@@ -1,0 +1,21 @@
+[package]
+name = "pinocchio-math"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Mathematical primitives for Pinocchio: vectors, matrices, transforms"
+
+[features]
+default = []
+wasm = ["getrandom/js"]
+
+[dependencies]
+nalgebra = { workspace = true }
+approx = { workspace = true }
+serde = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

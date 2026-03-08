@@ -1,0 +1,21 @@
+[package]
+name = "converter-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WASM bindings for 3D format conversion"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+converter-scene = { workspace = true }
+converter-gltf-io = { workspace = true }
+converter-usda = { workspace = true }
+converter-stl = { workspace = true }
+wasm-bindgen = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

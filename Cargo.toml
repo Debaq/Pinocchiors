@@ -1,0 +1,127 @@
+[workspace]
+resolver = "2"
+members = [
+    # Pinocchio - Rigging automático
+    "libs/pinocchio/math",
+    "libs/pinocchio/sparse",
+    "libs/pinocchio/mesh",
+    "libs/pinocchio/skeleton",
+    "libs/pinocchio/spatial",
+    "libs/pinocchio/graph",
+    "libs/pinocchio/attachment",
+    "libs/pinocchio/embedding",
+    "libs/pinocchio/repair",
+    "libs/pinocchio/print3d",
+    "libs/pinocchio/core",
+    # QuadriFlow - Quad remeshing
+    "libs/quadriflow/field",
+    "libs/quadriflow/hierarchy",
+    "libs/quadriflow/optimizer",
+    "libs/quadriflow/flow",
+    "libs/quadriflow/parametrizer",
+    "libs/quadriflow/extractor",
+    "libs/quadriflow/core",
+    # Converter - Conversión de formatos 3D
+    "libs/converter/scene",
+    "libs/converter/gltf-io",
+    "libs/converter/usda",
+    "libs/converter/stl",
+    "libs/converter/obj",
+    "libs/converter/core",
+    "libs/converter/wasm",
+    # Apps
+    "apps/desktop",
+    "apps/converter",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/pinocchio-rs/pinocchio"
+rust-version = "1.85"
+
+[workspace.dependencies]
+# Matemáticas
+nalgebra = "0.33"
+
+# Matrices sparse
+sprs = "0.11"
+
+# Grafos
+petgraph = "0.7"
+
+# I/O mallas
+tobj = "4.0"
+gltf = { version = "1.4", features = ["KHR_materials_unlit", "KHR_texture_transform", "KHR_materials_pbrSpecularGlossiness"] }
+stl_io = "0.10"
+
+# 3D math (ligero, para converter)
+glam = "0.29"
+
+# Procesamiento de texturas
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# Empaquetado USDZ
+zip = { version = "4", default-features = false }
+
+# Paralelismo
+rayon = "1.10"
+
+# Serialización
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Errores
+thiserror = "2.0"
+
+# WASM
+wasm-bindgen = "0.2"
+getrandom = { version = "0.2", features = ["js"] }
+
+# Testing
+proptest = "1.6"
+criterion = "0.5"
+approx = "0.5"
+
+# Crates internos - Pinocchio
+pinocchio-math = { path = "libs/pinocchio/math" }
+pinocchio-sparse = { path = "libs/pinocchio/sparse" }
+pinocchio-mesh = { path = "libs/pinocchio/mesh" }
+pinocchio-skeleton = { path = "libs/pinocchio/skeleton" }
+pinocchio-spatial = { path = "libs/pinocchio/spatial" }
+pinocchio-graph = { path = "libs/pinocchio/graph" }
+pinocchio-attachment = { path = "libs/pinocchio/attachment" }
+pinocchio-embedding = { path = "libs/pinocchio/embedding" }
+pinocchio-repair = { path = "libs/pinocchio/repair" }
+pinocchio-print3d = { path = "libs/pinocchio/print3d" }
+pinocchio-core = { path = "libs/pinocchio/core" }
+
+# Crates internos - QuadriFlow
+quadriflow-field = { path = "libs/quadriflow/field" }
+quadriflow-hierarchy = { path = "libs/quadriflow/hierarchy" }
+quadriflow-optimizer = { path = "libs/quadriflow/optimizer" }
+quadriflow-flow = { path = "libs/quadriflow/flow" }
+quadriflow-parametrizer = { path = "libs/quadriflow/parametrizer" }
+quadriflow-extractor = { path = "libs/quadriflow/extractor" }
+quadriflow-core = { path = "libs/quadriflow/core" }
+
+# Crates internos - Converter
+converter-scene = { path = "libs/converter/scene" }
+converter-gltf-io = { path = "libs/converter/gltf-io" }
+converter-usda = { path = "libs/converter/usda" }
+converter-stl = { path = "libs/converter/stl" }
+converter-obj = { path = "libs/converter/obj" }
+converter-core = { path = "libs/converter/core" }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+[profile.dev]
+debug = 1            # debug info limitada (suficiente para backtraces, ~50% menos espacio)
+split-debuginfo = "packed"  # compactar debug info en un solo archivo
+
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = 3

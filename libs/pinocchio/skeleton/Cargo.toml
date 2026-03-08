@@ -1,0 +1,25 @@
+[package]
+name = "pinocchio-skeleton"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Skeleton definitions and preset skeletons for Pinocchio"
+
+[features]
+default = []
+## Integración con converter-scene para carga de esqueletos desde glTF
+converter = ["dep:converter-scene", "dep:glam"]
+
+[dependencies]
+pinocchio-math = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# Dependencias opcionales para feature "converter"
+converter-scene = { workspace = true, optional = true }
+glam = { workspace = true, optional = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+glam = { workspace = true }

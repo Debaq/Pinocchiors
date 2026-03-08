@@ -1,0 +1,16 @@
+[package]
+name = "quadriflow-flow"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Min-cost network flow solver for QuadriFlow singularity minimization"
+
+[dependencies]
+pinocchio-mesh = { workspace = true }
+quadriflow-field = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+pinocchio-math = { workspace = true }
+approx = { workspace = true }

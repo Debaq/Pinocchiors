@@ -1,0 +1,53 @@
+[package]
+name = "pinocchio-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "pinocchio_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Pinocchio - Auto rigging
+pinocchio-core = { workspace = true }
+pinocchio-mesh = { workspace = true, features = ["converter"] }
+pinocchio-skeleton = { workspace = true, features = ["converter"] }
+pinocchio-math = { workspace = true }
+pinocchio-attachment = { workspace = true }
+
+# Converter - Multi-format I/O
+converter-scene = { workspace = true }
+converter-gltf-io = { workspace = true }
+converter-stl = { workspace = true }
+converter-obj = { workspace = true }
+
+# Repair & Print3D
+pinocchio-repair = { workspace = true }
+pinocchio-print3d = { workspace = true }
+
+# QuadriFlow - Retopology
+quadriflow-core = { workspace = true }
+
+# USDA/USDZ export
+converter-usda = { workspace = true }
+
+# Tauri
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-shell = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Async
+tokio = { version = "1", features = ["sync"] }
+
+# Errors
+thiserror = { workspace = true }

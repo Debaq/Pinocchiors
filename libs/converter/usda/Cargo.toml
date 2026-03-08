@@ -1,0 +1,13 @@
+[package]
+name = "converter-usda"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "USDA/USDZ writer — pure Rust, no C++ dependencies"
+
+[dependencies]
+converter-scene = { workspace = true }
+glam = { workspace = true }
+image = { workspace = true }
+thiserror = { workspace = true }
+zip = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "converter-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Unified facade for 3D format conversion"
+
+[dependencies]
+converter-scene = { workspace = true }
+converter-gltf-io = { workspace = true }
+converter-usda = { workspace = true }
+converter-stl = { workspace = true }
+converter-obj = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

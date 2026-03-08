@@ -1,0 +1,14 @@
+[package]
+name = "pinocchio-sparse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sparse matrix operations and Cholesky decomposition for Pinocchio"
+
+[dependencies]
+pinocchio-math = { workspace = true }
+sprs = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

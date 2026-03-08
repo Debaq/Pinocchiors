@@ -1,0 +1,10 @@
+[package]
+name = "converter-scene"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Intermediate 3D scene representation for format conversion"
+
+[dependencies]
+glam = { workspace = true }
+thiserror = { workspace = true }

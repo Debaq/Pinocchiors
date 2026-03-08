@@ -1,0 +1,18 @@
+[package]
+name = "quadriflow-parametrizer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Surface parametrization for QuadriFlow"
+
+[dependencies]
+quadriflow-field = { workspace = true }
+quadriflow-flow = { workspace = true }
+pinocchio-math = { workspace = true }
+pinocchio-mesh = { workspace = true }
+pinocchio-sparse = { workspace = true }
+nalgebra = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

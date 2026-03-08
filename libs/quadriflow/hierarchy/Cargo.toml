@@ -1,0 +1,15 @@
+[package]
+name = "quadriflow-hierarchy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Multi-scale mesh hierarchy for QuadriFlow"
+
+[dependencies]
+pinocchio-math = { workspace = true }
+pinocchio-mesh = { workspace = true }
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }

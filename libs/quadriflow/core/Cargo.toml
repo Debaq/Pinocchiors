@@ -1,0 +1,27 @@
+[package]
+name = "quadriflow-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Main API for QuadriFlow quad remeshing"
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "getrandom/js"]
+
+[dependencies]
+quadriflow-field = { workspace = true }
+quadriflow-hierarchy = { workspace = true }
+quadriflow-optimizer = { workspace = true }
+quadriflow-flow = { workspace = true }
+quadriflow-parametrizer = { workspace = true }
+quadriflow-extractor = { workspace = true }
+pinocchio-math = { workspace = true }
+pinocchio-mesh = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+wasm-bindgen = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
+
+[dev-dependencies]
+approx = { workspace = true }

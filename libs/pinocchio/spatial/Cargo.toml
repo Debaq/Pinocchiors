@@ -1,0 +1,15 @@
+[package]
+name = "pinocchio-spatial"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Spatial data structures (Octree, distance fields) for Pinocchio"
+
+[dependencies]
+pinocchio-math = { workspace = true }
+pinocchio-mesh = { workspace = true }
+thiserror = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
