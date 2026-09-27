@@ -248,6 +248,7 @@ pub(crate) fn write_skel_root(
 }
 
 /// Escribe meshes con SkelBindingAPI (skinning attributes).
+#[allow(clippy::too_many_arguments)]
 fn write_skinned_mesh(
     w: &mut UsdWriter,
     scene: &Scene,
@@ -534,6 +535,7 @@ pub(crate) fn write_skel_animation(
     anim_name
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_translation_time_samples(
     w: &mut UsdWriter,
     all_times: &[f32],
@@ -575,6 +577,7 @@ fn write_translation_time_samples(
     w.line("}");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_rotation_time_samples(
     w: &mut UsdWriter,
     all_times: &[f32],
@@ -617,6 +620,7 @@ fn write_rotation_time_samples(
     w.line("}");
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_scale_time_samples(
     w: &mut UsdWriter,
     all_times: &[f32],

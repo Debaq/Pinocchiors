@@ -347,31 +347,14 @@ pub fn generate_dovetail_geometry(config: &DovetailConfig, placement: &JointPlac
     positions.push(position + u * half_top + v * half_height + offset);  // 6: superior der
     positions.push(position - u * half_top + v * half_height + offset);  // 7: superior izq
 
-    let mut indices = Vec::new();
-
-    // Cara frontal (2 triángulos)
-    indices.push([0, 2, 1]);
-    indices.push([0, 3, 2]);
-
-    // Cara posterior (2 triángulos)
-    indices.push([4, 5, 6]);
-    indices.push([4, 6, 7]);
-
-    // Cara inferior (2 triángulos)
-    indices.push([0, 1, 5]);
-    indices.push([0, 5, 4]);
-
-    // Cara superior (2 triángulos)
-    indices.push([3, 6, 2]);
-    indices.push([3, 7, 6]);
-
-    // Cara izquierda (2 triángulos)
-    indices.push([0, 4, 7]);
-    indices.push([0, 7, 3]);
-
-    // Cara derecha (2 triángulos)
-    indices.push([1, 2, 6]);
-    indices.push([1, 6, 5]);
+    let indices = vec![
+        [0, 2, 1], [0, 3, 2], // cara frontal
+        [4, 5, 6], [4, 6, 7], // cara posterior
+        [0, 1, 5], [0, 5, 4], // cara inferior
+        [3, 6, 2], [3, 7, 6], // cara superior
+        [0, 4, 7], [0, 7, 3], // cara izquierda
+        [1, 2, 6], [1, 6, 5], // cara derecha
+    ];
 
     Ok(Mesh::from_triangles(&positions, &indices))
 }

@@ -93,8 +93,8 @@ impl AllShortestPather {
         let mut distances = vec![vec![Real::INFINITY; n]; n];
 
         // Inicializar diagonal
-        for i in 0..n {
-            distances[i][i] = 0.0;
+        for (i, row) in distances.iter_mut().enumerate() {
+            row[i] = 0.0;
         }
 
         // Inicializar con aristas existentes

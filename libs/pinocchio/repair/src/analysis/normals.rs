@@ -108,8 +108,8 @@ fn find_seed_face(mesh: &Mesh, face_state: &[Option<bool>]) -> Option<usize> {
     let mut best_face = None;
     let mut min_z = f64::INFINITY;
 
-    for face_idx in 0..mesh.num_faces() {
-        if face_state[face_idx].is_some() {
+    for (face_idx, state) in face_state.iter().enumerate().take(mesh.num_faces()) {
+        if state.is_some() {
             continue;
         }
 

@@ -118,8 +118,8 @@ pub fn merge_vertices(mesh: &mut Mesh, v0: usize, v1: usize) -> bool {
 
     // Crear mapa de índices (v1 se elimina, índices mayores se decrementan)
     let mut index_map: Vec<usize> = (0..mesh.num_vertices()).collect();
-    for i in (v1 + 1)..mesh.num_vertices() {
-        index_map[i] = i - 1;
+    for (i, slot) in index_map.iter_mut().enumerate().skip(v1 + 1) {
+        *slot = i - 1;
     }
     index_map[v1] = v0;
 

@@ -432,6 +432,7 @@ fn intervals_overlap(a_min: Real, a_max: Real, b_min: Real, b_max: Real, toleran
 }
 
 /// Test de intersección para triángulos coplanares
+#[allow(clippy::too_many_arguments)]
 fn triangles_intersect_coplanar(
     a0: Vector3, a1: Vector3, a2: Vector3,
     b0: Vector3, b1: Vector3, b2: Vector3,

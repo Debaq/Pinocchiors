@@ -33,16 +33,13 @@ pub fn make_normals_consistent(mesh: &mut Mesh) -> usize {
     }
 
     // Extraer triángulos, volteando los marcados
-    let mut triangles: Vec<[usize; 3]> = Vec::with_capacity(mesh.num_faces());
-    for face_idx in 0..mesh.num_faces() {
-        let [v0, v1, v2] = mesh.get_face_vertices(face_idx);
-        if flip_set[face_idx] {
+    let triangles: Vec<[usize; 3]> = (0..mesh.num_faces())
+        .map(|face_idx| {
+            let [v0, v1, v2] = mesh.get_face_vertices(face_idx);
             // Voltear: intercambiar v1 y v2
-            triangles.push([v0, v2, v1]);
-        } else {
-            triangles.push([v0, v1, v2]);
-        }
-    }
+            if flip_set[face_idx] { [v0, v2, v1] } else { [v0, v1, v2] }
+        })
+        .collect();
 
     // Reconstruir la malla
     let positions: Vec<_> = mesh.vertices.iter().map(|v| v.position).collect();
@@ -185,9 +182,9 @@ pub fn orient_normals_largest_component(mesh: &mut Mesh) -> usize {
     let mut flip_count = 0;
     let mut triangles: Vec<[usize; 3]> = Vec::with_capacity(mesh.num_faces());
 
-    for face_idx in 0..mesh.num_faces() {
+    for (face_idx, flip) in face_flip.iter().enumerate().take(mesh.num_faces()) {
         let [v0, v1, v2] = mesh.get_face_vertices(face_idx);
-        if face_flip[face_idx] == Some(true) {
+        if *flip == Some(true) {
             triangles.push([v0, v2, v1]);
             flip_count += 1;
         } else {

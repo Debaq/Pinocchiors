@@ -503,11 +503,11 @@ fn ear_clip_triangulate(polygon: &[Vector3], plane: &Plane) -> Vec<(Vector3, Vec
 
             // Verificar que ningún otro punto esté dentro del triángulo
             let mut is_ear = true;
-            for j in 0..n {
+            for (j, &point) in remaining.iter().enumerate().take(n) {
                 if j == prev || j == i || j == next {
                     continue;
                 }
-                let p = project(remaining[j]);
+                let p = project(point);
                 if point_in_triangle_2d(p, p_prev, p_curr, p_next) {
                     is_ear = false;
                     break;

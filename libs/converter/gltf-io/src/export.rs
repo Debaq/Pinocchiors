@@ -140,9 +140,9 @@ fn strip_unused_data(scene: &mut Scene) {
     // Construir mapa de reasignación de texturas: old_idx → new_idx
     let mut tex_remap: Vec<Option<usize>> = vec![None; scene.textures.len()];
     let mut new_tex_idx = 0;
-    for i in 0..scene.textures.len() {
+    for (i, slot) in tex_remap.iter_mut().enumerate() {
         if used_textures.contains(&i) {
-            tex_remap[i] = Some(new_tex_idx);
+            *slot = Some(new_tex_idx);
             new_tex_idx += 1;
         }
     }
@@ -150,9 +150,9 @@ fn strip_unused_data(scene: &mut Scene) {
     // Construir mapa de reasignación de materiales
     let mut mat_remap: Vec<Option<usize>> = vec![None; scene.materials.len()];
     let mut new_mat_idx = 0;
-    for i in 0..scene.materials.len() {
+    for (i, slot) in mat_remap.iter_mut().enumerate() {
         if used_materials.contains(&i) {
-            mat_remap[i] = Some(new_mat_idx);
+            *slot = Some(new_mat_idx);
             new_mat_idx += 1;
         }
     }

@@ -11,6 +11,7 @@ pub struct Matrix3(pub NaMatrix3<Real>);
 impl Matrix3 {
     /// Crea una matriz desde componentes (row-major)
     #[inline]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         m00: Real, m01: Real, m02: Real,
         m10: Real, m11: Real, m12: Real,

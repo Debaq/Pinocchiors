@@ -36,12 +36,10 @@ pub fn remove_degenerate_faces(mesh: &mut Mesh, config: &DegenerateConfig) -> us
     }
 
     // Extraer triángulos que no se eliminarán
-    let mut triangles: Vec<[usize; 3]> = Vec::new();
-    for face_idx in 0..mesh.num_faces() {
-        if !to_remove[face_idx] {
-            triangles.push(mesh.get_face_vertices(face_idx));
-        }
-    }
+    let mut triangles: Vec<[usize; 3]> = (0..mesh.num_faces())
+        .filter(|&face_idx| !to_remove[face_idx])
+        .map(|face_idx| mesh.get_face_vertices(face_idx))
+        .collect();
 
     let removed_count = degenerates.len();
 
