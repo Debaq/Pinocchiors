@@ -92,6 +92,8 @@ pub fn import_stl(path: impl AsRef<Path>) -> Result<Scene, StlImportError> {
     scene.meshes.push(mesh);
     scene.nodes.push(node);
     scene.root_nodes.push(0);
+    // STL no guarda unidades; la convención (slicers, CAD) es milímetros
+    scene.meters_per_unit = 0.001;
 
     Ok(scene)
 }

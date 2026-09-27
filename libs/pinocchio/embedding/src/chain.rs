@@ -199,6 +199,23 @@ fn point_along(polyline: &[Vector3], s: Real) -> Vector3 {
     *polyline.last().expect("polilínea vacía")
 }
 
+/// Longitud de arco del punto de la polilínea más cercano a `p`
+fn closest_arc_length(polyline: &[Vector3], p: &Vector3) -> Real {
+    let mut best = (Real::INFINITY, 0.0);
+    let mut acc = 0.0;
+    for w in polyline.windows(2) {
+        let seg = w[1] - w[0];
+        let len = seg.length();
+        let t = if len > 0.0 { ((*p - w[0]).dot(&seg) / (len * len)).clamp(0.0, 1.0) } else { 0.0 };
+        let d = p.distance_squared(&(w[0] + seg * t));
+        if d < best.0 {
+            best = (d, acc + t * len);
+        }
+        acc += len;
+    }
+    best.1
+}
+
 fn polyline_length(polyline: &[Vector3]) -> Real {
     polyline.windows(2).map(|w| w[0].distance(&w[1])).sum()
 }
@@ -335,17 +352,29 @@ pub fn chain_embed<S: Skeleton>(
             smooth(&mut polyline, 2);
             let total = polyline_length(&polyline);
 
-            // Repartir según las proporciones de la plantilla
+            // Repartir según las proporciones de la plantilla. El primer joint
+            // de una cadena con más de un hueso se ancla a la proyección de su
+            // posición de plantilla sobre el camino: el tramo desde la base
+            // (p. ej. pelvis→cadera) atraviesa el torso y su longitud en la
+            // malla no guarda proporción con la plantilla.
             let lengths: Vec<Real> = chain
                 .iter()
                 .map(|&b| template[b].distance(&template[skeleton.get_parent(b).unwrap()]))
                 .collect();
-            let template_total: Real = lengths.iter().sum();
+            let (start, first_bone) = if chain.len() >= 2 {
+                let anchor = closest_arc_length(&polyline, &template[chain[0]]).min(0.5 * total);
+                positions[chain[0]] = Some(point_along(&polyline, anchor));
+                cells[chain[0]] = graph.nearest_interior(&positions[chain[0]].unwrap()).or(Some(end_cell));
+                (anchor, 1)
+            } else {
+                (0.0, 0)
+            };
+            let rest_total: Real = lengths[first_bone..].iter().sum();
             let mut acc = 0.0;
-            for (&bone, &len) in chain.iter().zip(&lengths) {
+            for (&bone, &len) in chain.iter().zip(&lengths).skip(first_bone) {
                 acc += len;
-                let fraction = if template_total > 0.0 { acc / template_total } else { 1.0 };
-                let pos = point_along(&polyline, fraction * total);
+                let fraction = if rest_total > 0.0 { acc / rest_total } else { 1.0 };
+                let pos = point_along(&polyline, start + fraction * (total - start));
                 positions[bone] = Some(pos);
                 cells[bone] = graph.nearest_interior(&pos).or(Some(end_cell));
             }

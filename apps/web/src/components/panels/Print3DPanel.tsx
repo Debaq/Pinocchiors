@@ -33,6 +33,8 @@ export interface PieceInfo {
 export interface Print3DPanelProps {
   onAnalyze?: () => void;
   onScale?: (params: ScaleParams) => void;
+  onUndoScale?: () => void;
+  canUndoScale?: boolean;
   onSubdivide?: (config: SubdivideConfig) => void;
   onExportPiece?: (index: number) => void;
   analysis?: MeshAnalysis;
@@ -192,6 +194,15 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
               fullWidth
             >
               Ajustar a medida
+            </Button>
+            <Button
+              onClick={() => props.onUndoScale?.()}
+              disabled={props.isProcessing || !props.canUndoScale}
+              variant="ghost"
+              size="sm"
+              fullWidth
+            >
+              Deshacer escala
             </Button>
           </div>
         </div>

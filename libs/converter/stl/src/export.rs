@@ -10,11 +10,13 @@ pub enum StlExportError {
     NoGeometry,
 }
 
-/// Exporta una `Scene` a formato STL binario.
+/// Exporta una `Scene` a formato STL binario, en milímetros.
 ///
 /// Fusiona todas las primitivas de todos los meshes en un solo conjunto
 /// de triángulos. Solo exporta geometría — materiales, texturas,
-/// esqueletos y animaciones se descartan.
+/// esqueletos y animaciones se descartan. Como STL no guarda unidades y los
+/// slicers asumen milímetros, las coordenadas se convierten según
+/// `scene.meters_per_unit` (una escena glTF en metros sale ×1000).
 pub fn export_stl(scene: &Scene, path: impl AsRef<Path>) -> Result<(), StlExportError> {
     let triangles = extract_triangles(scene)?;
 
@@ -32,9 +34,10 @@ pub fn export_stl(scene: &Scene, path: impl AsRef<Path>) -> Result<(), StlExport
 fn extract_triangles(scene: &Scene) -> Result<Vec<stl_io::Triangle>, StlExportError> {
     let mut triangles = Vec::new();
 
+    let to_mm = (scene.meters_per_unit * 1000.0) as f32;
     for prim in scene.world_primitives() {
         for tri in &prim.triangles {
-            let [v0, v1, v2] = tri.map(|i| prim.positions[i as usize]);
+            let [v0, v1, v2] = tri.map(|i| prim.positions[i as usize].map(|c| c * to_mm));
             triangles.push(stl_io::Triangle {
                 normal: stl_io::Normal::new(compute_face_normal(v0, v1, v2)),
                 vertices: [
@@ -103,6 +106,7 @@ mod tests {
             children: vec![],
         });
         scene.root_nodes.push(0);
+        scene.meters_per_unit = 0.001; // milímetros: sin conversión
 
         let tris = extract_triangles(&scene).unwrap();
         assert_eq!(tris.len(), 1);
@@ -110,5 +114,20 @@ mod tests {
         assert_eq!([v1[0], v1[1], v1[2]], [10.5, 0.0, 0.0]);
         let n = tris[0].normal;
         assert_eq!([n[0], n[1], n[2]], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn converts_meters_to_millimeters() {
+        let mut scene = Scene::new(); // glTF: metros
+        scene.meshes.push(Mesh {
+            name: "tri".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(vec![[0.0, 0.0, 0.0], [1.7, 0.0, 0.0], [0.0, 1.0, 0.0]])],
+                indices: Some(IndexData::U16(vec![0, 1, 2])),
+                material: None,
+            }],
+        });
+        let tris = extract_triangles(&scene).unwrap();
+        assert!((tris[0].vertices[1][0] - 1700.0).abs() < 1e-3);
     }
 }

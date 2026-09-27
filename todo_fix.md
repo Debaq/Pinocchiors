@@ -107,7 +107,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Error `InvalidConfig` si el margen no deja volumen útil (antes devolvía una pieza sin avisar).
 - [x] `calculate_z_planes` protege contra altura ≤ 0.
 - [x] Se cuentan los planos necesarios **antes** de generarlos; más de `MAX_CUT_PLANES` (1000) → error que sugiere revisar unidades.
-- [ ] Considerar `scene.meters_per_unit` (requiere definir las unidades de STL y del volumen en la GUI).
+- [x] Unidades: STL importado en mm (`meters_per_unit = 0.001`), STL exportado siempre en mm, GLB exportado en metros (glTF). El panel de impresión convierte mm ↔ unidades de la escena (análisis, escalado, volumen de impresión, margen, piezas).
 
 ### 17. Progreso del autorig falso y bloqueo del runtime ✅ RESUELTO
 - [x] `pinocchio_core::autorig_with_progress` con `AutorigStage` (preparing, embedding, weights, done) emitidas al comenzar cada etapa real.
@@ -124,7 +124,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [x] `max_medial_spheres` y `refine_iterations` quedan sin efecto (documentado).
 - **Resultado (humanoide de prueba, altura 1):** codo, muñeca y mano a < 0.01 de las reales (antes ~0.05–0.08). Se adapta a pose T con la plantilla en pose A.
 - **Tests:** tolerancias endurecidas a 0.03 en brazos; regiones anatómicas originales; `autorig_adapts_to_t_pose`.
-- **Pendiente menor:** en las piernas la cadera queda ~0.05 baja porque la plantilla tiene el hueso pelvis→cadera más largo que el modelo.
+- [x] El primer joint de cada cadena se ancla a la proyección de su plantilla sobre el camino (mejora leve en brazos).
+- **Limitación conocida:** en el humanoide sintético la cadera queda en y≈0.42 (el muslo nace dentro del torso) y la rodilla ~0.03 baja: el reparto por proporciones de la plantilla no conoce la anatomía del modelo.
 
 ### 20. `DistanceField::sample` devuelve la celda más cercana ✅ RESUELTO
 - [x] Interpolación trilineal entre centros de celda (sin NaN con celdas infinitas). **Test:** reproduce un campo lineal exacto.
@@ -138,7 +139,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [x] salida opcional con `--format` (y error claro si sobrescribiría la entrada);
   - [x] `--batch` acepta varios archivos, `--out-dir`, resumen y código de salida 1 si alguno falla;
   - [x] `--format` también sin `--batch` (validado contra la extensión de la salida). Tests del plan de conversión.
-- [ ] `mesh_before_print_scale` se guarda pero no existe comando `undo_print_scale` (falta también el botón en la UI).
+- [x] Comando `undo_print_scale` + botón "Deshacer escala" (restaura malla y escena).
 - [x] `libs/converter/usdz/` (carpeta vacía) borrada.
 - [x] `apps/web`: se quitó `pnpm-lock.yaml`; queda `package-lock.json` (lo usan `tauri.conf.json` y CI).
 - [x] `Cargo.toml`: `repository` → `https://github.com/Debaq/Pinocchiors`.

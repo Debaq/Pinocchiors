@@ -359,3 +359,4 @@ fn autorig_adapts_to_t_pose() {
         assert!(d < 0.05, "{name}: {:?} a {d:.3} de {truth:?}", joint(name));
     }
 }
+

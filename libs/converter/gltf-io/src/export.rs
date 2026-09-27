@@ -59,16 +59,20 @@ pub fn export_glb_bytes(
 
 /// Preprocesa la escena según las opciones activas.
 fn preprocess_scene(scene: &Scene, options: &GlbExportOptions) -> Scene {
-    if !options.needs_preprocessing() {
+    // glTF usa metros: convertir si la escena está en otra unidad (p. ej. STL en mm)
+    let to_meters = scene.meters_per_unit;
+    if !options.needs_preprocessing() && to_meters == 1.0 {
         return scene.clone();
     }
 
     let mut scene = scene.clone();
 
-    // 1. Escalar geometría
-    if let Some(factor) = options.scale_factor {
+    // 1. Escalar geometría (unidades + factor pedido)
+    let factor = options.scale_factor.unwrap_or(1.0) * to_meters;
+    if factor != 1.0 {
         transforms::apply_scale(&mut scene, factor);
     }
+    scene.meters_per_unit = 1.0;
 
     // 2. Aplanar transforms
     if options.flatten_transforms {
@@ -1456,5 +1460,27 @@ mod tests {
         // La textura 1x1 roja (opaca) debe haberse convertido a JPEG
         let mime = root["images"][0]["mimeType"].as_str().unwrap();
         assert_eq!(mime, "image/jpeg", "textura opaca debe recomprimirse a JPEG");
+    }
+
+    #[test]
+    fn export_converts_scene_units_to_meters() {
+        use converter_scene::{IndexData, Mesh, Node, Primitive, Transform, VertexAttribute};
+        let mut scene = Scene::new();
+        scene.meters_per_unit = 0.001; // p. ej. importada de STL (mm)
+        scene.meshes.push(Mesh {
+            name: "tri".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(vec![[0.0, 0.0, 0.0], [1000.0, 0.0, 0.0], [0.0, 500.0, 0.0]])],
+                indices: Some(IndexData::U16(vec![0, 1, 2])),
+                material: None,
+            }],
+        });
+        scene.nodes.push(Node { name: "n".into(), transform: Transform::identity(), mesh: Some(0), skin: None, children: vec![] });
+        scene.root_nodes.push(0);
+
+        let glb = export_glb_bytes(&scene, &GlbExportOptions::default()).unwrap();
+        let back = crate::import_gltf_bytes(&glb).unwrap();
+        let (_, max) = back.compute_bounding_box().unwrap();
+        assert!((max[0] - 1.0).abs() < 1e-6 && (max[1] - 0.5).abs() < 1e-6, "{max:?}");
     }
 }

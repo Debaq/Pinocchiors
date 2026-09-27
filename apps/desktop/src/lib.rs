@@ -46,6 +46,7 @@ pub fn run() {
             // Impresión 3D
             commands::analyze_print3d,
             commands::scale_mesh_for_print,
+            commands::undo_print_scale,
             commands::subdivide_mesh,
             commands::export_print3d_piece,
         ])

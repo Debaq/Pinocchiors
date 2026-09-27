@@ -1537,18 +1537,7 @@ pub fn analyze_print3d(state: State<'_, AppState>) -> Result<Print3dAnalysisInfo
     let analysis = pinocchio_print3d::analyze(mesh)
         .map_err(|e| format!("Error en análisis: {:?}", e))?;
 
-    let dims = analysis.bounding_box.dimensions();
-
-    Ok(Print3dAnalysisInfo {
-        volume: analysis.volume,
-        surface_area: analysis.surface_area,
-        center_of_mass: analysis.center_of_mass,
-        dimensions: dims,
-        is_closed: analysis.is_closed,
-        vertex_count: analysis.vertex_count,
-        triangle_count: analysis.triangle_count,
-        estimated_weight: analysis.estimated_weight,
-    })
+    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
 }
 
 /// Escala la malla para impresión
@@ -1557,12 +1546,12 @@ pub fn scale_mesh_for_print(
     params: ScalePrintInput,
     state: State<'_, AppState>,
 ) -> Result<Print3dAnalysisInfo, String> {
-    // Guardar backup
+    // Guardar backup (malla y escena) para poder deshacer
     {
         let mesh_lock = state.mesh.lock().unwrap();
         let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?.clone();
-        let mut backup = state.mesh_before_print_scale.lock().unwrap();
-        *backup = Some(mesh);
+        *state.mesh_before_print_scale.lock().unwrap() = Some(mesh);
+        *state.scene_before_print_scale.lock().unwrap() = state.scene.lock().unwrap().clone();
     }
 
     let mut mesh = {
@@ -1580,11 +1569,14 @@ pub fn scale_mesh_for_print(
             pinocchio_print3d::scale(&mut mesh, factor);
         }
         "fit" => {
-            let target = params.target_size.ok_or("Falta tamaño objetivo")?;
+            let target_mm = params.target_size.ok_or("Falta tamaño objetivo")?;
+            let k = mm_per_unit(&state);
+            let target = target_mm.map(|v| v / k);
             pinocchio_print3d::scale_to_fit(&mut mesh, target).map_err(|e| format!("No se pudo escalar: {e}"))?;
         }
         "volume" => {
-            let target_vol = params.target_volume.ok_or("Falta volumen objetivo")?;
+            let k = mm_per_unit(&state);
+            let target_vol = params.target_volume.ok_or("Falta volumen objetivo")? / (k * k * k);
             let current_vol = pinocchio_print3d::compute_volume(&mesh);
             pinocchio_print3d::scale_to_volume(&mut mesh, current_vol, target_vol)
                 .map_err(|e| format!("No se pudo escalar por volumen: {e}"))?;
@@ -1621,18 +1613,56 @@ pub fn scale_mesh_for_print(
     // Re-analizar
     let analysis = pinocchio_print3d::analyze(&mesh)
         .map_err(|e| format!("Error en análisis: {:?}", e))?;
-    let dims = analysis.bounding_box.dimensions();
+    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
+}
 
-    Ok(Print3dAnalysisInfo {
-        volume: analysis.volume,
-        surface_area: analysis.surface_area,
-        center_of_mass: analysis.center_of_mass,
-        dimensions: dims,
+/// Deshace el último escalado para impresión
+#[tauri::command]
+pub fn undo_print_scale(state: State<'_, AppState>) -> Result<Print3dAnalysisInfo, String> {
+    let mesh = state
+        .mesh_before_print_scale
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("No hay escalado que deshacer")?;
+    let scene = state
+        .scene_before_print_scale
+        .lock()
+        .unwrap()
+        .take()
+        .ok_or("No hay escena de backup")?;
+
+    let analysis = pinocchio_print3d::analyze(&mesh).map_err(|e| format!("Error en análisis: {:?}", e))?;
+    *state.mesh.lock().unwrap() = Some(mesh);
+    *state.scene.lock().unwrap() = Some(scene);
+    *state.result.lock().unwrap() = None;
+    *state.print3d_pieces.lock().unwrap() = None;
+
+    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
+}
+
+/// Milímetros por unidad de la escena (la UI de impresión trabaja en mm)
+fn mm_per_unit(state: &State<'_, AppState>) -> f64 {
+    state
+        .scene
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map_or(1.0, |s| s.meters_per_unit * 1000.0)
+}
+
+/// Análisis de impresión convertido a milímetros (`k` = mm por unidad)
+fn analysis_to_info(analysis: &pinocchio_print3d::MeshAnalysis, k: f64) -> Print3dAnalysisInfo {
+    Print3dAnalysisInfo {
+        volume: analysis.volume * k * k * k,
+        surface_area: analysis.surface_area * k * k,
+        center_of_mass: analysis.center_of_mass.map(|c| c * k),
+        dimensions: analysis.bounding_box.dimensions().map(|d| d * k),
         is_closed: analysis.is_closed,
         vertex_count: analysis.vertex_count,
         triangle_count: analysis.triangle_count,
-        estimated_weight: analysis.estimated_weight,
-    })
+        estimated_weight: analysis.estimated_weight.map(|w| w * k * k * k),
+    }
 }
 
 /// Subdivide la malla en piezas para impresión
@@ -1650,19 +1680,21 @@ pub fn subdivide_mesh(
         _ => SubdivideStrategy::Grid,
     };
 
+    // La UI trabaja en milímetros
+    let k = mm_per_unit(&state);
     let subdivide_config = SubdivideConfig {
-        build_volume: config.build_volume,
+        build_volume: config.build_volume.map(|v| v / k),
         max_dimension: None,
         overlap: 0.0,
         strategy,
-        margin: config.margin.unwrap_or(2.0),
+        margin: config.margin.unwrap_or(2.0) / k,
     };
 
     let mut pieces = pinocchio_print3d::subdivide(mesh, &subdivide_config)
         .map_err(|e| format!("Error subdividiendo: {:?}", e))?;
 
     // Calcular vecinos
-    pinocchio_print3d::find_neighbors(&mut pieces, 1.0);
+    pinocchio_print3d::find_neighbors(&mut pieces, 1.0 / k);
 
     let piece_infos: Vec<PieceInfo> = pieces.iter().enumerate().map(|(i, p)| {
         let bbox = pinocchio_print3d::compute_bounding_box(&p.mesh);
@@ -1671,7 +1703,7 @@ pub fn subdivide_mesh(
             label: p.label.clone(),
             vertex_count: p.mesh.num_vertices(),
             face_count: p.mesh.num_faces(),
-            dimensions: bbox.dimensions(),
+            dimensions: bbox.dimensions().map(|d| d * k),
         }
     }).collect();
 

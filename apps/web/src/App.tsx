@@ -227,6 +227,7 @@ export const App: Component = () => {
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
   const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
+  const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
 
   // Config
   const [autorigConfig, setAutorigConfig] = createSignal<AutorigConfig>({
@@ -410,6 +411,7 @@ export const App: Component = () => {
       setQuadMeshLoaded(false);
       setQuadMeshInfo({ vertices: 0, quads: 0 });
       setShowQuadMesh(false);
+      setCanUndoPrintScale(false);
 
       // Pipeline: mark import as completed, navigate to next
       pipeline.markCompleted("import");
@@ -654,6 +656,9 @@ export const App: Component = () => {
       setRepairResult(result);
       setDiagnostics(result.new_diagnostics);
       setCanUndoRepair(true);
+      // El backend descarta el rig al cambiar la geometría
+      setAutorigComplete(false);
+      setWeightsData(undefined);
 
       // Refrescar meshData y meshInfo
       const data = await invoke<MeshData>("get_mesh_data");
@@ -685,6 +690,8 @@ export const App: Component = () => {
       setCanUndoRepair(false);
       setDiagnostics(undefined);
       setRepairResult(undefined);
+      setAutorigComplete(false);
+      setWeightsData(undefined);
       setStatusMessage("Reparación deshecha");
     } catch (e) {
       console.error("Undo repair error:", e);
@@ -713,12 +720,36 @@ export const App: Component = () => {
     }
   };
 
+  const handleUndoPrintScale = async () => {
+    try {
+      setIsProcessing(true);
+      const result = await invoke<TauriPrint3dAnalysis>("undo_print_scale");
+      setMeshAnalysis(result);
+      setSubdivideResult(undefined);
+      setAutorigComplete(false);
+      setWeightsData(undefined);
+      const data = await invoke<MeshData>("get_mesh_data");
+      setMeshData(data);
+      setCanUndoPrintScale(false);
+      setStatusMessage("Escala deshecha");
+    } catch (e) {
+      console.error("Undo scale error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleScaleForPrint = async (params: ScaleParams) => {
     try {
       setIsProcessing(true);
       setStatusMessage("Escalando malla...");
       const result = await invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params });
       setMeshAnalysis(result);
+      setCanUndoPrintScale(true);
+      // El backend descarta el rig al cambiar la geometría
+      setAutorigComplete(false);
+      setWeightsData(undefined);
 
       // Refrescar meshData
       const data = await invoke<MeshData>("get_mesh_data");
@@ -998,6 +1029,8 @@ export const App: Component = () => {
             print3dProps={{
               onAnalyze: handleAnalyzePrint3d,
               onScale: handleScaleForPrint,
+              onUndoScale: handleUndoPrintScale,
+              canUndoScale: canUndoPrintScale(),
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
               analysis: meshAnalysis(),
