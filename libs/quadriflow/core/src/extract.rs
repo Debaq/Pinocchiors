@@ -1,21 +1,22 @@
-//! Extracción de la malla a partir de los campos.
+//! Extracción de la malla a partir de los desplazamientos enteros.
 //!
-//! 1. Cada arista del grafo fino compara los retículos de sus extremos: si
-//!    ambos redondean al mismo punto, los vértices se funden; si difieren en
-//!    una celda (horizontal o vertical), hay una arista de la malla final.
-//! 2. Las caras se trazan girando alrededor de cada vértice en orden angular.
-//! 3. Cada polígono se divide en quads (centroide + puntos medios), así la
-//!    salida tiene solo quads aunque haya triángulos o pentágonos en las
-//!    singularidades.
+//! 1. Las aristas del grafo fino con desplazamiento (0, 0) se colapsan: sus
+//!    extremos caen en el mismo punto del retículo y forman un vértice final.
+//! 2. Cada triángulo de entrada que no se degenera queda como medio quad: dos
+//!    lados de una celda y su diagonal. La topología (y la orientación) sale
+//!    de la malla de entrada, no de ángulos medidos sobre la geometría.
+//! 3. Los medios quads que comparten la diagonal forman un quad; los que
+//!    quedan solos (junto a singularidades) son triángulos, y los agujeros que
+//!    no son borde real se rellenan.
+//! 4. Cada polígono se divide en quads (centroide + puntos medios), así la
+//!    salida tiene solo quads.
 
-use crate::field::{compat_orientation, compat_position_index};
 use crate::hierarchy::Level;
+use crate::integer::EdgeOffsets;
 use crate::quad::{QuadFace, QuadMesh};
 use crate::V3;
 use std::collections::HashMap;
 
-/// Largo máximo de una cara normal; los loops más largos son agujeros o bordes.
-const MAX_FACE_SIZE: usize = 8;
 /// Largo máximo de un agujero que se rellena.
 const MAX_HOLE_SIZE: usize = 64;
 
@@ -49,31 +50,19 @@ impl UnionFind {
     }
 }
 
-/// Extrae la malla poligonal del nivel más fino.
-pub(crate) fn extract_polygons(level: &Level, q: &[V3], o: &[V3], scale: f64) -> Polygons {
+/// Extrae la malla poligonal del nivel más fino. `triangles` son los
+/// triángulos de la superficie cuyos vértices son los del nivel.
+pub(crate) fn extract_polygons(
+    level: &Level,
+    offsets: &EdgeOffsets,
+    o: &[V3],
+    triangles: &[[u32; 3]],
+) -> Polygons {
     let n = level.len();
-    let inv_scale = 1.0 / scale;
     let mut uf = UnionFind((0..n as u32).collect());
-    let mut links: Vec<(u32, u32)> = Vec::new();
-
-    for i in 0..n {
-        for &(j, _) in level.neighbors(i) {
-            let j = j as usize;
-            if j <= i {
-                continue;
-            }
-            let (qi, qj) = compat_orientation(&q[i], &level.nrm[i], &q[j], &level.nrm[j]);
-            let (si, sj) = compat_position_index(
-                &level.pos[i], &level.nrm[i], &qi, &o[i],
-                &level.pos[j], &level.nrm[j], &qj, &o[j],
-                scale, inv_scale,
-            );
-            let d = [(si[0] - sj[0]).abs(), (si[1] - sj[1]).abs()];
-            match d {
-                [0, 0] => uf.union(i as u32, j as u32),
-                [1, 0] | [0, 1] => links.push((i as u32, j as u32)),
-                _ => {}
-            }
+    for (&(i, j), d) in offsets.edges.iter().zip(&offsets.offset) {
+        if *d == [0, 0] {
+            uf.union(i, j);
         }
     }
 
@@ -118,124 +107,168 @@ pub(crate) fn extract_polygons(level: &Level, q: &[V3], o: &[V3], scale: f64) ->
         .zip(&constrained)
         .map(|((p, _, w), (cp, cw))| if *cw > 0.0 { cp / *cw } else { p / *w })
         .collect();
-    let normals: Vec<V3> = sums
-        .iter()
-        .map(|(_, nrm, _)| nrm.try_normalize(1e-30).unwrap_or_else(V3::z))
-        .collect();
 
-    let mut neighbors: Vec<Vec<u32>> = vec![Vec::new(); vertices.len()];
-    for (i, j) in links {
+    // Tipo de cada par de vértices finales vecinos: ¿diagonal de una celda?
+    let mut diagonal: HashMap<(u32, u32), bool> = HashMap::new();
+    for (&(i, j), d) in offsets.edges.iter().zip(&offsets.offset) {
         let (a, b) = (cluster[i as usize], cluster[j as usize]);
         if a != b {
-            neighbors[a as usize].push(b);
-            neighbors[b as usize].push(a);
+            diagonal
+                .entry((a.min(b), a.max(b)))
+                .or_insert(d[0].abs() == 1 && d[1].abs() == 1);
         }
     }
-    for list in &mut neighbors {
-        list.sort_unstable();
-        list.dedup();
-    }
-    prune_dangling(&mut neighbors);
-    for (a, list) in neighbors.iter_mut().enumerate() {
-        sort_by_angle(list, a, &vertices, &normals);
-    }
+    let is_diagonal = |a: u32, b: u32| diagonal.get(&(a.min(b), a.max(b))).copied().unwrap_or(false);
 
-    let faces = remove_pillows(trace_faces(&neighbors, &vertices, &normals, &on_boundary));
+    let halves = collapsed_triangles(triangles, &cluster);
+    let mut faces = pair_halves(&halves, is_diagonal);
+    fill_holes(&mut faces, &on_boundary);
     Polygons { vertices, fixed, faces }
 }
 
-/// Un ciclo aislado del grafo produce dos caras con los mismos vértices (una a
-/// cada lado) que forman una "almohada" cerrada sin volumen: se eliminan ambas.
-fn remove_pillows(faces: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
-    let key = |f: &[u32]| {
-        let mut k = f.to_vec();
-        k.sort_unstable();
-        k
-    };
-    let mut count: HashMap<Vec<u32>, u32> = HashMap::new();
-    for f in &faces {
-        *count.entry(key(f)).or_default() += 1;
+/// Triángulos de entrada vistos sobre los vértices finales: se descartan los
+/// degenerados y, si dos se superponen (comparten una semiarista, por un
+/// pliegue de la parametrización), gana el que cubre más triángulos de entrada.
+fn collapsed_triangles(triangles: &[[u32; 3]], cluster: &[u32]) -> Vec<[u32; 3]> {
+    let mut support: HashMap<[u32; 3], u32> = HashMap::new();
+    let mut order: Vec<[u32; 3]> = Vec::new();
+    for t in triangles {
+        let c = t.map(|v| cluster[v as usize]);
+        if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
+            continue;
+        }
+        // Rotación canónica: el menor primero, conservando la orientación
+        let k = (0..3).min_by_key(|&k| c[k]).expect("tres vértices");
+        let key = [c[k], c[(k + 1) % 3], c[(k + 2) % 3]];
+        let count = support.entry(key).or_insert(0);
+        if *count == 0 {
+            order.push(key);
+        }
+        *count += 1;
     }
-    faces.into_iter().filter(|f| count[&key(f)] == 1).collect()
+    order.sort_by_key(|key| std::cmp::Reverse(support[key]));
+
+    let mut used: std::collections::HashSet<(u32, u32)> = Default::default();
+    let mut accepted = Vec::new();
+    for t in order {
+        let half_edges = [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])];
+        if half_edges.iter().any(|h| used.contains(h)) {
+            continue;
+        }
+        used.extend(half_edges);
+        accepted.push(t);
+    }
+    accepted
 }
 
-/// Ordena los vecinos de `a` en sentido antihorario alrededor de su normal.
-fn sort_by_angle(list: &mut [u32], a: usize, vertices: &[V3], normals: &[V3]) {
-    let n = normals[a];
-    let e1 = {
-        let helper = if n.x.abs() > 0.9 { V3::y() } else { V3::x() };
-        n.cross(&helper).normalize()
-    };
-    let e2 = n.cross(&e1);
-    let angle = |b: u32| {
-        let d = vertices[b as usize] - vertices[a];
-        d.dot(&e2).atan2(d.dot(&e1))
-    };
-    list.sort_by(|&x, &y| angle(x).total_cmp(&angle(y)));
-}
-
-/// Elimina iterativamente los vértices de valencia 1 (aristas colgantes):
-/// dejarían un "pico" con vértices repetidos en la cara que los rodea.
-fn prune_dangling(neighbors: &mut [Vec<u32>]) {
-    let mut stack: Vec<u32> = (0..neighbors.len() as u32)
-        .filter(|&v| neighbors[v as usize].len() == 1)
-        .collect();
-    while let Some(v) = stack.pop() {
-        let Some(&u) = neighbors[v as usize].first() else { continue };
-        neighbors[v as usize].clear();
-        let list = &mut neighbors[u as usize];
-        list.retain(|&x| x != v);
-        if list.len() == 1 {
-            stack.push(u);
+/// Une los medios quads que comparten su diagonal. Un triángulo `(a, b, x)` y
+/// otro `(b, a, y)` sobre la diagonal `a–b` forman el quad `(a, y, b, x)`.
+fn pair_halves(halves: &[[u32; 3]], is_diagonal: impl Fn(u32, u32) -> bool) -> Vec<Vec<u32>> {
+    let mut by_half_edge: HashMap<(u32, u32), usize> = HashMap::new();
+    for (idx, t) in halves.iter().enumerate() {
+        for k in 0..3 {
+            by_half_edge.insert((t[k], t[(k + 1) % 3]), idx);
         }
     }
-}
+    // La diagonal de cada medio quad (si tiene exactamente una)
+    let diagonal_of = |t: &[u32; 3]| -> Option<usize> {
+        let mut found = (0..3).filter(|&k| is_diagonal(t[k], t[(k + 1) % 3]));
+        let k = found.next()?;
+        found.next().is_none().then_some(k)
+    };
 
-/// Recorre las caras de un grafo plano local: desde la semiarista a→b, la
-/// siguiente es b→c con c el vecino anterior a `a` en el orden antihorario de
-/// `b`. Esa regla es una permutación de las semiaristas y cada órbita es una
-/// cara. Las órbitas largas son agujeros: se rellenan salvo que recorran el
-/// borde de la malla de entrada.
-fn trace_faces(
-    neighbors: &[Vec<u32>],
-    vertices: &[V3],
-    normals: &[V3],
-    on_boundary: &[bool],
-) -> Vec<Vec<u32>> {
-    let mut visited: Vec<Vec<bool>> = neighbors.iter().map(|l| vec![false; l.len()]).collect();
-    let mut faces = Vec::new();
-    let mut face: Vec<u32> = Vec::new();
-
-    for start in 0..neighbors.len() {
-        for k in 0..neighbors[start].len() {
-            if visited[start][k] {
-                continue;
-            }
-            face.clear();
-            let (mut cur, mut kk) = (start, k);
-            loop {
-                visited[cur][kk] = true;
-                face.push(cur as u32);
-                let next = neighbors[cur][kk] as usize;
-                let list = &neighbors[next];
-                let back = list.iter().position(|&x| x as usize == cur).expect("adyacencia simétrica");
-                (cur, kk) = (next, (back + list.len() - 1) % list.len());
-                if (cur, kk) == (start, k) || visited[cur][kk] {
-                    break;
+    let mut paired = vec![false; halves.len()];
+    let mut faces = Vec::with_capacity(halves.len() / 2 + 1);
+    for (idx, t) in halves.iter().enumerate() {
+        if paired[idx] {
+            continue;
+        }
+        if let Some(k) = diagonal_of(t) {
+            let (a, b, x) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+            if let Some(&other) = by_half_edge.get(&(b, a))
+                && !paired[other]
+                && other != idx
+            {
+                let u = halves[other];
+                let ko = (0..3).find(|&j| u[j] == b).expect("comparte la diagonal");
+                if diagonal_of(&u) == Some(ko) {
+                    let y = u[(ko + 2) % 3];
+                    paired[idx] = true;
+                    paired[other] = true;
+                    faces.push(vec![a, y, b, x]);
+                    continue;
                 }
             }
-            for cycle in simple_cycles(&face) {
-                if accept_face(&cycle, vertices, normals, on_boundary) {
-                    faces.push(cycle);
-                }
-            }
+        }
+    }
+    for (idx, t) in halves.iter().enumerate() {
+        if !paired[idx] {
+            faces.push(t.to_vec());
         }
     }
     faces
 }
 
-/// Parte un loop cerrado que repite vértices (puentes, cruces) en ciclos
-/// simples; los tramos de ida y vuelta quedan como ciclos de 2 y se descartan.
+/// Rellena los agujeros: cada loop de semiaristas sin gemela se cierra con un
+/// polígono, salvo que siga el borde real de la entrada o sea muy largo.
+fn fill_holes(faces: &mut Vec<Vec<u32>>, on_boundary: &[bool]) {
+    let mut half_edges: std::collections::HashSet<(u32, u32)> = Default::default();
+    for f in faces.iter() {
+        for k in 0..f.len() {
+            half_edges.insert((f[k], f[(k + 1) % f.len()]));
+        }
+    }
+    // Semiaristas del agujero: las gemelas que faltan, indexadas por su origen
+    let mut open: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut missing: Vec<(u32, u32)> = half_edges
+        .iter()
+        .filter(|&&(a, b)| !half_edges.contains(&(b, a)))
+        .map(|&(a, b)| (b, a))
+        .collect();
+    missing.sort_unstable();
+    for &(a, b) in &missing {
+        open.entry(a).or_default().push(b);
+    }
+
+    for &(start, first) in &missing {
+        if !open.get(&start).is_some_and(|l| l.contains(&first)) {
+            continue; // ya usada
+        }
+        let mut loop_ = vec![start];
+        let mut cur = first;
+        let take = |open: &mut HashMap<u32, Vec<u32>>, a: u32, b: u32| {
+            if let Some(list) = open.get_mut(&a) {
+                list.retain(|&x| x != b);
+            }
+        };
+        take(&mut open, start, first);
+        let mut closed = false;
+        while loop_.len() <= MAX_HOLE_SIZE {
+            if cur == start {
+                closed = true;
+                break;
+            }
+            loop_.push(cur);
+            let Some(&next) = open.get(&cur).and_then(|l| l.first()) else { break };
+            take(&mut open, cur, next);
+            cur = next;
+        }
+        if !closed {
+            continue;
+        }
+        // Un agujero que pasa dos veces por un vértice se parte en ciclos simples
+        for cycle in simple_cycles(&loop_) {
+            let along_boundary =
+                cycle.iter().filter(|&&v| on_boundary[v as usize]).count() * 2 >= cycle.len();
+            if cycle.len() >= 3 && !along_boundary {
+                faces.push(cycle);
+            }
+        }
+    }
+}
+
+/// Parte un loop cerrado que repite vértices en ciclos simples; los tramos de
+/// ida y vuelta quedan como ciclos de 2 y se descartan.
 fn simple_cycles(walk: &[u32]) -> Vec<Vec<u32>> {
     let mut cycles = Vec::new();
     let mut stack: Vec<u32> = Vec::with_capacity(walk.len());
@@ -254,33 +287,6 @@ fn simple_cycles(walk: &[u32]) -> Vec<Vec<u32>> {
     }
     cycles.push(stack);
     cycles
-}
-
-fn accept_face(face: &[u32], vertices: &[V3], normals: &[V3], on_boundary: &[bool]) -> bool {
-    if face.len() < 3 || face.len() > MAX_HOLE_SIZE {
-        return false;
-    }
-    let along_boundary = {
-        let count = face.iter().filter(|&&v| on_boundary[v as usize]).count();
-        count * 2 >= face.len()
-    };
-    let mut newell = V3::zeros();
-    let mut nsum = V3::zeros();
-    for (idx, &v) in face.iter().enumerate() {
-        let (p, q) = (vertices[v as usize], vertices[face[(idx + 1) % face.len()] as usize]);
-        newell += p.cross(&q);
-        nsum += normals[v as usize];
-    }
-    let forward = newell.dot(&nsum) > 0.0;
-    match (face.len() <= MAX_FACE_SIZE, forward) {
-        (true, true) => true,
-        // Loop invertido: el contorno exterior de un borde, o un pliegue local
-        // del grafo que se cierra igual (la relajación posterior lo despliega)
-        (true, false) => !along_boundary,
-        // Agujero: se rellena salvo que siga el borde real de la entrada
-        (false, true) => !along_boundary,
-        (false, false) => false,
-    }
 }
 
 /// Divide cada polígono de n lados en n quads (centroide + puntos medios) y
@@ -333,53 +339,58 @@ pub(crate) fn polygons_to_quads(poly: &Polygons) -> (QuadMesh, Vec<bool>) {
 mod tests {
     use super::*;
 
-    fn grid(n: usize) -> (Vec<Vec<u32>>, Vec<V3>, Vec<V3>) {
-        let idx = |i: usize, j: usize| (i * (n + 1) + j) as u32;
-        let mut vertices = Vec::new();
-        let mut neighbors = vec![Vec::new(); (n + 1) * (n + 1)];
-        for i in 0..=n {
-            for j in 0..=n {
-                vertices.push(V3::new(j as f64, i as f64, 0.0));
-                if j < n {
-                    neighbors[idx(i, j) as usize].push(idx(i, j + 1));
-                    neighbors[idx(i, j + 1) as usize].push(idx(i, j));
-                }
-                if i < n {
-                    neighbors[idx(i, j) as usize].push(idx(i + 1, j));
-                    neighbors[idx(i + 1, j) as usize].push(idx(i, j));
-                }
-            }
-        }
-        let normals = vec![V3::z(); vertices.len()];
-        for (a, list) in neighbors.iter_mut().enumerate() {
-            sort_by_angle(list, a, &vertices, &normals);
-        }
-        (neighbors, vertices, normals)
+    #[test]
+    fn halves_sharing_a_diagonal_become_a_quad() {
+        // Celda 0-1-2-3 partida por la diagonal 0-2, más un triángulo suelto
+        let halves = [[0, 1, 2], [0, 2, 3], [1, 4, 2]];
+        let faces = pair_halves(&halves, |a, b| (a.min(b), a.max(b)) == (0, 2));
+        assert_eq!(faces.len(), 2);
+        // El mismo ciclo 0-1-2-3, empezando donde sea
+        let quad = &faces[0];
+        let start = quad.iter().position(|&v| v == 0).unwrap();
+        let rotated: Vec<u32> = (0..4).map(|k| quad[(start + k) % 4]).collect();
+        assert_eq!(rotated, vec![0, 1, 2, 3]);
+        assert_eq!(faces[1], vec![1, 4, 2]);
     }
 
     #[test]
-    fn traces_every_cell_of_a_grid_counterclockwise() {
-        let (neighbors, vertices, normals) = grid(3);
-        let faces = trace_faces(&neighbors, &vertices, &normals, &vec![false; vertices.len()]);
-        assert_eq!(faces.len(), 9);
-        for f in &faces {
-            assert_eq!(f.len(), 4);
-            let [a, b, c] = [0, 1, 2].map(|k| vertices[f[k] as usize]);
-            assert!((b - a).cross(&(c - b)).z > 0.0);
-        }
+    fn overlapping_collapsed_triangles_keep_the_best_supported() {
+        // (0,1,2) aparece dos veces (desde vértices distintos); (0,1,3) usa la
+        // misma semiarista 0→1 una sola vez: es un pliegue y se descarta.
+        // (4,5,6) está degenerado tras el colapso.
+        let cluster = [0, 1, 2, 3, 0, 0, 1, 1, 2];
+        let tris = [[0, 1, 2], [4, 7, 8], [0, 1, 3], [4, 5, 6]];
+        let out = collapsed_triangles(&tris, &cluster);
+        assert_eq!(out, vec![[0, 1, 2]]);
     }
 
     #[test]
-    fn isolated_cycle_leaves_no_pillow() {
-        let faces = vec![vec![0, 1, 2, 3], vec![3, 2, 1, 0], vec![4, 5, 6]];
-        assert_eq!(remove_pillows(faces), vec![vec![4, 5, 6]]);
+    fn small_holes_are_filled_but_real_boundaries_are_not() {
+        // Anillo de 4 quads alrededor de un agujero cuadrado 4-5-6-7
+        let mut faces = vec![
+            vec![0, 1, 5, 4],
+            vec![1, 2, 6, 5],
+            vec![2, 3, 7, 6],
+            vec![3, 0, 4, 7],
+        ];
+        // Sin bordes en la entrada, el anillo tiene dos agujeros: se cierran ambos
+        let mut on_boundary = vec![false; 8];
+        fill_holes(&mut faces, &on_boundary);
+        assert_eq!(faces.len(), 6);
+        assert!(faces[4..].iter().all(|f| f.len() == 4));
+
+        // Si el contorno exterior es borde de la entrada, solo se cierra el interior
+        faces.truncate(4);
+        on_boundary[..4].fill(true);
+        fill_holes(&mut faces, &on_boundary);
+        assert_eq!(faces.len(), 5);
+        assert!(faces[4].iter().all(|&v| v >= 4));
     }
 
     #[test]
     fn walks_split_into_simple_cycles() {
         // Dos ciclos unidos por el puente 2-5: 0 1 2 5 6 7 5 2 3
-        let walk = [0, 1, 2, 5, 6, 7, 5, 2, 3];
-        let cycles = simple_cycles(&walk);
+        let cycles = simple_cycles(&[0, 1, 2, 5, 6, 7, 5, 2, 3]);
         assert!(cycles.contains(&vec![5, 6, 7]));
         assert!(cycles.contains(&vec![2, 5]));
         assert!(cycles.contains(&vec![0, 1, 2, 3]));
@@ -406,4 +417,3 @@ mod tests {
         assert_eq!(topo.euler_characteristic, 1);
     }
 }
-

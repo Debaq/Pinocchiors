@@ -1,7 +1,7 @@
 # TODO Fix — Auditoría 2026-09-26
 
 Resultado de la auditoría del workspace. Estado base: `cargo build` y `cargo check -p pinocchio-app` limpios, 488 tests OK — los bugs de abajo **no** están cubiertos por tests.
-Estado al 2026-09-27: 421 tests OK (salieron ~100 de los crates de quadriflow borrados), clippy sin avisos.
+Estado al 2026-09-27: 426 tests OK (salieron ~100 de los crates de quadriflow borrados), clippy sin avisos.
 
 Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ confirmado con probe ejecutable
 
@@ -55,7 +55,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [x] `RemeshConfig` sin `adaptive` ni `remove_flips` (no hacían nada útil); GUI y frontend actualizados.
 - **Resultado:** esfera, toro y cubo salen cerrados con la χ correcta; plano 10×10 perfecto; gonfoterio (500k tris, genus 1) → 4790 quads cerrados con genus 1 en ~7 s.
 - **Tests:** `libs/quadriflow/core/tests/remesh.rs` (11) + 14 unitarios. `opt-level = 2` para quadriflow-core y nalgebra en `dev` (tests: 25 s → 1 s).
-- **Pendiente:** densidad adaptativa; optimización de singularidades por flujo (lo propio de QuadriFlow); tubos más finos que un quad pueden perder asas.
+- [x] Singularidades de posición (lo propio de QuadriFlow, 2026-09-27): `integer.rs` guarda por arista la rotación de marcos y el desplazamiento entero; las sumas no nulas alrededor de triángulos regulares se anulan moviendo cargas unitarias por caminos mínimos del grafo dual (salen por bordes o se absorben en singularidades de orientación) sin invertir caras. La extracción pasó a ser topológica: triángulos colapsados = medios quads, emparejados por la diagonal. Vértices irregulares: toro 66 → 3, esfera 34 → 20, gonfoterio 337 → 227; todo sigue cerrado y manifold.
+- **Pendiente:** densidad adaptativa; triángulos en singularidades de orientación (esfera: 20 irregulares contra 8 posibles); tubos más finos que un quad pueden perder asas.
 
 ### 22. STL desde/hacia bytes y WASM ✅ RESUELTO (2026-09-27)
 - **Problema:** `converter-wasm` anunciaba import/export STL pero el import siempre fallaba y el export no existía; `Format::can_import_bytes` decía que STL sí, pero `import_bytes` lo rechazaba. Las opciones `texture_quality`/`max_texture_size` se truncaban en silencio (300 → 44).
@@ -199,4 +200,6 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 6. ~~#8~~ ✅
 7. ~~#21 + #22 + pendientes de #8 + clippy~~ ✅
 
-Queda abierto: densidad adaptativa y flujo de singularidades en la retopología (#21), limitación de cadera (#19).
+8. ~~Singularidades de posición (#21)~~ ✅
+
+Queda abierto: densidad adaptativa y celdas triangulares en singularidades de orientación (#21), limitación de cadera (#19).

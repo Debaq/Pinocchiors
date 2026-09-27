@@ -143,11 +143,37 @@ fn sphere_is_closed_regular_and_outward() {
     assert!(mean_angle_deviation(&q) < 10.0);
 }
 
+/// Vértices interiores con valencia distinta de 4.
+fn irregular_vertices(q: &QuadMesh) -> usize {
+    let mut edges: HashMap<(usize, usize), u32> = HashMap::new();
+    for f in &q.faces {
+        for k in 0..4 {
+            let (a, b) = (f.v[k], f.v[(k + 1) % 4]);
+            *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut valence = vec![0; q.vertices.len()];
+    let mut boundary = vec![false; q.vertices.len()];
+    for (&(a, b), &count) in &edges {
+        valence[a] += 1;
+        valence[b] += 1;
+        if count == 1 {
+            boundary[a] = true;
+            boundary[b] = true;
+        }
+    }
+    (0..q.vertices.len()).filter(|&v| !boundary[v] && valence[v] > 0 && valence[v] != 4).count()
+}
+
 #[test]
 fn torus_keeps_its_genus() {
     let q = remesh(&torus(), &config(400)).unwrap();
     assert_closed_manifold(&q, 0);
     assert_face_count(&q, 400, 0.15);
+    // Un toro admite un campo sin singularidades: tras eliminar las de
+    // posición quedan muy pocos vértices irregulares
+    let irregular = irregular_vertices(&q);
+    assert!(irregular * 50 <= q.num_vertices(), "{irregular} irregulares de {}", q.num_vertices());
     for v in &q.vertices {
         let ring = (v.x * v.x + v.z * v.z).sqrt() - 1.0;
         // La entrada es facetada: la flecha de sus caras ronda 0.01
@@ -274,6 +300,7 @@ fn reports_stages_in_order() {
             RemeshStage::Hierarchy,
             RemeshStage::OrientationField,
             RemeshStage::PositionField,
+            RemeshStage::Singularities,
             RemeshStage::Extraction,
             RemeshStage::Done,
         ]

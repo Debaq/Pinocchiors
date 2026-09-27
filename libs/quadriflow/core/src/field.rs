@@ -20,6 +20,15 @@ use rayon::prelude::*;
 /// Representantes de `q0` y `q1` (entre sus 4 rotaciones) más parecidos entre sí.
 #[inline]
 pub(crate) fn compat_orientation(q0: &V3, n0: &V3, q1: &V3, n1: &V3) -> (V3, V3) {
+    let (a, b, _, _) = compat_orientation_index(q0, n0, q1, n1);
+    (a, b)
+}
+
+/// Como [`compat_orientation`], devolviendo también cuántos cuartos de vuelta
+/// (alrededor de su normal) se rotó cada vector: `a = R^k0 q0`, `b = R^k1 q1`,
+/// con `R(v) = n × v`.
+#[inline]
+pub(crate) fn compat_orientation_index(q0: &V3, n0: &V3, q1: &V3, n1: &V3) -> (V3, V3, u8, u8) {
     let a = [*q0, n0.cross(q0)];
     let b = [*q1, n1.cross(q1)];
     let (mut best, mut bi, mut bj) = (-1.0, 0, 0);
@@ -32,7 +41,9 @@ pub(crate) fn compat_orientation(q0: &V3, n0: &V3, q1: &V3, n1: &V3) -> (V3, V3)
         }
     }
     let sign = a[bi].dot(&b[bj]).signum();
-    (a[bi], b[bj] * sign)
+    // Invertir el signo es girar media vuelta
+    let k1 = bj as u8 + if sign < 0.0 { 2 } else { 0 };
+    (a[bi], b[bj] * sign, bi as u8, k1)
 }
 
 /// Punto más cercano a `p0` y `p1` que está en ambos planos tangentes.

@@ -30,15 +30,19 @@
 //! 2. **Jerarquía**: niveles cada vez más gruesos emparejando vértices.
 //! 3. **Campo de orientación** 4-RoSy, suavizado de grueso a fino.
 //! 4. **Campo de posición** 4-PoSy: un retículo local por vértice.
-//! 5. **Extracción**: se funden los vértices que caen en el mismo punto del
-//!    retículo, se trazan las caras y cada polígono se divide en quads, que se
-//!    proyectan sobre la superficie original.
+//! 5. **Singularidades de posición** (QuadriFlow): los desplazamientos enteros
+//!    entre retículos vecinos se corrigen para que sumen cero alrededor de
+//!    cada triángulo regular, sin invertir ninguno.
+//! 6. **Extracción**: se funden los vértices del mismo punto del retículo, los
+//!    triángulos que sobreviven (medios quads) se emparejan por su diagonal y
+//!    cada polígono se divide en quads, que se proyectan sobre la superficie.
 
 pub mod config;
 mod extract;
 mod features;
 mod field;
 mod hierarchy;
+mod integer;
 mod quad;
 mod surface;
 
@@ -74,6 +78,8 @@ pub enum RemeshStage {
     OrientationField,
     /// Campo de posición
     PositionField,
+    /// Eliminación de singularidades de posición
+    Singularities,
     /// Extracción de quads
     Extraction,
     /// Terminado
@@ -88,6 +94,7 @@ impl RemeshStage {
             RemeshStage::Hierarchy => "hierarchy",
             RemeshStage::OrientationField => "orientation_field",
             RemeshStage::PositionField => "position_field",
+            RemeshStage::Singularities => "singularities",
             RemeshStage::Extraction => "extraction",
             RemeshStage::Done => "done",
         }
@@ -100,6 +107,7 @@ impl RemeshStage {
             RemeshStage::Hierarchy => 15,
             RemeshStage::OrientationField => 25,
             RemeshStage::PositionField => 50,
+            RemeshStage::Singularities => 75,
             RemeshStage::Extraction => 85,
             RemeshStage::Done => 100,
         }
@@ -156,8 +164,12 @@ where
     on_progress(RemeshStage::PositionField, "Calculando el campo de posición...");
     let position = field::solve_position(&hierarchy, &orientation, scale, iterations);
 
+    on_progress(RemeshStage::Singularities, "Eliminando singularidades de posición...");
+    let mut offsets = integer::EdgeOffsets::compute(&hierarchy.levels[0], &orientation[0], &position, scale);
+    integer::remove_position_singularities(&mut offsets, &surface.triangles);
+
     on_progress(RemeshStage::Extraction, "Extrayendo quads...");
-    let polygons = extract::extract_polygons(&hierarchy.levels[0], &orientation[0], &position, scale);
+    let polygons = extract::extract_polygons(&hierarchy.levels[0], &offsets, &position, &surface.triangles);
     let (mut quads, mut fixed) = extract::polygons_to_quads(&polygons);
     if quads.is_empty() {
         return Err(RemeshError::ExtractionFailed);
