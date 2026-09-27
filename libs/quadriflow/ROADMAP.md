@@ -148,7 +148,9 @@ Plan hacia una retopología lista para producción (una fase por commit):
       "Avanzado", seguir la curvatura, densidad adaptativa, reparar malla rota
       e iteraciones; al terminar muestra el informe de calidad (resalta
       plegados, irregulares > 8 % y distancia > 2 %).
-- [x] **Fase 7 — Calidad avanzada** (investigación; un cambio adoptado):
+- [ ] **Fase 7 — Calidad avanzada** (investigada, NO resuelta; solo se
+      adoptó el cambio de gradación. Los cuatro problemas siguen abiertos:
+      ver "Pendiente"):
       - Transiciones de densidad: gradación 0.5 → 0.3. Con densidad
         adaptativa, gonfoterio: irregulares 6.0 → 5.1 %, ángulos malos 8.3 →
         5.0 %, cola conservada (original→quads 1.8 → 1.15 %); Ender: plegados
@@ -169,10 +171,53 @@ Plan hacia una retopología lista para producción (una fase por commit):
         (audiómetro: plegados 33 → 155). Requiere otra extracción (dual
         contouring con QEF).
 
-## Pendiente
+## Pendiente (fase 8 en adelante)
 
-- Bandas de un quad de alto con dislocaciones (cantos de discos, paredes):
-  mover la dislocación fuera de la banda antes de extraer.
-- Dual contouring con QEF en la reconstrucción, para conservar aristas vivas.
-- Densidad adaptativa sin costo en regularidad (transiciones con patrones
-  fijos de refinamiento).
+Los problemas abiertos tienen solución conocida; lo que cambia es el
+esfuerzo. Los intentos acotados de la fase 7 fallaron, pero identificaron las
+causas reales. Cada cambio en su commit, comparado antes/después con el banco
+a varias densidades (una sola corrida por modelo es ruido) y con casos límite
+con tiempo máximo (dos experimentos se colgaron cientos de segundos).
+
+### Primero: probar personajes reales
+
+El banco no tiene ningún personaje para rigging (humanoide con manos y dedos).
+Antes de decidir los puntos 2A y 4, agregar 1–2 humanoides y medir: dedos
+separados, loops en rodillas y codos, simetría en la línea media. Eso define
+si la densidad adaptativa por niveles hace falta o basta con más quads.
+
+### Propuestas
+
+| # | Problema | Propuesta | ¿Vale la pena? | Esfuerzo | Riesgo |
+|---|---|---|---|---|---|
+| 1 | Quads plegados en bandas de un quad de alto (canto del disco de Part 1, paredes): una dislocación del retículo no tiene dónde acomodarse | En `integer.rs`, encarecer que las cargas de posición crucen zonas donde dos aristas vivas están a menos de dos quads, para que salgan por una zona ancha | **Sí**: causa la mayoría de los plegados en CAD | Medio | Bajo: cambio de costos en una etapa existente, fácil de revertir |
+| 2A | Pares 3-5 sobrantes junto a singularidades de orientación (esfera: 14 irregulares, mínimo 8) | Simplificación posterior de la malla de quads con operadores que desplazan los pares hasta anularlos (Bozzo y Tarini, *Practical quad mesh simplification*) | **Probablemente**: loops más limpios, mejor deformación del rig | Medio | Medio: puede introducir pliegues o romper la variedad; empezar como opción |
+| 2B | Ídem | Orientación y posición óptimas en forma global (Bommes et al., *Mixed-Integer Quadrangulation*); `pinocchio-sparse` ayuda | **No por ahora** | Muy grande | Alto: rendimiento del solver con 50k quads, redondeo |
+| 3 | Aristas vivas redondeadas al reconstruir mallas rotas (audiómetro) | Extraer con *dual contouring* con QEF (Ju et al. 2002; variante manifold: Schaefer et al. 2007) en `rebuild.rs` | **Solo si importan las STL rotas de CAD** (impresión 3D); para personajes casi no aporta | Medio-grande | Medio: toca la reconstrucción, hoy robusta |
+| 4 | La densidad adaptativa sube los irregulares: con escala continua los retículos vecinos nunca calzan | Tamaños por niveles (1×, ½×, ¼×): cada región con su tamaño y fronteras cosidas con plantillas fijas de transición 2:1 (como el mallado por octrees) | **Potencialmente mucho** para personajes (dedos, colas, orejas); lo decide la prueba con personajes | Grande | Alto: el mayor cambio de arquitectura |
+| 5 | Chaflanes angostos que la densidad adaptativa no detecta | Medir el ancho de la cara entre dos aristas vivas y sumarlo al criterio de tamaño | Solo después del 4 | Chico | Bajo |
+
+Orden recomendado: personajes → 1 → 2A → (4 según personajes) → (3 si la
+impresión 3D de STL rotas es un caso de uso importante).
+
+### Límites matemáticos (no son bugs)
+
+- Una esfera necesita al menos 8 vértices irregulares (Poincaré-Hopf): solo
+  se puede bajar de 14 a 8.
+- Un rasgo más angosto que un quad no se representa sin quads más chicos ahí
+  (agujeros chicos, colas finas, chaflanes a densidad uniforme); la salida es
+  la densidad adaptativa.
+- Toda transición de tamaño necesita vértices irregulares: se pueden ordenar
+  (punto 4), no eliminar.
+- Con simetría espejo, un tubo más fino que un quad justo sobre el plano puede
+  perderse (la cola del gonfoterio); se mitiga activando además la densidad
+  adaptativa.
+
+### Riesgos generales
+
+- Complejidad: el crate creció mucho en las fases 1–7; cada módulo nuevo es
+  más código que mantener.
+- Regresiones silenciosas: el pipeline es sensible; un cambio que mejora un
+  modelo empeora otro.
+- Pendiente de verificar a mano: el panel de retopología de la app (fase 6)
+  no se probó en pantalla.
