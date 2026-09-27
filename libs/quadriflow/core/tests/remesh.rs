@@ -4,7 +4,7 @@
 use pinocchio_math::nalgebra::Vector3 as V3;
 use pinocchio_math::Vector3;
 use pinocchio_mesh::Mesh;
-use quadriflow_core::{remesh, remesh_with_callback, QuadMesh, RemeshConfig, RemeshError, RemeshStage};
+use quadriflow_core::{remesh, remesh_with_callback, QuadMesh, Rebuild, RemeshConfig, RemeshError, RemeshStage};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
@@ -279,6 +279,94 @@ fn coarse_input_is_refined() {
     assert_closed_manifold(&q, 2);
     assert_face_count(&q, 600, 0.1);
     assert!(mean_angle_deviation(&q) < 2.0);
+}
+
+/// Dos esferas de radio 1 que se cruzan, separadas por `gap` en x.
+fn overlapping_spheres(gap: f64) -> Mesh {
+    let (mut p, mut t) = sphere_triangles(1.0);
+    let n = p.len();
+    p.extend(sphere_triangles(1.0).0.iter().map(|q| Vector3(q.0 + V3::new(gap, 0.0, 0.0))));
+    t.extend(sphere_triangles(1.0).1.iter().map(|f| f.map(|i| i + n)));
+    Mesh::from_triangles(&p, &t)
+}
+
+fn component_count(q: &QuadMesh) -> usize {
+    let mut parent: Vec<usize> = (0..q.vertices.len()).collect();
+    fn find(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    for f in &q.faces {
+        for k in 1..4 {
+            let (a, b) = (find(&mut parent, f.v[0]), find(&mut parent, f.v[k]));
+            parent[a] = b;
+        }
+    }
+    let used: std::collections::HashSet<usize> = q.faces.iter().flat_map(|f| f.v).collect();
+    used.into_iter().filter(|&v| find(&mut parent, v) == v).count()
+}
+
+#[test]
+fn overlapping_shells_become_their_union() {
+    let q = remesh(&overlapping_spheres(1.0), &config(800)).unwrap();
+    assert_closed_manifold(&q, 2);
+    assert_eq!(component_count(&q), 1);
+    assert_face_count(&q, 800, 0.15);
+    // Ningún vértice dentro de la otra esfera: la pared interior desaparece
+    for v in &q.vertices {
+        let inside_both = v.norm() < 0.95 && (v - V3::new(1.0, 0.0, 0.0)).norm() < 0.95;
+        assert!(!inside_both, "vértice interior {v:?}");
+    }
+    assert!(mean_angle_deviation(&q) < 12.0, "{}", mean_angle_deviation(&q));
+    assert!(irregular_vertices(&q) < q.num_vertices() / 10, "{} irregulares", irregular_vertices(&q));
+    let again = remesh(&overlapping_spheres(1.0), &config(800)).unwrap();
+    assert_eq!((q.faces, q.vertices), (again.faces, again.vertices));
+}
+
+#[test]
+fn rebuild_is_reported_as_its_own_stage() {
+    let mut stages = Vec::new();
+    remesh_with_callback(&overlapping_spheres(1.0), &config(200), |stage, _| stages.push(stage)).unwrap();
+    assert_eq!(&stages[..3], [RemeshStage::Preprocess, RemeshStage::Rebuild, RemeshStage::Hierarchy]);
+    let progress: Vec<u32> = stages.iter().map(|s| s.progress()).collect();
+    assert!(progress.windows(2).all(|w| w[0] < w[1]));
+}
+
+#[test]
+fn rebuild_never_keeps_the_input_shells() {
+    let config = RemeshConfig { rebuild: Rebuild::Never, ..config(800) };
+    let q = remesh(&overlapping_spheres(1.0), &config).unwrap();
+    assert_eq!(component_count(&q), 2);
+}
+
+#[test]
+fn non_manifold_fin_is_removed() {
+    // Aleta sin volumen colgando de una arista de la esfera: tres caras por arista
+    let (mut p, mut t) = sphere_triangles(1.0);
+    let [a, b, _] = t[0];
+    let tip = p.len();
+    p.push(Vector3((p[a].0 + p[b].0) * 1.5));
+    t.push([a, b, tip]);
+    let q = remesh(&Mesh::from_triangles(&p, &t), &config(400)).unwrap();
+    assert_closed_manifold(&q, 2);
+    assert_face_count(&q, 400, 0.15);
+    for v in &q.vertices {
+        assert!((v.norm() - 1.0).abs() < 0.03, "vértice fuera de la esfera: {}", v.norm());
+    }
+}
+
+#[test]
+fn rebuild_always_on_a_clean_sphere_keeps_it() {
+    let config = RemeshConfig { rebuild: Rebuild::Always, ..config(400) };
+    let q = remesh(&sphere(1.0), &config).unwrap();
+    assert_closed_manifold(&q, 2);
+    assert_face_count(&q, 400, 0.15);
+    for v in &q.vertices {
+        assert!((v.norm() - 1.0).abs() < 0.02, "{}", v.norm());
+    }
 }
 
 #[test]

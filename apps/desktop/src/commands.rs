@@ -1163,6 +1163,7 @@ pub async fn run_retopology(
         sharp_angle: config.sharp_angle.map(|a| (a as f64).to_radians())
             .unwrap_or(std::f64::consts::FRAC_PI_4),
         smooth_iterations: config.smooth_iterations.unwrap_or(10),
+        ..Default::default()
     };
 
     let progress = on_progress.clone();

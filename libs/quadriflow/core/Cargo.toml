@@ -11,3 +11,6 @@ pinocchio-mesh = { workspace = true }
 pinocchio-spatial = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
+
+[dev-dependencies]
+pinocchio-mesh = { workspace = true, features = ["converter"] }

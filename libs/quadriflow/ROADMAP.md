@@ -14,6 +14,7 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 
 | Módulo | Qué hace |
 |---|---|
+| `rebuild.rs` | Reconstrucción de entradas rotas: número de vueltas rápido (dipolos, Barill 2018) en una grilla, distancias exactas en los cruces, *marching tetrahedra* y colapso de astillas |
 | `surface.rs` | Soldado de costuras, subdivisión (arista más larga primero), normales, áreas, adyacencia, bordes y aristas vivas → restricciones |
 | `hierarchy.rs` | Niveles por emparejamiento de vértices vecinos + coloreo para Gauss-Seidel paralelo |
 | `field.rs` | Campos extrínsecos de orientación (4-RoSy) y posición (4-PoSy), de grueso a fino |
@@ -43,14 +44,47 @@ Singularidades de posición eliminadas (vértices interiores con valencia ≠ 4)
 
 Rendimiento: ~500k triángulos → 5000 quads en ~7 s (16 hilos).
 
+## Entradas rotas (`RemeshConfig::rebuild`)
+
+Con `Rebuild::Auto` (por defecto) la superficie se reconstruye si tiene aristas
+no-manifold, orientación incoherente o cáscaras cerradas metidas unas en otras;
+se retopologiza la superficie exterior de la unión. Las superficies abiertas
+con cáscaras superpuestas no se reconstruyen (se taparían sus agujeros).
+Vóxel = ⅓ del lado de un quad; grilla de 48 a 320 vóxeles en el eje mayor.
+Sobre una superficie reconstruida `preserve_sharp` no tiene efecto: sus
+esquinas quedan redondeadas a escala de vóxel.
+
+## Banco de modelos reales
+
+`cargo run --release -p quadriflow-core --example quality -- <modelo> <quads> [--sharp] [--rebuild always|never] [--obj salida.obj]`
+
+| Modelo | Entrada | Quads (obj.) | Irregulares | Ángulos fuera de [60°,120°] | Dist. máx (% diag.) |
+|---|---|---|---|---|---|
+| Gonfoterio | 500k tris, limpia | 5014 (5000) | 4.5 % | 3.9 % | 1.18 |
+| Conejo (STL) | 15 cáscaras, 1062 aristas no-manifold | 3354 (3000) | 3.8 % | 7.9 % | 0.50 |
+| Oído interno | 9 piezas abiertas | 2496 (3000) | 6.3 % | 7.5 % | 1.36 |
+| Molde CAD `--sharp` | limpia | 1992 (2000) | 4.6 % | 9.0 % | 1.35 |
+| Audiómetro (STL) | 1989 aristas no-manifold | 2432 (3000) | 10.3 % | 9.4 % | 2.31 |
+| Audiómetro, 10k | ídem | 9540 (10000) | 5.1 % | 3.9 % | 1.48 |
+
+Sin reconstrucción el conejo y el audiómetro salían rotos (20 % y 24 %
+irregulares, 31 % y 59 % de ángulos malos, quads en astillas y aletas).
+
 ## Pendiente
 
-- [ ] Densidad adaptativa (quads más chicos donde hay más curvatura).
+Plan hacia una retopología lista para producción (una fase por commit):
+
 - [x] Eliminación de singularidades de posición (QuadriFlow): camino mínimo por
-      carga unitaria en vez de un flujo global; no mueve singularidades de
-      orientación.
-- [ ] En la esfera quedan triángulos en las singularidades de orientación
-      (20 irregulares contra 8 posibles): una celda triangular termina en 3
-      quads en vez de un vértice de valencia 3.
-- [ ] Estructuras más finas que un quad (tubos delgados) pueden cerrarse o
-      perder asas; subir el número de quads lo mitiga.
+      carga unitaria en vez de un flujo global.
+- [x] **Fase 1 — Entradas rotas**: reconstrucción volumétrica automática.
+- [ ] **Fase 2 — Limpieza topológica**: disolver vértices de valencia 2,
+      doublets y quads con aristas de largo cero (molde: aspecto máx ~10¹²);
+      vértice de valencia 3/5 en las singularidades de orientación.
+- [ ] **Fase 3 — Aristas vivas**: esquinas fijas, aristas de quads alineadas a
+      las curvas vivas (aletas en las esquinas del molde) y aristas vivas
+      recuperadas tras la reconstrucción.
+- [ ] **Fase 4 — Geometría**: relajación que respete rasgos, sin quads
+      doblados; cantidad de quads ±10 %; distancia máx < 0.5 % de la diagonal.
+- [ ] **Fase 5 — Personajes**: simetría espejo, densidad adaptativa,
+      estructuras delgadas (colmillos, paredes de carcasas).
+- [ ] **Fase 6 — App**: exponer reconstrucción, simetría y densidad; métricas.

@@ -25,7 +25,9 @@
 //! Sigue *Instant Field-Aligned Meshes* (Jakob et al. 2015), la base de
 //! QuadriFlow (Huang et al. 2018):
 //!
-//! 1. **Preparación**: soldado de costuras y subdivisión hasta que las aristas
+//! 1. **Preparación**: soldado de costuras; si la malla está rota (aristas
+//!    no-manifold, cáscaras superpuestas) se reconstruye por vóxeles; luego
+//!    subdivisión hasta que las aristas
 //!    sean más cortas que medio quad; se marcan bordes y aristas vivas.
 //! 2. **Jerarquía**: niveles cada vez más gruesos emparejando vértices.
 //! 3. **Campo de orientación** 4-RoSy, suavizado de grueso a fino.
@@ -44,9 +46,10 @@ mod field;
 mod hierarchy;
 mod integer;
 mod quad;
+mod rebuild;
 mod surface;
 
-pub use config::RemeshConfig;
+pub use config::{Rebuild, RemeshConfig};
 pub use quad::{QuadFace, QuadMesh, QuadTopology};
 
 use pinocchio_mesh::Mesh;
@@ -72,6 +75,8 @@ pub enum RemeshError {
 pub enum RemeshStage {
     /// Soldado, subdivisión y detección de bordes
     Preprocess,
+    /// Reconstrucción por vóxeles de una entrada rota (solo si hace falta)
+    Rebuild,
     /// Construcción de la jerarquía multiresolución
     Hierarchy,
     /// Campo de orientación
@@ -91,6 +96,7 @@ impl RemeshStage {
     pub fn name(&self) -> &'static str {
         match self {
             RemeshStage::Preprocess => "preprocess",
+            RemeshStage::Rebuild => "rebuild",
             RemeshStage::Hierarchy => "hierarchy",
             RemeshStage::OrientationField => "orientation_field",
             RemeshStage::PositionField => "position_field",
@@ -104,6 +110,7 @@ impl RemeshStage {
     pub fn progress(&self) -> u32 {
         match self {
             RemeshStage::Preprocess => 2,
+            RemeshStage::Rebuild => 5,
             RemeshStage::Hierarchy => 15,
             RemeshStage::OrientationField => 25,
             RemeshStage::PositionField => 50,
@@ -141,9 +148,24 @@ where
     let mut surface = Surface::from_mesh(mesh);
     let diagonal = surface.bbox_diagonal();
     surface.weld(diagonal * 1e-7);
-    let area = surface.area();
+    let mut area = surface.area();
     if surface.triangles.is_empty() || area.is_nan() || area <= 0.0 {
         return Err(RemeshError::EmptyMesh);
+    }
+    let rebuild = match config.rebuild {
+        Rebuild::Auto => rebuild::needs_rebuild(&surface),
+        Rebuild::Always => true,
+        Rebuild::Never => false,
+    };
+    if rebuild {
+        on_progress(RemeshStage::Rebuild, "Reconstruyendo la superficie...");
+        let quad_edge = (area / config.target_faces as f64).sqrt();
+        surface = rebuild::rebuild(&surface, quad_edge / REBUILD_VOXELS_PER_QUAD);
+        surface.weld(diagonal * 1e-7);
+        area = surface.area();
+        if surface.triangles.is_empty() || area.is_nan() || area <= 0.0 {
+            return Err(RemeshError::EmptyMesh);
+        }
     }
     let original = surface.clone();
 
@@ -151,7 +173,9 @@ where
     let scale = 2.0 * (area / config.target_faces as f64).sqrt();
     let max_edge = (scale * 0.5).min(surface.average_edge_length() * 2.0);
     surface.subdivide(max_edge);
-    let sharp = config.preserve_sharp.then_some(config.sharp_angle);
+    // Las esquinas de una superficie reconstruida están redondeadas a escala de
+    // vóxel: su ángulo diedro no distingue aristas vivas del escalonado
+    let sharp = (config.preserve_sharp && !rebuild).then_some(config.sharp_angle);
     let graph = surface.vertex_graph(sharp, config.sharp_angle);
 
     on_progress(RemeshStage::Hierarchy, "Construyendo la jerarquía...");
@@ -194,6 +218,9 @@ where
     );
     Ok(quads)
 }
+
+/// Vóxeles por lado de quad en la reconstrucción.
+const REBUILD_VOXELS_PER_QUAD: f64 = 3.0;
 
 /// Iteraciones de relajación tangencial de la malla final.
 const RELAX_ITERATIONS: usize = 3;

@@ -7,7 +7,7 @@ pub struct RemeshConfig {
     pub target_faces: usize,
 
     /// Alinear los quads a las aristas vivas (además de los bordes, que se
-    /// respetan siempre).
+    /// respetan siempre). Sin efecto si la superficie se reconstruye.
     pub preserve_sharp: bool,
 
     /// Ángulo diedro (radianes) a partir del cual una arista es viva. También
@@ -16,6 +16,25 @@ pub struct RemeshConfig {
 
     /// Iteraciones de suavizado de los campos en cada nivel de la jerarquía.
     pub smooth_iterations: usize,
+
+    /// Cuándo reconstruir la superficie antes de retopologizar.
+    pub rebuild: Rebuild,
+}
+
+/// Reconstrucción volumétrica de la entrada: reemplaza la malla por la
+/// superficie exterior de la unión de sus volúmenes. Arregla aristas
+/// no-manifold, cáscaras superpuestas y caras interiores; a cambio redondea
+/// las aristas vivas a la escala de un tercio de quad y cierra los agujeros.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Rebuild {
+    /// Solo si la malla tiene aristas no-manifold, orientación incoherente o
+    /// cáscaras metidas unas en otras.
+    #[default]
+    Auto,
+    /// Siempre.
+    Always,
+    /// Nunca: la entrada se usa tal cual.
+    Never,
 }
 
 impl Default for RemeshConfig {
@@ -25,6 +44,7 @@ impl Default for RemeshConfig {
             preserve_sharp: false,
             sharp_angle: std::f64::consts::FRAC_PI_4, // 45°
             smooth_iterations: 10,
+            rebuild: Rebuild::Auto,
         }
     }
 }
