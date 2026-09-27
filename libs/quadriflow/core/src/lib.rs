@@ -51,6 +51,7 @@ mod hierarchy;
 mod isotropic;
 mod integer;
 mod quad;
+pub mod quality;
 mod rebuild;
 mod sizing;
 mod smooth;
@@ -59,6 +60,7 @@ mod surface;
 
 pub use config::{Rebuild, RemeshConfig, Symmetry};
 pub use quad::{QuadFace, QuadMesh, QuadTopology};
+pub use quality::QualityReport;
 
 use pinocchio_mesh::Mesh;
 use pinocchio_spatial::{Bvh, Triangle};

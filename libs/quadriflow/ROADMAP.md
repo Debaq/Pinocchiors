@@ -26,6 +26,7 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 | `cleanup.rs` | Limpieza de la malla poligonal: colapso de aristas degeneradas, fusión de caras, *doublets* y colapso de diagonales mientras baje Σ(valencia−4)² + Σ(lados−4)², sin plegar caras ni cerrar esquinas bajo 30° |
 | `features.rs` | Proyección de vértices sobre bordes y aristas vivas |
 | `smooth.rs` | Optimización de la malla final: cada vértice va a la mejor de varias posiciones (promedio de vecinos, "paralelogramo" y, si tiene quads malos, búsqueda local) según Σ(1 − calidad)² con barrera antes de plegarse; los de arista viva se deslizan sobre ella y las esquinas quedan fijas |
+| `quality.rs` | Informe de calidad público (`quality::analyze`): irregulares, plegados, deformes, estirados, desvío de ángulos y distancia a la original |
 | `quad.rs` | `QuadMesh`, análisis topológico, separación de pellizcos, componentes |
 
 ## Garantías (tests en `core/tests/remesh.rs`)
@@ -143,5 +144,11 @@ Plan hacia una retopología lista para producción (una fase por commit):
         los rasgos casi desaparece. Por eso es opcional.
       - Queda: chaflanes angostos entre dos aristas vivas (el grosor no los
         detecta); transiciones de densidad más regulares.
-- [ ] **Fase 6 — App**: exponer reconstrucción, alineación a curvatura,
-      simetría y densidad adaptativa; métricas de calidad en la interfaz.
+- [x] **Fase 6 — App**: el panel de retopología expone simetría y, en
+      "Avanzado", seguir la curvatura, densidad adaptativa, reparar malla rota
+      e iteraciones; al terminar muestra el informe de calidad (resalta
+      plegados, irregulares > 8 % y distancia > 2 %).
+- [ ] **Fase 7 — Calidad avanzada**: chaflanes angostos entre aristas vivas,
+      transiciones de densidad regulares (para activar la densidad adaptativa
+      por defecto), pares 3-5 junto a singularidades de orientación, aristas
+      vivas tras la reconstrucción.

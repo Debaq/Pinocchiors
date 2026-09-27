@@ -12,7 +12,7 @@ use pinocchio_skeleton::{
     fit_to_bounds, BasicSkeleton, BirdSkeleton, Bone, CentaurSkeleton, HorseSkeleton, HumanSkeleton,
     MechSkeleton, QuadSkeleton, SerpentSkeleton, SpiderSkeleton, Skeleton,
 };
-use quadriflow_core::{remesh_with_callback, RemeshConfig};
+use quadriflow_core::{remesh_with_callback, Rebuild, RemeshConfig, Symmetry};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{ipc::Channel, State};
@@ -166,6 +166,73 @@ pub struct RetopologyConfig {
     pub sharp_angle: Option<f32>,
     /// Iteraciones de suavizado de los campos por nivel
     pub smooth_iterations: Option<usize>,
+    /// Reconstrucción de mallas rotas: "auto", "always" o "never"
+    pub rebuild: Option<String>,
+    /// Alineación a las direcciones de curvatura (0 = nada, 1 = completa)
+    pub curvature_alignment: Option<f64>,
+    /// Quads más chicos donde la pieza es más delgada que un quad
+    pub adaptive_density: Option<bool>,
+    /// Simetría espejo: "none", "x", "y" o "z"
+    pub symmetry: Option<String>,
+}
+
+impl RetopologyConfig {
+    fn to_remesh_config(&self) -> Result<RemeshConfig, String> {
+        let defaults = RemeshConfig::default();
+        let rebuild = match self.rebuild.as_deref() {
+            None | Some("auto") => Rebuild::Auto,
+            Some("always") => Rebuild::Always,
+            Some("never") => Rebuild::Never,
+            Some(other) => return Err(format!("Reconstrucción desconocida: {other}")),
+        };
+        let symmetry = match self.symmetry.as_deref() {
+            None | Some("none") => Symmetry::None,
+            Some("x") => Symmetry::X,
+            Some("y") => Symmetry::Y,
+            Some("z") => Symmetry::Z,
+            Some(other) => return Err(format!("Simetría desconocida: {other}")),
+        };
+        Ok(RemeshConfig {
+            target_faces: self.target_quads,
+            preserve_sharp: self.preserve_sharp.unwrap_or(defaults.preserve_sharp),
+            sharp_angle: self.sharp_angle.map_or(defaults.sharp_angle, |a| (a as f64).to_radians()),
+            smooth_iterations: self.smooth_iterations.unwrap_or(defaults.smooth_iterations),
+            rebuild,
+            curvature_alignment: self.curvature_alignment.unwrap_or(defaults.curvature_alignment).clamp(0.0, 1.0),
+            adaptive_density: self.adaptive_density.unwrap_or(defaults.adaptive_density),
+            symmetry,
+        })
+    }
+}
+
+/// Calidad de la malla de quads (ver `quadriflow_core::QualityReport`)
+#[derive(Debug, Clone, Serialize)]
+pub struct QuadQuality {
+    /// Porcentaje de vértices interiores con valencia distinta de 4
+    pub irregular_percent: f64,
+    /// Quads con una esquina plegada
+    pub folded_quads: usize,
+    /// Quads deformes (alguna esquina fuera de ~30°–150°)
+    pub poor_quads: usize,
+    /// Quads con un lado más de 5 veces el otro
+    pub stretched_quads: usize,
+    /// Desviación media de los ángulos respecto de 90°, en grados
+    pub mean_angle_deviation: f64,
+    /// Distancia máxima a la malla original, en % de su diagonal
+    pub max_distance_percent: Option<f64>,
+}
+
+impl From<quadriflow_core::QualityReport> for QuadQuality {
+    fn from(r: quadriflow_core::QualityReport) -> Self {
+        Self {
+            irregular_percent: r.irregular_percent(),
+            folded_quads: r.folded_quads,
+            poor_quads: r.poor_quads,
+            stretched_quads: r.stretched_quads,
+            mean_angle_deviation: r.mean_angle_deviation,
+            max_distance_percent: r.max_distance.map(|d| 100.0 * d),
+        }
+    }
 }
 
 /// Información del resultado de retopología
@@ -174,6 +241,7 @@ pub struct QuadMeshInfo {
     pub num_vertices: usize,
     pub num_quads: usize,
     pub bounding_box: BoundingBox,
+    pub quality: QuadQuality,
 }
 
 /// Datos de la malla de quads para Three.js
@@ -1157,33 +1225,29 @@ pub async fn run_retopology(
         message: "Preparando retopología...".to_string(),
     });
 
-    let remesh_config = RemeshConfig {
-        target_faces: config.target_quads,
-        preserve_sharp: config.preserve_sharp.unwrap_or(false),
-        sharp_angle: config.sharp_angle.map(|a| (a as f64).to_radians())
-            .unwrap_or(std::f64::consts::FRAC_PI_4),
-        smooth_iterations: config.smooth_iterations.unwrap_or(10),
-        ..Default::default()
-    };
+    let remesh_config = config.to_remesh_config()?;
 
     let progress = on_progress.clone();
-    let quad_mesh = tauri::async_runtime::spawn_blocking(move || {
-        remesh_with_callback(&mesh, &remesh_config, |stage, message| {
+    let (quad_mesh, quality) = tauri::async_runtime::spawn_blocking(move || {
+        let quads = remesh_with_callback(&mesh, &remesh_config, |stage, message| {
             let _ = progress.send(Progress {
                 stage: stage.name().to_string(),
                 percent: stage.progress(),
                 message: message.to_string(),
             });
-        })
+        })?;
+        let quality = quadriflow_core::quality::analyze(&quads, Some(&mesh));
+        Ok::<_, quadriflow_core::RemeshError>((quads, quality))
     })
     .await
     .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
-    .map_err(|e| format!("Error en retopología: {:?}", e))?;
+    .map_err(|e| format!("Error en retopología: {e}"))?;
 
     let info = QuadMeshInfo {
         num_vertices: quad_mesh.num_vertices(),
         num_quads: quad_mesh.num_faces(),
         bounding_box: calculate_quad_mesh_bounds(&quad_mesh),
+        quality: quality.into(),
     };
 
     let _ = on_progress.send(Progress {
@@ -1989,6 +2053,33 @@ fn calculate_quad_mesh_bounds(quad_mesh: &quadriflow_core::QuadMesh) -> Bounding
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn retopology_config_maps_to_remesh_config() {
+        let config = RetopologyConfig {
+            target_quads: 3000,
+            preserve_sharp: Some(true),
+            sharp_angle: Some(30.0),
+            smooth_iterations: None,
+            rebuild: Some("never".into()),
+            curvature_alignment: Some(2.0),
+            adaptive_density: Some(true),
+            symmetry: Some("x".into()),
+        };
+        let r = config.to_remesh_config().unwrap();
+        assert_eq!(r.target_faces, 3000);
+        assert!(r.preserve_sharp);
+        assert!((r.sharp_angle - 30f64.to_radians()).abs() < 1e-6);
+        assert_eq!(r.smooth_iterations, RemeshConfig::default().smooth_iterations);
+        assert_eq!(r.rebuild, Rebuild::Never);
+        assert_eq!(r.curvature_alignment, 1.0);
+        assert!(r.adaptive_density);
+        assert_eq!(r.symmetry, Symmetry::X);
+
+        let unknown = RetopologyConfig { symmetry: Some("w".into()), ..config };
+        assert!(unknown.to_remesh_config().is_err());
+    }
+
     use super::*;
     use converter_scene::glam::{Quat, Vec3};
     use converter_scene::{Material, Mesh as SceneMesh, Node, Primitive, Transform};

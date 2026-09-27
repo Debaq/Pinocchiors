@@ -1,5 +1,5 @@
 import { Component } from "solid-js";
-import { RetopologyPanel, type RetopologyConfig } from "../panels/RetopologyPanel";
+import { RetopologyPanel, type RetopologyConfig, type QuadQuality } from "../panels/RetopologyPanel";
 
 export interface RetopologyStepProps {
   config: RetopologyConfig;
@@ -10,6 +10,7 @@ export interface RetopologyStepProps {
   hasResult?: boolean;
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
+  quality?: QuadQuality;
 }
 
 export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
@@ -17,7 +18,8 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
     <div class="space-y-5">
       <h3 class="text-sm font-semibold text-text">Retopologia</h3>
       <p class="text-xs text-text-muted leading-relaxed">
-        Genera una malla de quads limpia usando QuadriFlow.
+        Genera una malla de quads limpia, alineada a la forma. Las mallas rotas se reparan
+        solas; la simetría deja un loop de aristas en la línea media, útil para el rig.
       </p>
       <RetopologyPanel
         config={props.config}
@@ -28,6 +30,7 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
         hasResult={props.hasResult}
         showQuadMesh={props.showQuadMesh}
         onShowQuadMeshChange={props.onShowQuadMeshChange}
+        quality={props.quality}
       />
     </div>
   );

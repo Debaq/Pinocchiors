@@ -10,6 +10,7 @@ import {
   type AutorigConfig,
   type ViewSettings,
   type RetopologyConfig,
+  type QuadQuality,
 } from "./components/panels";
 import { Viewer3D, MeshData, SkeletonData, WeightsData } from "./lib/Viewer3D";
 import { createPipelineStore } from "./lib/pipeline";
@@ -137,6 +138,7 @@ interface TauriQuadMeshInfo {
   num_vertices: number;
   num_quads: number;
   bounding_box: { min: [number, number, number]; max: [number, number, number] };
+  quality: QuadQuality;
 }
 
 interface TauriQuadMeshData {
@@ -218,7 +220,12 @@ export const App: Component = () => {
     preserveSharp: false,
     sharpAngle: 45,
     smoothIterations: 10,
+    rebuild: "auto",
+    curvatureAlignment: 1,
+    adaptiveDensity: false,
+    symmetry: "none",
   });
+  const [quadQuality, setQuadQuality] = createSignal<QuadQuality | undefined>();
   const [quadMeshData, setQuadMeshData] = createSignal<MeshData | undefined>();
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
   const [quadMeshInfo, setQuadMeshInfo] = createSignal({ vertices: 0, quads: 0 });
@@ -408,6 +415,7 @@ export const App: Component = () => {
       setQuadMeshData(undefined);
       setQuadMeshLoaded(false);
       setQuadMeshInfo({ vertices: 0, quads: 0 });
+      setQuadQuality(undefined);
       setShowQuadMesh(false);
       setCanUndoPrintScale(false);
 
@@ -569,11 +577,16 @@ export const App: Component = () => {
           preserve_sharp: config.preserveSharp,
           sharp_angle: config.sharpAngle,
           smooth_iterations: config.smoothIterations,
+          rebuild: config.rebuild,
+          curvature_alignment: config.curvatureAlignment,
+          adaptive_density: config.adaptiveDensity,
+          symmetry: config.symmetry,
         },
         onProgress,
       });
 
       setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
+      setQuadQuality(info.quality);
 
       const quadData = await invoke<TauriQuadMeshData>("get_quad_mesh_data");
 
@@ -1005,6 +1018,7 @@ export const App: Component = () => {
               hasResult: quadMeshLoaded(),
               showQuadMesh: showQuadMesh(),
               onShowQuadMeshChange: setShowQuadMesh,
+              quality: quadQuality(),
             }}
             skeletonProps={{
               presets: skeletonPresets(),

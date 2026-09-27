@@ -1,13 +1,47 @@
 import { Component, Show } from "solid-js";
-import { Panel, Slider, Checkbox, Button } from "../ui";
+import { Panel, Slider, Checkbox, Button, Select } from "../ui";
 import * as Icons from "../icons";
+
+export type RebuildMode = "auto" | "always" | "never";
+export type SymmetryAxis = "none" | "x" | "y" | "z";
 
 export interface RetopologyConfig {
   targetQuads: number;
   preserveSharp: boolean;
   sharpAngle: number;
   smoothIterations: number;
+  /** Reconstrucción de mallas rotas (no-manifold, cáscaras superpuestas) */
+  rebuild: RebuildMode;
+  /** Alineación a las direcciones de curvatura, 0–1 */
+  curvatureAlignment: number;
+  /** Quads más chicos donde la pieza es más delgada que un quad */
+  adaptiveDensity: boolean;
+  /** Simetría espejo por el centro de la caja envolvente */
+  symmetry: SymmetryAxis;
 }
+
+/** Calidad de la malla de quads resultante */
+export interface QuadQuality {
+  irregular_percent: number;
+  folded_quads: number;
+  poor_quads: number;
+  stretched_quads: number;
+  mean_angle_deviation: number;
+  max_distance_percent: number | null;
+}
+
+const SYMMETRY_OPTIONS = [
+  { value: "none", label: "Sin simetría" },
+  { value: "x", label: "Espejo en X" },
+  { value: "y", label: "Espejo en Y" },
+  { value: "z", label: "Espejo en Z" },
+];
+
+const REBUILD_OPTIONS = [
+  { value: "auto", label: "Automática (si la malla está rota)" },
+  { value: "always", label: "Siempre" },
+  { value: "never", label: "Nunca" },
+];
 
 export interface RetopologyPanelProps {
   config: RetopologyConfig;
@@ -18,7 +52,16 @@ export interface RetopologyPanelProps {
   hasResult?: boolean;
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
+  quality?: QuadQuality;
 }
+
+/** Fila del informe de calidad; `warn` la resalta. */
+const QualityRow: Component<{ label: string; value: string; warn?: boolean }> = (props) => (
+  <div class="flex justify-between text-xs">
+    <span class="text-text-muted">{props.label}</span>
+    <span class={props.warn ? "text-amber-400" : "text-text"}>{props.value}</span>
+  </div>
+);
 
 export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
   const updateConfig = (partial: Partial<RetopologyConfig>) => {
@@ -59,16 +102,57 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           />
         </Show>
 
-        {/* Smooth Iterations */}
-        <Slider
-          label="Iteraciones de suavizado"
-          value={props.config.smoothIterations}
-          onChange={(value) => updateConfig({ smoothIterations: Math.round(value) })}
-          min={1}
-          max={50}
-          step={1}
-          formatValue={(v) => `${v}`}
+        {/* Mirror symmetry */}
+        <Select
+          label="Simetría"
+          options={SYMMETRY_OPTIONS}
+          value={props.config.symmetry}
+          onChange={(value) => updateConfig({ symmetry: value as SymmetryAxis })}
         />
+
+        {/* Advanced options */}
+        <Panel title="Avanzado" defaultOpen={false}>
+          <div class="space-y-5 pt-2">
+            <Slider
+              label="Seguir la curvatura"
+              value={Math.round(props.config.curvatureAlignment * 100)}
+              onChange={(value) => updateConfig({ curvatureAlignment: value / 100 })}
+              min={0}
+              max={100}
+              step={5}
+              formatValue={(v) => `${v}%`}
+            />
+
+            <Checkbox
+              label="Densidad adaptativa (rasgos delgados)"
+              checked={props.config.adaptiveDensity}
+              onChange={(checked) => updateConfig({ adaptiveDensity: checked })}
+            />
+            <Show when={props.config.adaptiveDensity}>
+              <p class="text-xs text-text-muted leading-relaxed">
+                Conserva puntas, dedos y paredes finas con quads más chicos, a cambio de algunos
+                vértices irregulares más.
+              </p>
+            </Show>
+
+            <Select
+              label="Reparar malla rota"
+              options={REBUILD_OPTIONS}
+              value={props.config.rebuild}
+              onChange={(value) => updateConfig({ rebuild: value as RebuildMode })}
+            />
+
+            <Slider
+              label="Iteraciones de suavizado"
+              value={props.config.smoothIterations}
+              onChange={(value) => updateConfig({ smoothIterations: Math.round(value) })}
+              min={1}
+              max={50}
+              step={1}
+              formatValue={(v) => `${v}`}
+            />
+          </div>
+        </Panel>
 
         {/* Execute Button */}
         <Button
@@ -85,7 +169,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           }>
             <span class="flex items-center gap-2">
               <Icons.Lightning size={16} />
-              Ejecutar QuadriFlow
+              Retopologizar
             </span>
           </Show>
         </Button>
@@ -99,6 +183,37 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
               </svg>
               Retopología completada
             </div>
+
+            <Show when={props.quality}>
+              {(q) => (
+                <div class="space-y-1 rounded bg-current/20 p-2">
+                  <QualityRow
+                    label="Vértices irregulares"
+                    value={`${q().irregular_percent.toFixed(1)}%`}
+                    warn={q().irregular_percent > 8}
+                  />
+                  <QualityRow
+                    label="Quads deformes"
+                    value={q().poor_quads.toLocaleString()}
+                    warn={q().folded_quads > 0}
+                  />
+                  <QualityRow
+                    label="Quads plegados"
+                    value={q().folded_quads.toLocaleString()}
+                    warn={q().folded_quads > 0}
+                  />
+                  <QualityRow label="Quads estirados" value={q().stretched_quads.toLocaleString()} />
+                  <QualityRow label="Desvío de ángulos" value={`${q().mean_angle_deviation.toFixed(1)}°`} />
+                  <Show when={q().max_distance_percent !== null}>
+                    <QualityRow
+                      label="Distancia máx. a la original"
+                      value={`${q().max_distance_percent!.toFixed(2)}%`}
+                      warn={q().max_distance_percent! > 2}
+                    />
+                  </Show>
+                </div>
+              )}
+            </Show>
 
             <Checkbox
               label="Mostrar malla de quads"
