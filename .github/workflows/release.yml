@@ -7,7 +7,7 @@
 #
 # Artefactos:
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
-#   - App de escritorio     .deb/.rpm/.AppImage, .msi/-setup.exe, .dmg (arm64)
+#   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
 #   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
 
 name: Release
@@ -156,7 +156,13 @@ jobs:
 
       - name: Build Tauri
         working-directory: apps/desktop
-        run: node ../web/node_modules/@tauri-apps/cli/tauri.js build
+        run: |
+          # Linux: sin .deb ni .rpm; el binario suelto se publica aparte
+          if [[ "${{ matrix.platform }}" == linux ]]; then
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage
+          else
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build
+          fi
 
       - name: Renombrar instaladores
         env:
@@ -166,8 +172,6 @@ jobs:
           shopt -s nullglob
           for f in target/release/bundle/*/*; do
             case "$f" in
-              *.deb)       out="linux-amd64.deb" ;;
-              *.rpm)       out="linux-x86_64.rpm" ;;
               *.AppImage)  out="linux-amd64.AppImage" ;;
               *.msi)       out="windows-x64.msi" ;;
               *-setup.exe) out="windows-x64-setup.exe" ;;
@@ -176,6 +180,19 @@ jobs:
             esac
             cp "$f" "dist/Pinocchio-${TAG}-${out}"
           done
+          # Binario Linux suelto (requiere webkit2gtk-4.1 instalado en el sistema)
+          if [[ "${{ matrix.platform }}" == linux ]]; then
+            bin=""
+            for candidate in target/release/pinocchio-app target/release/Pinocchio; do
+              if [[ -f "$candidate" ]]; then bin="$candidate"; break; fi
+            done
+            if [[ -z "$bin" ]]; then
+              echo "::error::No se encontró el binario de la app en target/release"
+              exit 1
+            fi
+            cp "$bin" "dist/Pinocchio-${TAG}-linux-x86_64"
+            chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
+          fi
           ls -la dist
 
       - uses: actions/upload-artifact@v4
