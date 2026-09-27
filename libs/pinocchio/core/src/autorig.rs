@@ -109,8 +109,6 @@ pub fn autorig<S: Skeleton + Sync>(
     let embedding = full_embedding_pipeline(
         &working_mesh,
         &working_skeleton,
-        config.max_medial_spheres,
-        config.refine_iterations,
         config.distance_field_resolution,
     )?;
 

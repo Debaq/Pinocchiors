@@ -1,4 +1,4 @@
-use converter_scene::{IndexData, Scene, VertexAttribute};
+use converter_scene::Scene;
 use std::path::Path;
 use thiserror::Error;
 
@@ -24,61 +24,25 @@ pub fn export_stl(scene: &Scene, path: impl AsRef<Path>) -> Result<(), StlExport
     Ok(())
 }
 
-/// Extrae todos los triángulos de la escena como `stl_io::Triangle`.
+/// Extrae todos los triángulos de la escena como `stl_io::Triangle`, en espacio
+/// mundo (aplicando las transformaciones de los nodos).
+///
+/// La normal de cada faceta es la de la cara según el orden de sus vértices,
+/// como exige el formato STL.
 fn extract_triangles(scene: &Scene) -> Result<Vec<stl_io::Triangle>, StlExportError> {
     let mut triangles = Vec::new();
 
-    for mesh in &scene.meshes {
-        for prim in &mesh.primitives {
-            // Buscar posiciones y normales
-            let positions = prim.attributes.iter().find_map(|a| {
-                if let VertexAttribute::Positions(p) = a { Some(p) } else { None }
+    for prim in scene.world_primitives() {
+        for tri in &prim.triangles {
+            let [v0, v1, v2] = tri.map(|i| prim.positions[i as usize]);
+            triangles.push(stl_io::Triangle {
+                normal: stl_io::Normal::new(compute_face_normal(v0, v1, v2)),
+                vertices: [
+                    stl_io::Vertex::new(v0),
+                    stl_io::Vertex::new(v1),
+                    stl_io::Vertex::new(v2),
+                ],
             });
-            let normals = prim.attributes.iter().find_map(|a| {
-                if let VertexAttribute::Normals(n) = a { Some(n) } else { None }
-            });
-
-            let positions = match positions {
-                Some(p) => p,
-                None => continue,
-            };
-
-            // Obtener lista de índices de triángulos
-            let tri_indices = match &prim.indices {
-                Some(IndexData::U16(idx)) => {
-                    idx.iter().map(|&i| i as usize).collect::<Vec<_>>()
-                }
-                Some(IndexData::U32(idx)) => {
-                    idx.iter().map(|&i| i as usize).collect::<Vec<_>>()
-                }
-                // Sin índices: cada 3 vértices forman un triángulo
-                None => (0..positions.len()).collect(),
-            };
-
-            // Iterar triángulos (cada 3 índices)
-            for chunk in tri_indices.chunks_exact(3) {
-                let (i0, i1, i2) = (chunk[0], chunk[1], chunk[2]);
-
-                let v0 = positions[i0];
-                let v1 = positions[i1];
-                let v2 = positions[i2];
-
-                // Usar normal del primer vértice si existe, sino calcular de la geometría
-                let normal = if let Some(normals) = normals {
-                    normals[i0]
-                } else {
-                    compute_face_normal(v0, v1, v2)
-                };
-
-                triangles.push(stl_io::Triangle {
-                    normal: stl_io::Normal::new(normal),
-                    vertices: [
-                        stl_io::Vertex::new(v0),
-                        stl_io::Vertex::new(v1),
-                        stl_io::Vertex::new(v2),
-                    ],
-                });
-            }
         }
     }
 
@@ -103,5 +67,48 @@ fn compute_face_normal(v0: [f32; 3], v1: [f32; 3], v2: [f32; 3]) -> [f32; 3] {
         [n[0] / len, n[1] / len, n[2] / len]
     } else {
         [0.0, 0.0, 1.0]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use converter_scene::glam::{Quat, Vec3};
+    use converter_scene::{IndexData, Mesh, Node, Primitive, Transform, VertexAttribute};
+
+    #[test]
+    fn applies_node_transforms() {
+        let mut scene = Scene::new();
+        scene.meshes.push(Mesh {
+            name: "tri".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(vec![
+                    [0.0, 0.0, 0.0],
+                    [1.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0],
+                ])],
+                indices: Some(IndexData::U16(vec![0, 1, 2])),
+                material: None,
+            }],
+        });
+        scene.nodes.push(Node {
+            name: "n".into(),
+            transform: Transform::Trs {
+                translation: Vec3::new(10.0, 0.0, 0.0),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::splat(0.5),
+            },
+            mesh: Some(0),
+            skin: None,
+            children: vec![],
+        });
+        scene.root_nodes.push(0);
+
+        let tris = extract_triangles(&scene).unwrap();
+        assert_eq!(tris.len(), 1);
+        let v1 = tris[0].vertices[1];
+        assert_eq!([v1[0], v1[1], v1[2]], [10.5, 0.0, 0.0]);
+        let n = tris[0].normal;
+        assert_eq!([n[0], n[1], n[2]], [0.0, 0.0, 1.0]);
     }
 }

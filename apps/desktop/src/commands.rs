@@ -312,103 +312,77 @@ pub fn import_model(path: String, state: State<'_, AppState>) -> Result<MeshInfo
 }
 
 /// Obtiene los datos de la malla para renderizar en Three.js
+///
+/// La geometría va en espacio mundo y en el mismo orden de vértices que la
+/// malla de pinocchio (`scene_to_mesh`), así los pesos se aplican por índice.
 #[tauri::command]
 pub fn get_mesh_data(state: State<'_, AppState>) -> Result<MeshData, String> {
     let scene_lock = state.scene.lock().unwrap();
     let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+    Ok(scene_mesh_data(scene))
+}
 
-    // Recolectar todos los vértices y caras de la escena
+fn scene_mesh_data(scene: &Scene) -> MeshData {
+    let prims = scene.world_primitives();
+    let has_uvs = prims.iter().any(|p| p.uvs.is_some());
+
     let mut positions: Vec<f32> = Vec::new();
     let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut uvs: Vec<f32> = Vec::new();
-    let mut has_uvs = false;
 
-    let mut vertex_offset: u32 = 0;
+    for prim in &prims {
+        let offset = (positions.len() / 3) as u32;
+        positions.extend(prim.positions.iter().flatten());
 
-    for mesh in &scene.meshes {
-        for primitive in &mesh.primitives {
-            // Extraer posiciones
-            let pos_data = primitive.attributes.iter().find_map(|attr| {
-                if let VertexAttribute::Positions(p) = attr {
-                    Some(p)
-                } else {
-                    None
-                }
-            });
+        match &prim.normals {
+            Some(n) => normals.extend(n.iter().flatten()),
+            None => normals.extend(compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten()),
+        }
 
-            if let Some(pos_data) = pos_data {
-                let pos_count = pos_data.len();
-
-                // Aplanar posiciones [f32; 3] -> Vec<f32>
-                for p in pos_data {
-                    positions.extend_from_slice(p);
-                }
-
-                // Extraer normales
-                let norm_data = primitive.attributes.iter().find_map(|attr| {
-                    if let VertexAttribute::Normals(n) = attr {
-                        Some(n)
-                    } else {
-                        None
-                    }
-                });
-
-                if let Some(norm_data) = norm_data {
-                    for n in norm_data {
-                        normals.extend_from_slice(n);
-                    }
-                } else {
-                    // Generar normales dummy si no existen
-                    for _ in 0..pos_count {
-                        normals.extend_from_slice(&[0.0, 1.0, 0.0]);
-                    }
-                }
-
-                // Extraer UVs (set 0)
-                let uv_data = primitive.attributes.iter().find_map(|attr| {
-                    if let VertexAttribute::TexCoords(0, uv) = attr {
-                        Some(uv)
-                    } else {
-                        None
-                    }
-                });
-
-                if let Some(uv_data) = uv_data {
-                    for uv in uv_data {
-                        uvs.extend_from_slice(uv);
-                    }
-                    has_uvs = true;
-                }
-
-                // Índices
-                if let Some(index_data) = &primitive.indices {
-                    match index_data {
-                        IndexData::U16(idx) => {
-                            indices.extend(idx.iter().map(|&i| i as u32 + vertex_offset));
-                        }
-                        IndexData::U32(idx) => {
-                            indices.extend(idx.iter().map(|&i| i + vertex_offset));
-                        }
-                    }
-                } else {
-                    // Sin índices - generar secuenciales
-                    for i in 0..pos_count as u32 {
-                        indices.push(vertex_offset + i);
-                    }
-                }
-
-                vertex_offset += pos_count as u32;
+        // Si alguna primitiva tiene UVs, las demás se rellenan para mantener la alineación
+        if has_uvs {
+            match &prim.uvs {
+                Some(uv) => uvs.extend(uv.iter().flatten()),
+                None => uvs.extend(std::iter::repeat_n(0.0, prim.positions.len() * 2)),
             }
         }
+
+        indices.extend(prim.triangles.iter().flatten().map(|&i| i + offset));
     }
 
-    Ok(MeshData {
+    MeshData {
         positions,
         normals,
         indices,
         uvs: if has_uvs { Some(uvs) } else { None },
-    })
+    }
+}
+
+/// Normales por vértice ponderadas por área
+fn compute_vertex_normals(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec<[f32; 3]> {
+    let mut acc = vec![[0.0f32; 3]; positions.len()];
+    for t in triangles {
+        let [a, b, c] = t.map(|i| positions[i as usize]);
+        let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+        let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+        let n = [
+            e1[1] * e2[2] - e1[2] * e2[1],
+            e1[2] * e2[0] - e1[0] * e2[2],
+            e1[0] * e2[1] - e1[1] * e2[0],
+        ];
+        for &i in t {
+            for k in 0..3 {
+                acc[i as usize][k] += n[k];
+            }
+        }
+    }
+    acc.into_iter()
+        .map(|n| {
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len > 1e-12 { [n[0] / len, n[1] / len, n[2] / len] } else { [0.0, 1.0, 0.0] }
+        })
+        .collect()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1344,8 +1318,11 @@ pub fn repair_mesh(
     let summary = pinocchio_repair::repair_all(&mut mesh, &repair_config)
         .map_err(|e| format!("Error en reparación: {:?}", e))?;
 
-    // Reconstruir Scene desde mesh reparada
-    let new_scene = mesh_to_scene(&mesh);
+    // Reconstruir Scene desde mesh reparada (la topología cambió)
+    let new_scene = {
+        let base = state.scene_before_repair.lock().unwrap();
+        mesh_to_scene(&mesh, "repaired", base.as_ref())
+    };
 
     // Calcular nuevo MeshInfo
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&new_scene);
@@ -1480,6 +1457,7 @@ pub fn scale_mesh_for_print(
         let mesh_lock = state.mesh.lock().unwrap();
         mesh_lock.as_ref().unwrap().clone()
     };
+    let before = mesh.bounding_box();
 
     match params.mode.as_str() {
         "uniform" => {
@@ -1498,8 +1476,21 @@ pub fn scale_mesh_for_print(
         _ => return Err(format!("Modo de escala no soportado: {}", params.mode)),
     }
 
-    // Actualizar mesh en estado y reconstruir scene
-    let new_scene = mesh_to_scene(&mesh);
+    // Factor realmente aplicado (scale_to_fit solo reduce), respecto del centro
+    // del bounding box como hace pinocchio_print3d::scale
+    let before_len = before.longest_axis_length();
+    let factor = if before_len > 0.0 { mesh.bounding_box().longest_axis_length() / before_len } else { 1.0 };
+
+    let new_scene = {
+        let scene_lock = state.scene.lock().unwrap();
+        let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+        if scene.skeletons.is_empty() {
+            scale_scene_about(scene, factor, before.center())
+        } else {
+            // Los joints no cuelgan de scene.nodes: se exporta geometría estática
+            mesh_to_scene(&mesh, "print", Some(scene))
+        }
+    };
     {
         let mut mesh_lock = state.mesh.lock().unwrap();
         *mesh_lock = Some(mesh.clone());
@@ -1592,7 +1583,10 @@ pub fn export_print3d_piece(
     }
 
     let piece = &pieces[piece_index];
-    let scene = mesh_to_scene(&piece.mesh);
+    let scene = {
+        let base = state.scene.lock().unwrap();
+        mesh_to_scene(&piece.mesh, &format!("pieza_{}", piece.label), base.as_ref())
+    };
 
     let path_ref = Path::new(&path);
     converter_stl::export_stl(&scene, path_ref)
@@ -1657,73 +1651,19 @@ fn get_bone_names(skeleton_type: &SkeletonType) -> Vec<String> {
 }
 
 fn calculate_scene_stats(scene: &Scene) -> (usize, usize, bool, bool) {
-    let mut total_vertices = 0;
-    let mut total_faces = 0;
-    let mut has_normals = false;
-    let mut has_uvs = false;
-
-    for mesh in &scene.meshes {
-        for primitive in &mesh.primitives {
-            for attr in &primitive.attributes {
-                match attr {
-                    VertexAttribute::Positions(p) => {
-                        total_vertices += p.len();
-                    }
-                    VertexAttribute::Normals(_) => {
-                        has_normals = true;
-                    }
-                    VertexAttribute::TexCoords(0, _) => {
-                        has_uvs = true;
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(indices) = &primitive.indices {
-                let count = match indices {
-                    IndexData::U16(v) => v.len(),
-                    IndexData::U32(v) => v.len(),
-                };
-                total_faces += count / 3;
-            }
-        }
-    }
-
-    (total_vertices, total_faces, has_normals, has_uvs)
+    let prims = scene.world_primitives();
+    let vertices = prims.iter().map(|p| p.positions.len()).sum();
+    let faces = prims.iter().map(|p| p.triangles.len()).sum();
+    let has_normals = prims.iter().any(|p| p.normals.is_some());
+    let has_uvs = prims.iter().any(|p| p.uvs.is_some());
+    (vertices, faces, has_normals, has_uvs)
 }
 
 fn calculate_scene_bounds(scene: &Scene) -> BoundingBox {
-    let mut min = [f32::MAX, f32::MAX, f32::MAX];
-    let mut max = [f32::MIN, f32::MIN, f32::MIN];
-
-    for mesh in &scene.meshes {
-        for primitive in &mesh.primitives {
-            let positions = primitive.attributes.iter().find_map(|attr| {
-                if let VertexAttribute::Positions(p) = attr {
-                    Some(p)
-                } else {
-                    None
-                }
-            });
-
-            if let Some(positions) = positions {
-                for p in positions {
-                    min[0] = min[0].min(p[0]);
-                    min[1] = min[1].min(p[1]);
-                    min[2] = min[2].min(p[2]);
-                    max[0] = max[0].max(p[0]);
-                    max[1] = max[1].max(p[1]);
-                    max[2] = max[2].max(p[2]);
-                }
-            }
-        }
+    match scene.compute_bounding_box() {
+        Some((min, max)) => BoundingBox { min, max },
+        None => BoundingBox { min: [0.0; 3], max: [1.0; 3] },
     }
-
-    if min[0] == f32::MAX {
-        min = [0.0, 0.0, 0.0];
-        max = [1.0, 1.0, 1.0];
-    }
-
-    BoundingBox { min, max }
 }
 
 fn scene_to_pinocchio_mesh(scene: &Scene) -> Result<Mesh, String> {
@@ -1751,40 +1691,94 @@ fn diagnostics_to_info(d: &pinocchio_repair::MeshDiagnostics) -> MeshDiagnostics
 }
 
 /// Reconstruye una Scene (converter-scene) a partir de una Mesh de pinocchio.
-fn mesh_to_scene(mesh: &Mesh) -> Scene {
-    use converter_scene::{Mesh as SceneMesh, Primitive};
+///
+/// La malla de pinocchio está en espacio mundo, así que la escena tiene un solo
+/// nodo raíz con identidad. Conserva las unidades y el eje "arriba" de `base`.
+/// Se pierden materiales, UVs y skins: la topología pudo cambiar.
+fn mesh_to_scene(mesh: &Mesh, name: &str, base: Option<&Scene>) -> Scene {
+    use converter_scene::{Mesh as SceneMesh, Node, Primitive, Transform};
 
-    let num_verts = mesh.num_vertices();
-    let mut positions = Vec::with_capacity(num_verts);
-    for i in 0..num_verts {
-        let v = &mesh.vertices[i].position;
-        positions.push([v.x() as f32, v.y() as f32, v.z() as f32]);
-    }
+    let positions: Vec<[f32; 3]> = mesh
+        .vertices
+        .iter()
+        .map(|v| [v.position.x() as f32, v.position.y() as f32, v.position.z() as f32])
+        .collect();
 
-    let num_faces = mesh.num_faces();
-    let mut indices = Vec::with_capacity(num_faces * 3);
-    for i in 0..num_faces {
-        let f = mesh.get_face_vertices(i);
-        indices.push(f[0] as u32);
-        indices.push(f[1] as u32);
-        indices.push(f[2] as u32);
-    }
+    let triangles: Vec<[u32; 3]> = (0..mesh.num_faces())
+        .map(|i| mesh.get_face_vertices(i).map(|v| v as u32))
+        .collect();
+    let normals = compute_vertex_normals(&positions, &triangles);
 
     let primitive = Primitive {
-        attributes: vec![VertexAttribute::Positions(positions)],
-        indices: Some(IndexData::U32(indices)),
+        attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
+        indices: Some(IndexData::U32(triangles.into_iter().flatten().collect())),
         material: None,
     };
 
-    let scene_mesh = SceneMesh {
-        name: "repaired".to_string(),
-        primitives: vec![primitive],
+    let mut scene = Scene {
+        meshes: vec![SceneMesh { name: name.to_string(), primitives: vec![primitive] }],
+        nodes: vec![Node {
+            name: name.to_string(),
+            transform: Transform::identity(),
+            mesh: Some(0),
+            skin: None,
+            children: Vec::new(),
+        }],
+        root_nodes: vec![0],
+        ..Scene::default()
+    };
+    if let Some(base) = base {
+        scene.meters_per_unit = base.meters_per_unit;
+        scene.y_up = base.y_up;
+    }
+    scene
+}
+
+/// Escala la escena uniformemente respecto de `center` (espacio mundo)
+/// envolviendo sus raíces en un nodo nuevo. Conserva materiales, UVs y texturas.
+fn scale_scene_about(scene: &Scene, factor: f64, center: Vector3) -> Scene {
+    use converter_scene::glam::{Mat4, Vec3};
+    use converter_scene::{Node, Transform};
+
+    let mut scene = scene.clone();
+    let c = Vec3::new(center.x() as f32, center.y() as f32, center.z() as f32);
+    let matrix = Mat4::from_translation(c) * Mat4::from_scale(Vec3::splat(factor as f32)) * Mat4::from_translation(-c);
+
+    // Escena sin nodos: un nodo por malla para poder colgarlos del nuevo raíz
+    if scene.nodes.is_empty() {
+        for (i, mesh) in scene.meshes.iter().enumerate() {
+            scene.nodes.push(Node {
+                name: mesh.name.clone(),
+                transform: Transform::identity(),
+                mesh: Some(i),
+                skin: None,
+                children: Vec::new(),
+            });
+        }
+    }
+    let children = if scene.root_nodes.is_empty() {
+        let mut is_child = vec![false; scene.nodes.len()];
+        for n in &scene.nodes {
+            for &c in &n.children {
+                if c < is_child.len() {
+                    is_child[c] = true;
+                }
+            }
+        }
+        (0..scene.nodes.len()).filter(|&i| !is_child[i]).collect()
+    } else {
+        scene.root_nodes.clone()
     };
 
-    Scene {
-        meshes: vec![scene_mesh],
-        ..Scene::default()
-    }
+    scene.nodes.push(Node {
+        name: "print_scale".to_string(),
+        transform: Transform::Matrix(matrix),
+        mesh: None,
+        skin: None,
+        children,
+    });
+    scene.root_nodes = vec![scene.nodes.len() - 1];
+    scene
 }
 
 fn calculate_quad_mesh_bounds(quad_mesh: &quadriflow_core::QuadMesh) -> BoundingBox {
@@ -1806,4 +1800,91 @@ fn calculate_quad_mesh_bounds(quad_mesh: &quadriflow_core::QuadMesh) -> Bounding
     }
 
     BoundingBox { min, max }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use converter_scene::glam::{Quat, Vec3};
+    use converter_scene::{Material, Mesh as SceneMesh, Node, Primitive, Transform};
+
+    /// Cubo en una escena con un nodo trasladado y escalado, y un material
+    fn transformed_cube_scene() -> Scene {
+        let p = vec![
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
+        ];
+        let idx: Vec<u32> = vec![
+            0, 2, 1, 0, 3, 2, 4, 5, 6, 4, 6, 7, 0, 1, 5, 0, 5, 4,
+            3, 7, 6, 3, 6, 2, 0, 4, 7, 0, 7, 3, 1, 2, 6, 1, 6, 5,
+        ];
+        let mut scene = Scene::new();
+        scene.materials.push(Material { name: "rojo".into(), ..Material::default() });
+        scene.meshes.push(SceneMesh {
+            name: "cubo".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(p)],
+                indices: Some(IndexData::U32(idx)),
+                material: Some(0),
+            }],
+        });
+        scene.nodes.push(Node {
+            name: "cubo".into(),
+            transform: Transform::Trs {
+                translation: Vec3::new(10.0, 0.0, 0.0),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::splat(2.0),
+            },
+            mesh: Some(0),
+            skin: None,
+            children: vec![],
+        });
+        scene.root_nodes.push(0);
+        scene
+    }
+
+    #[test]
+    fn viewer_and_pinocchio_mesh_share_world_space_and_order() {
+        let scene = transformed_cube_scene();
+        let data = scene_mesh_data(&scene);
+        let mesh = scene_to_pinocchio_mesh(&scene).unwrap();
+        assert_eq!(data.positions.len() / 3, mesh.num_vertices());
+        for (i, v) in mesh.vertices.iter().enumerate() {
+            let p = &data.positions[i * 3..i * 3 + 3];
+            assert!((p[0] as f64 - v.position.x()).abs() < 1e-5);
+            assert!((p[1] as f64 - v.position.y()).abs() < 1e-5);
+        }
+        let bbox = calculate_scene_bounds(&scene);
+        assert_eq!(bbox.min, [10.0, 0.0, 0.0]);
+        assert_eq!(bbox.max, [12.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn repaired_scene_exports_visible_glb() {
+        let scene = transformed_cube_scene();
+        let mesh = scene_to_pinocchio_mesh(&scene).unwrap();
+        let repaired = mesh_to_scene(&mesh, "repaired", Some(&scene));
+        assert!(repaired.validate().is_ok());
+
+        let glb = converter_gltf_io::export_glb_bytes(&repaired, &Default::default()).unwrap();
+        let json_len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        let json: serde_json::Value = serde_json::from_slice(&glb[20..20 + json_len]).unwrap();
+        assert_eq!(json["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(json["scenes"][0]["nodes"], serde_json::json!([0]));
+        // Sin doble transformación: el bbox sigue siendo el de la escena original
+        assert_eq!(repaired.compute_bounding_box(), scene.compute_bounding_box());
+    }
+
+    #[test]
+    fn print_scale_keeps_materials_and_center() {
+        let scene = transformed_cube_scene();
+        let center = Vector3::new(11.0, 1.0, 1.0);
+        let scaled = scale_scene_about(&scene, 0.5, center);
+
+        assert_eq!(scaled.materials.len(), 1);
+        assert_eq!(scaled.meshes[0].primitives[0].material, Some(0));
+        let (min, max) = scaled.compute_bounding_box().unwrap();
+        assert_eq!(min, [10.5, 0.5, 0.5]);
+        assert_eq!(max, [11.5, 1.5, 1.5]);
+    }
 }

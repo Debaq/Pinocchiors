@@ -15,6 +15,7 @@ mod texture;
 mod skeleton;
 mod animation;
 mod transform;
+mod world;
 
 pub use scene::{Scene, Node, SceneError};
 pub use mesh::{Mesh, Primitive, VertexAttribute, IndexData};
@@ -23,3 +24,7 @@ pub use texture::{Texture, TextureFormat, TextureRef};
 pub use skeleton::{Skeleton, Joint};
 pub use animation::{Animation, Channel, Interpolation, KeyframeTimes, KeyframeValues};
 pub use transform::Transform;
+pub use world::{MeshInstance, WorldPrimitive};
+
+/// Re-export de `glam` para construir transformaciones sin depender del crate
+pub use glam;

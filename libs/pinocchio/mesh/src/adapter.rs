@@ -3,14 +3,18 @@
 //! Este módulo solo está disponible cuando el feature `converter` está activo.
 
 use crate::Mesh;
-use converter_scene::{Scene, VertexAttribute};
+use converter_scene::Scene;
 use pinocchio_math::Vector3;
 
-/// Convierte una `Scene` a `Mesh`, extrayendo toda la geometría.
+/// Convierte una `Scene` a `Mesh`, extrayendo toda la geometría en espacio
+/// mundo (aplicando las transformaciones de los nodos).
 ///
-/// Combina todos los meshes y primitivas de la escena en una sola malla.
-/// Solo extrae posiciones e índices (la estructura half-edge no soporta
-/// materiales, texturas, esqueletos ni animaciones).
+/// Combina todas las instancias y primitivas de la escena en una sola malla,
+/// en el orden de [`Scene::world_primitives`]; los vértices conservan ese
+/// orden, así que el índice de vértice coincide con el de cualquier otro
+/// consumidor que recorra la escena igual. Solo extrae posiciones e índices
+/// (la estructura half-edge no soporta materiales, texturas, esqueletos ni
+/// animaciones).
 ///
 /// # Errores
 ///
@@ -18,54 +22,19 @@ use pinocchio_math::Vector3;
 pub fn scene_to_mesh(scene: &Scene) -> Option<Mesh> {
     let mut all_positions: Vec<Vector3> = Vec::new();
     let mut all_indices: Vec<[usize; 3]> = Vec::new();
-    let mut vertex_offset = 0;
 
-    for mesh in &scene.meshes {
-        for prim in &mesh.primitives {
-            // Extraer posiciones
-            let positions = prim.attributes.iter().find_map(|attr| {
-                if let VertexAttribute::Positions(p) = attr {
-                    Some(p)
-                } else {
-                    None
-                }
-            })?;
-
-            for p in positions {
-                all_positions.push(Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64));
-            }
-
-            // Extraer índices
-            if let Some(ref idx) = prim.indices {
-                let indices: Vec<u32> = match idx {
-                    converter_scene::IndexData::U16(v) => v.iter().map(|&i| i as u32).collect(),
-                    converter_scene::IndexData::U32(v) => v.clone(),
-                };
-
-                for chunk in indices.chunks(3) {
-                    if chunk.len() == 3 {
-                        all_indices.push([
-                            chunk[0] as usize + vertex_offset,
-                            chunk[1] as usize + vertex_offset,
-                            chunk[2] as usize + vertex_offset,
-                        ]);
-                    }
-                }
-            } else {
-                // Sin índices: triángulos implícitos
-                for i in (0..positions.len()).step_by(3) {
-                    if i + 2 < positions.len() {
-                        all_indices.push([
-                            i + vertex_offset,
-                            i + 1 + vertex_offset,
-                            i + 2 + vertex_offset,
-                        ]);
-                    }
-                }
-            }
-
-            vertex_offset = all_positions.len();
-        }
+    for prim in scene.world_primitives() {
+        let offset = all_positions.len();
+        all_positions.extend(
+            prim.positions
+                .iter()
+                .map(|p| Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64)),
+        );
+        all_indices.extend(
+            prim.triangles
+                .iter()
+                .map(|t| [t[0] as usize + offset, t[1] as usize + offset, t[2] as usize + offset]),
+        );
     }
 
     if all_positions.is_empty() || all_indices.is_empty() {
@@ -101,7 +70,7 @@ pub fn load_stl_via_converter<P: AsRef<std::path::Path>>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, Transform};
+    use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, Transform, VertexAttribute};
 
     fn triangle_scene() -> Scene {
         let mut scene = Scene::new();

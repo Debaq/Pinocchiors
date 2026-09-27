@@ -1,4 +1,4 @@
-use converter_scene::{AlphaMode, IndexData, Scene, TextureFormat, VertexAttribute};
+use converter_scene::{AlphaMode, Scene, TextureFormat};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 use thiserror::Error;
@@ -51,98 +51,71 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
     let mut vertex_offset: usize = 0;
     let mut normal_offset: usize = 0;
     let mut uv_offset: usize = 0;
+    let mut current_instance = None;
 
-    for (mi, mesh) in scene.meshes.iter().enumerate() {
-        writeln!(out)?;
-        let name = if mesh.name.is_empty() {
-            format!("mesh_{mi}")
-        } else {
-            mesh.name.clone()
-        };
-        writeln!(out, "o {name}")?;
-
-        for prim in &mesh.primitives {
-            let mut positions: &[[f32; 3]] = &[];
-            let mut normals: &[[f32; 3]] = &[];
-            let mut uvs: &[[f32; 2]] = &[];
-
-            for attr in &prim.attributes {
-                match attr {
-                    VertexAttribute::Positions(p) => positions = p,
-                    VertexAttribute::Normals(n) => normals = n,
-                    VertexAttribute::TexCoords(0, uv) => uvs = uv,
-                    _ => {}
-                }
-            }
-
-            // Vertices
-            for p in positions {
-                writeln!(out, "v {} {} {}", p[0], p[1], p[2])?;
-            }
-
-            // Normals
-            for n in normals {
-                writeln!(out, "vn {} {} {}", n[0], n[1], n[2])?;
-            }
-
-            // UVs
-            for uv in uvs {
-                writeln!(out, "vt {} {}", uv[0], uv[1])?;
-            }
-
-            // Material
-            if let Some(mat_idx) = prim.material {
-                if mat_idx < scene.materials.len() {
-                    let mat_name = if scene.materials[mat_idx].name.is_empty() {
-                        format!("material_{mat_idx}")
-                    } else {
-                        scene.materials[mat_idx].name.clone()
-                    };
-                    writeln!(out, "usemtl {mat_name}")?;
-                }
-            }
-
-            // Faces (1-based)
-            let has_normals = !normals.is_empty();
-            let has_uvs = !uvs.is_empty();
-
-            let face_indices: Vec<u32> = match &prim.indices {
-                Some(IndexData::U16(idx)) => idx.iter().map(|&i| i as u32).collect(),
-                Some(IndexData::U32(idx)) => idx.clone(),
-                None => (0..positions.len() as u32).collect(),
+    // Geometría en espacio mundo: OBJ no tiene grafo de escena
+    for prim in scene.world_primitives() {
+        if current_instance != Some(prim.instance) {
+            current_instance = Some(prim.instance);
+            writeln!(out)?;
+            let mesh_name = &scene.meshes[prim.mesh].name;
+            let node_name = prim.node.map(|n| scene.nodes[n].name.as_str()).unwrap_or("");
+            let name = if !node_name.is_empty() {
+                node_name.to_string()
+            } else if !mesh_name.is_empty() {
+                mesh_name.clone()
+            } else {
+                format!("mesh_{}", prim.mesh)
             };
-
-            for face in face_indices.chunks(3) {
-                if face.len() < 3 { continue; }
-                write!(out, "f")?;
-                for &idx in face {
-                    let vi = idx as usize + vertex_offset + 1; // 1-based
-                    match (has_uvs, has_normals) {
-                        (true, true) => {
-                            let ti = idx as usize + uv_offset + 1;
-                            let ni = idx as usize + normal_offset + 1;
-                            write!(out, " {vi}/{ti}/{ni}")?;
-                        }
-                        (true, false) => {
-                            let ti = idx as usize + uv_offset + 1;
-                            write!(out, " {vi}/{ti}")?;
-                        }
-                        (false, true) => {
-                            let ni = idx as usize + normal_offset + 1;
-                            write!(out, " {vi}//{ni}")?;
-                        }
-                        (false, false) => {
-                            write!(out, " {vi}")?;
-                        }
-                    }
-                }
-                writeln!(out)?;
-            }
-
-            vertex_offset += positions.len();
-            normal_offset += normals.len();
-            uv_offset += uvs.len();
+            writeln!(out, "o {name}")?;
         }
+
+        let normals: &[[f32; 3]] = prim.normals.as_deref().unwrap_or(&[]);
+        let uvs: &[[f32; 2]] = prim.uvs.as_deref().unwrap_or(&[]);
+
+        for p in &prim.positions {
+            writeln!(out, "v {} {} {}", p[0], p[1], p[2])?;
+        }
+        for n in normals {
+            writeln!(out, "vn {} {} {}", n[0], n[1], n[2])?;
+        }
+        for uv in uvs {
+            writeln!(out, "vt {} {}", uv[0], uv[1])?;
+        }
+
+        if let Some(mat_idx) = prim.material {
+            if mat_idx < scene.materials.len() {
+                let mat_name = if scene.materials[mat_idx].name.is_empty() {
+                    format!("material_{mat_idx}")
+                } else {
+                    scene.materials[mat_idx].name.clone()
+                };
+                writeln!(out, "usemtl {mat_name}")?;
+            }
+        }
+
+        let has_normals = !normals.is_empty();
+        let has_uvs = !uvs.is_empty();
+
+        for face in &prim.triangles {
+            write!(out, "f")?;
+            for &idx in face {
+                let vi = idx as usize + vertex_offset + 1; // 1-based
+                let ti = idx as usize + uv_offset + 1;
+                let ni = idx as usize + normal_offset + 1;
+                match (has_uvs, has_normals) {
+                    (true, true) => write!(out, " {vi}/{ti}/{ni}")?,
+                    (true, false) => write!(out, " {vi}/{ti}")?,
+                    (false, true) => write!(out, " {vi}//{ni}")?,
+                    (false, false) => write!(out, " {vi}")?,
+                }
+            }
+            writeln!(out)?;
+        }
+
+        vertex_offset += prim.positions.len();
+        normal_offset += normals.len();
+        uv_offset += uvs.len();
     }
 
     Ok(out)
@@ -408,5 +381,18 @@ f 1 2 3
                 original_bb.1[i], imported_bb.1[i],
             );
         }
+    }
+
+    #[test]
+    fn export_applies_node_transform() {
+        let mut scene = triangle_scene();
+        scene.nodes[0].transform = Transform::Trs {
+            translation: glam::Vec3::new(10.0, 0.0, 0.0),
+            rotation: glam::Quat::IDENTITY,
+            scale: glam::Vec3::splat(2.0),
+        };
+        let obj = write_obj(&scene, None).unwrap();
+        assert!(obj.contains("v 12 0 0"), "{obj}");
+        assert!(obj.contains("v 10 2 0"), "{obj}");
     }
 }

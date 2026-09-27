@@ -44,21 +44,21 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [ ] Mientras tanto: devolver error si `attachment.num_vertices() != mesh.num_vertices()`.
 - **Test:** malla > umbral → `export_weights().0.len() == mesh.num_vertices()`.
 
-### 4. Exportar tras reparar o escalar genera un archivo vacío ✅
-- **Dónde:** `apps/desktop/src/commands.rs:1791` (`mesh_to_scene`)
-- **Problema:** crea una `Scene` sin `nodes` ni `root_nodes`. El GLB sale sin `nodes`/`scenes` (invisible en visores) y el USDA con `Root {}` vacío. Además se pierden materiales, UVs, normales y skins.
-- **Fix:**
-  - [ ] Crear un `Node` que referencie el mesh y agregarlo a `root_nodes`.
-  - [ ] Mejor: modificar las posiciones de la `Scene` original en lugar de reconstruirla (conservar atributos si la topología no cambió; si cambió, al menos conservar el material).
-- **Test:** reparar → `export_glb_bytes` → el JSON tiene `nodes` y `scenes`.
+### 4. Exportar tras reparar o escalar genera un archivo vacío ✅ RESUELTO
+- **Dónde:** `apps/desktop/src/commands.rs` (`mesh_to_scene`, `scale_scene_about`)
+- **Hecho:**
+  - [x] `mesh_to_scene` crea nodo raíz + `root_nodes`, normales por vértice y conserva `meters_per_unit`/`y_up`.
+  - [x] Escalar para imprimir ya no reconstruye la escena: envuelve las raíces en un nodo `T(c)·S(s)·T(-c)` y conserva materiales, UVs y texturas. Si la escena tiene esqueletos, se exporta geometría estática (los joints no cuelgan de `scene.nodes`).
+  - [x] Factor realmente aplicado calculado del bbox (`scale_to_fit` solo reduce).
+- **Tests:** `apps/desktop` → GLB tras reparar tiene `nodes` y `scenes`; escalado conserva material y centro.
+- **Pendiente menor:** tras reparar se pierden materiales/UVs (la topología cambia).
 
-### 5. Transformaciones de nodos ignoradas en todo el proyecto
-- **Dónde:** `libs/pinocchio/mesh/src/adapter.rs:18`, `apps/desktop/src/commands.rs:316` (`get_mesh_data`), `libs/converter/stl/src/export.rs:31`, `libs/converter/obj/src/export.rs:55`
-- **Problema:** todos iteran `scene.meshes` directamente. GLB con escala 0.01, rotación Z-up o varios nodos → geometría incorrecta en el visor, autorig y STL/OBJ. Las instancias se pierden.
-- **Fix:**
-  - [ ] Agregar `Scene::world_transforms() -> Vec<Mat4>` (recorriendo desde `root_nodes`) y `Scene::flattened_meshes()` en `converter-scene`.
-  - [ ] Usarlos en `scene_to_mesh`, `get_mesh_data` y en los exportadores STL/OBJ (transformar también las normales).
-- **Test:** escena con un nodo escalado ×2 y trasladado → STL exportado con bbox esperado.
+### 5. Transformaciones de nodos ignoradas en todo el proyecto ✅ RESUELTO
+- **Hecho:**
+  - [x] `converter-scene`: `Scene::world_transforms()`, `mesh_instances()` y `world_primitives()` (normales con matriz normal, winding invertido si det < 0, mallas con skin en espacio de bind, ciclos e índices inválidos ignorados). `compute_bounding_box` ahora es en espacio mundo. Re-export de `glam`.
+  - [x] STL y OBJ exportan en espacio mundo con instancias; STL usa la normal de la cara (antes la del primer vértice).
+  - [x] `scene_to_mesh` (pinocchio) y la GUI (`get_mesh_data`, stats, bbox) usan el mismo recorrido → los índices de vértice coinciden con los pesos.
+- **Tests:** anidado + instancias, espejo, skin, ciclos/índices inválidos, STL y OBJ con nodo transformado, GUI vs pinocchio en el mismo espacio y orden.
 
 ---
 
@@ -91,11 +91,12 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [ ] Validar `current_volume > EPS && target_volume > 0`; devolver `Result`.
   - [ ] En `scale_to_fit` (`:53`) proteger contra `dims[i] == 0`.
 
-### 10. Índices fuera de rango → panic
+### 10. Índices fuera de rango → panic (parcial)
 - **Dónde:** `libs/pinocchio/mesh/src/mesh.rs:29` (`from_triangles`), `libs/converter/scene/src/scene.rs` (`validate`)
 - **Problema:** no se validan los índices; `Scene::validate()` no se llama en producción y tampoco revisa índices de vértices. Un GLB malformado tumba la app.
 - **Fix:**
-  - [ ] `validate()` debe revisar `index < positions.len()` y el largo de los atributos por primitiva.
+  - [x] `Scene::world_primitives` descarta triángulos con índices fuera de rango (cubre GUI, autorig, STL, OBJ).
+- [ ] `validate()` debe revisar `index < positions.len()` y el largo de los atributos por primitiva.
   - [ ] Llamar `validate()` al final de cada importador (o en `converter_core::import`).
   - [ ] `from_triangles` → `try_from_triangles` que devuelva `Result`.
 
@@ -116,10 +117,10 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [ ] Resetear `quad_mesh`, `diagnostics`, `mesh_before_repair`, `scene_before_repair`, `print3d_pieces`, `mesh_before_print_scale`.
 - [ ] Agregar un método `AppState::reset_derived()`.
 
-### 13. UVs desalineadas en `get_mesh_data`
+### 13. UVs desalineadas en `get_mesh_data` ✅ RESUELTO (con #5)
 - **Dónde:** `apps/desktop/src/commands.rs:369-382`
-- [ ] Si alguna primitiva tiene UVs, rellenar con `[0,0]` las que no tienen.
-- [ ] Generar normales reales en lugar de las dummy `(0,1,0)` (`:362`).
+- [x] Si alguna primitiva tiene UVs, rellenar con `[0,0]` las que no tienen.
+- [x] Generar normales reales en lugar de las dummy `(0,1,0)`.
 
 ### 14. Mallas GLB sin soldar (costuras de UV)
 - **Dónde:** `libs/pinocchio/mesh/src/adapter.rs`
@@ -147,13 +148,15 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - **Dónde:** `libs/converter/gltf-io/src/import.rs:445-460`
 - [ ] Si la conversión queda vacía, saltar la primitiva en vez de dejar `indices: None` (hoy se interpreta como lista de triángulos implícita).
 
-### 19. El embedding sigue a la plantilla, no a las proporciones de la malla
-- **Dónde:** `libs/pinocchio/embedding/src/embedding.rs` (`discrete_embed`, `refine_embedding`)
-- **Problema:** cada articulación toma la esfera medial más cercana a su posición en la plantilla ajustada y el refinamiento la empuja de vuelta hacia esa posición. En el humanoide de prueba, codo y muñeca quedan ~0.05 (en altura 1) más cerca del torso que en el modelo.
-- **Fix:**
-  - [ ] Embedding discreto real de Pinocchio (asignación sobre el grafo de esferas con penalizaciones de longitud/dirección), o ajuste por cadenas: extremidad = punto medial más lejano en la dirección del miembro y articulaciones repartidas según las longitudes de la plantilla.
-  - [ ] Refinamiento que centre en el eje medial en vez de volver a la plantilla (`refine_embedding_global` existe pero no se usa).
-- **Test:** endurecer tolerancias de `autorig_humanoid_joints_inside_and_in_place` (codo/muñeca < 0.03).
+### 19. El embedding sigue a la plantilla, no a las proporciones de la malla ✅ RESUELTO
+- **Dónde:** `libs/pinocchio/embedding/src/chain.rs` (nuevo)
+- **Hecho:**
+  - [x] Embedding por cadenas: Dijkstra sobre la grilla interior con costo `longitud/d²` (sigue el eje medial); extremo de cada extremidad = punto medial más lejano de su región; articulaciones repartidas según las proporciones de la plantilla.
+  - [x] `quality_score` invariante a la escala (proporciones de huesos).
+  - [x] `max_medial_spheres` y `refine_iterations` quedan sin efecto (documentado).
+- **Resultado (humanoide de prueba, altura 1):** codo, muñeca y mano a < 0.01 de las reales (antes ~0.05–0.08). Se adapta a pose T con la plantilla en pose A.
+- **Tests:** tolerancias endurecidas a 0.03 en brazos; regiones anatómicas originales; `autorig_adapts_to_t_pose`.
+- **Pendiente menor:** en las piernas la cadera queda ~0.05 baja porque la plantilla tiene el hueso pelvis→cadera más largo que el modelo.
 
 ### 20. `DistanceField::sample` devuelve la celda más cercana
 - **Dónde:** `libs/pinocchio/spatial/src/distance_field.rs` (`sample`)
@@ -192,8 +195,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## Orden sugerido
 
-1. ~~#1 + #2 (+ test E2E)~~ ✅ — siguiente paso natural: #19 (precisión del embedding).
-2. #4 + #5 — export correcto.
+1. ~~#1 + #2 (+ test E2E)~~ ✅
+2. ~~#4 + #5 + #19~~ ✅
 3. #6 + #7 + #12 — estado de la GUI.
 4. #9 + #10 + #11 — robustez y seguridad.
 5. #3, #8, #14 — funcionalidades incompletas.

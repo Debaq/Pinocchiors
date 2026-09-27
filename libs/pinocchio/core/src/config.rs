@@ -20,10 +20,12 @@ pub struct PinocchioConfig {
     /// Peso de difusión para heat diffusion (mayor = más suave)
     pub diffusion_weight: Real,
 
-    /// Número máximo de esferas para el eje medial
+    /// Número máximo de esferas para el eje medial.
+    /// Sin efecto desde el embedding por cadenas; se conserva por compatibilidad.
     pub max_medial_spheres: usize,
 
-    /// Número de iteraciones para refinar el embedding
+    /// Número de iteraciones para refinar el embedding.
+    /// Sin efecto desde el embedding por cadenas; se conserva por compatibilidad.
     pub refine_iterations: usize,
 
     /// Número máximo de influencias de hueso por vértice

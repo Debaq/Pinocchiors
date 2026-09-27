@@ -21,6 +21,11 @@ struct Capsule {
 }
 
 fn humanoid_capsules() -> Vec<Capsule> {
+    humanoid_capsules_with_arms(false)
+}
+
+/// `t_pose`: brazos horizontales en vez de caídos en diagonal
+fn humanoid_capsules_with_arms(t_pose: bool) -> Vec<Capsule> {
     let c = |a: [f64; 3], b: [f64; 3], r: f64| Capsule { a, b, r };
     let mut caps = vec![
         c([0.0, 0.48, 0.0], [0.0, 0.78, 0.0], 0.11), // torso
@@ -31,9 +36,15 @@ fn humanoid_capsules() -> Vec<Capsule> {
         caps.push(c([0.07 * side, 0.47, 0.0], [0.08 * side, 0.26, 0.0], 0.05)); // muslo
         caps.push(c([0.08 * side, 0.26, 0.0], [0.09 * side, 0.05, 0.0], 0.045)); // pierna
         caps.push(c([0.09 * side, 0.05, 0.0], [0.09 * side, 0.02, 0.07], 0.03)); // pie
-        caps.push(c([0.15 * side, 0.76, 0.0], [0.28 * side, 0.60, 0.0], 0.035)); // brazo
-        caps.push(c([0.28 * side, 0.60, 0.0], [0.38 * side, 0.45, 0.0], 0.03)); // antebrazo
-        caps.push(c([0.38 * side, 0.45, 0.0], [0.42 * side, 0.40, 0.0], 0.03)); // mano
+        if t_pose {
+            caps.push(c([0.15 * side, 0.74, 0.0], [0.33 * side, 0.74, 0.0], 0.035)); // brazo
+            caps.push(c([0.33 * side, 0.74, 0.0], [0.50 * side, 0.74, 0.0], 0.03)); // antebrazo
+            caps.push(c([0.50 * side, 0.74, 0.0], [0.56 * side, 0.74, 0.0], 0.03)); // mano
+        } else {
+            caps.push(c([0.15 * side, 0.76, 0.0], [0.28 * side, 0.60, 0.0], 0.035)); // brazo
+            caps.push(c([0.28 * side, 0.60, 0.0], [0.38 * side, 0.45, 0.0], 0.03)); // antebrazo
+            caps.push(c([0.38 * side, 0.45, 0.0], [0.42 * side, 0.40, 0.0], 0.03)); // mano
+        }
     }
     caps
 }
@@ -150,6 +161,10 @@ fn humanoid_mesh() -> Mesh {
     surface_nets(&humanoid_capsules(), [-0.55, -0.1, -0.2], [0.55, 1.1, 0.25], 72)
 }
 
+fn t_pose_mesh() -> Mesh {
+    surface_nets(&humanoid_capsules_with_arms(true), [-0.65, -0.1, -0.2], [0.65, 1.1, 0.25], 80)
+}
+
 /// Humanoide + resultado de autorig con el preset humano, calculados una sola vez
 fn fixture() -> &'static (Mesh, PinocchioOutput) {
     static FIXTURE: OnceLock<(Mesh, PinocchioOutput)> = OnceLock::new();
@@ -192,14 +207,17 @@ fn autorig_humanoid_joints_inside_and_in_place() {
 
     // Cerca de las articulaciones reales del modelo (tolerancia en altura = 1)
     let expected = [
-        ("pelvis", [0.0, 0.48, 0.0], 0.08),
-        ("head", [0.0, 0.96, 0.0], 0.08),
-        ("knee_l", [-0.08, 0.26, 0.0], 0.06),
-        ("knee_r", [0.08, 0.26, 0.0], 0.06),
-        ("ankle_l", [-0.09, 0.05, 0.0], 0.08),
-        ("elbow_l", [-0.28, 0.60, 0.0], 0.08),
-        ("elbow_r", [0.28, 0.60, 0.0], 0.08),
-        ("wrist_l", [-0.38, 0.45, 0.0], 0.10),
+        ("pelvis", [0.0, 0.48, 0.0], 0.05),
+        ("head", [0.0, 0.94, 0.0], 0.03),
+        ("knee_l", [-0.08, 0.26, 0.0], 0.05),
+        ("knee_r", [0.08, 0.26, 0.0], 0.05),
+        ("ankle_l", [-0.09, 0.05, 0.0], 0.04),
+        ("elbow_l", [-0.28, 0.60, 0.0], 0.03),
+        ("elbow_r", [0.28, 0.60, 0.0], 0.03),
+        ("wrist_l", [-0.38, 0.45, 0.0], 0.03),
+        ("wrist_r", [0.38, 0.45, 0.0], 0.03),
+        ("hand_l", [-0.42, 0.40, 0.0], 0.03),
+        ("foot_r", [0.09, 0.02, 0.07], 0.04),
     ];
     for (name, truth, tol) in expected {
         let d = dist(joint(name), truth);
@@ -219,18 +237,16 @@ fn autorig_humanoid_weights_by_region() {
         assert!(w.iter().filter(|&&x| x > 1e-9).count() <= 4);
     }
 
-    // El peso del hueso i corresponde al segmento padre(i) → i.
-    // Las regiones se toman lejos de las articulaciones: el embedding ajusta la
-    // plantilla y codo y muñeca quedan ~0.05 más cerca del torso que en el modelo.
+    // El peso del hueso i corresponde al segmento padre(i) → i
     type Region = (&'static str, fn([f64; 3]) -> bool, &'static [&'static str]);
     let regions: [Region; 8] = [
         ("cabeza", |p| p[1] > 0.93, &["head", "neck"]),
         ("muslo izq.", |p| (-0.15..-0.03).contains(&p[0]) && (0.32..0.40).contains(&p[1]), &["knee_l"]),
         ("pierna izq.", |p| (-0.15..-0.03).contains(&p[0]) && (0.12..0.20).contains(&p[1]), &["ankle_l"]),
         ("pierna der.", |p| (0.03..0.15).contains(&p[0]) && (0.12..0.20).contains(&p[1]), &["ankle_r"]),
-        ("brazo izq.", |p| (-0.21..-0.16).contains(&p[0]) && p[1] > 0.62, &["elbow_l"]),
-        ("antebrazo izq.", |p| (-0.30..-0.27).contains(&p[0]), &["wrist_l"]),
-        ("antebrazo der.", |p| (0.27..0.30).contains(&p[0]), &["wrist_r"]),
+        ("brazo izq.", |p| (-0.25..-0.19).contains(&p[0]) && p[1] > 0.6, &["elbow_l"]),
+        ("antebrazo izq.", |p| (-0.35..-0.31).contains(&p[0]), &["wrist_l"]),
+        ("antebrazo der.", |p| (0.31..0.35).contains(&p[0]), &["wrist_r"]),
         ("mano der.", |p| p[0] > 0.40, &["hand_r", "wrist_r"]),
     ];
     for (label, in_region, allowed) in regions {
@@ -280,3 +296,24 @@ fn autorig_skeleton_fit_none_uses_given_placement() {
     assert!(dist(knee, [-0.08, 0.26, 0.0]) < 0.06, "knee_l en {knee:?}");
 }
 
+#[test]
+fn autorig_adapts_to_t_pose() {
+    // La plantilla tiene los brazos caídos; el embedding debe seguir la malla
+    let caps = humanoid_capsules_with_arms(true);
+    let config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() };
+    let out = autorig(&t_pose_mesh(), &HumanSkeleton::new(), Some(config)).expect("autorig");
+    let joint = |name: &str| unit(&out.bone_positions[bone_index(name)]);
+
+    for p in &out.bone_positions {
+        assert!(sdf(&caps, unit(p)) < 0.0, "articulación fuera de la malla: {:?}", unit(p));
+    }
+    for (name, truth) in [
+        ("elbow_l", [-0.33, 0.74, 0.0]),
+        ("wrist_r", [0.50, 0.74, 0.0]),
+        ("hand_l", [-0.56, 0.74, 0.0]),
+        ("knee_r", [0.08, 0.26, 0.0]),
+    ] {
+        let d = dist(joint(name), truth);
+        assert!(d < 0.05, "{name}: {:?} a {d:.3} de {truth:?}", joint(name));
+    }
+}

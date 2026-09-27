@@ -1,7 +1,6 @@
 //! Embedding del esqueleto en la malla
 
 use crate::medial_surface::MedialSphere;
-use crate::sphere_packing::pack_spheres;
 use crate::sphere_graph::SphereGraph;
 use pinocchio_math::{Real, Vector3};
 use pinocchio_mesh::Mesh;
@@ -434,12 +433,11 @@ fn is_inside(field: &DistanceField, pos: &Vector3) -> bool {
 /// Pipeline completo de embedding.
 ///
 /// El esqueleto debe estar en el mismo espacio que la malla y aproximadamente
-/// alineado con ella (ver `pinocchio_skeleton::fit_to_bounds`).
+/// alineado con ella (ver `pinocchio_skeleton::fit_to_bounds`). Usa el
+/// embedding por cadenas sobre el eje medial ([`crate::chain_embed`]).
 pub fn full_embedding_pipeline<S: Skeleton>(
     mesh: &Mesh,
     skeleton: &S,
-    max_spheres: usize,
-    refine_iterations: usize,
     field_resolution: [usize; 3],
 ) -> Result<EmbeddingResult, EmbeddingError> {
     use crate::medial_surface::medial_spheres_from_field;
@@ -458,16 +456,8 @@ pub fn full_embedding_pipeline<S: Skeleton>(
         return Err(EmbeddingError::NoValidEmbedding);
     }
 
-    // 3. Reducir esferas
-    let packed = pack_spheres(&spheres, max_spheres);
-
-    // 4. Embedding discreto
-    let initial = discrete_embed(mesh, skeleton, &packed)?;
-
-    // 5. Refinar
-    let refined = refine_embedding(mesh, skeleton, &initial, &distance_field, refine_iterations);
-
-    Ok(refined)
+    // 3. Embedding por cadenas
+    crate::chain::chain_embed(skeleton, &distance_field, &spheres)
 }
 
 #[cfg(test)]

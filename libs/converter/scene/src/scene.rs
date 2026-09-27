@@ -164,7 +164,8 @@ impl Scene {
         }
     }
 
-    /// Calcula el bounding box global (AABB) de toda la geometría.
+    /// Calcula el bounding box global (AABB) de toda la geometría, en espacio
+    /// mundo (aplicando las transformaciones de los nodos).
     ///
     /// Retorna `None` si la escena no contiene vértices.
     /// Retorna `(min, max)` como arrays `[f32; 3]`.
@@ -173,18 +174,12 @@ impl Scene {
         let mut max = [f32::NEG_INFINITY; 3];
         let mut found = false;
 
-        for mesh in &self.meshes {
-            for prim in &mesh.primitives {
-                for attr in &prim.attributes {
-                    if let VertexAttribute::Positions(positions) = attr {
-                        for p in positions {
-                            found = true;
-                            for i in 0..3 {
-                                if p[i] < min[i] { min[i] = p[i]; }
-                                if p[i] > max[i] { max[i] = p[i]; }
-                            }
-                        }
-                    }
+        for prim in self.world_primitives() {
+            for p in &prim.positions {
+                found = true;
+                for i in 0..3 {
+                    min[i] = min[i].min(p[i]);
+                    max[i] = max[i].max(p[i]);
                 }
             }
         }
