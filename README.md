@@ -32,8 +32,9 @@ Import → Reparación → Retopología → Rigging → Pesos → Impresión 3D 
 ### Pinocchio: auto-rigging
 Implementación en Rust del algoritmo de [Pinocchio](https://people.csail.mit.edu/ibaran/papers/2007-SIGGRAPH-Pinocchio.pdf) (Baran & Popović, SIGGRAPH 2007).
 
-- Ajusta automáticamente un esqueleto dentro de una malla (esferas mediales, grafo, optimización discreta y refinamiento continuo).
-- Calcula los pesos de skinning mediante **difusión de calor** (*bone heat*).
+- Ajusta automáticamente un esqueleto dentro de una malla: campo de distancias con signo, eje medial y ajuste por cadenas (cada extremidad sigue el eje medial hasta su punta, con las proporciones de la plantilla).
+- Calcula los pesos de skinning con **bone heat** (Baran & Popović): hueso visible más cercano y difusión con el Laplaciano cotangente.
+- Trabaja en las coordenadas originales del modelo, suelda costuras UV y transfiere los pesos si la malla se decima.
 - Esqueletos predefinidos: `HumanSkeleton`, `QuadSkeleton`, `HorseSkeleton`, `CentaurSkeleton`, `BirdSkeleton`, `SpiderSkeleton`, `SerpentSkeleton`, `MechSkeleton`.
 - Decimación automática en mallas grandes, normalización y presets `fast()` / `high_quality()`.
 
@@ -201,8 +202,11 @@ converter modelo.obj modelo.glb --optimize-geometry --max-texture-size 1024 --te
 # STL en metros → OBJ en centímetros
 converter pieza.stl pieza.obj --scale 100
 
-# Modo batch: la salida toma el nombre de la entrada con la nueva extensión
-converter personaje.glb --batch --format usda
+# Sin archivo de salida: mismo nombre con la extensión de --format
+converter personaje.glb --format usdz
+
+# Modo batch: varios archivos, salida junto a cada entrada o en --out-dir
+converter --batch --format stl modelos/*.glb --out-dir stl/
 ```
 
 ### Opciones
@@ -220,7 +224,9 @@ converter personaje.glb --batch --format usda
 | `--generate-normals` | Generar normales si faltan (solo GLB) |
 | `--flatten-transforms` | Hornear los transforms en la geometría (solo GLB, sin esqueletos) |
 | `--strip-unused` | Eliminar materiales y texturas no usados (solo GLB) |
-| `--batch` / `--format <fmt>` | Modo batch con formato de salida: `glb`, `usda`, `usdz`, `stl`, `obj` |
+| `--format <fmt>` | Formato de salida: `glb`, `usda`, `usdz`, `stl`, `obj` (obligatorio sin archivo de salida) |
+| `--batch` | Convierte varios archivos de entrada (requiere `--format`); código de salida 1 si alguno falla |
+| `--out-dir <dir>` | Directorio de salida del modo batch |
 
 ---
 
@@ -333,15 +339,13 @@ cargo test -p pinocchio-repair
 cargo test -p converter-gltf-io
 ```
 
-| Módulo | Tests aprox. |
-|--------|-------------:|
-| pinocchio (núcleo) | 170+ |
-| pinocchio-repair | 61 |
-| pinocchio-print3d | 39 |
-| converter-usda | 36 |
-| converter-gltf-io | 25 |
-| converter-core | 14 |
-| converter-obj | 6 |
+Incluye tests end-to-end del autorig sobre humanoides sintéticos (`libs/pinocchio/core/tests/autorig_e2e.rs`): posiciones de articulaciones, pesos por región del cuerpo, pose T, malla decimada y malla sin soldar.
+
+Los tests de la app de escritorio necesitan las dependencias de sistema de Tauri:
+
+```bash
+cargo test -p pinocchio-app
+```
 
 ---
 
@@ -373,4 +377,4 @@ cargo test -p converter-gltf-io
 
 ## Licencia
 
-Doble licencia **MIT** o **Apache-2.0**, a elección del usuario.
+Doble licencia **MIT** ([LICENSE-MIT](LICENSE-MIT)) o **Apache-2.0** ([LICENSE-APACHE](LICENSE-APACHE)), a elección del usuario.

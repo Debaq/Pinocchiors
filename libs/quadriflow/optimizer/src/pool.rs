@@ -119,20 +119,18 @@ thread_local! {
     pub static USIZE_POOL: VecPool<usize> = VecPool::new(8, 64);
 }
 
-/// Get a pooled f64 buffer.
-pub fn get_f64_buffer() -> PooledVec<'static, f64> {
-    F64_POOL.with(|pool| {
-        // Safety: we're returning a reference to thread-local storage
-        // which lives for 'static within this thread
-        unsafe { std::mem::transmute(pool.get()) }
-    })
+/// Run `f` with a pooled f64 buffer from this thread's pool.
+///
+/// The buffer is returned to the pool when `f` finishes. A closure keeps the
+/// borrow of the thread-local pool from escaping (unlike returning a
+/// `PooledVec<'static, _>`, which would outlive the pool at thread exit).
+pub fn with_f64_buffer<R>(f: impl FnOnce(&mut Vec<f64>) -> R) -> R {
+    F64_POOL.with(|pool| f(&mut pool.get()))
 }
 
-/// Get a pooled usize buffer.
-pub fn get_usize_buffer() -> PooledVec<'static, usize> {
-    USIZE_POOL.with(|pool| {
-        unsafe { std::mem::transmute(pool.get()) }
-    })
+/// Run `f` with a pooled usize buffer from this thread's pool.
+pub fn with_usize_buffer<R>(f: impl FnOnce(&mut Vec<usize>) -> R) -> R {
+    USIZE_POOL.with(|pool| f(&mut pool.get()))
 }
 
 /// Scratch space for algorithms that need temporary storage.
@@ -257,13 +255,15 @@ mod tests {
 
     #[test]
     fn test_thread_local_pools() {
-        let mut buf = get_f64_buffer();
-        buf.push(1.0);
-        buf.push(2.0);
-        assert_eq!(buf.len(), 2);
-        drop(buf);
+        let len = with_f64_buffer(|buf| {
+            buf.push(1.0);
+            buf.push(2.0);
+            buf.len()
+        });
+        assert_eq!(len, 2);
 
-        let buf = get_f64_buffer();
-        assert!(buf.is_empty());
+        // El buffer vuelve limpio al pool
+        assert!(with_f64_buffer(|buf| buf.is_empty()));
+        assert!(with_usize_buffer(|buf| buf.capacity() >= 64));
     }
 }

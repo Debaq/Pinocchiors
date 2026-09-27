@@ -131,18 +131,20 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## 🔵 Bajos / limpieza
 
-- [ ] `libs/quadriflow/optimizer/src/pool.rs:127,134` — `transmute` a `'static` sobre un `thread_local`, unsound. No se usa: borrar `get_f64_buffer`/`get_usize_buffer` o cambiarlos por una API con closure (`with_f64_buffer(|buf| …)`).
-- [ ] CLI `apps/converter/src/main.rs`:
-  - [ ] la ayuda dice que `output` es opcional, pero el modo normal falla sin él → derivarlo de `--format`;
-  - [ ] `--batch` no procesa varios archivos → aceptar varios inputs/glob;
-  - [ ] `--format` se ignora fuera de `--batch`.
-- [ ] `mesh_before_print_scale` se guarda pero no existe comando `undo_print_scale`.
-- [ ] `libs/converter/usdz/` es una carpeta vacía fuera del workspace → borrar.
-- [ ] `apps/web` tiene `package-lock.json` y `pnpm-lock.yaml` → elegir uno.
-- [ ] `Cargo.toml`: `repository` apunta a `pinocchio-rs/pinocchio` → `Debaq/Pinocchiors`.
-- [ ] Agregar `LICENSE-MIT` y `LICENSE-APACHE`.
-- [ ] Clippy: 3 errores `approx_constant` (`libs/pinocchio/graph/src/pt_graph.rs:157-160`, `3.14` en un test) y unos 100 lints de estilo (`cargo clippy --fix`).
-- [ ] Frontend sin verificar: `npm install && npx tsc --noEmit` en `apps/web`.
+- [x] `quadriflow/optimizer/src/pool.rs`: el `transmute` a `'static` se reemplazó por `with_f64_buffer(|buf| …)` / `with_usize_buffer`.
+- [x] CLI `apps/converter`:
+  - [x] salida opcional con `--format` (y error claro si sobrescribiría la entrada);
+  - [x] `--batch` acepta varios archivos, `--out-dir`, resumen y código de salida 1 si alguno falla;
+  - [x] `--format` también sin `--batch` (validado contra la extensión de la salida). Tests del plan de conversión.
+- [ ] `mesh_before_print_scale` se guarda pero no existe comando `undo_print_scale` (falta también el botón en la UI).
+- [x] `libs/converter/usdz/` (carpeta vacía) borrada.
+- [x] `apps/web`: se quitó `pnpm-lock.yaml`; queda `package-lock.json` (lo usan `tauri.conf.json` y CI).
+- [x] `Cargo.toml`: `repository` → `https://github.com/Debaq/Pinocchiors`.
+- [x] `LICENSE-MIT` y `LICENSE-APACHE` (texto oficial).
+- [x] Clippy: errores `approx_constant` del test de `pt_graph` corregidos.
+- [ ] Clippy: ~100 lints de estilo. `cargo clippy --fix` propone APIs de Rust ≥ 1.88 (`as_chunks`, let chains) y el workspace declara 1.85: decidir si subir `rust-version`.
+- [x] Frontend: `npx tsc --noEmit` pasa.
+- [x] CI: el job de tests instala las dependencias de Tauri y corre también `pinocchio-app`.
 
 ---
 

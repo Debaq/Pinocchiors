@@ -23,7 +23,7 @@ pub use align::{
     align_to_boundary, align_to_features, compute_curvature_sizing, detect_boundary,
     detect_sharp_edges, BoundaryInfo, SharpEdge, SharpEdgeConfig, SharpEdgeInfo,
 };
-pub use pool::{get_f64_buffer, get_usize_buffer, ScratchSpace, VecPool};
+pub use pool::{with_f64_buffer, with_usize_buffer, ScratchSpace, VecPool};
 pub use simd::{
     batch_align_4rosy, batch_cross, batch_dot, batch_normalize, batch_rotate_around_axis,
     batch_transport_direction, smooth_faces_batch, VectorBatch, BATCH_SIZE,

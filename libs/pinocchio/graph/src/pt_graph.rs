@@ -154,10 +154,10 @@ mod tests {
 
         graph.add_node(0, 0);
         graph.add_node(1, 1);
-        graph.add_edge(0, 1, 3.14);
+        graph.add_edge(0, 1, 2.5);
 
-        assert_eq!(graph.get_edge_weight(0, 1), Some(3.14));
-        assert_eq!(graph.get_edge_weight(1, 0), Some(3.14)); // No dirigido
+        assert_eq!(graph.get_edge_weight(0, 1), Some(2.5));
+        assert_eq!(graph.get_edge_weight(1, 0), Some(2.5)); // No dirigido
         assert_eq!(graph.get_edge_weight(0, 2), None);
     }
 }
