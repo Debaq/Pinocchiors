@@ -1,0 +1,255 @@
+# Pre-releases.
+#
+# Se lanza SOLO al hacer push de un tag con el formato:
+#   pre.<YYYY>.<MM>.<DD>.<sha7>     p.ej. pre.2026.09.26.285f33f
+# La fecha es la del commit en UTC. Para crear el tag correcto:
+#   ./scripts/release.sh [commit]
+#
+# Artefactos:
+#   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
+#   - App de escritorio     .deb/.rpm/.AppImage, .msi/-setup.exe, .dmg (arm64)
+#   - Paquete WASM          converter-wasm (wasm-bindgen --target web)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "pre.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  version:
+    name: Validar tag
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          date=$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)
+          sha=$(git rev-parse --short=7 HEAD)
+          expected="pre.${date}.${sha}"
+          if [[ "$TAG" != "$expected" ]]; then
+            echo "::error::Tag '${TAG}' no coincide con el commit. Esperado: '${expected}' (usa scripts/release.sh)"
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Versión: ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo test --workspace --exclude pinocchio-app --locked
+
+  # ───────────────────────────────────────────────────────────────────────────
+  cli:
+    name: CLI (${{ matrix.target }})
+    needs: [version, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc }
+          - { os: macos-latest,   target: aarch64-apple-darwin }
+          - { os: macos-latest,   target: x86_64-apple-darwin }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cli-${{ matrix.target }}
+
+      - run: cargo build --release --locked -p converter-cli --target ${{ matrix.target }}
+
+      - name: Empaquetar
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          name="converter-${TAG}-${{ matrix.target }}"
+          mkdir -p "dist/${name}"
+          bin_dir="target/${{ matrix.target }}/release"
+          if [[ "${{ matrix.target }}" == *windows* ]]; then
+            cp "${bin_dir}/converter.exe" "dist/${name}/"
+            (cd dist && 7z a -tzip "${name}.zip" "${name}" > /dev/null)
+          else
+            cp "${bin_dir}/converter" "dist/${name}/"
+            tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          fi
+          rm -rf "dist/${name}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    needs: [version, test]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04,   platform: linux }
+          - { os: windows-latest, platform: windows }
+          - { os: macos-latest,   platform: macos }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf file
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-${{ matrix.platform }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Instalar frontend
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build Tauri
+        working-directory: apps/desktop
+        run: node ../web/node_modules/@tauri-apps/cli/tauri.js build
+
+      - name: Renombrar instaladores
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          mkdir -p dist
+          shopt -s nullglob
+          for f in target/release/bundle/*/*; do
+            case "$f" in
+              *.deb)       out="linux-amd64.deb" ;;
+              *.rpm)       out="linux-x86_64.rpm" ;;
+              *.AppImage)  out="linux-amd64.AppImage" ;;
+              *.msi)       out="windows-x64.msi" ;;
+              *-setup.exe) out="windows-x64-setup.exe" ;;
+              *.dmg)       out="macos-arm64.dmg" ;;
+              *)           continue ;;
+            esac
+            cp "$f" "dist/Pinocchio-${TAG}-${out}"
+          done
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  wasm:
+    name: WASM
+    needs: [version, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+
+      - name: Versión de wasm-bindgen (Cargo.lock)
+        id: wb
+        run: |
+          ver=$(cargo metadata --format-version 1 --locked \
+            | jq -r '.packages[] | select(.name == "wasm-bindgen") | .version')
+          echo "version=${ver}" >> "$GITHUB_OUTPUT"
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli@${{ steps.wb.outputs.version }}
+
+      - name: Build
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          cargo build --release --locked -p converter-wasm --target wasm32-unknown-unknown
+          name="converter-wasm-${TAG}"
+          wasm-bindgen --target web --out-dir "dist/${name}" \
+            target/wasm32-unknown-unknown/release/converter_wasm.wasm
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          rm -rf "dist/${name}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm
+          path: dist/*
+          if-no-files-found: error
+
+  # ───────────────────────────────────────────────────────────────────────────
+  release:
+    name: Publicar pre-release
+    needs: [version, cli, desktop, wasm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS.txt
+
+      - name: Crear release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* \
+              --verify-tag \
+              --title "$TAG" \
+              --prerelease \
+              --generate-notes
+          fi
