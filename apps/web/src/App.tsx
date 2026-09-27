@@ -225,6 +225,8 @@ export const App: Component = () => {
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
   const [quadMeshInfo, setQuadMeshInfo] = createSignal({ vertices: 0, quads: 0 });
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
+  const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
+  const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
 
   // Config
   const [autorigConfig, setAutorigConfig] = createSignal<AutorigConfig>({
@@ -507,12 +509,14 @@ export const App: Component = () => {
 
       const ext = selected.split(".").pop()?.toLowerCase() || "glb";
 
+      const includeRig = exportIncludeRig() && autorigComplete();
       const result = await invoke<ExportResult>("export_model", {
         config: {
           format: ext,
           path: selected,
-          include_skeleton: true,
-          include_weights: autorigComplete(),
+          include_skeleton: includeRig,
+          include_weights: includeRig,
+          use_retopology: exportUseRetopology() && quadMeshLoaded(),
         },
       });
 
@@ -1005,6 +1009,11 @@ export const App: Component = () => {
               onExport: handleExport,
               canExport: meshLoaded(),
               autorigComplete: autorigComplete(),
+              hasQuadMesh: quadMeshLoaded(),
+              includeRig: exportIncludeRig(),
+              onIncludeRigChange: setExportIncludeRig,
+              useRetopology: exportUseRetopology(),
+              onUseRetopologyChange: setExportUseRetopology,
             }}
             viewSettings={viewSettings()}
             onViewSettingsChange={setViewSettings}

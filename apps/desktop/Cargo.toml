@@ -51,3 +51,6 @@ tokio = { version = "1", features = ["sync"] }
 
 # Errors
 thiserror = { workspace = true }
+
+[dev-dependencies]
+nalgebra = { workspace = true }

@@ -55,12 +55,14 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] `auto_fit_skeleton` fija la base y resetea el gizmo; `move_bone` escribe en la base con la inversa del gizmo, así la edición sobrevive a cambios de escala/rotación.
 - **Test:** `gizmo_inverse_roundtrip`.
 
-### 8. Retopología y rig no se pueden exportar
-- **Dónde:** `apps/desktop/src/commands.rs:420` (`export_model`), `116-117`
-- **Problema:** `quad_mesh` solo se visualiza. `include_skeleton` e `include_weights` no se leen en ninguna parte. Solo existe export JSON de pesos.
-- **Fix:**
-  - [ ] Opción "usar malla retopologizada" → convertir `QuadMesh` a `Scene` (triangulada para GLB; quads para OBJ).
-  - [ ] Escribir skin en la `Scene` (`Skeleton` + `JointIndices`/`JointWeights`) desde `PinocchioOutput` para GLB/USDZ.
+### 8. Retopología y rig no se pueden exportar ✅ RESUELTO
+- [x] Opción "Usar malla retopologizada": `QuadMesh` → `Scene` (triangulada) para cualquier formato.
+- [x] Opción "Incluir esqueleto y pesos": escena con skin (`Skeleton` + `JointIndices`/`JointWeights`, hasta 4 influencias). Un joint por hueso en la cabeza de su segmento (como Blender); conserva materiales, normales y UVs.
+- [x] Rig + retopología: los pesos se transfieren a la malla de quads con `pinocchio_core::transfer_weights` (ahora pública).
+- [x] Reparar, deshacer reparación o escalar para imprimir invalidan el rig (antes se podían exportar pesos de otra malla); además se verifica que el número de pesos coincida con los vértices.
+- [x] Frontend: dos casillas en el paso de exportación.
+- **Tests:** GLB con skin ida y vuelta (joints, pesos normalizados), USDA con UsdSkel, malla de quads triangulada.
+- **Pendiente:** OBJ/STL no tienen rig (esperado); el JSON de pesos sigue siendo solo de la malla original.
 
 ### 9. `scale_to_volume` con volumen 0 → NaN/inf ✅ RESUELTO
 - [x] `scale_to_volume` y `scale_to_fit` devuelven `Result`: volumen ≤ 0 → `MeshNotClosed`, objetivo/tamaño inválido → `InvalidConfig`; los ejes planos no limitan `scale_to_fit`.
@@ -167,6 +169,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 3. ~~#6 + #7 + #12 + #17~~ ✅
 4. ~~#9 + #10 + #11 + #15 + #16 + #18 + #20~~ ✅
 5. ~~#3 + #14~~ ✅
+6. ~~#8~~ ✅
 4. #9 + #10 + #11 — robustez y seguridad.
 5. #3, #8, #14 — funcionalidades incompletas.
 6. Medios y limpieza.

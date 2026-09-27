@@ -5,7 +5,7 @@
 
 use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
-use pinocchio_core::{autorig_with_progress, AutorigStage, PinocchioConfig, SkeletonFit};
+use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, PinocchioConfig, SkeletonFit};
 use pinocchio_mesh::Mesh;
 use pinocchio_math::Vector3;
 use pinocchio_skeleton::{
@@ -114,7 +114,10 @@ pub struct ExportConfig {
     pub format: String,
     pub path: String,
     pub include_skeleton: Option<bool>,
+    /// Exportar el rig (esqueleto + pesos de skinning) del autorig
     pub include_weights: Option<bool>,
+    /// Exportar la malla retopologizada en vez de la original
+    pub use_retopology: Option<bool>,
     pub texture_quality: Option<u8>,
     pub max_texture_size: Option<u32>,
     pub optimize_geometry: Option<bool>,
@@ -393,8 +396,11 @@ fn compute_vertex_normals(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec
 /// Exporta el modelo actual
 #[tauri::command]
 pub fn export_model(config: ExportConfig, state: State<'_, AppState>) -> Result<ExportResult, String> {
-    let scene_lock = state.scene.lock().unwrap();
-    let scene = scene_lock.as_ref().ok_or("No hay escena para exportar")?;
+    if config.format == "json" {
+        return export_weights_json(&config, &state);
+    }
+    let export_scene = build_export_scene(&config, &state)?;
+    let scene = &export_scene;
 
     let path = Path::new(&config.path);
     let mut files_created = Vec::new();
@@ -445,10 +451,6 @@ pub fn export_model(config: ExportConfig, state: State<'_, AppState>) -> Result<
                 .map_err(|e| format!("Error exportando USDZ: {:?}", e))?;
             files_created.push(config.path.clone());
         }
-        "json" => {
-            // Exportar pesos de skinning
-            return export_weights_json(&config, &state);
-        }
         _ => return Err(format!("Formato de exportación no soportado: {}", config.format)),
     }
 
@@ -458,6 +460,194 @@ pub fn export_model(config: ExportConfig, state: State<'_, AppState>) -> Result<
         message: "Exportación completada".to_string(),
         files_created,
     })
+}
+
+/// Escena a exportar según las opciones: geometría original o retopologizada,
+/// con o sin el rig del autorig.
+fn build_export_scene(config: &ExportConfig, state: &State<'_, AppState>) -> Result<Scene, String> {
+    let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena para exportar")?;
+    let use_retopology = config.use_retopology.unwrap_or(false);
+
+    let geometry = if use_retopology {
+        let quad = state.quad_mesh.lock().unwrap();
+        quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, &scene)
+    } else {
+        scene
+    };
+    if !config.include_weights.unwrap_or(false) {
+        return Ok(geometry);
+    }
+
+    let result_lock = state.result.lock().unwrap();
+    let result = result_lock.as_ref().ok_or("No hay resultado de autorig para exportar el rig")?;
+    let skeleton = {
+        let skeleton_lock = state.skeleton.lock().unwrap();
+        to_basic_skeleton(skeleton_lock.as_ref().ok_or("No hay esqueleto")?)
+    };
+
+    let source_weights: Vec<Vec<f64>> = (0..result.attachment.num_vertices())
+        .map(|v| result.get_weights(v).to_vec())
+        .collect();
+    let prims = geometry.world_primitives();
+    let vertex_weights = if use_retopology {
+        // El rig se calculó sobre la malla original: llevarlo a la retopologizada
+        let mesh_lock = state.mesh.lock().unwrap();
+        let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
+        let targets: Vec<Vector3> = prims
+            .iter()
+            .flat_map(|p| p.positions.iter())
+            .map(|p| Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64))
+            .collect();
+        transfer_weights(mesh, &source_weights, &targets)
+    } else {
+        source_weights
+    };
+
+    let vertex_count: usize = prims.iter().map(|p| p.positions.len()).sum();
+    if vertex_weights.len() != vertex_count {
+        return Err(format!(
+            "El rig no corresponde a la malla actual ({} pesos, {} vértices): vuelve a ejecutar el autorig",
+            vertex_weights.len(),
+            vertex_count
+        ));
+    }
+    Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions))
+}
+
+/// Malla de quads de QuadriFlow como escena (triangulada, en espacio mundo)
+fn quad_mesh_to_scene(quad: &quadriflow_core::QuadMesh, base: &Scene) -> Scene {
+    use converter_scene::{Mesh as SceneMesh, Node, Primitive, Transform};
+
+    let positions: Vec<[f32; 3]> = quad.vertices.iter().map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect();
+    let triangles: Vec<[u32; 3]> = quad
+        .faces
+        .iter()
+        .flat_map(|f| {
+            let [a, b, c, d] = f.v.map(|i| i as u32);
+            [[a, b, c], [a, c, d]]
+        })
+        .collect();
+    let normals = compute_vertex_normals(&positions, &triangles);
+
+    Scene {
+        meshes: vec![SceneMesh {
+            name: "retopology".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
+                indices: Some(IndexData::U32(triangles.into_iter().flatten().collect())),
+                material: None,
+            }],
+        }],
+        nodes: vec![Node {
+            name: "retopology".into(),
+            transform: Transform::identity(),
+            mesh: Some(0),
+            skin: None,
+            children: vec![],
+        }],
+        root_nodes: vec![0],
+        meters_per_unit: base.meters_per_unit,
+        y_up: base.y_up,
+        ..Scene::default()
+    }
+}
+
+/// Construye una escena con skin a partir de la geometría (en espacio mundo),
+/// los pesos por vértice `[vértice][hueso]` y el esqueleto embebido.
+///
+/// Pinocchio asigna el peso del hueso `b` al segmento `padre(b) → b`; en glTF/USD
+/// un vértice sigue a un joint. Se crea un joint por hueso ubicado en la cabeza
+/// de su segmento (la posición del padre) y colgando del joint del padre, como
+/// los huesos de Blender: rotar un joint mueve su segmento y todo lo que cuelga.
+fn rigged_scene(
+    base: &Scene,
+    prims: &[converter_scene::WorldPrimitive],
+    vertex_weights: &[Vec<f64>],
+    skeleton: &BasicSkeleton,
+    joint_positions: &[Vector3],
+) -> Scene {
+    use converter_scene::glam::{Mat4, Vec3};
+    use converter_scene::{Joint, Mesh as SceneMesh, Node, Primitive, Skeleton as SceneSkeleton, Transform};
+
+    const MAX_INFLUENCES: usize = 4;
+    let num_bones = skeleton.num_bones();
+    let to_vec3 = |p: Vector3| Vec3::new(p.x() as f32, p.y() as f32, p.z() as f32);
+    let head = |b: usize| to_vec3(skeleton.get_parent(b).map_or(joint_positions[b], |p| joint_positions[p]));
+
+    let joints: Vec<Joint> = (0..num_bones)
+        .map(|b| {
+            let local = match skeleton.get_parent(b) {
+                Some(p) => head(b) - head(p),
+                None => head(b),
+            };
+            Joint {
+                name: skeleton.bones()[b].name.clone(),
+                children: skeleton.get_children(b),
+                inverse_bind_matrix: Mat4::from_translation(-head(b)),
+                local_transform: Mat4::from_translation(local),
+                node_index: None,
+            }
+        })
+        .collect();
+    let roots = (0..num_bones).filter(|&b| skeleton.get_parent(b).is_none()).collect();
+
+    // Hasta 4 influencias por vértice, renormalizadas
+    let top_weights = |w: &[f64]| -> ([u16; 4], [f32; 4]) {
+        let mut idx: Vec<usize> = (0..w.len()).collect();
+        idx.sort_by(|&a, &b| w[b].total_cmp(&w[a]));
+        let mut joints = [0u16; MAX_INFLUENCES];
+        let mut weights = [0f32; MAX_INFLUENCES];
+        let sum: f64 = idx.iter().take(MAX_INFLUENCES).map(|&i| w[i].max(0.0)).sum();
+        for (slot, &i) in idx.iter().take(MAX_INFLUENCES).enumerate() {
+            joints[slot] = i as u16;
+            weights[slot] = if sum > 0.0 { (w[i].max(0.0) / sum) as f32 } else if slot == 0 { 1.0 } else { 0.0 };
+        }
+        (joints, weights)
+    };
+
+    let mut offset = 0;
+    let primitives = prims
+        .iter()
+        .map(|prim| {
+            let count = prim.positions.len();
+            let (joint_idx, joint_w): (Vec<[u16; 4]>, Vec<[f32; 4]>) =
+                vertex_weights[offset..offset + count].iter().map(|w| top_weights(w)).unzip();
+            offset += count;
+
+            let mut attributes = vec![VertexAttribute::Positions(prim.positions.clone())];
+            if let Some(n) = &prim.normals {
+                attributes.push(VertexAttribute::Normals(n.clone()));
+            }
+            if let Some(uv) = &prim.uvs {
+                attributes.push(VertexAttribute::TexCoords(0, uv.clone()));
+            }
+            attributes.push(VertexAttribute::JointIndices(joint_idx));
+            attributes.push(VertexAttribute::JointWeights(joint_w));
+            Primitive {
+                attributes,
+                indices: Some(IndexData::U32(prim.triangles.iter().flatten().copied().collect())),
+                material: prim.material,
+            }
+        })
+        .collect();
+
+    Scene {
+        meshes: vec![SceneMesh { name: "rigged".into(), primitives }],
+        nodes: vec![Node {
+            name: "rigged".into(),
+            transform: Transform::identity(),
+            mesh: Some(0),
+            skin: Some(0),
+            children: vec![],
+        }],
+        root_nodes: vec![0],
+        materials: base.materials.clone(),
+        textures: base.textures.clone(),
+        skeletons: vec![SceneSkeleton { name: "pinocchio".into(), joints, roots }],
+        animations: vec![],
+        meters_per_unit: base.meters_per_unit,
+        y_up: base.y_up,
+    }
 }
 
 fn export_weights_json(config: &ExportConfig, state: &State<'_, AppState>) -> Result<ExportResult, String> {
@@ -1266,6 +1456,8 @@ pub fn repair_mesh(
         let mut scene_lock = state.scene.lock().unwrap();
         *scene_lock = Some(new_scene);
     }
+    // La topología cambió: el rig anterior ya no corresponde
+    *state.result.lock().unwrap() = None;
 
     // Re-analizar
     let new_diagnostics = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
@@ -1319,6 +1511,7 @@ pub fn undo_repair(state: State<'_, AppState>) -> Result<MeshInfo, String> {
 
     let mut diag_lock = state.diagnostics.lock().unwrap();
     *diag_lock = None;
+    *state.result.lock().unwrap() = None;
 
     Ok(info)
 }
@@ -1422,6 +1615,8 @@ pub fn scale_mesh_for_print(
         let mut scene_lock = state.scene.lock().unwrap();
         *scene_lock = Some(new_scene);
     }
+    // Las posiciones cambiaron: el rig anterior ya no corresponde
+    *state.result.lock().unwrap() = None;
 
     // Re-analizar
     let analysis = pinocchio_print3d::analyze(&mesh)
@@ -1848,5 +2043,75 @@ mod tests {
         state.reset_derived();
         assert!(state.mesh_before_repair.lock().unwrap().is_none());
         assert!(state.scene_before_repair.lock().unwrap().is_none());
+    }
+
+    fn chain_skeleton() -> (BasicSkeleton, Vec<Vector3>) {
+        let skel = BasicSkeleton::from_bones(vec![
+            Bone::new("root", Vector3::new(11.0, 0.0, 1.0)),
+            Bone::with_parent("mid", Vector3::new(11.0, 1.0, 1.0), 0),
+            Bone::with_parent("tip", Vector3::new(11.0, 2.0, 1.0), 1).as_leaf(),
+        ]);
+        let positions = skel.bones().iter().map(|b| b.position).collect();
+        (skel, positions)
+    }
+
+    #[test]
+    fn rigged_scene_exports_skin_to_glb_and_usd() {
+        let scene = transformed_cube_scene();
+        let prims = scene.world_primitives();
+        let (skel, joints) = chain_skeleton();
+        // Mitad inferior al segmento root→mid (hueso 1), superior a mid→tip (hueso 2)
+        let weights: Vec<Vec<f64>> = prims[0]
+            .positions
+            .iter()
+            .map(|p| if p[1] < 1.0 { vec![0.0, 1.0, 0.0] } else { vec![0.0, 0.3, 0.7] })
+            .collect();
+        let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints);
+        assert!(rigged.validate().is_ok());
+        assert_eq!(rigged.materials.len(), 1, "conserva materiales");
+
+        // Joints en la cabeza de cada segmento, colgando del padre
+        let sk = &rigged.skeletons[0];
+        assert_eq!(sk.joints.len(), 3);
+        assert_eq!(sk.joints[0].children, vec![1]);
+        let world_mid = sk.joints[0].local_transform * sk.joints[1].local_transform;
+        assert_eq!(world_mid.w_axis.truncate(), converter_scene::glam::Vec3::new(11.0, 0.0, 1.0));
+
+        // GLB: ida y vuelta conserva skin y pesos
+        let glb = converter_gltf_io::export_glb_bytes(&rigged, &Default::default()).unwrap();
+        let back = converter_gltf_io::import_gltf_bytes(&glb).unwrap();
+        assert_eq!(back.skeletons.len(), 1);
+        assert_eq!(back.skeletons[0].joints.len(), 3);
+        let attrs = &back.meshes[0].primitives[0].attributes;
+        let joint_weights = attrs.iter().find_map(|a| match a {
+            VertexAttribute::JointWeights(w) => Some(w),
+            _ => None,
+        });
+        let w = joint_weights.expect("WEIGHTS_0");
+        assert!(w.iter().all(|w| (w.iter().sum::<f32>() - 1.0).abs() < 1e-5));
+
+        // USD: UsdSkel con índices y pesos
+        let usda = converter_usda::write_usda(&rigged, &Default::default()).unwrap().usda;
+        assert!(usda.contains("SkelRoot"), "{usda}");
+        assert!(usda.contains("primvars:skel:jointIndices"));
+        assert!(usda.contains("primvars:skel:jointWeights"));
+    }
+
+    #[test]
+    fn quad_mesh_exports_as_triangles() {
+        use quadriflow_core::{QuadFace, QuadMesh};
+        let quad = QuadMesh {
+            vertices: vec![
+                nalgebra::Vector3::new(0.0, 0.0, 0.0),
+                nalgebra::Vector3::new(1.0, 0.0, 0.0),
+                nalgebra::Vector3::new(1.0, 1.0, 0.0),
+                nalgebra::Vector3::new(0.0, 1.0, 0.0),
+            ],
+            faces: vec![QuadFace { v: [0, 1, 2, 3] }],
+        };
+        let scene = quad_mesh_to_scene(&quad, &Scene::default());
+        assert!(scene.validate().is_ok());
+        let prims = scene.world_primitives();
+        assert_eq!(prims[0].triangles, vec![[0, 1, 2], [0, 2, 3]]);
     }
 }

@@ -212,10 +212,13 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
     })
 }
 
-/// Transfiere pesos de `source` a puntos arbitrarios (en el mismo espacio):
-/// cada punto toma el punto más cercano de `source` e interpola con
-/// coordenadas baricéntricas los pesos de los vértices de ese triángulo.
-fn transfer_weights(source: &Mesh, weights: &[Vec<Real>], targets: &[Vector3]) -> Vec<Vec<Real>> {
+/// Transfiere pesos `[vértice][hueso]` de `source` a puntos arbitrarios en el
+/// mismo espacio: cada punto toma el punto más cercano de `source` e interpola
+/// con coordenadas baricéntricas los pesos de los vértices de ese triángulo.
+///
+/// Sirve para llevar un rig a otra malla de la misma forma (p. ej. la malla
+/// retopologizada) sin recalcularlo.
+pub fn transfer_weights(source: &Mesh, weights: &[Vec<Real>], targets: &[Vector3]) -> Vec<Vec<Real>> {
     use pinocchio_spatial::{Bvh, Triangle};
     use rayon::prelude::*;
 

@@ -30,7 +30,7 @@ pub mod config;
 pub mod pipeline;
 
 pub use config::RemeshConfig;
-pub use quadriflow_extractor::QuadMesh;
+pub use quadriflow_extractor::{QuadFace, QuadMesh};
 
 use pinocchio_mesh::Mesh;
 use quadriflow_extractor::{extract_quads, ExtractionConfig};
