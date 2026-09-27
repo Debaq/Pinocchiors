@@ -1,12 +1,10 @@
-# Verificación en cada push a master y en pull requests.
+# Verificación manual (Actions → CI → Run workflow, o `gh workflow run CI`).
 # Solo corre tests y chequeos: no genera binarios ni releases (ver release.yml).
 
 name: CI
 
 on:
-  push:
-    branches: [master]
-  pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
