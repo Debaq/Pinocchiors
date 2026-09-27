@@ -118,9 +118,9 @@ fn compute_vertex_index(field: &OrientationField, mesh: &Mesh, vertex_idx: usize
     // The index is the number of quarter-turns (90°) extra
     let quarter_turns = total_rotation / FRAC_PI_2;
     let rounded_quarters = quarter_turns.round();
-    let index = (rounded_quarters - (faces_around.len() as f64)) / 4.0;
+    
 
-    index
+    (rounded_quarters - (faces_around.len() as f64)) / 4.0
 }
 
 /// Compute the rotation needed to align face_a's direction with face_b's.
@@ -141,9 +141,9 @@ fn compute_rotation_between_faces(
     let transported = transport_direction(&dir_a, &normal_a, &normal_b);
 
     // Find the angle between transported and dir_b, considering 4-RoSy
-    let angle = angle_between_4rosy(&transported, &dir_b, &normal_b);
+    
 
-    angle
+    angle_between_4rosy(&transported, &dir_b, &normal_b)
 }
 
 /// Transport a tangent vector from one face to another.
@@ -201,11 +201,10 @@ fn get_faces_around_vertex(mesh: &Mesh, vertex_idx: usize) -> Vec<usize> {
     loop {
         let edge = &mesh.edges[current_edge];
 
-        if let Some(face) = edge.face {
-            if !faces.contains(&face) {
+        if let Some(face) = edge.face
+            && !faces.contains(&face) {
                 faces.push(face);
             }
-        }
 
         // Move to next edge around vertex
         current_edge = match edge.twin {

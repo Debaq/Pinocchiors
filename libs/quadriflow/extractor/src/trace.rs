@@ -96,11 +96,11 @@ pub fn trace_isolines_with_config(
     let mut vertices: Vec<Vector3<f64>> = Vec::new();
 
     for point in all_points {
-        if !uv_to_vertex.contains_key(&point.uv) {
+        uv_to_vertex.entry(point.uv).or_insert_with(|| {
             let idx = vertices.len();
             vertices.push(point.position);
-            uv_to_vertex.insert(point.uv, idx);
-        }
+            idx
+        });
     }
 
     // Find all quads from global set of UV points

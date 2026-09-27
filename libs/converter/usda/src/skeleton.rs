@@ -230,7 +230,7 @@ pub(crate) fn write_skel_root(
 
     // Meshes del nodo (con SkelBindingAPI)
     if let Some(mesh_idx) = node.mesh {
-        let skel_path = format!("{}", skel_name);
+        let skel_path = skel_name.to_string();
         let anim_path = anim_names.first().cloned();
         w.blank();
         write_skinned_mesh(w, scene, mesh_idx, &skel_path, anim_path.as_deref(), &node_name, skeleton_idx, options);
@@ -371,7 +371,7 @@ fn write_primitive_geometry(
     };
 
     if flipped {
-        for tri in face_indices.chunks_exact_mut(3) {
+        for tri in face_indices.as_chunks_mut::<3>().0 {
             tri.swap(1, 2);
         }
     }
@@ -436,15 +436,14 @@ fn write_primitive_geometry(
     }
 
     // Material binding
-    if let Some(mat_idx) = prim.material {
-        if let Some(mat) = scene.materials.get(mat_idx) {
+    if let Some(mat_idx) = prim.material
+        && let Some(mat) = scene.materials.get(mat_idx) {
             let mat_name = crate::materials::material_prim_name(mat, mat_idx);
             w.write_fmt_line(format_args!(
                 "rel material:binding = </Root/Materials/{}>",
                 mat_name
             ));
         }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,8 +485,8 @@ pub(crate) fn write_skel_animation(
     let mut scale_channels: HashMap<usize, &Channel> = HashMap::new();
 
     for ch in &anim.channels {
-        if let Some(&(si, ji)) = skel_ctx.node_to_joint.get(&ch.node) {
-            if si == skeleton_idx {
+        if let Some(&(si, ji)) = skel_ctx.node_to_joint.get(&ch.node)
+            && si == skeleton_idx {
                 match &ch.values {
                     KeyframeValues::Translation(_) => { trans_channels.insert(ji, ch); }
                     KeyframeValues::Rotation(_) => { rot_channels.insert(ji, ch); }
@@ -495,7 +494,6 @@ pub(crate) fn write_skel_animation(
                     KeyframeValues::Weights(_) => {} // Morph weights no van en SkelAnimation
                 }
             }
-        }
     }
 
     // Recopilar todos los tiempos únicos
@@ -1214,7 +1212,7 @@ pub(crate) fn write_int_flat_array(w: &mut UsdWriter, prefix: &str, values: &[i3
     }
     w.buf.push_str("] (\n");
     w.write_indent();
-    write!(w.buf, "    elementSize = {}\n", element_size).unwrap();
+    writeln!(w.buf, "    elementSize = {}", element_size).unwrap();
     w.write_indent();
     w.buf.push_str("    interpolation = \"vertex\"\n");
     w.write_indent();
@@ -1234,7 +1232,7 @@ pub(crate) fn write_float_flat_array(w: &mut UsdWriter, prefix: &str, values: &[
     }
     w.buf.push_str("] (\n");
     w.write_indent();
-    write!(w.buf, "    elementSize = {}\n", element_size).unwrap();
+    writeln!(w.buf, "    elementSize = {}", element_size).unwrap();
     w.write_indent();
     w.buf.push_str("    interpolation = \"vertex\"\n");
     w.write_indent();

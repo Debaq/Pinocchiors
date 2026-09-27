@@ -78,16 +78,14 @@ impl Scene {
         }
 
         for (i, node) in self.nodes.iter().enumerate() {
-            if let Some(mesh_idx) = node.mesh {
-                if mesh_idx >= n_meshes {
+            if let Some(mesh_idx) = node.mesh
+                && mesh_idx >= n_meshes {
                     return Err(SceneError::MeshOutOfBounds { node: i, index: mesh_idx, count: n_meshes });
                 }
-            }
-            if let Some(skin_idx) = node.skin {
-                if skin_idx >= n_skeletons {
+            if let Some(skin_idx) = node.skin
+                && skin_idx >= n_skeletons {
                     return Err(SceneError::SkinOutOfBounds { node: i, index: skin_idx, count: n_skeletons });
                 }
-            }
             for &child in &node.children {
                 if child >= n_nodes {
                     return Err(SceneError::ChildOutOfBounds { node: i, index: child, count: n_nodes });
@@ -100,13 +98,12 @@ impl Scene {
                 return Err(SceneError::EmptyMesh(mi));
             }
             for (pi, prim) in mesh.primitives.iter().enumerate() {
-                if let Some(mat_idx) = prim.material {
-                    if mat_idx >= n_materials {
+                if let Some(mat_idx) = prim.material
+                    && mat_idx >= n_materials {
                         return Err(SceneError::MaterialOutOfBounds {
                             mesh: mi, prim: pi, index: mat_idx, count: n_materials,
                         });
                     }
-                }
             }
         }
 

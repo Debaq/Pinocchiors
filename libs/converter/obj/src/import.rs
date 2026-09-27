@@ -43,7 +43,7 @@ pub fn import_obj(path: impl AsRef<Path>) -> Result<Scene, ObjImportError> {
         // Posiciones
         if !mesh.positions.is_empty() {
             let positions: Vec<[f32; 3]> = mesh.positions
-                .chunks_exact(3)
+                .as_chunks::<3>().0.iter()
                 .map(|c| [c[0], c[1], c[2]])
                 .collect();
             attributes.push(VertexAttribute::Positions(positions));
@@ -52,7 +52,7 @@ pub fn import_obj(path: impl AsRef<Path>) -> Result<Scene, ObjImportError> {
         // Normales
         if !mesh.normals.is_empty() {
             let normals: Vec<[f32; 3]> = mesh.normals
-                .chunks_exact(3)
+                .as_chunks::<3>().0.iter()
                 .map(|c| [c[0], c[1], c[2]])
                 .collect();
             attributes.push(VertexAttribute::Normals(normals));
@@ -61,7 +61,7 @@ pub fn import_obj(path: impl AsRef<Path>) -> Result<Scene, ObjImportError> {
         // Coordenadas UV
         if !mesh.texcoords.is_empty() {
             let uvs: Vec<[f32; 2]> = mesh.texcoords
-                .chunks_exact(2)
+                .as_chunks::<2>().0.iter()
                 .map(|c| [c[0], c[1]])
                 .collect();
             attributes.push(VertexAttribute::TexCoords(0, uvs));

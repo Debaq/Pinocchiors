@@ -129,13 +129,13 @@ impl Skeleton for BasicSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }

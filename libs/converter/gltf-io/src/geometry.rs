@@ -102,7 +102,7 @@ fn strip_degenerate_triangles(prim: &mut Primitive) {
     match indices {
         IndexData::U16(idx) => {
             let mut cleaned = Vec::with_capacity(idx.len());
-            for tri in idx.chunks_exact(3) {
+            for tri in idx.as_chunks::<3>().0 {
                 if tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2] {
                     cleaned.extend_from_slice(tri);
                 }
@@ -111,7 +111,7 @@ fn strip_degenerate_triangles(prim: &mut Primitive) {
         }
         IndexData::U32(idx) => {
             let mut cleaned = Vec::with_capacity(idx.len());
-            for tri in idx.chunks_exact(3) {
+            for tri in idx.as_chunks::<3>().0 {
                 if tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2] {
                     cleaned.extend_from_slice(tri);
                 }

@@ -143,7 +143,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<Scene, GltfImportError> {
 pub fn import_gltf_bytes(data: &[u8]) -> Result<Scene, GltfImportError> {
     let gltf::Glb { json, bin, .. } = gltf::Glb::from_slice(data)?;
     let root: gltf::json::Root = gltf::json::Root::from_slice(&json)
-        .map_err(|e| gltf::Error::Deserialize(e))?;
+        .map_err(gltf::Error::Deserialize)?;
     let doc = gltf::Document::from_json_without_validation(root);
 
     // Verificar extensiones requeridas
@@ -418,14 +418,13 @@ fn import_meshes(
                 for pt in &transforms {
                     // Buscar el set UV correspondiente y transformarlo in-place
                     for attr in &mut attributes {
-                        if let VertexAttribute::TexCoords(set, uvs) = attr {
-                            if *set == pt.tex_coord_set {
+                        if let VertexAttribute::TexCoords(set, uvs) = attr
+                            && *set == pt.tex_coord_set {
                                 *uvs = apply_texture_transform(
                                     uvs, pt.offset, pt.rotation, pt.scale,
                                 );
                                 break;
                             }
-                        }
                     }
                 }
             }
@@ -712,7 +711,7 @@ fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
 }
 
 fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
-    if data.len() < 4 || &data[0..2] != &[0xFF, 0xD8] {
+    if data.len() < 4 || data[0..2] != [0xFF, 0xD8] {
         return None;
     }
     let mut i = 2;
@@ -723,15 +722,13 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
         }
         let marker = data[i + 1];
         // SOF markers (Start of Frame) contienen las dimensiones
-        if (0xC0..=0xC3).contains(&marker) || (0xC5..=0xC7).contains(&marker)
-            || (0xC9..=0xCB).contains(&marker) || (0xCD..=0xCF).contains(&marker)
-        {
-            if i + 9 < data.len() {
+        if ((0xC0..=0xC3).contains(&marker) || (0xC5..=0xC7).contains(&marker)
+            || (0xC9..=0xCB).contains(&marker) || (0xCD..=0xCF).contains(&marker))
+            && i + 9 < data.len() {
                 let h = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
                 let w = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
                 return Some((w, h));
             }
-        }
         if i + 3 < data.len() {
             let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
             i += 2 + len;
@@ -812,13 +809,12 @@ fn percent_decode(s: &str) -> String {
     let bytes = s.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+        if bytes[i] == b'%' && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
                 result.push((hi << 4 | lo) as char);
                 i += 3;
                 continue;
             }
-        }
         result.push(bytes[i] as char);
         i += 1;
     }
@@ -904,7 +900,7 @@ mod tests {
 
         let mut json_bytes = serde_json::to_vec(&json).unwrap();
         // Pad JSON to 4-byte alignment (con espacios, spec GLB)
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
 
@@ -993,7 +989,7 @@ mod tests {
         });
 
         let mut json_bytes = serde_json::to_vec(&json).unwrap();
-        while json_bytes.len() % 4 != 0 { json_bytes.push(b' '); }
+        while !json_bytes.len().is_multiple_of(4) { json_bytes.push(b' '); }
 
         let total_length = 12 + 8 + json_bytes.len() + 8 + bin.len();
         let mut glb = Vec::with_capacity(total_length);
@@ -1298,7 +1294,7 @@ mod tests {
 
     fn build_glb_from_json_bin(json: &serde_json::Value, bin: &[u8]) -> Vec<u8> {
         let mut json_bytes = serde_json::to_vec(json).unwrap();
-        while json_bytes.len() % 4 != 0 {
+        while !json_bytes.len().is_multiple_of(4) {
             json_bytes.push(b' ');
         }
 
@@ -1315,7 +1311,7 @@ mod tests {
 
         glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
         glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
-        glb.extend_from_slice(&bin);
+        glb.extend_from_slice(bin);
 
         glb
     }

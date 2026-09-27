@@ -245,12 +245,8 @@ pub fn slice_by_plane(mesh: &Mesh, plane: &Plane) -> Result<(Mesh, Mesh)> {
         .collect();
 
     // Verificar si el plano intersecta la malla
-    let has_front = classifications
-        .iter()
-        .any(|&c| c == PointClassification::Front);
-    let has_back = classifications
-        .iter()
-        .any(|&c| c == PointClassification::Back);
+    let has_front = classifications.contains(&PointClassification::Front);
+    let has_back = classifications.contains(&PointClassification::Back);
 
     if !has_front {
         // Todo está detrás del plano

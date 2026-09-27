@@ -270,17 +270,15 @@ fn compute_face_rotations(mesh: &Mesh, seam_data: &SeamData) -> Vec<u8> {
             let edge = &mesh.edges[current_edge];
 
             // Check twin for adjacent face
-            if let Some(twin_idx) = edge.twin {
-                if let Some(adj_face) = mesh.edges[twin_idx].face {
-                    if !visited[adj_face] {
+            if let Some(twin_idx) = edge.twin
+                && let Some(adj_face) = mesh.edges[twin_idx].face
+                    && !visited[adj_face] {
                         // Get transition rotation
                         let transition = seam_data.transition(current_edge);
                         rotations[adj_face] = (rotations[face_idx] + transition.rotation) % 4;
                         visited[adj_face] = true;
                         queue.push_back(adj_face);
                     }
-                }
-            }
 
             current_edge = edge.next;
             if current_edge == start_edge {

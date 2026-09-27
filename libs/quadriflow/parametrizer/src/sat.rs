@@ -422,10 +422,10 @@ fn propagate_adjustment(
             let edge_len_u = (new_u - nu).abs();
             let edge_len_v = (new_v - nv).abs();
             if edge_len_u == 0 && edge_len_v > 1 {
-                score -= edge_len_v as i32;
+                score -= edge_len_v;
             }
             if edge_len_v == 0 && edge_len_u > 1 {
-                score -= edge_len_u as i32;
+                score -= edge_len_u;
             }
         }
 

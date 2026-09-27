@@ -104,7 +104,7 @@ pub fn translate_to_origin(mesh: &mut Mesh) {
     let offset = bbox.min_vec();
 
     for vertex in &mut mesh.vertices {
-        vertex.position = vertex.position - offset;
+        vertex.position -= offset;
     }
 }
 
@@ -114,14 +114,14 @@ pub fn center_on_origin(mesh: &mut Mesh) {
     let center = bbox.center();
 
     for vertex in &mut mesh.vertices {
-        vertex.position = vertex.position - center;
+        vertex.position -= center;
     }
 }
 
 /// Traslada una malla por un offset dado
 pub fn translate(mesh: &mut Mesh, offset: Vector3) {
     for vertex in &mut mesh.vertices {
-        vertex.position = vertex.position + offset;
+        vertex.position += offset;
     }
 }
 

@@ -159,7 +159,7 @@ impl Scene {
                     None => (0..count as u32).collect(),
                 };
                 let triangles = indices
-                    .chunks_exact(3)
+                    .as_chunks::<3>().0.iter()
                     .filter(|t| t.iter().all(|&i| (i as usize) < count))
                     .map(|t| if flip { [t[0], t[2], t[1]] } else { [t[0], t[1], t[2]] })
                     .collect();

@@ -124,7 +124,7 @@ fn decimate_with_mapping(
         vertex_to_cell.push(cell);
 
         let entry = cell_vertices.entry(cell).or_insert((PVec3::zero(), Vec::new()));
-        entry.0 = entry.0 + v.position;
+        entry.0 += v.position;
         entry.1.push(v_idx);
     }
 
@@ -313,7 +313,7 @@ mod tests {
             let coarse = hierarchy.level(1).unwrap();
 
             // Check face_to_coarser validity
-            for (_fine_f, &coarse_f) in fine.face_to_coarser.iter().enumerate() {
+            for &coarse_f in fine.face_to_coarser.iter() {
                 // Either maps to a valid coarse face or is collapsed (usize::MAX)
                 assert!(coarse_f == usize::MAX || coarse_f < coarse.num_faces());
             }

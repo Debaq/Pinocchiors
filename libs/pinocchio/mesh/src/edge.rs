@@ -8,6 +8,7 @@
 /// - La siguiente arista en la cara
 /// - La cara a la que pertenece (None si es borde)
 #[derive(Debug, Clone, Copy)]
+#[derive(Default)]
 pub struct MeshEdge {
     /// Índice del vértice de destino
     pub vertex: usize,
@@ -36,13 +37,3 @@ impl MeshEdge {
     }
 }
 
-impl Default for MeshEdge {
-    fn default() -> Self {
-        Self {
-            vertex: 0,
-            twin: None,
-            next: 0,
-            face: None,
-        }
-    }
-}

@@ -215,11 +215,10 @@ impl<T: Clone> Octree<T> {
             };
 
             // Podar si el nodo no puede contener un punto más cercano
-            if let Some((_, _, best_dist)) = best {
-                if bounds.distance_squared_to_point(query) > *best_dist {
+            if let Some((_, _, best_dist)) = best
+                && bounds.distance_squared_to_point(query) > *best_dist {
                     return;
                 }
-            }
 
             match n {
                 OctreeNode::Leaf { items, .. } => {

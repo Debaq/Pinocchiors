@@ -102,7 +102,7 @@ impl PositionField {
         // Combine into UV coordinates
         let coords: Vec<Vector2<f64>> = u_coords
             .into_iter()
-            .zip(v_coords.into_iter())
+            .zip(v_coords)
             .map(|(u, v)| Vector2::new(u, v))
             .collect();
 

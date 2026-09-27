@@ -79,7 +79,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Cada textura se escribe una vez; colisiones → `{nombre}_{i}`.
 - [x] MTL exporta también `norm`/`map_Bump` (normales), `map_Ke` y `Ke` (emisivo).
 - **Test:** rutas absolutas y `../` no escriben fuera del directorio; nombres repetidos no se pisan.
-- **Pendiente:** metallic-roughness (glTF lo empaqueta en canales G/B; MTL espera mapas separados).
+- [x] Metallic-roughness separado en `map_Pr` (G) y `map_Pm` (B), más `Pr`/`Pm`.
 
 ---
 
@@ -145,7 +145,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] `Cargo.toml`: `repository` → `https://github.com/Debaq/Pinocchiors`.
 - [x] `LICENSE-MIT` y `LICENSE-APACHE` (texto oficial).
 - [x] Clippy: errores `approx_constant` del test de `pt_graph` corregidos.
-- [ ] Clippy: ~100 lints de estilo. `cargo clippy --fix` propone APIs de Rust ≥ 1.88 (`as_chunks`, let chains) y el workspace declara 1.85: decidir si subir `rust-version`.
+- [x] Clippy: `rust-version` subido a 1.88 (solo se compila en CI con Rust estable) y `cargo clippy --fix` aplicado. Quedan ~25 avisos de estilo propios de código numérico (`needless_range_loop`, `too_many_arguments`).
 - [x] Frontend: `npx tsc --noEmit` pasa.
 - [x] CI: el job de tests instala las dependencias de Tauri y corre también `pinocchio-app`.
 
@@ -158,7 +158,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Roundtrip repair → export GLB con nodos (#4).
 - [x] Converter con transformaciones de nodos → STL/OBJ (#5).
 - [ ] Fuzz/proptest de importadores con índices inválidos (#10).
-- [ ] Des-ignorar los doctests de `pinocchio-core`, `quadriflow-core`, `pinocchio-repair` y `pinocchio-print3d`.
+- [x] Doctests de `pinocchio-core`, `quadriflow-core`, `pinocchio-repair` y `pinocchio-print3d` como `no_run` (compilan contra la API real).
 - [ ] 23 crates sin tests unitarios (wasm, CLI, desktop, varios de quadriflow).
 
 ---

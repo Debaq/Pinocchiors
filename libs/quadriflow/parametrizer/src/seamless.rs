@@ -167,8 +167,8 @@ impl SeamData {
             let edge = &mesh.edges[edge_idx];
 
             // Only process edges with twins (interior edges)
-            if let (Some(face_a), Some(twin_idx)) = (edge.face, edge.twin) {
-                if let Some(face_b) = mesh.edges[twin_idx].face {
+            if let (Some(face_a), Some(twin_idx)) = (edge.face, edge.twin)
+                && let Some(face_b) = mesh.edges[twin_idx].face {
                     // Compute rotation between face_a and face_b
                     let rotation = compute_face_rotation(
                         orientation,
@@ -178,7 +178,6 @@ impl SeamData {
 
                     transitions[edge_idx] = SeamTransition::with_rotation(rotation);
                 }
-            }
         }
 
         SeamData { transitions }

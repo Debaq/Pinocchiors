@@ -284,27 +284,24 @@ fn compute_total_energy<S: Skeleton>(
 
     for bone_idx in 0..skeleton.num_bones() {
         // Término de longitud
-        if let Some(target_len) = target_lengths[bone_idx] {
-            if let Some(bone) = skeleton.get_bone(bone_idx) {
-                if let Some(parent_idx) = bone.parent {
+        if let Some(target_len) = target_lengths[bone_idx]
+            && let Some(bone) = skeleton.get_bone(bone_idx)
+                && let Some(parent_idx) = bone.parent {
                     let actual_len = positions[bone_idx].distance(&positions[parent_idx]);
                     let len_error = (actual_len - target_len) / target_len.max(0.001);
                     energy += config.length_weight * len_error * len_error;
                 }
-            }
-        }
 
         // Término de superficie medial (distancia a la esfera más cercana)
-        if let Some(nearest) = sphere_graph.find_nearest_sphere(&positions[bone_idx]) {
-            if let Some(sphere) = sphere_graph.get_sphere(nearest) {
+        if let Some(nearest) = sphere_graph.find_nearest_sphere(&positions[bone_idx])
+            && let Some(sphere) = sphere_graph.get_sphere(nearest) {
                 let dist_to_sphere = positions[bone_idx].distance(&sphere.center);
                 energy += config.medial_weight * dist_to_sphere * dist_to_sphere;
             }
-        }
 
         // Término de suavidad (ángulos entre huesos consecutivos)
-        if let Some(bone) = skeleton.get_bone(bone_idx) {
-            if let Some(parent_idx) = bone.parent {
+        if let Some(bone) = skeleton.get_bone(bone_idx)
+            && let Some(parent_idx) = bone.parent {
                 let children = skeleton.get_children(bone_idx);
                 for child_idx in children {
                     let v1 = positions[bone_idx] - positions[parent_idx];
@@ -317,7 +314,6 @@ fn compute_total_energy<S: Skeleton>(
                     }
                 }
             }
-        }
     }
 
     energy
@@ -343,16 +339,16 @@ fn compute_gradient<S: Skeleton>(
 
         match axis {
             0 => {
-                pos_plus[bone_idx] = pos_plus[bone_idx] + Vector3::new(h, 0.0, 0.0);
-                pos_minus[bone_idx] = pos_minus[bone_idx] - Vector3::new(h, 0.0, 0.0);
+                pos_plus[bone_idx] += Vector3::new(h, 0.0, 0.0);
+                pos_minus[bone_idx] -= Vector3::new(h, 0.0, 0.0);
             }
             1 => {
-                pos_plus[bone_idx] = pos_plus[bone_idx] + Vector3::new(0.0, h, 0.0);
-                pos_minus[bone_idx] = pos_minus[bone_idx] - Vector3::new(0.0, h, 0.0);
+                pos_plus[bone_idx] += Vector3::new(0.0, h, 0.0);
+                pos_minus[bone_idx] -= Vector3::new(0.0, h, 0.0);
             }
             _ => {
-                pos_plus[bone_idx] = pos_plus[bone_idx] + Vector3::new(0.0, 0.0, h);
-                pos_minus[bone_idx] = pos_minus[bone_idx] - Vector3::new(0.0, 0.0, h);
+                pos_plus[bone_idx] += Vector3::new(0.0, 0.0, h);
+                pos_minus[bone_idx] -= Vector3::new(0.0, 0.0, h);
             }
         }
 
@@ -362,9 +358,9 @@ fn compute_gradient<S: Skeleton>(
         let deriv = (e_plus - e_minus) / (2.0 * h);
 
         match axis {
-            0 => gradient = gradient + Vector3::new(deriv, 0.0, 0.0),
-            1 => gradient = gradient + Vector3::new(0.0, deriv, 0.0),
-            _ => gradient = gradient + Vector3::new(0.0, 0.0, deriv),
+            0 => gradient += Vector3::new(deriv, 0.0, 0.0),
+            1 => gradient += Vector3::new(0.0, deriv, 0.0),
+            _ => gradient += Vector3::new(0.0, 0.0, deriv),
         }
     }
 
@@ -379,9 +375,9 @@ fn enforce_bone_lengths<S: Skeleton>(
     tolerance: Real,
 ) {
     for bone_idx in 0..skeleton.num_bones() {
-        if let Some(target_len) = target_lengths[bone_idx] {
-            if let Some(bone) = skeleton.get_bone(bone_idx) {
-                if let Some(parent_idx) = bone.parent {
+        if let Some(target_len) = target_lengths[bone_idx]
+            && let Some(bone) = skeleton.get_bone(bone_idx)
+                && let Some(parent_idx) = bone.parent {
                     let actual_len = positions[bone_idx].distance(&positions[parent_idx]);
                     let error_ratio = (actual_len - target_len).abs() / target_len;
 
@@ -391,8 +387,6 @@ fn enforce_bone_lengths<S: Skeleton>(
                         positions[bone_idx] = positions[parent_idx] + direction * target_len;
                     }
                 }
-            }
-        }
     }
 }
 
@@ -402,9 +396,9 @@ fn compute_embedding_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -
     let mut count = 0;
 
     for bone_idx in 0..skeleton.num_bones() {
-        if let Some(bone) = skeleton.get_bone(bone_idx) {
-            if let Some(parent_idx) = bone.parent {
-                if let Some(parent) = skeleton.get_bone(parent_idx) {
+        if let Some(bone) = skeleton.get_bone(bone_idx)
+            && let Some(parent_idx) = bone.parent
+                && let Some(parent) = skeleton.get_bone(parent_idx) {
                     // Error en la longitud del hueso
                     let target_length = bone.position.distance(&parent.position);
                     let actual_length = positions[bone_idx].distance(&positions[parent_idx]);
@@ -413,8 +407,6 @@ fn compute_embedding_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -
                     total_error += length_error;
                     count += 1;
                 }
-            }
-        }
     }
 
     if count > 0 {

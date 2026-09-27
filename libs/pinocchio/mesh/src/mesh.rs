@@ -335,11 +335,10 @@ impl Mesh {
             let edge = &self.edges[edge_idx];
 
             // Si la arista tiene twin, su cara es vecina
-            if let Some(twin_idx) = edge.twin {
-                if let Some(neighbor_face) = self.edges[twin_idx].face {
+            if let Some(twin_idx) = edge.twin
+                && let Some(neighbor_face) = self.edges[twin_idx].face {
                     neighbors.push(neighbor_face);
                 }
-            }
 
             edge_idx = edge.next;
         }

@@ -206,12 +206,11 @@ fn write_header(w: &mut UsdWriter, scene: &Scene, options: &UsdaExportOptions) {
     w.write_fmt_line(format_args!("    upAxis = \"{}\"", up));
 
     // TimeCodes si hay animaciones
-    if options.export_animations {
-        if let Some((start, end)) = skeleton::compute_time_range(scene, options.fps) {
+    if options.export_animations
+        && let Some((start, end)) = skeleton::compute_time_range(scene, options.fps) {
             w.write_fmt_line(format_args!("    startTimeCode = {}", start));
             w.write_fmt_line(format_args!("    endTimeCode = {}", end));
         }
-    }
 
     w.line(")");
     w.blank();
@@ -401,7 +400,7 @@ fn write_primitive(
 
     // Flip winding order si la escala acumulada es negativa
     if flipped {
-        for tri in face_indices.chunks_exact_mut(3) {
+        for tri in face_indices.as_chunks_mut::<3>().0 {
             tri.swap(1, 2);
         }
     }
@@ -469,15 +468,14 @@ fn write_primitive(
     }
 
     // material binding
-    if let Some(mat_idx) = prim.material {
-        if let Some(mat) = scene.materials.get(mat_idx) {
+    if let Some(mat_idx) = prim.material
+        && let Some(mat) = scene.materials.get(mat_idx) {
             let mat_name = materials::material_prim_name(mat, mat_idx);
             w.write_fmt_line(format_args!(
                 "rel material:binding = </Root/Materials/{}>",
                 mat_name
             ));
         }
-    }
 
     w.close_block();
 }

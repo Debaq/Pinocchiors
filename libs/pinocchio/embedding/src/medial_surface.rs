@@ -395,11 +395,10 @@ fn sample_high_curvature_region(
 
                 let dist = field.sample(&pos);
 
-                if dist > 0.0 && dist < bbox.diagonal() * 0.5 {
-                    if is_local_maximum_expanded(&pos, dist, field, sub_step * 0.5) {
+                if dist > 0.0 && dist < bbox.diagonal() * 0.5
+                    && is_local_maximum_expanded(&pos, dist, field, sub_step * 0.5) {
                         spheres.push(MedialSphere::new(pos, dist));
                     }
-                }
             }
         }
     }

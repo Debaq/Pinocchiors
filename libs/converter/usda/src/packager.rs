@@ -185,7 +185,7 @@ mod tests {
             0,  // filter
             0,  // interlace
         ];
-        let ihdr_crc = crc32(&[b'I', b'H', b'D', b'R'], &ihdr_data);
+        let ihdr_crc = crc32(b"IHDR", &ihdr_data);
         buf.write_all(&(ihdr_data.len() as u32).to_be_bytes()).unwrap();
         buf.write_all(b"IHDR").unwrap();
         buf.write_all(&ihdr_data).unwrap();
@@ -386,8 +386,8 @@ mod tests {
         // Ambos deben producir paquetes válidos
         let archive_normal = ZipArchive::new(Cursor::new(bytes_normal)).unwrap();
         let archive_arkit = ZipArchive::new(Cursor::new(bytes_arkit)).unwrap();
-        assert!(archive_normal.len() >= 1);
-        assert!(archive_arkit.len() >= 1);
+        assert!(!archive_normal.is_empty());
+        assert!(!archive_arkit.is_empty());
     }
 
     #[test]
@@ -402,7 +402,7 @@ mod tests {
         // No debe fallar — 1024 < 2048, se respeta el más pequeño
         let bytes = write_usdz_bytes(&scene, &opts).unwrap();
         let archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
-        assert!(archive.len() >= 1);
+        assert!(!archive.is_empty());
     }
 
     #[test]

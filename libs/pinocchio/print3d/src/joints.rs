@@ -468,7 +468,7 @@ pub fn calculate_joint_positions(
         _ => {
             // Distribución en grilla
             let cols = ((count as Real).sqrt().ceil() as usize).max(1);
-            let rows = (count + cols - 1) / cols;
+            let rows = count.div_ceil(cols);
 
             let step_x = if cols > 1 {
                 usable_width / (cols - 1) as Real

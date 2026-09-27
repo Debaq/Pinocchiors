@@ -215,7 +215,7 @@ pub fn compute_center_of_mass(mesh: &Mesh) -> Vector3 {
         // Centroide del tetraedro (origen + 3 vértices) / 4
         let centroid = (v0 + v1 + v2) * 0.25;
 
-        com = com + centroid * vol;
+        com += centroid * vol;
         total_volume += vol;
     }
 

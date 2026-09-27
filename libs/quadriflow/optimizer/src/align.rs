@@ -105,8 +105,8 @@ pub fn detect_sharp_edges(mesh: &Mesh, config: &SharpEdgeConfig) -> SharpEdgeInf
                 // Boundary edge
                 info.boundary_count += 1;
 
-                if config.include_boundary {
-                    if let Some(face_idx) = edge.face {
+                if config.include_boundary
+                    && let Some(face_idx) = edge.face {
                         info.edges.push(SharpEdge {
                             edge_idx,
                             v0,
@@ -116,14 +116,13 @@ pub fn detect_sharp_edges(mesh: &Mesh, config: &SharpEdgeConfig) -> SharpEdgeInf
                             faces: (face_idx, face_idx),
                         });
                     }
-                }
             }
             Some(twin_idx) => {
                 // Interior edge - compute dihedral angle
                 let twin = &mesh.edges[twin_idx];
 
-                if let (Some(face_a), Some(face_b)) = (edge.face, twin.face) {
-                    if face_a < face_normals.len() && face_b < face_normals.len() {
+                if let (Some(face_a), Some(face_b)) = (edge.face, twin.face)
+                    && face_a < face_normals.len() && face_b < face_normals.len() {
                         let normal_a = face_normals[face_a];
                         let normal_b = face_normals[face_b];
 
@@ -143,7 +142,6 @@ pub fn detect_sharp_edges(mesh: &Mesh, config: &SharpEdgeConfig) -> SharpEdgeInf
                             });
                         }
                     }
-                }
             }
         }
     }

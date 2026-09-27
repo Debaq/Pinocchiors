@@ -298,11 +298,10 @@ fn validate_input<S: Skeleton>(
         return Err(PinocchioError::EmptySkeleton);
     }
 
-    if config.verify_mesh_integrity {
-        if let Err(e) = mesh.integrity_check() {
+    if config.verify_mesh_integrity
+        && let Err(e) = mesh.integrity_check() {
             return Err(PinocchioError::IntegrityCheckFailed(e));
         }
-    }
 
     Ok(())
 }

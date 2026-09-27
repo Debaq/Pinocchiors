@@ -84,8 +84,8 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
             writeln!(out, "vt {} {}", uv[0], uv[1])?;
         }
 
-        if let Some(mat_idx) = prim.material {
-            if mat_idx < scene.materials.len() {
+        if let Some(mat_idx) = prim.material
+            && mat_idx < scene.materials.len() {
                 let mat_name = if scene.materials[mat_idx].name.is_empty() {
                     format!("material_{mat_idx}")
                 } else {
@@ -93,7 +93,6 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
                 };
                 writeln!(out, "usemtl {mat_name}")?;
             }
-        }
 
         let has_normals = !normals.is_empty();
         let has_uvs = !uvs.is_empty();

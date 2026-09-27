@@ -248,7 +248,7 @@ impl<'a> GlbBuilder<'a> {
     /// Retorna el índice del bufferView creado.
     fn push_buffer_view(&mut self, data: &[u8], target: Option<u32>) -> usize {
         // Alinear offset a 4 bytes
-        while self.bin.len() % 4 != 0 {
+        while !self.bin.len().is_multiple_of(4) {
             self.bin.push(0);
         }
         let offset = self.bin.len();
@@ -779,17 +779,15 @@ impl<'a> GlbBuilder<'a> {
         // todos los nodos que no aparecen como children de ningún otro nodo.
         let mut is_child = vec![false; self.nodes.len()];
         for node in &self.nodes {
-            if let Some(children) = node.get("children") {
-                if let Some(arr) = children.as_array() {
+            if let Some(children) = node.get("children")
+                && let Some(arr) = children.as_array() {
                     for c in arr {
-                        if let Some(idx) = c.as_u64() {
-                            if (idx as usize) < is_child.len() {
+                        if let Some(idx) = c.as_u64()
+                            && (idx as usize) < is_child.len() {
                                 is_child[idx as usize] = true;
                             }
-                        }
                     }
                 }
-            }
         }
         let root_nodes: Vec<usize> = (0..self.nodes.len())
             .filter(|&i| !is_child[i])
@@ -804,7 +802,7 @@ impl<'a> GlbBuilder<'a> {
         let bin = self.bin;
         // Pad bin a 4 bytes
         let mut bin_padded = bin;
-        while bin_padded.len() % 4 != 0 {
+        while !bin_padded.len().is_multiple_of(4) {
             bin_padded.push(0);
         }
 

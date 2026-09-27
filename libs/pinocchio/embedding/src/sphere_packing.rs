@@ -164,13 +164,13 @@ pub fn merge_cluster(spheres: &[MedialSphere], indices: &[usize]) -> MedialSpher
     for &idx in indices {
         let sphere = &spheres[idx];
         let weight = sphere.radius;
-        weighted_center = weighted_center + sphere.center * weight;
+        weighted_center += sphere.center * weight;
         total_weight += weight;
         max_radius = max_radius.max(sphere.radius);
     }
 
     if total_weight > 1e-10 {
-        weighted_center = weighted_center / total_weight;
+        weighted_center /= total_weight;
     }
 
     MedialSphere::new(weighted_center, max_radius)

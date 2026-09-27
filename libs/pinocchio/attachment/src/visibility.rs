@@ -94,15 +94,14 @@ impl<'a> VisibilityTester<'a> {
         for face_idx in 0..self.mesh.num_faces() {
             let [v0, v1, v2] = self.mesh.get_face_positions(face_idx);
 
-            if let Some(t) = self.ray_triangle_intersect(origin, direction, &v0, &v1, &v2) {
-                if t > EPSILON {
-                    let should_update = closest.map_or(true, |(best_t, _, _)| t < best_t);
+            if let Some(t) = self.ray_triangle_intersect(origin, direction, &v0, &v1, &v2)
+                && t > EPSILON {
+                    let should_update = closest.is_none_or(|(best_t, _, _)| t < best_t);
                     if should_update {
                         let point = *origin + *direction * t;
                         closest = Some((t, point, face_idx));
                     }
                 }
-            }
         }
 
         closest

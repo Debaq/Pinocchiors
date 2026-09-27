@@ -156,7 +156,7 @@ fn compute_polygon_normal(vertices: &[Vector3]) -> Vector3 {
         let next = vertices[(i + 1) % n];
 
         // Newell's method
-        normal = normal + Vector3::new(
+        normal += Vector3::new(
             (curr.y() - next.y()) * (curr.z() + next.z()),
             (curr.z() - next.z()) * (curr.x() + next.x()),
             (curr.x() - next.x()) * (curr.y() + next.y()),

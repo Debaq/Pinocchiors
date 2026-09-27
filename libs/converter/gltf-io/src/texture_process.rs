@@ -27,23 +27,21 @@ pub(crate) fn process_texture(
     let mut img = decode_texture(tex)?;
 
     // Resize si excede max_texture_size
-    if let Some(max_size) = options.max_texture_size {
-        if tex.width > max_size || tex.height > max_size {
+    if let Some(max_size) = options.max_texture_size
+        && (tex.width > max_size || tex.height > max_size) {
             let (new_w, new_h) = fit_dimensions(img.width(), img.height(), max_size);
             img = img.resize_exact(new_w, new_h, FilterType::Lanczos3);
         }
-    }
 
     // Decidir formato de salida
     let has_alpha = image_has_alpha(&img);
 
-    if let Some(quality) = options.texture_quality {
-        if !has_alpha {
+    if let Some(quality) = options.texture_quality
+        && !has_alpha {
             // Recomprimir a JPEG (sin alpha)
             let bytes = encode_jpeg(&img, quality)?;
             return Ok((bytes, "image/jpeg"));
         }
-    }
 
     // Mantener PNG (tiene alpha o no se pidió recompresión)
     let bytes = encode_png(&img)?;

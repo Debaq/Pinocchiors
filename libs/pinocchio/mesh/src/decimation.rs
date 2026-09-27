@@ -64,7 +64,7 @@ pub fn decimate_with_resolution(mesh: &Mesh, resolution: usize) -> Mesh {
         vertex_to_cell.push(cell);
 
         let entry = cell_vertices.entry(cell).or_insert((Vector3::zero(), 0));
-        entry.0 = entry.0 + v.position;
+        entry.0 += v.position;
         entry.1 += 1;
     }
 

@@ -87,7 +87,7 @@ impl Attachment {
 
                     // Aplicar transformación ponderada
                     let transformed = relative.transform_point(&rest_pos);
-                    new_pos = new_pos + transformed * weight;
+                    new_pos += transformed * weight;
                 }
 
                 new_pos
@@ -138,9 +138,7 @@ impl Attachment {
             let dominant = self.get_dominant_bones(vert_idx, max_influences);
 
             // Resetear todos los pesos
-            for w in &mut self.weights[vert_idx] {
-                *w = 0.0;
-            }
+            self.weights[vert_idx].fill(0.0);
 
             // Asignar solo los dominantes
             for (bone_idx, weight) in dominant {

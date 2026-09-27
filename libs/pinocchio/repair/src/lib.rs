@@ -170,11 +170,10 @@ pub fn repair_all(mesh: &mut Mesh, config: &RepairConfig) -> RepairResult<Repair
     }
 
     // 4. Orientar hacia afuera
-    if config.orient_outward {
-        if let Ok(flipped) = repair::normals::orient_normals_outward(mesh) {
+    if config.orient_outward
+        && let Ok(flipped) = repair::normals::orient_normals_outward(mesh) {
             summary.faces_flipped += flipped;
         }
-    }
 
     // 5. Rellenar agujeros
     if config.fill_holes {

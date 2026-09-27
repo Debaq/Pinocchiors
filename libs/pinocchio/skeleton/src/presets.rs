@@ -1,5 +1,8 @@
 //! Esqueletos predefinidos
 
+// Los presets se arman hueso a hueso con un comentario por parte del cuerpo
+#![allow(clippy::vec_init_then_push)]
+
 use crate::{Bone, Skeleton};
 use pinocchio_math::Vector3;
 
@@ -72,13 +75,13 @@ impl Skeleton for HumanSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -150,13 +153,13 @@ impl Skeleton for QuadSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -175,10 +178,10 @@ impl HorseSkeleton {
         // Ajustar proporciones para caballo (cuello más largo, piernas más largas)
         for bone in quad.bones.iter_mut() {
             if bone.name.contains("neck") {
-                bone.position = bone.position + Vector3::new(0.0, 0.1, 0.1);
+                bone.position += Vector3::new(0.0, 0.1, 0.1);
             }
             if bone.name.contains("head") {
-                bone.position = bone.position + Vector3::new(0.0, 0.15, 0.2);
+                bone.position += Vector3::new(0.0, 0.15, 0.2);
             }
         }
         Self { bones: quad.bones }
@@ -206,13 +209,13 @@ impl Skeleton for HorseSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -296,13 +299,13 @@ impl Skeleton for CentaurSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -381,13 +384,13 @@ impl Skeleton for BirdSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -473,13 +476,13 @@ impl Skeleton for SpiderSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -548,13 +551,13 @@ impl Skeleton for SerpentSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }
@@ -635,13 +638,13 @@ impl Skeleton for MechSkeleton {
 
     fn scale(&mut self, factor: f64) {
         for bone in &mut self.bones {
-            bone.position = bone.position * factor;
+            bone.position *= factor;
         }
     }
 
     fn translate(&mut self, offset: Vector3) {
         for bone in &mut self.bones {
-            bone.position = bone.position + offset;
+            bone.position += offset;
         }
     }
 }

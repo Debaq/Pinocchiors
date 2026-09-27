@@ -82,13 +82,12 @@ pub(crate) fn flatten_node_transforms(scene: &mut Scene) {
             continue;
         }
 
-        if let Some(mesh_idx) = node.mesh {
-            if let Some(mesh) = scene.meshes.get_mut(mesh_idx) {
+        if let Some(mesh_idx) = node.mesh
+            && let Some(mesh) = scene.meshes.get_mut(mesh_idx) {
                 for prim in &mut mesh.primitives {
                     transform_primitive(prim, &global);
                 }
             }
-        }
 
         // Resetear transform a identidad
         node.transform = Transform::identity();
@@ -202,7 +201,7 @@ fn compute_vertex_normals(positions: &[[f32; 3]], indices: &IndexData) -> Vec<[f
         IndexData::U32(idx) => idx.clone(),
     };
 
-    for tri in idx_iter.chunks_exact(3) {
+    for tri in idx_iter.as_chunks::<3>().0 {
         let i0 = tri[0] as usize;
         let i1 = tri[1] as usize;
         let i2 = tri[2] as usize;

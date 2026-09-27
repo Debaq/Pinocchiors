@@ -143,8 +143,7 @@ mod tests {
         let exported = dir.path().join("exported.stl");
 
         // Crear STL con 2 triángulos (un cuadrado)
-        let tris = vec![
-            stl_io::Triangle {
+        let tris = [stl_io::Triangle {
                 normal: stl_io::Normal::new([0.0, 0.0, 1.0]),
                 vertices: [
                     stl_io::Vertex::new([0.0, 0.0, 0.0]),
@@ -159,8 +158,7 @@ mod tests {
                     stl_io::Vertex::new([1.0, 1.0, 0.0]),
                     stl_io::Vertex::new([0.0, 1.0, 0.0]),
                 ],
-            },
-        ];
+            }];
         let mut file = std::fs::File::create(&original).unwrap();
         stl_io::write_stl(&mut file, tris.iter()).unwrap();
 
