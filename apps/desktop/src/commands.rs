@@ -486,15 +486,10 @@ fn build_export_scene(config: &ExportConfig, state: &State<'_, AppState>) -> Res
         .collect();
     let prims = geometry.world_primitives();
     let vertex_weights = if use_retopology {
-        // El rig se calculó sobre la malla original: llevarlo a la retopologizada
         let mesh_lock = state.mesh.lock().unwrap();
         let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
-        let targets: Vec<Vector3> = prims
-            .iter()
-            .flat_map(|p| p.positions.iter())
-            .map(|p| Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64))
-            .collect();
-        transfer_weights(mesh, &source_weights, &targets)
+        let quad = state.quad_mesh.lock().unwrap();
+        weights_on_quad_mesh(mesh, &source_weights, quad.as_ref().ok_or("No hay malla retopologizada")?)?
     } else {
         source_weights
     };
@@ -646,6 +641,37 @@ fn rigged_scene(
     }
 }
 
+/// Pesos del autorig llevados a los vértices de la malla retopologizada, en el
+/// orden de `quad.vertices` (el mismo de [`quad_mesh_to_scene`]).
+fn weights_on_quad_mesh(
+    mesh: &Mesh,
+    source_weights: &[Vec<f64>],
+    quad: &quadriflow_core::QuadMesh,
+) -> Result<Vec<Vec<f64>>, String> {
+    if source_weights.len() != mesh.num_vertices() {
+        return Err(format!(
+            "El rig no corresponde a la malla actual ({} pesos, {} vértices): vuelve a ejecutar el autorig",
+            source_weights.len(),
+            mesh.num_vertices()
+        ));
+    }
+    let targets: Vec<Vector3> = quad.vertices.iter().map(|v| Vector3::new(v.x, v.y, v.z)).collect();
+    Ok(transfer_weights(mesh, source_weights, &targets))
+}
+
+/// Las `max_influences` influencias dominantes de cada vértice (renormalizadas),
+/// rellenas con hueso 0 y peso 0 hasta completar.
+fn influence_table(weights: &[Vec<f64>], max_influences: usize) -> (Vec<Vec<usize>>, Vec<Vec<f64>>) {
+    weights
+        .iter()
+        .map(|w| {
+            let mut dominant = pinocchio_attachment::dominant_influences(w, max_influences);
+            dominant.resize(max_influences, (0, 0.0));
+            dominant.into_iter().unzip()
+        })
+        .unzip()
+}
+
 fn export_weights_json(config: &ExportConfig, state: &State<'_, AppState>) -> Result<ExportResult, String> {
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;
@@ -656,16 +682,30 @@ fn export_weights_json(config: &ExportConfig, state: &State<'_, AppState>) -> Re
     let mesh_lock = state.mesh.lock().unwrap();
     let mesh = mesh_lock.as_ref().ok_or("No hay malla")?;
 
+    let source_weights: Vec<Vec<f64>> = (0..result.attachment.num_vertices())
+        .map(|v| result.get_weights(v).to_vec())
+        .collect();
+    let (source, num_vertices, num_faces, vertex_weights) = if config.use_retopology.unwrap_or(false) {
+        let quad_lock = state.quad_mesh.lock().unwrap();
+        let quad = quad_lock.as_ref().ok_or("No hay malla retopologizada")?;
+        let weights = weights_on_quad_mesh(mesh, &source_weights, quad)?;
+        ("retopology", quad.num_vertices(), quad.num_faces(), weights)
+    } else {
+        ("original", mesh.num_vertices(), mesh.num_faces(), source_weights)
+    };
+
     let max_influences = 4;
-    let (indices, weights) = result.export_weights(max_influences);
+    let (indices, weights) = influence_table(&vertex_weights, max_influences);
 
     let bone_names: Vec<String> = get_bone_names(skeleton_type);
 
     let export_data = serde_json::json!({
         "version": "1.0",
         "mesh": {
-            "num_vertices": mesh.num_vertices(),
-            "num_faces": mesh.num_faces(),
+            // "retopology": índices de vértice de la malla de quads exportada
+            "source": source,
+            "num_vertices": num_vertices,
+            "num_faces": num_faces,
         },
         "skeleton": {
             "bones": bone_names,
@@ -2121,6 +2161,44 @@ mod tests {
         assert!(usda.contains("SkelRoot"), "{usda}");
         assert!(usda.contains("primvars:skel:jointIndices"));
         assert!(usda.contains("primvars:skel:jointWeights"));
+    }
+
+    #[test]
+    fn weights_follow_the_quad_mesh() {
+        use quadriflow_core::{QuadFace, QuadMesh};
+        // Tira vertical: abajo hueso 0, arriba hueso 1
+        let positions: Vec<Vector3> = (0..=4)
+            .flat_map(|j| [Vector3::new(0.0, j as f64, 0.0), Vector3::new(1.0, j as f64, 0.0)])
+            .collect();
+        let triangles: Vec<[usize; 3]> = (0..4)
+            .flat_map(|j| [[2 * j, 2 * j + 1, 2 * j + 3], [2 * j, 2 * j + 3, 2 * j + 2]])
+            .collect();
+        let mesh = Mesh::from_triangles(&positions, &triangles);
+        let source: Vec<Vec<f64>> = positions
+            .iter()
+            .map(|p| if p.y() < 2.0 { vec![1.0, 0.0] } else { vec![0.0, 1.0] })
+            .collect();
+
+        let quad = QuadMesh {
+            vertices: vec![
+                nalgebra::Vector3::new(0.0, 0.5, 0.0),
+                nalgebra::Vector3::new(1.0, 0.5, 0.0),
+                nalgebra::Vector3::new(1.0, 3.5, 0.0),
+                nalgebra::Vector3::new(0.0, 3.5, 0.0),
+            ],
+            faces: vec![QuadFace { v: [0, 1, 2, 3] }],
+        };
+        let weights = weights_on_quad_mesh(&mesh, &source, &quad).unwrap();
+        assert_eq!(weights.len(), 4);
+        assert!(weights[0][0] > 0.99 && weights[1][0] > 0.99);
+        assert!(weights[2][1] > 0.99 && weights[3][1] > 0.99);
+
+        let (indices, table) = influence_table(&weights, 4);
+        assert_eq!(indices[2][0], 1);
+        assert!(table.iter().all(|w| w.len() == 4 && (w.iter().sum::<f64>() - 1.0).abs() < 1e-9));
+
+        // Pesos de otra malla: error en vez de índices sin sentido
+        assert!(weights_on_quad_mesh(&mesh, &source[..3], &quad).is_err());
     }
 
     #[test]

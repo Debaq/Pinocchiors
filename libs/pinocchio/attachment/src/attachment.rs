@@ -110,26 +110,7 @@ impl Attachment {
 
     /// Obtiene los huesos más influyentes para un vértice
     pub fn get_dominant_bones(&self, vertex_idx: usize, max_bones: usize) -> Vec<(usize, Real)> {
-        let weights = &self.weights[vertex_idx];
-
-        let mut indexed: Vec<(usize, Real)> = weights
-            .iter()
-            .enumerate()
-            .map(|(i, &w)| (i, w))
-            .collect();
-
-        indexed.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        indexed.truncate(max_bones);
-
-        // Renormalizar
-        let sum: Real = indexed.iter().map(|(_, w)| w).sum();
-        if sum > 1e-10 {
-            for (_, w) in &mut indexed {
-                *w /= sum;
-            }
-        }
-
-        indexed
+        dominant_influences(&self.weights[vertex_idx], max_bones)
     }
 
     /// Compacta los pesos manteniendo solo los N más significativos
@@ -157,6 +138,22 @@ impl Attachment {
         }
         true
     }
+}
+
+/// Los `max_bones` huesos de mayor peso de un vértice, `(hueso, peso)` en
+/// orden decreciente y renormalizados para sumar 1.
+pub fn dominant_influences(weights: &[Real], max_bones: usize) -> Vec<(usize, Real)> {
+    let mut indexed: Vec<(usize, Real)> = weights.iter().copied().enumerate().collect();
+    indexed.sort_by(|a, b| b.1.total_cmp(&a.1));
+    indexed.truncate(max_bones);
+
+    let sum: Real = indexed.iter().map(|(_, w)| w).sum();
+    if sum > 1e-10 {
+        for (_, w) in &mut indexed {
+            *w /= sum;
+        }
+    }
+    indexed
 }
 
 #[cfg(test)]

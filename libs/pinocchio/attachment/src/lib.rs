@@ -13,5 +13,5 @@ pub mod symmetry;
 
 pub use visibility::VisibilityTester;
 pub use heat_diffusion::{HeatDiffusion, HeatDiffusionError};
-pub use attachment::Attachment;
+pub use attachment::{dominant_influences, Attachment};
 pub use symmetry::{SymmetryMap, SymmetryAxis, SymmetryPair};
