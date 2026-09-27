@@ -76,6 +76,25 @@ fn main() {
     let (mean_d, max_d) = distance(&q, &bvh);
     println!("distancia a la original (% diagonal): media {:.3}, máx {:.3}", 100.0 * mean_d / diagonal, 100.0 * max_d / diagonal);
     println!("quads desalineados con la superficie (>20°): {:.2} %", 100.0 * misaligned(&q, &bvh, 20.0));
+    let jac = scaled_jacobians(&q);
+    let aspects = aspect_ratios(&q);
+    let pct = |n: usize| 100.0 * n as f64 / q.num_faces() as f64;
+    println!(
+        "jacobiano escalado: mín {:.2}, <0 (plegados) {}, <0.3 {:.2} %, <0.5 {:.2} %; aspecto >3 {:.2} %, >5 {}",
+        jac.iter().cloned().fold(f64::INFINITY, f64::min),
+        jac.iter().filter(|&&j| j < 0.0).count(),
+        pct(jac.iter().filter(|&&j| j < 0.3).count()),
+        pct(jac.iter().filter(|&&j| j < 0.5).count()),
+        pct(aspects.iter().filter(|&&a| a > 3.0).count()),
+        aspects.iter().filter(|&&a| a > 5.0).count(),
+    );
+    let back = distance_from_original(&mesh, &q);
+    println!(
+        "distancia de la original a los quads (% diagonal): media {:.3}, máx {:.3} en {:?}",
+        100.0 * back.0 / diagonal,
+        100.0 * back.1 / diagonal,
+        back.2.as_slice()
+    );
 
     if let Some(out) = obj {
         let mut f = std::io::BufWriter::new(std::fs::File::create(out).unwrap());
@@ -256,4 +275,58 @@ fn misaligned(q: &QuadMesh, bvh: &Bvh, max_angle: f64) -> f64 {
         })
         .count();
     bad as f64 / q.num_faces() as f64
+}
+
+/// Jacobiano escalado mínimo de cada quad: en cada esquina, el seno del ángulo
+/// con signo respecto de la normal del quad. 1 = cuadrado, ≤ 0 = plegado o
+/// cóncavo.
+fn scaled_jacobians(q: &QuadMesh) -> Vec<f64> {
+    q.faces
+        .iter()
+        .map(|f| {
+            let p = f.v.map(|i| q.vertices[i]);
+            let n = (p[2] - p[0]).cross(&(p[3] - p[1]));
+            let Some(n) = n.try_normalize(1e-300) else { return -1.0 };
+            (0..4)
+                .map(|k| {
+                    let (a, b) = (p[(k + 1) % 4] - p[k], p[(k + 3) % 4] - p[k]);
+                    let d = a.norm() * b.norm();
+                    if d == 0.0 { -1.0 } else { a.cross(&b).dot(&n) / d }
+                })
+                .fold(f64::INFINITY, f64::min)
+        })
+        .collect()
+}
+
+fn aspect_ratios(q: &QuadMesh) -> Vec<f64> {
+    q.faces
+        .iter()
+        .map(|f| {
+            let l: Vec<f64> = (0..4).map(|k| (q.vertices[f.v[(k + 1) % 4]] - q.vertices[f.v[k]]).norm()).collect();
+            l.iter().cloned().fold(0.0, f64::max) / l.iter().cloned().fold(f64::INFINITY, f64::min).max(1e-300)
+        })
+        .collect()
+}
+
+/// Distancia desde los vértices de la original a la malla de quads (partida
+/// en triángulos): detecta rasgos perdidos (agujeros tapados, puntas cortadas).
+fn distance_from_original(mesh: &Mesh, q: &QuadMesh) -> (f64, f64, pinocchio_math::nalgebra::Vector3<f64>) {
+    let tris = q
+        .faces
+        .iter()
+        .flat_map(|f| {
+            let [a, b, c, d] = f.v.map(|i| Vector3(q.vertices[i]));
+            [Triangle::new(a, b, c), Triangle::new(a, c, d)]
+        })
+        .collect();
+    let bvh = Bvh::build(tris);
+    let (mut sum, mut max, mut at) = (0.0, 0.0f64, mesh.vertices[0].position.0);
+    for v in &mesh.vertices {
+        let d = bvh.query_distance(&v.position);
+        sum += d;
+        if d > max {
+            (max, at) = (d, v.position.0);
+        }
+    }
+    (sum / mesh.vertices.len() as f64, max, at)
 }

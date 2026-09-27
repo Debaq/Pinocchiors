@@ -23,6 +23,7 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 | `extract.rs` | Fusión de vértices del mismo punto del retículo, medios quads emparejados por su diagonal (tomada del retículo de cada triángulo), relleno de agujeros, n-gonos → quads |
 | `cleanup.rs` | Limpieza de la malla poligonal: colapso de aristas degeneradas, fusión de caras, *doublets* y colapso de diagonales mientras baje Σ(valencia−4)² + Σ(lados−4)², sin plegar caras ni cerrar esquinas bajo 30° |
 | `features.rs` | Proyección de vértices sobre bordes y aristas vivas |
+| `smooth.rs` | Optimización de la malla final: cada vértice va a la mejor de varias posiciones (promedio de vecinos, "paralelogramo" y, si tiene quads malos, búsqueda local) según Σ(1 − calidad)² con barrera antes de plegarse; los de arista viva se deslizan sobre ella y las esquinas quedan fijas |
 | `quad.rs` | `QuadMesh`, análisis topológico, separación de pellizcos, componentes |
 
 ## Garantías (tests en `core/tests/remesh.rs`)
@@ -36,6 +37,7 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 - Con `preserve_sharp`, ningún quad cruza una arista viva.
 - Determinista (mismo resultado con cualquier número de hilos).
 - Toro (admite un campo sin singularidades): < 2 % de vértices irregulares.
+- Esfera, toro y cilindro sin quads plegados.
 
 Singularidades de posición eliminadas (vértices interiores con valencia ≠ 4):
 
@@ -76,6 +78,23 @@ esquinas quedan redondeadas a escala de vóxel.
 ¹ Detalle de la piel más fino que un quad. ² Con reconstrucción la métrica
 compara contra caras interiores de la entrada rota: no es válida.
 
+Geometría (fase 4; calidad = jacobiano escalado mínimo del quad):
+
+| Modelo | Plegados (antes → ahora) | Calidad < 0.5 | Aspecto > 5 | Dist. quads→original máx | original→quads máx |
+|---|---|---|---|---|---|
+| Esfera | 0 → 0 | 0 % | 0 | 0.12 % | 0.13 % |
+| Gonfoterio | 5 → 3 | 0.72 → 0.38 % | 3 → 5 | 1.10 → 0.78 % | 6.2 % (punta delgada) |
+| Conejo | 12 → 9 | 1.24 → 0.65 % | 17 → 9 | 0.50 % | 2.1 % |
+| Molde | 16 → 11 | 2.10 → 1.32 % | 18 → 18 | 1.37 → 0.96 % | 1.3 % |
+| Ender 3 angle | 9 → 1 | 1.96 → 0.59 % | 8 → 4 | 1.19 % | 1.7 % |
+| Espéculo | 29 → 17 | 1.92 → 1.62 % | 45 → 27 | 0.33 % | 0.6 % |
+| Part 1 | 28 → 28 | 3.29 → 2.81 % | 23 → 36 | 1.33 % | 2.6 % |
+| Tapa | 20 → 14 | 2.51 → 3.08 % | 19 → 39 | 2.99 % | 1.2 % |
+
+Los quads malos que quedan están casi todos en rasgos más angostos que un quad
+(chaflanes, ranuras, paredes, puntas): ninguna posición de los vértices los
+arregla a esa densidad; es trabajo de la fase 5.
+
 Evolución (antes de la fase 1 → fase 3), irregulares / ángulos malos: esfera
 1.9 → 1.3 % / 0.4 → 0.7 %; gonfoterio 4.5 → 3.1 % / 3.9 → 2.6 %; molde 4.6 →
 1.9 % / 9.0 → 3.1 % (aspecto máx ~10¹² → 41); tapa 8.4 → 3.3 % / 21.5 → 4.5 %;
@@ -103,9 +122,12 @@ Plan hacia una retopología lista para producción (una fase por commit):
       extracciones más; queda la más cercana). Queda: recuperar aristas vivas
       tras la reconstrucción; algunos quads sueltos con aspecto > 50 en CAD;
       agujeros más chicos que un quad se tapan (fase 5).
-- [ ] **Fase 4 — Geometría**: relajación que respete rasgos, sin quads
-      doblados ni con aspecto > 5; distancia máx < 0.5 % de la diagonal. (La
-      cantidad ±10 % ya se corrige desde la fase 3.)
-- [ ] **Fase 5 — Personajes**: simetría espejo, densidad adaptativa,
-      estructuras delgadas (colmillos, paredes de carcasas).
+- [x] **Fase 4 — Geometría**: optimización de la malla final con control de
+      calidad (`smooth.rs`) en vez del Laplaciano con vértices clavados; los
+      vértices de arista viva se deslizan, los fijos sin arista viva real se
+      liberan. Formas suaves sin quads plegados. Queda: los quads malos en
+      rasgos más angostos que un quad (fase 5).
+- [ ] **Fase 5 — Personajes y rasgos delgados**: densidad adaptativa (quads
+      más chicos donde un rasgo es más angosto que un quad: chaflanes,
+      ranuras, puntas, paredes), simetría espejo.
 - [ ] **Fase 6 — App**: exponer reconstrucción, simetría y densidad; métricas.

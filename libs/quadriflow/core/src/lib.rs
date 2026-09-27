@@ -52,6 +52,7 @@ mod isotropic;
 mod integer;
 mod quad;
 mod rebuild;
+mod smooth;
 mod surface;
 
 pub use config::{Rebuild, RemeshConfig};
@@ -229,7 +230,7 @@ where
     project_to_surface(&mut quads.vertices, &bvh);
     let lines = features::FeatureLines::new(&graph, scale);
     snap_to_features(&mut quads, &fixed, &lines, MIN_SNAP_DISTANCE * scale * 0.5);
-    relax(&mut quads, &fixed, &bvh, RELAX_ITERATIONS);
+    smooth::optimize(&mut quads, &fixed, &bvh, &lines, config.sharp_angle, SMOOTH_ITERATIONS);
     // Restos de la extracción (burbujas en pellizcos): nunca más piezas que la entrada
     quads.keep_largest_components(original.component_count());
 
@@ -249,8 +250,8 @@ const ISOTROPIC_ITERATIONS: usize = 5;
 /// Vóxeles por lado de quad en la reconstrucción.
 const REBUILD_VOXELS_PER_QUAD: f64 = 3.0;
 
-/// Iteraciones de relajación tangencial de la malla final.
-const RELAX_ITERATIONS: usize = 3;
+/// Pasadas de optimización geométrica de la malla final.
+const SMOOTH_ITERATIONS: usize = 10;
 
 /// Desvío relativo de la cantidad de quads a partir del cual se corrige la
 /// escala con otra extracción (a lo sumo `COUNT_CORRECTIONS` veces; queda la
@@ -328,46 +329,6 @@ fn project_to_surface(vertices: &mut [V3], bvh: &Bvh) {
     for v in vertices {
         if let Some(hit) = bvh.query_closest(&pinocchio_math::Vector3(*v)) {
             *v = hit.point.0;
-        }
-    }
-}
-
-/// Suaviza la distribución de vértices sobre la superficie: cada vértice libre
-/// va al promedio de sus vecinos y se reproyecta. Los vértices sobre bordes,
-/// aristas vivas o el contorno de la malla de quads no se mueven.
-fn relax(quads: &mut QuadMesh, fixed: &[bool], bvh: &Bvh, iterations: usize) {
-    let n = quads.vertices.len();
-    let mut edge_count: std::collections::HashMap<(usize, usize), u32> = Default::default();
-    for f in &quads.faces {
-        for k in 0..4 {
-            let (a, b) = (f.v[k], f.v[(k + 1) % 4]);
-            *edge_count.entry((a.min(b), a.max(b))).or_default() += 1;
-        }
-    }
-    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
-    let mut pinned = fixed.to_vec();
-    let mut edges: Vec<_> = edge_count.into_iter().collect();
-    edges.sort_unstable();
-    for ((a, b), count) in edges {
-        neighbors[a].push(b);
-        neighbors[b].push(a);
-        if count != 2 {
-            pinned[a] = true;
-            pinned[b] = true;
-        }
-    }
-
-    let free: Vec<usize> = (0..n).filter(|&i| !pinned[i] && !neighbors[i].is_empty()).collect();
-    for _ in 0..iterations {
-        let mut moved: Vec<V3> = free
-            .iter()
-            .map(|&i| {
-                neighbors[i].iter().map(|&j| quads.vertices[j]).sum::<V3>() / neighbors[i].len() as f64
-            })
-            .collect();
-        project_to_surface(&mut moved, bvh);
-        for (&i, p) in free.iter().zip(moved) {
-            quads.vertices[i] = p;
         }
     }
 }

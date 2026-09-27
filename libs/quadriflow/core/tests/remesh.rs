@@ -191,6 +191,25 @@ fn sharp_corners_leave_no_degenerate_edges() {
     assert!(shortest > 0.05 * mean, "arista de {shortest} con media {mean}");
 }
 
+/// Quads con alguna esquina plegada respecto de la normal del propio quad.
+fn folded_quads(q: &QuadMesh) -> usize {
+    (0..q.num_faces())
+        .filter(|&f| {
+            let n = face_normal(q, f);
+            let p = q.faces[f].v.map(|i| q.vertices[i]);
+            (0..4).any(|k| (p[(k + 1) % 4] - p[k]).cross(&(p[(k + 3) % 4] - p[k])).dot(&n) <= 0.0)
+        })
+        .count()
+}
+
+#[test]
+fn smooth_shapes_have_no_folded_quads() {
+    for (name, mesh) in [("esfera", sphere(1.0)), ("toro", torus()), ("cilindro", cylinder(true))] {
+        let q = remesh(&mesh, &config(600)).unwrap();
+        assert_eq!(folded_quads(&q), 0, "{name}");
+    }
+}
+
 #[test]
 fn torus_keeps_its_genus() {
     let q = remesh(&torus(), &config(400)).unwrap();
