@@ -14,12 +14,6 @@ members = [
     "libs/pinocchio/print3d",
     "libs/pinocchio/core",
     # QuadriFlow - Quad remeshing
-    "libs/quadriflow/field",
-    "libs/quadriflow/hierarchy",
-    "libs/quadriflow/optimizer",
-    "libs/quadriflow/flow",
-    "libs/quadriflow/parametrizer",
-    "libs/quadriflow/extractor",
     "libs/quadriflow/core",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
@@ -98,12 +92,6 @@ pinocchio-print3d = { path = "libs/pinocchio/print3d" }
 pinocchio-core = { path = "libs/pinocchio/core" }
 
 # Crates internos - QuadriFlow
-quadriflow-field = { path = "libs/quadriflow/field" }
-quadriflow-hierarchy = { path = "libs/quadriflow/hierarchy" }
-quadriflow-optimizer = { path = "libs/quadriflow/optimizer" }
-quadriflow-flow = { path = "libs/quadriflow/flow" }
-quadriflow-parametrizer = { path = "libs/quadriflow/parametrizer" }
-quadriflow-extractor = { path = "libs/quadriflow/extractor" }
 quadriflow-core = { path = "libs/quadriflow/core" }
 
 # Crates internos - Converter
@@ -120,6 +108,13 @@ clap = { version = "4", features = ["derive"] }
 [profile.dev]
 debug = 1            # debug info limitada (suficiente para backtraces, ~50% menos espacio)
 split-debuginfo = "packed"  # compactar debug info en un solo archivo
+
+# Numérico pesado: sin optimizar, sus tests tardan minutos
+[profile.dev.package.quadriflow-core]
+opt-level = 2
+
+[profile.dev.package.nalgebra]
+opt-level = 2
 
 [profile.release]
 lto = true

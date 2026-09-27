@@ -6,9 +6,7 @@ export interface RetopologyConfig {
   targetQuads: number;
   preserveSharp: boolean;
   sharpAngle: number;
-  adaptive: boolean;
   smoothIterations: number;
-  removeFlips: boolean;
 }
 
 export interface RetopologyPanelProps {
@@ -61,20 +59,6 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           />
         </Show>
 
-        {/* Adaptive Resolution */}
-        <Checkbox
-          label="Resolución adaptiva"
-          checked={props.config.adaptive}
-          onChange={(checked) => updateConfig({ adaptive: checked })}
-        />
-
-        {/* Description */}
-        <p class="text-xs text-text-dim leading-relaxed">
-          {props.config.adaptive
-            ? "Más detalle en áreas de alta curvatura."
-            : "Distribución uniforme de quads."}
-        </p>
-
         {/* Smooth Iterations */}
         <Slider
           label="Iteraciones de suavizado"
@@ -84,13 +68,6 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
           max={50}
           step={1}
           formatValue={(v) => `${v}`}
-        />
-
-        {/* Remove T-junctions */}
-        <Checkbox
-          label="Eliminar T-junctions (SAT)"
-          checked={props.config.removeFlips}
-          onChange={(checked) => updateConfig({ removeFlips: checked })}
         />
 
         {/* Execute Button */}

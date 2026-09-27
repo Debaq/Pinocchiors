@@ -217,9 +217,7 @@ export const App: Component = () => {
     targetQuads: 5000,
     preserveSharp: false,
     sharpAngle: 45,
-    adaptive: false,
     smoothIterations: 10,
-    removeFlips: false,
   });
   const [quadMeshData, setQuadMeshData] = createSignal<MeshData | undefined>();
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
@@ -570,9 +568,7 @@ export const App: Component = () => {
           target_quads: config.targetQuads,
           preserve_sharp: config.preserveSharp,
           sharp_angle: config.sharpAngle,
-          adaptive: config.adaptive,
           smooth_iterations: config.smoothIterations,
-          remove_flips: config.removeFlips,
         },
         onProgress,
       });

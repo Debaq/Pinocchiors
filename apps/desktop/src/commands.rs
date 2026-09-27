@@ -164,12 +164,8 @@ pub struct RetopologyConfig {
     pub preserve_sharp: Option<bool>,
     /// Ángulo de detección de bordes agudos (grados)
     pub sharp_angle: Option<f32>,
-    /// Usar resolución adaptiva
-    pub adaptive: Option<bool>,
-    /// Iteraciones de suavizado del campo de orientación
+    /// Iteraciones de suavizado de los campos por nivel
     pub smooth_iterations: Option<usize>,
-    /// Eliminar T-junctions con SAT solver (más lento pero más limpio)
-    pub remove_flips: Option<bool>,
 }
 
 /// Información del resultado de retopología
@@ -1126,9 +1122,7 @@ pub async fn run_retopology(
         preserve_sharp: config.preserve_sharp.unwrap_or(false),
         sharp_angle: config.sharp_angle.map(|a| (a as f64).to_radians())
             .unwrap_or(std::f64::consts::FRAC_PI_4),
-        adaptive: config.adaptive.unwrap_or(false),
         smooth_iterations: config.smooth_iterations.unwrap_or(10),
-        remove_flips: config.remove_flips.unwrap_or(false),
     };
 
     let progress = on_progress.clone();

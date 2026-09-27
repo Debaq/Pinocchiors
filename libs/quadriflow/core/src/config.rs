@@ -1,27 +1,21 @@
-//! Configuration for quad remeshing.
+//! Configuración de la retopología.
 
-/// Configuration for the QuadriFlow remeshing pipeline.
+/// Parámetros de [`remesh`](crate::remesh).
 #[derive(Debug, Clone)]
 pub struct RemeshConfig {
-    /// Target number of quad faces in output mesh.
-    /// The actual count may vary slightly.
+    /// Número aproximado de quads de la malla resultante.
     pub target_faces: usize,
 
-    /// Whether to detect and preserve sharp edges.
+    /// Alinear los quads a las aristas vivas (además de los bordes, que se
+    /// respetan siempre).
     pub preserve_sharp: bool,
 
-    /// Angle threshold (radians) for sharp edge detection.
-    /// Edges with dihedral angle greater than this are considered sharp.
+    /// Ángulo diedro (radianes) a partir del cual una arista es viva. También
+    /// separa las esquinas de los bordes curvos.
     pub sharp_angle: f64,
 
-    /// Use adaptive resolution based on local curvature.
-    pub adaptive: bool,
-
-    /// Number of smoothing iterations for field optimization.
+    /// Iteraciones de suavizado de los campos en cada nivel de la jerarquía.
     pub smooth_iterations: usize,
-
-    /// Whether to use SAT solver to remove T-junctions (slower but cleaner).
-    pub remove_flips: bool,
 }
 
 impl Default for RemeshConfig {
@@ -29,16 +23,14 @@ impl Default for RemeshConfig {
         Self {
             target_faces: 1000,
             preserve_sharp: false,
-            sharp_angle: std::f64::consts::FRAC_PI_4, // 45 degrees
-            adaptive: false,
+            sharp_angle: std::f64::consts::FRAC_PI_4, // 45°
             smooth_iterations: 10,
-            remove_flips: false,
         }
     }
 }
 
 impl RemeshConfig {
-    /// Create config for fast but lower quality remeshing.
+    /// Menos iteraciones: más rápido, campos algo menos suaves.
     pub fn fast(target_faces: usize) -> Self {
         Self {
             target_faces,
@@ -47,13 +39,12 @@ impl RemeshConfig {
         }
     }
 
-    /// Create config for high quality remeshing.
+    /// Más iteraciones y aristas vivas preservadas.
     pub fn quality(target_faces: usize) -> Self {
         Self {
             target_faces,
             preserve_sharp: true,
             smooth_iterations: 20,
-            remove_flips: true,
             ..Default::default()
         }
     }

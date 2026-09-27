@@ -3255,95 +3255,10 @@ dependencies = [
 name = "quadriflow-core"
 version = "0.1.0"
 dependencies = [
- "approx 0.5.1",
- "getrandom 0.2.17",
  "pinocchio-math",
  "pinocchio-mesh",
- "quadriflow-extractor",
- "quadriflow-field",
- "quadriflow-flow",
- "quadriflow-hierarchy",
- "quadriflow-optimizer",
- "quadriflow-parametrizer",
+ "pinocchio-spatial",
  "rayon",
- "thiserror 2.0.18",
- "wasm-bindgen",
-]
-
-[[package]]
-name = "quadriflow-extractor"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "quadriflow-parametrizer",
- "rayon",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "quadriflow-field"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "pinocchio-sparse",
- "rand 0.8.5",
- "rayon",
-]
-
-[[package]]
-name = "quadriflow-flow"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "quadriflow-field",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "quadriflow-hierarchy"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "rayon",
-]
-
-[[package]]
-name = "quadriflow-optimizer"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "pinocchio-sparse",
- "quadriflow-field",
- "quadriflow-hierarchy",
- "rayon",
-]
-
-[[package]]
-name = "quadriflow-parametrizer"
-version = "0.1.0"
-dependencies = [
- "approx 0.5.1",
- "nalgebra",
- "pinocchio-math",
- "pinocchio-mesh",
- "pinocchio-sparse",
- "quadriflow-field",
- "quadriflow-flow",
  "thiserror 2.0.18",
 ]
 

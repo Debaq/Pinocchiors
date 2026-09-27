@@ -1,10 +1,9 @@
 //! # quadriflow-core
 //!
-//! QuadriFlow: A Scalable and Robust Method for Quadrangulation
+//! Retopología: convierte una malla de triángulos en una malla de quads
+//! alineada a la forma.
 //!
-//! This is a Rust port of the QuadriFlow algorithm by Huang et al. (SGP 2018).
-//!
-//! ## Usage
+//! ## Uso
 //!
 //! ```no_run
 //! use quadriflow_core::{remesh, RemeshConfig};
@@ -21,145 +20,100 @@
 //! # }
 //! ```
 //!
-//! ## Algorithm Overview
+//! ## Algoritmo
 //!
-//! 1. **Field Computation**: Compute orientation and position fields
-//! 2. **Optimization**: Smooth fields and align to features
-//! 3. **Flow Solve**: Minimize singularities via min-cost flow
-//! 4. **Parametrization**: Convert to integer grid coordinates
-//! 5. **Extraction**: Trace isolines to build quad mesh
+//! Sigue *Instant Field-Aligned Meshes* (Jakob et al. 2015), la base de
+//! QuadriFlow (Huang et al. 2018):
+//!
+//! 1. **Preparación**: soldado de costuras y subdivisión hasta que las aristas
+//!    sean más cortas que medio quad; se marcan bordes y aristas vivas.
+//! 2. **Jerarquía**: niveles cada vez más gruesos emparejando vértices.
+//! 3. **Campo de orientación** 4-RoSy, suavizado de grueso a fino.
+//! 4. **Campo de posición** 4-PoSy: un retículo local por vértice.
+//! 5. **Extracción**: se funden los vértices que caen en el mismo punto del
+//!    retículo, se trazan las caras y cada polígono se divide en quads, que se
+//!    proyectan sobre la superficie original.
 
 pub mod config;
-pub mod pipeline;
+mod extract;
+mod features;
+mod field;
+mod hierarchy;
+mod quad;
+mod surface;
 
 pub use config::RemeshConfig;
-pub use quadriflow_extractor::{QuadFace, QuadMesh};
+pub use quad::{QuadFace, QuadMesh, QuadTopology};
 
 use pinocchio_mesh::Mesh;
-use quadriflow_extractor::{extract_quads, ExtractionConfig};
-use quadriflow_field::{OrientationField, PositionField, PositionFieldConfig};
-use quadriflow_flow::{
-    apply_singularity_optimization, optimize_singularities, SingularityOptConfig,
-};
-use quadriflow_hierarchy::{
-    build_hierarchy, propagate_field_to_coarser, propagate_field_to_finer, HierarchyConfig,
-    MeshHierarchy,
-};
-use quadriflow_optimizer::{
-    align_to_boundary, align_to_features, detect_boundary, detect_sharp_edges,
-    smooth_orientation_field_simd, SharpEdgeConfig,
-};
-use quadriflow_parametrizer::{
-    compute_integer_parametrization, IntegerConfig, SeamData,
-};
+use pinocchio_spatial::{Bvh, Triangle};
+use surface::Surface;
 use thiserror::Error;
 
-/// Errors during quad remeshing.
+pub(crate) type V3 = pinocchio_math::nalgebra::Vector3<f64>;
+
+/// Errores de la retopología.
 #[derive(Error, Debug)]
 pub enum RemeshError {
-    #[error("Input mesh is empty")]
+    #[error("la malla de entrada no tiene triángulos")]
     EmptyMesh,
-    #[error("Input mesh is non-manifold")]
-    NonManifold,
-    #[error("Field computation failed: {0}")]
-    FieldError(String),
-    #[error("Flow solver failed: {0}")]
-    FlowError(#[from] quadriflow_flow::FlowError),
-    #[error("Parametrization failed: {0}")]
-    ParametrizationError(#[from] quadriflow_parametrizer::ParametrizationError),
-    #[error("Mesh extraction failed: {0}")]
-    ExtractionError(#[from] quadriflow_extractor::ExtractionError),
+    #[error("configuración inválida: {0}")]
+    InvalidConfig(String),
+    #[error("no se pudo extraer ningún quad; probar con más quads objetivo")]
+    ExtractionFailed,
 }
 
-/// Stage of the remeshing pipeline.
+/// Etapa del proceso, para reportar progreso.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemeshStage {
-    /// Building mesh hierarchy for multi-scale optimization
-    BuildHierarchy,
-    /// Computing orientation field
+    /// Soldado, subdivisión y detección de bordes
+    Preprocess,
+    /// Construcción de la jerarquía multiresolución
+    Hierarchy,
+    /// Campo de orientación
     OrientationField,
-    /// Smoothing orientation field (multi-scale + SIMD)
-    FieldSmoothing,
-    /// Aligning field to sharp edges and boundaries
-    FeatureAlignment,
-    /// Optimizing singularities via min-cost flow
-    SingularityOptimization,
-    /// Computing position field
+    /// Campo de posición
     PositionField,
-    /// Computing seam transitions
-    SeamData,
-    /// Integer parametrization
-    Parametrization,
-    /// Extracting quad mesh
+    /// Extracción de quads
     Extraction,
-    /// Done
+    /// Terminado
     Done,
 }
 
 impl RemeshStage {
-    /// Get stage name for display.
+    /// Identificador de la etapa.
     pub fn name(&self) -> &'static str {
         match self {
-            RemeshStage::BuildHierarchy => "build_hierarchy",
+            RemeshStage::Preprocess => "preprocess",
+            RemeshStage::Hierarchy => "hierarchy",
             RemeshStage::OrientationField => "orientation_field",
-            RemeshStage::FieldSmoothing => "field_smoothing",
-            RemeshStage::FeatureAlignment => "feature_alignment",
-            RemeshStage::SingularityOptimization => "singularity_optimization",
             RemeshStage::PositionField => "position_field",
-            RemeshStage::SeamData => "seam_data",
-            RemeshStage::Parametrization => "parametrization",
             RemeshStage::Extraction => "extraction",
             RemeshStage::Done => "done",
         }
     }
 
-    /// Get approximate progress percentage for this stage.
+    /// Porcentaje aproximado al comenzar la etapa.
     pub fn progress(&self) -> u32 {
         match self {
-            RemeshStage::BuildHierarchy => 2,
-            RemeshStage::OrientationField => 8,
-            RemeshStage::FieldSmoothing => 18,
-            RemeshStage::FeatureAlignment => 25,
-            RemeshStage::SingularityOptimization => 35,
-            RemeshStage::PositionField => 45,
-            RemeshStage::SeamData => 55,
-            RemeshStage::Parametrization => 70,
+            RemeshStage::Preprocess => 2,
+            RemeshStage::Hierarchy => 15,
+            RemeshStage::OrientationField => 25,
+            RemeshStage::PositionField => 50,
             RemeshStage::Extraction => 85,
             RemeshStage::Done => 100,
         }
     }
 }
 
-/// Remesh a triangle mesh into a quad-dominant mesh.
-///
-/// This is the main entry point for QuadriFlow.
-///
-/// # Arguments
-///
-/// * `mesh` - Input triangle mesh
-/// * `config` - Remeshing configuration
-///
-/// # Returns
-///
-/// A quad mesh with approximately `config.target_faces` faces.
+/// Retopologiza una malla de triángulos a una malla de quads con
+/// aproximadamente `config.target_faces` caras.
 pub fn remesh(mesh: &Mesh, config: &RemeshConfig) -> Result<QuadMesh, RemeshError> {
     remesh_with_callback(mesh, config, |_, _| {})
 }
 
-/// Remesh with progress callback.
-///
-/// The callback receives (stage, message) for each pipeline step.
-///
-/// The pipeline follows the QuadriFlow paper:
-/// 1. Build hierarchy (if adaptive)
-/// 2. Compute orientation field
-/// 3. Smooth field (multi-scale if adaptive, then SIMD)
-/// 4. Align to features (if preserve_sharp)
-/// 5. Optimize singularities via min-cost flow
-/// 6. Compute position field
-/// 7. Compute seam transitions
-/// 8. Integer parametrization
-/// 9. Extract quad mesh
+/// Igual que [`remesh`], llamando a `on_progress(etapa, mensaje)` al comenzar
+/// cada etapa.
 pub fn remesh_with_callback<F>(
     mesh: &Mesh,
     config: &RemeshConfig,
@@ -168,206 +122,127 @@ pub fn remesh_with_callback<F>(
 where
     F: FnMut(RemeshStage, &str),
 {
-    if mesh.vertices.is_empty() {
+    if config.target_faces == 0 {
+        return Err(RemeshError::InvalidConfig("target_faces debe ser mayor que 0".into()));
+    }
+    if !(config.sharp_angle.is_finite() && config.sharp_angle > 0.0) {
+        return Err(RemeshError::InvalidConfig("sharp_angle debe ser positivo".into()));
+    }
+
+    on_progress(RemeshStage::Preprocess, "Preparando la superficie...");
+    let mut surface = Surface::from_mesh(mesh);
+    let diagonal = surface.bbox_diagonal();
+    surface.weld(diagonal * 1e-7);
+    let area = surface.area();
+    if surface.triangles.is_empty() || area.is_nan() || area <= 0.0 {
         return Err(RemeshError::EmptyMesh);
     }
+    let original = surface.clone();
 
-    // Step 1: Build hierarchy
-    on_progress(RemeshStage::BuildHierarchy, "Building mesh hierarchy...");
-    let hierarchy = if config.adaptive {
-        build_hierarchy(mesh, &HierarchyConfig::default())
-    } else {
-        MeshHierarchy::from_mesh(mesh.clone())
-    };
+    // Se extrae con el doble de lado y cada polígono se divide en ~4 quads
+    let scale = 2.0 * (area / config.target_faces as f64).sqrt();
+    let max_edge = (scale * 0.5).min(surface.average_edge_length() * 2.0);
+    surface.subdivide(max_edge);
+    let sharp = config.preserve_sharp.then_some(config.sharp_angle);
+    let graph = surface.vertex_graph(sharp, config.sharp_angle);
 
-    // Step 2: Compute orientation field
-    on_progress(RemeshStage::OrientationField, "Computing orientation field...");
-    let mut orientation = if config.preserve_sharp {
-        OrientationField::from_mesh_edge_aligned(mesh)
-    } else {
-        OrientationField::from_mesh(mesh)
-    };
+    on_progress(RemeshStage::Hierarchy, "Construyendo la jerarquía...");
+    let hierarchy = hierarchy::Hierarchy::build(&graph);
 
-    if orientation.is_empty() {
-        return Err(RemeshError::FieldError(
-            "Failed to compute orientation field".to_string(),
-        ));
+    let iterations = config.smooth_iterations.max(1);
+    on_progress(RemeshStage::OrientationField, "Calculando el campo de orientación...");
+    let orientation = field::solve_orientation(&hierarchy, iterations);
+
+    on_progress(RemeshStage::PositionField, "Calculando el campo de posición...");
+    let position = field::solve_position(&hierarchy, &orientation, scale, iterations);
+
+    on_progress(RemeshStage::Extraction, "Extrayendo quads...");
+    let polygons = extract::extract_polygons(&hierarchy.levels[0], &orientation[0], &position, scale);
+    let (mut quads, mut fixed) = extract::polygons_to_quads(&polygons);
+    if quads.is_empty() {
+        return Err(RemeshError::ExtractionFailed);
     }
-
-    // Step 3: Field smoothing (multi-scale + SIMD)
-    on_progress(RemeshStage::FieldSmoothing, "Smoothing orientation field...");
-    smooth_field_multiscale(&mut orientation, mesh, &hierarchy, config);
-
-    // Step 4: Feature alignment
-    if config.preserve_sharp {
-        on_progress(RemeshStage::FeatureAlignment, "Aligning field to features...");
-        align_field_to_features(&mut orientation, mesh, config);
-    } else {
-        on_progress(RemeshStage::FeatureAlignment, "Skipping feature alignment (preserve_sharp=false)");
+    quads.split_nonmanifold_vertices();
+    fixed.resize(quads.vertices.len(), true);
+    let bvh = surface_bvh(&original);
+    project_to_surface(&mut quads.vertices, &bvh);
+    let lines = features::FeatureLines::new(&graph, scale);
+    for (v, _) in quads.vertices.iter_mut().zip(&fixed).filter(|(_, f)| **f) {
+        if let Some(p) = lines.closest(v) {
+            *v = p;
+        }
     }
-
-    // Step 5: Singularity optimization
-    on_progress(RemeshStage::SingularityOptimization, "Optimizing singularities...");
-    let sing_result = optimize_singularities(mesh, &orientation, &SingularityOptConfig::default())?;
-    apply_singularity_optimization(&mut orientation, mesh, &sing_result);
-    // Light re-smooth to clean flow artifacts
-    smooth_orientation_field_simd(&mut orientation, mesh, config.smooth_iterations / 2);
-
-    // Step 6: Compute position field
-    on_progress(RemeshStage::PositionField, "Computing position field...");
-    let position_config = PositionFieldConfig {
-        target_edge_length: estimate_target_edge_length(mesh, config.target_faces),
-        solver_iterations: config.smooth_iterations * 50,
-        solver_tolerance: 1e-6,
-        alignment_weight: 1.0,
-    };
-    let position = PositionField::from_orientation_field(mesh, &orientation, &position_config);
-
-    if position.is_empty() {
-        return Err(RemeshError::FieldError(
-            "Failed to compute position field".to_string(),
-        ));
-    }
-
-    // Step 7: Compute seam transitions
-    on_progress(RemeshStage::SeamData, "Computing seam transitions...");
-    let seam_data = SeamData::from_orientation_field(mesh, &orientation);
-
-    // Step 8: Integer parametrization
-    on_progress(RemeshStage::Parametrization, "Computing integer parametrization...");
-    let integer_config = IntegerConfig {
-        optimization_iterations: config.smooth_iterations,
-        use_greedy: true,
-        distortion_weight: 1.0,
-        remove_tjunctions: config.remove_flips,
-        ..Default::default()
-    };
-
-    let (param, _stats) =
-        compute_integer_parametrization(mesh, &position, &seam_data, &integer_config)?;
-
-    // Step 9: Extract quad mesh
-    on_progress(RemeshStage::Extraction, "Extracting quad mesh...");
-    let extraction_config = ExtractionConfig::default();
-    let quad_mesh = extract_quads(mesh, &param, &extraction_config)?;
+    relax(&mut quads, &fixed, &bvh, RELAX_ITERATIONS);
+    // Restos de la extracción (burbujas en pellizcos): nunca más piezas que la entrada
+    quads.keep_largest_components(original.component_count());
 
     on_progress(
         RemeshStage::Done,
-        &format!(
-            "Done: {} vertices, {} quads (singularities: {} -> {})",
-            quad_mesh.num_vertices(),
-            quad_mesh.num_faces(),
-            sing_result.initial_singularities,
-            sing_result.final_singularities,
-        ),
+        &format!("{} vértices, {} quads", quads.num_vertices(), quads.num_faces()),
     );
-
-    Ok(quad_mesh)
+    Ok(quads)
 }
 
-/// Multi-scale field smoothing: propagate to coarser levels, smooth there, propagate back.
-pub(crate) fn smooth_field_multiscale(
-    orientation: &mut OrientationField,
-    mesh: &Mesh,
-    hierarchy: &MeshHierarchy,
-    config: &RemeshConfig,
-) {
-    if config.adaptive && hierarchy.depth() > 1 {
-        // Propagate to coarsest level
-        let mut current_dirs = orientation.directions.clone();
-        let mut current_normals = orientation.normals.clone();
+/// Iteraciones de relajación tangencial de la malla final.
+const RELAX_ITERATIONS: usize = 3;
 
-        for level in hierarchy.iter_fine_to_coarse().skip(1) {
-            let (dirs, normals) =
-                propagate_field_to_coarser(&current_dirs, &current_normals, level);
-            current_dirs = dirs;
-            current_normals = normals;
-        }
-
-        // Smooth at coarsest level (more iterations since fewer faces)
-        if let Some(coarsest_mesh) = hierarchy.mesh_at(hierarchy.depth() - 1) {
-            let mut coarse_field = OrientationField {
-                directions: current_dirs,
-                normals: current_normals,
-            };
-            smooth_orientation_field_simd(
-                &mut coarse_field,
-                coarsest_mesh,
-                config.smooth_iterations * 2,
-            );
-            current_dirs = coarse_field.directions;
-            current_normals = coarse_field.normals;
-        }
-
-        // Propagate back to finest level
-        for level in hierarchy.iter_coarse_to_fine().skip(1) {
-            let (dirs, normals) =
-                propagate_field_to_finer(&current_dirs, &current_normals, level);
-            current_dirs = dirs;
-            current_normals = normals;
-        }
-
-        orientation.directions = current_dirs;
-        orientation.normals = current_normals;
-    }
-
-    // Always do SIMD smoothing at the finest level
-    smooth_orientation_field_simd(orientation, mesh, config.smooth_iterations);
+fn surface_bvh(surface: &Surface) -> Bvh {
+    let triangles = surface
+        .triangles
+        .iter()
+        .map(|t| {
+            let [a, b, c] = t.map(|i| pinocchio_math::Vector3(surface.positions[i as usize]));
+            Triangle::new(a, b, c)
+        })
+        .collect();
+    Bvh::build(triangles)
 }
 
-/// Align orientation field to sharp edges and mesh boundaries.
-pub(crate) fn align_field_to_features(
-    orientation: &mut OrientationField,
-    mesh: &Mesh,
-    config: &RemeshConfig,
-) {
-    let sharp_config = SharpEdgeConfig {
-        angle_threshold: config.sharp_angle,
-        include_boundary: true,
-    };
-    let sharp_info = detect_sharp_edges(mesh, &sharp_config);
-
-    if !sharp_info.edges.is_empty() {
-        align_to_features(orientation, mesh, &sharp_info.edges, 0.7);
-    }
-
-    let boundary = detect_boundary(mesh);
-    if !boundary.is_closed {
-        align_to_boundary(orientation, mesh, &boundary, 0.8);
-    }
-
-    // Light re-smooth to blend alignment
-    let blend_iterations = config.smooth_iterations / 4;
-    if blend_iterations > 0 {
-        smooth_orientation_field_simd(orientation, mesh, blend_iterations);
+/// Lleva cada vértice al punto más cercano de la superficie original.
+fn project_to_surface(vertices: &mut [V3], bvh: &Bvh) {
+    for v in vertices {
+        if let Some(hit) = bvh.query_closest(&pinocchio_math::Vector3(*v)) {
+            *v = hit.point.0;
+        }
     }
 }
 
-/// Estimate target edge length based on mesh size and desired face count.
-pub(crate) fn estimate_target_edge_length(mesh: &Mesh, target_faces: usize) -> f64 {
-    // Compute mesh bounding box diagonal
-    let mut min = [f64::MAX; 3];
-    let mut max = [f64::MIN; 3];
-
-    for vertex in &mesh.vertices {
-        let pos = vertex.position;
-        min[0] = min[0].min(pos.x());
-        min[1] = min[1].min(pos.y());
-        min[2] = min[2].min(pos.z());
-        max[0] = max[0].max(pos.x());
-        max[1] = max[1].max(pos.y());
-        max[2] = max[2].max(pos.z());
+/// Suaviza la distribución de vértices sobre la superficie: cada vértice libre
+/// va al promedio de sus vecinos y se reproyecta. Los vértices sobre bordes,
+/// aristas vivas o el contorno de la malla de quads no se mueven.
+fn relax(quads: &mut QuadMesh, fixed: &[bool], bvh: &Bvh, iterations: usize) {
+    let n = quads.vertices.len();
+    let mut edge_count: std::collections::HashMap<(usize, usize), u32> = Default::default();
+    for f in &quads.faces {
+        for k in 0..4 {
+            let (a, b) = (f.v[k], f.v[(k + 1) % 4]);
+            *edge_count.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    let mut neighbors: Vec<Vec<usize>> = vec![Vec::new(); n];
+    let mut pinned = fixed.to_vec();
+    let mut edges: Vec<_> = edge_count.into_iter().collect();
+    edges.sort_unstable();
+    for ((a, b), count) in edges {
+        neighbors[a].push(b);
+        neighbors[b].push(a);
+        if count != 2 {
+            pinned[a] = true;
+            pinned[b] = true;
+        }
     }
 
-    let diagonal = ((max[0] - min[0]).powi(2)
-        + (max[1] - min[1]).powi(2)
-        + (max[2] - min[2]).powi(2))
-    .sqrt();
-
-    // Approximate: surface area ≈ diagonal² / 6, each quad has area ≈ edge_length²
-    // So edge_length ≈ diagonal / sqrt(target_faces * 6)
-    let estimated = diagonal / (target_faces as f64 * 6.0).sqrt();
-
-    // Clamp to reasonable range
-    estimated.clamp(diagonal * 0.001, diagonal * 0.5)
+    let free: Vec<usize> = (0..n).filter(|&i| !pinned[i] && !neighbors[i].is_empty()).collect();
+    for _ in 0..iterations {
+        let mut moved: Vec<V3> = free
+            .iter()
+            .map(|&i| {
+                neighbors[i].iter().map(|&j| quads.vertices[j]).sum::<V3>() / neighbors[i].len() as f64
+            })
+            .collect();
+        project_to_surface(&mut moved, bvh);
+        for (&i, p) in free.iter().zip(moved) {
+            quads.vertices[i] = p;
+        }
+    }
 }
