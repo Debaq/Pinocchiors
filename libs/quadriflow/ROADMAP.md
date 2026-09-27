@@ -19,7 +19,8 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 | `hierarchy.rs` | Niveles por emparejamiento de vértices vecinos + coloreo para Gauss-Seidel paralelo |
 | `field.rs` | Campos extrínsecos de orientación (4-RoSy) y posición (4-PoSy), de grueso a fino |
 | `integer.rs` | Desplazamientos enteros por arista y eliminación de singularidades de posición (cargas unitarias por caminos mínimos en el grafo dual, sin invertir caras) |
-| `extract.rs` | Fusión de vértices del mismo punto del retículo, medios quads emparejados por su diagonal, relleno de agujeros, n-gonos → quads |
+| `extract.rs` | Fusión de vértices del mismo punto del retículo, medios quads emparejados por su diagonal (tomada del retículo de cada triángulo), relleno de agujeros, n-gonos → quads |
+| `cleanup.rs` | Limpieza de la malla poligonal: colapso de aristas degeneradas, fusión de caras, *doublets* y colapso de diagonales mientras baje Σ(valencia−4)² + Σ(lados−4)², sin plegar caras ni cerrar esquinas bajo 30° |
 | `features.rs` | Proyección de vértices sobre bordes y aristas vivas |
 | `quad.rs` | `QuadMesh`, análisis topológico, separación de pellizcos, componentes |
 
@@ -58,14 +59,19 @@ esquinas quedan redondeadas a escala de vóxel.
 
 `cargo run --release -p quadriflow-core --example quality -- <modelo> <quads> [--sharp] [--rebuild always|never] [--obj salida.obj]`
 
-| Modelo | Entrada | Quads (obj.) | Irregulares | Ángulos fuera de [60°,120°] | Dist. máx (% diag.) |
-|---|---|---|---|---|---|
-| Gonfoterio | 500k tris, limpia | 5014 (5000) | 4.5 % | 3.9 % | 1.18 |
-| Conejo (STL) | 15 cáscaras, 1062 aristas no-manifold | 3354 (3000) | 3.8 % | 7.9 % | 0.50 |
-| Oído interno | 9 piezas abiertas | 2496 (3000) | 6.3 % | 7.5 % | 1.36 |
-| Molde CAD `--sharp` | limpia | 1992 (2000) | 4.6 % | 9.0 % | 1.35 |
-| Audiómetro (STL) | 1989 aristas no-manifold | 2432 (3000) | 10.3 % | 9.4 % | 2.31 |
-| Audiómetro, 10k | ídem | 9540 (10000) | 5.1 % | 3.9 % | 1.48 |
+| Modelo | Entrada | Quads (obj.) | Irregulares | Ángulos fuera de [60°,120°] | Aspecto máx | Dist. máx (% diag.) |
+|---|---|---|---|---|---|---|
+| Esfera (8k tris) | limpia | 1072 (1000) | 10 (mín. 8) | 0.4 % | 2.2 | 0.12 |
+| Gonfoterio | 500k tris, limpia | 4774 (5000) | 4.0 % | 2.5 % | 10.1 | 1.18 |
+| Conejo (STL) | 15 cáscaras, 1062 aristas no-manifold | 3180 (3000) | 3.8 % | 6.9 % | 24.7 | 0.61 |
+| Oído interno | 9 piezas abiertas | 2358 (3000) | 5.5 % | 6.7 % | 81.6 | 1.77 |
+| Molde CAD `--sharp` | limpia | 1930 (2000) | 4.0 % | 7.6 % | 33.5 | 1.35 |
+| Audiómetro (STL) | 1989 aristas no-manifold | 2102 (3000) | 10.8 % | 9.8 % | 26.9 | 3.01 |
+| Audiómetro, 10k | ídem | 9106 (10000) | 4.4 % | 3.6 % | 14.6 | 1.71 |
+
+Evolución de los irregulares (antes de la fase 1 → fase 1 → fase 2): esfera
+20 → 20 → 10; gonfoterio 227 → 227 → 190; molde 92 → 92 → 78 (aspecto máx
+~10¹² → 33.5); conejo 472 → 126 → 121; oído 153 → 153 → 127.
 
 Sin reconstrucción el conejo y el audiómetro salían rotos (20 % y 24 %
 irregulares, 31 % y 59 % de ángulos malos, quads en astillas y aletas).
@@ -77,9 +83,12 @@ Plan hacia una retopología lista para producción (una fase por commit):
 - [x] Eliminación de singularidades de posición (QuadriFlow): camino mínimo por
       carga unitaria en vez de un flujo global.
 - [x] **Fase 1 — Entradas rotas**: reconstrucción volumétrica automática.
-- [ ] **Fase 2 — Limpieza topológica**: disolver vértices de valencia 2,
-      doublets y quads con aristas de largo cero (molde: aspecto máx ~10¹²);
-      vértice de valencia 3/5 en las singularidades de orientación.
+- [x] **Fase 2 — Limpieza topológica**: diagonal de cada medio quad tomada de
+      su propio retículo (el mapa global por par de vértices daba medios quads
+      con dos "diagonales"), limpieza de la malla poligonal (`cleanup.rs`).
+      Queda: pares 3-5 junto a singularidades de orientación que absorbieron
+      carga de posición (esfera gruesa: 14 irregulares contra 8); son
+      dislocaciones que ninguna operación local elimina.
 - [ ] **Fase 3 — Aristas vivas**: esquinas fijas, aristas de quads alineadas a
       las curvas vivas (aletas en las esquinas del molde) y aristas vivas
       recuperadas tras la reconstrucción.

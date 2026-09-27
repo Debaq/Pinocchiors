@@ -166,6 +166,32 @@ fn irregular_vertices(q: &QuadMesh) -> usize {
 }
 
 #[test]
+fn sphere_has_few_extra_singularities() {
+    // Una esfera necesita al menos 8 vértices de valencia 3; quedan algunos
+    // pares 3-5 junto a las singularidades de orientación
+    for (target, max) in [(600, 14), (1000, 16)] {
+        let q = remesh(&sphere(1.0), &config(target)).unwrap();
+        assert_closed_manifold(&q, 2);
+        let irregular = irregular_vertices(&q);
+        assert!(irregular <= max, "{irregular} irregulares con {target} quads");
+    }
+}
+
+#[test]
+fn sharp_corners_leave_no_degenerate_edges() {
+    let config = RemeshConfig { target_faces: 400, preserve_sharp: true, ..Default::default() };
+    let q = remesh(&cylinder(true), &config).unwrap();
+    let lengths: Vec<f64> = q
+        .faces
+        .iter()
+        .flat_map(|f| (0..4).map(|k| (q.vertices[f.v[(k + 1) % 4]] - q.vertices[f.v[k]]).norm()))
+        .collect();
+    let mean = lengths.iter().sum::<f64>() / lengths.len() as f64;
+    let shortest = lengths.iter().cloned().fold(f64::INFINITY, f64::min);
+    assert!(shortest > 0.05 * mean, "arista de {shortest} con media {mean}");
+}
+
+#[test]
 fn torus_keeps_its_genus() {
     let q = remesh(&torus(), &config(400)).unwrap();
     assert_closed_manifold(&q, 0);

@@ -8,11 +8,11 @@
 //! 3. Los medios quads que comparten la diagonal forman un quad; los que
 //!    quedan solos (junto a singularidades) son triángulos, y los agujeros que
 //!    no son borde real se rellenan.
-//! 4. Cada polígono se divide en quads (centroide + puntos medios), así la
+//! 4. Tras la limpieza (`cleanup`), cada polígono se divide en quads (centroide + puntos medios), así la
 //!    salida tiene solo quads.
 
 use crate::hierarchy::Level;
-use crate::integer::EdgeOffsets;
+use crate::integer::{self, EdgeOffsets};
 use crate::quad::{QuadFace, QuadMesh};
 use crate::V3;
 use std::collections::HashMap;
@@ -65,7 +65,6 @@ pub(crate) fn extract_polygons(
             uf.union(i, j);
         }
     }
-
     // Vértices de salida: promedio (por área) de los puntos del retículo fundidos
     let mut cluster = vec![u32::MAX; n];
     let mut sums: Vec<(V3, V3, f64)> = Vec::new();
@@ -120,19 +119,42 @@ pub(crate) fn extract_polygons(
     }
     let is_diagonal = |a: u32, b: u32| diagonal.get(&(a.min(b), a.max(b))).copied().unwrap_or(false);
 
-    let halves = collapsed_triangles(triangles, &cluster);
-    let mut faces = pair_halves(&halves, is_diagonal);
+    let halves = collapsed_triangles(triangles, &cluster, |t| lattice_diagonal(offsets, t));
+    let mut faces = pair_halves(&halves, &is_diagonal);
     fill_holes(&mut faces, &on_boundary);
     Polygons { vertices, fixed, faces }
 }
 
+/// Lado (`k` → `k+1`) del triángulo que es la diagonal de su celda, según sus
+/// propias esquinas en el retículo: solo si es medio quad (área ½ celda).
+fn lattice_diagonal(offsets: &EdgeOffsets, t: [u32; 3]) -> Option<usize> {
+    let c = integer::lattice_corners(offsets, t)?;
+    let area = (c[1][0] - c[0][0]) * (c[2][1] - c[0][1]) - (c[1][1] - c[0][1]) * (c[2][0] - c[0][0]);
+    if area.abs() != 1 {
+        return None;
+    }
+    (0..3).find(|&k| {
+        let (p, q) = (c[k], c[(k + 1) % 3]);
+        (q[0] - p[0]).abs() == 1 && (q[1] - p[1]).abs() == 1
+    })
+}
+
+/// Medio quad: triángulo sobre los vértices finales y, si se conoce, el lado
+/// que es la diagonal de la celda.
+type Half = ([u32; 3], Option<usize>);
+
 /// Triángulos de entrada vistos sobre los vértices finales: se descartan los
 /// degenerados y, si dos se superponen (comparten una semiarista, por un
 /// pliegue de la parametrización), gana el que cubre más triángulos de entrada.
-fn collapsed_triangles(triangles: &[[u32; 3]], cluster: &[u32]) -> Vec<[u32; 3]> {
-    let mut support: HashMap<[u32; 3], u32> = HashMap::new();
+/// `diagonal_of` da el lado diagonal de un triángulo de entrada.
+fn collapsed_triangles(
+    triangles: &[[u32; 3]],
+    cluster: &[u32],
+    diagonal_of: impl Fn([u32; 3]) -> Option<usize>,
+) -> Vec<Half> {
+    let mut support: HashMap<[u32; 3], (u32, Option<usize>)> = HashMap::new();
     let mut order: Vec<[u32; 3]> = Vec::new();
-    for t in triangles {
+    for &t in triangles {
         let c = t.map(|v| cluster[v as usize]);
         if c[0] == c[1] || c[1] == c[2] || c[0] == c[2] {
             continue;
@@ -140,13 +162,16 @@ fn collapsed_triangles(triangles: &[[u32; 3]], cluster: &[u32]) -> Vec<[u32; 3]>
         // Rotación canónica: el menor primero, conservando la orientación
         let k = (0..3).min_by_key(|&k| c[k]).expect("tres vértices");
         let key = [c[k], c[(k + 1) % 3], c[(k + 2) % 3]];
-        let count = support.entry(key).or_insert(0);
-        if *count == 0 {
+        let entry = support.entry(key).or_insert((0, None));
+        if entry.0 == 0 {
             order.push(key);
         }
-        *count += 1;
+        entry.0 += 1;
+        if entry.1.is_none() {
+            entry.1 = diagonal_of(t).map(|m| (m + 3 - k) % 3);
+        }
     }
-    order.sort_by_key(|key| std::cmp::Reverse(support[key]));
+    order.sort_by_key(|key| std::cmp::Reverse(support[key].0));
 
     let mut used: std::collections::HashSet<(u32, u32)> = Default::default();
     let mut accepted = Vec::new();
@@ -156,22 +181,26 @@ fn collapsed_triangles(triangles: &[[u32; 3]], cluster: &[u32]) -> Vec<[u32; 3]>
             continue;
         }
         used.extend(half_edges);
-        accepted.push(t);
+        accepted.push((t, support[&t].1));
     }
     accepted
 }
 
 /// Une los medios quads que comparten su diagonal. Un triángulo `(a, b, x)` y
-/// otro `(b, a, y)` sobre la diagonal `a–b` forman el quad `(a, y, b, x)`.
-fn pair_halves(halves: &[[u32; 3]], is_diagonal: impl Fn(u32, u32) -> bool) -> Vec<Vec<u32>> {
+/// otro `(b, a, y)` sobre la diagonal `a–b` forman el quad `(a, y, b, x)`. La
+/// diagonal de cada uno sale de su retículo o, si no se conoce (singularidad
+/// de orientación), de `is_diagonal` cuando señala un único lado.
+fn pair_halves(halves: &[Half], is_diagonal: &impl Fn(u32, u32) -> bool) -> Vec<Vec<u32>> {
     let mut by_half_edge: HashMap<(u32, u32), usize> = HashMap::new();
-    for (idx, t) in halves.iter().enumerate() {
+    for (idx, (t, _)) in halves.iter().enumerate() {
         for k in 0..3 {
             by_half_edge.insert((t[k], t[(k + 1) % 3]), idx);
         }
     }
-    // La diagonal de cada medio quad (si tiene exactamente una)
-    let diagonal_of = |t: &[u32; 3]| -> Option<usize> {
+    let diagonal_of = |(t, known): &Half| -> Option<usize> {
+        if known.is_some() {
+            return *known;
+        }
         let mut found = (0..3).filter(|&k| is_diagonal(t[k], t[(k + 1) % 3]));
         let k = found.next()?;
         found.next().is_none().then_some(k)
@@ -179,19 +208,20 @@ fn pair_halves(halves: &[[u32; 3]], is_diagonal: impl Fn(u32, u32) -> bool) -> V
 
     let mut paired = vec![false; halves.len()];
     let mut faces = Vec::with_capacity(halves.len() / 2 + 1);
-    for (idx, t) in halves.iter().enumerate() {
+    for (idx, half) in halves.iter().enumerate() {
         if paired[idx] {
             continue;
         }
-        if let Some(k) = diagonal_of(t) {
+        let t = half.0;
+        if let Some(k) = diagonal_of(half) {
             let (a, b, x) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
             if let Some(&other) = by_half_edge.get(&(b, a))
                 && !paired[other]
                 && other != idx
             {
-                let u = halves[other];
+                let u = halves[other].0;
                 let ko = (0..3).find(|&j| u[j] == b).expect("comparte la diagonal");
-                if diagonal_of(&u) == Some(ko) {
+                if diagonal_of(&halves[other]) == Some(ko) {
                     let y = u[(ko + 2) % 3];
                     paired[idx] = true;
                     paired[other] = true;
@@ -201,7 +231,7 @@ fn pair_halves(halves: &[[u32; 3]], is_diagonal: impl Fn(u32, u32) -> bool) -> V
             }
         }
     }
-    for (idx, t) in halves.iter().enumerate() {
+    for (idx, (t, _)) in halves.iter().enumerate() {
         if !paired[idx] {
             faces.push(t.to_vec());
         }
@@ -269,7 +299,7 @@ fn fill_holes(faces: &mut Vec<Vec<u32>>, on_boundary: &[bool]) {
 
 /// Parte un loop cerrado que repite vértices en ciclos simples; los tramos de
 /// ida y vuelta quedan como ciclos de 2 y se descartan.
-fn simple_cycles(walk: &[u32]) -> Vec<Vec<u32>> {
+pub(crate) fn simple_cycles(walk: &[u32]) -> Vec<Vec<u32>> {
     let mut cycles = Vec::new();
     let mut stack: Vec<u32> = Vec::with_capacity(walk.len());
     let mut position: HashMap<u32, usize> = HashMap::new();
@@ -342,8 +372,8 @@ mod tests {
     #[test]
     fn halves_sharing_a_diagonal_become_a_quad() {
         // Celda 0-1-2-3 partida por la diagonal 0-2, más un triángulo suelto
-        let halves = [[0, 1, 2], [0, 2, 3], [1, 4, 2]];
-        let faces = pair_halves(&halves, |a, b| (a.min(b), a.max(b)) == (0, 2));
+        let halves = [([0, 1, 2], None), ([0, 2, 3], None), ([1, 4, 2], None)];
+        let faces = pair_halves(&halves, &|a, b| (a.min(b), a.max(b)) == (0, 2));
         assert_eq!(faces.len(), 2);
         // El mismo ciclo 0-1-2-3, empezando donde sea
         let quad = &faces[0];
@@ -360,8 +390,8 @@ mod tests {
         // (4,5,6) está degenerado tras el colapso.
         let cluster = [0, 1, 2, 3, 0, 0, 1, 1, 2];
         let tris = [[0, 1, 2], [4, 7, 8], [0, 1, 3], [4, 5, 6]];
-        let out = collapsed_triangles(&tris, &cluster);
-        assert_eq!(out, vec![[0, 1, 2]]);
+        let out = collapsed_triangles(&tris, &cluster, |_| None);
+        assert_eq!(out, vec![([0, 1, 2], None)]);
     }
 
     #[test]

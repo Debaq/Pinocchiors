@@ -132,6 +132,18 @@ pub(crate) fn face_state(offsets: &EdgeOffsets, t: [u32; 3]) -> Option<FaceState
     Some(FaceState::Charge(sum))
 }
 
+/// Posiciones enteras de las esquinas del triángulo en el marco de la primera
+/// (`None` si es una singularidad de orientación).
+pub(crate) fn lattice_corners(offsets: &EdgeOffsets, t: [u32; 3]) -> Option<[[i32; 2]; 3]> {
+    let (frames, total) = corner_rotations(offsets, t)?;
+    if total != 0 {
+        return None;
+    }
+    let (_, d_ab) = offsets.directed(t[0], t[1])?;
+    let (_, d_bc) = offsets.directed(t[1], t[2])?;
+    Some([[0, 0], d_ab, add(d_ab, rot2(d_bc, frames[1]))])
+}
+
 /// Área con signo (×2) del triángulo en el retículo, en el marco de su primer
 /// vértice: > 0 orientado como la superficie, < 0 invertido, 0 colapsado.
 pub(crate) fn lattice_area(offsets: &EdgeOffsets, t: [u32; 3]) -> Option<i32> {

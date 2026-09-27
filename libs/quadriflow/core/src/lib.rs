@@ -36,10 +36,14 @@
 //!    entre retículos vecinos se corrigen para que sumen cero alrededor de
 //!    cada triángulo regular, sin invertir ninguno.
 //! 6. **Extracción**: se funden los vértices del mismo punto del retículo, los
-//!    triángulos que sobreviven (medios quads) se emparejan por su diagonal y
-//!    cada polígono se divide en quads, que se proyectan sobre la superficie.
+//!    triángulos que sobreviven (medios quads) se emparejan por su diagonal.
+//! 7. **Limpieza**: operaciones locales sobre la malla poligonal (fundir caras,
+//!    disolver *doublets*, colapsar diagonales y aristas degeneradas) mientras
+//!    bajen la irregularidad; cada polígono se divide en quads, que se
+//!    proyectan sobre la superficie.
 
 pub mod config;
+mod cleanup;
 mod extract;
 mod features;
 mod field;
@@ -193,7 +197,8 @@ where
     integer::remove_position_singularities(&mut offsets, &surface.triangles);
 
     on_progress(RemeshStage::Extraction, "Extrayendo quads...");
-    let polygons = extract::extract_polygons(&hierarchy.levels[0], &offsets, &position, &surface.triangles);
+    let mut polygons = extract::extract_polygons(&hierarchy.levels[0], &offsets, &position, &surface.triangles);
+    cleanup::simplify(&mut polygons);
     let (mut quads, mut fixed) = extract::polygons_to_quads(&polygons);
     if quads.is_empty() {
         return Err(RemeshError::ExtractionFailed);
