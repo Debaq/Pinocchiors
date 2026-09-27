@@ -7,6 +7,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ObjImportError {
+    #[error("geometría inválida: {0}")]
+    InvalidGeometry(#[from] converter_scene::SceneError),
     #[error("error leyendo archivo: {0}")]
     Io(#[from] std::io::Error),
     #[error("error parseando OBJ: {0}")]
@@ -99,6 +101,7 @@ pub fn import_obj(path: impl AsRef<Path>) -> Result<Scene, ObjImportError> {
         scene.root_nodes.push(i);
     }
 
+    scene.validate_geometry()?;
     Ok(scene)
 }
 

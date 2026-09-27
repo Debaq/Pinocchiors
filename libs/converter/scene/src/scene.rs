@@ -1,4 +1,4 @@
-use crate::{Animation, Material, Mesh, Skeleton, Texture, Transform, VertexAttribute};
+use crate::{Animation, IndexData, Material, Mesh, Skeleton, Texture, Transform, VertexAttribute};
 use thiserror::Error;
 
 /// Nodo del grafo de escena.
@@ -27,6 +27,10 @@ pub enum SceneError {
     EmptyMesh(usize),
     #[error("primitiva {prim} del mesh {mesh} no tiene posiciones")]
     MissingPositions { mesh: usize, prim: usize },
+    #[error("primitiva {prim} del mesh {mesh} tiene el índice {index} pero solo {count} vértices")]
+    IndexOutOfBounds { mesh: usize, prim: usize, index: usize, count: usize },
+    #[error("primitiva {prim} del mesh {mesh}: el atributo {attribute} tiene {len} elementos pero hay {count} vértices")]
+    AttributeLengthMismatch { mesh: usize, prim: usize, attribute: &'static str, len: usize, count: usize },
 }
 
 /// Escena 3D completa — formato pivote entre todos los conversores.
@@ -103,13 +107,55 @@ impl Scene {
                         });
                     }
                 }
-                let has_positions = prim.attributes.iter().any(|a| matches!(a, VertexAttribute::Positions(_)));
-                if !has_positions {
-                    return Err(SceneError::MissingPositions { mesh: mi, prim: pi });
-                }
             }
         }
 
+        self.validate_geometry()
+    }
+
+    /// Valida la geometría de cada primitiva: que tenga posiciones, que todos
+    /// los atributos tengan un elemento por vértice y que los índices existan.
+    ///
+    /// A diferencia de [`validate`](Self::validate), acepta mallas sin
+    /// primitivas (p. ej. un glTF con solo líneas). Los importadores la llaman
+    /// para rechazar archivos malformados antes de que lleguen a los consumidores.
+    pub fn validate_geometry(&self) -> Result<(), SceneError> {
+        for (mi, mesh) in self.meshes.iter().enumerate() {
+            for (pi, prim) in mesh.primitives.iter().enumerate() {
+                let count = prim
+                    .attributes
+                    .iter()
+                    .find_map(|a| match a {
+                        VertexAttribute::Positions(p) => Some(p.len()),
+                        _ => None,
+                    })
+                    .ok_or(SceneError::MissingPositions { mesh: mi, prim: pi })?;
+
+                for attr in &prim.attributes {
+                    let (attribute, len) = match attr {
+                        VertexAttribute::Positions(v) => ("POSITION", v.len()),
+                        VertexAttribute::Normals(v) => ("NORMAL", v.len()),
+                        VertexAttribute::Tangents(v) => ("TANGENT", v.len()),
+                        VertexAttribute::TexCoords(_, v) => ("TEXCOORD", v.len()),
+                        VertexAttribute::Colors(v) => ("COLOR", v.len()),
+                        VertexAttribute::JointIndices(v) => ("JOINTS", v.len()),
+                        VertexAttribute::JointWeights(v) => ("WEIGHTS", v.len()),
+                    };
+                    if len != count {
+                        return Err(SceneError::AttributeLengthMismatch { mesh: mi, prim: pi, attribute, len, count });
+                    }
+                }
+
+                let max_index = match &prim.indices {
+                    Some(IndexData::U16(idx)) => idx.iter().map(|&i| i as usize).max(),
+                    Some(IndexData::U32(idx)) => idx.iter().map(|&i| i as usize).max(),
+                    None => None,
+                };
+                if let Some(index) = max_index.filter(|&i| i >= count) {
+                    return Err(SceneError::IndexOutOfBounds { mesh: mi, prim: pi, index, count });
+                }
+            }
+        }
         Ok(())
     }
 
@@ -294,5 +340,26 @@ mod tests {
         assert_eq!(max, [1.0, 1.0, 0.0]);
 
         assert!(a.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_geometry_catches_bad_indices_and_attributes() {
+        let mut scene = simple_scene();
+        assert!(scene.validate_geometry().is_ok());
+
+        scene.meshes[0].primitives[0].indices = Some(IndexData::U16(vec![0, 1, 7]));
+        assert!(matches!(scene.validate_geometry(), Err(SceneError::IndexOutOfBounds { index: 7, count: 3, .. })));
+
+        let mut scene = simple_scene();
+        scene.meshes[0].primitives[0].attributes.push(VertexAttribute::Normals(vec![[0.0, 0.0, 1.0]]));
+        assert!(matches!(
+            scene.validate_geometry(),
+            Err(SceneError::AttributeLengthMismatch { attribute: "NORMAL", len: 1, count: 3, .. })
+        ));
+
+        // Mallas sin primitivas (p. ej. solo líneas) son válidas para la geometría
+        let mut scene = simple_scene();
+        scene.meshes.push(Mesh { name: "lineas".into(), primitives: vec![] });
+        assert!(scene.validate_geometry().is_ok());
     }
 }

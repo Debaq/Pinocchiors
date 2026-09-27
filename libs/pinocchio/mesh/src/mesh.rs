@@ -25,7 +25,28 @@ impl Mesh {
         }
     }
 
-    /// Crea una malla desde vértices y caras triangulares
+    /// Como [`from_triangles`](Self::from_triangles), pero devuelve un error en
+    /// vez de hacer panic si algún índice no existe.
+    pub fn try_from_triangles(positions: &[Vector3], indices: &[[usize; 3]]) -> Result<Self, String> {
+        if let Some((face, tri)) = indices
+            .iter()
+            .enumerate()
+            .find(|(_, t)| t.iter().any(|&i| i >= positions.len()))
+        {
+            return Err(format!(
+                "la cara {face} referencia {tri:?} pero solo hay {} vértices",
+                positions.len()
+            ));
+        }
+        Ok(Self::from_triangles(positions, indices))
+    }
+
+    /// Crea una malla a partir de posiciones y triángulos.
+    ///
+    /// # Panics
+    ///
+    /// Si algún índice es `>= positions.len()`; usar
+    /// [`try_from_triangles`](Self::try_from_triangles) con datos no confiables.
     pub fn from_triangles(positions: &[Vector3], indices: &[[usize; 3]]) -> Self {
         let mut mesh = Self::new();
 

@@ -137,7 +137,7 @@ pub fn greedy_rounding(
         .collect();
 
     // Sort by priority (closest to integer first)
-    vertex_priority.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    vertex_priority.sort_by(|a, b| a.1.total_cmp(&b.1));
 
     let mut u = vec![0i32; n];
     let mut v = vec![0i32; n];

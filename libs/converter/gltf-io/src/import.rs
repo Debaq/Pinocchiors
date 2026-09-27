@@ -10,6 +10,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GltfImportError {
+    #[error("geometría inválida: {0}")]
+    InvalidGeometry(#[from] converter_scene::SceneError),
     #[error("error leyendo archivo: {0}")]
     Io(#[from] std::io::Error),
     #[error("error parseando glTF: {0}")]
@@ -131,6 +133,7 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<Scene, GltfImportError> {
     import_skins(&doc, &buffers, &mut scene);
     import_animations(&doc, &buffers, &mut scene);
 
+    scene.validate_geometry()?;
     Ok(scene)
 }
 
@@ -174,6 +177,7 @@ pub fn import_gltf_bytes(data: &[u8]) -> Result<Scene, GltfImportError> {
     import_skins(&doc, &buffers, &mut scene);
     import_animations(&doc, &buffers, &mut scene);
 
+    scene.validate_geometry()?;
     Ok(scene)
 }
 
@@ -454,10 +458,10 @@ fn import_meshes(
                     .unwrap_or_else(|| (0..vertex_count as u32).collect());
                 let converted = convert_indices_for_mode(raw, mode);
                 if converted.is_empty() {
-                    None
-                } else {
-                    Some(IndexData::U32(converted))
+                    // Sin triángulos: `None` se interpretaría como lista implícita
+                    continue;
                 }
+                Some(IndexData::U32(converted))
             };
 
             primitives.push(Primitive {

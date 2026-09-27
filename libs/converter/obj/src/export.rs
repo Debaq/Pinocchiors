@@ -1,4 +1,5 @@
 use converter_scene::{AlphaMode, Scene, TextureFormat};
+use std::collections::{HashMap, HashSet};
 use std::fmt::Write as FmtWrite;
 use std::path::Path;
 use thiserror::Error;
@@ -121,8 +122,63 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
     Ok(out)
 }
 
+/// Escribe cada textura una sola vez, con un nombre de archivo seguro y único
+/// dentro del directorio de salida.
+#[derive(Default)]
+struct TextureFiles {
+    written: HashMap<usize, String>,
+    used: HashSet<String>,
+}
+
+impl TextureFiles {
+    /// Nombre de archivo para la textura `index` (la escribe la primera vez).
+    /// `None` si el índice no existe.
+    fn file_for(
+        &mut self,
+        scene: &Scene,
+        index: usize,
+        base_dir: &Path,
+        stem: &str,
+    ) -> Result<Option<String>, ObjExportError> {
+        if let Some(name) = self.written.get(&index) {
+            return Ok(Some(name.clone()));
+        }
+        let Some(tex) = scene.textures.get(index) else {
+            return Ok(None);
+        };
+        let ext = match tex.format {
+            TextureFormat::Png => "png",
+            TextureFormat::Jpeg => "jpg",
+            TextureFormat::WebP => "webp",
+        };
+        let base = sanitize_file_stem(&tex.name).unwrap_or_else(|| format!("{stem}_tex_{index}"));
+        let mut filename = format!("{base}.{ext}");
+        if self.used.contains(&filename) {
+            filename = format!("{base}_{index}.{ext}");
+        }
+        std::fs::write(base_dir.join(&filename), &tex.data)?;
+        self.used.insert(filename.clone());
+        self.written.insert(index, filename.clone());
+        Ok(Some(filename))
+    }
+}
+
+/// Deja solo el nombre base (sin directorios ni extensión) con caracteres
+/// `[A-Za-z0-9_-]`. Los nombres vienen del archivo importado y no son confiables.
+fn sanitize_file_stem(name: &str) -> Option<String> {
+    let last = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = last.split('.').next().unwrap_or(last);
+    let clean: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect();
+    let clean = clean.trim_matches('_');
+    (!clean.is_empty()).then(|| clean.to_string())
+}
+
 fn write_mtl(scene: &Scene, base_dir: &Path, stem: &str) -> Result<String, ObjExportError> {
     let mut out = String::new();
+    let mut textures = TextureFiles::default();
     writeln!(out, "# MTL exported by converter-obj")?;
 
     for (i, mat) in scene.materials.iter().enumerate() {
@@ -157,28 +213,22 @@ fn write_mtl(scene: &Scene, base_dir: &Path, stem: &str) -> Result<String, ObjEx
         // Illumination model
         writeln!(out, "illum 2")?;
 
-        // Diffuse texture (map_Kd)
-        if let Some(ref tex_ref) = mat.base_color_texture {
-            if tex_ref.texture_index < scene.textures.len() {
-                let tex = &scene.textures[tex_ref.texture_index];
-                let ext = match tex.format {
-                    TextureFormat::Png => "png",
-                    TextureFormat::Jpeg => "jpg",
-                    TextureFormat::WebP => "webp",
-                };
-                let tex_filename = if tex.name.is_empty() {
-                    format!("{stem}_tex_{}.{ext}", tex_ref.texture_index)
-                } else {
-                    // Asegurar que tiene extensión correcta
-                    let base = tex.name.split('.').next().unwrap_or(&tex.name);
-                    format!("{base}.{ext}")
-                };
+        // Emisivo (Ke)
+        let [er, eg, eb] = mat.emissive_factor;
+        if er > 0.0 || eg > 0.0 || eb > 0.0 {
+            writeln!(out, "Ke {er} {eg} {eb}")?;
+        }
 
-                // Escribir archivo de textura
-                let tex_path = base_dir.join(&tex_filename);
-                std::fs::write(&tex_path, &tex.data)?;
-
-                writeln!(out, "map_Kd {tex_filename}")?;
+        // Texturas
+        let maps: [(&str, Option<usize>); 4] = [
+            ("map_Kd", mat.base_color_texture.as_ref().map(|t| t.texture_index)),
+            ("norm", mat.normal_texture.as_ref().map(|t| t.texture_index)),
+            ("map_Bump", mat.normal_texture.as_ref().map(|t| t.texture_index)),
+            ("map_Ke", mat.emissive_texture.as_ref().map(|t| t.texture_index)),
+        ];
+        for (keyword, tex_index) in maps {
+            if let Some(filename) = tex_index.and_then(|i| textures.file_for(scene, i, base_dir, stem).transpose()) {
+                writeln!(out, "{keyword} {}", filename?)?;
             }
         }
     }
@@ -394,5 +444,51 @@ f 1 2 3
         let obj = write_obj(&scene, None).unwrap();
         assert!(obj.contains("v 12 0 0"), "{obj}");
         assert!(obj.contains("v 10 2 0"), "{obj}");
+    }
+
+    #[test]
+    fn texture_names_are_sanitized_and_unique() {
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("fuera");
+        std::fs::create_dir(&outside).unwrap();
+
+        let mut scene = triangle_scene();
+        let tex = |name: &str| Texture {
+            name: name.into(),
+            data: vec![1, 2, 3],
+            format: TextureFormat::Png,
+            width: 1,
+            height: 1,
+        };
+        // Ruta absoluta, ruta relativa hacia arriba y dos texturas con el mismo nombre
+        scene.textures.push(tex(&format!("{}/pwn", outside.display())));
+        scene.textures.push(tex("../../subir.png"));
+        scene.textures.push(tex("piel.png"));
+        scene.textures.push(tex("piel.jpg"));
+        let tref = |i| Some(TextureRef { texture_index: i, tex_coord_set: 0 });
+        for (i, normal) in [(0, None), (1, None), (2, tref(3))] {
+            scene.materials.push(Material {
+                name: format!("m{i}"),
+                base_color_texture: tref(i),
+                normal_texture: normal,
+                ..Material::default()
+            });
+        }
+
+        let obj_dir = dir.path().join("salida");
+        std::fs::create_dir(&obj_dir).unwrap();
+        export_obj(&scene, obj_dir.join("modelo.obj")).unwrap();
+
+        // Nada se escribió fuera del directorio de salida
+        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
+        let mut files: Vec<String> = std::fs::read_dir(&obj_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["modelo.mtl", "modelo.obj", "piel.png", "piel_3.png", "pwn.png", "subir.png"]);
+
+        let mtl = std::fs::read_to_string(obj_dir.join("modelo.mtl")).unwrap();
+        assert!(mtl.contains("norm piel_3.png"), "{mtl}");
     }
 }

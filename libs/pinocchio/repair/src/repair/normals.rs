@@ -160,7 +160,7 @@ pub fn orient_normals_largest_component(mesh: &mut Mesh) -> usize {
         .min_by(|&a, &b| {
             let min_z_a = mesh.get_face_positions(a).iter().map(|p| p.z()).fold(f64::INFINITY, f64::min);
             let min_z_b = mesh.get_face_positions(b).iter().map(|p| p.z()).fold(f64::INFINITY, f64::min);
-            min_z_a.partial_cmp(&min_z_b).unwrap()
+            min_z_a.total_cmp(&min_z_b)
         })
         .unwrap();
 

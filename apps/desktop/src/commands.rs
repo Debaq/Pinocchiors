@@ -1381,16 +1381,20 @@ pub fn scale_mesh_for_print(
     match params.mode.as_str() {
         "uniform" => {
             let factor = params.factor.ok_or("Falta factor de escala")?;
+            if !(factor.is_finite() && factor > 0.0) {
+                return Err(format!("Factor de escala inválido: {factor}"));
+            }
             pinocchio_print3d::scale(&mut mesh, factor);
         }
         "fit" => {
             let target = params.target_size.ok_or("Falta tamaño objetivo")?;
-            pinocchio_print3d::scale_to_fit(&mut mesh, target);
+            pinocchio_print3d::scale_to_fit(&mut mesh, target).map_err(|e| format!("No se pudo escalar: {e}"))?;
         }
         "volume" => {
             let target_vol = params.target_volume.ok_or("Falta volumen objetivo")?;
             let current_vol = pinocchio_print3d::compute_volume(&mesh);
-            pinocchio_print3d::scale_to_volume(&mut mesh, current_vol, target_vol);
+            pinocchio_print3d::scale_to_volume(&mut mesh, current_vol, target_vol)
+                .map_err(|e| format!("No se pudo escalar por volumen: {e}"))?;
         }
         _ => return Err(format!("Modo de escala no soportado: {}", params.mode)),
     }

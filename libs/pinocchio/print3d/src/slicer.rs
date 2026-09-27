@@ -612,6 +612,9 @@ pub fn slice_by_planes(mesh: &Mesh, planes: &[Plane]) -> Result<Vec<Mesh>> {
     Ok(pieces)
 }
 
+/// Máximo de planos de corte que acepta [`subdivide`]
+pub const MAX_CUT_PLANES: usize = 1000;
+
 /// Subdivide una malla en piezas que quepan en el volumen de construcción
 ///
 /// # Argumentos
@@ -631,6 +634,12 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
         config.build_volume[1] - margin2,
         config.build_volume[2] - margin2,
     ];
+    if config.margin < 0.0 || effective_volume.iter().any(|&v| !(v.is_finite() && v > 0.0)) {
+        return Err(Print3dError::InvalidConfig(format!(
+            "el margen ({}) no deja espacio útil en el volumen de impresión {:?}",
+            config.margin, config.build_volume
+        )));
+    }
 
     if dims[0] <= effective_volume[0]
         && dims[1] <= effective_volume[1]
@@ -645,6 +654,18 @@ pub fn subdivide(mesh: &Mesh, config: &SubdivideConfig) -> Result<Vec<LabeledPie
             neighbors: vec![],
             cut_faces: vec![],
         }]);
+    }
+
+    // Rechazar antes de generar los planos si serían demasiados
+    let cuts = |axis: usize| (dims[axis] / effective_volume[axis]).ceil().max(1.0) - 1.0;
+    let needed = match config.strategy {
+        SubdivideStrategy::ZLayers => cuts(2),
+        _ => cuts(0) + cuts(1) + cuts(2),
+    };
+    if needed > MAX_CUT_PLANES as Real {
+        return Err(Print3dError::InvalidConfig(format!(
+            "se necesitarían {needed} planos de corte (máximo {MAX_CUT_PLANES}); revisa las unidades del modelo y del volumen de impresión"
+        )));
     }
 
     // Calcular planos de corte según estrategia
@@ -785,6 +806,9 @@ fn calculate_grid_planes(bbox: &BoundingBox, max_size: &[Real; 3]) -> Vec<Plane>
 fn calculate_z_planes(bbox: &BoundingBox, max_height: Real) -> Vec<Plane> {
     let mut planes = Vec::new();
     let height = bbox.max[2] - bbox.min[2];
+    if !(max_height.is_finite() && max_height > 0.0) {
+        return planes;
+    }
 
     let nz = (height / max_height).ceil() as usize;
     if nz > 1 {
@@ -1074,5 +1098,31 @@ mod tests {
         // Cubo de 1x1x1 cabe en 98x98x98 (100-2*1), no necesita subdivisión
         assert_eq!(pieces.len(), 1);
         assert_eq!(pieces[0].label, "1");
+    }
+
+    #[test]
+    fn test_subdivide_rejects_margin_without_room() {
+        let cube = create_unit_cube();
+        for strategy in [SubdivideStrategy::Grid, SubdivideStrategy::ZLayers] {
+            let config = SubdivideConfig {
+                build_volume: [4.0, 4.0, 4.0],
+                margin: 2.0,
+                strategy,
+                ..Default::default()
+            };
+            assert!(matches!(subdivide(&cube, &config), Err(Print3dError::InvalidConfig(_))));
+        }
+    }
+
+    #[test]
+    fn test_subdivide_rejects_too_many_planes() {
+        // Cubo unitario con un volumen de impresión diminuto (p. ej. unidades mezcladas)
+        let cube = create_unit_cube();
+        let config = SubdivideConfig {
+            build_volume: [1e-3, 1e-3, 1e-3],
+            margin: 0.0,
+            ..Default::default()
+        };
+        assert!(matches!(subdivide(&cube, &config), Err(Print3dError::InvalidConfig(_))));
     }
 }

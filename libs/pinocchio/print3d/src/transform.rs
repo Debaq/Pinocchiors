@@ -2,6 +2,7 @@
 //!
 //! Proporciona funciones para escalar, trasladar y orientar mallas.
 
+use crate::error::{Print3dError, Result};
 use pinocchio_math::{Real, Vector3};
 use pinocchio_mesh::Mesh;
 
@@ -42,48 +43,59 @@ pub fn scale_non_uniform(mesh: &mut Mesh, factors: [Real; 3]) {
     }
 }
 
-/// Escala una malla para que quepa en un volumen dado
+/// Escala una malla para que quepa en un volumen dado (solo reduce)
+///
+/// Los ejes en los que la malla es plana (dimensión ~0) no limitan la escala.
 ///
 /// # Argumentos
 /// * `mesh` - Malla a escalar
-/// * `max_size` - Dimensiones máximas permitidas [x, y, z]
+/// * `max_size` - Dimensiones máximas permitidas [x, y, z], > 0
 ///
 /// # Retorna
-/// El factor de escala aplicado
-pub fn scale_to_fit(mesh: &mut Mesh, max_size: [Real; 3]) -> Real {
-    let bbox = compute_bounding_box(mesh);
-    let dims = bbox.dimensions();
+/// El factor de escala aplicado (1.0 si ya cabía)
+pub fn scale_to_fit(mesh: &mut Mesh, max_size: [Real; 3]) -> Result<Real> {
+    if max_size.iter().any(|&m| !(m.is_finite() && m > 0.0)) {
+        return Err(Print3dError::InvalidConfig(format!(
+            "tamaño máximo inválido: {max_size:?}"
+        )));
+    }
+    let dims = compute_bounding_box(mesh).dimensions();
 
-    // Calcular factor para que quepa
-    let factor_x = max_size[0] / dims[0];
-    let factor_y = max_size[1] / dims[1];
-    let factor_z = max_size[2] / dims[2];
-
-    let factor = factor_x.min(factor_y).min(factor_z);
+    let factor = (0..3)
+        .filter(|&i| dims[i] > 1e-12)
+        .map(|i| max_size[i] / dims[i])
+        .fold(Real::INFINITY, Real::min);
 
     if factor < 1.0 {
         scale(mesh, factor);
+        Ok(factor)
+    } else {
+        Ok(1.0)
     }
-
-    factor
 }
 
 /// Escala una malla para alcanzar un volumen objetivo
 ///
 /// # Argumentos
 /// * `mesh` - Malla a escalar
-/// * `current_volume` - Volumen actual de la malla
-/// * `target_volume` - Volumen objetivo en mm³
+/// * `current_volume` - Volumen actual de la malla (> 0: la malla debe ser cerrada)
+/// * `target_volume` - Volumen objetivo en mm³ (> 0)
 ///
 /// # Retorna
 /// El factor de escala aplicado
-pub fn scale_to_volume(mesh: &mut Mesh, current_volume: Real, target_volume: Real) -> Real {
-    // El volumen escala con el cubo del factor lineal
-    // V_new = V_old * factor³
-    // factor = (V_new / V_old)^(1/3)
+pub fn scale_to_volume(mesh: &mut Mesh, current_volume: Real, target_volume: Real) -> Result<Real> {
+    if !(current_volume.is_finite() && current_volume > 1e-12) {
+        return Err(Print3dError::MeshNotClosed);
+    }
+    if !(target_volume.is_finite() && target_volume > 0.0) {
+        return Err(Print3dError::InvalidConfig(format!(
+            "volumen objetivo inválido: {target_volume}"
+        )));
+    }
+    // El volumen escala con el cubo del factor lineal: V_new = V_old * factor³
     let factor = (target_volume / current_volume).cbrt();
     scale(mesh, factor);
-    factor
+    Ok(factor)
 }
 
 /// Traslada una malla para que su bounding box comience en el origen
@@ -192,5 +204,37 @@ mod tests {
         assert_eq!(x, 3);
         assert_eq!(y, 2);
         assert_eq!(z, 2);
+    }
+
+    fn flat_square() -> Mesh {
+        // Cuadrado en el plano z = 0 (volumen 0, dimensión z = 0)
+        let v = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(10.0, 10.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+        ];
+        Mesh::from_triangles(&v, &[[0, 1, 2], [0, 2, 3]])
+    }
+
+    #[test]
+    fn test_scale_to_volume_rejects_open_mesh() {
+        let mut mesh = flat_square();
+        assert!(scale_to_volume(&mut mesh, 0.0, 1000.0).is_err());
+        assert!(scale_to_volume(&mut mesh, 100.0, -1.0).is_err());
+        // La malla no se tocó
+        assert!(mesh.vertices.iter().all(|v| v.position.x().is_finite()));
+        assert!((scale_to_volume(&mut mesh, 1000.0, 8000.0).unwrap() - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_scale_to_fit_flat_mesh() {
+        let mut mesh = flat_square();
+        // z = 0 no limita la escala; x/y = 10 → cabe en 5 con factor 0.5
+        let factor = scale_to_fit(&mut mesh, [5.0, 5.0, 5.0]).unwrap();
+        assert!((factor - 0.5).abs() < 1e-12);
+        assert!(mesh.vertices.iter().all(|v| v.position.z().is_finite()));
+        assert!(scale_to_fit(&mut mesh, [0.0, 5.0, 5.0]).is_err());
+        assert_eq!(scale_to_fit(&mut mesh, [100.0, 100.0, 100.0]).unwrap(), 1.0);
     }
 }

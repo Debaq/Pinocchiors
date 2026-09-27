@@ -503,7 +503,7 @@ pub(crate) fn write_skel_animation(
     for ch in trans_channels.values().chain(rot_channels.values()).chain(scale_channels.values()) {
         all_times.extend_from_slice(&ch.times);
     }
-    all_times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    all_times.sort_by(|a, b| a.total_cmp(b));
     all_times.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
 
     if all_times.is_empty() {

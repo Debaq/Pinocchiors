@@ -81,28 +81,22 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [ ] Opción "usar malla retopologizada" → convertir `QuadMesh` a `Scene` (triangulada para GLB; quads para OBJ).
   - [ ] Escribir skin en la `Scene` (`Skeleton` + `JointIndices`/`JointWeights`) desde `PinocchioOutput` para GLB/USDZ.
 
-### 9. `scale_to_volume` con volumen 0 → NaN/inf
-- **Dónde:** `libs/pinocchio/print3d/src/transform.rs:80`
-- **Fix:**
-  - [ ] Validar `current_volume > EPS && target_volume > 0`; devolver `Result`.
-  - [ ] En `scale_to_fit` (`:53`) proteger contra `dims[i] == 0`.
+### 9. `scale_to_volume` con volumen 0 → NaN/inf ✅ RESUELTO
+- [x] `scale_to_volume` y `scale_to_fit` devuelven `Result`: volumen ≤ 0 → `MeshNotClosed`, objetivo/tamaño inválido → `InvalidConfig`; los ejes planos no limitan `scale_to_fit`.
+- [x] GUI: valida el factor uniforme (> 0, finito) y muestra el error.
 
-### 10. Índices fuera de rango → panic (parcial)
-- **Dónde:** `libs/pinocchio/mesh/src/mesh.rs:29` (`from_triangles`), `libs/converter/scene/src/scene.rs` (`validate`)
-- **Problema:** no se validan los índices; `Scene::validate()` no se llama en producción y tampoco revisa índices de vértices. Un GLB malformado tumba la app.
-- **Fix:**
-  - [x] `Scene::world_primitives` descarta triángulos con índices fuera de rango (cubre GUI, autorig, STL, OBJ).
-- [ ] `validate()` debe revisar `index < positions.len()` y el largo de los atributos por primitiva.
-  - [ ] Llamar `validate()` al final de cada importador (o en `converter_core::import`).
-  - [ ] `from_triangles` → `try_from_triangles` que devuelva `Result`.
+### 10. Índices fuera de rango → panic ✅ RESUELTO
+- [x] `Scene::world_primitives` descarta triángulos con índices fuera de rango.
+- [x] `Scene::validate_geometry()`: posiciones presentes, un elemento por vértice en cada atributo, índices válidos. `validate()` la incluye.
+- [x] Los importadores glTF (archivo y bytes) y OBJ la llaman antes de devolver la escena (cubre converter-core, GUI y WASM).
+- [x] `Mesh::try_from_triangles`; `from_triangles` documenta el panic.
 
-### 11. Export OBJ: escritura fuera del directorio con nombres de textura
-- **Dónde:** `libs/converter/obj/src/export.rs:196-206`
-- **Problema:** el nombre viene del archivo importado; un nombre absoluto (`/home/x/algo`) escribe `/home/x/algo.png`. Texturas con el mismo nombre se sobrescriben. Solo se exporta `map_Kd`.
-- **Fix:**
-  - [ ] Sanear: solo `file_stem` de `Path::new(name).file_name()`, filtrar a `[A-Za-z0-9_-]`, y si queda vacío usar `{stem}_tex_{i}`.
-  - [ ] Nombres únicos por índice de textura.
-  - [ ] Exportar también `map_Bump`/`norm`, `map_Pr`/`map_Pm` (PBR MTL) cuando existan.
+### 11. Export OBJ: escritura fuera del directorio con nombres de textura ✅ RESUELTO
+- [x] Nombre de archivo = solo el nombre base saneado a `[A-Za-z0-9_-]`; vacío → `{stem}_tex_{i}`.
+- [x] Cada textura se escribe una vez; colisiones → `{nombre}_{i}`.
+- [x] MTL exporta también `norm`/`map_Bump` (normales), `map_Ke` y `Ke` (emisivo).
+- **Test:** rutas absolutas y `../` no escriben fuera del directorio; nombres repetidos no se pisan.
+- **Pendiente:** metallic-roughness (glTF lo empaqueta en canales G/B; MTL espera mapas separados).
 
 ---
 
@@ -122,26 +116,21 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - **Dónde:** `libs/pinocchio/mesh/src/adapter.rs`
 - [ ] Soldar por posición (con tolerancia) para autorig y reparación, guardando el mapeo `original → soldado` para devolver los pesos por vértice original.
 
-### 15. `partial_cmp().unwrap()` hace panic con NaN
-- [ ] `libs/pinocchio/repair/src/repair/normals.rs:163`
-- [ ] `libs/quadriflow/parametrizer/src/integer.rs:140`
-- [ ] `libs/converter/usda/src/skeleton.rs:506`
-- **Fix:** usar `f64::total_cmp`.
+### 15. `partial_cmp().unwrap()` hace panic con NaN ✅ RESUELTO
+- [x] `repair/normals.rs`, `parametrizer/integer.rs` y `usda/skeleton.rs` usan `total_cmp`.
 
-### 16. `subdivide` (print3d)
-- **Dónde:** `libs/pinocchio/print3d/src/slicer.rs:623`, `742`, `785`
-- [ ] Error explícito si `margin * 2 >= build_volume[i]` (hoy devuelve una sola pieza sin avisar).
-- [ ] `calculate_z_planes` sin guarda `max_height <= 0` → `inf as usize` → loop enorme / OOM.
-- [ ] Límite máximo de planos (p. ej. 1000) → error.
-- [ ] Considerar `scene.meters_per_unit` (modelo en metros vs volumen de impresión en mm).
+### 16. `subdivide` (print3d) ✅ RESUELTO (salvo unidades)
+- [x] Error `InvalidConfig` si el margen no deja volumen útil (antes devolvía una pieza sin avisar).
+- [x] `calculate_z_planes` protege contra altura ≤ 0.
+- [x] Se cuentan los planos necesarios **antes** de generarlos; más de `MAX_CUT_PLANES` (1000) → error que sugiere revisar unidades.
+- [ ] Considerar `scene.meters_per_unit` (requiere definir las unidades de STL y del volumen en la GUI).
 
 ### 17. Progreso del autorig falso y bloqueo del runtime ✅ RESUELTO
 - [x] `pinocchio_core::autorig_with_progress` con `AutorigStage` (preparing, embedding, weights, done) emitidas al comenzar cada etapa real.
 - [x] `spawn_blocking` (ver #6).
 
-### 18. Strip/fan inválido → índices `None`
-- **Dónde:** `libs/converter/gltf-io/src/import.rs:445-460`
-- [ ] Si la conversión queda vacía, saltar la primitiva en vez de dejar `indices: None` (hoy se interpreta como lista de triángulos implícita).
+### 18. Strip/fan inválido → índices `None` ✅ RESUELTO
+- [x] Si la conversión queda vacía se omite la primitiva.
 
 ### 19. El embedding sigue a la plantilla, no a las proporciones de la malla ✅ RESUELTO
 - **Dónde:** `libs/pinocchio/embedding/src/chain.rs` (nuevo)
@@ -153,9 +142,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - **Tests:** tolerancias endurecidas a 0.03 en brazos; regiones anatómicas originales; `autorig_adapts_to_t_pose`.
 - **Pendiente menor:** en las piernas la cadera queda ~0.05 baja porque la plantilla tiene el hueso pelvis→cadera más largo que el modelo.
 
-### 20. `DistanceField::sample` devuelve la celda más cercana
-- **Dónde:** `libs/pinocchio/spatial/src/distance_field.rs` (`sample`)
-- [ ] El comentario dice "trilineal" pero no interpola. Implementar interpolación trilineal (mejora `gradient()` y el test de interior).
+### 20. `DistanceField::sample` devuelve la celda más cercana ✅ RESUELTO
+- [x] Interpolación trilineal entre centros de celda (sin NaN con celdas infinitas). **Test:** reproduce un campo lineal exacto.
 
 ---
 
@@ -180,8 +168,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 - [x] E2E autorig: figura en coords mundo → posiciones de huesos dentro de la malla y huesos dominantes correctos (cubre #1, #2).
 - [ ] Autorig con malla > umbral de decimación (#3).
-- [ ] Roundtrip repair → export GLB con nodos (#4).
-- [ ] Converter con transformaciones de nodos → STL/OBJ (#5).
+- [x] Roundtrip repair → export GLB con nodos (#4).
+- [x] Converter con transformaciones de nodos → STL/OBJ (#5).
 - [ ] Fuzz/proptest de importadores con índices inválidos (#10).
 - [ ] Des-ignorar los doctests de `pinocchio-core`, `quadriflow-core`, `pinocchio-repair` y `pinocchio-print3d`.
 - [ ] 23 crates sin tests unitarios (wasm, CLI, desktop, varios de quadriflow).
@@ -193,6 +181,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 1. ~~#1 + #2 (+ test E2E)~~ ✅
 2. ~~#4 + #5 + #19~~ ✅
 3. ~~#6 + #7 + #12 + #17~~ ✅
+4. ~~#9 + #10 + #11 + #15 + #16 + #18 + #20~~ ✅
 4. #9 + #10 + #11 — robustez y seguridad.
 5. #3, #8, #14 — funcionalidades incompletas.
 6. Medios y limpieza.

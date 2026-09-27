@@ -358,17 +358,48 @@ impl DistanceField {
         self.values[idx] = value;
     }
 
-    /// Interpola la distancia en una posición arbitraria (trilineal)
+    /// Interpola la distancia en una posición arbitraria (trilineal entre los
+    /// centros de celda). Fuera de los límites devuelve `+inf`, o `-inf` si el
+    /// campo tiene signo (exterior).
     pub fn sample(&self, pos: &Vector3) -> Real {
-        let (x, y, z) = match self.world_to_cell(pos) {
-            Some(coords) => coords,
-            None => {
-                return if self.signed { Real::NEG_INFINITY } else { Real::INFINITY };
-            }
-        };
+        if self.world_to_cell(pos).is_none() {
+            return if self.signed { Real::NEG_INFINITY } else { Real::INFINITY };
+        }
 
-        // Interpolación trilineal simplificada
-        self.get(x, y, z)
+        // Coordenadas continuas respecto de los centros de celda
+        let rel = *pos - self.bounds.min;
+        let u = [
+            rel.x() / self.cell_size.x() - 0.5,
+            rel.y() / self.cell_size.y() - 0.5,
+            rel.z() / self.cell_size.z() - 0.5,
+        ];
+        let mut base = [0usize; 3];
+        let mut frac = [0.0; 3];
+        for axis in 0..3 {
+            let n = self.resolution[axis];
+            if n < 2 {
+                continue;
+            }
+            let i0 = (u[axis].floor().max(0.0) as usize).min(n - 2);
+            base[axis] = i0;
+            frac[axis] = (u[axis] - i0 as Real).clamp(0.0, 1.0);
+        }
+        let get = |dx: usize, dy: usize, dz: usize| {
+            let x = (base[0] + dx).min(self.resolution[0] - 1);
+            let y = (base[1] + dy).min(self.resolution[1] - 1);
+            let z = (base[2] + dz).min(self.resolution[2] - 1);
+            self.get(x, y, z)
+        };
+        let lerp = |a: Real, b: Real, t: Real| {
+            // Evita inf * 0 = NaN cuando alguna celda no tiene valor
+            if t == 0.0 { a } else if t == 1.0 { b } else { a + (b - a) * t }
+        };
+        let [tx, ty, tz] = frac;
+        let c00 = lerp(get(0, 0, 0), get(1, 0, 0), tx);
+        let c10 = lerp(get(0, 1, 0), get(1, 1, 0), tx);
+        let c01 = lerp(get(0, 0, 1), get(1, 0, 1), tx);
+        let c11 = lerp(get(0, 1, 1), get(1, 1, 1), tx);
+        lerp(lerp(c00, c10, ty), lerp(c01, c11, ty), tz)
     }
 
     /// Calcula el gradiente en una posición
@@ -564,5 +595,26 @@ mod tests {
         assert!(field.sample(&Vector3::new(-1.2, 0.0, 0.0)) > 0.0);
         assert!(field.sample(&Vector3::new(1.2, 0.0, 0.0)) > 0.0);
         assert!(field.sample(&Vector3::new(0.0, 1.4, 0.0)) < 0.0);
+    }
+
+    #[test]
+    fn test_sample_is_trilinear() {
+        // Campo lineal f(x, y, z) = x + 2y + 3z en los centros de celda: la
+        // interpolación trilineal lo reproduce exactamente entre centros
+        let bounds = Rect::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(4.0, 4.0, 4.0));
+        let mut field = DistanceField::new(bounds, [4, 4, 4]);
+        for z in 0..4 {
+            for y in 0..4 {
+                for x in 0..4 {
+                    let c = field.cell_center(x, y, z);
+                    field.set(x, y, z, c.x() + 2.0 * c.y() + 3.0 * c.z());
+                }
+            }
+        }
+        let p = Vector3::new(1.3, 2.1, 0.9);
+        assert!((field.sample(&p) - (1.3 + 4.2 + 2.7)).abs() < 1e-9);
+        // En un centro de celda coincide con el valor de la celda
+        let c = field.cell_center(2, 1, 3);
+        assert!((field.sample(&c) - field.get(2, 1, 3)).abs() < 1e-12);
     }
 }
