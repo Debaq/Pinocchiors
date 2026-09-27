@@ -1,6 +1,6 @@
 //! Remallado isótropo con preservación de rasgos (Botsch y Kobbelt 2004).
 //!
-//! Deja triángulos casi equiláteros de lado `target`: parte las aristas
+//! Deja triángulos casi equiláteros de lado `target(p)`: parte las aristas
 //! largas, colapsa las cortas, voltea aristas hacia valencia 6 y relaja los
 //! vértices sobre el plano tangente, reproyectándolos sobre la superficie
 //! original. Las aristas vivas y los bordes siguen siendo aristas: sus
@@ -28,27 +28,34 @@ enum Kind {
 /// operación: más abajo, la cara se pliega.
 const MIN_NORMAL_COS: f64 = 0.2;
 
-pub(crate) fn remesh(surface: &Surface, target: f64, sharp_angle: Option<f64>, iterations: usize) -> Surface {
+/// Lado deseado de los triángulos en cada punto.
+pub(crate) type Target<'a> = &'a (dyn Fn(&V3) -> f64 + Sync);
+
+/// `cell` es el tamaño de celda del índice de aristas vivas (el lado más grande).
+pub(crate) fn remesh(surface: &Surface, target: Target, cell: f64, sharp_angle: Option<f64>, iterations: usize) -> Surface {
     let mut mesh = Mesh::new(surface, sharp_angle);
+    mesh.goal = mesh.pos.par_iter().map(target).collect();
     let bvh = triangle_bvh(surface);
     let segments: Vec<(V3, V3)> = mesh
         .features
         .iter()
         .map(|&(a, b)| (mesh.pos[a as usize], mesh.pos[b as usize]))
         .collect();
-    let lines = FeatureLines::from_segments(segments, target);
-    let (low, high) = (0.8 * target, 4.0 / 3.0 * target);
+    let lines = FeatureLines::from_segments(segments, cell);
     for _ in 0..iterations {
-        mesh.split_long_edges(high);
-        mesh.collapse_short_edges(low, high);
+        mesh.split_long_edges(target);
+        mesh.collapse_short_edges();
         mesh.flip_edges();
         mesh.smooth(&bvh, &lines);
+        mesh.goal = mesh.pos.par_iter().map(target).collect();
     }
     mesh.into_surface()
 }
 
 struct Mesh {
     pos: Vec<V3>,
+    /// Lado deseado en cada vértice
+    goal: Vec<f64>,
     kind: Vec<Kind>,
     alive_vertex: Vec<bool>,
     tris: Vec<[u32; 3]>,
@@ -74,6 +81,7 @@ impl Mesh {
         }
         let mut mesh = Self {
             pos: surface.positions.clone(),
+            goal: Vec::new(),
             kind: vec![Kind::Free; n],
             alive_vertex: vec![true; n],
             tris: surface.triangles.clone(),
@@ -193,14 +201,20 @@ impl Mesh {
         self.alive[f as usize] = false;
     }
 
-    fn split_long_edges(&mut self, high: f64) {
+    /// Límites de largo de la arista `(a, b)`: 4/5 y 4/3 del menor objetivo de sus extremos.
+    fn limits(&self, (a, b): (u32, u32)) -> (f64, f64) {
+        let t = self.goal[a as usize].min(self.goal[b as usize]);
+        (0.8 * t, 4.0 / 3.0 * t)
+    }
+
+    fn split_long_edges(&mut self, target: Target) {
         use std::cmp::Reverse;
         // La más larga primero; largos no negativos: el orden de sus bits es el numérico
         let mut heap: std::collections::BinaryHeap<(u64, Reverse<(u32, u32)>)> = self
             .edges()
             .into_iter()
             .map(|e| (self.len(e), e))
-            .filter(|&(l, _)| l > high)
+            .filter(|&(l, e)| l > self.limits(e).1)
             .map(|(l, e)| (l.to_bits(), Reverse(e)))
             .collect();
         while let Some((_, Reverse((a, b)))) = heap.pop() {
@@ -209,7 +223,9 @@ impl Mesh {
                 continue;
             }
             let m = self.pos.len() as u32;
-            self.pos.push((self.pos[a as usize] + self.pos[b as usize]) * 0.5);
+            let mid = (self.pos[a as usize] + self.pos[b as usize]) * 0.5;
+            self.pos.push(mid);
+            self.goal.push(target(&mid));
             let feature = self.features.remove(&(a, b));
             self.kind.push(if feature { Kind::Line } else { Kind::Free });
             self.alive_vertex.push(true);
@@ -229,7 +245,7 @@ impl Mesh {
             }
             for e in new_edges {
                 let l = self.len(e);
-                if l > high {
+                if l > self.limits(e).1 {
                     heap.push((l.to_bits(), Reverse(e)));
                 }
             }
@@ -237,7 +253,7 @@ impl Mesh {
     }
 
     /// Intenta fundir `a` en `b`. Devuelve si lo hizo.
-    fn try_collapse(&mut self, a: u32, b: u32, high: f64) -> bool {
+    fn try_collapse(&mut self, a: u32, b: u32) -> bool {
         let feature_edge = self.features.contains(&key(a, b));
         match self.kind[a as usize] {
             Kind::Corner => return false,
@@ -266,12 +282,13 @@ impl Mesh {
             return false;
         }
 
-        let target = if self.kind[a as usize] == Kind::Free && self.kind[b as usize] == Kind::Free {
+        let new_pos = if self.kind[a as usize] == Kind::Free && self.kind[b as usize] == Kind::Free {
             (self.pos[a as usize] + self.pos[b as usize]) * 0.5
         } else {
             self.pos[b as usize]
         };
-        if na.iter().any(|&x| x != b && (self.pos[x as usize] - target).norm() > high) {
+        let target = new_pos;
+        if na.iter().any(|&x| x != b && (self.pos[x as usize] - target).norm() > self.limits((x, b)).1) {
             return false;
         }
         // Ninguna cara que queda se pliega ni se degenera
@@ -311,18 +328,25 @@ impl Mesh {
         true
     }
 
-    fn collapse_short_edges(&mut self, low: f64, high: f64) {
-        let mut short: Vec<((u32, u32), f64)> =
-            self.edges().into_iter().map(|e| (e, self.len(e))).filter(|&(_, l)| l < low).collect();
+    fn collapse_short_edges(&mut self) {
+        let mut short: Vec<((u32, u32), f64)> = self
+            .edges()
+            .into_iter()
+            .map(|e| (e, self.len(e)))
+            .filter(|&(e, l)| l < self.limits(e).0)
+            .collect();
         short.sort_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)));
         for ((a, b), _) in short {
-            if !self.alive_vertex[a as usize] || !self.alive_vertex[b as usize] || self.len((a, b)) >= low {
+            if !self.alive_vertex[a as usize]
+                || !self.alive_vertex[b as usize]
+                || self.len((a, b)) >= self.limits((a, b)).0
+            {
                 continue;
             }
             // Se mueve el vértice menos restringido
             let (from, to) = if self.kind[a as usize] <= self.kind[b as usize] { (a, b) } else { (b, a) };
-            if !self.try_collapse(from, to, high) {
-                self.try_collapse(to, from, high);
+            if !self.try_collapse(from, to) {
+                self.try_collapse(to, from);
             }
         }
     }
@@ -501,7 +525,7 @@ mod tests {
 
     #[test]
     fn cube_becomes_uniform_and_keeps_its_edges() {
-        let out = remesh(&cube(), 0.1, Some(std::f64::consts::FRAC_PI_4), 5);
+        let out = remesh(&cube(), &|_| 0.1, 0.1, Some(std::f64::consts::FRAC_PI_4), 5);
         let lengths = edge_lengths(&out);
         let mean = lengths.iter().sum::<f64>() / lengths.len() as f64;
         assert!((0.08..0.13).contains(&mean), "media {mean}");

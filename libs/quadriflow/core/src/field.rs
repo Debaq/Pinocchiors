@@ -310,6 +310,22 @@ fn restrict_guide(fine: &Level, coarse: &Level, guide: &Guide) -> Guide {
         .collect()
 }
 
+/// Escala por vértice de cada nivel: la de `at` en el más fino y el promedio
+/// de los hijos en los gruesos.
+pub(crate) fn level_scales(h: &Hierarchy, at: impl Fn(&V3) -> f64 + Sync) -> Vec<Vec<f64>> {
+    let mut out: Vec<Vec<f64>> = vec![h.levels[0].pos.par_iter().map(&at).collect()];
+    for lvl in 1..h.levels.len() {
+        let fine = &out[lvl - 1];
+        let next = h.levels[lvl]
+            .children
+            .iter()
+            .map(|&[a, b]| if b == NONE { fine[a as usize] } else { 0.5 * (fine[a as usize] + fine[b as usize]) })
+            .collect();
+        out.push(next);
+    }
+    out
+}
+
 /// Resuelve la orientación en todos los niveles. Devuelve `q` por nivel; los
 /// niveles gruesos se recalculan al final a partir del más fino, para que el
 /// campo de posición use orientaciones coherentes en toda la jerarquía.
@@ -372,7 +388,7 @@ pub(crate) fn solve_orientation(h: &Hierarchy, iterations: usize, guide: Option<
     qs
 }
 
-fn smooth_position(level: &Level, q: &[V3], o: &mut [V3], scale: f64, inv_scale: f64) {
+fn smooth_position(level: &Level, q: &[V3], o: &mut [V3], scales: &[f64]) {
     gauss_seidel(level, o, |i, o| {
         let constraint = level.constraint[i];
         if let Constraint::Corner { point } = constraint {
@@ -383,10 +399,12 @@ fn smooth_position(level: &Level, q: &[V3], o: &mut [V3], scale: f64, inv_scale:
         let mut weight = 0.0;
         for &(j, w) in level.neighbors(i) {
             let j = j as usize;
+            // Escala adaptativa: el par usa el promedio de las suyas
+            let scale = 0.5 * (scales[i] + scales[j]);
             let (a, b) = compat_position(
                 &v, &n, &qi, &sum,
                 &level.pos[j], &level.nrm[j], &q[j], &o[j],
-                scale, inv_scale,
+                scale, 1.0 / scale,
             );
             sum = a * weight + b * w;
             weight += w;
@@ -394,20 +412,20 @@ fn smooth_position(level: &Level, q: &[V3], o: &mut [V3], scale: f64, inv_scale:
             sum -= n * n.dot(&(sum - v));
         }
         (weight > 0.0).then(|| {
-            constraint.project_position(lattice_round(&sum, &qi, &n, &v, scale, inv_scale))
+            constraint.project_position(lattice_round(&sum, &qi, &n, &v, scales[i], 1.0 / scales[i]))
         })
     });
 }
 
 /// Resuelve el campo de posición y devuelve `o` en el nivel más fino.
+/// `scales` es la escala del retículo por vértice de cada nivel.
 pub(crate) fn solve_position(
     h: &Hierarchy,
     qs: &[Vec<V3>],
-    scale: f64,
+    scales: &[Vec<f64>],
     iterations: usize,
 ) -> Vec<V3> {
     let levels = &h.levels;
-    let inv_scale = 1.0 / scale;
     let mut coarser: Vec<V3> = Vec::new();
 
     for lvl in (0..levels.len()).rev() {
@@ -425,7 +443,7 @@ pub(crate) fn solve_position(
             })
             .collect();
         for _ in 0..iterations {
-            smooth_position(level, &qs[lvl], &mut o, scale, inv_scale);
+            smooth_position(level, &qs[lvl], &mut o, &scales[lvl]);
         }
         coarser = o;
     }

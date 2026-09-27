@@ -50,8 +50,7 @@ pub(crate) struct EdgeOffsets {
 }
 
 impl EdgeOffsets {
-    pub fn compute(level: &Level, q: &[V3], o: &[V3], scale: f64) -> Self {
-        let inv_scale = 1.0 / scale;
+    pub fn compute(level: &Level, q: &[V3], o: &[V3], scales: &[f64]) -> Self {
         let mut result = Self {
             index: HashMap::new(),
             edges: Vec::new(),
@@ -66,6 +65,8 @@ impl EdgeOffsets {
                 }
                 let (qi, qj, ki, kj) =
                     compat_orientation_index(&q[i], &level.nrm[i], &q[j], &level.nrm[j]);
+                let scale = 0.5 * (scales[i] + scales[j]);
+                let inv_scale = 1.0 / scale;
                 let (si, sj) = compat_position_index(
                     &level.pos[i], &level.nrm[i], &qi, &o[i],
                     &level.pos[j], &level.nrm[j], &qj, &o[j],

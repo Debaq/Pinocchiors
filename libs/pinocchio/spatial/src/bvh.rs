@@ -278,6 +278,44 @@ impl Bvh {
         }
     }
 
+    /// Distancia al primer triángulo que corta el rayo `origin + t·dir`
+    /// (`dir` unitario) con `t` en `(t_min, t_max)`.
+    pub fn ray_distance(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<Real> {
+        let root = self.root.as_ref()?;
+        let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
+        let mut best = t_max;
+        self.first_hit_recursive(root, origin, dir, &inv_dir, t_min, &mut best);
+        (best < t_max).then_some(best)
+    }
+
+    fn first_hit_recursive(
+        &self,
+        node: &BvhNode,
+        origin: &Vector3,
+        dir: &Vector3,
+        inv_dir: &Vector3,
+        t_min: Real,
+        best: &mut Real,
+    ) {
+        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, *best) {
+            return;
+        }
+        match node {
+            BvhNode::Leaf { triangle_idx, .. } => {
+                if let Some(t) = ray_triangle_t(origin, dir, &self.triangles[*triangle_idx])
+                    && t > t_min
+                    && t < *best
+                {
+                    *best = t;
+                }
+            }
+            BvhNode::Internal { left, right, .. } => {
+                self.first_hit_recursive(left, origin, dir, inv_dir, t_min, best);
+                self.first_hit_recursive(right, origin, dir, inv_dir, t_min, best);
+            }
+        }
+    }
+
     /// Triángulo por índice
     pub fn triangle(&self, idx: usize) -> &Triangle {
         &self.triangles[idx]
@@ -409,6 +447,27 @@ fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ray_distance_finds_the_first_hit() {
+        // Dos planos paralelos z = 1 y z = 3
+        let plane = |z: Real| {
+            [
+                Triangle::new(Vector3::new(-5.0, -5.0, z), Vector3::new(5.0, -5.0, z), Vector3::new(5.0, 5.0, z)),
+                Triangle::new(Vector3::new(-5.0, -5.0, z), Vector3::new(5.0, 5.0, z), Vector3::new(-5.0, 5.0, z)),
+            ]
+        };
+        let bvh = Bvh::build(plane(3.0).into_iter().chain(plane(1.0)).collect());
+        let up = Vector3::new(0.0, 0.0, 1.0);
+        let t = bvh.ray_distance(&Vector3::new(0.3, 0.2, 0.0), &up, 0.0, 10.0).unwrap();
+        assert!((t - 1.0).abs() < 1e-12);
+        // Desde un plano, ignorando el propio con t_min
+        let t = bvh.ray_distance(&Vector3::new(0.3, 0.2, 1.0), &up, 1e-6, 10.0).unwrap();
+        assert!((t - 2.0).abs() < 1e-12);
+        assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 1.0), &up, 1e-6, 1.5).is_none());
+        let down = Vector3::new(0.0, 0.0, -1.0);
+        assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 0.5), &down, 0.0, 10.0).is_none());
+    }
 
     #[test]
     fn test_bvh_single_triangle() {

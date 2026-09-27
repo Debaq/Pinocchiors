@@ -52,10 +52,12 @@ mod isotropic;
 mod integer;
 mod quad;
 mod rebuild;
+mod sizing;
 mod smooth;
+mod symmetry;
 mod surface;
 
-pub use config::{Rebuild, RemeshConfig};
+pub use config::{Rebuild, RemeshConfig, Symmetry};
 pub use quad::{QuadFace, QuadMesh, QuadTopology};
 
 use pinocchio_mesh::Mesh;
@@ -151,6 +153,35 @@ where
     }
 
     on_progress(RemeshStage::Preprocess, "Preparando la superficie...");
+    let (surface, rebuild) = prepare(mesh, config, &mut on_progress)?;
+    let quads = match config.symmetry.axis() {
+        None => remesh_surface(surface, rebuild, config, config.target_faces, &mut on_progress)?,
+        Some(axis) => {
+            let center = symmetry::center(&surface, axis);
+            let half = symmetry::clip(&surface, axis, center);
+            if half.triangles.is_empty() {
+                return Err(RemeshError::EmptyMesh);
+            }
+            let tolerance = surface.bbox_diagonal() * 1e-6;
+            let target = config.target_faces.div_ceil(2);
+            let half = remesh_surface(half, rebuild, config, target, &mut on_progress)?;
+            symmetry::mirror(&half, axis, center, tolerance)
+        }
+    };
+
+    on_progress(
+        RemeshStage::Done,
+        &format!("{} vértices, {} quads", quads.num_vertices(), quads.num_faces()),
+    );
+    Ok(quads)
+}
+
+/// Soldado de costuras y, si hace falta, reconstrucción. Devuelve la
+/// superficie y si se reconstruyó.
+fn prepare<F>(mesh: &Mesh, config: &RemeshConfig, on_progress: &mut F) -> Result<(Surface, bool), RemeshError>
+where
+    F: FnMut(RemeshStage, &str),
+{
     let mut surface = Surface::from_mesh(mesh);
     let diagonal = surface.bbox_diagonal();
     surface.weld(diagonal * 1e-7);
@@ -173,17 +204,42 @@ where
             return Err(RemeshError::EmptyMesh);
         }
     }
+    Ok((surface, rebuild))
+}
+
+/// Retopologiza una superficie ya preparada con `target_faces` quads.
+fn remesh_surface<F>(
+    mut surface: Surface,
+    rebuild: bool,
+    config: &RemeshConfig,
+    target_faces: usize,
+    on_progress: &mut F,
+) -> Result<QuadMesh, RemeshError>
+where
+    F: FnMut(RemeshStage, &str),
+{
+    let area = surface.area();
     let original = surface.clone();
+    let bvh = surface_bvh(&original);
 
     // Se extrae con el doble de lado y cada polígono se divide en ~4 quads
-    let scale = 2.0 * (area / config.target_faces as f64).sqrt();
+    let scale = 2.0 * (area / target_faces as f64).sqrt();
+    // Densidad adaptativa: escala local no mayor que el grosor de la pieza
+    let mut sizing = sizing::Sizing::uniform(scale);
+    if config.adaptive_density {
+        let measured = sizing::Sizing::measure(&original, &bvh, scale);
+        if measured.is_adaptive() {
+            sizing = measured;
+        }
+    }
     if rebuild::is_manifold(&surface) {
         // Triángulos uniformes: el campo no hereda el muestreo de la entrada.
         // Las aristas vivas se conservan siempre (la geometría no se redondea);
         // `preserve_sharp` decide solo si los quads se alinean a ellas
         let features = (!rebuild).then_some(config.sharp_angle);
-        let target = scale * ISOTROPIC_EDGE;
-        surface = isotropic::remesh(&surface, target, features, ISOTROPIC_ITERATIONS);
+        let target = |p: &V3| sizing.at(p) * ISOTROPIC_EDGE;
+        let cell = sizing.base() * ISOTROPIC_EDGE;
+        surface = isotropic::remesh(&surface, &target, cell, features, ISOTROPIC_ITERATIONS);
     } else {
         let max_edge = (scale * 0.5).min(surface.average_edge_length() * 2.0);
         surface.subdivide(max_edge);
@@ -199,45 +255,39 @@ where
     let iterations = config.smooth_iterations.max(1);
     on_progress(RemeshStage::OrientationField, "Calculando el campo de orientación...");
     let strength = config.curvature_alignment;
-    let guide = (strength > 0.0).then(|| field::curvature_guide(&hierarchy.levels[0], scale, strength));
+    let guide = (strength > 0.0).then(|| field::curvature_guide(&hierarchy.levels[0], sizing.base(), strength));
     let orientation = field::solve_orientation(&hierarchy, iterations, guide);
 
-    let mut polygons =
-        extract_polygons(&surface, &hierarchy, &orientation, scale, iterations, &mut on_progress);
+    let mut polygons = extract_polygons(&surface, &hierarchy, &orientation, &sizing, iterations, on_progress);
     // Cada polígono de n lados termina en n quads: si la cantidad se desvía
-    // del objetivo, se ajusta la escala y se extrae de nuevo
-    let ratio_of = |p: &extract::Polygons| p.faces.iter().map(Vec::len).sum::<usize>() as f64 / config.target_faces as f64;
-    let (mut scale, mut ratio) = (scale, ratio_of(&polygons));
-    let mut trial = (scale, ratio);
+    // del objetivo, se ajusta la escala base y se extrae de nuevo
+    let ratio_of = |p: &extract::Polygons| p.faces.iter().map(Vec::len).sum::<usize>() as f64 / target_faces as f64;
+    let (mut base, mut ratio) = (sizing.base(), ratio_of(&polygons));
+    let mut trial = (base, ratio);
     for _ in 0..COUNT_CORRECTIONS {
         if trial.1 == 0.0 || (trial.1 - 1.0).abs() <= COUNT_TOLERANCE {
             break;
         }
-        let next_scale = trial.0 * trial.1.sqrt();
-        let next = extract_polygons(&surface, &hierarchy, &orientation, next_scale, iterations, &mut |_, _| {});
-        trial = (next_scale, ratio_of(&next));
+        sizing.set_base(trial.0 * trial.1.sqrt());
+        let next = extract_polygons(&surface, &hierarchy, &orientation, &sizing, iterations, &mut |_, _| {});
+        trial = (sizing.base(), ratio_of(&next));
         if (trial.1 - 1.0).abs() < (ratio - 1.0).abs() {
-            (scale, ratio, polygons) = (trial.0, trial.1, next);
+            (base, ratio, polygons) = (trial.0, trial.1, next);
         }
     }
+    sizing.set_base(base);
     let (mut quads, mut fixed) = extract::polygons_to_quads(&polygons);
     if quads.is_empty() {
         return Err(RemeshError::ExtractionFailed);
     }
     quads.split_nonmanifold_vertices();
     fixed.resize(quads.vertices.len(), true);
-    let bvh = surface_bvh(&original);
     project_to_surface(&mut quads.vertices, &bvh);
-    let lines = features::FeatureLines::new(&graph, scale);
-    snap_to_features(&mut quads, &fixed, &lines, MIN_SNAP_DISTANCE * scale * 0.5);
+    let lines = features::FeatureLines::new(&graph, sizing.base());
+    snap_to_features(&mut quads, &fixed, &lines, |p| MIN_SNAP_DISTANCE * sizing.at(p) * 0.5);
     smooth::optimize(&mut quads, &fixed, &bvh, &lines, config.sharp_angle, SMOOTH_ITERATIONS);
     // Restos de la extracción (burbujas en pellizcos): nunca más piezas que la entrada
     quads.keep_largest_components(original.component_count());
-
-    on_progress(
-        RemeshStage::Done,
-        &format!("{} vértices, {} quads", quads.num_vertices(), quads.num_faces()),
-    );
     Ok(quads)
 }
 
@@ -259,13 +309,13 @@ const SMOOTH_ITERATIONS: usize = 10;
 const COUNT_TOLERANCE: f64 = 0.08;
 const COUNT_CORRECTIONS: usize = 2;
 
-/// Campo de posición, desplazamientos enteros, extracción y limpieza a una
-/// escala dada.
+/// Campo de posición, desplazamientos enteros, extracción y limpieza con la
+/// escala local de `sizing`.
 fn extract_polygons<F>(
     surface: &Surface,
     hierarchy: &hierarchy::Hierarchy,
     orientation: &[Vec<V3>],
-    scale: f64,
+    sizing: &sizing::Sizing,
     iterations: usize,
     on_progress: &mut F,
 ) -> extract::Polygons
@@ -273,10 +323,11 @@ where
     F: FnMut(RemeshStage, &str),
 {
     on_progress(RemeshStage::PositionField, "Calculando el campo de posición...");
-    let position = field::solve_position(hierarchy, orientation, scale, iterations);
+    let scales = field::level_scales(hierarchy, |p| sizing.at(p));
+    let position = field::solve_position(hierarchy, orientation, &scales, iterations);
 
     on_progress(RemeshStage::Singularities, "Eliminando singularidades de posición...");
-    let mut offsets = integer::EdgeOffsets::compute(&hierarchy.levels[0], &orientation[0], &position, scale);
+    let mut offsets = integer::EdgeOffsets::compute(&hierarchy.levels[0], &orientation[0], &position, &scales[0]);
     integer::remove_position_singularities(&mut offsets, &surface.triangles);
 
     on_progress(RemeshStage::Extraction, "Extrayendo quads...");
@@ -293,7 +344,12 @@ const MIN_SNAP_DISTANCE: f64 = 0.2;
 /// quedaran encima de otro vértice fijo de sus quads: pasa con los puntos
 /// medios entre dos líneas vivas distintas cuando una cara es más angosta que
 /// un quad. (Los vértices libres cercanos los separa la relajación.)
-fn snap_to_features(quads: &mut QuadMesh, fixed: &[bool], lines: &features::FeatureLines, min_distance: f64) {
+fn snap_to_features(
+    quads: &mut QuadMesh,
+    fixed: &[bool],
+    lines: &features::FeatureLines,
+    min_distance: impl Fn(&V3) -> f64,
+) {
     let mut faces_of: Vec<Vec<usize>> = vec![Vec::new(); quads.vertices.len()];
     for (f, face) in quads.faces.iter().enumerate() {
         for &v in &face.v {
@@ -305,7 +361,7 @@ fn snap_to_features(quads: &mut QuadMesh, fixed: &[bool], lines: &features::Feat
         let crowded = faces_of[v]
             .iter()
             .flat_map(|&f| quads.faces[f].v)
-            .any(|u| u != v && fixed[u] && (quads.vertices[u] - p).norm() < min_distance);
+            .any(|u| u != v && fixed[u] && (quads.vertices[u] - p).norm() < min_distance(&p));
         if !crowded {
             quads.vertices[v] = p;
         }

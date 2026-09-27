@@ -1,13 +1,13 @@
 //! Mide la calidad de la retopología sobre un modelo real.
 //!
 //! ```text
-//! cargo run --release -p quadriflow-core --example quality -- modelo.glb 5000 [--sharp] [--rebuild always|never] [--curvature 1.0] [--obj salida.obj]
+//! cargo run --release -p quadriflow-core --example quality -- modelo.glb 5000 [--sharp] [--rebuild always|never] [--curvature 1.0] [--adaptive] [--symmetry x|y|z] [--obj salida.obj]
 //! ```
 
 use pinocchio_math::Vector3;
 use pinocchio_mesh::Mesh;
 use pinocchio_spatial::{Bvh, Triangle};
-use quadriflow_core::{remesh_with_callback, QuadMesh, Rebuild, RemeshConfig};
+use quadriflow_core::{remesh_with_callback, QuadMesh, Rebuild, RemeshConfig, Symmetry};
 use std::collections::HashMap;
 use std::io::Write;
 use std::time::Instant;
@@ -38,6 +38,13 @@ fn main() {
         preserve_sharp: sharp,
         rebuild,
         curvature_alignment: curvature,
+        adaptive_density: args.iter().any(|a| a == "--adaptive"),
+        symmetry: match args.iter().position(|a| a == "--symmetry").and_then(|i| args.get(i + 1)).map(String::as_str) {
+            Some("x") => Symmetry::X,
+            Some("y") => Symmetry::Y,
+            Some("z") => Symmetry::Z,
+            _ => Symmetry::None,
+        },
         ..Default::default()
     };
     let start = Instant::now();

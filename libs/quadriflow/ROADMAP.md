@@ -16,6 +16,8 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 |---|---|
 | `rebuild.rs` | Reconstrucción de entradas rotas: número de vueltas rápido (dipolos, Barill 2018) en una grilla, distancias exactas en los cruces, *marching tetrahedra* y colapso de astillas |
 | `isotropic.rs` | Remallado isótropo con rasgos (Botsch-Kobbelt): partir, colapsar, voltear y relajar; aristas vivas y bordes se conservan, sus vértices se deslizan sobre la línea y las esquinas quedan fijas |
+| `sizing.rs` | Densidad adaptativa (opcional): grosor local por rayos hacia adentro y afuera desde muestras de la superficie, gradación geodésica y base calibrada para conservar la cantidad de quads |
+| `symmetry.rs` | Simetría espejo: recorte de la mitad positiva, retopología de la mitad y reflexión soldando la costura |
 | `surface.rs` | Soldado de costuras, subdivisión (arista más larga primero), normales, áreas, adyacencia, bordes y aristas vivas → restricciones |
 | `hierarchy.rs` | Niveles por emparejamiento de vértices vecinos + coloreo para Gauss-Seidel paralelo |
 | `field.rs` | Campos extrínsecos de orientación (4-RoSy) y posición (4-PoSy), de grueso a fino; guía de curvatura (tensor de forma suavizado, sin cruzar aristas vivas) en los niveles gruesos |
@@ -127,7 +129,19 @@ Plan hacia una retopología lista para producción (una fase por commit):
       vértices de arista viva se deslizan, los fijos sin arista viva real se
       liberan. Formas suaves sin quads plegados. Queda: los quads malos en
       rasgos más angostos que un quad (fase 5).
-- [ ] **Fase 5 — Personajes y rasgos delgados**: densidad adaptativa (quads
-      más chicos donde un rasgo es más angosto que un quad: chaflanes,
-      ranuras, puntas, paredes), simetría espejo.
-- [ ] **Fase 6 — App**: exponer reconstrucción, simetría y densidad; métricas.
+- [x] **Fase 5 — Personajes y rasgos delgados**:
+      - `RemeshConfig::symmetry` (X/Y/Z, plano por el centro de la caja): la
+        mitad positiva se retopologiza y se refleja; resultado exactamente
+        simétrico con un loop de aristas en la línea media, en la mitad de
+        tiempo. Un rasgo más delgado que un quad justo sobre el plano (la
+        cola del gonfoterio) puede cerrarse.
+      - `RemeshConfig::adaptive_density` (desactivado por defecto): escala
+        local ≤ grosor medido por rayos. Conserva rasgos delgados (aleta de
+        0.4 con quads de ~1.8: error 5.8 % → 0 %; punta del gonfoterio 6.2 %
+        → 1.6 %) pero cada transición de tamaño agrega vértices irregulares
+        (gonfoterio 3.1 % → 5.5 %); con transiciones suaves el efecto sobre
+        los rasgos casi desaparece. Por eso es opcional.
+      - Queda: chaflanes angostos entre dos aristas vivas (el grosor no los
+        detecta); transiciones de densidad más regulares.
+- [ ] **Fase 6 — App**: exponer reconstrucción, alineación a curvatura,
+      simetría y densidad adaptativa; métricas de calidad en la interfaz.

@@ -4,7 +4,7 @@
 use pinocchio_math::nalgebra::Vector3 as V3;
 use pinocchio_math::Vector3;
 use pinocchio_mesh::Mesh;
-use quadriflow_core::{remesh, remesh_with_callback, QuadMesh, Rebuild, RemeshConfig, RemeshError, RemeshStage};
+use quadriflow_core::{remesh, remesh_with_callback, QuadMesh, Rebuild, RemeshConfig, RemeshError, RemeshStage, Symmetry};
 use std::collections::HashMap;
 use std::f64::consts::PI;
 
@@ -411,6 +411,57 @@ fn rebuild_always_on_a_clean_sphere_keeps_it() {
     assert_face_count(&q, 400, 0.15);
     for v in &q.vertices {
         assert!((v.norm() - 1.0).abs() < 0.02, "{}", v.norm());
+    }
+}
+
+/// Caja de lados `size` con la esquina en `origin`, normales hacia afuera.
+fn cuboid(origin: V3<f64>, size: V3<f64>) -> (Vec<Vector3>, Vec<[usize; 3]>) {
+    let p = (0..8)
+        .map(|k: usize| {
+            let unit = V3::new((k & 1) as f64, (k >> 1 & 1) as f64, (k >> 2 & 1) as f64);
+            Vector3(origin + size.component_mul(&unit))
+        })
+        .collect();
+    let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+    (p, quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect())
+}
+
+#[test]
+fn adaptive_density_keeps_a_thin_fin() {
+    // Cubo de 10 y, aparte, una aleta de 0.4 de espesor: con ~600 quads cada
+    // quad mide ~1.8, más de cuatro veces el espesor
+    let (mut p, mut t) = cuboid(V3::zeros(), V3::repeat(10.0));
+    let (fp, ft) = cuboid(V3::new(15.0, 0.0, 0.0), V3::new(0.4, 4.0, 4.0));
+    let n = p.len();
+    p.extend(fp);
+    t.extend(ft.iter().map(|f| f.map(|i| i + n)));
+    let mesh = Mesh::from_triangles(&p, &t);
+    let config = RemeshConfig { preserve_sharp: true, adaptive_density: true, ..config(600) };
+    let q = remesh(&mesh, &config).unwrap();
+    assert_closed_manifold(&q, 4);
+    // La aleta sigue ahí, con su espesor
+    let fin: Vec<&V3<f64>> = q.vertices.iter().filter(|v| v.x > 12.0).collect();
+    assert!(fin.len() > 20, "{} vértices en la aleta", fin.len());
+    let (lo, hi) = fin.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v.x), hi.max(v.x)));
+    assert!((lo - 15.0).abs() < 0.05 && (hi - 15.4).abs() < 0.05, "espesor de {lo} a {hi}");
+}
+
+#[test]
+fn mirror_symmetry_is_exact() {
+    for (name, mesh, euler) in [("esfera", sphere(1.0), 2), ("toro", torus(), 0)] {
+        let config = RemeshConfig { symmetry: Symmetry::X, ..config(600) };
+        let q = remesh(&mesh, &config).unwrap();
+        assert_closed_manifold(&q, euler);
+        assert_face_count(&q, 600, 0.15);
+        // Cada vértice tiene su imagen del otro lado del plano x = 0
+        let key = |p: &V3<f64>| [p.x, p.y, p.z].map(|c| (c * 1e6).round() as i64);
+        let all: std::collections::HashSet<[i64; 3]> = q.vertices.iter().map(key).collect();
+        for v in &q.vertices {
+            assert!(all.contains(&key(&V3::new(-v.x, v.y, v.z))), "{name}: sin imagen para {v:?}");
+        }
+        // Y la mitad de las caras de cada lado
+        let right = (0..q.num_faces()).filter(|&f| q.faces[f].v.iter().map(|&i| q.vertices[i].x).sum::<f64>() > 0.0).count();
+        assert_eq!(right * 2, q.num_faces(), "{name}");
     }
 }
 

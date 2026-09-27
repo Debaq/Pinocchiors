@@ -24,6 +24,41 @@ pub struct RemeshConfig {
     /// curvatura (0 = nada). Donde la superficie es plana o esférica no hay
     /// dirección preferida y no influye.
     pub curvature_alignment: f64,
+
+    /// Achicar los quads donde la pieza es más delgada que un quad (paredes,
+    /// tubos, puntas, ranuras, agujeros chicos), que de otro modo se tapan o
+    /// se pierden. La cantidad total se conserva (el resto queda algo más
+    /// grueso) y cada cambio de tamaño agrega vértices irregulares: por eso
+    /// está desactivado por defecto.
+    pub adaptive_density: bool,
+
+    /// Simetría espejo: se retopologiza la mitad del lado positivo del plano y
+    /// se refleja, así el resultado es exactamente simétrico (útil para
+    /// personajes). Si la entrada no lo es, se simetriza esa mitad.
+    pub symmetry: Symmetry,
+}
+
+/// Plano de simetría: perpendicular al eje, por el centro de la caja
+/// envolvente de la malla.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Symmetry {
+    #[default]
+    None,
+    X,
+    Y,
+    Z,
+}
+
+impl Symmetry {
+    /// Índice del eje (0, 1, 2), si hay simetría.
+    pub fn axis(&self) -> Option<usize> {
+        match self {
+            Symmetry::None => None,
+            Symmetry::X => Some(0),
+            Symmetry::Y => Some(1),
+            Symmetry::Z => Some(2),
+        }
+    }
 }
 
 /// Reconstrucción volumétrica de la entrada: reemplaza la malla por la
@@ -51,6 +86,8 @@ impl Default for RemeshConfig {
             smooth_iterations: 10,
             rebuild: Rebuild::Auto,
             curvature_alignment: 1.0,
+            adaptive_density: false,
+            symmetry: Symmetry::None,
         }
     }
 }
