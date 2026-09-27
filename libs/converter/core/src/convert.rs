@@ -120,7 +120,7 @@ pub fn export(
 
 /// Importa una escena desde bytes en memoria.
 ///
-/// Soporta: GLB (`Format::Gltf`).
+/// Soporta: GLB (`Format::Gltf`) y STL (`Format::Stl`).
 pub fn import_bytes(data: &[u8], format: Format) -> Result<Scene, ConvertError> {
     if !format.can_import_bytes() {
         return Err(ConvertError::ImportNotSupported(format.name().to_string()));
@@ -128,13 +128,15 @@ pub fn import_bytes(data: &[u8], format: Format) -> Result<Scene, ConvertError> 
 
     match format {
         Format::Gltf => Ok(converter_gltf_io::import_gltf_bytes(data)?),
+        Format::Stl => Ok(converter_stl::import_stl_bytes(data)?),
         _ => Err(ConvertError::ImportNotSupported(format.name().to_string())),
     }
 }
 
 /// Exporta una escena a bytes en memoria.
 ///
-/// Soporta: GLB (`Format::Gltf`), USDZ (`Format::Usdz`).
+/// Soporta: GLB (`Format::Gltf`), USDA, USDZ y STL. OBJ no, porque sus
+/// materiales y texturas van en archivos aparte.
 pub fn export_bytes(
     scene: &Scene,
     format: Format,
@@ -144,14 +146,13 @@ pub fn export_bytes(
         return Err(ConvertError::ExportNotSupported(format.name().to_string()));
     }
 
-    let glb_opts = options.to_glb_options();
-
     match format {
-        Format::Gltf => Ok(converter_gltf_io::export_glb_bytes(scene, &glb_opts)?),
-        Format::Usdz => {
-            let usda_opts = options.to_usda_options();
-            Ok(converter_usda::write_usdz_bytes(scene, &usda_opts)?)
+        Format::Gltf => Ok(converter_gltf_io::export_glb_bytes(scene, &options.to_glb_options())?),
+        Format::Usda => {
+            Ok(converter_usda::write_usda(scene, &options.to_usda_options())?.usda.into_bytes())
         }
+        Format::Usdz => Ok(converter_usda::write_usdz_bytes(scene, &options.to_usda_options())?),
+        Format::Stl => Ok(converter_stl::export_stl_bytes(scene)?),
         _ => Err(ConvertError::ExportNotSupported(format.name().to_string())),
     }
 }
@@ -289,7 +290,42 @@ mod tests {
     #[test]
     fn export_bytes_not_supported() {
         let scene = triangle_scene();
-        let result = export_bytes(&scene, Format::Stl, &ConvertOptions::default());
+        let result = export_bytes(&scene, Format::Obj, &ConvertOptions::default());
         assert!(matches!(result, Err(ConvertError::ExportNotSupported(_))));
+    }
+
+    #[test]
+    fn stl_bytes_roundtrip() {
+        let mut scene = triangle_scene();
+        scene.meters_per_unit = 0.001;
+        let bytes = export_bytes(&scene, Format::Stl, &ConvertOptions::default()).unwrap();
+        let imported = import_bytes(&bytes, Format::Stl).unwrap();
+        assert_eq!(imported.compute_bounding_box(), scene.compute_bounding_box());
+    }
+
+    #[test]
+    fn export_usda_bytes() {
+        let bytes = export_bytes(&triangle_scene(), Format::Usda, &ConvertOptions::default()).unwrap();
+        assert!(String::from_utf8(bytes).unwrap().starts_with("#usda 1.0"));
+    }
+
+    #[test]
+    fn byte_capabilities_match_implementation() {
+        let scene = triangle_scene();
+        let opts = ConvertOptions::default();
+        let glb = export_bytes(&scene, Format::Gltf, &opts).unwrap();
+        for &format in Format::all() {
+            assert_eq!(
+                export_bytes(&scene, format, &opts).is_ok(),
+                format.can_export_bytes(),
+                "export_bytes {format:?}"
+            );
+            let input = match format {
+                Format::Stl => export_bytes(&scene, Format::Stl, &opts).unwrap(),
+                _ => glb.clone(),
+            };
+            let imported = import_bytes(&input, format);
+            assert_eq!(imported.is_ok(), format.can_import_bytes(), "import_bytes {format:?}");
+        }
     }
 }

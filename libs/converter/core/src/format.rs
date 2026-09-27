@@ -88,7 +88,7 @@ impl Format {
 
     /// Indica si el formato soporta exportación a bytes en memoria.
     pub fn can_export_bytes(self) -> bool {
-        matches!(self, Format::Gltf | Format::Usdz)
+        matches!(self, Format::Gltf | Format::Usda | Format::Usdz | Format::Stl)
     }
 
     /// Todos los formatos disponibles.

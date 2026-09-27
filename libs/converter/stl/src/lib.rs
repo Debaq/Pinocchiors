@@ -9,5 +9,5 @@
 mod import;
 mod export;
 
-pub use import::{import_stl, StlImportError};
-pub use export::{export_stl, StlExportError};
+pub use import::{import_stl, import_stl_bytes, StlImportError};
+pub use export::{export_stl, export_stl_bytes, StlExportError};

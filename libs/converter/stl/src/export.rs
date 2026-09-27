@@ -1,4 +1,5 @@
 use converter_scene::Scene;
+use std::io::Write;
 use std::path::Path;
 use thiserror::Error;
 
@@ -20,10 +21,19 @@ pub enum StlExportError {
 pub fn export_stl(scene: &Scene, path: impl AsRef<Path>) -> Result<(), StlExportError> {
     let triangles = extract_triangles(scene)?;
 
-    let mut file = std::fs::File::create(path)?;
+    let mut file = std::io::BufWriter::new(std::fs::File::create(path)?);
     stl_io::write_stl(&mut file, triangles.iter())?;
+    file.flush()?;
 
     Ok(())
+}
+
+/// Exporta una `Scene` a STL binario en memoria. Mismas reglas que [`export_stl`].
+pub fn export_stl_bytes(scene: &Scene) -> Result<Vec<u8>, StlExportError> {
+    let triangles = extract_triangles(scene)?;
+    let mut out = Vec::with_capacity(84 + triangles.len() * 50);
+    stl_io::write_stl(&mut out, triangles.iter())?;
+    Ok(out)
 }
 
 /// Extrae todos los triángulos de la escena como `stl_io::Triangle`, en espacio

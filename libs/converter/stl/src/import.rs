@@ -1,6 +1,7 @@
 use converter_scene::{
     IndexData, Mesh, Node, Primitive, Scene, Transform, VertexAttribute,
 };
+use std::io::{Read, Seek};
 use std::path::Path;
 use thiserror::Error;
 
@@ -17,8 +18,19 @@ pub enum StlImportError {
 /// STL solo contiene triángulos y normales — la escena resultante tendrá
 /// un único mesh sin materiales, texturas, esqueleto ni animaciones.
 pub fn import_stl(path: impl AsRef<Path>) -> Result<Scene, StlImportError> {
-    let mut file = std::fs::OpenOptions::new().read(true).open(path.as_ref())?;
-    let stl_mesh = stl_io::read_stl(&mut file)?;
+    let path = path.as_ref();
+    let mut file = std::fs::File::open(path)?;
+    let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("stl_mesh");
+    read_scene(&mut file, name)
+}
+
+/// Importa un STL (ASCII o binario) desde bytes en memoria (p. ej. en WASM).
+pub fn import_stl_bytes(data: &[u8]) -> Result<Scene, StlImportError> {
+    read_scene(&mut std::io::Cursor::new(data), "stl_mesh")
+}
+
+fn read_scene<R: Read + Seek>(reader: &mut R, name: &str) -> Result<Scene, StlImportError> {
+    let stl_mesh = stl_io::read_stl(reader)?;
 
     if stl_mesh.faces.is_empty() {
         return Err(StlImportError::Empty);
@@ -71,12 +83,7 @@ pub fn import_stl(path: impl AsRef<Path>) -> Result<Scene, StlImportError> {
     };
 
     let mesh = Mesh {
-        name: path
-            .as_ref()
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("stl_mesh")
-            .to_string(),
+        name: name.to_string(),
         primitives: vec![primitive],
     };
 
@@ -195,4 +202,48 @@ mod tests {
         };
         assert_eq!(count(&scene), count(&scene2));
     }
+
+    #[test]
+    fn bytes_roundtrip_matches_file_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tri.stl");
+        let mut scene = import_stl_bytes(ASCII_TRIANGLE.as_bytes()).unwrap();
+        scene.meters_per_unit = 0.001;
+
+        let bytes = crate::export_stl_bytes(&scene).unwrap();
+        export_stl(&scene, &path).unwrap();
+        assert_eq!(bytes, std::fs::read(&path).unwrap());
+
+        let back = import_stl_bytes(&bytes).unwrap();
+        assert_eq!(back.compute_bounding_box(), scene.compute_bounding_box());
+        assert_eq!(back.meters_per_unit, 0.001);
+    }
+
+    #[test]
+    fn imports_ascii_from_bytes() {
+        let scene = import_stl_bytes(ASCII_TRIANGLE.as_bytes()).unwrap();
+        assert!(scene.validate().is_ok());
+        let (min, max) = scene.compute_bounding_box().unwrap();
+        assert_eq!(min, [0.0, 0.0, 0.0]);
+        assert_eq!(max, [2.0, 3.0, 0.0]);
+    }
+
+    #[test]
+    fn rejects_garbage_and_empty_bytes() {
+        assert!(import_stl_bytes(b"").is_err());
+        assert!(import_stl_bytes(b"not an stl file at all").is_err());
+        // Binario válido sin triángulos: cabecera de 80 bytes + contador 0
+        assert!(matches!(import_stl_bytes(&[0u8; 84]), Err(StlImportError::Empty)));
+    }
+
+    const ASCII_TRIANGLE: &str = "solid t
+facet normal 0 0 1
+  outer loop
+    vertex 0 0 0
+    vertex 2 0 0
+    vertex 0 3 0
+  endloop
+endfacet
+endsolid t
+";
 }
