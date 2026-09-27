@@ -157,7 +157,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Autorig con malla > umbral de decimación (#3).
 - [x] Roundtrip repair → export GLB con nodos (#4).
 - [x] Converter con transformaciones de nodos → STL/OBJ (#5).
-- [ ] Fuzz/proptest de importadores con índices inválidos (#10).
+- [x] Proptest de escenas malformadas: `world_primitives` nunca hace panic y `validate_geometry` rechaza exactamente índices/atributos inválidos (#10).
 - [x] Doctests de `pinocchio-core`, `quadriflow-core`, `pinocchio-repair` y `pinocchio-print3d` como `no_run` (compilan contra la API real).
 - [ ] 23 crates sin tests unitarios (wasm, CLI, desktop, varios de quadriflow).
 

@@ -8,3 +8,6 @@ description = "Intermediate 3D scene representation for format conversion"
 [dependencies]
 glam = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }

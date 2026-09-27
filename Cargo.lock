@@ -555,6 +555,7 @@ name = "converter-scene"
 version = "0.1.0"
 dependencies = [
  "glam",
+ "proptest",
  "thiserror 2.0.18",
 ]
 
