@@ -64,19 +64,15 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## 🟠 Altos
 
-### 6. Flag `processing` queda pegado
-- **Dónde:** `apps/desktop/src/commands.rs:882-894`, `1051-1059`
-- **Problema:** hace `swap(true)` y después retorna con `?` si falta la malla o el esqueleto → desde ahí todo autorig o retopología responde "Ya hay un proceso en curso" hasta reiniciar la app. Un panic dentro tiene el mismo efecto.
-- **Fix:**
-  - [ ] Guard RAII (`struct ProcessingGuard<'a>(&'a AtomicBool)` con `Drop` que haga `store(false)`).
-  - [ ] Ejecutar el trabajo pesado en `tauri::async_runtime::spawn_blocking`.
+### 6. Flag `processing` queda pegado ✅ RESUELTO
+- [x] `AppState::try_begin_processing()` devuelve un `ProcessingGuard` que libera el flag en `Drop` (errores, `?` tempranos y panics).
+- [x] `run_autorig` y `run_retopology` corren en `tauri::async_runtime::spawn_blocking`; un panic se reporta como error.
+- **Test:** `processing_guard_releases_on_drop`.
 
-### 7. Auto-fit y edición de huesos se pierden al transformar
-- **Dónde:** `apps/desktop/src/commands.rs:634` (`transform_skeleton`), `725` (`move_bone`), `782` (`auto_fit_skeleton`)
-- **Problema:** `transform_skeleton` siempre parte de `original_skeleton`, que auto-fit y `move_bone` no actualizan. Ejemplo: auto-fit → cambiar escala → el esqueleto vuelve al preset.
-- **Fix:**
-  - [ ] `auto_fit_skeleton` y `move_bone` deben actualizar `original_skeleton` (nueva base), o
-  - [ ] Separar "base editada" y "transformación de gizmo" en el estado.
+### 7. Auto-fit y edición de huesos se pierden al transformar ✅ RESUELTO
+- [x] Modelo explícito: esqueleto visible = `gizmo(base)`. `original_skeleton` es la base y `skeleton_transform` guarda los parámetros del gizmo.
+- [x] `auto_fit_skeleton` fija la base y resetea el gizmo; `move_bone` escribe en la base con la inversa del gizmo, así la edición sobrevive a cambios de escala/rotación.
+- **Test:** `gizmo_inverse_roundtrip`.
 
 ### 8. Retopología y rig no se pueden exportar
 - **Dónde:** `apps/desktop/src/commands.rs:420` (`export_model`), `116-117`
@@ -112,10 +108,10 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## 🟡 Medios
 
-### 12. `import_model` no limpia el estado anterior
-- **Dónde:** `apps/desktop/src/commands.rs:300-310`
-- [ ] Resetear `quad_mesh`, `diagnostics`, `mesh_before_repair`, `scene_before_repair`, `print3d_pieces`, `mesh_before_print_scale`.
-- [ ] Agregar un método `AppState::reset_derived()`.
+### 12. `import_model` no limpia el estado anterior ✅ RESUELTO
+- [x] `AppState::reset_derived()` (resultado, quad mesh, diagnósticos, backups, piezas) llamado al importar.
+- [x] Frontend: al importar también limpia la vista de la malla de quads.
+- **Test:** `reset_derived_clears_previous_model_state`.
 
 ### 13. UVs desalineadas en `get_mesh_data` ✅ RESUELTO (con #5)
 - **Dónde:** `apps/desktop/src/commands.rs:369-382`
@@ -139,10 +135,9 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [ ] Límite máximo de planos (p. ej. 1000) → error.
 - [ ] Considerar `scene.meters_per_unit` (modelo en metros vs volumen de impresión en mm).
 
-### 17. Progreso del autorig falso y bloqueo del runtime
-- **Dónde:** `apps/desktop/src/commands.rs:920-942`
-- [ ] Callback de progreso real en `autorig` (como `remesh_with_callback`).
-- [ ] `spawn_blocking` (ver #6).
+### 17. Progreso del autorig falso y bloqueo del runtime ✅ RESUELTO
+- [x] `pinocchio_core::autorig_with_progress` con `AutorigStage` (preparing, embedding, weights, done) emitidas al comenzar cada etapa real.
+- [x] `spawn_blocking` (ver #6).
 
 ### 18. Strip/fan inválido → índices `None`
 - **Dónde:** `libs/converter/gltf-io/src/import.rs:445-460`
@@ -197,7 +192,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 1. ~~#1 + #2 (+ test E2E)~~ ✅
 2. ~~#4 + #5 + #19~~ ✅
-3. #6 + #7 + #12 — estado de la GUI.
+3. ~~#6 + #7 + #12 + #17~~ ✅
 4. #9 + #10 + #11 — robustez y seguridad.
 5. #3, #8, #14 — funcionalidades incompletas.
 6. Medios y limpieza.

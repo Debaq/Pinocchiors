@@ -6,7 +6,7 @@ use pinocchio_mesh::Mesh;
 use pinocchio_repair::MeshDiagnostics;
 use pinocchio_skeleton::BasicSkeleton;
 use quadriflow_core::QuadMesh;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 /// Tipos de esqueleto disponibles
@@ -23,6 +23,31 @@ pub enum SkeletonType {
     Custom(BasicSkeleton),
 }
 
+/// Transformación de gizmo aplicada sobre el esqueleto base
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SkeletonTransformParams {
+    pub scale: f64,
+    pub translation: [f64; 3],
+    /// Euler XYZ en grados
+    pub rotation: [f64; 3],
+}
+
+impl Default for SkeletonTransformParams {
+    fn default() -> Self {
+        Self { scale: 1.0, translation: [0.0; 3], rotation: [0.0; 3] }
+    }
+}
+
+/// Marca un proceso largo en curso; libera la marca al soltarse (también si hay
+/// un error o un panic)
+pub struct ProcessingGuard<'a>(&'a AtomicBool);
+
+impl Drop for ProcessingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+
 /// Estado compartido de la aplicación
 pub struct AppState {
     /// Escena importada (formato pivote)
@@ -34,8 +59,12 @@ pub struct AppState {
     /// Tipo de esqueleto seleccionado
     pub skeleton: Mutex<Option<SkeletonType>>,
 
-    /// Esqueleto original (antes de transformaciones)
+    /// Esqueleto base (preset, auto-fit o con huesos editados), antes de la
+    /// transformación de gizmo
     pub original_skeleton: Mutex<Option<SkeletonType>>,
+
+    /// Transformación de gizmo aplicada sobre `original_skeleton`
+    pub skeleton_transform: Mutex<SkeletonTransformParams>,
 
     /// Resultado del autorig
     pub result: Mutex<Option<PinocchioOutput>>,
@@ -69,6 +98,7 @@ impl AppState {
             mesh: Mutex::new(None),
             skeleton: Mutex::new(None),
             original_skeleton: Mutex::new(None),
+            skeleton_transform: Mutex::new(SkeletonTransformParams::default()),
             result: Mutex::new(None),
             quad_mesh: Mutex::new(None),
             processing: AtomicBool::new(false),
@@ -78,6 +108,29 @@ impl AppState {
             print3d_pieces: Mutex::new(None),
             mesh_before_print_scale: Mutex::new(None),
         }
+    }
+}
+
+impl AppState {
+    /// Intenta marcar un proceso largo como en curso. `None` si ya hay uno.
+    pub fn try_begin_processing(&self) -> Option<ProcessingGuard<'_>> {
+        if self.processing.swap(true, Ordering::SeqCst) {
+            None
+        } else {
+            Some(ProcessingGuard(&self.processing))
+        }
+    }
+
+    /// Descarta todo lo derivado de la malla actual (resultados, backups,
+    /// diagnósticos, piezas). Se llama al importar un modelo nuevo.
+    pub fn reset_derived(&self) {
+        *self.result.lock().unwrap() = None;
+        *self.quad_mesh.lock().unwrap() = None;
+        *self.diagnostics.lock().unwrap() = None;
+        *self.mesh_before_repair.lock().unwrap() = None;
+        *self.scene_before_repair.lock().unwrap() = None;
+        *self.print3d_pieces.lock().unwrap() = None;
+        *self.mesh_before_print_scale.lock().unwrap() = None;
     }
 }
 

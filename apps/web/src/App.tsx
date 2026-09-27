@@ -404,6 +404,10 @@ export const App: Component = () => {
       setCanUndoRepair(false);
       setMeshAnalysis(undefined);
       setSubdivideResult(undefined);
+      setQuadMeshData(undefined);
+      setQuadMeshLoaded(false);
+      setQuadMeshInfo({ vertices: 0, quads: 0 });
+      setShowQuadMesh(false);
 
       // Pipeline: mark import as completed, navigate to next
       pipeline.markCompleted("import");

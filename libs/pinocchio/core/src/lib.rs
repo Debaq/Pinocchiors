@@ -23,7 +23,7 @@ mod autorig;
 pub use config::{PinocchioConfig, SkeletonFit};
 pub use output::PinocchioOutput;
 pub use error::PinocchioError;
-pub use autorig::autorig;
+pub use autorig::{autorig, autorig_with_progress, AutorigStage};
 
 // Re-export sub-crates for convenience
 pub use pinocchio_math as math;

@@ -9,6 +9,41 @@ use pinocchio_math::{Real, Rect, Transform, Vector3};
 use pinocchio_mesh::{decimate, Mesh};
 use pinocchio_skeleton::{fit_to_bounds, map_positions, BasicSkeleton, Bone, Skeleton};
 
+/// Etapas del auto-rigging, para reportar progreso
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutorigStage {
+    /// Validación, decimación y normalización de la malla
+    Preparing,
+    /// Campo de distancias, eje medial y embedding del esqueleto
+    Embedding,
+    /// Cálculo de pesos de skinning (bone heat)
+    Weights,
+    /// Terminado
+    Done,
+}
+
+impl AutorigStage {
+    /// Nombre corto de la etapa
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Preparing => "preparing",
+            Self::Embedding => "embedding",
+            Self::Weights => "weights",
+            Self::Done => "done",
+        }
+    }
+
+    /// Porcentaje aproximado al comenzar la etapa
+    pub fn progress(&self) -> u32 {
+        match self {
+            Self::Preparing => 0,
+            Self::Embedding => 10,
+            Self::Weights => 50,
+            Self::Done => 100,
+        }
+    }
+}
+
 /// Fracción de la malla que ocupa una plantilla ajustada con [`SkeletonFit::Auto`]
 const SKELETON_FILL: Real = 0.9;
 
@@ -69,6 +104,17 @@ pub fn autorig<S: Skeleton + Sync>(
     skeleton: &S,
     config: Option<PinocchioConfig>,
 ) -> Result<PinocchioOutput, PinocchioError> {
+    autorig_with_progress(mesh, skeleton, config, |_| {})
+}
+
+/// Igual que [`autorig`], llamando `on_stage` al comenzar cada etapa
+pub fn autorig_with_progress<S: Skeleton + Sync>(
+    mesh: &Mesh,
+    skeleton: &S,
+    config: Option<PinocchioConfig>,
+    mut on_stage: impl FnMut(AutorigStage),
+) -> Result<PinocchioOutput, PinocchioError> {
+    on_stage(AutorigStage::Preparing);
     let config = config.unwrap_or_default();
 
     // 1. Validar entrada
@@ -106,6 +152,7 @@ pub fn autorig<S: Skeleton + Sync>(
     };
 
     // 4. Embedding del esqueleto
+    on_stage(AutorigStage::Embedding);
     let embedding = full_embedding_pipeline(
         &working_mesh,
         &working_skeleton,
@@ -113,6 +160,7 @@ pub fn autorig<S: Skeleton + Sync>(
     )?;
 
     // 5. Pesos de skinning con el esqueleto ya embebido
+    on_stage(AutorigStage::Weights);
     let embedded_skeleton = BasicSkeleton::from_bones(
         working_skeleton
             .bones()
@@ -146,6 +194,7 @@ pub fn autorig<S: Skeleton + Sync>(
         .collect();
 
     let stats = compute_stats(&working_mesh, &working_skeleton, &attachment, &embedding);
+    on_stage(AutorigStage::Done);
 
     Ok(PinocchioOutput {
         attachment,

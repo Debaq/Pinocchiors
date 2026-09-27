@@ -3,9 +3,9 @@
 //! Fase 1: Import/Export multi-formato usando converter-*
 //! Fase 2: Retopología con QuadriFlow
 
-use crate::state::{AppState, SkeletonType};
+use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
-use pinocchio_core::{autorig, PinocchioConfig, SkeletonFit};
+use pinocchio_core::{autorig_with_progress, AutorigStage, PinocchioConfig, SkeletonFit};
 use pinocchio_mesh::Mesh;
 use pinocchio_math::Vector3;
 use pinocchio_skeleton::{
@@ -304,9 +304,10 @@ pub fn import_model(path: String, state: State<'_, AppState>) -> Result<MeshInfo
     let mut mesh_lock = state.mesh.lock().unwrap();
     *mesh_lock = Some(mesh);
 
-    // Limpiar resultado anterior
-    let mut result_lock = state.result.lock().unwrap();
-    *result_lock = None;
+    // Descartar resultados, backups y piezas del modelo anterior
+    drop(scene_lock);
+    drop(mesh_lock);
+    state.reset_derived();
 
     Ok(info)
 }
@@ -586,15 +587,11 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
 
     let data = get_skeleton_data_for_type(&skeleton_type);
 
-    let mut skeleton_lock = state.skeleton.lock().unwrap();
-    *skeleton_lock = Some(skeleton_type.clone());
-
-    // Guardar como original (resetear transformaciones previas)
-    let mut orig_lock = state.original_skeleton.lock().unwrap();
-    *orig_lock = Some(skeleton_type);
-
-    let mut result_lock = state.result.lock().unwrap();
-    *result_lock = None;
+    // El preset pasa a ser la base, sin transformación de gizmo
+    *state.skeleton.lock().unwrap() = Some(skeleton_type.clone());
+    *state.original_skeleton.lock().unwrap() = Some(skeleton_type);
+    *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+    *state.result.lock().unwrap() = None;
 
     Ok(data)
 }
@@ -602,8 +599,80 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
 // ═══════════════════════════════════════════════════════════════════════════
 // SKELETON TRANSFORM COMMANDS
 // ═══════════════════════════════════════════════════════════════════════════
+//
+// El esqueleto visible es `gizmo(base)`: `original_skeleton` es la base (preset,
+// auto-fit o con huesos editados) y `skeleton_transform` la transformación de
+// gizmo. Cada edición mantiene esa relación para que no se pierda al cambiar
+// de herramienta.
 
-/// Transforma el esqueleto (escala, traslación, rotación)
+/// Aplica la transformación de gizmo: escala → rotación XYZ → traslación
+fn apply_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
+    let [rx, ry, rz] = t.rotation.map(f64::to_radians);
+    let (sx, cx) = rx.sin_cos();
+    let (sy, cy) = ry.sin_cos();
+    let (sz, cz) = rz.sin_cos();
+    let (x, y, z) = (p.x() * t.scale, p.y() * t.scale, p.z() * t.scale);
+    // X
+    let (y, z) = (y * cx - z * sx, y * sx + z * cx);
+    // Y
+    let (x, z) = (x * cy + z * sy, -x * sy + z * cy);
+    // Z
+    let (x, y) = (x * cz - y * sz, x * sz + y * cz);
+    Vector3::new(x + t.translation[0], y + t.translation[1], z + t.translation[2])
+}
+
+/// Inversa de [`apply_gizmo`]
+fn invert_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
+    let [rx, ry, rz] = t.rotation.map(f64::to_radians);
+    let (sx, cx) = rx.sin_cos();
+    let (sy, cy) = ry.sin_cos();
+    let (sz, cz) = rz.sin_cos();
+    let (x, y, z) = (p.x() - t.translation[0], p.y() - t.translation[1], p.z() - t.translation[2]);
+    // Z⁻¹
+    let (x, y) = (x * cz + y * sz, -x * sz + y * cz);
+    // Y⁻¹
+    let (x, z) = (x * cy - z * sy, x * sy + z * cy);
+    // X⁻¹
+    let (y, z) = (y * cx + z * sx, -y * sx + z * cx);
+    let inv = if t.scale.abs() > 1e-12 { 1.0 / t.scale } else { 1.0 };
+    Vector3::new(x * inv, y * inv, z * inv)
+}
+
+/// Copia editable de cualquier tipo de esqueleto
+fn to_basic_skeleton(skeleton_type: &SkeletonType) -> BasicSkeleton {
+    match skeleton_type {
+        SkeletonType::Custom(s) => s.clone(),
+        other => {
+            let data = get_skeleton_data_for_type(other);
+            let bones = data
+                .bones
+                .iter()
+                .map(|b| {
+                    let pos = Vector3::new(b.position[0], b.position[1], b.position[2]);
+                    let bone = match b.parent {
+                        Some(parent) => Bone::with_parent(&b.name, pos, parent),
+                        None => Bone::new(&b.name, pos),
+                    };
+                    if b.is_leaf { bone.as_leaf() } else { bone }
+                })
+                .collect();
+            BasicSkeleton::from_bones(bones)
+        }
+    }
+}
+
+/// Base actual; si no hay, se toma el esqueleto visible con gizmo identidad
+fn current_base(state: &State<'_, AppState>) -> Result<BasicSkeleton, String> {
+    let mut orig = state.original_skeleton.lock().unwrap();
+    if orig.is_none() {
+        let skel = state.skeleton.lock().unwrap();
+        *orig = Some(skel.as_ref().ok_or("No hay esqueleto seleccionado")?.clone());
+        *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+    }
+    Ok(to_basic_skeleton(orig.as_ref().unwrap()))
+}
+
+/// Transforma el esqueleto (escala, traslación, rotación) respecto de la base
 #[tauri::command]
 pub fn transform_skeleton(
     scale: f64,
@@ -611,142 +680,41 @@ pub fn transform_skeleton(
     rotation: [f64; 3],
     state: State<'_, AppState>,
 ) -> Result<SkeletonData, String> {
-    // Asegurar que tenemos original guardado
-    {
-        let mut orig = state.original_skeleton.lock().unwrap();
-        if orig.is_none() {
-            let skel = state.skeleton.lock().unwrap();
-            let cloned = skel.as_ref().ok_or("No hay esqueleto seleccionado")?.clone();
-            drop(skel);
-            *orig = Some(cloned);
-        }
-    }
-
-    // Partir del original
-    let original = state.original_skeleton.lock().unwrap();
-    let original_type = original.as_ref().ok_or("No hay esqueleto original")?;
-    let original_data = get_skeleton_data_for_type(original_type);
-
-    // Crear BasicSkeleton desde los datos originales
-    let bones: Vec<Bone> = original_data.bones.iter().map(|b| {
-        let mut bone = if let Some(parent) = b.parent {
-            Bone::with_parent(&b.name, Vector3::new(b.position[0], b.position[1], b.position[2]), parent)
-        } else {
-            Bone::new(&b.name, Vector3::new(b.position[0], b.position[1], b.position[2]))
-        };
-        if b.is_leaf {
-            bone = bone.as_leaf();
-        }
-        bone
-    }).collect();
-
-    let mut skel = BasicSkeleton::from_bones(bones);
-
-    // Aplicar escala
-    if (scale - 1.0).abs() > 1e-6 {
-        skel.scale(scale);
-    }
-
-    // Aplicar rotación (euler XYZ en grados)
-    let rx = rotation[0].to_radians();
-    let ry = rotation[1].to_radians();
-    let rz = rotation[2].to_radians();
-
-    if rx.abs() > 1e-6 || ry.abs() > 1e-6 || rz.abs() > 1e-6 {
-        let (sx, cx) = rx.sin_cos();
-        let (sy, cy) = ry.sin_cos();
-        let (sz, cz) = rz.sin_cos();
-
-        for bone in skel.bones_mut() {
-            let x = bone.position.x();
-            let y = bone.position.y();
-            let z = bone.position.z();
-
-            // Rotación X
-            let y1 = y * cx - z * sx;
-            let z1 = y * sx + z * cx;
-            // Rotación Y
-            let x2 = x * cy + z1 * sy;
-            let z2 = -x * sy + z1 * cy;
-            // Rotación Z
-            let x3 = x2 * cz - y1 * sz;
-            let y3 = x2 * sz + y1 * cz;
-
-            bone.position = Vector3::new(x3, y3, z2);
-        }
-    }
-
-    // Aplicar traslación
-    if translation[0].abs() > 1e-6 || translation[1].abs() > 1e-6 || translation[2].abs() > 1e-6 {
-        skel.translate(Vector3::new(translation[0], translation[1], translation[2]));
-    }
-
+    let base = current_base(&state)?;
+    let params = SkeletonTransformParams { scale, translation, rotation };
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
     let data = skeleton_to_data(&skel);
 
-    // Guardar como Custom
-    let mut skeleton_lock = state.skeleton.lock().unwrap();
-    *skeleton_lock = Some(SkeletonType::Custom(skel));
-
-    // Limpiar resultado autorig
-    let mut result_lock = state.result.lock().unwrap();
-    *result_lock = None;
+    *state.skeleton_transform.lock().unwrap() = params;
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
 
     Ok(data)
 }
 
-/// Mueve un hueso individual
+/// Mueve un hueso individual (posición en coordenadas del esqueleto visible)
 #[tauri::command]
 pub fn move_bone(
     bone_index: usize,
     position: [f64; 3],
     state: State<'_, AppState>,
 ) -> Result<SkeletonData, String> {
-    let mut skeleton_lock = state.skeleton.lock().unwrap();
-    let skeleton_type = skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?;
-
-    // Convertir a BasicSkeleton si no lo es
-    let mut skel = match skeleton_type {
-        SkeletonType::Custom(s) => s.clone(),
-        other => {
-            let data = get_skeleton_data_for_type(other);
-            let bones: Vec<Bone> = data.bones.iter().map(|b| {
-                let mut bone = if let Some(parent) = b.parent {
-                    Bone::with_parent(&b.name, Vector3::new(b.position[0], b.position[1], b.position[2]), parent)
-                } else {
-                    Bone::new(&b.name, Vector3::new(b.position[0], b.position[1], b.position[2]))
-                };
-                if b.is_leaf {
-                    bone = bone.as_leaf();
-                }
-                bone
-            }).collect();
-            BasicSkeleton::from_bones(bones)
-        }
-    };
-
-    // Guardar original si no existe
-    {
-        let mut orig = state.original_skeleton.lock().unwrap();
-        if orig.is_none() {
-            *orig = Some(skeleton_type.clone());
-        }
-    }
-
-    let bones = skel.bones_mut();
-    if bone_index >= bones.len() {
+    let mut base = current_base(&state)?;
+    if bone_index >= base.num_bones() {
         return Err(format!("Índice de hueso fuera de rango: {}", bone_index));
     }
+    let params = *state.skeleton_transform.lock().unwrap();
 
-    bones[bone_index].position = Vector3::new(position[0], position[1], position[2]);
+    // La base guarda la edición sin el gizmo, así sobrevive a cambios de transformación
+    let pos = Vector3::new(position[0], position[1], position[2]);
+    base.bones_mut()[bone_index].position = invert_gizmo(pos, &params);
 
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
     let data = skeleton_to_data(&skel);
 
-    *skeleton_lock = Some(SkeletonType::Custom(skel));
-
-    // Limpiar resultado autorig
-    drop(skeleton_lock);
-    let mut result_lock = state.result.lock().unwrap();
-    *result_lock = None;
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
 
     Ok(data)
 }
@@ -754,46 +722,26 @@ pub fn move_bone(
 /// Auto-ajusta el esqueleto al bounding box de la malla
 ///
 /// Usa el mismo criterio que `autorig` con `SkeletonFit::Auto`, así el esqueleto
-/// que ve el usuario coincide con el que se embebe.
+/// que ve el usuario coincide con el que se embebe. El resultado pasa a ser la
+/// nueva base, sin transformación de gizmo.
 #[tauri::command]
 pub fn auto_fit_skeleton(state: State<'_, AppState>) -> Result<SkeletonData, String> {
     let mesh_bbox = {
         let mesh_lock = state.mesh.lock().unwrap();
         mesh_lock.as_ref().ok_or("No hay malla cargada")?.bounding_box()
     };
-
-    let skeleton_lock = state.skeleton.lock().unwrap();
-    let skeleton_type = skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?;
-
-    // Guardar original si no existe
-    {
-        let mut orig = state.original_skeleton.lock().unwrap();
-        if orig.is_none() {
-            *orig = Some(skeleton_type.clone());
-        }
-    }
-
-    let skel = match skeleton_type {
-        SkeletonType::Human => fit_to_bounds(&HumanSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Quad => fit_to_bounds(&QuadSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Horse => fit_to_bounds(&HorseSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Centaur => fit_to_bounds(&CentaurSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Bird => fit_to_bounds(&BirdSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Spider => fit_to_bounds(&SpiderSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Serpent => fit_to_bounds(&SerpentSkeleton::default(), &mesh_bbox, 0.9),
-        SkeletonType::Mech => fit_to_bounds(&MechSkeleton::new(), &mesh_bbox, 0.9),
-        SkeletonType::Custom(skel) => fit_to_bounds(skel, &mesh_bbox, 0.9),
+    let current = {
+        let skeleton_lock = state.skeleton.lock().unwrap();
+        to_basic_skeleton(skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?)
     };
-    drop(skeleton_lock);
 
+    let skel = fit_to_bounds(&current, &mesh_bbox, 0.9);
     let data = skeleton_to_data(&skel);
 
-    let mut skeleton_lock = state.skeleton.lock().unwrap();
-    *skeleton_lock = Some(SkeletonType::Custom(skel));
-
-    // Limpiar resultado autorig
-    let mut result_lock = state.result.lock().unwrap();
-    *result_lock = None;
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel.clone()));
+    *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
 
     Ok(data)
 }
@@ -803,50 +751,38 @@ pub fn auto_fit_skeleton(state: State<'_, AppState>) -> Result<SkeletonData, Str
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Ejecuta el autorig con progress reporting
+///
+/// El cálculo corre en un hilo bloqueante para no ocupar el runtime async; el
+/// flag `processing` se libera siempre (también ante errores o panics).
 #[tauri::command]
 pub async fn run_autorig(
     config: AutorigConfig,
     on_progress: Channel<Progress>,
     state: State<'_, AppState>,
 ) -> Result<(), String> {
-    if state.processing.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Err("Ya hay un proceso de autorig en curso".to_string());
-    }
+    let _guard = state
+        .try_begin_processing()
+        .ok_or("Ya hay un proceso en curso")?;
 
-    let mesh = {
-        let mesh_lock = state.mesh.lock().unwrap();
-        mesh_lock.clone().ok_or("No hay malla cargada")?
-    };
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let skeleton_type = state
+        .skeleton
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No hay esqueleto seleccionado")?;
 
-    let skeleton_type = {
-        let skeleton_lock = state.skeleton.lock().unwrap();
-        skeleton_lock.clone().ok_or("No hay esqueleto seleccionado")?
-    };
-
-    let _ = on_progress.send(Progress {
-        stage: "preparing".to_string(),
-        percent: 0,
-        message: "Preparando datos...".to_string(),
-    });
-
-    let pinocchio_config = match config.quality.as_str() {
+    let mut pinocchio_config = match config.quality.as_str() {
         "fast" => PinocchioConfig::fast(),
         "high" => PinocchioConfig::high_quality(),
         _ => PinocchioConfig::default(),
     };
-
-    let pinocchio_config = if let Some(dw) = config.diffusion_weight {
-        pinocchio_config.with_diffusion_weight(dw)
-    } else {
-        pinocchio_config
-    };
-
-    let pinocchio_config = if let Some(mi) = config.max_influences {
-        pinocchio_config.with_max_influences(mi)
-    } else {
-        pinocchio_config
-    };
-
+    if let Some(dw) = config.diffusion_weight {
+        pinocchio_config = pinocchio_config.with_diffusion_weight(dw);
+    }
+    if let Some(mi) = config.max_influences {
+        pinocchio_config = pinocchio_config.with_max_influences(mi);
+    }
     // Los presets son plantillas que autorig encaja en la malla; un esqueleto
     // Custom ya fue colocado por el usuario sobre la malla y se respeta.
     let pinocchio_config = pinocchio_config.with_skeleton_fit(match skeleton_type {
@@ -854,52 +790,48 @@ pub async fn run_autorig(
         _ => SkeletonFit::Auto,
     });
 
-    let _ = on_progress.send(Progress {
-        stage: "embedding".to_string(),
-        percent: 20,
-        message: "Calculando embedding del esqueleto...".to_string(),
-    });
-
-    let result = match &skeleton_type {
-        SkeletonType::Human => autorig(&mesh, &HumanSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Quad => autorig(&mesh, &QuadSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Horse => autorig(&mesh, &HorseSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Centaur => autorig(&mesh, &CentaurSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Bird => autorig(&mesh, &BirdSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Spider => autorig(&mesh, &SpiderSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Serpent => autorig(&mesh, &SerpentSkeleton::default(), Some(pinocchio_config)),
-        SkeletonType::Mech => autorig(&mesh, &MechSkeleton::new(), Some(pinocchio_config)),
-        SkeletonType::Custom(skel) => autorig(&mesh, skel, Some(pinocchio_config)),
-    };
-
-    let _ = on_progress.send(Progress {
-        stage: "diffusion".to_string(),
-        percent: 70,
-        message: "Calculando pesos de skinning...".to_string(),
-    });
-
-    match result {
-        Ok(output) => {
-            let _ = on_progress.send(Progress {
-                stage: "done".to_string(),
-                percent: 100,
-                message: format!(
-                    "Completado: {} vértices, {} huesos",
-                    output.stats.num_vertices, output.stats.num_bones
-                ),
+    let progress = on_progress.clone();
+    let output = tauri::async_runtime::spawn_blocking(move || {
+        let report = |stage: AutorigStage| {
+            let message = match stage {
+                AutorigStage::Preparing => "Preparando malla...",
+                AutorigStage::Embedding => "Ajustando el esqueleto a la malla...",
+                AutorigStage::Weights => "Calculando pesos de skinning...",
+                AutorigStage::Done => "Terminado",
+            };
+            let _ = progress.send(Progress {
+                stage: stage.name().to_string(),
+                percent: stage.progress(),
+                message: message.to_string(),
             });
-
-            let mut result_lock = state.result.lock().unwrap();
-            *result_lock = Some(output);
-
-            state.processing.store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(())
+        };
+        let config = Some(pinocchio_config);
+        match &skeleton_type {
+            SkeletonType::Human => autorig_with_progress(&mesh, &HumanSkeleton::new(), config, report),
+            SkeletonType::Quad => autorig_with_progress(&mesh, &QuadSkeleton::new(), config, report),
+            SkeletonType::Horse => autorig_with_progress(&mesh, &HorseSkeleton::new(), config, report),
+            SkeletonType::Centaur => autorig_with_progress(&mesh, &CentaurSkeleton::new(), config, report),
+            SkeletonType::Bird => autorig_with_progress(&mesh, &BirdSkeleton::new(), config, report),
+            SkeletonType::Spider => autorig_with_progress(&mesh, &SpiderSkeleton::new(), config, report),
+            SkeletonType::Serpent => autorig_with_progress(&mesh, &SerpentSkeleton::default(), config, report),
+            SkeletonType::Mech => autorig_with_progress(&mesh, &MechSkeleton::new(), config, report),
+            SkeletonType::Custom(skel) => autorig_with_progress(&mesh, skel, config, report),
         }
-        Err(e) => {
-            state.processing.store(false, std::sync::atomic::Ordering::SeqCst);
-            Err(format!("Error en autorig: {:?}", e))
-        }
-    }
+    })
+    .await
+    .map_err(|e| format!("El autorig terminó inesperadamente: {e}"))?
+    .map_err(|e| format!("Error en autorig: {e}"))?;
+
+    let _ = on_progress.send(Progress {
+        stage: "done".to_string(),
+        percent: 100,
+        message: format!(
+            "Completado: {} vértices, {} huesos",
+            output.stats.num_vertices, output.stats.num_bones
+        ),
+    });
+    *state.result.lock().unwrap() = Some(output);
+    Ok(())
 }
 
 /// Obtiene los datos de pesos para visualización
@@ -979,21 +911,19 @@ pub fn get_skeleton_data(state: State<'_, AppState>) -> Result<SkeletonData, Str
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Ejecuta la retopología con QuadriFlow
+///
+/// Corre en un hilo bloqueante; el flag `processing` se libera siempre.
 #[tauri::command]
 pub async fn run_retopology(
     config: RetopologyConfig,
     on_progress: Channel<Progress>,
     state: State<'_, AppState>,
 ) -> Result<QuadMeshInfo, String> {
-    if state.processing.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        return Err("Ya hay un proceso en curso".to_string());
-    }
+    let _guard = state
+        .try_begin_processing()
+        .ok_or("Ya hay un proceso en curso")?;
 
-    // Obtener la malla del estado
-    let mesh = {
-        let mesh_lock = state.mesh.lock().unwrap();
-        mesh_lock.clone().ok_or("No hay malla cargada")?
-    };
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
 
     let _ = on_progress.send(Progress {
         stage: "preparing".to_string(),
@@ -1001,7 +931,6 @@ pub async fn run_retopology(
         message: "Preparando retopología...".to_string(),
     });
 
-    // Configurar RemeshConfig
     let remesh_config = RemeshConfig {
         target_faces: config.target_quads,
         preserve_sharp: config.preserve_sharp.unwrap_or(false),
@@ -1012,47 +941,37 @@ pub async fn run_retopology(
         remove_flips: config.remove_flips.unwrap_or(false),
     };
 
-    // Canal para enviar progreso desde el callback
-    let progress_sender = on_progress.clone();
+    let progress = on_progress.clone();
+    let quad_mesh = tauri::async_runtime::spawn_blocking(move || {
+        remesh_with_callback(&mesh, &remesh_config, |stage, message| {
+            let _ = progress.send(Progress {
+                stage: stage.name().to_string(),
+                percent: stage.progress(),
+                message: message.to_string(),
+            });
+        })
+    })
+    .await
+    .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
+    .map_err(|e| format!("Error en retopología: {:?}", e))?;
 
-    // Ejecutar retopología con callback de progreso
-    let result = remesh_with_callback(&mesh, &remesh_config, |stage, message| {
-        let _ = progress_sender.send(Progress {
-            stage: stage.name().to_string(),
-            percent: stage.progress(),
-            message: message.to_string(),
-        });
+    let info = QuadMeshInfo {
+        num_vertices: quad_mesh.num_vertices(),
+        num_quads: quad_mesh.num_faces(),
+        bounding_box: calculate_quad_mesh_bounds(&quad_mesh),
+    };
+
+    let _ = on_progress.send(Progress {
+        stage: "done".to_string(),
+        percent: 100,
+        message: format!(
+            "Retopología completada: {} vértices, {} quads",
+            info.num_vertices, info.num_quads
+        ),
     });
 
-    match result {
-        Ok(quad_mesh) => {
-            let info = QuadMeshInfo {
-                num_vertices: quad_mesh.num_vertices(),
-                num_quads: quad_mesh.num_faces(),
-                bounding_box: calculate_quad_mesh_bounds(&quad_mesh),
-            };
-
-            let _ = on_progress.send(Progress {
-                stage: "done".to_string(),
-                percent: 100,
-                message: format!(
-                    "Retopología completada: {} vértices, {} quads",
-                    info.num_vertices, info.num_quads
-                ),
-            });
-
-            // Guardar resultado en estado
-            let mut quad_mesh_lock = state.quad_mesh.lock().unwrap();
-            *quad_mesh_lock = Some(quad_mesh);
-
-            state.processing.store(false, std::sync::atomic::Ordering::SeqCst);
-            Ok(info)
-        }
-        Err(e) => {
-            state.processing.store(false, std::sync::atomic::Ordering::SeqCst);
-            Err(format!("Error en retopología: {:?}", e))
-        }
-    }
+    *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
+    Ok(info)
 }
 
 /// Obtiene los datos de la malla de quads para renderizar en Three.js
@@ -1886,5 +1805,44 @@ mod tests {
         let (min, max) = scaled.compute_bounding_box().unwrap();
         assert_eq!(min, [10.5, 0.5, 0.5]);
         assert_eq!(max, [11.5, 1.5, 1.5]);
+    }
+
+    #[test]
+    fn gizmo_inverse_roundtrip() {
+        let params = SkeletonTransformParams {
+            scale: 1.7,
+            translation: [3.0, -2.0, 0.5],
+            rotation: [30.0, -45.0, 120.0],
+        };
+        for p in [Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 2.0, 3.0), Vector3::new(-0.4, 0.9, -1.2)] {
+            let back = invert_gizmo(apply_gizmo(p, &params), &params);
+            assert!(back.distance(&p) < 1e-9, "{p:?} → {back:?}");
+        }
+        // Identidad
+        let id = SkeletonTransformParams::default();
+        let p = Vector3::new(1.0, 2.0, 3.0);
+        assert!(apply_gizmo(p, &id).distance(&p) < 1e-12);
+    }
+
+    #[test]
+    fn processing_guard_releases_on_drop() {
+        let state = AppState::new();
+        {
+            let _guard = state.try_begin_processing().unwrap();
+            assert!(state.try_begin_processing().is_none());
+        }
+        // Liberado al salir del scope (igual que en un `?` temprano o un panic)
+        assert!(state.try_begin_processing().is_some());
+    }
+
+    #[test]
+    fn reset_derived_clears_previous_model_state() {
+        let state = AppState::new();
+        let mesh = scene_to_pinocchio_mesh(&transformed_cube_scene()).unwrap();
+        *state.mesh_before_repair.lock().unwrap() = Some(mesh);
+        *state.scene_before_repair.lock().unwrap() = Some(transformed_cube_scene());
+        state.reset_derived();
+        assert!(state.mesh_before_repair.lock().unwrap().is_none());
+        assert!(state.scene_before_repair.lock().unwrap().is_none());
     }
 }
