@@ -1,6 +1,7 @@
 # TODO Fix — Auditoría 2026-09-26
 
 Resultado de la auditoría del workspace. Estado base: `cargo build` y `cargo check -p pinocchio-app` limpios, 488 tests OK — los bugs de abajo **no** están cubiertos por tests.
+Estado al 2026-09-27: 421 tests OK (salieron ~100 de los crates de quadriflow borrados), clippy sin avisos.
 
 Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ confirmado con probe ejecutable
 
@@ -41,6 +42,27 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] El `Attachment` usa siempre las posiciones y el número de vértices de la malla original.
 - **Test:** `autorig_decimated_mesh_transfers_weights_to_original` (decimación forzada, regiones > 90 %).
 
+### 21. La retopología no funcionaba ✅ RESUELTO (2026-09-27)
+- **Dónde:** `libs/quadriflow/`
+- **Problema:** con una esfera de radio 1 devolvía 0 quads; con radio 100, 248 159 quads (objetivo 200), con bordes y normales mezcladas. Ningún test verificaba la salida.
+- **Causas:** `compute_scale` devolvía `1/(ratio·L)` en vez de `ratio/L` y la parametrización entera **dividía** por la escala (la grilla escalaba al revés, con L²); además, el Poisson del campo de posición no aplicaba el matching 4-RoSy entre caras, así que la UV salía incoherente incluso en un plano.
+- **Hecho:** núcleo reescrito según *Instant Field-Aligned Meshes* (Jakob et al. 2015), la base de QuadriFlow. Se borraron los crates `field`, `hierarchy`, `optimizer`, `flow`, `parametrizer` y `extractor`. Detalle en `libs/quadriflow/ROADMAP.md`.
+  - [x] Soldado de costuras y subdivisión (cola de prioridad) hasta aristas < medio quad.
+  - [x] Jerarquía por emparejamiento y Gauss-Seidel paralelo por colores (determinista).
+  - [x] Campos extrínsecos 4-RoSy/4-PoSy con restricciones de borde y aristas vivas.
+  - [x] Extracción por órbitas de semiaristas, poda de colgantes, relleno de agujeros, eliminación de "almohadas", separación de pellizcos y de componentes espurias.
+  - [x] Salida solo de quads (n-gonos → n quads), proyectada sobre la superficie y relajada.
+  - [x] `RemeshConfig` sin `adaptive` ni `remove_flips` (no hacían nada útil); GUI y frontend actualizados.
+- **Resultado:** esfera, toro y cubo salen cerrados con la χ correcta; plano 10×10 perfecto; gonfoterio (500k tris, genus 1) → 4790 quads cerrados con genus 1 en ~7 s.
+- **Tests:** `libs/quadriflow/core/tests/remesh.rs` (11) + 14 unitarios. `opt-level = 2` para quadriflow-core y nalgebra en `dev` (tests: 25 s → 1 s).
+- **Pendiente:** densidad adaptativa; optimización de singularidades por flujo (lo propio de QuadriFlow); tubos más finos que un quad pueden perder asas.
+
+### 22. STL desde/hacia bytes y WASM ✅ RESUELTO (2026-09-27)
+- **Problema:** `converter-wasm` anunciaba import/export STL pero el import siempre fallaba y el export no existía; `Format::can_import_bytes` decía que STL sí, pero `import_bytes` lo rechazaba. Las opciones `texture_quality`/`max_texture_size` se truncaban en silencio (300 → 44).
+- [x] `converter_stl::{import_stl_bytes, export_stl_bytes}`; `converter-core` importa STL y exporta STL/USDA a bytes.
+- [x] `converter-wasm`: lógica testeable de forma nativa (errores `String`, `JsError` solo en el borde) y validación de opciones.
+- **Tests:** 8 en wasm (todo formato anunciado funciona), capacidades de bytes = implementación en core, STL ASCII/binario/vacío.
+
 ---
 
 ## 🟠 Altos
@@ -62,7 +84,9 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Reparar, deshacer reparación o escalar para imprimir invalidan el rig (antes se podían exportar pesos de otra malla); además se verifica que el número de pesos coincida con los vértices.
 - [x] Frontend: dos casillas en el paso de exportación.
 - **Tests:** GLB con skin ida y vuelta (joints, pesos normalizados), USDA con UsdSkel, malla de quads triangulada.
-- **Pendiente:** OBJ/STL no tienen rig (esperado); el JSON de pesos sigue siendo solo de la malla original.
+- [x] El JSON de pesos respeta "Usar malla retopologizada": pesos transferidos a los vértices de la malla de quads (mismo orden que la geometría exportada) y `"mesh.source": "retopology"`. `dominant_influences` pasa a ser función pública de `pinocchio-attachment`.
+- **Test:** `weights_follow_the_quad_mesh`.
+- OBJ/STL no tienen rig (esperado).
 
 ### 9. `scale_to_volume` con volumen 0 → NaN/inf ✅ RESUELTO
 - [x] `scale_to_volume` y `scale_to_fit` devuelven `Result`: volumen ≤ 0 → `MeshNotClosed`, objetivo/tamaño inválido → `InvalidConfig`; los ejes planos no limitan `scale_to_fit`.
@@ -125,7 +149,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - **Resultado (humanoide de prueba, altura 1):** codo, muñeca y mano a < 0.01 de las reales (antes ~0.05–0.08). Se adapta a pose T con la plantilla en pose A.
 - **Tests:** tolerancias endurecidas a 0.03 en brazos; regiones anatómicas originales; `autorig_adapts_to_t_pose`.
 - [x] El primer joint de cada cadena se ancla a la proyección de su plantilla sobre el camino (mejora leve en brazos).
-- **Limitación conocida:** en el humanoide sintético la cadera queda en y≈0.42 (el muslo nace dentro del torso) y la rodilla ~0.03 baja: el reparto por proporciones de la plantilla no conoce la anatomía del modelo.
+- **Limitación conocida:** en el humanoide sintético la cadera queda en y≈0.42 (real 0.47, dentro del torso) y la rodilla ~0.03 baja por arrastre. No hay señal geométrica: la cadera está dentro del volumen del torso.
+  - Probado (2026-09-27): usar la cadera de la plantilla ajustada y recorrer la pierna desde ahí baja la rodilla a 0.01, pero el codo sube de 0.006 a 0.05 (el hombro de la plantilla está peor ubicado). Elegir candidato por la proporción primer hueso / resto elige mal en ambas poses. Se dejó como estaba.
 
 ### 20. `DistanceField::sample` devuelve la celda más cercana ✅ RESUELTO
 - [x] Interpolación trilineal entre centros de celda (sin NaN con celdas infinitas). **Test:** reproduce un campo lineal exacto.
@@ -145,7 +170,8 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] `Cargo.toml`: `repository` → `https://github.com/Debaq/Pinocchiors`.
 - [x] `LICENSE-MIT` y `LICENSE-APACHE` (texto oficial).
 - [x] Clippy: errores `approx_constant` del test de `pt_graph` corregidos.
-- [x] Clippy: `rust-version` subido a 1.88 (solo se compila en CI con Rust estable) y `cargo clippy --fix` aplicado. Quedan ~25 avisos de estilo propios de código numérico (`needless_range_loop`, `too_many_arguments`).
+- [x] Clippy: `rust-version` subido a 1.88 (solo se compila en CI con Rust estable) y `cargo clippy --fix` aplicado.
+- [x] Clippy: 0 avisos en `--workspace --all-targets` (bucles → iteradores; `allow(too_many_arguments)` en funciones numéricas y writers USD).
 - [x] Frontend: `npx tsc --noEmit` pasa.
 - [x] CI: el job de tests instala las dependencias de Tauri y corre también `pinocchio-app`.
 
@@ -159,7 +185,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Converter con transformaciones de nodos → STL/OBJ (#5).
 - [x] Proptest de escenas malformadas: `world_primitives` nunca hace panic y `validate_geometry` rechaza exactamente índices/atributos inválidos (#10).
 - [x] Doctests de `pinocchio-core`, `quadriflow-core`, `pinocchio-repair` y `pinocchio-print3d` como `no_run` (compilan contra la API real).
-- [ ] 23 crates sin tests unitarios (wasm, CLI, desktop, varios de quadriflow).
+- [x] Todos los crates tienen tests (el último sin tests era `converter-wasm`; los de quadriflow se borraron).
 
 ---
 
@@ -171,6 +197,6 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 4. ~~#9 + #10 + #11 + #15 + #16 + #18 + #20~~ ✅
 5. ~~#3 + #14~~ ✅
 6. ~~#8~~ ✅
-4. #9 + #10 + #11 — robustez y seguridad.
-5. #3, #8, #14 — funcionalidades incompletas.
-6. Medios y limpieza.
+7. ~~#21 + #22 + pendientes de #8 + clippy~~ ✅
+
+Queda abierto: densidad adaptativa y flujo de singularidades en la retopología (#21), limitación de cadera (#19).
