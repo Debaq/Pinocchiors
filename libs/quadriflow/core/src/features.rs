@@ -23,24 +23,28 @@ fn closest_on_segment(p: &V3, a: &V3, b: &V3) -> V3 {
 impl FeatureLines {
     /// Indexa las aristas características en una grilla de lado `cell`.
     pub fn new(graph: &VertexGraph, cell: f64) -> Self {
-        let mut lines = Self {
-            cell,
-            segments: Vec::with_capacity(graph.feature_edges.len()),
-            grid: HashMap::new(),
-        };
-        for &(a, b) in &graph.feature_edges {
-            let (pa, pb) = (graph.pos[a as usize], graph.pos[b as usize]);
-            let id = lines.segments.len() as u32;
-            lines.segments.push((pa, pb));
+        let segments = graph
+            .feature_edges
+            .iter()
+            .map(|&(a, b)| (graph.pos[a as usize], graph.pos[b as usize]))
+            .collect();
+        Self::from_segments(segments, cell)
+    }
+
+    /// Indexa segmentos sueltos en una grilla de lado `cell`.
+    pub fn from_segments(segments: Vec<(V3, V3)>, cell: f64) -> Self {
+        let mut lines = Self { cell, segments: Vec::new(), grid: HashMap::new() };
+        for (id, &(pa, pb)) in segments.iter().enumerate() {
             let (lo, hi) = (lines.cell_of(&pa.inf(&pb)), lines.cell_of(&pa.sup(&pb)));
             for x in lo[0]..=hi[0] {
                 for y in lo[1]..=hi[1] {
                     for z in lo[2]..=hi[2] {
-                        lines.grid.entry([x, y, z]).or_default().push(id);
+                        lines.grid.entry([x, y, z]).or_default().push(id as u32);
                     }
                 }
             }
         }
+        lines.segments = segments;
         lines
     }
 

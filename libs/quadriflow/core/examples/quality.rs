@@ -1,7 +1,7 @@
 //! Mide la calidad de la retopología sobre un modelo real.
 //!
 //! ```text
-//! cargo run --release -p quadriflow-core --example quality -- modelo.glb 5000 [--sharp] [--rebuild always|never] [--obj salida.obj]
+//! cargo run --release -p quadriflow-core --example quality -- modelo.glb 5000 [--sharp] [--rebuild always|never] [--curvature 1.0] [--obj salida.obj]
 //! ```
 
 use pinocchio_math::Vector3;
@@ -27,7 +27,19 @@ fn main() {
     let mesh = load(path);
     println!("entrada: {} vértices, {} triángulos; {}", mesh.num_vertices(), mesh.num_faces(), input_topology(&mesh));
 
-    let config = RemeshConfig { target_faces: target, preserve_sharp: sharp, rebuild, ..Default::default() };
+    let curvature = args
+        .iter()
+        .position(|a| a == "--curvature")
+        .and_then(|i| args.get(i + 1))
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(RemeshConfig::default().curvature_alignment);
+    let config = RemeshConfig {
+        target_faces: target,
+        preserve_sharp: sharp,
+        rebuild,
+        curvature_alignment: curvature,
+        ..Default::default()
+    };
     let start = Instant::now();
     let mut last = (start, String::from("inicio"));
     let mut stages = Vec::new();
@@ -63,6 +75,7 @@ fn main() {
     let (bvh, diagonal) = bvh(&mesh);
     let (mean_d, max_d) = distance(&q, &bvh);
     println!("distancia a la original (% diagonal): media {:.3}, máx {:.3}", 100.0 * mean_d / diagonal, 100.0 * max_d / diagonal);
+    println!("quads desalineados con la superficie (>20°): {:.2} %", 100.0 * misaligned(&q, &bvh, 20.0));
 
     if let Some(out) = obj {
         let mut f = std::io::BufWriter::new(std::fs::File::create(out).unwrap());
@@ -217,4 +230,30 @@ fn input_topology(mesh: &Mesh) -> String {
     let non_manifold = edges.values().filter(|&&c| c > 2).count();
     let euler = ids.len() as i64 - edges.len() as i64 + mesh.num_faces() as i64;
     format!("{components} componentes, Euler {euler}, {boundary} aristas de borde, {non_manifold} no-manifold")
+}
+
+/// Fracción de quads con alguna mitad cuya normal se aparta más de
+/// `max_angle` grados de la del triángulo original más cercano a su centro:
+/// quads que cruzan una arista viva o doblados.
+fn misaligned(q: &QuadMesh, bvh: &Bvh, max_angle: f64) -> f64 {
+    let cos = max_angle.to_radians().cos();
+    let bad = q
+        .faces
+        .iter()
+        .filter(|f| {
+            let [a, b, c, d] = f.v.map(|i| q.vertices[i]);
+            [[a, b, c], [a, c, d]].iter().any(|t| {
+                let n = (t[1] - t[0]).cross(&(t[2] - t[0]));
+                if n.norm() == 0.0 {
+                    return true;
+                }
+                let center = (t[0] + t[1] + t[2]) / 3.0;
+                let Some(hit) = bvh.query_closest(&Vector3(center)) else { return false };
+                let tri = bvh.triangle(hit.triangle);
+                let m = tri.normal().0;
+                n.normalize().dot(&m.normalize()) < cos
+            })
+        })
+        .count();
+    bad as f64 / q.num_faces() as f64
 }

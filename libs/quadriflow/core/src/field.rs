@@ -172,7 +172,11 @@ where
     }
 }
 
-fn smooth_orientation(level: &Level, q: &mut [V3]) {
+/// Dirección guía por vértice (dirección principal de curvatura) y su peso,
+/// relativo a la suma de los pesos de los vecinos.
+pub(crate) type Guide = Vec<(V3, f64)>;
+
+fn smooth_orientation(level: &Level, q: &mut [V3], guide: Option<&Guide>) {
     gauss_seidel(level, q, |i, q| {
         if constrained_direction(level, i).is_some() {
             return None;
@@ -187,15 +191,141 @@ fn smooth_orientation(level: &Level, q: &mut [V3]) {
             weight += w;
             sum = tangent(&sum, &n).unwrap_or(a);
         }
+        if let Some(&(dir, w)) = guide.map(|g| &g[i])
+            && w > 0.0
+            && let Some(dir) = tangent(&dir, &n)
+        {
+            let (a, b) = compat_orientation(&sum, &n, &dir, &n);
+            sum = tangent(&(a * weight + b * (w * weight)), &n).unwrap_or(a);
+        }
         Some(sum)
     });
+}
+
+/// La guía de curvatura actúa desde este nivel de la jerarquía hacia los más
+/// gruesos: fija la estructura global (sin pares de singularidades sobrantes)
+/// y deja que el nivel fino se suavice sin el ruido local de la curvatura.
+const GUIDE_MIN_LEVEL: usize = 2;
+
+/// Radio (en vueltas de vecinos) del suavizado del tensor de curvatura.
+const CURVATURE_SMOOTHING: usize = 3;
+
+/// Guía de curvatura del nivel más fino: dirección principal de mayor
+/// curvatura y peso `strength · min(1, |k1 − k2| · scale)` (nulo en planos y
+/// esferas, donde no hay dirección preferida).
+pub(crate) fn curvature_guide(level: &Level, scale: f64, strength: f64) -> Guide {
+    let n = level.len();
+    // Operador de forma por vértice, como tensor 3×3 en coordenadas del mundo
+    let mut tensor: Vec<[f64; 6]> = (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let (p, nrm) = (level.pos[i], level.nrm[i]);
+            let t1 = any_tangent(&nrm);
+            let t2 = nrm.cross(&t1);
+            // Mínimos cuadrados de S·e = Δn con S = [[a, b], [b, c]]
+            let mut m = pinocchio_math::nalgebra::Matrix3::<f64>::zeros();
+            let mut r = V3::zeros();
+            for &(j, _) in level.neighbors(i).iter().filter(|&&(j, _)| same_side(level, i, j as usize)) {
+                let e = level.pos[j as usize] - p;
+                let dn = level.nrm[j as usize] - nrm;
+                let (ex, ey) = (e.dot(&t1), e.dot(&t2));
+                let (dx, dy) = (dn.dot(&t1), dn.dot(&t2));
+                let w = 1.0 / e.norm_squared().max(1e-300);
+                // Filas: [ex, ey, 0]·(a, b, c) = dx ; [0, ex, ey]·(a, b, c) = dy
+                let rows = [(V3::new(ex, ey, 0.0), dx), (V3::new(0.0, ex, ey), dy)];
+                for (row, rhs) in rows {
+                    m += row * row.transpose() * w;
+                    r += row * rhs * w;
+                }
+            }
+            let Some(abc) = m.try_inverse().map(|inv| inv * r) else { return [0.0; 6] };
+            let (a, b, c) = (abc.x, abc.y, abc.z);
+            // S3 = a t1t1ᵀ + b (t1t2ᵀ + t2t1ᵀ) + c t2t2ᵀ, simétrico: 6 componentes
+            let s = t1 * t1.transpose() * a + (t1 * t2.transpose() + t2 * t1.transpose()) * b + t2 * t2.transpose() * c;
+            [s[(0, 0)], s[(1, 1)], s[(2, 2)], s[(0, 1)], s[(0, 2)], s[(1, 2)]]
+        })
+        .collect();
+    for _ in 0..CURVATURE_SMOOTHING {
+        tensor = (0..n)
+            .into_par_iter()
+            .map(|i| {
+                let mut acc = tensor[i];
+                let mut count = 1.0;
+                for &(j, _) in level.neighbors(i).iter().filter(|&&(j, _)| same_side(level, i, j as usize)) {
+                    for (x, y) in acc.iter_mut().zip(&tensor[j as usize]) {
+                        *x += y;
+                    }
+                    count += 1.0;
+                }
+                acc.map(|x| x / count)
+            })
+            .collect();
+    }
+
+    (0..n)
+        .into_par_iter()
+        .map(|i| {
+            let nrm = level.nrm[i];
+            let t1 = any_tangent(&nrm);
+            let t2 = nrm.cross(&t1);
+            let [xx, yy, zz, xy, xz, yz] = tensor[i];
+            let s = pinocchio_math::nalgebra::Matrix3::new(xx, xy, xz, xy, yy, yz, xz, yz, zz);
+            let (a, b, c) = ((s * t1).dot(&t1), (s * t2).dot(&t1), (s * t2).dot(&t2));
+            let anisotropy = ((a - c).powi(2) + 4.0 * b * b).sqrt();
+            let theta = 0.5 * (2.0 * b).atan2(a - c);
+            let dir = t1 * theta.cos() + t2 * theta.sin();
+            (dir, strength * (anisotropy * scale).min(1.0))
+        })
+        .collect()
+}
+
+/// Coseno mínimo entre normales vecinas para que cuenten en la curvatura: una
+/// arista viva no es curvatura (tiene su propia restricción) y no debe
+/// contagiar su dirección a las caras de al lado.
+const SAME_SIDE_COS: f64 = std::f64::consts::FRAC_1_SQRT_2;
+
+fn same_side(level: &Level, i: usize, j: usize) -> bool {
+    level.nrm[i].dot(&level.nrm[j]) > SAME_SIDE_COS
+}
+
+/// Guía de un nivel grueso a partir del fino: suma de las guías de los hijos
+/// (alineadas entre sí) ponderadas por área; si discrepan, el peso baja.
+fn restrict_guide(fine: &Level, coarse: &Level, guide: &Guide) -> Guide {
+    (0..coarse.len())
+        .map(|c| {
+            let n = coarse.nrm[c];
+            let [a, b] = coarse.children[c];
+            let (a, b) = (a as usize, b);
+            let (ga, wa) = guide[a];
+            if b == NONE {
+                return (ga, wa);
+            }
+            let (gb, wb) = guide[b as usize];
+            let (xa, xb) = compat_orientation(&ga, &fine.nrm[a], &gb, &fine.nrm[b as usize]);
+            let (aa, ab) = (fine.area[a], fine.area[b as usize]);
+            let total = xa * (wa * aa) + xb * (wb * ab);
+            let area = (aa + ab).max(1e-300);
+            (tangent(&total, &n).unwrap_or(ga), total.norm() / area)
+        })
+        .collect()
 }
 
 /// Resuelve la orientación en todos los niveles. Devuelve `q` por nivel; los
 /// niveles gruesos se recalculan al final a partir del más fino, para que el
 /// campo de posición use orientaciones coherentes en toda la jerarquía.
-pub(crate) fn solve_orientation(h: &Hierarchy, iterations: usize) -> Vec<Vec<V3>> {
+pub(crate) fn solve_orientation(h: &Hierarchy, iterations: usize, guide: Option<Guide>) -> Vec<Vec<V3>> {
     let levels = &h.levels;
+    let guides: Vec<Guide> = match guide {
+        Some(g) => {
+            let mut out = vec![g];
+            for lvl in 1..levels.len() {
+                let next = restrict_guide(&levels[lvl - 1], &levels[lvl], &out[lvl - 1]);
+                out.push(next);
+            }
+            out
+        }
+        None => Vec::new(),
+    };
     let mut qs: Vec<Vec<V3>> = levels.iter().map(|l| vec![V3::zeros(); l.len()]).collect();
     let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
 
@@ -214,7 +344,8 @@ pub(crate) fn solve_orientation(h: &Hierarchy, iterations: usize) -> Vec<Vec<V3>
                 .unwrap_or_else(|| any_tangent(&n));
         }
         for _ in 0..iterations {
-            smooth_orientation(level, &mut qs[lvl]);
+            let guide = guides.get(lvl).filter(|_| lvl >= GUIDE_MIN_LEVEL);
+            smooth_orientation(level, &mut qs[lvl], guide);
         }
     }
 

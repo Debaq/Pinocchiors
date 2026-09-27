@@ -51,6 +51,17 @@ fn has_overlapping_shells(surface: &Surface) -> bool {
     surface.positions.par_iter().step_by(step).any(|&p| tree.winding(p) > 1.1)
 }
 
+/// Toda arista con dos caras recorridas en sentidos opuestos.
+#[cfg(test)]
+pub(crate) fn is_closed_manifold(surface: &Surface) -> bool {
+    matches!(edge_state(surface), EdgeState::Closed)
+}
+
+/// Sin aristas no-manifold ni orientación incoherente (puede tener bordes).
+pub(crate) fn is_manifold(surface: &Surface) -> bool {
+    !matches!(edge_state(surface), EdgeState::Broken)
+}
+
 enum EdgeState {
     /// Toda arista con dos caras en sentidos opuestos.
     Closed,

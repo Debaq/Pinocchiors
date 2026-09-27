@@ -19,6 +19,11 @@ pub struct RemeshConfig {
 
     /// Cuándo reconstruir la superficie antes de retopologizar.
     pub rebuild: Rebuild,
+
+    /// Cuánto se alinean los quads a las direcciones principales de
+    /// curvatura (0 = nada). Donde la superficie es plana o esférica no hay
+    /// dirección preferida y no influye.
+    pub curvature_alignment: f64,
 }
 
 /// Reconstrucción volumétrica de la entrada: reemplaza la malla por la
@@ -45,6 +50,7 @@ impl Default for RemeshConfig {
             sharp_angle: std::f64::consts::FRAC_PI_4, // 45°
             smooth_iterations: 10,
             rebuild: Rebuild::Auto,
+            curvature_alignment: 1.0,
         }
     }
 }

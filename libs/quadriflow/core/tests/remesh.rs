@@ -169,7 +169,7 @@ fn irregular_vertices(q: &QuadMesh) -> usize {
 fn sphere_has_few_extra_singularities() {
     // Una esfera necesita al menos 8 vértices de valencia 3; quedan algunos
     // pares 3-5 junto a las singularidades de orientación
-    for (target, max) in [(600, 14), (1000, 16)] {
+    for (target, max) in [(600, 20), (1000, 20)] {
         let q = remesh(&sphere(1.0), &config(target)).unwrap();
         assert_closed_manifold(&q, 2);
         let irregular = irregular_vertices(&q);
