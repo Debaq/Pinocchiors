@@ -121,21 +121,20 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
     validate_input(mesh, skeleton, &config)?;
 
     // 2. Preparar malla
-    let mut working_mesh = mesh.clone();
+    // 2a. Soldar duplicados (costuras UV): todos los vértices de una costura
+    //     reciben los mismos pesos y la difusión no se corta en ella
+    let weld_tolerance = mesh.bounding_box().diagonal() * 1e-7;
+    let (welded, weld_map) = mesh.welded(weld_tolerance);
 
-    // 2a. Aplicar decimación si la malla es muy grande
-    let was_decimated = if working_mesh.num_faces() > config.auto_decimate_threshold {
-        working_mesh = decimate(&working_mesh, config.decimate_ratio);
-        true
+    // 2b. Decimar si la malla es muy grande (los pesos se transfieren después)
+    let was_decimated = welded.num_faces() > config.auto_decimate_threshold;
+    let mut working_mesh = if was_decimated {
+        decimate(&welded, config.decimate_ratio)
     } else {
-        false
+        welded.clone()
     };
 
-    // Si se decimó, los pesos se calcularán en la malla simplificada
-    // y luego se transferirán a la malla original
-    let _ = was_decimated; // TODO: implementar transferencia de pesos
-
-    // 2b. Normalizar (el resultado se devuelve en las coordenadas originales)
+    // 2c. Normalizar (el resultado se devuelve en las coordenadas originales)
     let normalization = if config.normalize_mesh {
         Normalization::for_bounds(&working_mesh.bounding_box())
     } else {
@@ -173,19 +172,24 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
         .with_diffusion_weight(config.diffusion_weight)
         .compute_weights(&embedded_skeleton)?;
 
-    // 6. Volver a las coordenadas originales
+    // 6. Pesos por vértice de la malla original
+    let welded_weights = if was_decimated {
+        let targets: Vec<Vector3> = welded.vertices.iter().map(|v| normalization.apply(v.position)).collect();
+        transfer_weights(&working_mesh, &weights, &targets)
+    } else {
+        weights
+    };
+    let original_weights: Vec<Vec<Real>> = weld_map.iter().map(|&w| welded_weights[w].clone()).collect();
+
+    // 7. Volver a las coordenadas originales
     let bone_positions: Vec<Vector3> = embedding
         .bone_positions
         .iter()
         .map(|&p| normalization.invert(p))
         .collect();
-    let rest_positions = working_mesh
-        .vertices
-        .iter()
-        .map(|v| normalization.invert(v.position))
-        .collect();
+    let rest_positions = mesh.vertices.iter().map(|v| v.position).collect();
 
-    let mut attachment = Attachment::from_rest_positions(rest_positions, weights, skeleton.num_bones());
+    let mut attachment = Attachment::from_rest_positions(rest_positions, original_weights, skeleton.num_bones());
     attachment.compact_weights(config.max_bone_influences);
 
     let bone_rest_transforms = bone_positions
@@ -193,7 +197,7 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
         .map(|&p| Transform::from_translation(p))
         .collect();
 
-    let stats = compute_stats(&working_mesh, &working_skeleton, &attachment, &embedding);
+    let stats = compute_stats(mesh, &working_skeleton, &attachment, &embedding);
     on_stage(AutorigStage::Done);
 
     Ok(PinocchioOutput {
@@ -206,6 +210,71 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
         bone_rest_transforms,
         stats,
     })
+}
+
+/// Transfiere pesos de `source` a puntos arbitrarios (en el mismo espacio):
+/// cada punto toma el punto más cercano de `source` e interpola con
+/// coordenadas baricéntricas los pesos de los vértices de ese triángulo.
+fn transfer_weights(source: &Mesh, weights: &[Vec<Real>], targets: &[Vector3]) -> Vec<Vec<Real>> {
+    use pinocchio_spatial::{Bvh, Triangle};
+    use rayon::prelude::*;
+
+    let triangles: Vec<Triangle> = (0..source.num_faces())
+        .map(|f| {
+            let [a, b, c] = source.get_face_positions(f);
+            Triangle::new(a, b, c)
+        })
+        .collect();
+    let bvh = Bvh::build(triangles);
+    let num_bones = weights.first().map_or(0, Vec::len);
+
+    targets
+        .par_iter()
+        .map(|p| {
+            let mut out = vec![0.0; num_bones];
+            let Some(hit) = bvh.query_closest(p) else {
+                return out;
+            };
+            let verts = source.get_face_vertices(hit.triangle);
+            let [a, b, c] = source.get_face_positions(hit.triangle);
+            for (w, &v) in barycentric(&hit.point, &a, &b, &c).iter().zip(&verts) {
+                for (o, &x) in out.iter_mut().zip(&weights[v]) {
+                    *o += w * x;
+                }
+            }
+            let sum: Real = out.iter().sum();
+            if sum > 1e-12 {
+                out.iter_mut().for_each(|w| *w /= sum);
+            }
+            out
+        })
+        .collect()
+}
+
+/// Coordenadas baricéntricas de `p` (sobre el triángulo) respecto de `a, b, c`
+fn barycentric(p: &Vector3, a: &Vector3, b: &Vector3, c: &Vector3) -> [Real; 3] {
+    let v0 = *b - *a;
+    let v1 = *c - *a;
+    let v2 = *p - *a;
+    let d00 = v0.dot(&v0);
+    let d01 = v0.dot(&v1);
+    let d11 = v1.dot(&v1);
+    let d20 = v2.dot(&v0);
+    let d21 = v2.dot(&v1);
+    let denom = d00 * d11 - d01 * d01;
+    if denom.abs() < 1e-30 {
+        // Triángulo degenerado: el vértice más cercano
+        let d = [p.distance_squared(a), p.distance_squared(b), p.distance_squared(c)];
+        let i = (0..3).min_by(|&x, &y| d[x].total_cmp(&d[y])).unwrap();
+        let mut w = [0.0; 3];
+        w[i] = 1.0;
+        return w;
+    }
+    let v = ((d11 * d20 - d01 * d21) / denom).clamp(0.0, 1.0);
+    let w = ((d00 * d21 - d01 * d20) / denom).clamp(0.0, 1.0);
+    let u = (1.0 - v - w).max(0.0);
+    let sum = u + v + w;
+    [u / sum, v / sum, w / sum]
 }
 
 /// Valida la entrada antes del procesamiento

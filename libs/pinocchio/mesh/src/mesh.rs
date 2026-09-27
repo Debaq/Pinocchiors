@@ -171,6 +171,42 @@ impl Mesh {
         }
     }
 
+    /// Suelda los vértices que comparten posición (a menos de `tolerance`),
+    /// como los duplicados de las costuras UV de un glTF.
+    ///
+    /// Devuelve la malla soldada y, para cada vértice original, su índice en
+    /// ella. Omite los triángulos que quedan degenerados.
+    pub fn welded(&self, tolerance: Real) -> (Mesh, Vec<usize>) {
+        let tolerance = tolerance.max(Real::MIN_POSITIVE);
+        let key = |p: &Vector3| {
+            (
+                (p.x() / tolerance).round() as i64,
+                (p.y() / tolerance).round() as i64,
+                (p.z() / tolerance).round() as i64,
+            )
+        };
+
+        let mut index_of: HashMap<(i64, i64, i64), usize> = HashMap::new();
+        let mut positions = Vec::new();
+        let map: Vec<usize> = self
+            .vertices
+            .iter()
+            .map(|v| {
+                *index_of.entry(key(&v.position)).or_insert_with(|| {
+                    positions.push(v.position);
+                    positions.len() - 1
+                })
+            })
+            .collect();
+
+        let triangles: Vec<[usize; 3]> = (0..self.num_faces())
+            .map(|f| self.get_face_vertices(f).map(|v| map[v]))
+            .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+            .collect();
+
+        (Mesh::from_triangles(&positions, &triangles), map)
+    }
+
     /// Normaliza la malla al cubo unitario centrado en el origen
     pub fn normalize_bounding_box(&mut self) {
         let bbox = self.bounding_box();
@@ -389,5 +425,23 @@ mod tests {
 
         let area = mesh.get_face_area(0);
         assert!((area - 0.5).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_welded_merges_seam_duplicates() {
+        // Cuadrado de dos triángulos sin vértices compartidos (como una costura UV)
+        let p = [
+            Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 1.0, 0.0), Vector3::new(0.0, 1.0, 0.0),
+        ];
+        let mesh = Mesh::from_triangles(&p, &[[0, 1, 2], [3, 4, 5]]);
+        let (welded, map) = mesh.welded(1e-9);
+        assert_eq!(welded.num_vertices(), 4);
+        assert_eq!(welded.num_faces(), 2);
+        assert_eq!(map[0], map[3]);
+        assert_eq!(map[2], map[4]);
+        for (i, &m) in map.iter().enumerate() {
+            assert_eq!(welded.vertices[m].position, p[i]);
+        }
     }
 }

@@ -225,11 +225,9 @@ fn autorig_humanoid_joints_inside_and_in_place() {
     }
 }
 
-#[test]
-fn autorig_humanoid_weights_by_region() {
-    let (mesh, out) = fixture();
-
-    // Pesos normalizados y compactados
+/// Pesos normalizados/compactados y hueso dominante correcto por región del cuerpo
+fn check_weights_by_region(mesh: &Mesh, out: &PinocchioOutput, min_ratio: f64) {
+    assert_eq!(out.attachment.num_vertices(), mesh.num_vertices());
     for v in 0..mesh.num_vertices() {
         let w = out.get_weights(v);
         let sum: f64 = w.iter().sum();
@@ -264,7 +262,51 @@ fn autorig_humanoid_weights_by_region() {
         }
         assert!(total > 10, "{label}: región vacía");
         let ratio = ok as f64 / total as f64;
-        assert!(ratio > 0.95, "{label}: solo {ok}/{total} vértices con el hueso esperado");
+        assert!(ratio > min_ratio, "{label}: solo {ok}/{total} vértices con el hueso esperado");
+    }
+}
+
+#[test]
+fn autorig_humanoid_weights_by_region() {
+    let (mesh, out) = fixture();
+    check_weights_by_region(mesh, out, 0.95);
+}
+
+#[test]
+fn autorig_decimated_mesh_transfers_weights_to_original() {
+    // Forzar decimación: los pesos se calculan en la malla simplificada y se
+    // transfieren a cada vértice de la original
+    let (mesh, _) = fixture();
+    let config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() }
+        .with_auto_decimate(mesh.num_faces() / 4, 0.3);
+    let out = autorig(mesh, &HumanSkeleton::new(), Some(config)).expect("autorig");
+    check_weights_by_region(mesh, &out, 0.9);
+}
+
+#[test]
+fn autorig_unwelded_mesh_gets_identical_weights_on_seams() {
+    // Cada triángulo con sus propios vértices, como un glTF con costuras UV en todas partes
+    let (mesh, _) = fixture();
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    for f in 0..mesh.num_faces() {
+        let base = positions.len();
+        positions.extend(mesh.get_face_positions(f));
+        triangles.push([base, base + 1, base + 2]);
+    }
+    let unwelded = Mesh::from_triangles(&positions, &triangles);
+    let config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() };
+    let out = autorig(&unwelded, &HumanSkeleton::new(), Some(config)).expect("autorig");
+
+    check_weights_by_region(&unwelded, &out, 0.95);
+
+    // Los duplicados de una misma posición tienen exactamente los mismos pesos
+    let mut by_position: std::collections::HashMap<[u64; 3], usize> = std::collections::HashMap::new();
+    for (v, vertex) in unwelded.vertices.iter().enumerate() {
+        let p = vertex.position;
+        let key = [p.x().to_bits(), p.y().to_bits(), p.z().to_bits()];
+        let first = *by_position.entry(key).or_insert(v);
+        assert_eq!(out.get_weights(first), out.get_weights(v), "vértices {first} y {v}");
     }
 }
 

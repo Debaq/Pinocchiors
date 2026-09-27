@@ -36,29 +36,10 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
   - [x] API: `HeatDiffusion::compute_weights(&skeleton)` (se eliminó `compute_initial_heat`).
 - **Tests:** cadena en cilindro (huesos dominantes por altura), invariancia de escala (cilindro 1 vs 170), CG contra residuo, pesos por región del humanoide (cabeza, muslo, piernas, brazo, antebrazos, mano) > 95 %.
 
-### 3. Mallas grandes: pesos no corresponden a la malla
-- **Dónde:** `libs/pinocchio/core/src/autorig.rs:62` (`TODO: implementar transferencia de pesos`)
-- **Problema:** con más de 100k caras (50k en `fast`) se decima la malla, y los pesos quedan con el número de vértices de la malla decimada. La GUI los aplica por índice a la original.
-- **Fix:**
-  - [ ] Transferir pesos a la malla original (vértice más cercano, o baricéntrico sobre el triángulo más cercano de la decimada).
-  - [ ] Mientras tanto: devolver error si `attachment.num_vertices() != mesh.num_vertices()`.
-- **Test:** malla > umbral → `export_weights().0.len() == mesh.num_vertices()`.
-
-### 4. Exportar tras reparar o escalar genera un archivo vacío ✅ RESUELTO
-- **Dónde:** `apps/desktop/src/commands.rs` (`mesh_to_scene`, `scale_scene_about`)
-- **Hecho:**
-  - [x] `mesh_to_scene` crea nodo raíz + `root_nodes`, normales por vértice y conserva `meters_per_unit`/`y_up`.
-  - [x] Escalar para imprimir ya no reconstruye la escena: envuelve las raíces en un nodo `T(c)·S(s)·T(-c)` y conserva materiales, UVs y texturas. Si la escena tiene esqueletos, se exporta geometría estática (los joints no cuelgan de `scene.nodes`).
-  - [x] Factor realmente aplicado calculado del bbox (`scale_to_fit` solo reduce).
-- **Tests:** `apps/desktop` → GLB tras reparar tiene `nodes` y `scenes`; escalado conserva material y centro.
-- **Pendiente menor:** tras reparar se pierden materiales/UVs (la topología cambia).
-
-### 5. Transformaciones de nodos ignoradas en todo el proyecto ✅ RESUELTO
-- **Hecho:**
-  - [x] `converter-scene`: `Scene::world_transforms()`, `mesh_instances()` y `world_primitives()` (normales con matriz normal, winding invertido si det < 0, mallas con skin en espacio de bind, ciclos e índices inválidos ignorados). `compute_bounding_box` ahora es en espacio mundo. Re-export de `glam`.
-  - [x] STL y OBJ exportan en espacio mundo con instancias; STL usa la normal de la cara (antes la del primer vértice).
-  - [x] `scene_to_mesh` (pinocchio) y la GUI (`get_mesh_data`, stats, bbox) usan el mismo recorrido → los índices de vértice coinciden con los pesos.
-- **Tests:** anidado + instancias, espejo, skin, ciclos/índices inválidos, STL y OBJ con nodo transformado, GUI vs pinocchio en el mismo espacio y orden.
+### 3. Mallas grandes: pesos no corresponden a la malla ✅ RESUELTO
+- [x] Con decimación, los pesos se transfieren a cada vértice original: punto más cercano de la malla decimada (BVH) + interpolación baricéntrica.
+- [x] El `Attachment` usa siempre las posiciones y el número de vértices de la malla original.
+- **Test:** `autorig_decimated_mesh_transfers_weights_to_original` (decimación forzada, regiones > 90 %).
 
 ---
 
@@ -112,9 +93,10 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - [x] Si alguna primitiva tiene UVs, rellenar con `[0,0]` las que no tienen.
 - [x] Generar normales reales en lugar de las dummy `(0,1,0)`.
 
-### 14. Mallas GLB sin soldar (costuras de UV)
-- **Dónde:** `libs/pinocchio/mesh/src/adapter.rs`
-- [ ] Soldar por posición (con tolerancia) para autorig y reparación, guardando el mapeo `original → soldado` para devolver los pesos por vértice original.
+### 14. Mallas GLB sin soldar (costuras de UV) ✅ RESUELTO
+- [x] `Mesh::welded(tolerance)` → malla soldada + mapeo original → soldado.
+- [x] `autorig` suelda antes de decimar/embeber/calcular pesos y devuelve los pesos por vértice original: los duplicados de una costura reciben exactamente los mismos pesos.
+- **Test:** `autorig_unwelded_mesh_gets_identical_weights_on_seams` (humanoide con todos los triángulos separados).
 
 ### 15. `partial_cmp().unwrap()` hace panic con NaN ✅ RESUELTO
 - [x] `repair/normals.rs`, `parametrizer/integer.rs` y `usda/skeleton.rs` usan `total_cmp`.
@@ -167,7 +149,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 ## Tests que faltan
 
 - [x] E2E autorig: figura en coords mundo → posiciones de huesos dentro de la malla y huesos dominantes correctos (cubre #1, #2).
-- [ ] Autorig con malla > umbral de decimación (#3).
+- [x] Autorig con malla > umbral de decimación (#3).
 - [x] Roundtrip repair → export GLB con nodos (#4).
 - [x] Converter con transformaciones de nodos → STL/OBJ (#5).
 - [ ] Fuzz/proptest de importadores con índices inválidos (#10).
@@ -182,6 +164,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 2. ~~#4 + #5 + #19~~ ✅
 3. ~~#6 + #7 + #12 + #17~~ ✅
 4. ~~#9 + #10 + #11 + #15 + #16 + #18 + #20~~ ✅
+5. ~~#3 + #14~~ ✅
 4. #9 + #10 + #11 — robustez y seguridad.
 5. #3, #8, #14 — funcionalidades incompletas.
 6. Medios y limpieza.
