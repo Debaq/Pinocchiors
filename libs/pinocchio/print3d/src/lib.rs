@@ -12,21 +12,26 @@
 //!
 //! ## Ejemplo
 //!
-//! ```rust,ignore
+//! ```no_run
 //! use pinocchio_print3d::{analyze, subdivide, SubdivideConfig};
 //!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mesh = pinocchio_mesh::load_obj("modelo.obj")?;
+//!
 //! // Analizar modelo
-//! let analysis = analyze(&mesh);
+//! let analysis = analyze(&mesh)?;
 //! println!("Volumen: {} mm³", analysis.volume);
 //! println!("Dimensiones: {:?}", analysis.bounding_box.dimensions());
 //!
 //! // Subdividir para impresora con volumen 220x220x250
 //! let config = SubdivideConfig {
-//!     build_volume: Vector3::new(220.0, 220.0, 250.0),
+//!     build_volume: [220.0, 220.0, 250.0],
 //!     ..Default::default()
 //! };
-//! let pieces = subdivide(&mesh, &config);
+//! let pieces = subdivide(&mesh, &config)?;
 //! println!("Dividido en {} piezas", pieces.len());
+//! # Ok(())
+//! # }
 //! ```
 
 mod analysis;

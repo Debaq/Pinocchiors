@@ -10,9 +10,11 @@
 //!
 //! # Ejemplo
 //!
-//! ```ignore
-//! use pinocchio_mesh::Mesh;
-//! use pinocchio_repair::{analyze, repair_all, RepairConfig, AnalysisConfig};
+//! ```no_run
+//! use pinocchio_repair::{analyze, repair_all, AnalysisConfig, RepairConfig};
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mut mesh = pinocchio_mesh::load_obj("modelo.obj")?;
 //!
 //! // Analizar la malla
 //! let diagnostics = analyze(&mesh, &AnalysisConfig::default());
@@ -21,6 +23,8 @@
 //! // Reparar la malla
 //! let summary = repair_all(&mut mesh, &RepairConfig::default())?;
 //! println!("Vértices fusionados: {}", summary.vertices_merged);
+//! # Ok(())
+//! # }
 //! ```
 
 mod error;

@@ -6,16 +6,19 @@
 //!
 //! ## Usage
 //!
-//! ```ignore
+//! ```no_run
 //! use quadriflow_core::{remesh, RemeshConfig};
-//! use pinocchio_mesh::Mesh;
 //!
-//! let input_mesh = Mesh::from_obj("model.obj")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let input_mesh = pinocchio_mesh::load_obj("model.obj")?;
 //! let config = RemeshConfig {
 //!     target_faces: 5000,
 //!     ..Default::default()
 //! };
 //! let quad_mesh = remesh(&input_mesh, &config)?;
+//! println!("{} quads", quad_mesh.faces.len());
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! ## Algorithm Overview

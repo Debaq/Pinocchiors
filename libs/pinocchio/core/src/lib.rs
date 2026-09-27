@@ -5,14 +5,18 @@
 //!
 //! # Ejemplo
 //!
-//! ```ignore
+//! ```no_run
 //! use pinocchio_core::{autorig, PinocchioConfig};
-//! use pinocchio_mesh::Mesh;
-//! use pinocchio_skeleton::HumanSkeleton;
+//! use pinocchio_core::mesh::load_obj;
+//! use pinocchio_core::skeleton::HumanSkeleton;
 //!
-//! let mesh = Mesh::load_obj("character.obj")?;
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let mesh = load_obj("character.obj")?;
 //! let skeleton = HumanSkeleton::new();
-//! let result = autorig(&mesh, &skeleton, None)?;
+//! let result = autorig(&mesh, &skeleton, Some(PinocchioConfig::default()))?;
+//! println!("{} huesos embebidos", result.bone_positions.len());
+//! # Ok(())
+//! # }
 //! ```
 
 mod config;

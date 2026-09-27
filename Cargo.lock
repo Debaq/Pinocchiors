@@ -544,6 +544,7 @@ version = "0.1.0"
 dependencies = [
  "converter-scene",
  "glam",
+ "image",
  "tempfile",
  "thiserror 2.0.18",
  "tobj",

@@ -127,10 +127,54 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
 #[derive(Default)]
 struct TextureFiles {
     written: HashMap<usize, String>,
+    channels: HashMap<(usize, usize), Option<String>>,
     used: HashSet<String>,
 }
 
 impl TextureFiles {
+    /// Nombre de archivo libre en el directorio de salida
+    fn unique_name(&mut self, base: &str, index: usize, ext: &str) -> String {
+        let mut filename = format!("{base}.{ext}");
+        if self.used.contains(&filename) {
+            filename = format!("{base}_{index}.{ext}");
+        }
+        self.used.insert(filename.clone());
+        filename
+    }
+
+    /// Escribe un canal de la textura `index` como PNG en escala de grises
+    /// (p. ej. rugosidad = G y metálico = B del mapa metallic-roughness de
+    /// glTF). `None` si la textura no existe o no se puede decodificar.
+    fn channel_file_for(
+        &mut self,
+        scene: &Scene,
+        index: usize,
+        channel: usize,
+        suffix: &str,
+        base_dir: &Path,
+        stem: &str,
+    ) -> Result<Option<String>, ObjExportError> {
+        if let Some(cached) = self.channels.get(&(index, channel)) {
+            return Ok(cached.clone());
+        }
+        let result = match scene.textures.get(index).and_then(|t| image::load_from_memory(&t.data).ok().map(|img| (t, img))) {
+            Some((tex, img)) => {
+                let rgba = img.to_rgba8();
+                let gray = image::GrayImage::from_fn(rgba.width(), rgba.height(), |x, y| {
+                    image::Luma([rgba.get_pixel(x, y).0[channel]])
+                });
+                let base = sanitize_file_stem(&tex.name).unwrap_or_else(|| format!("{stem}_tex_{index}"));
+                let filename = self.unique_name(&format!("{base}_{suffix}"), index, "png");
+                gray.save_with_format(base_dir.join(&filename), image::ImageFormat::Png)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?;
+                Some(filename)
+            }
+            None => None,
+        };
+        self.channels.insert((index, channel), result.clone());
+        Ok(result)
+    }
+
     /// Nombre de archivo para la textura `index` (la escribe la primera vez).
     /// `None` si el índice no existe.
     fn file_for(
@@ -152,12 +196,8 @@ impl TextureFiles {
             TextureFormat::WebP => "webp",
         };
         let base = sanitize_file_stem(&tex.name).unwrap_or_else(|| format!("{stem}_tex_{index}"));
-        let mut filename = format!("{base}.{ext}");
-        if self.used.contains(&filename) {
-            filename = format!("{base}_{index}.{ext}");
-        }
+        let filename = self.unique_name(&base, index, ext);
         std::fs::write(base_dir.join(&filename), &tex.data)?;
-        self.used.insert(filename.clone());
         self.written.insert(index, filename.clone());
         Ok(Some(filename))
     }
@@ -229,6 +269,19 @@ fn write_mtl(scene: &Scene, base_dir: &Path, stem: &str) -> Result<String, ObjEx
         for (keyword, tex_index) in maps {
             if let Some(filename) = tex_index.and_then(|i| textures.file_for(scene, i, base_dir, stem).transpose()) {
                 writeln!(out, "{keyword} {}", filename?)?;
+            }
+        }
+
+        // PBR (extensión MTL): glTF empaqueta rugosidad en G y metálico en B
+        writeln!(out, "Pr {}", mat.roughness_factor)?;
+        writeln!(out, "Pm {}", mat.metallic_factor)?;
+        if let Some(mr) = &mat.metallic_roughness_texture {
+            let i = mr.texture_index;
+            if let Some(f) = textures.channel_file_for(scene, i, 1, "roughness", base_dir, stem)? {
+                writeln!(out, "map_Pr {f}")?;
+            }
+            if let Some(f) = textures.channel_file_for(scene, i, 2, "metallic", base_dir, stem)? {
+                writeln!(out, "map_Pm {f}")?;
             }
         }
     }
@@ -490,5 +543,35 @@ f 1 2 3
 
         let mtl = std::fs::read_to_string(obj_dir.join("modelo.mtl")).unwrap();
         assert!(mtl.contains("norm piel_3.png"), "{mtl}");
+    }
+
+    #[test]
+    fn metallic_roughness_is_split_into_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        // Textura 2x1: G = rugosidad, B = metálico
+        let mut img = image::RgbaImage::new(2, 1);
+        img.put_pixel(0, 0, image::Rgba([0, 200, 30, 255]));
+        img.put_pixel(1, 0, image::Rgba([0, 100, 60, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+
+        let mut scene = triangle_scene();
+        scene.textures.push(Texture { name: "mr".into(), data: png, format: TextureFormat::Png, width: 2, height: 1 });
+        scene.materials.push(Material {
+            name: "pbr".into(),
+            metallic_roughness_texture: Some(TextureRef { texture_index: 0, tex_coord_set: 0 }),
+            ..Material::default()
+        });
+        export_obj(&scene, dir.path().join("m.obj")).unwrap();
+
+        let mtl = std::fs::read_to_string(dir.path().join("m.mtl")).unwrap();
+        assert!(mtl.contains("map_Pr mr_roughness.png"), "{mtl}");
+        assert!(mtl.contains("map_Pm mr_metallic.png"), "{mtl}");
+        let rough = image::open(dir.path().join("mr_roughness.png")).unwrap().to_luma8();
+        let metal = image::open(dir.path().join("mr_metallic.png")).unwrap().to_luma8();
+        assert_eq!(rough.get_pixel(0, 0).0[0], 200);
+        assert_eq!(metal.get_pixel(1, 0).0[0], 60);
     }
 }

@@ -90,14 +90,18 @@ impl Normalization {
 ///
 /// # Example
 ///
-/// ```ignore
-/// use pinocchio_core::{autorig, PinocchioConfig};
-/// use pinocchio_mesh::load_obj;
-/// use pinocchio_skeleton::HumanSkeleton;
+/// ```no_run
+/// use pinocchio_core::autorig;
+/// use pinocchio_core::mesh::load_obj;
+/// use pinocchio_core::skeleton::HumanSkeleton;
 ///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let mesh = load_obj("character.obj")?;
-/// let skeleton = HumanSkeleton::new();
-/// let result = autorig(&mesh, &skeleton, None)?;
+/// let result = autorig(&mesh, &HumanSkeleton::new(), None)?;
+/// let (bone_indices, weights) = result.export_weights(4);
+/// # let _ = (bone_indices, weights);
+/// # Ok(())
+/// # }
 /// ```
 pub fn autorig<S: Skeleton + Sync>(
     mesh: &Mesh,

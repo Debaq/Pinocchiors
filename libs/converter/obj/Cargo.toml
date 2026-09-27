@@ -9,6 +9,7 @@ description = "OBJ/MTL import and export for converter-scene"
 converter-scene = { workspace = true }
 tobj = { workspace = true }
 glam = { workspace = true }
+image = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
