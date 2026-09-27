@@ -20,7 +20,7 @@ mod output;
 mod error;
 mod autorig;
 
-pub use config::PinocchioConfig;
+pub use config::{PinocchioConfig, SkeletonFit};
 pub use output::PinocchioOutput;
 pub use error::PinocchioError;
 pub use autorig::autorig;

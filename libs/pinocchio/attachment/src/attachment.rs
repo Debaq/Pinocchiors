@@ -26,6 +26,15 @@ impl Attachment {
         }
     }
 
+    /// Crea un Attachment a partir de las posiciones de reposo de los vértices
+    pub fn from_rest_positions(rest_positions: Vec<Vector3>, weights: Vec<Vec<Real>>, num_bones: usize) -> Self {
+        Self {
+            weights,
+            rest_positions,
+            num_bones,
+        }
+    }
+
     /// Obtiene los pesos de un vértice
     pub fn get_weights(&self, vertex_idx: usize) -> &[Real] {
         &self.weights[vertex_idx]

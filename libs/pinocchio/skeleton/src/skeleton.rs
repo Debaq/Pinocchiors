@@ -1,7 +1,7 @@
 //! Trait y tipos para esqueletos
 
 use crate::Bone;
-use pinocchio_math::Vector3;
+use pinocchio_math::{Real, Rect, Vector3};
 
 /// Trait que define un esqueleto
 pub trait Skeleton {
@@ -140,6 +140,58 @@ impl Skeleton for BasicSkeleton {
     }
 }
 
+/// Copia el esqueleto aplicando `f` a la posición de cada hueso
+pub fn map_positions<S: Skeleton + ?Sized>(skeleton: &S, f: impl Fn(Vector3) -> Vector3) -> BasicSkeleton {
+    BasicSkeleton::from_bones(
+        skeleton
+            .bones()
+            .iter()
+            .map(|b| Bone {
+                position: f(b.position),
+                ..b.clone()
+            })
+            .collect(),
+    )
+}
+
+/// Bounding box de las posiciones de los huesos (`None` si no hay huesos)
+pub fn skeleton_bounds<S: Skeleton + ?Sized>(skeleton: &S) -> Option<Rect> {
+    let mut bones = skeleton.bones().iter();
+    let first = bones.next()?;
+    let mut rect = Rect::from_point(first.position);
+    for b in bones {
+        rect.expand_to_point(b.position);
+    }
+    Some(rect)
+}
+
+/// Escala uniformemente y centra el esqueleto dentro de `target`.
+///
+/// Si el esqueleto es "alto" (su extensión en Y es al menos la mitad de su
+/// mayor extensión: bípedos, cuadrúpedos), la escala hace que su altura ocupe
+/// `fill` veces la altura de `target`, independiente de la pose de los brazos.
+/// Si no (arañas, serpientes, alas muy abiertas), se usa la mayor extensión.
+pub fn fit_to_bounds<S: Skeleton + ?Sized>(skeleton: &S, target: &Rect, fill: Real) -> BasicSkeleton {
+    let Some(bounds) = skeleton_bounds(skeleton) else {
+        return BasicSkeleton::new();
+    };
+    let skel_size = bounds.size();
+    let target_size = target.size();
+    let skel_max = skel_size.max_component();
+
+    let scale = if skel_max <= 1e-12 {
+        1.0
+    } else if skel_size.y() >= 0.5 * skel_max {
+        fill * target_size.y() / skel_size.y()
+    } else {
+        fill * target_size.max_component() / skel_max
+    };
+
+    let skel_center = bounds.center();
+    let target_center = target.center();
+    map_positions(skeleton, |p| (p - skel_center) * scale + target_center)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,5 +232,31 @@ mod tests {
         let mut skel = make_simple_skeleton();
         skel.scale(2.0);
         assert!((skel.get_position(1).unwrap().y() - 2.0).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fit_to_bounds_tall_skeleton() {
+        // Plantilla en y ∈ [0, 2]; malla de 170 de alto, desplazada
+        let skel = make_simple_skeleton();
+        let target = Rect::new(Vector3::new(100.0, 0.0, -20.0), Vector3::new(160.0, 170.0, 20.0));
+        let fitted = fit_to_bounds(&skel, &target, 0.9);
+
+        let b = skeleton_bounds(&fitted).unwrap();
+        assert!((b.size().y() - 153.0).abs() < 1e-9);
+        assert!(b.center().distance(&target.center()) < 1e-9);
+        // Jerarquía y nombres intactos
+        assert_eq!(fitted.get_parent(2), Some(1));
+        assert_eq!(fitted.bones()[2].name, "head");
+    }
+
+    #[test]
+    fn test_fit_to_bounds_flat_skeleton() {
+        // Esqueleto horizontal (serpiente): se ajusta por la mayor extensión
+        let mut skel = BasicSkeleton::new();
+        skel.add_bone(Bone::new("a", Vector3::new(0.0, 0.0, 0.0)));
+        skel.add_bone(Bone::with_parent("b", Vector3::new(0.0, 0.0, 4.0), 0));
+        let target = Rect::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.2, 10.0));
+        let b = skeleton_bounds(&fit_to_bounds(&skel, &target, 0.9)).unwrap();
+        assert!((b.size().z() - 9.0).abs() < 1e-9);
     }
 }

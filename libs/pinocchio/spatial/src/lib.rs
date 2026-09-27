@@ -11,4 +11,4 @@ mod bvh;
 
 pub use octree::Octree;
 pub use distance_field::DistanceField;
-pub use bvh::{Bvh, Triangle};
+pub use bvh::{closest_point_on_triangle, Bvh, ClosestHit, Triangle};

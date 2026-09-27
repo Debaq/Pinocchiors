@@ -11,7 +11,7 @@ pub mod sphere_packing;
 pub mod sphere_graph;
 pub mod embedding;
 
-pub use medial_surface::{sample_medial_surface, sample_medial_surface_adaptive, MedialSphere, AdaptiveSamplingConfig};
+pub use medial_surface::{medial_spheres_from_field, sample_medial_surface, sample_medial_surface_adaptive, MedialSphere, AdaptiveSamplingConfig};
 pub use sphere_packing::pack_spheres;
 pub use sphere_graph::SphereGraph;
 pub use embedding::{

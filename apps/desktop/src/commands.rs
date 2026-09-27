@@ -5,11 +5,11 @@
 
 use crate::state::{AppState, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
-use pinocchio_core::{autorig, PinocchioConfig};
+use pinocchio_core::{autorig, PinocchioConfig, SkeletonFit};
 use pinocchio_mesh::Mesh;
 use pinocchio_math::Vector3;
 use pinocchio_skeleton::{
-    BasicSkeleton, BirdSkeleton, Bone, CentaurSkeleton, HorseSkeleton, HumanSkeleton,
+    fit_to_bounds, BasicSkeleton, BirdSkeleton, Bone, CentaurSkeleton, HorseSkeleton, HumanSkeleton,
     MechSkeleton, QuadSkeleton, SerpentSkeleton, SpiderSkeleton, Skeleton,
 };
 use quadriflow_core::{remesh_with_callback, RemeshConfig};
@@ -778,12 +778,15 @@ pub fn move_bone(
 }
 
 /// Auto-ajusta el esqueleto al bounding box de la malla
+///
+/// Usa el mismo criterio que `autorig` con `SkeletonFit::Auto`, así el esqueleto
+/// que ve el usuario coincide con el que se embebe.
 #[tauri::command]
 pub fn auto_fit_skeleton(state: State<'_, AppState>) -> Result<SkeletonData, String> {
-    let scene_lock = state.scene.lock().unwrap();
-    let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
-    let mesh_bbox = calculate_scene_bounds(scene);
-    drop(scene_lock);
+    let mesh_bbox = {
+        let mesh_lock = state.mesh.lock().unwrap();
+        mesh_lock.as_ref().ok_or("No hay malla cargada")?.bounding_box()
+    };
 
     let skeleton_lock = state.skeleton.lock().unwrap();
     let skeleton_type = skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?;
@@ -796,66 +799,19 @@ pub fn auto_fit_skeleton(state: State<'_, AppState>) -> Result<SkeletonData, Str
         }
     }
 
-    let skel_data = get_skeleton_data_for_type(skeleton_type);
+    let skel = match skeleton_type {
+        SkeletonType::Human => fit_to_bounds(&HumanSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Quad => fit_to_bounds(&QuadSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Horse => fit_to_bounds(&HorseSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Centaur => fit_to_bounds(&CentaurSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Bird => fit_to_bounds(&BirdSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Spider => fit_to_bounds(&SpiderSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Serpent => fit_to_bounds(&SerpentSkeleton::default(), &mesh_bbox, 0.9),
+        SkeletonType::Mech => fit_to_bounds(&MechSkeleton::new(), &mesh_bbox, 0.9),
+        SkeletonType::Custom(skel) => fit_to_bounds(skel, &mesh_bbox, 0.9),
+    };
     drop(skeleton_lock);
 
-    // Calcular bounding box del esqueleto
-    let mut skel_min = [f64::MAX; 3];
-    let mut skel_max = [f64::MIN; 3];
-    for bone in &skel_data.bones {
-        for i in 0..3 {
-            skel_min[i] = skel_min[i].min(bone.position[i]);
-            skel_max[i] = skel_max[i].max(bone.position[i]);
-        }
-    }
-
-    let mesh_size = [
-        (mesh_bbox.max[0] - mesh_bbox.min[0]) as f64,
-        (mesh_bbox.max[1] - mesh_bbox.min[1]) as f64,
-        (mesh_bbox.max[2] - mesh_bbox.min[2]) as f64,
-    ];
-    let skel_size = [
-        skel_max[0] - skel_min[0],
-        skel_max[1] - skel_min[1],
-        skel_max[2] - skel_min[2],
-    ];
-
-    // Escalar para que quepa en ~80% del bbox de la malla
-    let mesh_max_dim = mesh_size[0].max(mesh_size[1]).max(mesh_size[2]);
-    let skel_max_dim = skel_size[0].max(skel_size[1]).max(skel_size[2]);
-
-    let scale = if skel_max_dim > 1e-6 {
-        (mesh_max_dim * 0.8) / skel_max_dim
-    } else {
-        1.0
-    };
-
-    // Centro de la malla
-    let mesh_center = [
-        ((mesh_bbox.min[0] + mesh_bbox.max[0]) / 2.0) as f64,
-        ((mesh_bbox.min[1] + mesh_bbox.max[1]) / 2.0) as f64,
-        ((mesh_bbox.min[2] + mesh_bbox.max[2]) / 2.0) as f64,
-    ];
-
-    // Crear BasicSkeleton escalado y centrado
-    let bones: Vec<Bone> = skel_data.bones.iter().map(|b| {
-        let pos = [
-            (b.position[0] - (skel_min[0] + skel_max[0]) / 2.0) * scale + mesh_center[0],
-            (b.position[1] - skel_min[1]) * scale + mesh_bbox.min[1] as f64,
-            (b.position[2] - (skel_min[2] + skel_max[2]) / 2.0) * scale + mesh_center[2],
-        ];
-        let mut bone = if let Some(parent) = b.parent {
-            Bone::with_parent(&b.name, Vector3::new(pos[0], pos[1], pos[2]), parent)
-        } else {
-            Bone::new(&b.name, Vector3::new(pos[0], pos[1], pos[2]))
-        };
-        if b.is_leaf {
-            bone = bone.as_leaf();
-        }
-        bone
-    }).collect();
-
-    let skel = BasicSkeleton::from_bones(bones);
     let data = skeleton_to_data(&skel);
 
     let mut skeleton_lock = state.skeleton.lock().unwrap();
@@ -916,6 +872,13 @@ pub async fn run_autorig(
     } else {
         pinocchio_config
     };
+
+    // Los presets son plantillas que autorig encaja en la malla; un esqueleto
+    // Custom ya fue colocado por el usuario sobre la malla y se respeta.
+    let pinocchio_config = pinocchio_config.with_skeleton_fit(match skeleton_type {
+        SkeletonType::Custom(_) => SkeletonFit::None,
+        _ => SkeletonFit::Auto,
+    });
 
     let _ = on_progress.send(Progress {
         stage: "embedding".to_string(),

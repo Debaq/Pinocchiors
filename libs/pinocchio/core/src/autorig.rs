@@ -1,12 +1,44 @@
 //! Función principal de auto-rigging
 
+use crate::config::SkeletonFit;
 use crate::{PinocchioConfig, PinocchioError, PinocchioOutput};
 use crate::output::ProcessStats;
 use pinocchio_attachment::{Attachment, HeatDiffusion};
 use pinocchio_embedding::{full_embedding_pipeline, EmbeddingResult};
-use pinocchio_math::{Real, Transform, Vector3};
+use pinocchio_math::{Real, Rect, Transform, Vector3};
 use pinocchio_mesh::{decimate, Mesh};
-use pinocchio_skeleton::Skeleton;
+use pinocchio_skeleton::{fit_to_bounds, map_positions, BasicSkeleton, Bone, Skeleton};
+
+/// Fracción de la malla que ocupa una plantilla ajustada con [`SkeletonFit::Auto`]
+const SKELETON_FILL: Real = 0.9;
+
+/// Transformación de normalización: `p' = (p - center) * scale`
+#[derive(Debug, Clone, Copy)]
+struct Normalization {
+    center: Vector3,
+    scale: Real,
+}
+
+impl Normalization {
+    fn identity() -> Self {
+        Self { center: Vector3::zero(), scale: 1.0 }
+    }
+
+    /// Centra la caja en el origen y lleva su eje mayor a longitud 1
+    fn for_bounds(bounds: &Rect) -> Self {
+        let longest = bounds.longest_axis_length();
+        let scale = if longest > 0.0 { 1.0 / longest } else { 1.0 };
+        Self { center: bounds.center(), scale }
+    }
+
+    fn apply(&self, p: Vector3) -> Vector3 {
+        (p - self.center) * self.scale
+    }
+
+    fn invert(&self, p: Vector3) -> Vector3 {
+        p * (1.0 / self.scale) + self.center
+    }
+}
 
 /// Realiza el auto-rigging de una malla con un esqueleto
 ///
@@ -53,45 +85,77 @@ pub fn autorig<S: Skeleton + Sync>(
         false
     };
 
-    if config.normalize_mesh {
-        working_mesh.normalize_bounding_box();
-    }
-
     // Si se decimó, los pesos se calcularán en la malla simplificada
     // y luego se transferirán a la malla original
     let _ = was_decimated; // TODO: implementar transferencia de pesos
 
-    // 3. Embedding del esqueleto
+    // 2b. Normalizar (el resultado se devuelve en las coordenadas originales)
+    let normalization = if config.normalize_mesh {
+        Normalization::for_bounds(&working_mesh.bounding_box())
+    } else {
+        Normalization::identity()
+    };
+    for vertex in &mut working_mesh.vertices {
+        vertex.position = normalization.apply(vertex.position);
+    }
+
+    // 3. Llevar el esqueleto al espacio de trabajo de la malla
+    let working_skeleton = match config.skeleton_fit {
+        SkeletonFit::Auto => fit_to_bounds(skeleton, &working_mesh.bounding_box(), SKELETON_FILL),
+        SkeletonFit::None => map_positions(skeleton, |p| normalization.apply(p)),
+    };
+
+    // 4. Embedding del esqueleto
     let embedding = full_embedding_pipeline(
         &working_mesh,
-        skeleton,
+        &working_skeleton,
         config.max_medial_spheres,
         config.refine_iterations,
+        config.distance_field_resolution,
     )?;
 
-    // 4. Calcular pesos de skinning
-    let heat_diffusion = HeatDiffusion::new(&working_mesh)
-        .with_diffusion_weight(config.diffusion_weight);
+    // 5. Pesos de skinning con el esqueleto ya embebido
+    let embedded_skeleton = BasicSkeleton::from_bones(
+        working_skeleton
+            .bones()
+            .iter()
+            .zip(&embedding.bone_positions)
+            .map(|(bone, &position)| Bone { position, ..bone.clone() })
+            .collect(),
+    );
+    let weights = HeatDiffusion::new(&working_mesh)
+        .with_diffusion_weight(config.diffusion_weight)
+        .compute_weights(&embedded_skeleton)?;
 
-    let initial_heat = heat_diffusion.compute_initial_heat(skeleton);
-    let weights = heat_diffusion.compute_weights(skeleton, &initial_heat)?;
+    // 6. Volver a las coordenadas originales
+    let bone_positions: Vec<Vector3> = embedding
+        .bone_positions
+        .iter()
+        .map(|&p| normalization.invert(p))
+        .collect();
+    let rest_positions = working_mesh
+        .vertices
+        .iter()
+        .map(|v| normalization.invert(v.position))
+        .collect();
 
-    // 5. Crear Attachment
-    let mut attachment = Attachment::new(&working_mesh, weights, skeleton.num_bones());
-
-    // 6. Compactar pesos
+    let mut attachment = Attachment::from_rest_positions(rest_positions, weights, skeleton.num_bones());
     attachment.compact_weights(config.max_bone_influences);
 
-    // 7. Calcular transformaciones de reposo
-    let bone_rest_transforms = compute_rest_transforms(skeleton, &embedding);
+    let bone_rest_transforms = bone_positions
+        .iter()
+        .map(|&p| Transform::from_translation(p))
+        .collect();
 
-    // 8. Calcular estadísticas
-    let stats = compute_stats(&working_mesh, skeleton, &attachment, &embedding);
+    let stats = compute_stats(&working_mesh, &working_skeleton, &attachment, &embedding);
 
     Ok(PinocchioOutput {
         attachment,
-        embedding: embedding.clone(),
-        bone_positions: embedding.bone_positions,
+        embedding: EmbeddingResult {
+            bone_positions: bone_positions.clone(),
+            ..embedding
+        },
+        bone_positions,
         bone_rest_transforms,
         stats,
     })
@@ -118,25 +182,6 @@ fn validate_input<S: Skeleton>(
     }
 
     Ok(())
-}
-
-/// Calcula las transformaciones de reposo de los huesos
-fn compute_rest_transforms<S: Skeleton>(
-    skeleton: &S,
-    embedding: &EmbeddingResult,
-) -> Vec<Transform> {
-    let num_bones = skeleton.num_bones();
-    let mut transforms = Vec::with_capacity(num_bones);
-
-    for bone_idx in 0..num_bones {
-        let pos = embedding.bone_positions.get(bone_idx)
-            .copied()
-            .unwrap_or_else(Vector3::zero);
-
-        transforms.push(Transform::from_translation(pos));
-    }
-
-    transforms
 }
 
 /// Calcula las estadísticas del proceso

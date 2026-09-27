@@ -80,6 +80,52 @@ pub fn sample_medial_surface(
     spheres
 }
 
+/// Extrae esferas mediales directamente de un campo de distancias **con signo**.
+///
+/// Una celda interior (valor > 0) se considera parte del eje medial si como
+/// mucho `MAX_GREATER_NEIGHBORS` de sus 26 vecinas tienen una distancia mayor:
+/// en el interior de un tubo, las celdas del eje solo tienen vecinas mayores a
+/// lo largo del propio eje (cuando el tubo se ensancha), mientras que las
+/// celdas desplazadas del eje tienen toda una cara de vecinas mayores.
+pub fn medial_spheres_from_field(field: &DistanceField) -> Vec<MedialSphere> {
+    const MAX_GREATER_NEIGHBORS: usize = 3;
+    let [rx, ry, rz] = field.resolution();
+    let mut spheres = Vec::new();
+
+    for z in 0..rz {
+        for y in 0..ry {
+            for x in 0..rx {
+                let value = field.get(x, y, z);
+                if !(value > 0.0 && value.is_finite()) {
+                    continue;
+                }
+                let mut greater = 0;
+                for dz in -1i64..=1 {
+                    for dy in -1i64..=1 {
+                        for dx in -1i64..=1 {
+                            if dx == 0 && dy == 0 && dz == 0 {
+                                continue;
+                            }
+                            let (nx, ny, nz) = (x as i64 + dx, y as i64 + dy, z as i64 + dz);
+                            if nx < 0 || ny < 0 || nz < 0 || nx >= rx as i64 || ny >= ry as i64 || nz >= rz as i64 {
+                                continue;
+                            }
+                            if field.get(nx as usize, ny as usize, nz as usize) > value {
+                                greater += 1;
+                            }
+                        }
+                    }
+                }
+                if greater <= MAX_GREATER_NEIGHBORS {
+                    spheres.push(MedialSphere::new(field.cell_center(x, y, z), value));
+                }
+            }
+        }
+    }
+
+    spheres
+}
+
 /// Verifica si un punto es un máximo local en el campo de distancias (vecindario de 6)
 fn is_local_maximum(pos: &Vector3, dist: Real, field: &DistanceField) -> bool {
     is_local_maximum_with_neighborhood(pos, dist, field, 0.01, false)

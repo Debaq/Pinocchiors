@@ -36,6 +36,11 @@ impl Triangle {
         Self { v0, v1, v2, centroid }
     }
 
+    /// Normal geométrica (sin normalizar) según el orden de los vértices
+    pub fn normal(&self) -> Vector3 {
+        (self.v1 - self.v0).cross(&(self.v2 - self.v0))
+    }
+
     pub fn bounds(&self) -> Rect {
         let min = Vector3::new(
             self.v0.x().min(self.v1.x()).min(self.v2.x()),
@@ -49,6 +54,17 @@ impl Triangle {
         );
         Rect::new(min, max)
     }
+}
+
+/// Resultado de [`Bvh::query_closest`]
+#[derive(Debug, Clone, Copy)]
+pub struct ClosestHit {
+    /// Distancia al punto más cercano
+    pub distance: Real,
+    /// Punto más cercano sobre la malla
+    pub point: Vector3,
+    /// Índice del triángulo que contiene ese punto
+    pub triangle: usize,
 }
 
 /// BVH para consultas rápidas de distancia
@@ -185,93 +201,209 @@ impl Bvh {
         }
     }
 
+    /// Punto más cercano de la malla a `point`
+    pub fn query_closest(&self, point: &Vector3) -> Option<ClosestHit> {
+        let root = self.root.as_ref()?;
+        let mut best: Option<ClosestHit> = None;
+        self.closest_recursive(root, point, &mut best);
+        best
+    }
+
+    fn closest_recursive(&self, node: &BvhNode, point: &Vector3, best: &mut Option<ClosestHit>) {
+        let best_dist = best.map_or(Real::INFINITY, |h| h.distance);
+        if Self::get_bounds(node).distance_to_point(point) >= best_dist {
+            return;
+        }
+        match node {
+            BvhNode::Leaf { triangle_idx, .. } => {
+                let tri = &self.triangles[*triangle_idx];
+                let closest = closest_point_on_triangle(point, &tri.v0, &tri.v1, &tri.v2);
+                let distance = point.distance(&closest);
+                if distance < best_dist {
+                    *best = Some(ClosestHit { distance, point: closest, triangle: *triangle_idx });
+                }
+            }
+            BvhNode::Internal { left, right, .. } => {
+                let left_dist = Self::get_bounds(left).distance_to_point(point);
+                let right_dist = Self::get_bounds(right).distance_to_point(point);
+                if left_dist < right_dist {
+                    self.closest_recursive(left, point, best);
+                    self.closest_recursive(right, point, best);
+                } else {
+                    self.closest_recursive(right, point, best);
+                    self.closest_recursive(left, point, best);
+                }
+            }
+        }
+    }
+
+    /// Indica si el segmento `a → b` corta algún triángulo.
+    ///
+    /// Se ignoran los cortes a menos de `margin` (fracción de la longitud del
+    /// segmento, en `[0, 0.5)`) de cada extremo, para que un vértice de la
+    /// malla no quede bloqueado por sus propios triángulos adyacentes.
+    pub fn segment_intersects(&self, a: &Vector3, b: &Vector3, margin: Real) -> bool {
+        let Some(root) = self.root.as_ref() else {
+            return false;
+        };
+        let dir = *b - *a;
+        if dir.length_squared() == 0.0 {
+            return false;
+        }
+        let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
+        self.any_hit_recursive(root, a, &dir, &inv_dir, margin, 1.0 - margin)
+    }
+
+    fn any_hit_recursive(
+        &self,
+        node: &BvhNode,
+        origin: &Vector3,
+        dir: &Vector3,
+        inv_dir: &Vector3,
+        t_min: Real,
+        t_max: Real,
+    ) -> bool {
+        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, t_max) {
+            return false;
+        }
+        match node {
+            BvhNode::Leaf { triangle_idx, .. } => {
+                ray_triangle_t(origin, dir, &self.triangles[*triangle_idx])
+                    .is_some_and(|t| t > t_min && t < t_max)
+            }
+            BvhNode::Internal { left, right, .. } => {
+                self.any_hit_recursive(left, origin, dir, inv_dir, t_min, t_max)
+                    || self.any_hit_recursive(right, origin, dir, inv_dir, t_min, t_max)
+            }
+        }
+    }
+
+    /// Triángulo por índice
+    pub fn triangle(&self, idx: usize) -> &Triangle {
+        &self.triangles[idx]
+    }
+
     /// Número de triángulos en el BVH
     pub fn num_triangles(&self) -> usize {
         self.triangles.len()
     }
 }
 
-/// Distancia de un punto a un triángulo (copiado de distance_field para evitar dependencia circular)
-fn point_triangle_distance(p: &Vector3, v0: &Vector3, v1: &Vector3, v2: &Vector3) -> Real {
-    let edge0 = *v1 - *v0;
-    let edge1 = *v2 - *v0;
-    let v0_to_p = *p - *v0;
+/// Distancia de un punto a un triángulo
+pub(crate) fn point_triangle_distance(p: &Vector3, v0: &Vector3, v1: &Vector3, v2: &Vector3) -> Real {
+    p.distance(&closest_point_on_triangle(p, v0, v1, v2))
+}
 
-    let a = edge0.dot(&edge0);
-    let b = edge0.dot(&edge1);
-    let c = edge1.dot(&edge1);
-    let d = edge0.dot(&v0_to_p);
-    let e = edge1.dot(&v0_to_p);
+/// Punto más cercano a `p` sobre el triángulo `abc`
+///
+/// Algoritmo de Ericson, *Real-Time Collision Detection* (5.1.5): clasifica
+/// `p` en las regiones de Voronoi de vértices, aristas y cara.
+pub fn closest_point_on_triangle(p: &Vector3, a: &Vector3, b: &Vector3, c: &Vector3) -> Vector3 {
+    let ab = *b - *a;
+    let ac = *c - *a;
+    let ap = *p - *a;
 
-    let det = a * c - b * b;
-    let mut s = c * d - b * e;
-    let mut t = a * e - b * d;
-
-    if s + t <= det {
-        if s < 0.0 {
-            if t < 0.0 {
-                if d < 0.0 {
-                    t = 0.0;
-                    s = (-d).min(a).max(0.0);
-                } else {
-                    s = 0.0;
-                    t = (-e).min(c).max(0.0);
-                }
-            } else {
-                s = 0.0;
-                t = e.max(0.0).min(c);
-                if t > 0.0 { t = -e / c; }
-                t = t.clamp(0.0, 1.0);
-            }
-        } else if t < 0.0 {
-            t = 0.0;
-            s = d.max(0.0).min(a);
-            if s > 0.0 { s = -d / a; }
-            s = s.clamp(0.0, 1.0);
-        } else {
-            let inv_det = 1.0 / det;
-            s *= inv_det;
-            t *= inv_det;
-        }
-    } else {
-        if s < 0.0 {
-            let tmp0 = b + d;
-            let tmp1 = c + e;
-            if tmp1 > tmp0 {
-                let numer = tmp1 - tmp0;
-                let denom = a - 2.0 * b + c;
-                s = (numer / denom).clamp(0.0, 1.0);
-                t = 1.0 - s;
-            } else {
-                s = 0.0;
-                t = (-e / c).clamp(0.0, 1.0);
-            }
-        } else if t < 0.0 {
-            let tmp0 = b + e;
-            let tmp1 = a + d;
-            if tmp1 > tmp0 {
-                let numer = tmp1 - tmp0;
-                let denom = a - 2.0 * b + c;
-                t = (numer / denom).clamp(0.0, 1.0);
-                s = 1.0 - t;
-            } else {
-                t = 0.0;
-                s = (-d / a).clamp(0.0, 1.0);
-            }
-        } else {
-            let numer = (c + e) - (b + d);
-            if numer <= 0.0 {
-                s = 0.0;
-            } else {
-                let denom = a - 2.0 * b + c;
-                s = (numer / denom).clamp(0.0, 1.0);
-            }
-            t = 1.0 - s;
-        }
+    let d1 = ab.dot(&ap);
+    let d2 = ac.dot(&ap);
+    if d1 <= 0.0 && d2 <= 0.0 {
+        return *a;
     }
 
-    let closest = *v0 + edge0 * s + edge1 * t;
-    p.distance(&closest)
+    let bp = *p - *b;
+    let d3 = ab.dot(&bp);
+    let d4 = ac.dot(&bp);
+    if d3 >= 0.0 && d4 <= d3 {
+        return *b;
+    }
+
+    let vc = d1 * d4 - d3 * d2;
+    if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
+        let v = d1 / (d1 - d3);
+        return *a + ab * v;
+    }
+
+    let cp = *p - *c;
+    let d5 = ab.dot(&cp);
+    let d6 = ac.dot(&cp);
+    if d6 >= 0.0 && d5 <= d6 {
+        return *c;
+    }
+
+    let vb = d5 * d2 - d1 * d6;
+    if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
+        let w = d2 / (d2 - d6);
+        return *a + ac * w;
+    }
+
+    let va = d3 * d6 - d5 * d4;
+    if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return *b + (*c - *b) * w;
+    }
+
+    let denom = va + vb + vc;
+    if denom.abs() < Real::MIN_POSITIVE {
+        // Triángulo degenerado: devolver el vértice más cercano
+        let mut best = *a;
+        for q in [*b, *c] {
+            if p.distance_squared(&q) < p.distance_squared(&best) {
+                best = q;
+            }
+        }
+        return best;
+    }
+    let v = vb / denom;
+    let w = vc / denom;
+    *a + ab * v + ac * w
+}
+
+/// Intersección rayo-triángulo (Möller-Trumbore). Devuelve `t` tal que el punto
+/// de corte es `origin + dir * t` (sin normalizar `dir`).
+fn ray_triangle_t(origin: &Vector3, dir: &Vector3, tri: &Triangle) -> Option<Real> {
+    let e1 = tri.v1 - tri.v0;
+    let e2 = tri.v2 - tri.v0;
+    let h = dir.cross(&e2);
+    let det = e1.dot(&h);
+    if det.abs() < 1e-14 {
+        return None;
+    }
+    let inv = 1.0 / det;
+    let s = *origin - tri.v0;
+    let u = inv * s.dot(&h);
+    if !(0.0..=1.0).contains(&u) {
+        return None;
+    }
+    let q = s.cross(&e1);
+    let v = inv * dir.dot(&q);
+    if v < 0.0 || u + v > 1.0 {
+        return None;
+    }
+    Some(inv * e2.dot(&q))
+}
+
+/// Test rayo-AABB por slabs restringido a `[t_min, t_max]`
+fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Real, t_max: Real) -> bool {
+    let mut lo = t_min;
+    let mut hi = t_max;
+    for axis in 0..3 {
+        let (o, inv, min, max) = match axis {
+            0 => (origin.x(), inv_dir.x(), bounds.min.x(), bounds.max.x()),
+            1 => (origin.y(), inv_dir.y(), bounds.min.y(), bounds.max.y()),
+            _ => (origin.z(), inv_dir.z(), bounds.min.z(), bounds.max.z()),
+        };
+        let mut t0 = (min - o) * inv;
+        let mut t1 = (max - o) * inv;
+        if t0 > t1 {
+            std::mem::swap(&mut t0, &mut t1);
+        }
+        // f64::max/min ignoran NaN (0 * inf), que así no restringe el intervalo
+        lo = lo.max(t0);
+        hi = hi.min(t1);
+        if lo > hi {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -329,5 +461,74 @@ mod tests {
         let bvh = Bvh::build(vec![]);
         let dist = bvh.query_distance(&Vector3::zero());
         assert!(dist.is_infinite());
+    }
+
+    /// Punto más cercano por fuerza bruta (muestreo baricéntrico denso)
+    fn brute_force_distance(p: &Vector3, a: &Vector3, b: &Vector3, c: &Vector3) -> Real {
+        let n = 400;
+        let mut best = Real::INFINITY;
+        for i in 0..=n {
+            for j in 0..=(n - i) {
+                let u = i as Real / n as Real;
+                let v = j as Real / n as Real;
+                let q = *a + (*b - *a) * u + (*c - *a) * v;
+                best = best.min(p.distance(&q));
+            }
+        }
+        best
+    }
+
+    #[test]
+    fn test_closest_point_all_regions() {
+        let a = Vector3::new(0.0, 0.0, 0.0);
+        let b = Vector3::new(2.0, 0.0, 0.0);
+        let c = Vector3::new(0.5, 1.5, 0.0);
+        // Puntos en regiones de vértices, aristas y cara, dentro y fuera del plano
+        let points = [
+            Vector3::new(-1.0, -1.0, 0.3),
+            Vector3::new(3.0, -0.5, -0.2),
+            Vector3::new(0.4, 3.0, 0.5),
+            Vector3::new(1.0, -1.0, 0.0),
+            Vector3::new(1.8, 1.2, 0.4),
+            Vector3::new(-0.8, 0.9, -0.3),
+            Vector3::new(0.8, 0.5, 1.0),
+            Vector3::new(2.5, 0.2, 0.0),
+        ];
+        for p in &points {
+            let fast = point_triangle_distance(p, &a, &b, &c);
+            let brute = brute_force_distance(p, &a, &b, &c);
+            assert!((fast - brute).abs() < 5e-3, "p={p:?}: {fast} vs {brute}");
+        }
+    }
+
+    #[test]
+    fn test_query_closest_returns_triangle() {
+        let triangles = vec![
+            Triangle::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 0.0, 0.0), Vector3::new(0.0, 1.0, 0.0)),
+            Triangle::new(Vector3::new(5.0, 0.0, 0.0), Vector3::new(6.0, 0.0, 0.0), Vector3::new(5.0, 1.0, 0.0)),
+        ];
+        let bvh = Bvh::build(triangles);
+        let hit = bvh.query_closest(&Vector3::new(5.2, 0.2, 2.0)).unwrap();
+        assert_eq!(hit.triangle, 1);
+        assert!((hit.distance - 2.0).abs() < 1e-9);
+        assert!(hit.point.distance(&Vector3::new(5.2, 0.2, 0.0)) < 1e-9);
+    }
+
+    #[test]
+    fn test_segment_intersects() {
+        let triangles = vec![Triangle::new(
+            Vector3::new(-1.0, -1.0, 0.0),
+            Vector3::new(1.0, -1.0, 0.0),
+            Vector3::new(0.0, 1.0, 0.0),
+        )];
+        let bvh = Bvh::build(triangles);
+        // Cruza el triángulo
+        assert!(bvh.segment_intersects(&Vector3::new(0.0, 0.0, -1.0), &Vector3::new(0.0, 0.0, 1.0), 1e-4));
+        // No llega al triángulo
+        assert!(!bvh.segment_intersects(&Vector3::new(0.0, 0.0, 0.5), &Vector3::new(0.0, 0.0, 1.0), 1e-4));
+        // Pasa por fuera
+        assert!(!bvh.segment_intersects(&Vector3::new(3.0, 0.0, -1.0), &Vector3::new(3.0, 0.0, 1.0), 1e-4));
+        // Empieza sobre el triángulo: el margen ignora ese corte
+        assert!(!bvh.segment_intersects(&Vector3::new(0.0, 0.0, 0.0), &Vector3::new(0.0, 0.0, 1.0), 1e-4));
     }
 }

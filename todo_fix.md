@@ -8,24 +8,33 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## 🔴 Críticos — el pipeline produce resultados incorrectos
 
-### 1. Autorig mezcla espacios de coordenadas ✅
-- **Dónde:** `libs/pinocchio/core/src/autorig.rs:57`, `libs/pinocchio/mesh/src/mesh.rs:154`, `libs/pinocchio/skeleton/src/presets.rs`
-- **Problema:** `normalize_bounding_box()` centra la malla en el origen (eje mayor en [-0.5, 0.5]), pero los presets están en y∈[0,1] (pelvis 0.5, cabeza 1.0). Las `bone_positions` resultantes nunca se des-normalizan. En la GUI, los esqueletos Custom (auto-fit/transform) están en coords mundo → tercer espacio distinto.
-- **Evidencia:** cilindro de 170 de alto → huesos embebidos en y≈0.5–0.65; `chest`, `neck` y `head` colapsan al mismo punto.
-- **Fix:**
-  - [ ] Normalizar a [0,1] como el Pinocchio original (min→0, escala por eje mayor) o mover los presets al mismo espacio.
-  - [ ] Guardar la transformación de normalización y aplicar la inversa a `bone_positions` y `bone_rest_transforms`.
-  - [ ] Si el esqueleto viene en coords mundo (Custom), normalizarlo con la misma transformación que la malla.
-- **Test:** cilindro/figura en coords mundo → huesos dentro del bbox de la malla, ordenados en Y (pelvis < chest < neck < head).
+### 1. Autorig mezcla espacios de coordenadas ✅ RESUELTO
+- **Dónde:** `libs/pinocchio/core/src/autorig.rs`, `libs/pinocchio/skeleton/src/skeleton.rs`, `libs/pinocchio/embedding/`, `libs/pinocchio/spatial/`
+- **Problema original:** malla normalizada centrada en el origen y presets en y∈[0,1]; `bone_positions` nunca se des-normalizaban.
+- **Causas adicionales encontradas al arreglarlo:**
+  - `DistanceField` sin signo: el test `dist > 0 ⇒ dentro` del embedding siempre era verdadero y los huesos salían de la malla.
+  - Esferas mediales: muestreo de 10³ puntos con test de máximo local a ±0.01 sobre un campo de celda más cercana (~0.04) → casi todos los puntos, incluso fuera de la malla, pasaban.
+  - `point_triangle_distance` (BVH y DistanceField) con signos mezclados en las regiones de arista → distancias incorrectas.
+- **Hecho:**
+  - [x] `Normalization` explícita en `autorig`; posiciones de huesos, `bone_rest_transforms`, `embedding` y posiciones de reposo del `Attachment` vuelven a coordenadas originales.
+  - [x] `SkeletonFit { Auto, None }` en `PinocchioConfig`: `Auto` encaja la plantilla en la malla con `pinocchio_skeleton::fit_to_bounds`; `None` respeta un esqueleto ya colocado (GUI: esqueletos Custom).
+  - [x] `DistanceField::from_mesh_signed` (flood fill + normal del triángulo más cercano, corrige normales invertidas; soporta cáscaras superpuestas).
+  - [x] `medial_spheres_from_field`: eje medial extraído de la grilla con signo.
+  - [x] `closest_point_on_triangle` (Ericson) + `Bvh::query_closest` + `Bvh::segment_intersects`.
+  - [x] El pipeline usa `config.distance_field_resolution` (antes fijo en 32³).
+  - [x] GUI: `auto_fit_skeleton` usa `fit_to_bounds` (mismo criterio que autorig).
+- **Tests:** `libs/pinocchio/core/tests/autorig_e2e.rs` (humanoide sintético con surface nets, 170 de alto y desplazado): articulaciones dentro de la malla y cerca de las reales, columna ordenada, deformación en reposo = identidad, `SkeletonFit::None`.
 
-### 2. Pesos de skinning ignoran el embedding ✅
-- **Dónde:** `libs/pinocchio/core/src/autorig.rs:75`, `libs/pinocchio/attachment/src/heat_diffusion.rs:188`
-- **Problema:** `compute_initial_heat(skeleton)` usa las posiciones de la **plantilla**, no los huesos embebidos.
-- **Evidencia:** vértice de la cabeza → hueso dominante `hip_r`.
-- **Fix:**
-  - [ ] Construir un esqueleto con las posiciones de `embedding.bone_positions` y pasarlo a `compute_initial_heat` / `compute_weights`.
-  - [ ] Revisar que el heat inicial siga el bone heat de Pinocchio (hueso visible más cercano + resolver `(Δ + H) w = H p`), no solo `1/(1+d²)`.
-- **Test:** en la figura de prueba, vértices de la cabeza → `head`/`neck`; vértices del pie → `foot_*`.
+### 2. Pesos de skinning ignoran el embedding ✅ RESUELTO
+- **Dónde:** `libs/pinocchio/attachment/src/heat_diffusion.rs`, `libs/pinocchio/sparse/src/spd_matrix.rs`
+- **Problema original:** `compute_initial_heat` usaba la plantilla; además el heat `1/(1+d²)` casi no discriminaba entre huesos en espacio normalizado.
+- **Causa adicional:** `solve_gauss_seidel`/`solve_with_identity` recorrían la matriz entera por cada fila → O(n·nnz) por iteración (horas con 10k vértices). También afectaba a `quadriflow-field`.
+- **Hecho:**
+  - [x] `autorig` calcula los pesos con el esqueleto **embebido**.
+  - [x] Bone heat de Baran & Popović: hueso visible más cercano (ray casting con BVH), `(L + A·H) w = A·H p`, `H = k/(c·d²)`. Partición de la unidad por construcción, invariante a la escala.
+  - [x] `SPDMatrix::solve_cg` (gradiente conjugado + Jacobi) y `add_diagonal`; Gauss-Seidel recorre solo la columna i (O(nnz)).
+  - [x] API: `HeatDiffusion::compute_weights(&skeleton)` (se eliminó `compute_initial_heat`).
+- **Tests:** cadena en cilindro (huesos dominantes por altura), invariancia de escala (cilindro 1 vs 170), CG contra residuo, pesos por región del humanoide (cabeza, muslo, piernas, brazo, antebrazos, mano) > 95 %.
 
 ### 3. Mallas grandes: pesos no corresponden a la malla
 - **Dónde:** `libs/pinocchio/core/src/autorig.rs:62` (`TODO: implementar transferencia de pesos`)
@@ -138,6 +147,18 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 - **Dónde:** `libs/converter/gltf-io/src/import.rs:445-460`
 - [ ] Si la conversión queda vacía, saltar la primitiva en vez de dejar `indices: None` (hoy se interpreta como lista de triángulos implícita).
 
+### 19. El embedding sigue a la plantilla, no a las proporciones de la malla
+- **Dónde:** `libs/pinocchio/embedding/src/embedding.rs` (`discrete_embed`, `refine_embedding`)
+- **Problema:** cada articulación toma la esfera medial más cercana a su posición en la plantilla ajustada y el refinamiento la empuja de vuelta hacia esa posición. En el humanoide de prueba, codo y muñeca quedan ~0.05 (en altura 1) más cerca del torso que en el modelo.
+- **Fix:**
+  - [ ] Embedding discreto real de Pinocchio (asignación sobre el grafo de esferas con penalizaciones de longitud/dirección), o ajuste por cadenas: extremidad = punto medial más lejano en la dirección del miembro y articulaciones repartidas según las longitudes de la plantilla.
+  - [ ] Refinamiento que centre en el eje medial en vez de volver a la plantilla (`refine_embedding_global` existe pero no se usa).
+- **Test:** endurecer tolerancias de `autorig_humanoid_joints_inside_and_in_place` (codo/muñeca < 0.03).
+
+### 20. `DistanceField::sample` devuelve la celda más cercana
+- **Dónde:** `libs/pinocchio/spatial/src/distance_field.rs` (`sample`)
+- [ ] El comentario dice "trilineal" pero no interpola. Implementar interpolación trilineal (mejora `gradient()` y el test de interior).
+
 ---
 
 ## 🔵 Bajos / limpieza
@@ -159,7 +180,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## Tests que faltan
 
-- [ ] E2E autorig: figura en coords mundo → posiciones de huesos dentro de la malla y huesos dominantes correctos (cubre #1, #2).
+- [x] E2E autorig: figura en coords mundo → posiciones de huesos dentro de la malla y huesos dominantes correctos (cubre #1, #2).
 - [ ] Autorig con malla > umbral de decimación (#3).
 - [ ] Roundtrip repair → export GLB con nodos (#4).
 - [ ] Converter con transformaciones de nodos → STL/OBJ (#5).
@@ -171,7 +192,7 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 
 ## Orden sugerido
 
-1. #1 + #2 (+ test E2E) — el autorig es el núcleo del proyecto.
+1. ~~#1 + #2 (+ test E2E)~~ ✅ — siguiente paso natural: #19 (precisión del embedding).
 2. #4 + #5 — export correcto.
 3. #6 + #7 + #12 — estado de la GUI.
 4. #9 + #10 + #11 — robustez y seguridad.

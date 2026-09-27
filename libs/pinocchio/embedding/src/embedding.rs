@@ -3,7 +3,6 @@
 use crate::medial_surface::MedialSphere;
 use crate::sphere_packing::pack_spheres;
 use crate::sphere_graph::SphereGraph;
-use pinocchio_graph::{AllShortestPather, PtGraph};
 use pinocchio_math::{Real, Vector3};
 use pinocchio_mesh::Mesh;
 use pinocchio_skeleton::Skeleton;
@@ -48,26 +47,6 @@ pub fn discrete_embed<S: Skeleton>(
     }
 
     let num_bones = skeleton.num_bones();
-
-    // Construir grafo de esferas
-    let mut graph: PtGraph<usize, Real> = PtGraph::new();
-    for (i, _) in spheres.iter().enumerate() {
-        graph.add_node(i, i);
-    }
-
-    // Conectar esferas cercanas
-    let connection_threshold = compute_connection_threshold(spheres);
-    for i in 0..spheres.len() {
-        for j in (i + 1)..spheres.len() {
-            let dist = spheres[i].center.distance(&spheres[j].center);
-            if dist < connection_threshold {
-                graph.add_edge(i, j, dist);
-            }
-        }
-    }
-
-    // Calcular caminos mínimos (disponible para uso futuro)
-    let _apsp = AllShortestPather::new(&graph);
 
     // Asignar cada hueso a la esfera más cercana
     let mut bone_positions = Vec::with_capacity(num_bones);
@@ -124,9 +103,8 @@ pub fn refine_embedding<S: Skeleton>(
 
                 // Verificar que el nuevo punto esté dentro de la malla
                 let new_pos = current + direction * step_size;
-                let dist = distance_field.sample(&new_pos);
 
-                if dist > 0.0 {
+                if is_inside(distance_field, &new_pos) {
                     positions[bone_idx] = new_pos;
                 }
 
@@ -253,13 +231,13 @@ pub fn refine_embedding_global<S: Skeleton>(
 
             // Verificar que el nuevo punto esté dentro de la malla
             let dist = distance_field.sample(&new_pos);
-            if dist > 0.0 {
+            if is_inside(distance_field, &new_pos) {
                 positions[bone_idx] = new_pos;
-            } else {
+            } else if dist.is_finite() {
                 // Proyectar al interior
                 let gradient = distance_field.gradient(&positions[bone_idx]);
                 let projected = positions[bone_idx] + gradient * dist.abs() * 1.1;
-                if distance_field.sample(&projected) > 0.0 {
+                if is_inside(distance_field, &projected) {
                     positions[bone_idx] = projected;
                 }
                 velocities[bone_idx] = Vector3::zero();
@@ -419,20 +397,6 @@ fn enforce_bone_lengths<S: Skeleton>(
     }
 }
 
-/// Calcula el umbral de conexión para esferas
-fn compute_connection_threshold(spheres: &[MedialSphere]) -> Real {
-    if spheres.len() < 2 {
-        return 1.0;
-    }
-
-    // Usar la mediana de los radios * 3
-    let mut radii: Vec<Real> = spheres.iter().map(|s| s.radius).collect();
-    radii.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-
-    let median = radii[radii.len() / 2];
-    median * 3.0
-}
-
 /// Calcula la calidad del embedding
 fn compute_embedding_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -> Real {
     let mut total_error = 0.0;
@@ -461,20 +425,38 @@ fn compute_embedding_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -
     }
 }
 
-/// Pipeline completo de embedding
+/// Indica si `pos` está dentro de la malla según un campo con signo
+fn is_inside(field: &DistanceField, pos: &Vector3) -> bool {
+    let d = field.sample(pos);
+    d.is_finite() && d > 0.0
+}
+
+/// Pipeline completo de embedding.
+///
+/// El esqueleto debe estar en el mismo espacio que la malla y aproximadamente
+/// alineado con ella (ver `pinocchio_skeleton::fit_to_bounds`).
 pub fn full_embedding_pipeline<S: Skeleton>(
     mesh: &Mesh,
     skeleton: &S,
     max_spheres: usize,
     refine_iterations: usize,
+    field_resolution: [usize; 3],
 ) -> Result<EmbeddingResult, EmbeddingError> {
-    use crate::medial_surface::sample_medial_surface;
+    use crate::medial_surface::medial_spheres_from_field;
 
-    // 1. Crear campo de distancias
-    let distance_field = DistanceField::from_mesh(mesh, [32, 32, 32], 0.1);
+    if mesh.num_vertices() == 0 {
+        return Err(EmbeddingError::EmptyMesh);
+    }
 
-    // 2. Muestrear superficie medial
-    let spheres = sample_medial_surface(mesh, 1000, Some(&distance_field));
+    // 1. Campo de distancias con signo (positivo dentro)
+    let padding = mesh.bounding_box().longest_axis_length() * 0.1;
+    let distance_field = DistanceField::from_mesh_signed(mesh, field_resolution, padding);
+
+    // 2. Esferas del eje medial
+    let spheres = medial_spheres_from_field(&distance_field);
+    if spheres.is_empty() {
+        return Err(EmbeddingError::NoValidEmbedding);
+    }
 
     // 3. Reducir esferas
     let packed = pack_spheres(&spheres, max_spheres);

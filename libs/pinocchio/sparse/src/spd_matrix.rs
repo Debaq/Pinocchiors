@@ -150,12 +150,12 @@ impl SPDMatrix {
             for i in 0..self.size {
                 let mut sum = 0.0;
 
-                // Iterar sobre la columna i para encontrar elementos en fila i
-                for (col_idx, col) in self.matrix.outer_iterator().enumerate() {
-                    for (row_idx, &val) in col.iter() {
-                        if row_idx == i && col_idx != i {
+                // La matriz es simétrica: la columna i contiene los elementos de la fila i
+                if let Some(col) = self.matrix.outer_view(i) {
+                    for (j, &val) in col.iter() {
+                        if j != i {
                             // Usar x_new para valores ya actualizados, x para los demás
-                            let x_val = if col_idx < i { x_new[col_idx] } else { x[col_idx] };
+                            let x_val = if j < i { x_new[j] } else { x[j] };
                             sum += val * x_val;
                         }
                     }
@@ -222,12 +222,11 @@ impl SPDMatrix {
             for i in 0..self.size {
                 let mut sum = 0.0;
 
-                for (col_idx, col) in self.matrix.outer_iterator().enumerate() {
-                    for (row_idx, &val) in col.iter() {
-                        if row_idx == i && col_idx != i {
-                            let scaled_val = scale * val;
-                            let x_val = if col_idx < i { x_new[col_idx] } else { x[col_idx] };
-                            sum += scaled_val * x_val;
+                if let Some(col) = self.matrix.outer_view(i) {
+                    for (j, &val) in col.iter() {
+                        if j != i {
+                            let x_val = if j < i { x_new[j] } else { x[j] };
+                            sum += scale * val * x_val;
                         }
                     }
                 }
@@ -247,6 +246,96 @@ impl SPDMatrix {
 
             if max_diff < tolerance {
                 return Ok(x);
+            }
+        }
+
+        Ok(x)
+    }
+
+    /// Devuelve `A + diag(d)`
+    pub fn add_diagonal(&self, d: &[Real]) -> Result<Self, SPDMatrixError> {
+        if d.len() != self.size {
+            return Err(SPDMatrixError::DimensionMismatch {
+                expected: self.size,
+                found: d.len(),
+            });
+        }
+        let mut triplet = TriMat::with_capacity((self.size, self.size), self.nnz() + self.size);
+        for (&val, (r, c)) in self.matrix.iter() {
+            triplet.add_triplet(r, c, val);
+        }
+        for (i, &di) in d.iter().enumerate() {
+            triplet.add_triplet(i, i, di);
+        }
+        Ok(Self {
+            matrix: triplet.to_csc(),
+            size: self.size,
+            cholesky: None,
+        })
+    }
+
+    /// Resuelve `Ax = b` con gradiente conjugado precondicionado (Jacobi).
+    ///
+    /// Converge cuando `‖r‖ ≤ tolerance · ‖b‖`. Cada iteración cuesta O(nnz).
+    /// Devuelve `NotPositiveDefinite` si detecta curvatura no positiva.
+    pub fn solve_cg(
+        &self,
+        b: &[Real],
+        max_iterations: usize,
+        tolerance: Real,
+    ) -> Result<Vec<Real>, SPDMatrixError> {
+        if b.len() != self.size {
+            return Err(SPDMatrixError::DimensionMismatch {
+                expected: self.size,
+                found: b.len(),
+            });
+        }
+        let n = self.size;
+        let dot = |a: &[Real], b: &[Real]| a.iter().zip(b).map(|(x, y)| x * y).sum::<Real>();
+
+        let b_norm = dot(b, b).sqrt();
+        if b_norm == 0.0 {
+            return Ok(vec![0.0; n]);
+        }
+
+        // Precondicionador de Jacobi
+        let mut inv_diag = vec![1.0; n];
+        for (i, col) in self.matrix.outer_iterator().enumerate() {
+            for (j, &val) in col.iter() {
+                if i == j && val.abs() > 1e-300 {
+                    inv_diag[i] = 1.0 / val;
+                }
+            }
+        }
+
+        let mut x = vec![0.0; n];
+        let mut r = b.to_vec();
+        let mut z: Vec<Real> = r.iter().zip(&inv_diag).map(|(r, d)| r * d).collect();
+        let mut p = z.clone();
+        let mut rz = dot(&r, &z);
+
+        for _ in 0..max_iterations {
+            let ap = self.mul_vec(&p);
+            let pap = dot(&p, &ap);
+            if pap <= 0.0 {
+                return Err(SPDMatrixError::NotPositiveDefinite);
+            }
+            let alpha = rz / pap;
+            for i in 0..n {
+                x[i] += alpha * p[i];
+                r[i] -= alpha * ap[i];
+            }
+            if dot(&r, &r).sqrt() <= tolerance * b_norm {
+                return Ok(x);
+            }
+            for i in 0..n {
+                z[i] = r[i] * inv_diag[i];
+            }
+            let rz_new = dot(&r, &z);
+            let beta = rz_new / rz;
+            rz = rz_new;
+            for i in 0..n {
+                p[i] = z[i] + beta * p[i];
             }
         }
 
@@ -316,5 +405,30 @@ mod tests {
 
         assert!((x[0] - 1.0).abs() < 1e-4);
         assert!((x[1] - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn test_solve_cg_laplacian_plus_diagonal() {
+        // Laplaciano 1D (cadena de n nodos) + diagonal positiva: el sistema de bone heat
+        let n = 200;
+        let (mut rows, mut cols, mut vals) = (vec![], vec![], vec![]);
+        for i in 0..n - 1 {
+            for (r, c, v) in [(i, i, 1.0), (i + 1, i + 1, 1.0), (i, i + 1, -1.0), (i + 1, i, -1.0)] {
+                rows.push(r);
+                cols.push(c);
+                vals.push(v);
+            }
+        }
+        let lap = SPDMatrix::from_triplets(n, &rows, &cols, &vals).unwrap();
+        let h: Vec<Real> = (0..n).map(|i| if i % 50 == 0 { 2.0 } else { 0.0 }).collect();
+        let a = lap.add_diagonal(&h).unwrap();
+        let b: Vec<Real> = (0..n).map(|i| if i == 0 { 2.0 } else { 0.0 }).collect();
+
+        let x = a.solve_cg(&b, 1000, 1e-10).unwrap();
+        let ax = a.mul_vec(&x);
+        let residual: Real = ax.iter().zip(&b).map(|(p, q)| (p - q).powi(2)).sum::<Real>().sqrt();
+        assert!(residual < 1e-8, "residuo = {residual}");
+        // La solución es positiva y decrece al alejarse del nodo con calor
+        assert!(x[0] > x[25] && x[25] > 0.0);
     }
 }

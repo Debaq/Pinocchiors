@@ -2958,7 +2958,6 @@ name = "pinocchio-embedding"
 version = "0.1.0"
 dependencies = [
  "approx 0.5.1",
- "pinocchio-graph",
  "pinocchio-math",
  "pinocchio-mesh",
  "pinocchio-skeleton",

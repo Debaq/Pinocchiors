@@ -9,7 +9,6 @@ description = "Skeleton embedding algorithms for Pinocchio"
 pinocchio-math = { workspace = true }
 pinocchio-mesh = { workspace = true }
 pinocchio-skeleton = { workspace = true }
-pinocchio-graph = { workspace = true }
 pinocchio-spatial = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }

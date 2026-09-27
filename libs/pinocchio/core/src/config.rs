@@ -2,6 +2,18 @@
 
 use pinocchio_math::Real;
 
+/// Cómo se coloca el esqueleto respecto de la malla antes del embedding
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SkeletonFit {
+    /// El esqueleto es una plantilla en su propio espacio (p. ej. los presets,
+    /// definidos con altura 1): se escala y centra dentro de la malla.
+    #[default]
+    Auto,
+    /// El esqueleto ya está colocado en las coordenadas de la malla (p. ej.
+    /// ajustado a mano en un editor): se usa tal cual.
+    None,
+}
+
 /// Configuración para el proceso de auto-rigging
 #[derive(Debug, Clone)]
 pub struct PinocchioConfig {
@@ -35,6 +47,9 @@ pub struct PinocchioConfig {
 
     /// Ratio de decimación (0.0-1.0) cuando se activa decimación automática
     pub decimate_ratio: Real,
+
+    /// Colocación del esqueleto respecto de la malla
+    pub skeleton_fit: SkeletonFit,
 }
 
 impl Default for PinocchioConfig {
@@ -50,6 +65,7 @@ impl Default for PinocchioConfig {
             verify_mesh_integrity: true,
             auto_decimate_threshold: 100_000,
             decimate_ratio: 0.1,
+            skeleton_fit: SkeletonFit::Auto,
         }
     }
 }
@@ -68,6 +84,7 @@ impl PinocchioConfig {
             verify_mesh_integrity: false,
             auto_decimate_threshold: 50_000,
             decimate_ratio: 0.05,
+            skeleton_fit: SkeletonFit::Auto,
         }
     }
 
@@ -84,6 +101,7 @@ impl PinocchioConfig {
             verify_mesh_integrity: true,
             auto_decimate_threshold: 500_000,
             decimate_ratio: 0.2,
+            skeleton_fit: SkeletonFit::Auto,
         }
     }
 
@@ -127,6 +145,12 @@ impl PinocchioConfig {
     pub fn with_auto_decimate(mut self, threshold: usize, ratio: Real) -> Self {
         self.auto_decimate_threshold = threshold;
         self.decimate_ratio = ratio.clamp(0.01, 1.0);
+        self
+    }
+
+    /// Builder: establece cómo se coloca el esqueleto respecto de la malla
+    pub fn with_skeleton_fit(mut self, fit: SkeletonFit) -> Self {
+        self.skeleton_fit = fit;
         self
     }
 
