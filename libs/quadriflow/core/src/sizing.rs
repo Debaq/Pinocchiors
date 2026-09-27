@@ -19,7 +19,7 @@ use std::collections::{BinaryHeap, HashMap};
 /// quads que se gasta en un rasgo).
 pub(crate) const MIN_FACTOR: f64 = 1.0 / 6.0;
 /// Crecimiento máximo de la escala por unidad de distancia sobre la superficie.
-const GRADATION: f64 = 0.5;
+const GRADATION: f64 = 0.3;
 /// Lado de las celdas de la grilla de consulta, en unidades de la escala.
 const CELL: f64 = 0.25;
 

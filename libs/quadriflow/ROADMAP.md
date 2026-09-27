@@ -148,7 +148,31 @@ Plan hacia una retopología lista para producción (una fase por commit):
       "Avanzado", seguir la curvatura, densidad adaptativa, reparar malla rota
       e iteraciones; al terminar muestra el informe de calidad (resalta
       plegados, irregulares > 8 % y distancia > 2 %).
-- [ ] **Fase 7 — Calidad avanzada**: chaflanes angostos entre aristas vivas,
-      transiciones de densidad regulares (para activar la densidad adaptativa
-      por defecto), pares 3-5 junto a singularidades de orientación, aristas
-      vivas tras la reconstrucción.
+- [x] **Fase 7 — Calidad avanzada** (investigación; un cambio adoptado):
+      - Transiciones de densidad: gradación 0.5 → 0.3. Con densidad
+        adaptativa, gonfoterio: irregulares 6.0 → 5.1 %, ángulos malos 8.3 →
+        5.0 %, cola conservada (original→quads 1.8 → 1.15 %); Ender: plegados
+        34 → 23. Sigue siendo peor que sin adaptativa en CAD: queda opcional.
+        Descartado: niveles diádicos de escala (el promedio 1.5× en la
+        frontera no calza con ningún retículo; cientos de segundos) y dejar
+        que el refinamiento sume quads al objetivo (sobrerrefina CAD).
+      - Chaflanes: soltar aristas vivas a menos de 0.6 quads de otra sin
+        extremo común. Banco a 3 densidades × 6 piezas CAD: irregulares 3.07
+        → 2.93 % pero plegados 262 → 292. Descartado: los plegados no vienen
+        de restricciones contradictorias sino de bandas de un solo quad de
+        alto (canto de un disco) donde una dislocación no tiene lugar.
+      - Pares 3-5 junto a singularidades de orientación: prohibir que las
+        cargas de posición se absorban ahí no converge (quedan sin pareja):
+        son estructurales en este esquema.
+      - Aristas vivas tras la reconstrucción: llevar vértices del escalonado
+        de vóxeles a las aristas vivas de la entrada crea dientes de sierra
+        (audiómetro: plegados 33 → 155). Requiere otra extracción (dual
+        contouring con QEF).
+
+## Pendiente
+
+- Bandas de un quad de alto con dislocaciones (cantos de discos, paredes):
+  mover la dislocación fuera de la banda antes de extraer.
+- Dual contouring con QEF en la reconstrucción, para conservar aristas vivas.
+- Densidad adaptativa sin costo en regularidad (transiciones con patrones
+  fijos de refinamiento).
