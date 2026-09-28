@@ -319,8 +319,6 @@ struct GlbBuilder<'a> {
     animations: Vec<Value>,
     extensions_used: Vec<String>,
     extensions_required: Vec<String>,
-    /// Mapa: skeleton index → (primer nodo de joint en nodes[], cantidad de joints)
-    skin_joint_offsets: Vec<(usize, usize)>,
 }
 
 impl<'a> GlbBuilder<'a> {
@@ -339,7 +337,6 @@ impl<'a> GlbBuilder<'a> {
             animations: Vec::new(),
             extensions_used: Vec::new(),
             extensions_required: Vec::new(),
-            skin_joint_offsets: Vec::new(),
         }
     }
 
@@ -727,13 +724,26 @@ impl<'a> GlbBuilder<'a> {
         let scene_node_count = scene.nodes.len();
 
         for (skel_idx, skeleton) in scene.skeletons.iter().enumerate() {
-            let joint_node_offset = self.nodes.len();
-            self.skin_joint_offsets.push((joint_node_offset, skeleton.joints.len()));
+            // Nodo glTF de cada joint: el nodo de escena que ya lo representa
+            // (así las animaciones, que apuntan a nodos de escena, mueven el
+            // skin) o uno nuevo después de los que ya hay
+            let mut next = self.nodes.len();
+            let joint_nodes: Vec<usize> = skeleton
+                .joints
+                .iter()
+                .map(|joint| match joint.node_index {
+                    Some(n) if n < scene_node_count => n,
+                    _ => {
+                        next += 1;
+                        next - 1
+                    }
+                })
+                .collect();
 
-            // Crear nodos para cada joint
-            for joint in &skeleton.joints {
-                // Si el joint tiene node_index, reusar el nodo de escena ya existente
-                // en vez de crear uno duplicado. Si no, crear nodo nuevo.
+            for (ji, joint) in skeleton.joints.iter().enumerate() {
+                if joint_nodes[ji] < scene_node_count {
+                    continue;
+                }
                 let mut node_json = json!({});
                 if !joint.name.is_empty() {
                     node_json["name"] = json!(joint.name);
@@ -752,21 +762,14 @@ impl<'a> GlbBuilder<'a> {
                     node_json["scale"] = json!([scale.x, scale.y, scale.z]);
                 }
 
-                // Children: remap joint-local indices → global node indices
+                // Hijos: índices de joint → nodos glTF
                 if !joint.children.is_empty() {
-                    let children: Vec<usize> = joint.children.iter()
-                        .map(|&c| joint_node_offset + c)
-                        .collect();
+                    let children: Vec<usize> = joint.children.iter().map(|&c| joint_nodes[c]).collect();
                     node_json["children"] = json!(children);
                 }
 
                 self.nodes.push(node_json);
             }
-
-            // joints array (índices de nodos globales)
-            let joint_indices: Vec<usize> = (0..skeleton.joints.len())
-                .map(|j| joint_node_offset + j)
-                .collect();
 
             // inverseBindMatrices accessor
             let ibm_data: Vec<u8> = skeleton.joints.iter()
@@ -782,7 +785,7 @@ impl<'a> GlbBuilder<'a> {
             );
 
             let mut skin_json = json!({
-                "joints": joint_indices,
+                "joints": &joint_nodes,
                 "inverseBindMatrices": ibm_acc,
             });
             if !skeleton.name.is_empty() {
@@ -790,7 +793,7 @@ impl<'a> GlbBuilder<'a> {
             }
             // Skeleton root
             if let Some(&root) = skeleton.roots.first() {
-                skin_json["skeleton"] = json!(joint_node_offset + root);
+                skin_json["skeleton"] = json!(joint_nodes[root]);
             }
 
             self.skins.push(skin_json);
@@ -802,10 +805,6 @@ impl<'a> GlbBuilder<'a> {
                 }
             }
         }
-
-        // Remap animation node targets: los nodos de animación en Scene apuntan
-        // a nodos de escena (no a joints). Nada que hacer aquí — se resuelve en write_animations.
-        let _ = scene_node_count;
     }
 
     // -----------------------------------------------------------------------
