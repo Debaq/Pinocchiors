@@ -311,6 +311,9 @@ pub struct QuadMeshInfo {
     pub num_quads: usize,
     pub bounding_box: BoundingBox,
     pub quality: QuadQuality,
+    /// Caras que cruzan una costura del mapa UV original; `None` si el modelo
+    /// no tenía UV
+    pub uv_seam_faces: Option<usize>,
 }
 
 /// Datos de la malla de quads para Three.js
@@ -684,11 +687,15 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena para exportar")?;
     let use_retopology = config.use_retopology.unwrap_or(false);
 
-    let geometry = if use_retopology {
+    // Con retopología, el vértice de la malla de quads de cada vértice exportado
+    let (geometry, quad_vertex_of) = if use_retopology {
         let quad = state.quad_mesh.lock().unwrap();
-        quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, &scene)
+        let uvs = state.quad_uvs.lock().unwrap();
+        let (geometry, source) =
+            quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, uvs.as_ref(), &scene);
+        (geometry, Some(source))
     } else {
-        scene
+        (scene, None)
     };
     if !config.include_weights.unwrap_or(false) {
         return Ok(geometry);
@@ -705,11 +712,12 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
         .map(|v| result.get_weights(v).to_vec())
         .collect();
     let prims = geometry.world_primitives();
-    let vertex_weights = if use_retopology {
+    let vertex_weights = if let Some(quad_vertex_of) = quad_vertex_of {
         let mesh_lock = state.mesh.lock().unwrap();
         let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
         let quad = state.quad_mesh.lock().unwrap();
-        weights_on_quad_mesh(mesh, &source_weights, quad.as_ref().ok_or("No hay malla retopologizada")?)?
+        let weights = weights_on_quad_mesh(mesh, &source_weights, quad.as_ref().ok_or("No hay malla retopologizada")?)?;
+        quad_vertex_of.iter().map(|&v| weights[v].clone()).collect()
     } else {
         source_weights
     };
@@ -725,30 +733,95 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions))
 }
 
-/// Malla de quads de QuadriFlow como escena (triangulada, en espacio mundo)
-fn quad_mesh_to_scene(quad: &quadriflow_core::QuadMesh, base: &Scene) -> Scene {
+/// UV de la escena llevadas a la malla de quads. `None` si ninguna primitiva
+/// tiene UV. El grupo de cada cara es su material + 1 (0 = sin material).
+fn transfer_quad_uvs(scene: &Scene, quad: &quadriflow_core::QuadMesh) -> Option<uv_core::UvTransfer<4>> {
+    let prims = scene.world_primitives();
+    let surface = uv_core::UvSurface::new(prims.iter().filter_map(|p| {
+        Some(uv_core::UvPart {
+            group: p.material.map_or(0, |m| m + 1),
+            positions: &p.positions,
+            uvs: p.uvs.as_deref()?,
+            triangles: &p.triangles,
+        })
+    }))?;
+    let positions: Vec<[f64; 3]> = quad.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+    let faces: Vec<[usize; 4]> = quad.faces.iter().map(|f| f.v).collect();
+    Some(uv_core::transfer_uvs(&surface, &positions, &faces))
+}
+
+/// Malla de quads de QuadriFlow como escena (triangulada, en espacio mundo).
+///
+/// Con `uvs`, cada material es una primitiva y un vértice se duplica donde sus
+/// caras tienen UV distintas (costuras). Devuelve también, por cada vértice
+/// exportado en orden de primitivas, el vértice de la malla de quads.
+fn quad_mesh_to_scene(
+    quad: &quadriflow_core::QuadMesh,
+    uvs: Option<&uv_core::UvTransfer<4>>,
+    base: &Scene,
+) -> (Scene, Vec<usize>) {
     use converter_scene::{Mesh as SceneMesh, Node, Primitive, Transform};
 
     let positions: Vec<[f32; 3]> = quad.vertices.iter().map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect();
-    let triangles: Vec<[u32; 3]> = quad
-        .faces
-        .iter()
-        .flat_map(|f| {
-            let [a, b, c, d] = f.v.map(|i| i as u32);
-            [[a, b, c], [a, c, d]]
-        })
-        .collect();
-    let normals = compute_vertex_normals(&positions, &triangles);
+    let split = |f: &quadriflow_core::QuadFace| {
+        let [a, b, c, d] = f.v.map(|i| i as u32);
+        [[a, b, c], [a, c, d]]
+    };
+    let quad_triangles: Vec<[u32; 3]> = quad.faces.iter().flat_map(split).collect();
+    let normals = compute_vertex_normals(&positions, &quad_triangles);
 
-    Scene {
-        meshes: vec![SceneMesh {
-            name: "retopology".into(),
-            primitives: vec![Primitive {
+    let (primitives, source) = match uvs.filter(|t| t.corners.len() == quad.faces.len()) {
+        None => {
+            let primitive = Primitive {
                 attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
-                indices: Some(IndexData::U32(triangles.into_iter().flatten().collect())),
+                indices: Some(IndexData::U32(quad_triangles.into_iter().flatten().collect())),
                 material: None,
-            }],
-        }],
+            };
+            (vec![primitive], (0..quad.vertices.len()).collect())
+        }
+        Some(transfer) => {
+            let mut groups: Vec<usize> = transfer.groups.clone();
+            groups.sort_unstable();
+            groups.dedup();
+            let mut primitives = Vec::new();
+            let mut source = Vec::new();
+            for group in groups {
+                // Vértice exportado por (vértice de quads, UV exacta)
+                let mut ids: std::collections::HashMap<(usize, [u32; 2]), u32> = Default::default();
+                let (mut pos, mut nor, mut tex, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+                for (face, corner_uvs) in quad.faces.iter().zip(&transfer.corners).zip(&transfer.groups)
+                    .filter(|(_, g)| **g == group)
+                    .map(|(fc, _)| fc)
+                {
+                    let corner_ids = std::array::from_fn::<u32, 4, _>(|k| {
+                        let (v, uv) = (face.v[k], corner_uvs[k]);
+                        *ids.entry((v, uv.map(f32::to_bits))).or_insert_with(|| {
+                            pos.push(positions[v]);
+                            nor.push(normals[v]);
+                            tex.push(uv);
+                            source.push(v);
+                            (pos.len() - 1) as u32
+                        })
+                    });
+                    let [a, b, c, d] = corner_ids;
+                    indices.extend([a, b, c, a, c, d]);
+                }
+                primitives.push(Primitive {
+                    attributes: vec![
+                        VertexAttribute::Positions(pos),
+                        VertexAttribute::Normals(nor),
+                        VertexAttribute::TexCoords(0, tex),
+                    ],
+                    indices: Some(IndexData::U32(indices)),
+                    material: group.checked_sub(1).filter(|&m| m < base.materials.len()),
+                });
+            }
+            (primitives, source)
+        }
+    };
+
+    let scene = Scene {
+        meshes: vec![SceneMesh { name: "retopology".into(), primitives }],
         nodes: vec![Node {
             name: "retopology".into(),
             transform: Transform::identity(),
@@ -757,10 +830,13 @@ fn quad_mesh_to_scene(quad: &quadriflow_core::QuadMesh, base: &Scene) -> Scene {
             children: vec![],
         }],
         root_nodes: vec![0],
+        materials: if uvs.is_some() { base.materials.clone() } else { vec![] },
+        textures: if uvs.is_some() { base.textures.clone() } else { vec![] },
         meters_per_unit: base.meters_per_unit,
         y_up: base.y_up,
         ..Scene::default()
-    }
+    };
+    (scene, source)
 }
 
 /// Construye una escena con skin a partir de la geometría (en espacio mundo),
@@ -1380,6 +1456,7 @@ pub async fn run_retopology(
         .ok_or("Ya hay un proceso en curso")?;
 
     let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let scene = state.scene.lock().unwrap().clone();
 
     let _ = on_progress.send(Progress {
         stage: "preparing".to_string(),
@@ -1390,7 +1467,7 @@ pub async fn run_retopology(
     let remesh_config = config.to_remesh_config()?;
 
     let progress = on_progress.clone();
-    let (quad_mesh, quality) = tauri::async_runtime::spawn_blocking(move || {
+    let (quad_mesh, quality, uvs) = tauri::async_runtime::spawn_blocking(move || {
         let quads = remesh_with_callback(&mesh, &remesh_config, |stage, message| {
             let _ = progress.send(Progress {
                 stage: stage.name().to_string(),
@@ -1399,7 +1476,15 @@ pub async fn run_retopology(
             });
         })?;
         let quality = quadriflow_core::quality::analyze(&quads, Some(&mesh));
-        Ok::<_, quadriflow_core::RemeshError>((quads, quality))
+        let uvs = scene.as_ref().and_then(|scene| {
+            let _ = progress.send(Progress {
+                stage: "uv".to_string(),
+                percent: 99,
+                message: "Trasladando el mapa UV...".to_string(),
+            });
+            transfer_quad_uvs(scene, &quads)
+        });
+        Ok::<_, quadriflow_core::RemeshError>((quads, quality, uvs))
     })
     .await
     .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
@@ -1410,6 +1495,7 @@ pub async fn run_retopology(
         num_quads: quad_mesh.num_faces(),
         bounding_box: calculate_quad_mesh_bounds(&quad_mesh),
         quality: quality.into(),
+        uv_seam_faces: uvs.as_ref().map(|t| t.seam_faces),
     };
 
     let _ = on_progress.send(Progress {
@@ -1422,6 +1508,7 @@ pub async fn run_retopology(
     });
 
     *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
+    *state.quad_uvs.lock().unwrap() = uvs;
     Ok(info)
 }
 
@@ -2450,10 +2537,46 @@ mod tests {
             ],
             faces: vec![QuadFace { v: [0, 1, 2, 3] }],
         };
-        let scene = quad_mesh_to_scene(&quad, &Scene::default());
+        let (scene, source) = quad_mesh_to_scene(&quad, None, &Scene::default());
         assert!(scene.validate().is_ok());
         let prims = scene.world_primitives();
         assert_eq!(prims[0].triangles, vec![[0, 1, 2], [0, 2, 3]]);
+        assert_eq!(source, vec![0, 1, 2, 3]);
+    }
+
+    /// Dos quads que comparten una arista con UV distintas a cada lado: los
+    /// vértices de esa arista se duplican y cada material va en su primitiva
+    #[test]
+    fn quad_mesh_with_uvs_splits_seams_and_materials() {
+        use quadriflow_core::{QuadFace, QuadMesh};
+        let v = |x: f64, y: f64| nalgebra::Vector3::new(x, y, 0.0);
+        let quad = QuadMesh {
+            vertices: vec![v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0), v(0.0, 1.0), v(2.0, 0.0), v(2.0, 1.0)],
+            faces: vec![QuadFace { v: [0, 1, 2, 3] }, QuadFace { v: [1, 4, 5, 2] }],
+        };
+        let uvs = uv_core::UvTransfer {
+            corners: vec![
+                [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
+                [[0.6, 0.0], [1.0, 0.0], [1.0, 1.0], [0.6, 1.0]],
+            ],
+            groups: vec![1, 1],
+            seam_faces: 0,
+        };
+        let base = Scene { materials: vec![converter_scene::Material::default()], ..Scene::default() };
+        let (scene, source) = quad_mesh_to_scene(&quad, Some(&uvs), &base);
+        assert!(scene.validate().is_ok());
+        let prims = scene.world_primitives();
+        assert_eq!(prims.len(), 1);
+        assert_eq!(prims[0].material, Some(0));
+        assert_eq!(prims[0].positions.len(), 8, "la arista de la costura se duplica");
+        assert_eq!(source, vec![0, 1, 2, 3, 1, 4, 5, 2]);
+        assert_eq!(prims[0].uvs.as_ref().unwrap()[4], [0.6, 0.0]);
+
+        // Mismas UV a ambos lados: la arista se comparte
+        let mut continuous = uvs.clone();
+        continuous.corners[1] = [[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [0.5, 1.0]];
+        let (scene, _) = quad_mesh_to_scene(&quad, Some(&continuous), &base);
+        assert_eq!(scene.world_primitives()[0].positions.len(), 6);
     }
 
     fn words(bytes: &[u8]) -> Vec<u32> {

@@ -1,0 +1,17 @@
+[package]
+name = "uv-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Coordenadas UV: traspaso entre mallas, desplegado, empaquetado y horneado"
+
+[dependencies]
+pinocchio-math = { workspace = true }
+pinocchio-spatial = { workspace = true }
+rayon = { workspace = true }
+
+[dev-dependencies]
+quadriflow-core = { workspace = true }
+pinocchio-mesh = { workspace = true, features = ["converter"] }
+converter-scene = { workspace = true }
+converter-gltf-io = { workspace = true }

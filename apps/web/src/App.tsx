@@ -110,6 +110,8 @@ interface TauriQuadMeshInfo {
   num_quads: number;
   bounding_box: { min: [number, number, number]; max: [number, number, number] };
   quality: QuadQuality;
+  /** Caras que cruzan una costura del mapa UV original; null si no había UV */
+  uv_seam_faces: number | null;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -585,8 +587,12 @@ export const App: Component = () => {
 
       setIsProcessing(false);
       setProgress(undefined);
+      const uvNote =
+        info.uv_seam_faces === null
+          ? ""
+          : ` · UV trasladadas (${info.uv_seam_faces.toLocaleString()} caras cruzan costuras)`;
       setStatusMessage(
-        `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads`
+        `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}`
       );
 
       // Pipeline: mark retopology as completed

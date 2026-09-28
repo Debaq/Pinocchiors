@@ -72,6 +72,9 @@ pub struct AppState {
     /// Malla de quads resultante de retopología
     pub quad_mesh: Mutex<Option<QuadMesh>>,
 
+    /// UV de la malla original llevadas a `quad_mesh` (si el modelo tenía UV)
+    pub quad_uvs: Mutex<Option<uv_core::UvTransfer<4>>>,
+
     /// Indica si hay un proceso en curso
     pub processing: AtomicBool,
 
@@ -103,6 +106,7 @@ impl AppState {
             skeleton_transform: Mutex::new(SkeletonTransformParams::default()),
             result: Mutex::new(None),
             quad_mesh: Mutex::new(None),
+            quad_uvs: Mutex::new(None),
             processing: AtomicBool::new(false),
             diagnostics: Mutex::new(None),
             mesh_before_repair: Mutex::new(None),
@@ -128,6 +132,7 @@ impl AppState {
     pub fn geometry_changed(&self) {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
+        *self.quad_uvs.lock().unwrap() = None;
     }
 
     /// Descarta todo lo derivado de la malla actual (resultados, backups,
@@ -135,6 +140,7 @@ impl AppState {
     pub fn reset_derived(&self) {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
+        *self.quad_uvs.lock().unwrap() = None;
         *self.diagnostics.lock().unwrap() = None;
         *self.mesh_before_repair.lock().unwrap() = None;
         *self.scene_before_repair.lock().unwrap() = None;

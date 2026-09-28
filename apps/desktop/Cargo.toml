@@ -36,6 +36,9 @@ pinocchio-print3d = { workspace = true }
 # QuadriFlow - Retopology
 quadriflow-core = { workspace = true }
 
+# UV
+uv-core = { workspace = true }
+
 # USDA/USDZ export
 converter-usda = { workspace = true }
 

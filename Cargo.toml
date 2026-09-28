@@ -15,6 +15,8 @@ members = [
     "libs/pinocchio/core",
     # QuadriFlow - Quad remeshing
     "libs/quadriflow/core",
+    # UV - Coordenadas de textura
+    "libs/uv/core",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
     "libs/converter/gltf-io",
@@ -100,6 +102,9 @@ pinocchio-core = { path = "libs/pinocchio/core" }
 # Crates internos - QuadriFlow
 quadriflow-core = { path = "libs/quadriflow/core" }
 
+# Crates internos - UV
+uv-core = { path = "libs/uv/core" }
+
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }
 converter-gltf-io = { path = "libs/converter/gltf-io", default-features = false }
@@ -119,6 +124,9 @@ split-debuginfo = "packed"  # compactar debug info en un solo archivo
 
 # Numérico pesado: sin optimizar, sus tests tardan minutos
 [profile.dev.package.quadriflow-core]
+opt-level = 2
+
+[profile.dev.package.uv-core]
 opt-level = 2
 
 [profile.dev.package.nalgebra]

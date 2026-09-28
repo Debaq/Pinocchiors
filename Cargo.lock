@@ -2984,6 +2984,7 @@ dependencies = [
  "tauri-plugin-shell",
  "thiserror 2.0.18",
  "tokio",
+ "uv-core",
 ]
 
 [[package]]
@@ -5048,6 +5049,19 @@ dependencies = [
  "js-sys",
  "serde_core",
  "wasm-bindgen",
+]
+
+[[package]]
+name = "uv-core"
+version = "0.1.0"
+dependencies = [
+ "converter-gltf-io",
+ "converter-scene",
+ "pinocchio-math",
+ "pinocchio-mesh",
+ "pinocchio-spatial",
+ "quadriflow-core",
+ "rayon",
 ]
 
 [[package]]
