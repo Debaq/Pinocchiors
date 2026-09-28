@@ -8,14 +8,14 @@ export interface LightsPanelProps {
   onChange?: (lights: LightSettings) => void;
 }
 
-/** Luces del visor: la principal se mueve con los controles o con Alt + arrastrar */
+/** Luces del visor: la principal se mueve con los controles o con L + arrastrar */
 export const LightsPanel: Component<LightsPanelProps> = (props) => {
   const update = (partial: Partial<LightSettings>) => props.onChange?.({ ...props.lights, ...partial });
   return (
     <Panel title="Luces" icon={<Icons.Lightning size={14} />} defaultOpen={false}>
       <div class="space-y-4 pt-1">
         <p class="text-xs text-text-muted leading-relaxed">
-          <span class="text-text">Alt + arrastrar</span> en el visor gira la luz principal alrededor
+          Mantén <span class="text-text">L</span> y arrastra con clic izquierdo en el visor: gira la luz principal alrededor
           del modelo.
         </p>
         <Slider

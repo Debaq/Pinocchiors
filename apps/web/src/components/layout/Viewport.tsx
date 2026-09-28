@@ -1,4 +1,4 @@
-import { Component, onMount, onCleanup, Show, createEffect } from "solid-js";
+import { Component, onMount, onCleanup, Show, createEffect, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import {
   Viewer3D,
@@ -20,7 +20,11 @@ export interface ViewportProps {
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
-  /** La luz principal se movió arrastrando con Alt */
+  /** Fin de un movimiento con G (para deshacer) */
+  onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
+  /** Radio o intensidad del pincel cambiados con F / Shift+F */
+  onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
+  /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
 
   /** Materiales del archivo de origen */
@@ -60,6 +64,8 @@ export interface ViewportProps {
 export const Viewport: Component<ViewportProps> = (props) => {
   let canvasRef: HTMLCanvasElement | undefined;
   let viewer: Viewer3D | undefined;
+  /** Ayuda de la operación modal en curso (G, R, F…) */
+  const [hint, setHint] = createSignal<string | null>(null);
 
   onMount(() => {
     if (canvasRef) {
@@ -70,6 +76,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onGroundSelected: props.onGroundSelected,
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
+        onBoneMoveCommitted: (index, from, to) => props.onBoneMoveCommitted?.(index, from, to),
+        onPaintSettingsChanged: (change) => props.onPaintSettingsChanged?.(change),
+        onHint: setHint,
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
       });
@@ -187,10 +196,19 @@ export const Viewport: Component<ViewportProps> = (props) => {
           </div>
         </Show>
 
-        {/* Help text for bone editing */}
-        <Show when={props.boneEditMode}>
+        {/* Ayuda de la operación en curso, o de los gestos del esqueleto */}
+        <Show
+          when={hint()}
+          fallback={
+            <Show when={props.skeletonData && !props.groundSelectionMode && !props.paintSettings}>
+              <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/80 text-text-muted text-xs">
+                Clic: seleccionar articulación · G mover · R rotar · rueda/botón central: vista
+              </div>
+            </Show>
+          }
+        >
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-orange/90 text-bg text-xs font-medium">
-            Click en un hueso para seleccionarlo y arrastrarlo
+            {hint()}
           </div>
         </Show>
 

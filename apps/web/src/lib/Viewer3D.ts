@@ -125,12 +125,22 @@ export interface PaintStroke {
 
 export interface ViewerCallbacks {
   onWeightsPainted?: (stroke: PaintStroke) => void;
-  /** La luz principal se movió arrastrando con Alt */
+  /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
   onFpsUpdate?: (fps: number) => void;
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
+  /** Fin de un movimiento con G: posición inicial y final (para deshacer) */
+  onBoneMoveCommitted?: (
+    index: number,
+    from: [number, number, number],
+    to: [number, number, number]
+  ) => void;
+  /** Texto de ayuda de la operación en curso (null al terminar) */
+  onHint?: (text: string | null) => void;
+  /** Radio o intensidad del pincel cambiados con F / Shift+F */
+  onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -201,6 +211,8 @@ export class Viewer3D {
   /** Filas originales de los vértices tocados en el trazo en curso */
   private stroke: Map<number, Float32Array> | null = null;
   private lastDab: THREE.Vector3 | null = null;
+  /** Modo del trazo en curso (depende de Ctrl/Shift al empezar) */
+  private strokeMode: PaintSettings["mode"] = "add";
   private brushCursor: THREE.Mesh | null = null;
 
   /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
@@ -233,7 +245,7 @@ export class Viewer3D {
   private ambientLight = new THREE.HemisphereLight(0xffffff, 0x44475a, 1);
   private headLight = new THREE.DirectionalLight(0xffffff, 0);
   private environmentMap: THREE.Texture | null = null;
-  /** Arrastre de la luz principal con Alt */
+  /** Arrastre de la luz principal (L + clic izquierdo) */
   private lightDrag: { x: number; y: number; azimuth: number; elevation: number } | null = null;
   private sunMarker: THREE.Mesh | null = null;
 
@@ -256,6 +268,23 @@ export class Viewer3D {
   private boneEditMode = false;
   private transformControls: TransformControls | null = null;
   private selectedBoneIndex = -1;
+
+  // Gestos de Blender
+  private keysDown = new Set<string>();
+  private lastPointer = { x: 0, y: 0 };
+  private modal: {
+    kind: "grab" | "rotate" | "radius" | "strength";
+    bone: number;
+    mouse: { x: number; y: number };
+    /** Posición inicial de la articulación, en coordenadas de mundo */
+    start: THREE.Vector3;
+    axis: "x" | "y" | "z" | null;
+    /** Radio o intensidad inicial del pincel */
+    value: number;
+  } | null = null;
+  private pendingMove: { bone: number; position: [number, number, number] } | null = null;
+  private moveFrame: number | null = null;
+  private hintTimer: number | null = null;
   private gridHelper: THREE.GridHelper | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -366,9 +395,8 @@ export class Viewer3D {
     }
   }
 
-  /** Alt + arrastrar: gira la luz principal alrededor del modelo */
+  /** L + arrastrar: gira la luz principal alrededor del modelo */
   private onLightDown(event: PointerEvent): void {
-    if (!event.altKey || event.button !== 0) return;
     this.lightDrag = { x: event.clientX, y: event.clientY, azimuth: this.lights.azimuth, elevation: this.lights.elevation };
     this.controls.enabled = false;
     if (!this.sunMarker) {
@@ -409,17 +437,290 @@ export class Viewer3D {
     this.canvas.addEventListener("click", (e) => this.onCanvasClick(e));
     this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e));
 
-    // Luz principal (Alt + arrastrar), antes que el pincel
-    this.canvas.addEventListener("pointerdown", (e) => this.onLightDown(e));
-    this.canvas.addEventListener("pointermove", (e) => this.onLightMove(e));
-    window.addEventListener("pointerup", () => this.onLightUp());
+    // Navegación como Blender: antes que OrbitControls (fase de captura),
+    // se decide qué hace cada botón según los modificadores
+    window.addEventListener("pointerdown", (e) => {
+      if (e.target === this.canvas) this.configureNavigation(e);
+    }, true);
+    this.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
-    // Pincel de pesos
-    this.canvas.addEventListener("pointerdown", (e) => {
-      if (!this.lightDrag) this.onPaintDown(e);
+    // Clic: modal, luz, pincel, gizmo o selección (en ese orden)
+    this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
+    window.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    window.addEventListener("pointerup", () => {
+      this.onLightUp();
+      this.finishStroke();
     });
-    this.canvas.addEventListener("pointermove", (e) => this.onPaintMove(e));
-    window.addEventListener("pointerup", () => this.finishStroke());
+
+    // Teclas mientras hay una operación modal (G, R, F…): antes que los atajos
+    window.addEventListener("keydown", (e) => this.onModalKey(e), true);
+    window.addEventListener("keydown", (e) => this.keysDown.add(e.key.toLowerCase()));
+    window.addEventListener("keyup", (e) => this.keysDown.delete(e.key.toLowerCase()));
+    window.addEventListener("blur", () => this.keysDown.clear());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GESTOS DE BLENDER
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Botón central orbita (Shift desplaza, Ctrl hace zoom); sin botón
+   * central, lo mismo con Alt + izquierdo. El izquierdo solo no mueve la
+   * cámara: selecciona, pinta o confirma.
+   */
+  private configureNavigation(e: PointerEvent): void {
+    // OrbitControls ya cambia ROTATE por PAN si hay Shift (o Ctrl, por eso
+    // Ctrl va aparte como DOLLY, que no mira modificadores)
+    const action = (e.ctrlKey || e.metaKey) && !e.shiftKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+    const none = null as unknown as THREE.MOUSE;
+    this.controls.mouseButtons = {
+      LEFT: e.altKey && !this.modal ? action : none,
+      MIDDLE: action,
+      RIGHT: none,
+    };
+  }
+
+  private onPointerDown(e: PointerEvent): void {
+    this.lastPointer = { x: e.clientX, y: e.clientY };
+    if (this.modal) {
+      if (e.button === 0) this.confirmModal();
+      else if (e.button === 2) this.cancelModal();
+      return;
+    }
+    if (e.button !== 0 || e.altKey) return;
+    if (this.keysDown.has("l")) {
+      this.onLightDown(e);
+      return;
+    }
+    if (this.paintSettings) {
+      this.onPaintDown(e);
+      return;
+    }
+    if (this.groundSelectionMode) return;
+    // Sobre el gizmo de las herramientas, lo maneja el gizmo
+    if (this.transformControls?.dragging || this.transformControls?.axis) return;
+    const joint = this.pickJoint(e);
+    if (joint !== this.selectedBoneIndex) {
+      this.selectBone(joint);
+      this.callbacks.onBoneSelected?.(joint);
+    }
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (e.target === this.canvas || this.modal) this.lastPointer = { x: e.clientX, y: e.clientY };
+    if (this.modal) {
+      this.modalMove(e.clientX, e.clientY);
+      return;
+    }
+    this.onLightMove(e);
+    if (e.target === this.canvas) this.onPaintMove(e);
+  }
+
+  /** Articulación a menos de 16 px del cursor en pantalla (-1 si ninguna) */
+  private pickJoint(e: PointerEvent): number {
+    if (!this.settings.showSkeleton || this.boneSpheres.length === 0) return -1;
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let best = -1;
+    let bestDistance = 16;
+    const p = new THREE.Vector3();
+    this.boneSpheres.forEach((sphere, i) => {
+      sphere.getWorldPosition(p).project(this.camera);
+      if (p.z > 1) return;
+      const d = Math.hypot(((p.x + 1) / 2) * rect.width - mx, ((1 - p.y) / 2) * rect.height - my);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = i;
+      }
+    });
+    return best;
+  }
+
+  /**
+   * Empieza una operación modal como en Blender: "grab" (G) mueve la
+   * articulación seleccionada, "rotate" (R) la gira como pose de prueba,
+   * "radius" (F) y "strength" (Shift+F) ajustan el pincel. Devuelve `false`
+   * si no se puede (sin selección, sin pesos…).
+   */
+  startModal(kind: "grab" | "rotate" | "radius" | "strength"): boolean {
+    if (this.modal) return false;
+    const bone = this.selectedBoneIndex;
+    if ((kind === "grab" || kind === "rotate") && (bone < 0 || !this.boneSpheres[bone])) {
+      this.flashHint("Selecciona una articulación (clic izquierdo cerca de ella)");
+      return false;
+    }
+    if (kind === "rotate" && !this.canPose()) {
+      this.flashHint("Calcula los pesos para probar poses con R");
+      return false;
+    }
+    if ((kind === "radius" || kind === "strength") && !this.paintSettings) return false;
+    const start = bone >= 0 && this.boneSpheres[bone] ? this.boneSpheres[bone].getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
+    this.modal = {
+      kind,
+      bone,
+      mouse: { ...this.lastPointer },
+      start,
+      axis: null,
+      value: kind === "radius" ? this.paintSettings!.radius : kind === "strength" ? this.paintSettings!.strength : 0,
+    };
+    this.controls.enabled = false;
+    this.transformControls?.detach();
+    this.showModalHint();
+    return true;
+  }
+
+  /** Aviso breve (se borra solo) */
+  private flashHint(text: string): void {
+    this.callbacks.onHint?.(text);
+    if (this.hintTimer !== null) clearTimeout(this.hintTimer);
+    this.hintTimer = window.setTimeout(() => {
+      this.hintTimer = null;
+      if (!this.modal) this.callbacks.onHint?.(null);
+    }, 2500);
+  }
+
+  /** Hay una operación modal en curso */
+  isModal(): boolean {
+    return this.modal !== null;
+  }
+
+  private canPose(): boolean {
+    const mesh = this.meshData;
+    const weights = this.weightsData;
+    return !!mesh && !!weights && weights.numVertices * 3 === mesh.positions.length;
+  }
+
+  private showModalHint(): void {
+    const m = this.modal;
+    if (!m) return;
+    const axis = m.axis ? ` · eje ${m.axis.toUpperCase()}` : "";
+    const texts = {
+      grab: "Mover: arrastra el mouse · X/Y/Z restringe al eje",
+      rotate: "Rotar (pose de prueba): gira el mouse alrededor de la articulación · X/Y/Z eje",
+      radius: "Radio del pincel: mueve el mouse a los lados",
+      strength: "Intensidad del pincel: mueve el mouse a los lados",
+    };
+    this.callbacks.onHint?.(`${texts[m.kind]}${axis} · clic o Enter confirma · clic derecho o Esc cancela`);
+  }
+
+  private onModalKey(e: KeyboardEvent): void {
+    const m = this.modal;
+    if (!m) return;
+    const key = e.key.toLowerCase();
+    if (key === "escape") this.cancelModal();
+    else if (key === "enter" || key === " ") this.confirmModal();
+    else if ((key === "x" || key === "y" || key === "z") && (m.kind === "grab" || m.kind === "rotate")) {
+      m.axis = m.axis === key ? null : key;
+      this.showModalHint();
+      this.modalMove(this.lastPointer.x, this.lastPointer.y);
+    } else {
+      return;
+    }
+    // La tecla la usa la operación: los atajos de la app no la ven
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }
+
+  private axisVector(axis: "x" | "y" | "z"): THREE.Vector3 {
+    return new THREE.Vector3(axis === "x" ? 1 : 0, axis === "y" ? 1 : 0, axis === "z" ? 1 : 0);
+  }
+
+  private modalMove(x: number, y: number): void {
+    const m = this.modal;
+    if (!m) return;
+    const rect = this.canvas.getBoundingClientRect();
+    const dx = x - m.mouse.x;
+    const dy = y - m.mouse.y;
+    if (m.kind === "radius" || m.kind === "strength") {
+      const settings = this.paintSettings!;
+      const value = m.kind === "radius"
+        ? THREE.MathUtils.clamp(m.value * Math.exp(dx * 0.01), 0.002, 0.3)
+        : THREE.MathUtils.clamp(m.value + dx * 0.004, 0.02, 1);
+      this.paintSettings = { ...settings, [m.kind]: value };
+      this.callbacks.onPaintSettingsChanged?.({ [m.kind]: value });
+      return;
+    }
+    const sphere = this.boneSpheres[m.bone];
+    if (!sphere?.parent) return;
+    if (m.kind === "grab") {
+      // El punto sigue al mouse en el plano de la pantalla, a la misma profundidad
+      const s = m.start.clone().project(this.camera);
+      const target = new THREE.Vector3(s.x + (dx / rect.width) * 2, s.y - (dy / rect.height) * 2, s.z).unproject(this.camera);
+      if (m.axis) {
+        // Como Blender: el movimiento del mouse proyectado sobre el eje tal
+        // como se ve en pantalla (píxeles por unidad a lo largo del eje)
+        const axis = this.axisVector(m.axis);
+        const toPixels = (p: THREE.Vector3) => {
+          const q = p.clone().project(this.camera);
+          return new THREE.Vector2((q.x + 1) * rect.width / 2, (1 - q.y) * rect.height / 2);
+        };
+        const along = toPixels(m.start.clone().add(axis)).sub(toPixels(m.start));
+        const t = along.lengthSq() > 1e-6 ? (dx * along.x + dy * along.y) / along.lengthSq() : 0;
+        target.copy(m.start).addScaledVector(axis, t);
+      }
+      sphere.position.copy(sphere.parent.worldToLocal(target.clone()));
+      this.updateBoneLines();
+      this.scheduleBoneMoved(m.bone, sphere.position);
+      return;
+    }
+    // Rotar: ángulo del mouse alrededor de la articulación en pantalla
+    const c = m.start.clone().project(this.camera);
+    const cx = rect.left + ((c.x + 1) / 2) * rect.width;
+    const cy = rect.top + ((1 - c.y) / 2) * rect.height;
+    const angle = -(Math.atan2(y - cy, x - cx) - Math.atan2(m.mouse.y - cy, m.mouse.x - cx));
+    const axisWorld = m.axis ? this.axisVector(m.axis) : this.camera.getWorldDirection(new THREE.Vector3()).negate();
+    // Al espacio de la malla (el grupo puede estar girado por "suelo")
+    const groupRotation = this.meshGroup.getWorldQuaternion(new THREE.Quaternion());
+    const axisLocal = axisWorld.applyQuaternion(groupRotation.clone().invert()).normalize();
+    this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle));
+  }
+
+  /** Avisa el movimiento de una articulación, como mucho una vez por cuadro */
+  private scheduleBoneMoved(bone: number, position: THREE.Vector3): void {
+    this.pendingMove = { bone, position: [position.x, position.y, position.z] };
+    if (this.moveFrame !== null) return;
+    this.moveFrame = requestAnimationFrame(() => {
+      this.moveFrame = null;
+      const move = this.pendingMove;
+      this.pendingMove = null;
+      if (move) this.callbacks.onBoneMoved?.(move.bone, move.position);
+    });
+  }
+
+  private confirmModal(): void {
+    const m = this.modal;
+    if (!m) return;
+    this.modal = null;
+    this.controls.enabled = true;
+    this.callbacks.onHint?.(null);
+    if (m.kind === "grab") {
+      const sphere = this.boneSpheres[m.bone];
+      const from = sphere.parent!.worldToLocal(m.start.clone());
+      this.callbacks.onBoneMoveCommitted?.(m.bone, [from.x, from.y, from.z], [sphere.position.x, sphere.position.y, sphere.position.z]);
+    }
+    if (this.boneEditMode) this.selectBone(this.selectedBoneIndex);
+  }
+
+  private cancelModal(): void {
+    const m = this.modal;
+    if (!m) return;
+    this.modal = null;
+    this.controls.enabled = true;
+    this.callbacks.onHint?.(null);
+    if (m.kind === "grab") {
+      const sphere = this.boneSpheres[m.bone];
+      sphere.position.copy(sphere.parent!.worldToLocal(m.start.clone()));
+      this.updateBoneLines();
+      this.scheduleBoneMoved(m.bone, sphere.position);
+    } else if (m.kind === "rotate") {
+      this.resetPose();
+    } else {
+      const value = m.value;
+      this.paintSettings = this.paintSettings ? { ...this.paintSettings, [m.kind]: value } : null;
+      this.callbacks.onPaintSettingsChanged?.({ [m.kind]: value });
+    }
+    if (this.boneEditMode) this.selectBone(this.selectedBoneIndex);
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -498,6 +799,13 @@ export class Viewer3D {
     const hit = this.brushHit(event);
     if (!hit) return;
     this.controls.enabled = false;
+    // Como en Blender: Ctrl invierte (sumar ↔ restar) y Shift suaviza
+    const mode = this.paintSettings!.mode;
+    this.strokeMode = event.shiftKey
+      ? "smooth"
+      : event.ctrlKey || event.metaKey
+        ? mode === "subtract" ? "add" : "subtract"
+        : mode;
     this.stroke = new Map();
     this.lastDab = null;
     this.dab(this.meshGroup.worldToLocal(hit.point.clone()));
@@ -554,14 +862,14 @@ export class Viewer3D {
     }
     const mirror = settings.mirror ? this.paintMirror : null;
     // El suavizado lee los pesos de antes de la pincelada
-    const smoothTargets = settings.mode === "smooth" ? this.smoothTargets(hits, settings.bone) : null;
+    const smoothTargets = this.strokeMode === "smooth" ? this.smoothTargets(hits, settings.bone) : null;
     hits.forEach(([v, falloff], i) => {
       this.paintVertex(v, settings.bone, falloff * settings.strength, smoothTargets?.[i]);
       const mv = mirror?.vertex[v];
       if (mirror && mv !== undefined && mv !== 0xffffffff && mv !== v) {
         const pair = mirror.bone[settings.bone];
         const mb = pair === 0xffffffff ? settings.bone : pair;
-        const target = settings.mode === "smooth" ? this.smoothTargets([[mv, 1]], mb)[0] : undefined;
+        const target = this.strokeMode === "smooth" ? this.smoothTargets([[mv, 1]], mb)[0] : undefined;
         this.paintVertex(mv, mb, falloff * settings.strength, target);
       }
     });
@@ -629,7 +937,7 @@ export class Viewer3D {
     if (this.stroke && !this.stroke.has(v)) {
       this.stroke.set(v, weights.weights.slice(base, base + k * 2));
     }
-    if (paintRow(weights.weights, base, k, bone, this.paintSettings!.mode, amount, smoothTarget, this.fallbackBone(bone))) {
+    if (paintRow(weights.weights, base, k, bone, this.strokeMode, amount, smoothTarget, this.fallbackBone(bone))) {
       this.recolorVertex(v);
     }
   }
@@ -916,10 +1224,11 @@ export class Viewer3D {
     bonesGroup.name = "bones";
     this.skeletonGroup.add(bonesGroup);
 
-    // Joint spheres
+    // Joint spheres. Siempre por delante de la malla ("In Front" de Blender):
+    // el esqueleto va dentro del modelo y si no quedaría tapado
     const jointGeometry = new THREE.SphereGeometry(this.jointRadius(), 16, 16);
-    const jointMaterial = new THREE.MeshBasicMaterial({ color: 0xffb86c }); // Dracula orange
-    const leafMaterial = new THREE.MeshBasicMaterial({ color: 0x50fa7b }); // Dracula green
+    const jointMaterial = new THREE.MeshBasicMaterial({ color: 0xffb86c, depthTest: false }); // Dracula orange
+    const leafMaterial = new THREE.MeshBasicMaterial({ color: 0x50fa7b, depthTest: false }); // Dracula green
 
     for (let i = 0; i < data.bones.length; i++) {
       const bone = data.bones[i];
@@ -929,6 +1238,7 @@ export class Viewer3D {
       sphere.userData.boneName = bone.name;
       sphere.userData.boneIndex = i;
       sphere.userData.isLeaf = bone.isLeaf;
+      sphere.renderOrder = 6;
       bonesGroup.add(sphere);
       this.boneSpheres.push(sphere);
     }
@@ -950,8 +1260,10 @@ export class Viewer3D {
       const lineMaterial = new THREE.LineBasicMaterial({
         color: 0xffb86c,
         linewidth: 2,
+        depthTest: false,
       });
       const lines = new THREE.LineSegments(lineGeometry, lineMaterial);
+      lines.renderOrder = 5;
       lines.name = "boneLines";
       this.skeletonGroup.add(lines);
     }
@@ -969,7 +1281,7 @@ export class Viewer3D {
   private jointRadius(): number {
     if (!this.currentMesh) return 0.02;
     const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
-    return Math.max(size.length() * 0.006, 1e-4);
+    return Math.max(size.length() * 0.012, 1e-4);
   }
 
   /** Redibuja las líneas de los huesos con las posiciones de las esferas */
@@ -1216,15 +1528,27 @@ export class Viewer3D {
     const target = this.controls.target.clone();
     const dist = this.camera.position.distanceTo(target);
 
+    // Arriba/abajo con un pelo de inclinación: mirar justo por el eje Y
+    // deja la órbita sin dirección "arriba"
+    const tilt = dist * 1e-4;
     switch (name) {
       case "front":
         this.camera.position.set(target.x, target.y, target.z + dist);
         break;
+      case "back":
+        this.camera.position.set(target.x, target.y, target.z - dist);
+        break;
       case "right":
         this.camera.position.set(target.x + dist, target.y, target.z);
         break;
+      case "left":
+        this.camera.position.set(target.x - dist, target.y, target.z);
+        break;
       case "top":
-        this.camera.position.set(target.x, target.y + dist, target.z);
+        this.camera.position.set(target.x, target.y + dist, target.z + tilt);
+        break;
+      case "bottom":
+        this.camera.position.set(target.x, target.y - dist, target.z + tilt);
         break;
     }
 
@@ -1235,7 +1559,10 @@ export class Viewer3D {
   focusSelection(): void {
     if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
       const sphere = this.boneSpheres[this.selectedBoneIndex];
-      this.controls.target.copy(sphere.position);
+      const center = sphere.getWorldPosition(new THREE.Vector3());
+      // La cámara se traslada con el centro: mantiene dirección y distancia
+      this.camera.position.add(center.clone().sub(this.controls.target));
+      this.controls.target.copy(center);
       this.controls.update();
     } else {
       this.fitCamera();
@@ -1451,15 +1778,7 @@ export class Viewer3D {
       return;
     }
 
-    // Bone selection mode
-    if (this.boneEditMode && this.boneSpheres.length > 0) {
-      const intersects = this.raycaster.intersectObjects(this.boneSpheres);
-      if (intersects.length > 0) {
-        const boneIndex = intersects[0].object.userData.boneIndex as number;
-        this.selectBone(boneIndex);
-        this.callbacks.onBoneSelected?.(boneIndex);
-      }
-    }
+    // La selección de articulaciones va en onPointerDown
   }
 
   private onCanvasMouseMove(event: MouseEvent): void {

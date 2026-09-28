@@ -476,16 +476,26 @@ export const App: Component = () => {
       { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
       { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
       { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
-      { key: "g", action: () => { setActiveTool("move"); setBoneEditMode(true); }, description: "Mover" },
-      { key: "r", action: () => { setActiveTool("rotate"); setBoneEditMode(true); }, description: "Rotar" },
-      { key: "s", action: () => { setActiveTool("scale"); setBoneEditMode(true); }, description: "Escalar" },
-      { key: "Home", action: () => viewerRef?.resetView(), description: "Reset vista" },
-      { key: " ", action: () => viewerRef?.resetView(), description: "Reset vista" },
-      { key: "f", action: () => viewerRef?.focusSelection(), description: "Foco en selección" },
+      // Como en Blender: G y R son operaciones modales sobre la articulación
+      // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
+      { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
+      { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
+      { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
+      { key: " ", action: () => viewerRef?.resetView(), description: "Ver todo" },
+      { key: ".", action: () => viewerRef?.focusSelection(), description: "Centrar en la selección" },
+      {
+        key: "f",
+        action: () => (paintSettings() ? viewerRef?.startModal("radius") : viewerRef?.focusSelection()),
+        description: "Radio del pincel / centrar",
+      },
+      { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), description: "Intensidad del pincel" },
       { key: "n", action: () => setShowContextPanel(!showContextPanel()), description: "Toggle panel" },
       { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
       { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
       { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
+      { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), description: "Vista trasera" },
+      { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), description: "Vista izquierda" },
+      { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
       { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
     ]);
     shortcuts.attach();
@@ -1116,17 +1126,53 @@ export const App: Component = () => {
     }
   };
 
-  const handleBoneMoved = async (index: number, position: [number, number, number]) => {
-    try {
-      const data = await invoke<TauriSkeletonData>("move_bone", {
-        boneIndex: index,
-        position,
-        mirror: symmetricEdit(),
-      });
-      setSkeletonData(tauriSkeletonToViewer(data));
-    } catch (e) {
-      console.error("Move bone error:", e);
+  // Movimientos de articulaciones en orden, uno a la vez: mientras uno va al
+  // backend solo se guarda el último pedido (el arrastre manda muchos)
+  let pendingBoneMove: { index: number; position: [number, number, number] } | null = null;
+  let boneMoveRunning: Promise<void> | null = null;
+
+  const handleBoneMoved = (index: number, position: [number, number, number]): Promise<void> => {
+    pendingBoneMove = { index, position };
+    if (!boneMoveRunning) {
+      boneMoveRunning = (async () => {
+        while (pendingBoneMove) {
+          const move = pendingBoneMove;
+          pendingBoneMove = null;
+          try {
+            const data = await invoke<TauriSkeletonData>("move_bone", {
+              boneIndex: move.index,
+              position: move.position,
+              mirror: symmetricEdit(),
+            });
+            // Si llegó otro pedido, esta respuesta ya está vieja
+            if (!pendingBoneMove) setSkeletonData(tauriSkeletonToViewer(data));
+          } catch (e) {
+            console.error("Move bone error:", e);
+          }
+        }
+        boneMoveRunning = null;
+      })();
     }
+    return boneMoveRunning;
+  };
+
+  /** Fin de un movimiento con G: queda en el historial */
+  const handleBoneMoveCommitted = async (
+    index: number,
+    from: [number, number, number],
+    to: [number, number, number]
+  ) => {
+    setAutorigComplete(false);
+    let first = true;
+    await history.execute({
+      description: "Mover articulación",
+      execute: async () => {
+        // La primera vez ya está aplicado (el visor lo fue mandando)
+        if (!first) await handleBoneMoved(index, to);
+        first = false;
+      },
+      undo: () => handleBoneMoved(index, from),
+    });
   };
 
   /** Centra en el volumen la articulación seleccionada, o todas */
@@ -1308,6 +1354,8 @@ export const App: Component = () => {
               onGroundSelected={handleGroundSelected}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
+              onBoneMoveCommitted={handleBoneMoveCommitted}
+              onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
               meshData={displayQuad() ? quadMeshData() : meshData()}

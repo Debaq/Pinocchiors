@@ -135,7 +135,9 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
         <div class="space-y-3">
           <Stage n={3} title="Corregir a mano" />
           <p class="text-xs text-text-muted leading-relaxed">
-            Con <span class="text-text">Mover (G)</span> haz clic en una articulación y arrástrala.
+            Como en Blender: clic cerca de una articulación la selecciona y{" "}
+            <span class="text-text">G</span> la mueve con el mouse (X/Y/Z la limita a un eje; clic
+            confirma, clic derecho o Esc cancela). La herramienta Mover también tiene gizmo.
             Mira desde dos vistas: una articulación puede verse bien de frente y estar corrida de
             costado. <span class="text-text">Centrar</span> la devuelve al medio del miembro.
           </p>
@@ -213,8 +215,9 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
                     <div class="space-y-4 pt-1">
                       <p class="text-xs text-text-muted leading-relaxed">
                         Con <span class="text-text">Pintar (B)</span> arrastra sobre la malla: el mapa de
-                        calor muestra el hueso activo (rojo = todo su peso). Recalcular los pesos
-                        descarta lo pintado.
+                        calor muestra el hueso activo (rojo = todo su peso). Ctrl invierte el modo,
+                        Shift suaviza, <span class="text-text">F</span> cambia el radio y Shift+F la
+                        intensidad. Recalcular los pesos descarta lo pintado.
                       </p>
                       <Select
                         label="Hueso"
@@ -266,8 +269,8 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
             <Panel title="Probar la pose" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
               <div class="space-y-3 pt-1">
                 <p class="text-xs text-text-muted leading-relaxed">
-                  Con <span class="text-text">Rotar (R)</span>, haz clic en una articulación y gírala:
-                  la malla se dobla con los pesos. Si se estira o arrastra partes que no
+                  Selecciona una articulación y pulsa <span class="text-text">R</span>: gira con el
+                  mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Si se estira o arrastra partes que no
                   corresponden, mueve esa articulación y vuelve a calcular.
                 </p>
                 <div class="flex gap-2">
