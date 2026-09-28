@@ -1,4 +1,7 @@
-# Pre-releases.
+# Releases.
+#
+# El prefijo `pre.` del tag es solo parte del nombre: la release se publica
+# como release normal y queda marcada como la más reciente.
 #
 # Se lanza SOLO al hacer push de un tag con el formato:
 #   pre.<YYYY>.<MM>.<DD>.<sha7>     p.ej. pre.2026.09.26.285f33f
@@ -273,6 +276,6 @@ jobs:
             gh release create "$TAG" dist/* \
               --verify-tag \
               --title "$TAG" \
-              --prerelease \
+              --latest \
               --generate-notes
           fi
