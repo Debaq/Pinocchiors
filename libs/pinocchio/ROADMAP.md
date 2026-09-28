@@ -425,9 +425,11 @@ fijos.
 - Gonfoterio con la plantilla de elefante: patas, cola, cuello, orejas y la
       trompa real hasta la punta; al doblar la trompa se levanta y los
       colmillos siguen a la cabeza.
-- [ ] Pesos en cadenas largas: en el gonfoterio los primeros segmentos de la
-      trompa quedan dominados por la cabeza y se nota un corte al doblarla
-      (arreglable con el pincel; falta que el calor reparta mejor a lo largo).
+- Pesos en cadenas largas: en el banco sintético la trompa (alta, media,
+      baja) y los brazos del pulpo quedan 100 % con sus huesos. En el
+      gonfoterio la raíz de la trompa se funde con una cabeza enorme y los
+      primeros segmentos quedan con la cabeza (el tubo ahí es de cabeza): se
+      nota un corte al doblarla cerca de la cara; se corrige con el pincel.
 - [ ] Proporciones por especie (patas cortas del elefante, rodilla alta).
 
 ---

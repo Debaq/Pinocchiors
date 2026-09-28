@@ -6,7 +6,7 @@
 mod characters;
 
 use pinocchio_core::math::Vector3;
-use pinocchio_core::skeleton::{HumanSkeleton, QuadSkeleton, Skeleton};
+use pinocchio_core::skeleton::{BodyPlan, HumanSkeleton, QuadSkeleton, Skeleton};
 use pinocchio_core::{autorig, PinocchioConfig, PinocchioOutput};
 
 type Region = (&'static str, fn(&Vector3) -> bool, &'static [&'static str]);
@@ -88,5 +88,63 @@ fn human_regions_keep_their_bones() {
     let scores = region_scores(&mesh, &out, &skeleton, &regions);
     for (label, ratio) in scores {
         assert!(ratio > 0.85, "{label}: solo {:.0} % con el hueso esperado", 100.0 * ratio);
+    }
+}
+
+#[test]
+fn trunk_segments_bend_along_the_trunk() {
+    let character = characters::elephant();
+    let mesh = characters::mesh(&character.capsules, 0.03);
+    let skeleton = BodyPlan::variant("elephant").unwrap().build();
+    let config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() };
+    let out = autorig(&mesh, &skeleton, Some(config)).expect("autorig");
+    let trunk: Vec<&'static str> = skeleton
+        .bones()
+        .iter()
+        .filter(|b| b.name.starts_with("trunk"))
+        .map(|b| &*Box::leak(b.name.clone().into_boxed_str()))
+        .collect();
+    let trunk: &'static [&'static str] = Box::leak(trunk.into_boxed_slice());
+    // La trompa sintética baja de (1,3; 1,2) a (0,35; 1,35); la cabeza termina en z ≈ 1,3
+    let regions: [Region; 3] = [
+        ("trompa alta", |p| p.z() > 1.25 && p.y() > 0.95 && p.y() < 1.15, trunk),
+        ("trompa media", |p| p.z() > 1.25 && p.y() > 0.6 && p.y() < 0.85, trunk),
+        ("trompa baja", |p| p.z() > 1.2 && p.y() < 0.5, trunk),
+    ];
+    let scores = region_scores(&mesh, &out, &skeleton, &regions);
+    for (label, ratio) in scores {
+        assert!(ratio > 0.8, "{label}: solo {:.0} % con huesos de la trompa", 100.0 * ratio);
+    }
+}
+
+#[test]
+fn octopus_arm_moves_with_its_own_bones() {
+    let character = characters::octopus();
+    let mesh = characters::mesh(&character.capsules, 0.025);
+    let skeleton = BodyPlan::variant("octopus").unwrap().build();
+    let config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() };
+    let out = autorig(&mesh, &skeleton, Some(config)).expect("autorig");
+    let arm: Vec<&'static str> = skeleton
+        .bones()
+        .iter()
+        .filter(|b| b.name.starts_with("arm1_") && b.name.ends_with("_l"))
+        .map(|b| &*Box::leak(b.name.clone().into_boxed_str()))
+        .collect();
+    let arm: &'static [&'static str] = Box::leak(arm.into_boxed_slice());
+    // El brazo 1 izquierdo apunta a (-sin 22,5°, 0, cos 22,5°): `a` es la
+    // distancia a lo largo del brazo y `c` la distancia de costado
+    let regions: [Region; 2] = [
+        ("brazo medio", |p| {
+            let (a, c) = (-0.3827 * p.x() + 0.9239 * p.z(), (0.9239 * p.x() + 0.3827 * p.z()).abs());
+            a > 0.35 && a < 0.6 && c < 0.08
+        }, arm),
+        ("punta del brazo", |p| {
+            let (a, c) = (-0.3827 * p.x() + 0.9239 * p.z(), (0.9239 * p.x() + 0.3827 * p.z()).abs());
+            a > 0.75 && c < 0.06
+        }, arm),
+    ];
+    let scores = region_scores(&mesh, &out, &skeleton, &regions);
+    for (label, ratio) in scores {
+        assert!(ratio > 0.9, "{label}: solo {:.0} % con huesos del brazo", 100.0 * ratio);
     }
 }
