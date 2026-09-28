@@ -1,6 +1,6 @@
 import { Component, createEffect, createMemo, createSignal, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
@@ -49,6 +49,26 @@ import type { ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
+import { createPersisted } from "./lib/ui-state";
+import type { MenuEntry } from "./components/ui/ContextMenu";
+import { SettingsDialog, type AutosaveSettings } from "./components/layout/SettingsDialog";
+
+interface ProjectSaved {
+  written: boolean;
+  bytes: number;
+}
+
+interface ProjectOpened {
+  ui: string;
+  source_name: string | null;
+  saved_at: number;
+}
+
+interface RecoveryInfo {
+  path: string;
+  saved_at: number;
+  source_name: string | null;
+}
 import {
   clipsForExport,
   createClip,
@@ -436,8 +456,10 @@ export const App: Component = () => {
     maxInfluences: 4,
   });
 
-  // View settings
+  // View settings (la navegación de notebook se recuerda entre sesiones)
+  const [trackpadNavigation, setTrackpadNavigation] = createPersisted("view.trackpadNavigation", false);
   const [viewSettings, setViewSettings] = createSignal<ViewSettings>({
+    trackpadNavigation: trackpadNavigation(),
     showMesh: true,
     showWireframe: false,
     showSkeleton: true,
@@ -519,6 +541,9 @@ export const App: Component = () => {
   const shortcuts = createShortcutManager();
 
   const shortcutDefs: ShortcutDef[] = [
+    { key: "s", ctrl: true, action: () => handleSaveProject(), description: "Guardar proyecto" },
+    { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), description: "Guardar proyecto como" },
+    { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
     { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
     { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
     { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
@@ -656,6 +681,9 @@ export const App: Component = () => {
       clearQuadMesh();
       setLastExport(undefined);
       setCanUndoPrintScale(false);
+
+      // Modelo nuevo: el proyecto abierto ya no corresponde
+      setProjectPath(undefined);
 
       // Pipeline: importado; se muestra lo que trae el archivo
       pipeline.markCompleted("import");
@@ -1704,6 +1732,335 @@ export const App: Component = () => {
     }
   };
 
+  /** Sin esqueleto: ni pesos, ni ajuste, ni animaciones */
+  const clearSkeletonUi = () => {
+    dropWeights();
+    setSkeletonData(undefined);
+    setSkeletonLoaded(false);
+    setSelectedSkeleton(undefined);
+    setFitInfo(undefined);
+    setBodyPlan(undefined);
+    setSkeletonTransform({ ...defaultTransform });
+    setBoneEditMode(false);
+    setClips([]);
+    setActiveClipId(undefined);
+    setFrame(0);
+    setViewSettings((prev) => ({ ...prev, selectedBone: -1 }));
+  };
+
+  /**
+   * Borra un objeto desde el Outliner (o el menú del visor). No se puede
+   * deshacer: el historial se vacía porque sus pasos apuntaban a lo borrado.
+   */
+  const handleDeleteNode = async (nodeId: string) => {
+    const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
+    if (!["skeleton", "weights", "quadmesh"].includes(kind)) return;
+    try {
+      await invoke("remove_object", { kind });
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+      return;
+    }
+    if (kind === "skeleton") {
+      clearSkeletonUi();
+      setStatusMessage("Esqueleto borrado");
+    } else if (kind === "weights") {
+      dropWeights();
+      setStatusMessage("Pesos borrados");
+    } else {
+      // Un rig calculado sobre los quads se queda sin malla
+      if (usesQuad()) dropWeights();
+      clearQuadMesh();
+      setStatusMessage("Retopología borrada");
+    }
+    history.clear();
+  };
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PROYECTO (.pinocchio)
+  // El backend guarda su estado (modelo original, malla, esqueleto, pesos,
+  // quads, UV, respaldos para deshacer reparación y escala); acá se suma el de
+  // la interfaz como JSON. El historial de Ctrl+Z no se guarda: sus pasos son
+  // funciones que viven solo mientras la app está abierta
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const PROJECT_UI_VERSION = 1;
+  const [projectPath, setProjectPath] = createSignal<string | undefined>();
+  const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [recovery, setRecovery] = createSignal<RecoveryInfo | undefined>();
+
+  const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+
+  /** Estado de la interfaz que va al proyecto */
+  const projectUi = (): string => {
+    const { trackpadNavigation: _, ...view } = viewSettings();
+    return JSON.stringify({
+      version: PROJECT_UI_VERSION,
+      fileName: fileName(),
+      meshInfo: meshInfo(),
+      pipeline: { active: pipeline.activeStep(), completed: [...pipeline.completedSteps()] },
+      lights: lights(),
+      view,
+      showGrid: showGrid(),
+      showQuadMesh: showQuadMesh(),
+      activeQuad: activeQuad(),
+      skeleton: {
+        loaded: skeletonLoaded(),
+        preset: selectedSkeleton(),
+        transform: skeletonTransform(),
+        symmetricEdit: symmetricEdit(),
+        fitInfo: fitInfo(),
+        bodyPlan: bodyPlan(),
+      },
+      autorig: { config: autorigConfig(), complete: autorigComplete() },
+      paintConfig: paintConfig(),
+      retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
+      uv: { config: uvConfig(), preview: uvPreview() },
+      repair: {
+        analysisConfig: repairAnalysisConfig(),
+        options: repairOptions(),
+        diagnostics: diagnostics(),
+        result: repairResult(),
+        canUndo: canUndoRepair(),
+      },
+      print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale() },
+      export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
+      animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
+    });
+  };
+
+  /** Pone la interfaz como estaba y relee del backend lo que ve el visor */
+  const restoreProjectUi = async (json: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ui: any = JSON.parse(json || "{}");
+    history.clear();
+    setPlacementMode(undefined);
+    setBoneEditMode(false);
+    setPlaying(false);
+    setKeySelection(new Set<string>());
+    setLastExport(undefined);
+    setPaintMirrorLoaded(false);
+    setUvLayout(undefined);
+    setSkinTextures({});
+    setUvInfo(undefined);
+
+    setFileName(ui.fileName);
+    if (ui.meshInfo) setMeshInfo(ui.meshInfo);
+    if (ui.lights) setLights(ui.lights);
+    setViewSettings((prev) => ({ ...prev, ...ui.view, trackpadNavigation: prev.trackpadNavigation }));
+    if (typeof ui.showGrid === "boolean") {
+      setShowGrid(ui.showGrid);
+      viewerRef?.setGridVisible(ui.showGrid);
+    }
+    setActiveQuad(ui.activeQuad === true);
+    setSelectedSkeleton(ui.skeleton?.preset);
+    setSkeletonTransform(ui.skeleton?.transform ?? { ...defaultTransform });
+    if (typeof ui.skeleton?.symmetricEdit === "boolean") setSymmetricEdit(ui.skeleton.symmetricEdit);
+    setFitInfo(ui.skeleton?.fitInfo);
+    setBodyPlan(ui.skeleton?.bodyPlan);
+    if (ui.autorig?.config) setAutorigConfig(ui.autorig.config);
+    if (ui.paintConfig) setPaintConfig(ui.paintConfig);
+    if (ui.retopology?.config) setRetopologyConfig(ui.retopology.config);
+    setQuadMeshInfo(ui.retopology?.info ?? { vertices: 0, quads: 0 });
+    setQuadQuality(ui.retopology?.quality);
+    if (ui.uv?.config) setUvConfig(ui.uv.config);
+    if (ui.uv?.preview) setUvPreview(ui.uv.preview);
+    if (ui.repair?.analysisConfig) setRepairAnalysisConfig(ui.repair.analysisConfig);
+    if (ui.repair?.options) setRepairOptions(ui.repair.options);
+    setDiagnostics(ui.repair?.diagnostics);
+    setRepairResult(ui.repair?.result);
+    setCanUndoRepair(ui.repair?.canUndo === true);
+    setMeshAnalysis(ui.print3d?.analysis);
+    setSubdivideResult(ui.print3d?.subdivide);
+    setCanUndoPrintScale(ui.print3d?.canUndoScale === true);
+    if (ui.export) {
+      setExportIncludeRig(ui.export.includeRig !== false);
+      setExportUseRetopology(ui.export.useRetopology === true);
+      if (ui.export.options) setExportOptions(ui.export.options);
+    }
+    setClips(ui.animation?.clips ?? []);
+    setActiveClipId(ui.animation?.activeClipId);
+    setFrame(ui.animation?.frame ?? 0);
+    if (typeof ui.animation?.autoKey === "boolean") setAutoKey(ui.animation.autoKey);
+    if (ui.animation?.interpolation) setKeyInterpolation(ui.animation.interpolation);
+
+    // Lo que dibuja el visor sale del backend
+    setMeshData(await fetchMeshData());
+    setMeshLoaded(true);
+    const hasSkeleton = ui.skeleton?.loaded === true;
+    setSkeletonData(hasSkeleton ? tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")) : undefined);
+    setSkeletonLoaded(hasSkeleton);
+    if (ui.retopology?.loaded) {
+      setQuadMeshData(decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data")));
+      setQuadMeshLoaded(true);
+      setShowQuadMesh(ui.showQuadMesh === true);
+      await refreshSkin();
+    } else {
+      clearQuadMesh();
+    }
+    if (ui.autorig?.complete) {
+      const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+      setWeightsData(weights);
+      setBoneNames(weights.boneNames);
+      setAutorigComplete(true);
+    } else {
+      dropWeights();
+    }
+
+    pipeline.setCompleted(ui.pipeline?.completed ?? ["import"]);
+    pipeline.setActiveStep(ui.pipeline?.active ?? "structure");
+  };
+
+  /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
+  const handleSaveProject = async (as = false) => {
+    if (!meshLoaded()) {
+      setStatusMessage("No hay nada que guardar: importa un modelo primero");
+      return;
+    }
+    let path = as ? undefined : projectPath();
+    if (!path) {
+      const stem = (fileName() ?? "proyecto").replace(/\.[^.]+$/, "");
+      const chosen = await save({
+        title: "Guardar proyecto",
+        defaultPath: projectPath() ?? `${stem}.pinocchio`,
+        filters: [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }],
+      });
+      if (!chosen) return;
+      path = chosen.endsWith(".pinocchio") ? chosen : `${chosen}.pinocchio`;
+    }
+    try {
+      const saved = await busy("Guardando proyecto...", () =>
+        invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
+      );
+      setProjectPath(path);
+      setStatusMessage(`Proyecto guardado: ${baseName(path!)} (${(saved.bytes / 1e6).toFixed(1)} MB)`);
+    } catch (e) {
+      console.error("Save project error:", e);
+      setStatusMessage(`Error al guardar: ${e}`);
+    }
+  };
+
+  /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
+  const handleOpenProject = async (path?: string, recovered = false) => {
+    if (meshLoaded()) {
+      const ok = await ask("Lo que no esté guardado del trabajo actual se pierde. ¿Abrir otro proyecto?", {
+        title: "Abrir proyecto",
+        kind: "warning",
+      });
+      if (!ok) return;
+    }
+    if (!path) {
+      const chosen = await open({
+        title: "Abrir proyecto",
+        filters: [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }],
+      });
+      if (!chosen) return;
+      path = typeof chosen === "string" ? chosen : chosen[0];
+    }
+    try {
+      const opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
+      await restoreProjectUi(opened.ui);
+      // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
+      setProjectPath(recovered ? undefined : path);
+      setRecovery(undefined);
+      setStatusMessage(recovered ? "Sesión recuperada" : `Proyecto abierto: ${baseName(path)}`);
+    } catch (e) {
+      console.error("Open project error:", e);
+      setStatusMessage(`Error al abrir: ${e}`);
+    }
+  };
+
+  /** Descarta todo lo hecho sobre el modelo y vuelve al archivo importado */
+  const handleRevertToOriginal = async () => {
+    const ok = await ask("Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.", {
+      title: "Volver al modelo original",
+      kind: "warning",
+    });
+    if (!ok) return;
+    try {
+      await invoke("revert_to_original");
+      clearSkeletonUi();
+      clearQuadMesh();
+      setDiagnostics(undefined);
+      setRepairResult(undefined);
+      setCanUndoRepair(false);
+      setMeshAnalysis(undefined);
+      setSubdivideResult(undefined);
+      setCanUndoPrintScale(false);
+      setLastExport(undefined);
+      history.clear();
+      setMeshData(await fetchMeshData());
+      setStatusMessage("Modelo original restaurado");
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  const fileMenuItems = (): MenuEntry[] => [
+    { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
+    { label: "Guardar", shortcut: "Ctrl+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject() },
+    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject(true) },
+    { separator: true },
+    { label: "Importar modelo…", onSelect: () => handleLoad() },
+    { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
+    { separator: true },
+    { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
+  ];
+
+  // Guardado automático: al archivo del proyecto, o al de recuperación si aún no tiene
+  let lastAutosave = Date.now();
+  let autosaving = false;
+  const autosaveTimer = setInterval(async () => {
+    const settings = autosave();
+    if (!settings.enabled || autosaving || !meshLoaded() || isProcessing() || progress()) return;
+    if (Date.now() - lastAutosave < settings.minutes * 60_000) return;
+    autosaving = true;
+    lastAutosave = Date.now();
+    try {
+      const path = projectPath() ?? (await invoke<string>("recovery_project_path"));
+      const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true });
+      if (saved.written) {
+        const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+        setStatusMessage(`Guardado automático ${projectPath() ? "" : "(recuperación) "}a las ${time}`);
+      }
+    } catch (e) {
+      console.error("Autosave error:", e);
+    } finally {
+      autosaving = false;
+    }
+  }, 15_000);
+  onCleanup(() => clearInterval(autosaveTimer));
+
+  // Al abrir la app sin modelo: ofrecer la última recuperación
+  onMount(async () => {
+    try {
+      setRecovery((await invoke<RecoveryInfo | null>("recovery_info")) ?? undefined);
+    } catch {
+      // Sin backend (vista previa) no hay recuperación
+    }
+  });
+
+  /** Ítems propios del menú del clic derecho en el visor */
+  const viewportMenuItems = (): MenuEntry[] => {
+    const view = viewSettings();
+    const toggle = (key: "showMesh" | "showWireframe" | "showSkeleton" | "showWeights") =>
+      setViewSettings((prev) => ({ ...prev, [key]: !prev[key] }));
+    const items: MenuEntry[] = [
+      { header: "Mostrar" },
+      { label: "Malla", checked: view.showMesh, onSelect: () => toggle("showMesh") },
+      { label: "Wireframe", checked: view.showWireframe, onSelect: () => toggle("showWireframe") },
+      { label: "Grilla", checked: showGrid(), onSelect: () => handleToggleVisibility("grid") },
+    ];
+    if (skeletonLoaded()) items.push({ label: "Esqueleto", checked: view.showSkeleton, onSelect: () => toggle("showSkeleton") });
+    if (autorigComplete()) items.push({ label: "Heatmap de pesos", checked: view.showWeights, onSelect: () => toggle("showWeights") });
+    const removable: MenuEntry[] = [];
+    if (skeletonLoaded()) removable.push({ label: "Borrar esqueleto", danger: true, onSelect: () => handleDeleteNode("skeleton") });
+    if (quadMeshLoaded()) removable.push({ label: "Borrar retopología", danger: true, onSelect: () => handleDeleteNode("quadmesh") });
+    if (removable.length > 0) items.push({ separator: true }, ...removable);
+    return items;
+  };
+
   const handleSelectNode = (nodeId: string) => {
     if (nodeId.startsWith("bone-")) {
       const index = parseInt(nodeId.replace("bone-", ""));
@@ -1723,7 +2080,9 @@ export const App: Component = () => {
         <Header
           title="Pinocchio"
           fps={fps()}
-          fileName={fileName()}
+          fileName={projectPath() ? baseName(projectPath()!) : fileName()}
+          fileMenu={fileMenuItems}
+          onOpenSettings={() => setSettingsOpen(true)}
         />
 
         {/* Pipeline Bar */}
@@ -1774,11 +2133,17 @@ export const App: Component = () => {
               floorCandidates={floorCandidates()}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
+              contextMenuItems={viewportMenuItems}
             />
 
             {/* Welcome Screen overlay */}
             <Show when={!meshLoaded()}>
-              <WelcomeScreen onImport={handleLoad} />
+              <WelcomeScreen
+                onImport={handleLoad}
+                onOpenProject={() => handleOpenProject()}
+                recovery={recovery()}
+                onRecover={() => handleOpenProject(recovery()!.path, true)}
+              />
             </Show>
 
             <ProgressOverlay progress={progress()} />
@@ -1975,12 +2340,16 @@ export const App: Component = () => {
               lastExport: lastExport(),
             }}
             viewSettings={viewSettings()}
-            onViewSettingsChange={setViewSettings}
+            onViewSettingsChange={(settings) => {
+              setViewSettings(settings);
+              setTrackpadNavigation(settings.trackpadNavigation === true);
+            }}
             boneNames={boneNames()}
             hasWeights={autorigComplete()}
             sceneTree={meshLoaded() ? sceneTree() : undefined}
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
+            onDeleteNode={handleDeleteNode}
             stats={{
               fileName: fileName(),
               format: meshInfo().format,
@@ -2001,6 +2370,15 @@ export const App: Component = () => {
           progress={progress()}
         />
       </div>
+
+      <Show when={settingsOpen()}>
+        <SettingsDialog
+          autosave={autosave()}
+          onAutosaveChange={setAutosave}
+          projectPath={projectPath()}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </Show>
     </div>
   );
 };

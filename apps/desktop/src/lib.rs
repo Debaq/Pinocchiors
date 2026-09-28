@@ -3,6 +3,7 @@
 pub mod animation;
 pub mod commands;
 pub mod placement;
+pub mod project;
 pub mod state;
 pub mod structure;
 
@@ -37,6 +38,12 @@ pub fn run() {
             // Esqueletos
             commands::list_skeleton_presets,
             commands::select_skeleton,
+            commands::remove_object,
+            project::save_project,
+            project::open_project,
+            project::revert_to_original,
+            project::recovery_project_path,
+            project::recovery_info,
             commands::get_body_plan,
             commands::select_body_plan,
             commands::get_skeleton_data,

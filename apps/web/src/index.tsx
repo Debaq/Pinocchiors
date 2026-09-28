@@ -9,4 +9,11 @@ if (!root) {
   throw new Error("Root element not found");
 }
 
+// Sin el menú del navegador (Recargar, Inspeccionar…): cada zona pone el suyo.
+// En campos de texto queda el nativo para copiar y pegar
+document.addEventListener("contextmenu", (e) => {
+  const target = e.target as HTMLElement | null;
+  if (!target?.closest("input, textarea, [contenteditable='true']")) e.preventDefault();
+});
+
 render(() => <App />, root);

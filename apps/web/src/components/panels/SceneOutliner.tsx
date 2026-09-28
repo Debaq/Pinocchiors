@@ -1,4 +1,4 @@
-import { Component, For, Show, createSignal } from "solid-js";
+import { Component, For, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { SceneNode } from "../../lib/scene-tree";
 import * as Icons from "../icons";
@@ -7,6 +7,7 @@ export interface SceneOutlinerProps {
   tree: SceneNode;
   onToggleVisibility?: (nodeId: string) => void;
   onSelectNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
 }
 
 const nodeIcon = (type: SceneNode["type"]) => {
@@ -28,8 +29,24 @@ const OutlinerNode: Component<{
   depth: number;
   onToggleVisibility?: (nodeId: string) => void;
   onSelectNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
 }> = (props) => {
   const [expanded, setExpanded] = createSignal(props.node.expanded);
+  // Borrar pide un segundo clic (no se puede deshacer); se olvida a los 3 s
+  const [confirming, setConfirming] = createSignal(false);
+  let confirmTimer: ReturnType<typeof setTimeout> | undefined;
+  const onDelete = (e: MouseEvent) => {
+    e.stopPropagation();
+    clearTimeout(confirmTimer);
+    if (confirming()) {
+      setConfirming(false);
+      props.onDeleteNode?.(props.node.id);
+    } else {
+      setConfirming(true);
+      confirmTimer = setTimeout(() => setConfirming(false), 3000);
+    }
+  };
+  onCleanup(() => clearTimeout(confirmTimer));
   const hasChildren = () => props.node.children.length > 0;
   const NodeIcon = nodeIcon(props.node.type);
 
@@ -67,15 +84,34 @@ const OutlinerNode: Component<{
         {/* Label */}
         <span class={clsx(
           "text-xs flex-1 truncate",
-          props.node.selected ? "text-accent font-medium" : "text-text"
+          props.node.selected ? "text-accent font-medium" : "text-text",
+          !props.node.visible && "opacity-50"
         )}>
           {props.node.label}
         </span>
 
-        {/* Visibility toggle */}
+        {/* Borrar */}
+        <Show when={props.node.deletable && props.onDeleteNode}>
+          <button
+            class={clsx(
+              "h-4 flex items-center justify-center gap-0.5 rounded-sm transition-opacity",
+              confirming()
+                ? "px-1 bg-red/20 text-red text-[10px] font-medium"
+                : "w-4 opacity-0 group-hover:opacity-100 text-text-muted hover:text-red"
+            )}
+            title={confirming() ? "Clic de nuevo para borrar (no se puede deshacer)" : `Borrar ${props.node.label}`}
+            onClick={onDelete}
+          >
+            <Icons.Trash size={12} />
+            <Show when={confirming()}>¿Borrar?</Show>
+          </button>
+        </Show>
+
+        {/* Visibility toggle: las capas ocultas lo muestran siempre */}
         <button
           class={clsx(
-            "w-4 h-4 flex items-center justify-center opacity-0 group-hover:opacity-100",
+            "w-4 h-4 flex items-center justify-center",
+            props.node.visible && "opacity-0 group-hover:opacity-100",
             "transition-opacity",
             props.node.visible ? "text-text-muted hover:text-text" : "text-text-muted/40 hover:text-text-muted"
           )}
@@ -96,6 +132,7 @@ const OutlinerNode: Component<{
               depth={props.depth + 1}
               onToggleVisibility={props.onToggleVisibility}
               onSelectNode={props.onSelectNode}
+              onDeleteNode={props.onDeleteNode}
             />
           )}
         </For>
@@ -114,6 +151,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             depth={0}
             onToggleVisibility={props.onToggleVisibility}
             onSelectNode={props.onSelectNode}
+            onDeleteNode={props.onDeleteNode}
           />
         )}
       </For>

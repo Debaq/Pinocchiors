@@ -16,6 +16,7 @@ import {
   ViewerCallbacks,
 } from "../../lib/Viewer3D";
 import type { FloorCandidate } from "../../lib/placement";
+import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 
 export interface ViewportProps {
   // Callbacks
@@ -70,6 +71,9 @@ export interface ViewportProps {
 
   /** Pincel de pesos activo (`undefined` = apagado) */
   paintSettings?: PaintSettings;
+
+  /** Ítems del menú del clic derecho que agrega la app (después de los de vista) */
+  contextMenuItems?: () => MenuEntry[];
 }
 
 const PLACEMENT_HINTS: Record<PlacementMode, string> = {
@@ -83,6 +87,24 @@ export const Viewport: Component<ViewportProps> = (props) => {
   let viewer: Viewer3D | undefined;
   /** Ayuda de la operación modal en curso (G, R, F…) */
   const [hint, setHint] = createSignal<string | null>(null);
+  /** Menú del clic derecho abierto, con sus ítems */
+  const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+
+  const openMenu = (x: number, y: number) => {
+    if (!viewer) return;
+    const v = viewer;
+    const items: MenuEntry[] = [
+      { header: "Vista" },
+      { label: "Ver todo", shortcut: "Inicio", onSelect: () => v.resetView(), disabled: !props.meshData },
+      { label: "Frente", shortcut: "1", onSelect: () => v.setView("front") },
+      { label: "Derecha", shortcut: "3", onSelect: () => v.setView("right") },
+      { label: "Arriba", shortcut: "7", onSelect: () => v.setView("top") },
+      { label: "Atrás", shortcut: "Ctrl+1", onSelect: () => v.setView("back") },
+    ];
+    const extra = props.contextMenuItems?.() ?? [];
+    if (extra.length > 0) items.push({ separator: true }, ...extra);
+    setMenu({ x, y, items });
+  };
 
   onMount(() => {
     if (canvasRef) {
@@ -100,6 +122,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
         onPoseEdited: (joint) => props.onPoseEdited?.(joint),
         onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
+        onContextMenu: openMenu,
       });
 
       props.onViewerReady?.(viewer);
@@ -136,16 +159,16 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   createEffect(() => {
-    if (viewer && props.skeletonData) {
-      viewer.loadSkeleton(props.skeletonData);
-    }
+    if (!viewer) return;
+    if (props.skeletonData) viewer.loadSkeleton(props.skeletonData);
+    else viewer.unloadSkeleton();
   });
 
   // React to weights data changes
   createEffect(() => {
-    if (viewer && props.weightsData) {
-      viewer.loadWeights(props.weightsData);
-    }
+    if (!viewer) return;
+    if (props.weightsData) viewer.loadWeights(props.weightsData);
+    else viewer.unloadWeights();
   });
 
   // React to settings changes
@@ -188,24 +211,6 @@ export const Viewport: Component<ViewportProps> = (props) => {
 
       {/* Overlay */}
       <div class="absolute inset-0 pointer-events-none">
-        {/* Axis Gizmo */}
-        <div class="absolute top-3 right-3 w-16 h-16 flex items-center justify-center">
-          <div class="relative w-12 h-12">
-            {/* X axis */}
-            <div class="absolute left-1/2 top-1/2 w-5 h-0.5 bg-red origin-left" style={{ transform: "rotate(-30deg)" }}>
-              <span class="absolute -right-3 -top-2 text-[10px] font-bold text-red">X</span>
-            </div>
-            {/* Y axis */}
-            <div class="absolute left-1/2 top-1/2 w-0.5 h-5 bg-green origin-top" style={{ transform: "translateX(-50%) rotate(0deg)" }}>
-              <span class="absolute -top-4 left-1/2 -translate-x-1/2 text-[10px] font-bold text-green">Y</span>
-            </div>
-            {/* Z axis */}
-            <div class="absolute left-1/2 top-1/2 w-5 h-0.5 bg-cyan origin-left" style={{ transform: "rotate(30deg)" }}>
-              <span class="absolute -right-3 top-0 text-[10px] font-bold text-cyan">Z</span>
-            </div>
-          </div>
-        </div>
-
         {/* Ayuda de la orientación */}
         <Show when={props.placementMode}>
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-purple/90 text-bg text-xs font-medium">
@@ -247,6 +252,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
           </div>
         </Show>
       </div>
+      <Show when={menu()}>
+        {(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(null)} />}
+      </Show>
     </main>
   );
 };

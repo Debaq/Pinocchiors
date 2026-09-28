@@ -9,6 +9,8 @@ export interface SceneNode {
   selected: boolean;
   children: SceneNode[];
   boneIndex?: number;
+  /** Se puede borrar desde el Outliner */
+  deletable?: boolean;
 }
 
 export interface SceneTreeState {
@@ -82,6 +84,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       type: "quadmesh",
       label: "Quad Mesh",
       visible: state.showQuadMesh,
+      deletable: true,
       expanded: false,
       selected: false,
       children: [],
@@ -95,6 +98,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       type: "skeleton",
       label: "Esqueleto",
       visible: state.showSkeleton,
+      deletable: true,
       expanded: false,
       selected: false,
       children: state.skeletonData.bones.map((bone, i) => ({
@@ -118,6 +122,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       type: "weights",
       label: "Heatmap Pesos",
       visible: state.showWeights,
+      deletable: true,
       expanded: false,
       selected: false,
       children: [],

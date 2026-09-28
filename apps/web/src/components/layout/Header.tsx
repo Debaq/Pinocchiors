@@ -3,15 +3,21 @@ import { clsx } from "clsx";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IconButton, Tooltip } from "../ui";
 import * as Icons from "../icons";
+import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 
 export interface HeaderProps {
   fps?: number;
   title?: string;
   fileName?: string;
+  /** Ítems del menú Archivo (se arman al abrirlo) */
+  fileMenu?: () => MenuEntry[];
+  onOpenSettings?: () => void;
 }
 
 export const Header: Component<HeaderProps> = (props) => {
   const [isMaximized, setIsMaximized] = createSignal(false);
+  const [fileMenu, setFileMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] } | null>(null);
+  let menuClosedAt = 0;
 
   let unlisten: (() => void) | undefined;
 
@@ -56,6 +62,27 @@ export const Header: Component<HeaderProps> = (props) => {
         <h1 class="text-sm font-semibold text-text">
           {props.title ?? "Pinocchio"}
         </h1>
+
+        <Show when={props.fileMenu}>
+          <button
+            class={clsx(
+              "h-7 px-2.5 rounded-md text-xs text-text-muted",
+              "hover:text-text hover:bg-current/40",
+              fileMenu() && "text-text bg-current/40"
+            )}
+            onClick={(e) => {
+              // El clic que acaba de cerrar el menú (clic fuera) no lo vuelve a abrir
+              if (performance.now() - menuClosedAt < 300) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              setFileMenu({ x: rect.left, y: rect.bottom + 4, items: props.fileMenu!() });
+            }}
+          >
+            Archivo
+          </button>
+        </Show>
+        <Show when={fileMenu()}>
+          {(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => { menuClosedAt = performance.now(); setFileMenu(null); }} />}
+        </Show>
       </div>
 
       {/* Center - File name */}
@@ -78,8 +105,8 @@ export const Header: Component<HeaderProps> = (props) => {
         </Show>
 
         {/* Settings */}
-        <Tooltip content="Configuracion">
-          <IconButton variant="ghost" size="sm" aria-label="Configuracion">
+        <Tooltip content="Configuración">
+          <IconButton variant="ghost" size="sm" aria-label="Configuracion" onClick={() => props.onOpenSettings?.()}>
             <Icons.Gear size={18} />
           </IconButton>
         </Tooltip>

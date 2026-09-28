@@ -64,7 +64,20 @@ impl Drop for ProcessingGuard<'_> {
 }
 
 /// Estado compartido de la aplicación
+/// El modelo tal como se importó (se guarda en el proyecto y permite revertir)
+pub struct OriginalModel {
+    /// Nombre del archivo importado
+    pub name: String,
+    /// Formato de origen ("GLB", "STL"…)
+    pub format: String,
+    pub scene: Scene,
+}
+
 pub struct AppState {
+    pub original_model: Mutex<Option<OriginalModel>>,
+    /// Huella del último guardado del proyecto (el automático no reescribe si no cambió)
+    pub last_saved_hash: Mutex<Option<u64>>,
+
     /// Escena importada (formato pivote)
     pub scene: Mutex<Option<Scene>>,
 
@@ -131,6 +144,8 @@ impl AppState {
     /// Crea un nuevo estado vacío
     pub fn new() -> Self {
         Self {
+            original_model: Mutex::new(None),
+            last_saved_hash: Mutex::new(None),
             scene: Mutex::new(None),
             mesh: Mutex::new(None),
             skeleton: Mutex::new(None),

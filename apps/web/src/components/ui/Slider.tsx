@@ -1,5 +1,5 @@
 import { Slider as KobalteSlider } from "@kobalte/core/slider";
-import { Show } from "solid-js";
+import { Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
 
 export interface SliderProps {
@@ -22,6 +22,19 @@ export const Slider = (props: SliderProps) => {
   const value = () => props.value ?? min();
   const formatValue = () => props.formatValue ?? ((v: number) => v.toString());
 
+  // Doble clic en el valor: se escribe con el teclado (Enter confirma, Escape cancela)
+  const [editing, setEditing] = createSignal(false);
+  const decimals = () => (step().toString().split(".")[1] ?? "").length;
+  const commit = (text: string) => {
+    if (!editing()) return;
+    setEditing(false);
+    const parsed = parseFloat(text.replace(",", "."));
+    if (!Number.isFinite(parsed)) return;
+    const clamped = Math.min(max(), Math.max(min(), parsed));
+    const rounded = Number(clamped.toFixed(decimals()));
+    if (rounded !== value()) props.onChange?.(rounded);
+  };
+
   return (
     <KobalteSlider
       value={[value()]}
@@ -30,6 +43,8 @@ export const Slider = (props: SliderProps) => {
       maxValue={max()}
       step={step()}
       disabled={props.disabled}
+      // Kobalte pone este texto en ValueLabel e ignora lo que tenga adentro
+      getValueLabel={(params) => formatValue()(params.values[0])}
       class={clsx("w-full", props.class)}
     >
       <div class="flex items-center justify-between mb-1.5">
@@ -40,9 +55,34 @@ export const Slider = (props: SliderProps) => {
         </Show>
 
         <Show when={props.showValue !== false}>
-          <KobalteSlider.ValueLabel class="text-xs font-mono text-text-muted">
-            {formatValue()(value())}
-          </KobalteSlider.ValueLabel>
+          <Show
+            when={editing()}
+            fallback={
+              <KobalteSlider.ValueLabel
+                class={clsx(
+                  "text-xs font-mono text-text-muted rounded-sm px-1 -mx-1",
+                  !props.disabled && "cursor-text hover:bg-current/30"
+                )}
+                title={props.disabled ? undefined : "Doble clic para escribir el valor"}
+                onDblClick={() => !props.disabled && setEditing(true)}
+              />
+            }
+          >
+            <input
+              ref={(el) => requestAnimationFrame(() => { el.focus(); el.select(); })}
+              type="text"
+              inputmode="decimal"
+              value={Number(value().toFixed(decimals()))}
+              class="w-20 text-xs font-mono text-right text-text bg-bg-darker border border-accent rounded-sm px-1 outline-none"
+              onKeyDown={(e) => {
+                // Las flechas y atajos del visor no deben tocar el slider ni la escena
+                e.stopPropagation();
+                if (e.key === "Enter") commit(e.currentTarget.value);
+                else if (e.key === "Escape") setEditing(false);
+              }}
+              onBlur={(e) => commit(e.currentTarget.value)}
+            />
+          </Show>
         </Show>
       </div>
 

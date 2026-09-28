@@ -10,6 +10,8 @@ export interface ViewSettings {
   selectedBone: number;
   /** Materiales y texturas del archivo de origen */
   showTextures?: boolean;
+  /** Notebook: el desplazamiento gira la cámara en vez de acercar */
+  trackpadNavigation?: boolean;
 }
 
 export interface ViewPanelProps {
@@ -69,6 +71,20 @@ export const ViewPanel: Component<ViewPanelProps> = (props) => {
             onChange={(checked) => updateSettings({ showWeights: checked })}
             disabled={!props.hasWeights}
           />
+        </div>
+
+        {/* Navegación */}
+        <div class="space-y-1.5 pt-1 border-t border-border">
+          <Checkbox
+            label="Navegación con touchpad o TrackPoint"
+            checked={props.settings.trackpadNavigation === true}
+            onChange={(checked) => updateSettings({ trackpadNavigation: checked })}
+          />
+          <p class="text-xs text-text-muted leading-relaxed">
+            El desplazamiento gira la cámara: dos dedos en el touchpad, o botón central + TrackPoint.
+            Con Shift desplaza la vista; con Ctrl o pellizcando, acerca. Alt + clic izquierdo
+            arrastrando también gira.
+          </p>
         </div>
 
         {/* Bone Selector */}

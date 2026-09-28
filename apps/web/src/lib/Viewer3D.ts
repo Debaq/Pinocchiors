@@ -10,6 +10,7 @@ import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
 import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
+import { ViewCube } from "./ViewCube";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -105,6 +106,11 @@ export interface ViewerSettings {
   selectedBone: number;
   /** Materiales y texturas del archivo de origen */
   showTextures?: boolean;
+  /**
+   * Notebook: el desplazamiento (dos dedos, o botón central + TrackPoint, que
+   * el sistema convierte en rueda) gira la cámara; Shift desplaza, Ctrl acerca
+   */
+  trackpadNavigation?: boolean;
 }
 
 /** Opciones del pincel de pesos */
@@ -151,12 +157,28 @@ export interface ViewerCallbacks {
   ) => void;
   /** Texto de ayuda de la operación en curso (null al terminar) */
   onHint?: (text: string | null) => void;
+  /** Clic derecho en el visor (sin operación que cancelar): posición en pantalla */
+  onContextMenu?: (x: number, y: number) => void;
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
   onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
   /** Modo animación: se confirmó un giro (R) o desplazamiento (G) de la articulación */
   onPoseEdited?: (joint: number) => void;
   /** Se soltó el gizmo del esqueleto entero: factor de escala o giro (x, y, z, w) alrededor del pivote */
   onSkeletonTransformed?: (change: { scale: number } | { rotation: [number, number, number, number] }) => void;
+}
+
+/**
+ * Aristas de triángulos en blanco translúcido: contrasta con el fondo y con la
+ * malla, y en mallas densas no satura la vista como un blanco opaco.
+ */
+function wireframeMaterial(): THREE.MeshBasicMaterial {
+  return new THREE.MeshBasicMaterial({
+    color: 0xf8f8f2, // Dracula foreground
+    opacity: 0.35,
+    transparent: true,
+    depthWrite: false,
+    wireframe: true,
+  });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -292,6 +314,14 @@ export class Viewer3D {
   private frameCount = 0;
   private fpsTimer: number | null = null;
   private animationId: number | null = null;
+  /** Cubo de orientación de la esquina */
+  private viewCube = new ViewCube();
+  /** El último clic derecho canceló una operación modal */
+  private suppressContextMenu = false;
+  /** Cursor del lienzo antes de pasar sobre el cubo */
+  private cursorBeforeCube: string | null = null;
+  /** Giro animado de la cámara hacia una vista del cubo */
+  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; start: number } | null = null;
 
   // Callbacks
   private callbacks: ViewerCallbacks = {};
@@ -510,9 +540,27 @@ export class Viewer3D {
     // Navegación como Blender: antes que OrbitControls (fase de captura),
     // se decide qué hace cada botón según los modificadores
     window.addEventListener("pointerdown", (e) => {
-      if (e.target === this.canvas) this.configureNavigation(e);
+      if (e.target !== this.canvas) return;
+      // El cubo de orientación va primero: ni la cámara ni la selección ven el clic
+      if (e.button === 0 && !this.modal && this.onViewCubeDown(e)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        return;
+      }
+      this.configureNavigation(e);
     }, true);
-    this.canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+    this.canvas.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      // El clic derecho que canceló G/R/F no abre el menú
+      if (this.suppressContextMenu) {
+        this.suppressContextMenu = false;
+        return;
+      }
+      this.callbacks.onContextMenu?.(e.clientX, e.clientY);
+    });
+    window.addEventListener("wheel", (e) => {
+      if (e.target === this.canvas) this.onTrackpadWheel(e);
+    }, { capture: true, passive: false });
 
     // Clic: modal, luz, pincel, gizmo o selección (en ese orden)
     this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
@@ -550,11 +598,86 @@ export class Viewer3D {
     };
   }
 
+  /**
+   * Modo notebook: la rueda gira (Shift desplaza) en vez de acercar. Ctrl y el
+   * gesto de pellizco (que llega como Ctrl + rueda) siguen haciendo zoom.
+   */
+  private onTrackpadWheel(e: WheelEvent): void {
+    if (!this.settings.trackpadNavigation || e.ctrlKey || e.metaKey || !this.controls.enabled) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 400 : 1;
+    const dx = e.deltaX * unit;
+    const dy = e.deltaY * unit;
+    // Métodos internos de OrbitControls: el mismo camino que un arrastre
+    const orbit = this.controls as unknown as {
+      _rotateLeft(angle: number): void;
+      _rotateUp(angle: number): void;
+      _pan(dx: number, dy: number): void;
+    };
+    if (e.shiftKey) {
+      orbit._pan(-dx, -dy);
+    } else {
+      const height = this.canvas.clientHeight || 1;
+      orbit._rotateLeft((2 * Math.PI * dx) / height);
+      orbit._rotateUp((2 * Math.PI * dy) / height);
+    }
+    this.controls.update();
+  }
+
+  /** Clic en el cubo: la cámara va a la vista de esa cara, arista o vértice */
+  private onViewCubeDown(e: PointerEvent): boolean {
+    if (!this.viewCube.contains(this.canvas, e.clientX, e.clientY)) return false;
+    const dir = this.viewCube.pick(this.canvas, e.clientX, e.clientY);
+    if (!dir) return false;
+    this.lookFrom([dir.x, dir.y, dir.z]);
+    return true;
+  }
+
+  /** Lleva la cámara (con un giro corto) a mirar desde `dir` hacia el centro de la vista */
+  lookFrom(direction: Vec3): void {
+    const dir = new THREE.Vector3(...direction);
+    // Vista cenital pura: un pelo hacia el frente para que "arriba" en pantalla sea −Z
+    if (dir.x === 0 && dir.z === 0) dir.z = 1e-3;
+    const from = this.camera.position.clone().sub(this.controls.target);
+    const turn = new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), dir.normalize());
+    this.viewTransition = { from, turn, start: performance.now() };
+  }
+
+  private updateViewCubeHover(e: PointerEvent): void {
+    const over = e.target === this.canvas && !this.modal && e.buttons === 0
+      ? this.viewCube.pick(this.canvas, e.clientX, e.clientY)
+      : null;
+    this.viewCube.setHover(over);
+    if (over && this.cursorBeforeCube === null) {
+      this.cursorBeforeCube = this.canvas.style.cursor;
+      this.canvas.style.cursor = "pointer";
+    } else if (!over && this.cursorBeforeCube !== null) {
+      this.canvas.style.cursor = this.cursorBeforeCube;
+      this.cursorBeforeCube = null;
+    }
+  }
+
+  /** Avanza el giro hacia la vista elegida en el cubo (~0,3 s, con frenado) */
+  private stepViewTransition(): void {
+    const transition = this.viewTransition;
+    if (!transition) return;
+    const t = Math.min(1, (performance.now() - transition.start) / 300);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const turn = new THREE.Quaternion().slerp(transition.turn, eased);
+    this.camera.position.copy(this.controls.target).add(transition.from.clone().applyQuaternion(turn));
+    if (t < 1) this.requestRender();
+    else this.viewTransition = null;
+  }
+
   private onPointerDown(e: PointerEvent): void {
     this.lastPointer = { x: e.clientX, y: e.clientY };
     if (this.modal) {
       if (e.button === 0) this.confirmModal();
-      else if (e.button === 2) this.cancelModal();
+      else if (e.button === 2) {
+        this.cancelModal();
+        this.suppressContextMenu = true;
+      }
       return;
     }
     if (e.button !== 0 || e.altKey) return;
@@ -577,6 +700,7 @@ export class Viewer3D {
   }
 
   private onPointerMove(e: PointerEvent): void {
+    this.updateViewCubeHover(e);
     if (e.target === this.canvas || this.modal) this.lastPointer = { x: e.clientX, y: e.clientY };
     if (this.modal) {
       this.modalMove(e.clientX, e.clientY);
@@ -1098,9 +1222,15 @@ export class Viewer3D {
 
   private animate = (): void => {
     this.animationId = null;
+    if (this.viewTransition) {
+      this.stepViewTransition();
+      // Sin arrastre residual de la amortiguación durante el giro
+      this.controls.enableDamping = this.viewTransition === null;
+    }
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+    this.viewCube.render(this.renderer, this.camera, this.controls.target);
     this.frameCount++;
   };
 
@@ -1149,13 +1279,7 @@ export class Viewer3D {
       // Fallback to triangle wireframe. Comparte la geometría y dibuja en modo
       // wireframe: WireframeGeometry deduplica aristas con claves de texto en
       // JS y congela la ventana varios segundos con mallas de millones de caras.
-      const wireframeMaterial = new THREE.MeshBasicMaterial({
-        color: 0x44475a,
-        opacity: 0.5,
-        transparent: true,
-        wireframe: true,
-      });
-      this.currentWireframe = new THREE.Mesh(geometry, wireframeMaterial);
+      this.currentWireframe = new THREE.Mesh(geometry, wireframeMaterial());
       this.currentWireframe.visible = this.settings.showWireframe;
       this.meshGroup.add(this.currentWireframe);
     }
@@ -1501,6 +1625,34 @@ export class Viewer3D {
     }
   }
 
+  /** Quita el esqueleto (y el rig que lo usa) del visor */
+  unloadSkeleton(): void {
+    if (!this.skeletonData) return;
+    this.resetPose();
+    this.disposeRig();
+    this.clearSkeleton();
+    this.boneSpheres = [];
+    this.skeletonData = null;
+    this.selectedBoneIndex = -1;
+    this.attachGizmo();
+  }
+
+  /** Quita los pesos: sin heatmap ni rig */
+  unloadWeights(): void {
+    if (!this.weightsData) return;
+    this.resetPose();
+    this.disposeRig();
+    this.weightsData = null;
+    if (this.weightsMesh) {
+      this.meshGroup.remove(this.weightsMesh);
+      this.weightsMesh.geometry.dispose();
+      (this.weightsMesh.material as THREE.Material).dispose();
+      this.weightsMesh = null;
+    }
+    this.applySettings();
+    this.attachGizmo();
+  }
+
   loadWeights(data: WeightsData): void {
     this.resetPose();
     this.weightsData = data;
@@ -1762,36 +1914,17 @@ export class Viewer3D {
     this.attachGizmo();
   }
 
+  /** Vistas con nombre (atajos 1, 3, 7 y Ctrl): el mismo giro que el cubo */
   setView(name: string): void {
-    const target = this.controls.target.clone();
-    const dist = this.camera.position.distanceTo(target);
-
-    // Arriba/abajo con un pelo de inclinación: mirar justo por el eje Y
-    // deja la órbita sin dirección "arriba"
-    const tilt = dist * 1e-4;
-    switch (name) {
-      case "front":
-        this.camera.position.set(target.x, target.y, target.z + dist);
-        break;
-      case "back":
-        this.camera.position.set(target.x, target.y, target.z - dist);
-        break;
-      case "right":
-        this.camera.position.set(target.x + dist, target.y, target.z);
-        break;
-      case "left":
-        this.camera.position.set(target.x - dist, target.y, target.z);
-        break;
-      case "top":
-        this.camera.position.set(target.x, target.y + dist, target.z + tilt);
-        break;
-      case "bottom":
-        this.camera.position.set(target.x, target.y - dist, target.z + tilt);
-        break;
-    }
-
-    this.camera.lookAt(target);
-    this.controls.update();
+    const directions: Record<string, Vec3> = {
+      front: [0, 0, 1],
+      back: [0, 0, -1],
+      right: [1, 0, 0],
+      left: [-1, 0, 0],
+      top: [0, 1, 0],
+      bottom: [0, -1, 0],
+    };
+    if (directions[name]) this.lookFrom(directions[name]);
   }
 
   focusSelection(): void {
@@ -1820,6 +1953,7 @@ export class Viewer3D {
     }
     this.clearMesh();
     this.clearSkeleton();
+    this.viewCube.dispose();
     this.renderer.dispose();
   }
 
@@ -2018,7 +2152,6 @@ export class Viewer3D {
       this.meshGroup.add(m);
       return m;
     };
-    const wireframeMaterial = new THREE.MeshBasicMaterial({ color: 0x44475a, opacity: 0.5, transparent: true, wireframe: true });
     this.rig = {
       root,
       bones,
@@ -2028,7 +2161,7 @@ export class Viewer3D {
       tip,
       skeleton: threeSkeleton,
       mesh: skinned(mesh.material),
-      wireframe: skinned(wireframeMaterial),
+      wireframe: skinned(wireframeMaterial()),
     };
     this.syncRigVisibility();
     if (this.lastPose) this.setPose(this.lastPose);
@@ -2186,6 +2319,7 @@ export class Viewer3D {
 
   private fitCamera(): void {
     if (!this.currentMesh) return;
+    this.viewTransition = null;
 
     const box = new THREE.Box3().setFromObject(this.currentMesh);
     const center = box.getCenter(new THREE.Vector3());

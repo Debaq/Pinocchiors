@@ -1,10 +1,14 @@
-import { Component } from "solid-js";
+import { Component, Show } from "solid-js";
 import { clsx } from "clsx";
 import { Button } from "../ui";
 import * as Icons from "../icons";
 
 export interface WelcomeScreenProps {
   onImport?: () => void;
+  onOpenProject?: () => void;
+  /** Última sesión guardada por el guardado automático */
+  recovery?: { saved_at: number; source_name: string | null };
+  onRecover?: () => void;
 }
 
 export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
@@ -50,9 +54,23 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
           Importar Modelo
         </Button>
 
+        <div class="flex flex-col items-center gap-2 -mt-2">
+          <Button onClick={props.onOpenProject} variant="ghost" size="sm" icon={<Icons.FolderOpen size={14} />}>
+            Abrir proyecto (.pinocchio)
+          </Button>
+          <Show when={props.recovery}>
+            {(r) => (
+              <Button onClick={props.onRecover} variant="ghost" size="sm">
+                Recuperar sesión{r().source_name ? ` de ${r().source_name}` : ""} ·{" "}
+                {new Date(r().saved_at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
+              </Button>
+            )}
+          </Show>
+        </div>
+
         {/* Supported formats */}
         <p class="text-[10px] text-text-dim text-center">
-          Formatos soportados: GLB, GLTF, OBJ, STL, FBX
+          Formatos soportados: GLB, GLTF, OBJ, STL
         </p>
       </div>
     </div>

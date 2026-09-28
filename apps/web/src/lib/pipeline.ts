@@ -116,11 +116,15 @@ export function createPipelineStore() {
     setActiveStep(stepId);
   };
 
+  /** Reemplaza los pasos completados (al abrir un proyecto) */
+  const setCompleted = (steps: PipelineStepId[]) => setCompletedSteps(new Set(steps));
+
   return {
     activeStep,
     setActiveStep,
     completedSteps,
     markCompleted,
+    setCompleted,
     getStepStatus,
     navigateTo,
   };

@@ -501,7 +501,10 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
     let mesh = scene_to_pinocchio_mesh(&scene)?;
     report(progress, "done", 90, "Modelo importado");
 
-    // Guardar en estado
+    // Guardar en estado; la copia del original va al proyecto y permite revertir
+    let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    *state.original_model.lock().unwrap() = Some(crate::state::OriginalModel { name, format: ext.to_uppercase(), scene: scene.clone() });
+    *state.last_saved_hash.lock().unwrap() = None;
     let mut scene_lock = state.scene.lock().unwrap();
     *scene_lock = Some(scene);
 
@@ -1077,6 +1080,35 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
     *state.result.lock().unwrap() = None;
 
     Ok(data)
+}
+
+/// Borra un objeto de la escena desde el Outliner: "skeleton" (esqueleto y
+/// todo lo que depende de él), "weights" (el rig) o "quadmesh" (la retopología
+/// y su piel UV). La malla importada no se borra por acá.
+#[tauri::command]
+pub fn remove_object(kind: String, state: State<'_, AppState>) -> Result<(), String> {
+    use std::sync::atomic::Ordering;
+    match kind.as_str() {
+        "skeleton" => {
+            *state.skeleton.lock().unwrap() = None;
+            *state.original_skeleton.lock().unwrap() = None;
+            *state.skeleton_preset.lock().unwrap() = None;
+            *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+            state.active_mesh_changed();
+        }
+        "weights" => *state.result.lock().unwrap() = None,
+        "quadmesh" => {
+            // Un rig calculado sobre los quads se queda sin malla
+            if state.rig_on_quad.swap(false, Ordering::SeqCst) {
+                state.active_mesh_changed();
+            }
+            state.use_retopology.store(false, Ordering::SeqCst);
+            *state.quad_mesh.lock().unwrap() = None;
+            *state.quad_skin.lock().unwrap() = None;
+        }
+        other => return Err(format!("No se puede borrar: {other}")),
+    }
+    Ok(())
 }
 
 /// Forma de cuerpo + apéndices (ver `pinocchio_skeleton::BodyPlan`)
@@ -2686,7 +2718,7 @@ fn calculate_scene_bounds(scene: &Scene) -> BoundingBox {
     }
 }
 
-fn scene_to_pinocchio_mesh(scene: &Scene) -> Result<Mesh, String> {
+pub(crate) fn scene_to_pinocchio_mesh(scene: &Scene) -> Result<Mesh, String> {
     pinocchio_mesh::scene_to_mesh(scene).ok_or_else(|| "Escena vacía o sin geometría".to_string())
 }
 

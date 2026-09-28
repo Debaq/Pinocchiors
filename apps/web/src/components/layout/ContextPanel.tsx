@@ -62,6 +62,7 @@ export interface ContextPanelProps {
   sceneTree?: SceneNode;
   onToggleVisibility?: (nodeId: string) => void;
   onSelectNode?: (nodeId: string) => void;
+  onDeleteNode?: (nodeId: string) => void;
 
   // Pestaña de información
   stats?: SceneStats;
@@ -179,6 +180,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
                 tree={props.sceneTree!}
                 onToggleVisibility={props.onToggleVisibility}
                 onSelectNode={props.onSelectNode}
+                onDeleteNode={props.onDeleteNode}
               />
             </Show>
           </div>
