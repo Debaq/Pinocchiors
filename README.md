@@ -212,6 +212,15 @@ npx tauri build --config ../desktop/tauri.conf.json
 
 ## CLI de conversión
 
+Programa de terminal (`converter`) que convierte modelos entre formatos sin abrir la app. Usa las mismas librerías de conversión que la app de escritorio, pero no hace rigging, retopología ni orientación. Sirve para:
+
+- **Convertir muchos archivos de una vez** con `--batch`, en vez de abrirlos uno por uno en la app.
+- **Automatizar**: scripts, un servidor o una carpeta que se convierte sola (código de salida 1 si algo falla).
+- **Preparar modelos para AR** en iPhone/iPad (GLB → USDZ con `--arkit`).
+- **Probar el conversor** sin interfaz mientras se desarrolla.
+
+Cada release trae el binario listo para Linux, Windows y macOS (Intel y ARM): `converter-<versión>-<plataforma>.tar.gz` o `.zip`. Para compilarlo:
+
 ```bash
 cargo install --path apps/converter
 # o bien
