@@ -7,70 +7,112 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 ```
 
 - **Retopología:** si el modelo trae UV, se trasladan a la malla nueva
-  (fase 0). Es rápido y conserva el atlas original, pero no es exacto donde
-  una cara nueva cruza una costura vieja.
-- **UV / Piel:** paso propio, haya o no UV. Sin UV, despliega la malla (una
-  malla de quads limpia se corta mejor por sus bucles de aristas). Con UV
-  trasladadas, permite quedarse con ellas o desplegar de nuevo y hornear la
-  textura original sobre el mapa nuevo, que es la forma exacta.
+  (fase 0). Es rápido y conserva el atlas y los materiales originales, pero
+  donde una cara nueva cruza una costura vieja la textura se estira.
+- **UV / Piel:** paso propio, haya o no UV. Despliega la malla de quads en
+  islas nuevas cortadas por sus aristas y hornea encima las texturas del
+  original. Cada texel lee de un solo punto del original: sin astillas ni
+  costuras. Se puede volver a las UV trasladadas.
+
+## Módulos
+
+| Módulo | Qué hace |
+|---|---|
+| `surface` | `UvSurface`: malla de referencia con UV y normales. Vecindad que se corta en las costuras, BVH, baricéntricas, UV y marco tangente en un punto. |
+| `transfer` | `transfer_uvs`: UV por esquina para otra malla; cada esquina busca desde el centro de su cara sin cruzar costuras. |
+| `geometry` | `PolyMesh`: normales de Newell, áreas, vecindad por aristas, abanicos. |
+| `charts` | Segmentación en islas (crecimiento simultáneo + relajación, ver abajo); garantiza discos. |
+| `param` | LSCM + ARAP por isla; métricas de inversión y estiramiento L2. |
+| `pack` | Escala a densidad de texel uniforme, caja mínima, skyline con giro de 90°. |
+| `unwrap` | Orquesta: islas → parametrización (en paralelo) → partir las malas → empaquetar. |
+| `tangent` | `corner_frames`: normales y tangentes por esquina, las mismas al hornear y al exportar. |
+| `bake` | `bake`: rasteriza el mapa nuevo, busca el punto del original por texel y evalúa canales; dilata los bordes. |
+| `skin` | Nivel escena: `scene_surface`, `transferred_skin`, `unwrapped_skin` (hornea color, metal/rugosidad, oclusión, emisión y normal), `skin_scene` (malla + piel → `Scene`), `checker_texture`. |
 
 ## Fase 0 — Traspaso de UV en la retopología ✅
 
-- `UvSurface`: triángulos con UV, soldados por (grupo, posición, UV). Dos
-  triángulos son vecinos solo si la arista tiene las mismas UV a ambos lados,
-  así una costura corta la vecindad aunque no separe islas (cilindro).
-- `transfer_uvs::<N>(surface, posiciones, caras)`: cada esquina toma la UV del
-  triángulo más cercano alcanzable desde el centro de la cara sin cruzar
-  costuras; si el más cercano real está al otro lado, extrapola el mapa afín
-  del lado del centro. Devuelve UV por esquina, grupo (material) por cara y
-  cuántas caras cruzan costuras.
-- App: `AppState::quad_uvs`; `quad_mesh_to_scene` agrupa por material y
-  duplica vértices en las costuras; los pesos del rig siguen al vértice de
-  quads de origen.
-- Ejemplo: `cargo run --release -p uv-core --example retopo_uv -- modelo.glb 5000 salida.glb`.
-- Gonfoterio (500 k triángulos, 448 islas, 5000 quads): 2.9 s, 39 % de caras
-  cruzan costuras. La textura sigue bien; quedan astillas finas donde la UV
-  extrapolada cae fuera de la isla. Límite propio del traspaso directo: lo
-  corrige la fase 4.
+- Dos triángulos son vecinos solo si la arista tiene las mismas UV a ambos
+  lados: una costura corta la vecindad aunque no separe islas (cilindro).
+- Si el punto más cercano real queda al otro lado de una costura, se
+  extrapola el mapa afín del lado del centro de la cara.
+- Gonfoterio (500 k triángulos, 448 islas, 5000 quads): 2,9 s, 39 % de caras
+  cruzan costuras; astillas finas en esas caras. Las corrige la fase 4.
 
-## Fase 1 — Cartas (corte en discos)
+## Fase 1 — Islas ✅
 
-- Semillas por aristas vivas y crecimiento de regiones por normal
-  (planaridad + compacidad, estilo xatlas / D-charts).
-- En mallas de quads: cortar por bucles de aristas; preferir costuras en
-  zonas poco visibles (concavidades, oclusión ambiental aproximada).
-- Cada carta debe ser un disco: cortar asas (género > 0) con el camino más
-  corto entre bordes.
+- Crecimiento simultáneo desde semillas con cola de prioridad global (estilo
+  D-Charts / xatlas). Costo = `1 − n·n̄` + 0,1 · redondez (fracción del
+  perímetro no compartido). Límites duros: desviación ≤ `max_angle` (55°) y
+  nunca cruzar aristas vivas (diedro > `sharp_angle`, 70°).
+- Caras que nadie acepta siembran islas nuevas (la más grande primero).
+- Relajación (4 rondas): semilla = cara más interior (BFS desde el borde) y se
+  vuelve a crecer.
+- Discos: χ = 1, un lazo de borde, conexa. Si no, se parte en dos con
+  Dijkstra por centroides desde dos caras lejanas.
 
-## Fase 2 — Parametrización
+## Fase 2 — Parametrización ✅
 
-- LSCM por carta (2 vértices fijos, mínimos cuadrados dispersos con
-  `pinocchio-sparse`), luego refinado ARAP local/global.
-- Métrica de estiramiento (L2 de Sander) y detección de triángulos
-  invertidos; si una carta supera el umbral, dividirla y repetir.
+- LSCM (Cauchy-Riemann por triángulo, peso = área, 2 vértices fijos a su
+  distancia 3D) con CG precondicionado de `pinocchio-sparse`.
+- ARAP local/global (10 iteraciones, cotangentes acotadas a [1e-3, 1e3]); se
+  descarta si agrega inversiones.
+- Isla con triángulos invertidos o estiramiento L2 > 1,25: se parte y se
+  repite (hasta 10 rondas).
 
-## Fase 3 — Empaquetado
+## Fase 3 — Empaquetado ✅
 
-- Escalar cartas a densidad de texel uniforme; rotar a caja mínima.
-- Skyline/maxrects con margen en píxeles según el tamaño de textura destino
-  (512–4096), rotaciones de 90°.
+- Cada isla a su área 3D (densidad de texel uniforme), girada a la caja de
+  menor área (aristas de la cápsula convexa).
+- Skyline de abajo a la izquierda, cajas de mayor a menor, probando 90°;
+  varios anchos de franja y se queda el cuadrado más chico. Margen en px del
+  tamaño de textura destino (se itera porque depende del lado final).
+- Gonfoterio: 74 islas, 44 % del atlas cubierto.
 
-## Fase 4 — Horneado
+## Fase 4 — Horneado ✅
 
-- Rasterizar cada triángulo en el espacio UV nuevo; por texel, punto más
-  cercano (o rayo por la normal) sobre la malla original → UV viejas →
-  muestrear textura. Canales: base color, ORM, emisiva, normal (reorientada a
-  la base tangente nueva).
-- Dilatar bordes de islas (margen) para evitar costuras con mipmaps.
-- Opcional: normal map de alta (original) a baja (retopología).
-- Exportar tangentes (MikkTSpace) cuando el material tiene normal map:
-  gltf-validator avisa `MESH_PRIMITIVE_GENERATED_TANGENT_SPACE` en la fase 0.
+- Por texel: triángulo destino (rasterizado), punto 3D, punto más cercano
+  del original → grupo, UV originales y marco tangente de ambos lados.
+- Color base y emisión se combinan con su factor en espacio lineal y se
+  vuelven a sRGB. Metal/rugosidad y oclusión con sus factores.
+- Normal: normal de sombreado del original (más su normal map) al espacio
+  tangente nuevo; se hornea siempre, así la malla liviana conserva el relieve
+  de la original. Convención glTF: T hacia +u, B = w (N × T) hacia −v; la
+  exportación escribe esas mismas tangentes (`TANGENT`).
+- Dilatación de `2 × padding` texels y el resto del fondo con el color medio.
+- Gonfoterio: sin astillas, arrugas de la trompa conservadas, gltf-validator
+  0 errores / 0 avisos.
 
-## Fase 5 — App
+## Fase 5 — App ✅
 
-- Paso "UV / Piel" en `pipeline.ts` entre retopología y esqueleto.
-- Visor: textura de tablero para ver distorsión, vista 2D del atlas,
-  resaltar costuras. Opciones: conservar trasladadas / desplegar + hornear,
-  tamaño de textura, margen.
-- `geometry_changed()` descarta también las UV (ya descarta `quad_uvs`).
-- Verificación: exportar GLB → gltf-validator + render con f3d.
+- Paso "UV / Piel" (`apps/web/src/components/steps/UvStep.tsx`): métricas del
+  mapa, tamaño de textura, margen, curvatura por isla, desplegar y hornear,
+  volver a las UV trasladadas, vista con textura / tablero / sin textura y
+  atlas 2D.
+- Backend: `AppState::quad_skin`; comandos `get_uv_info`, `run_uv_unwrap`,
+  `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout`;
+  `get_quad_mesh_data` duplica vértices en las costuras e incluye UV.
+- La exportación con retopología usa la piel (materiales, texturas,
+  tangentes) y los pesos del rig siguen al vértice de quads de origen.
+
+## Pendiente
+
+- Empaquetado por rasterizado (como xatlas) para pasar de ~45 % a ~70 % de
+  uso del atlas.
+- Horneado con rayos por la normal además del punto más cercano: en zonas
+  finas o muy juntas (colmillo contra pata) el más cercano puede ser la otra
+  pieza; se ve una rayita clara en el gonfoterio.
+- Normal map de alta a baja sin UV de origen: `UvSurface` exige UV; un STL
+  denso podría aportar su relieve igual.
+- Desplegar también la malla original (sin retopología).
+- Costuras preferidas en zonas poco visibles (oclusión aproximada) y
+  alineadas a las costuras viejas.
+
+## Verificación
+
+```text
+cargo test -p uv-core
+cargo run --release -p uv-core --example retopo_uv -- modelo.glb 5000 salida.glb [--unwrap] [--checker] [--size 2048]
+f3d salida.glb --output render.png
+```
+
+Validar el GLB con gltf-validator (npm, `validateBytes`).

@@ -4,6 +4,9 @@ export type { ImportStepProps } from "./ImportStep";
 export { RetopologyStep } from "./RetopologyStep";
 export type { RetopologyStepProps } from "./RetopologyStep";
 
+export { UvStep, defaultUvConfig } from "./UvStep";
+export type { UvStepProps, UvConfig, UvInfo, UvPreview } from "./UvStep";
+
 export { SkeletonStep } from "./SkeletonStep";
 export type { SkeletonStepProps } from "./SkeletonStep";
 

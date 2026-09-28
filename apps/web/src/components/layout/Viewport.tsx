@@ -1,6 +1,6 @@
 import { Component, onMount, onCleanup, Show, createEffect } from "solid-js";
 import { clsx } from "clsx";
-import { Viewer3D, ViewerSettings, MeshData, SkeletonData, WeightsData } from "../../lib/Viewer3D";
+import { Viewer3D, ViewerSettings, MeshData, MeshTextures, SkeletonData, WeightsData } from "../../lib/Viewer3D";
 
 export interface ViewportProps {
   // Callbacks
@@ -12,6 +12,8 @@ export interface ViewportProps {
 
   // Data
   meshData?: MeshData;
+  /** Texturas de la piel de `meshData` (vista previa del paso UV) */
+  textures?: MeshTextures;
   skeletonData?: SkeletonData;
   weightsData?: WeightsData;
 
@@ -64,6 +66,14 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   // React to skeleton data changes
+  // Después de cargar la malla: sus texturas dependen de que tenga UV
+  createEffect(() => {
+    props.meshData;
+    if (viewer) {
+      viewer.setTextures(props.textures ?? {});
+    }
+  });
+
   createEffect(() => {
     if (viewer && props.skeletonData) {
       viewer.loadSkeleton(props.skeletonData);

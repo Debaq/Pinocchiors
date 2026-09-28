@@ -5057,8 +5057,10 @@ version = "0.1.0"
 dependencies = [
  "converter-gltf-io",
  "converter-scene",
+ "image",
  "pinocchio-math",
  "pinocchio-mesh",
+ "pinocchio-sparse",
  "pinocchio-spatial",
  "quadriflow-core",
  "rayon",

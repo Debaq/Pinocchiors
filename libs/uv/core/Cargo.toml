@@ -8,10 +8,12 @@ description = "Coordenadas UV: traspaso entre mallas, desplegado, empaquetado y 
 [dependencies]
 pinocchio-math = { workspace = true }
 pinocchio-spatial = { workspace = true }
+pinocchio-sparse = { workspace = true }
 rayon = { workspace = true }
+converter-scene = { workspace = true }
+image = { workspace = true }
 
 [dev-dependencies]
 quadriflow-core = { workspace = true }
 pinocchio-mesh = { workspace = true, features = ["converter"] }
-converter-scene = { workspace = true }
 converter-gltf-io = { workspace = true }

@@ -8,6 +8,7 @@ import { SceneOutliner } from "../panels/SceneOutliner";
 import { ImportStep, type ImportStepProps } from "../steps/ImportStep";
 import { RetopologyStep, type RetopologyStepProps } from "../steps/RetopologyStep";
 import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
+import { UvStep, type UvStepProps } from "../steps/UvStep";
 import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
 import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
 import { AnimateStep } from "../steps/AnimateStep";
@@ -24,6 +25,9 @@ export interface ContextPanelProps {
 
   // Retopology
   retopologyProps: RetopologyStepProps;
+
+  // UV / Piel
+  uvProps: UvStepProps;
 
   // Skeleton
   skeletonProps: SkeletonStepProps;
@@ -67,6 +71,9 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
           </Match>
           <Match when={props.activeStep === "retopology"}>
             <RetopologyStep {...props.retopologyProps} />
+          </Match>
+          <Match when={props.activeStep === "uv"}>
+            <UvStep {...props.uvProps} />
           </Match>
           <Match when={props.activeStep === "skeleton"}>
             <SkeletonStep {...props.skeletonProps} />

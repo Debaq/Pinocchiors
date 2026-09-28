@@ -38,6 +38,12 @@ pub fn run() {
             // Retopología
             commands::run_retopology,
             commands::get_quad_mesh_data,
+            // UV / Piel
+            commands::get_uv_info,
+            commands::run_uv_unwrap,
+            commands::restore_transferred_uvs,
+            commands::get_uv_texture,
+            commands::get_uv_layout,
             // Reparación
             commands::analyze_mesh,
             commands::repair_mesh,

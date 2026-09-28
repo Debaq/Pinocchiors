@@ -1,11 +1,11 @@
 # Pinocchiors
 
-Suite de procesamiento 3D en **Rust puro**: auto-rigging, retopología a quads, reparación de mallas, preparación para impresión 3D y conversión entre formatos (glTF/GLB, OBJ, STL, USDA/USDZ).
+Suite de procesamiento 3D en **Rust puro**: auto-rigging, retopología a quads, mapas UV con horneado de texturas, reparación de mallas, preparación para impresión 3D y conversión entre formatos (glTF/GLB, OBJ, STL, USDA/USDZ).
 
 Incluye una app de escritorio (Tauri + SolidJS + Three.js), una CLI de conversión y bindings WASM.
 
 ```
-Import → Reparación → Retopología → Rigging → Pesos → Impresión 3D → Export
+Import → Reparación → Retopología → UV / Piel → Rigging → Pesos → Impresión 3D → Export
 ```
 
 ---
@@ -45,6 +45,14 @@ Port de [QuadriFlow](https://github.com/hjwdzh/QuadriFlow) (SGP 2018).
 - Jerarquía multiescala, flujo de costo mínimo y parametrización entera.
 - Extracción de una malla de quads con preservación opcional de aristas vivas, modo adaptativo y eliminación de flips.
 - Paralelizado con `rayon`.
+
+### UV / Piel (`uv-core`)
+La "piel" de la malla: coordenadas UV, materiales y texturas.
+
+- Traspaso de UV del modelo original a la malla retopologizada, sin saltar entre islas en las costuras.
+- Desplegado propio: islas que crecen a la vez (desviación de normal acotada, nunca cruzan aristas vivas) y siempre son discos, LSCM + ARAP, empaquetado con densidad de texel uniforme.
+- Horneado de las texturas originales sobre el mapa nuevo (color, metal/rugosidad, oclusión, emisión) y de la normal: la malla liviana conserva el relieve de la original como normal map, con tangentes glTF exportadas.
+- Plan y detalles en [`libs/uv/ROADMAP.md`](libs/uv/ROADMAP.md).
 
 ### Reparación de mallas (`pinocchio-repair`)
 - Diagnóstico: bordes abiertos, vértices duplicados, caras degeneradas, aristas non-manifold y autointersecciones (con BVH y el test de Möller).
@@ -89,13 +97,9 @@ Pinocchiors/
 │   │   ├── print3d/        # Preparación para impresión 3D
 │   │   └── core/           # API pública: autorig()
 │   ├── quadriflow/         # Retopología a quads
-│   │   ├── field/          # Campos de orientación/posición
-│   │   ├── hierarchy/      # Jerarquía multiescala
-│   │   ├── optimizer/      # Optimización de campos
-│   │   ├── flow/           # Min-cost flow
-│   │   ├── parametrizer/   # Parametrización entera
-│   │   ├── extractor/      # Extracción de la malla quad
 │   │   └── core/           # API pública: remesh()
+│   ├── uv/                 # Mapas UV
+│   │   └── core/           # Traspaso, desplegado, empaquetado y horneado
 │   └── converter/          # Conversión de formatos
 │       ├── scene/          # Formato intermedio (Scene)
 │       ├── gltf-io/        # glTF/GLB
@@ -120,6 +124,7 @@ Pinocchiors/
         ▼               ▼              ▼                  ▼
  pinocchio-core   quadriflow-core  pinocchio-repair  converter-*
         │               │          pinocchio-print3d      │
+        │               │          uv-core ───────────────┤
         └───────┬───────┘                                 │
                 ▼                                         │
           pinocchio-mesh ◀── feature "converter" ─────────┘
@@ -177,6 +182,7 @@ npx tauri build --config ../desktop/tauri.conf.json
 | Esqueletos | `list_skeleton_presets`, `select_skeleton`, `get_skeleton_data`, `transform_skeleton`, `move_bone`, `auto_fit_skeleton` |
 | Auto-rig | `run_autorig`, `get_weights_data` |
 | Retopología | `run_retopology`, `get_quad_mesh_data` |
+| UV / Piel | `get_uv_info`, `run_uv_unwrap`, `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout` |
 | Reparación | `analyze_mesh`, `repair_mesh`, `undo_repair`, `get_repair_diagnostics` |
 | Impresión 3D | `analyze_print3d`, `scale_mesh_for_print`, `subdivide_mesh`, `export_print3d_piece` |
 
@@ -276,6 +282,22 @@ let quads = remesh_with_callback(&mesh, &config, |stage, msg| {
 })?;
 
 println!("{} vértices, {} quads", quads.vertices.len(), quads.faces.len());
+```
+
+### UV / Piel
+
+```rust
+use uv_core::{scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions};
+
+// positions: [[f64; 3]], faces: [[usize; 4]] de la malla retopologizada
+let surface = scene_surface(&scene); // UV y normales del original
+let skin = match &surface {
+    Some(s) => transferred_skin(&scene, s, &positions, &faces), // rápido, conserva el atlas
+    None => unwrapped_skin(&scene, None, &positions, &faces, &BakeOptions::default()),
+};
+// O desplegar de nuevo y hornear (sin costuras, con normal map del original):
+let skin = unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &BakeOptions::default());
+let (textured_scene, _) = skin_scene(&positions, &faces, Some(&skin), &scene);
 ```
 
 ### Reparación

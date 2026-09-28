@@ -85,6 +85,12 @@ function getHeatmapColor(value: number): THREE.Color {
 // VIEWER CLASS
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Texturas ya decodificadas para la vista previa de la piel */
+export interface MeshTextures {
+  base?: ImageBitmap;
+  normal?: ImageBitmap;
+}
+
 export class Viewer3D {
   // Core Three.js objects
   private canvas: HTMLCanvasElement;
@@ -102,6 +108,9 @@ export class Viewer3D {
   private currentWireframe: THREE.Mesh | null = null;
   private quadWireframe: THREE.LineSegments | null = null;
   private weightsMesh: THREE.Mesh | null = null;
+
+  // Texturas de la piel (color base y normal), si la malla tiene UV
+  private textures: MeshTextures = {};
 
   // Data
   private meshData: MeshData | null = null;
@@ -267,6 +276,9 @@ export class Viewer3D {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+    if (data.uvs) {
+      geometry.setAttribute("uv", new THREE.BufferAttribute(data.uvs, 2));
+    }
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
     // Material - Dracula style
@@ -276,6 +288,7 @@ export class Viewer3D {
       roughness: 0.7,
       side: THREE.DoubleSide,
     });
+    this.applyTextures(material, geometry);
 
     this.currentMesh = new THREE.Mesh(geometry, material);
     this.currentMesh.visible = this.settings.showMesh && !this.settings.showWeights;
@@ -310,6 +323,38 @@ export class Viewer3D {
 
     // Fit camera to mesh
     this.fitCamera();
+  }
+
+  /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
+  setTextures(textures: MeshTextures): void {
+    this.textures = textures;
+    if (this.currentMesh) {
+      this.applyTextures(this.currentMesh.material as THREE.MeshStandardMaterial, this.currentMesh.geometry);
+    }
+  }
+
+  private applyTextures(material: THREE.MeshStandardMaterial, geometry: THREE.BufferGeometry): void {
+    material.map?.dispose();
+    material.normalMap?.dispose();
+    const hasUv = geometry.getAttribute("uv") !== undefined;
+    // Convención glTF: UV (0, 0) = esquina superior izquierda, sin voltear
+    const texture = (image: ImageBitmap | undefined, srgb: boolean) => {
+      if (!hasUv || !image) return null;
+      const t = new THREE.Texture(image);
+      t.flipY = false;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+      t.needsUpdate = true;
+      return t;
+    };
+    material.map = texture(this.textures.base, true);
+    material.normalMap = texture(this.textures.normal, false);
+    // Sin atributo de tangentes Three usa derivadas de pantalla, con el eje Y
+    // opuesto al de glTF (igual que GLTFLoader)
+    material.normalScale.set(1, -1);
+    material.color.set(material.map ? 0xffffff : 0x6272a4);
+    material.needsUpdate = true;
   }
 
   loadSkeleton(data: SkeletonData): void {
@@ -627,7 +672,10 @@ export class Viewer3D {
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
       this.currentMesh.geometry.dispose();
-      (this.currentMesh.material as THREE.Material).dispose();
+      const material = this.currentMesh.material as THREE.MeshStandardMaterial;
+      material.map?.dispose();
+      material.normalMap?.dispose();
+      material.dispose();
       this.currentMesh = null;
     }
 

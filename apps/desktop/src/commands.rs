@@ -13,6 +13,7 @@ use pinocchio_skeleton::{
     MechSkeleton, QuadSkeleton, SerpentSkeleton, SpiderSkeleton, Skeleton,
 };
 use quadriflow_core::{remesh_with_callback, Rebuild, RemeshConfig, Symmetry};
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tauri::{ipc::{Channel, Response}, AppHandle, Manager, State};
@@ -322,6 +323,8 @@ pub struct QuadMeshInfo {
 pub struct QuadMeshData {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
+    /// UV por vértice si la malla tiene piel
+    pub uvs: Option<Vec<f32>>,
     pub indices: Vec<u32>,
     /// Índices de quads originales (para visualización de wireframe)
     pub quad_indices: Vec<u32>,
@@ -690,9 +693,9 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     // Con retopología, el vértice de la malla de quads de cada vértice exportado
     let (geometry, quad_vertex_of) = if use_retopology {
         let quad = state.quad_mesh.lock().unwrap();
-        let uvs = state.quad_uvs.lock().unwrap();
+        let skin = state.quad_skin.lock().unwrap();
         let (geometry, source) =
-            quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, uvs.as_ref(), &scene);
+            quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, skin.as_ref(), &scene);
         (geometry, Some(source))
     } else {
         (scene, None)
@@ -733,110 +736,15 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions))
 }
 
-/// UV de la escena llevadas a la malla de quads. `None` si ninguna primitiva
-/// tiene UV. El grupo de cada cara es su material + 1 (0 = sin material).
-fn transfer_quad_uvs(scene: &Scene, quad: &quadriflow_core::QuadMesh) -> Option<uv_core::UvTransfer<4>> {
-    let prims = scene.world_primitives();
-    let surface = uv_core::UvSurface::new(prims.iter().filter_map(|p| {
-        Some(uv_core::UvPart {
-            group: p.material.map_or(0, |m| m + 1),
-            positions: &p.positions,
-            uvs: p.uvs.as_deref()?,
-            triangles: &p.triangles,
-        })
-    }))?;
-    let positions: Vec<[f64; 3]> = quad.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
-    let faces: Vec<[usize; 4]> = quad.faces.iter().map(|f| f.v).collect();
-    Some(uv_core::transfer_uvs(&surface, &positions, &faces))
-}
-
-/// Malla de quads de QuadriFlow como escena (triangulada, en espacio mundo).
-///
-/// Con `uvs`, cada material es una primitiva y un vértice se duplica donde sus
-/// caras tienen UV distintas (costuras). Devuelve también, por cada vértice
-/// exportado en orden de primitivas, el vértice de la malla de quads.
+/// Malla de quads como escena (triangulada, en espacio mundo), con su piel si
+/// la tiene. Devuelve también el vértice de quads de cada vértice exportado.
 fn quad_mesh_to_scene(
     quad: &quadriflow_core::QuadMesh,
-    uvs: Option<&uv_core::UvTransfer<4>>,
+    skin: Option<&uv_core::Skin<4>>,
     base: &Scene,
 ) -> (Scene, Vec<usize>) {
-    use converter_scene::{Mesh as SceneMesh, Node, Primitive, Transform};
-
-    let positions: Vec<[f32; 3]> = quad.vertices.iter().map(|v| [v.x as f32, v.y as f32, v.z as f32]).collect();
-    let split = |f: &quadriflow_core::QuadFace| {
-        let [a, b, c, d] = f.v.map(|i| i as u32);
-        [[a, b, c], [a, c, d]]
-    };
-    let quad_triangles: Vec<[u32; 3]> = quad.faces.iter().flat_map(split).collect();
-    let normals = compute_vertex_normals(&positions, &quad_triangles);
-
-    let (primitives, source) = match uvs.filter(|t| t.corners.len() == quad.faces.len()) {
-        None => {
-            let primitive = Primitive {
-                attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
-                indices: Some(IndexData::U32(quad_triangles.into_iter().flatten().collect())),
-                material: None,
-            };
-            (vec![primitive], (0..quad.vertices.len()).collect())
-        }
-        Some(transfer) => {
-            let mut groups: Vec<usize> = transfer.groups.clone();
-            groups.sort_unstable();
-            groups.dedup();
-            let mut primitives = Vec::new();
-            let mut source = Vec::new();
-            for group in groups {
-                // Vértice exportado por (vértice de quads, UV exacta)
-                let mut ids: std::collections::HashMap<(usize, [u32; 2]), u32> = Default::default();
-                let (mut pos, mut nor, mut tex, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-                for (face, corner_uvs) in quad.faces.iter().zip(&transfer.corners).zip(&transfer.groups)
-                    .filter(|(_, g)| **g == group)
-                    .map(|(fc, _)| fc)
-                {
-                    let corner_ids = std::array::from_fn::<u32, 4, _>(|k| {
-                        let (v, uv) = (face.v[k], corner_uvs[k]);
-                        *ids.entry((v, uv.map(f32::to_bits))).or_insert_with(|| {
-                            pos.push(positions[v]);
-                            nor.push(normals[v]);
-                            tex.push(uv);
-                            source.push(v);
-                            (pos.len() - 1) as u32
-                        })
-                    });
-                    let [a, b, c, d] = corner_ids;
-                    indices.extend([a, b, c, a, c, d]);
-                }
-                primitives.push(Primitive {
-                    attributes: vec![
-                        VertexAttribute::Positions(pos),
-                        VertexAttribute::Normals(nor),
-                        VertexAttribute::TexCoords(0, tex),
-                    ],
-                    indices: Some(IndexData::U32(indices)),
-                    material: group.checked_sub(1).filter(|&m| m < base.materials.len()),
-                });
-            }
-            (primitives, source)
-        }
-    };
-
-    let scene = Scene {
-        meshes: vec![SceneMesh { name: "retopology".into(), primitives }],
-        nodes: vec![Node {
-            name: "retopology".into(),
-            transform: Transform::identity(),
-            mesh: Some(0),
-            skin: None,
-            children: vec![],
-        }],
-        root_nodes: vec![0],
-        materials: if uvs.is_some() { base.materials.clone() } else { vec![] },
-        textures: if uvs.is_some() { base.textures.clone() } else { vec![] },
-        meters_per_unit: base.meters_per_unit,
-        y_up: base.y_up,
-        ..Scene::default()
-    };
-    (scene, source)
+    let (positions, faces) = quad_arrays(quad);
+    uv_core::skin_scene(&positions, &faces, skin, base)
 }
 
 /// Construye una escena con skin a partir de la geometría (en espacio mundo),
@@ -1467,7 +1375,7 @@ pub async fn run_retopology(
     let remesh_config = config.to_remesh_config()?;
 
     let progress = on_progress.clone();
-    let (quad_mesh, quality, uvs) = tauri::async_runtime::spawn_blocking(move || {
+    let (quad_mesh, quality, skin) = tauri::async_runtime::spawn_blocking(move || {
         let quads = remesh_with_callback(&mesh, &remesh_config, |stage, message| {
             let _ = progress.send(Progress {
                 stage: stage.name().to_string(),
@@ -1476,15 +1384,17 @@ pub async fn run_retopology(
             });
         })?;
         let quality = quadriflow_core::quality::analyze(&quads, Some(&mesh));
-        let uvs = scene.as_ref().and_then(|scene| {
+        let skin = scene.as_ref().and_then(|scene| {
+            let surface = uv_core::scene_surface(scene)?;
             let _ = progress.send(Progress {
                 stage: "uv".to_string(),
                 percent: 99,
                 message: "Trasladando el mapa UV...".to_string(),
             });
-            transfer_quad_uvs(scene, &quads)
+            let (positions, faces) = quad_arrays(&quads);
+            Some(uv_core::transferred_skin(scene, &surface, &positions, &faces))
         });
-        Ok::<_, quadriflow_core::RemeshError>((quads, quality, uvs))
+        Ok::<_, quadriflow_core::RemeshError>((quads, quality, skin))
     })
     .await
     .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
@@ -1495,7 +1405,10 @@ pub async fn run_retopology(
         num_quads: quad_mesh.num_faces(),
         bounding_box: calculate_quad_mesh_bounds(&quad_mesh),
         quality: quality.into(),
-        uv_seam_faces: uvs.as_ref().map(|t| t.seam_faces),
+        uv_seam_faces: skin.as_ref().and_then(|s| match s.info {
+            uv_core::SkinInfo::Transferred { seam_faces } => Some(seam_faces),
+            uv_core::SkinInfo::Unwrapped { .. } => None,
+        }),
     };
 
     let _ = on_progress.send(Progress {
@@ -1508,7 +1421,7 @@ pub async fn run_retopology(
     });
 
     *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
-    *state.quad_uvs.lock().unwrap() = uvs;
+    *state.quad_skin.lock().unwrap() = skin;
     Ok(info)
 }
 
@@ -1516,97 +1429,231 @@ pub async fn run_retopology(
 #[tauri::command]
 pub async fn get_quad_mesh_data(app: AppHandle) -> Result<Response, String> {
     let bytes = in_background(app, |state| {
-        get_quad_mesh_data_impl(state).map(|d| pack_mesh(&d.positions, &d.normals, None, &d.indices, &d.quad_indices))
+        get_quad_mesh_data_impl(state).map(|d| pack_mesh(&d.positions, &d.normals, d.uvs.as_deref(), &d.indices, &d.quad_indices))
     })
     .await?;
     Ok(Response::new(bytes))
 }
 
 fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
-    let quad_mesh_lock = state.quad_mesh.lock().unwrap();
-    let quad_mesh = quad_mesh_lock.as_ref().ok_or("No hay malla de quads")?;
+    let quad_lock = state.quad_mesh.lock().unwrap();
+    let quad = quad_lock.as_ref().ok_or("No hay malla de quads")?;
+    let skin_lock = state.quad_skin.lock().unwrap();
+    let skin = skin_lock.as_ref().filter(|s| s.corners.len() == quad.num_faces());
 
-    let mut positions: Vec<f32> = Vec::with_capacity(quad_mesh.num_vertices() * 3);
-    let mut normals: Vec<f32> = Vec::with_capacity(quad_mesh.num_vertices() * 3);
-    let mut indices: Vec<u32> = Vec::with_capacity(quad_mesh.num_faces() * 6); // 2 triángulos por quad
-    let mut quad_indices: Vec<u32> = Vec::with_capacity(quad_mesh.num_faces() * 4);
-
-    // Extraer posiciones
-    for vertex in &quad_mesh.vertices {
-        positions.push(vertex.x as f32);
-        positions.push(vertex.y as f32);
-        positions.push(vertex.z as f32);
-    }
-
-    // Calcular normales por vértice (promedio de normales de caras adyacentes)
-    let mut vertex_normals = vec![[0.0f64; 3]; quad_mesh.num_vertices()];
-    let mut vertex_counts = vec![0usize; quad_mesh.num_vertices()];
-
-    for face in &quad_mesh.faces {
-        // Calcular normal de la cara
-        let v0 = &quad_mesh.vertices[face.v[0]];
-        let v1 = &quad_mesh.vertices[face.v[1]];
-        let v2 = &quad_mesh.vertices[face.v[2]];
-
-        let e1 = [v1.x - v0.x, v1.y - v0.y, v1.z - v0.z];
-        let e2 = [v2.x - v0.x, v2.y - v0.y, v2.z - v0.z];
-        let normal = [
-            e1[1] * e2[2] - e1[2] * e2[1],
-            e1[2] * e2[0] - e1[0] * e2[2],
-            e1[0] * e2[1] - e1[1] * e2[0],
-        ];
-
-        // Acumular normal en cada vértice
-        for &vi in &face.v {
-            vertex_normals[vi][0] += normal[0];
-            vertex_normals[vi][1] += normal[1];
-            vertex_normals[vi][2] += normal[2];
-            vertex_counts[vi] += 1;
+    let (positions, faces) = quad_arrays(quad);
+    let no_uvs;
+    let corners = match skin {
+        Some(s) => &s.corners,
+        None => {
+            no_uvs = vec![[[0.0f32; 2]; 4]; faces.len()];
+            &no_uvs
         }
+    };
+    // Mismas normales que al exportar; con piel, un vértice por (vértice, UV)
+    let frames = uv_core::corner_frames(&positions, &faces, corners);
+    let mut ids: HashMap<(usize, [u32; 2]), u32> = HashMap::new();
+    let mut data = QuadMeshData {
+        positions: Vec::new(),
+        normals: Vec::new(),
+        uvs: skin.map(|_| Vec::new()),
+        indices: Vec::with_capacity(faces.len() * 6),
+        quad_indices: Vec::with_capacity(faces.len() * 4),
+    };
+    for (f, face) in faces.iter().enumerate() {
+        let corner: [u32; 4] = std::array::from_fn(|k| {
+            let uv = corners[f][k];
+            *ids.entry((face[k], uv.map(f32::to_bits))).or_insert_with(|| {
+                data.positions.extend(positions[face[k]].map(|c| c as f32));
+                data.normals.extend(frames.normals[f][k]);
+                if let Some(uvs) = &mut data.uvs {
+                    uvs.extend(uv);
+                }
+                (data.positions.len() / 3 - 1) as u32
+            })
+        });
+        data.quad_indices.extend(corner);
+        let [a, b, c, d] = corner;
+        data.indices.extend([a, b, c, a, c, d]);
+    }
+    Ok(data)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// UV / PIEL
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Opciones del desplegado UV
+#[derive(Debug, Clone, Deserialize)]
+pub struct UvUnwrapConfig {
+    /// Lado de las texturas horneadas (px)
+    pub texture_size: u32,
+    /// Margen entre islas (px)
+    pub padding: u32,
+    /// Máxima desviación de normal dentro de una isla (grados)
+    pub max_angle: f64,
+}
+
+/// Estado de la piel de la malla retopologizada
+#[derive(Debug, Clone, Serialize)]
+pub struct UvInfo {
+    /// "transferred" (UV del original) o "unwrapped" (desplegado nuevo)
+    pub mode: String,
+    /// Caras que cruzan costuras del mapa original (solo "transferred")
+    pub seam_faces: Option<usize>,
+    pub num_charts: Option<usize>,
+    /// Estiramiento L2: 1 es isométrico
+    pub stretch: Option<f64>,
+    /// Fracción del atlas cubierta por islas
+    pub coverage: Option<f64>,
+    /// Lado de las texturas horneadas (0 si no hay)
+    pub texture_size: u32,
+    pub has_base_color: bool,
+    pub has_normal: bool,
+    /// El modelo original tiene UV: se puede volver a trasladarlas
+    pub can_restore: bool,
+}
+
+fn uv_info(skin: &uv_core::Skin<4>, scene: Option<&Scene>) -> UvInfo {
+    let can_restore = scene.is_some_and(|s| s.world_primitives().iter().any(|p| p.uvs.is_some()));
+    let textured = |f: fn(&converter_scene::Material) -> bool| skin.materials.iter().any(f);
+    let has_base_color = textured(|m| m.base_color_texture.is_some());
+    let has_normal = textured(|m| m.normal_texture.is_some());
+    match skin.info {
+        uv_core::SkinInfo::Transferred { seam_faces } => UvInfo {
+            mode: "transferred".into(),
+            seam_faces: Some(seam_faces),
+            num_charts: None,
+            stretch: None,
+            coverage: None,
+            texture_size: 0,
+            has_base_color,
+            has_normal,
+            can_restore,
+        },
+        uv_core::SkinInfo::Unwrapped { num_charts, stretch, coverage, texture_size } => UvInfo {
+            mode: "unwrapped".into(),
+            seam_faces: None,
+            num_charts: Some(num_charts),
+            stretch: Some(stretch),
+            coverage: Some(coverage),
+            texture_size,
+            has_base_color,
+            has_normal,
+            can_restore,
+        },
+    }
+}
+
+/// Piel actual de la malla retopologizada (`None` si no tiene)
+#[tauri::command]
+pub fn get_uv_info(state: State<'_, AppState>) -> Option<UvInfo> {
+    let skin = state.quad_skin.lock().unwrap();
+    let scene = state.scene.lock().unwrap();
+    skin.as_ref().map(|s| uv_info(s, scene.as_ref()))
+}
+
+/// Despliega la malla retopologizada y hornea sobre el mapa nuevo las
+/// texturas del original (color, metal/rugosidad, oclusión, emisión y la
+/// normal con el detalle de la malla original)
+#[tauri::command]
+pub async fn run_uv_unwrap(
+    config: UvUnwrapConfig,
+    on_progress: Channel<Progress>,
+    state: State<'_, AppState>,
+) -> Result<UvInfo, String> {
+    let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
+    let quad = state.quad_mesh.lock().unwrap().clone().ok_or("Primero ejecuta la retopología")?;
+    let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+    if !(64..=8192).contains(&config.texture_size) {
+        return Err(format!("Tamaño de textura fuera de rango: {}", config.texture_size));
     }
 
-    // Normalizar
-    for (normal, &count) in vertex_normals.iter_mut().zip(vertex_counts.iter()) {
-        if count > 0 {
-            let len = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
-            if len > 1e-10 {
-                normal[0] /= len;
-                normal[1] /= len;
-                normal[2] /= len;
-            } else {
-                *normal = [0.0, 1.0, 0.0];
-            }
-        } else {
-            *normal = [0.0, 1.0, 0.0];
-        }
-        normals.push(normal[0] as f32);
-        normals.push(normal[1] as f32);
-        normals.push(normal[2] as f32);
-    }
-
-    // Triangular quads: cada quad [v0, v1, v2, v3] -> [v0, v1, v2] + [v0, v2, v3]
-    for face in &quad_mesh.faces {
-        // Guardar índices de quad originales
-        for &vi in &face.v {
-            quad_indices.push(vi as u32);
-        }
-
-        // Triangular
-        indices.push(face.v[0] as u32);
-        indices.push(face.v[1] as u32);
-        indices.push(face.v[2] as u32);
-
-        indices.push(face.v[0] as u32);
-        indices.push(face.v[2] as u32);
-        indices.push(face.v[3] as u32);
-    }
-
-    Ok(QuadMeshData {
-        positions,
-        normals,
-        indices,
-        quad_indices,
+    let _ = on_progress.send(Progress {
+        stage: "unwrap".to_string(),
+        percent: 10,
+        message: "Cortando islas, desplegando y horneando texturas...".to_string(),
+    });
+    let skin = tauri::async_runtime::spawn_blocking(move || {
+        let (positions, faces) = quad_arrays(&quad);
+        let surface = uv_core::scene_surface(&scene);
+        let options = uv_core::BakeOptions {
+            texture_size: config.texture_size,
+            unwrap: uv_core::UnwrapOptions {
+                charts: uv_core::ChartOptions {
+                    max_angle: config.max_angle.clamp(15.0, 85.0),
+                    ..Default::default()
+                },
+                padding: config.padding.clamp(1, 64),
+                ..Default::default()
+            },
+        };
+        uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options)
     })
+    .await
+    .map_err(|e| format!("El desplegado terminó inesperadamente: {e}"))?;
+
+    let info = uv_info(&skin, state.scene.lock().unwrap().as_ref());
+    *state.quad_skin.lock().unwrap() = Some(skin);
+    Ok(info)
+}
+
+/// Vuelve a las UV trasladadas del modelo original
+#[tauri::command]
+pub async fn restore_transferred_uvs(app: AppHandle) -> Result<UvInfo, String> {
+    in_background(app, |state| {
+        let quad = state.quad_mesh.lock().unwrap().clone().ok_or("Primero ejecuta la retopología")?;
+        let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+        let surface = uv_core::scene_surface(&scene).ok_or("El modelo original no tiene UV")?;
+        let (positions, faces) = quad_arrays(&quad);
+        let skin = uv_core::transferred_skin(&scene, &surface, &positions, &faces);
+        let info = uv_info(&skin, Some(&scene));
+        *state.quad_skin.lock().unwrap() = Some(skin);
+        Ok(info)
+    })
+    .await
+}
+
+/// Imagen (PNG/JPEG tal cual) para la vista previa: `"base"` (color base),
+/// `"normal"` o `"checker"` (tablero). Vacía si la piel no tiene ese canal.
+#[tauri::command]
+pub async fn get_uv_texture(app: AppHandle, kind: String) -> Result<Response, String> {
+    let bytes = in_background(app, move |state| {
+        if kind == "checker" {
+            return Ok(uv_core::checker_texture(1024, 16).data);
+        }
+        let skin = state.quad_skin.lock().unwrap();
+        let Some(skin) = skin.as_ref() else { return Ok(Vec::new()) };
+        // Material de la primera cara que tenga ese canal
+        let texture = skin.face_material.iter().flatten().find_map(|&m| {
+            let material = skin.materials.get(m)?;
+            let reference = match kind.as_str() {
+                "normal" => material.normal_texture.as_ref(),
+                _ => material.base_color_texture.as_ref(),
+            }?;
+            skin.textures.get(reference.texture_index)
+        });
+        Ok(texture.map(|t| t.data.clone()).unwrap_or_default())
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// UV de las esquinas de cada quad (8 f32 por quad), para dibujar el atlas
+#[tauri::command]
+pub async fn get_uv_layout(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| {
+        let skin = state.quad_skin.lock().unwrap();
+        let skin = skin.as_ref().ok_or("La malla no tiene UV")?;
+        Ok(skin.corners.iter().flatten().flatten().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>())
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Posiciones y caras de la malla de quads en el formato de `uv-core`.
+fn quad_arrays(quad: &quadriflow_core::QuadMesh) -> (Vec<[f64; 3]>, Vec<[usize; 4]>) {
+    (quad.vertices.iter().map(|v| [v.x, v.y, v.z]).collect(), quad.faces.iter().map(|f| f.v).collect())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2554,15 +2601,17 @@ mod tests {
             vertices: vec![v(0.0, 0.0), v(1.0, 0.0), v(1.0, 1.0), v(0.0, 1.0), v(2.0, 0.0), v(2.0, 1.0)],
             faces: vec![QuadFace { v: [0, 1, 2, 3] }, QuadFace { v: [1, 4, 5, 2] }],
         };
-        let uvs = uv_core::UvTransfer {
+        let uvs = uv_core::Skin {
             corners: vec![
                 [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
                 [[0.6, 0.0], [1.0, 0.0], [1.0, 1.0], [0.6, 1.0]],
             ],
-            groups: vec![1, 1],
-            seam_faces: 0,
+            face_material: vec![Some(0), Some(0)],
+            materials: vec![converter_scene::Material::default()],
+            textures: vec![],
+            info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
         };
-        let base = Scene { materials: vec![converter_scene::Material::default()], ..Scene::default() };
+        let base = Scene::default();
         let (scene, source) = quad_mesh_to_scene(&quad, Some(&uvs), &base);
         assert!(scene.validate().is_ok());
         let prims = scene.world_primitives();

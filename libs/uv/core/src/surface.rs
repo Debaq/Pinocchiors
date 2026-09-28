@@ -16,6 +16,9 @@ pub struct UvPart<'a> {
     pub positions: &'a [[f32; 3]],
     /// Una UV por posición.
     pub uvs: &'a [[f32; 2]],
+    /// Normales de sombreado, una por posición. Sin ellas se calculan normales
+    /// suaves soldando posiciones.
+    pub normals: Option<&'a [[f32; 3]]>,
     pub triangles: &'a [[u32; 3]],
 }
 
@@ -29,6 +32,8 @@ pub struct UvPart<'a> {
 pub struct UvSurface {
     corners: Vec<[Vector3; 3]>,
     uvs: Vec<[[f64; 2]; 3]>,
+    /// Normal de sombreado por esquina.
+    normals: Vec<[Vector3; 3]>,
     groups: Vec<usize>,
     charts: Vec<usize>,
     num_charts: usize,
@@ -60,6 +65,8 @@ impl UvSurface {
 
         let mut corners = Vec::new();
         let mut uvs = Vec::new();
+        let mut normals: Vec<Option<[Vector3; 3]>> = Vec::new();
+        let mut position_keys: Vec<[[i64; 3]; 3]> = Vec::new();
         let mut groups = Vec::new();
         // Vértices soldados por (grupo, posición, UV)
         let mut keys: HashMap<(usize, [i64; 3], [i64; 2]), u32> = HashMap::new();
@@ -80,6 +87,13 @@ impl UvSurface {
                     continue;
                 }
                 let uv = tri.map(|i| part.uvs[i as usize].map(|c| c as f64));
+                let normal = part.normals.filter(|n| n.len() == count).map(|n| {
+                    tri.map(|i| {
+                        let q = n[i as usize];
+                        Vector3::new(q[0] as f64, q[1] as f64, q[2] as f64)
+                    })
+                });
+                position_keys.push(tri.map(|i| part.positions[i as usize].map(|c| (c as f64 / pos_step).round() as i64)));
                 let ids = tri.map(|i| {
                     let p = part.positions[i as usize];
                     let t = part.uvs[i as usize];
@@ -93,6 +107,7 @@ impl UvSurface {
                 });
                 corners.push(p);
                 uvs.push(uv);
+                normals.push(normal);
                 groups.push(part.group);
                 welded.push(ids);
             }
@@ -100,6 +115,7 @@ impl UvSurface {
         if corners.is_empty() {
             return None;
         }
+        let normals = smooth_normals(&corners, normals, &position_keys);
 
         // Triángulos por arista soldada
         let mut edges: HashMap<(u32, u32), Vec<usize>> = HashMap::new();
@@ -131,7 +147,7 @@ impl UvSurface {
             .collect();
 
         let bvh = Bvh::build(corners.iter().map(|c| Triangle::new(c[0], c[1], c[2])).collect());
-        Some(Self { corners, uvs, groups, charts, num_charts: chart_of_root.len(), neighbors, bvh })
+        Some(Self { corners, uvs, normals, groups, charts, num_charts: chart_of_root.len(), neighbors, bvh })
     }
 
     /// Número de triángulos válidos.
@@ -159,9 +175,9 @@ impl UvSurface {
         self.bvh.query_closest(p).expect("la superficie tiene triángulos")
     }
 
-    /// UV en el punto `p` según el mapa afín del triángulo `t`. `p` se proyecta
-    /// al plano del triángulo y fuera de él la UV se extrapola.
-    pub fn uv_at(&self, t: usize, p: &Vector3) -> [f64; 2] {
+    /// Coordenadas baricéntricas de `p` proyectado al plano del triángulo `t`
+    /// (fuera del triángulo alguna es negativa).
+    pub fn barycentric(&self, t: usize, p: &Vector3) -> [f64; 3] {
         let [a, b, c] = self.corners[t];
         let (e0, e1, e2) = (b - a, c - a, *p - a);
         let (d00, d01, d11) = (e0.dot(&e0), e0.dot(&e1), e1.dot(&e1));
@@ -172,9 +188,29 @@ impl UvSurface {
         } else {
             (1.0 / 3.0, 1.0 / 3.0)
         };
-        let u = 1.0 - v - w;
+        [1.0 - v - w, v, w]
+    }
+
+    /// UV en el punto `p` según el mapa afín del triángulo `t`. `p` se proyecta
+    /// al plano del triángulo y fuera de él la UV se extrapola.
+    pub fn uv_at(&self, t: usize, p: &Vector3) -> [f64; 2] {
+        let l = self.barycentric(t, p);
         let [ua, ub, uc] = self.uvs[t];
-        [0, 1].map(|k| u * ua[k] + v * ub[k] + w * uc[k])
+        [0, 1].map(|k| l[0] * ua[k] + l[1] * ub[k] + l[2] * uc[k])
+    }
+
+    /// Marco tangente `[T, B, N]` en el punto `p` del triángulo `t`, con la
+    /// convención de los normal maps glTF: T hacia +u, B hacia −v (arriba en
+    /// la imagen), N la normal de sombreado interpolada.
+    pub fn frame_at(&self, t: usize, p: &Vector3) -> [Vector3; 3] {
+        let l = self.barycentric(t, p);
+        let [na, nb, nc] = self.normals[t];
+        let [a, b, c] = self.corners[t];
+        let face_normal = (b - a).cross(&(c - a)).try_normalize().unwrap_or(Vector3::unit_z());
+        let n = (na * l[0] + nb * l[1] + nc * l[2]).try_normalize().unwrap_or(face_normal);
+        let [ua, ub, uc] = self.uvs[t];
+        let (dpdu, dpdv) = uv_derivatives([a, b, c], [ua, ub, uc]);
+        tangent_frame(n, dpdu, dpdv)
     }
 
     /// Triángulo más cercano a `p` alcanzable desde `start` sin cruzar costuras
@@ -215,4 +251,63 @@ fn find(parent: &mut [usize], mut x: usize) -> usize {
         x = parent[x];
     }
     x
+}
+
+/// Derivadas ∂p/∂u y ∂p/∂v de un triángulo (cero si sus UV son degeneradas).
+pub(crate) fn uv_derivatives(p: [Vector3; 3], uv: [[f64; 2]; 3]) -> (Vector3, Vector3) {
+    let (e1, e2) = (p[1] - p[0], p[2] - p[0]);
+    let (du1, dv1) = (uv[1][0] - uv[0][0], uv[1][1] - uv[0][1]);
+    let (du2, dv2) = (uv[2][0] - uv[0][0], uv[2][1] - uv[0][1]);
+    let det = du1 * dv2 - du2 * dv1;
+    if det.abs() < 1e-20 {
+        return (Vector3::zero(), Vector3::zero());
+    }
+    let r = 1.0 / det;
+    ((e1 * dv2 - e2 * dv1) * r, (e2 * du1 - e1 * du2) * r)
+}
+
+/// `[T, B, N]` ortonormal a partir de la normal y las derivadas UV. B apunta
+/// hacia −v (convención glTF). Devuelve también el signo en
+/// [`tangent_handedness`].
+pub(crate) fn tangent_frame(n: Vector3, dpdu: Vector3, dpdv: Vector3) -> [Vector3; 3] {
+    let (t, w) = tangent_handedness(n, dpdu, dpdv);
+    [t, n.cross(&t) * w, n]
+}
+
+/// Tangente ortogonalizada contra `n` y signo `w` tal que `B = w (N × T)`
+/// apunte hacia −v.
+pub(crate) fn tangent_handedness(n: Vector3, dpdu: Vector3, dpdv: Vector3) -> (Vector3, f64) {
+    let t = (dpdu - n * n.dot(&dpdu)).try_normalize().unwrap_or_else(|| {
+        let helper = if n.x().abs() < 0.9 { Vector3::unit_x() } else { Vector3::unit_y() };
+        helper.cross(&n).normalize()
+    });
+    let w = if n.cross(&t).dot(&(dpdv * -1.0)) >= 0.0 { 1.0 } else { -1.0 };
+    (t, w)
+}
+
+/// Completa las normales que faltan con normales suaves: suma de normales de
+/// cara (ponderadas por área) de los triángulos que tocan cada posición.
+fn smooth_normals(
+    corners: &[[Vector3; 3]],
+    given: Vec<Option<[Vector3; 3]>>,
+    keys: &[[[i64; 3]; 3]],
+) -> Vec<[Vector3; 3]> {
+    let mut sums: HashMap<[i64; 3], Vector3> = HashMap::new();
+    for (t, normal) in given.iter().enumerate() {
+        if normal.is_none() {
+            let [a, b, c] = corners[t];
+            let n = (b - a).cross(&(c - a));
+            for key in keys[t] {
+                let entry = sums.entry(key).or_insert(Vector3::zero());
+                *entry += n;
+            }
+        }
+    }
+    given
+        .into_iter()
+        .enumerate()
+        .map(|(t, normal)| {
+            normal.unwrap_or_else(|| keys[t].map(|k| sums[&k].try_normalize().unwrap_or(Vector3::unit_z())))
+        })
+        .collect()
 }

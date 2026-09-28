@@ -12,7 +12,7 @@ import {
   type RetopologyConfig,
   type QuadQuality,
 } from "./components/panels";
-import { Viewer3D, MeshData, SkeletonData, WeightsData } from "./lib/Viewer3D";
+import { Viewer3D, MeshData, MeshTextures, SkeletonData, WeightsData } from "./lib/Viewer3D";
 import { createPipelineStore } from "./lib/pipeline";
 import { buildSceneTree } from "./lib/scene-tree";
 import type { ToolId } from "./lib/tools";
@@ -23,6 +23,7 @@ import type { SkeletonTransform } from "./components/panels/SkeletonTransformPan
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
 import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
+import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -214,8 +215,63 @@ export const App: Component = () => {
   const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
 
+  // UV / Piel de la malla retopologizada
+  const [uvConfig, setUvConfig] = createSignal<UvConfig>(defaultUvConfig);
+  const [uvInfo, setUvInfo] = createSignal<UvInfo | undefined>();
+  const [uvPreview, setUvPreview] = createSignal<UvPreview>("texture");
+  const [uvLayout, setUvLayout] = createSignal<Float32Array | undefined>();
+  const [skinTextures, setSkinTextures] = createSignal<MeshTextures>({});
+  const [checkerTexture, setCheckerTexture] = createSignal<ImageBitmap | undefined>();
+
+  const decodeImage = async (buffer: ArrayBuffer): Promise<ImageBitmap | undefined> =>
+    buffer.byteLength > 0 ? createImageBitmap(new Blob([buffer])) : undefined;
+
+  /** Lee del backend la piel actual: estado, atlas, texturas y la malla con UV */
+  const refreshSkin = async () => {
+    const info = await invoke<UvInfo | null>("get_uv_info");
+    setUvInfo(info ?? undefined);
+    if (!info) {
+      setUvLayout(undefined);
+      setSkinTextures({});
+      return;
+    }
+    const [layout, base, normal, mesh] = await Promise.all([
+      invoke<ArrayBuffer>("get_uv_layout"),
+      invoke<ArrayBuffer>("get_uv_texture", { kind: "base" }).then(decodeImage),
+      invoke<ArrayBuffer>("get_uv_texture", { kind: "normal" }).then(decodeImage),
+      invoke<ArrayBuffer>("get_quad_mesh_data"),
+    ]);
+    setUvLayout(new Float32Array(layout));
+    setSkinTextures({ base, normal });
+    setQuadMeshData(decodeMesh(mesh));
+  };
+
+  /** Texturas que ve el visor sobre la malla de quads según la vista elegida */
+  const viewerTextures = (): MeshTextures | undefined => {
+    if (!showQuadMesh() || !uvInfo()) return undefined;
+    switch (uvPreview()) {
+      case "texture":
+        return skinTextures();
+      case "checker":
+        return { base: checkerTexture() };
+      default:
+        return {};
+    }
+  };
+
+  const handleUvPreview = async (preview: UvPreview) => {
+    if (preview === "checker" && !checkerTexture()) {
+      setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_uv_texture", { kind: "checker" })));
+    }
+    setUvPreview(preview);
+    setShowQuadMesh(true);
+  };
+
   /** Descarta la retopología: ya no corresponde a la geometría actual */
   const clearQuadMesh = () => {
+    setUvInfo(undefined);
+    setUvLayout(undefined);
+    setSkinTextures({});
     setQuadMeshData(undefined);
     setQuadMeshLoaded(false);
     setQuadMeshInfo({ vertices: 0, quads: 0 });
@@ -547,6 +603,50 @@ export const App: Component = () => {
     setStatusMessage("Suelo establecido - modelo reorientado");
   };
 
+  const handleUvUnwrap = async () => {
+    try {
+      setIsProcessing(true);
+      setProgress({ value: 0, label: "Desplegando..." });
+      setStatusMessage("Desplegando UV y horneando texturas...");
+      const onProgress = new Channel<Progress>();
+      onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+      const config = uvConfig();
+      const info = await invoke<UvInfo>("run_uv_unwrap", {
+        config: { texture_size: config.textureSize, padding: config.padding, max_angle: config.maxAngle },
+        onProgress,
+      });
+      setProgress({ value: 100, label: "Cargando en el visor..." });
+      await refreshSkin();
+      setUvPreview("texture");
+      setShowQuadMesh(true);
+      setExportUseRetopology(true);
+      pipeline.markCompleted("uv");
+      setStatusMessage(
+        `UV desplegadas: ${info.num_charts ?? 0} islas, estiramiento ${info.stretch?.toFixed(3) ?? "--"}` +
+          (info.texture_size > 0 ? `, texturas de ${info.texture_size} px` : "")
+      );
+    } catch (e) {
+      console.error("UV unwrap error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+      setProgress(undefined);
+    }
+  };
+
+  const handleUvRestore = async () => {
+    try {
+      setIsProcessing(true);
+      await invoke<UvInfo>("restore_transferred_uvs");
+      await refreshSkin();
+      setStatusMessage("UV trasladadas del modelo original");
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleRetopology = async () => {
     try {
       setIsProcessing(true);
@@ -580,6 +680,7 @@ export const App: Component = () => {
       setProgress({ value: 100, label: "Cargando en el visor..." });
       const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
       setQuadMeshData(quadData);
+      await refreshSkin();
       setQuadMeshLoaded(true);
       setShowQuadMesh(true);
       // Lo último que se ve en el visor es lo que se exporta
@@ -971,6 +1072,7 @@ export const App: Component = () => {
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               meshData={showQuadMesh() && quadMeshData() ? quadMeshData() : meshData()}
+              textures={viewerTextures()}
               skeletonData={skeletonData()}
               weightsData={weightsData()}
               settings={viewSettings()}
@@ -1024,6 +1126,19 @@ export const App: Component = () => {
               showQuadMesh: showQuadMesh(),
               onShowQuadMeshChange: setShowQuadMesh,
               quality: quadQuality(),
+            }}
+            uvProps={{
+              config: uvConfig(),
+              onChange: setUvConfig,
+              hasRetopology: quadMeshLoaded(),
+              info: uvInfo(),
+              isProcessing: isProcessing(),
+              onUnwrap: handleUvUnwrap,
+              onRestore: handleUvRestore,
+              preview: uvPreview(),
+              onPreviewChange: handleUvPreview,
+              layout: uvLayout(),
+              atlasImage: skinTextures().base,
             }}
             skeletonProps={{
               presets: skeletonPresets(),

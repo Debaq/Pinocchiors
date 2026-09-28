@@ -9,6 +9,7 @@ export type PipelineStepId =
   | "import"
   | "repair"
   | "retopology"
+  | "uv"
   | "skeleton"
   | "animate"
   | "print3d"
@@ -43,6 +44,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     id: "retopology",
     label: "Retopología",
     icon: Icons.GridFour,
+  },
+  {
+    id: "uv",
+    label: "UV / Piel",
+    icon: Icons.Checkerboard,
   },
   {
     id: "skeleton",
