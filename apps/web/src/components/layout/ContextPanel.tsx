@@ -17,7 +17,7 @@ import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
 import { UvStep, type UvStepProps } from "../steps/UvStep";
 import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
 import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
-import { AnimateStep } from "../steps/AnimateStep";
+import { AnimateStep, type AnimateStepProps } from "../steps/AnimateStep";
 import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
 
 export interface ContextPanelProps {
@@ -46,6 +46,7 @@ export interface ContextPanelProps {
 
   // Export
   exportProps: ExportStepProps;
+  animateProps: AnimateStepProps;
 
   // View
   viewSettings: ViewSettings;
@@ -285,7 +286,7 @@ const StepContent: Component<ContextPanelProps> = (props) => (
       <SkeletonStep {...props.skeletonProps} />
     </Match>
     <Match when={props.activeStep === "animate"}>
-      <AnimateStep />
+      <AnimateStep {...props.animateProps} />
     </Match>
     <Match when={props.activeStep === "print3d"}>
       <Print3DStep {...props.print3dProps} />

@@ -9,6 +9,7 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
 import { boundsAfter, type FloorCandidate } from "./placement";
+import type { Pose, Quat, Vec3 } from "./animation";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -150,6 +151,8 @@ export interface ViewerCallbacks {
   onHint?: (text: string | null) => void;
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
   onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
+  /** Modo animación: se confirmó un giro (R) o desplazamiento (G) de la articulación */
+  onPoseEdited?: (joint: number) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -233,6 +236,29 @@ export class Viewer3D {
     moving: boolean[];
   } | null = null;
 
+  /**
+   * Modo animación: la malla sigue al esqueleto con skinning en GPU. Un
+   * `THREE.Bone` por hueso `b`, en la cabeza de su segmento (la posición del
+   * padre), igual que el rig exportado; girar la articulación `J` gira los
+   * huesos de sus hijos (la raíz, el suyo).
+   */
+  private animationMode = false;
+  /** Última pose pedida: se vuelve a aplicar si el rig se rehace */
+  private lastPose: Pose | null = null;
+  private rig: {
+    root: THREE.Group;
+    bones: THREE.Bone[];
+    parents: (number | null)[];
+    children: number[][];
+    /** Posición local de reposo de cada hueso */
+    rest: THREE.Vector3[];
+    /** Articulación respecto de la cabeza de su segmento (reposo) */
+    tip: THREE.Vector3[];
+    skeleton: THREE.Skeleton;
+    mesh: THREE.SkinnedMesh;
+    wireframe: THREE.SkinnedMesh;
+  } | null = null;
+
   // Settings
   private settings: ViewerSettings = {
     showMesh: true,
@@ -292,6 +318,9 @@ export class Viewer3D {
     axis: "x" | "y" | "z" | null;
     /** Radio o intensidad inicial del pincel */
     value: number;
+    /** Modo animación: giro y posición locales al empezar */
+    startRotation?: THREE.Quaternion;
+    startPosition?: THREE.Vector3;
   } | null = null;
   private pendingMove: { bone: number; position: [number, number, number] } | null = null;
   private moveFrame: number | null = null;
@@ -586,6 +615,15 @@ export class Viewer3D {
       this.flashHint("Calcula los pesos para probar poses con R");
       return false;
     }
+    const rig = this.rig;
+    if (rig && kind === "grab" && rig.parents[bone] !== null) {
+      this.flashHint("En la animación solo se desplaza la raíz: gira las articulaciones con R");
+      return false;
+    }
+    if (rig && kind === "rotate" && this.jointBones(bone).length === 0) {
+      this.flashHint("Esta articulación es una punta: no tiene nada que girar");
+      return false;
+    }
     if ((kind === "radius" || kind === "strength") && !this.paintSettings) return false;
     const start = bone >= 0 && this.boneSpheres[bone] ? this.boneSpheres[bone].getWorldPosition(new THREE.Vector3()) : new THREE.Vector3();
     this.modal = {
@@ -595,6 +633,8 @@ export class Viewer3D {
       start,
       axis: null,
       value: kind === "radius" ? this.paintSettings!.radius : kind === "strength" ? this.paintSettings!.strength : 0,
+      startRotation: rig ? this.jointBones(bone)[0]?.quaternion.clone() : undefined,
+      startPosition: rig ? rig.bones[bone].position.clone() : undefined,
     };
     this.controls.enabled = false;
     this.transformControls?.detach();
@@ -691,6 +731,12 @@ export class Viewer3D {
         const t = along.lengthSq() > 1e-6 ? (dx * along.x + dy * along.y) / along.lengthSq() : 0;
         target.copy(m.start).addScaledVector(axis, t);
       }
+      if (this.rig) {
+        // La raíz no tiene padre: su posición local es la del mundo del rig
+        this.rig.bones[m.bone].position.copy(this.rig.root.worldToLocal(target.clone()));
+        this.updatePosedSpheres();
+        return;
+      }
       sphere.position.copy(sphere.parent.worldToLocal(target.clone()));
       this.updateBoneLines();
       this.scheduleBoneMoved(m.bone, sphere.position);
@@ -705,6 +751,10 @@ export class Viewer3D {
     // Al espacio de la malla (el grupo puede estar girado por "suelo")
     const groupRotation = this.meshGroup.getWorldQuaternion(new THREE.Quaternion());
     const axisLocal = axisWorld.applyQuaternion(groupRotation.clone().invert()).normalize();
+    if (this.rig && m.startRotation) {
+      this.rotateJoint(m.bone, m.startRotation, new THREE.Quaternion().setFromAxisAngle(axisWorld.normalize(), angle));
+      return;
+    }
     this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle));
   }
 
@@ -726,6 +776,10 @@ export class Viewer3D {
     this.modal = null;
     this.controls.enabled = true;
     this.callbacks.onHint?.(null);
+    if (this.rig && (m.kind === "grab" || m.kind === "rotate")) {
+      this.callbacks.onPoseEdited?.(m.bone);
+      return;
+    }
     if (m.kind === "grab") {
       const sphere = this.boneSpheres[m.bone];
       const from = sphere.parent!.worldToLocal(m.start.clone());
@@ -740,6 +794,12 @@ export class Viewer3D {
     this.modal = null;
     this.controls.enabled = true;
     this.callbacks.onHint?.(null);
+    if (this.rig && (m.kind === "grab" || m.kind === "rotate")) {
+      if (m.startRotation) for (const bone of this.jointBones(m.bone)) bone.quaternion.copy(m.startRotation);
+      if (m.startPosition) this.rig.bones[m.bone].position.copy(m.startPosition);
+      this.updatePosedSpheres();
+      return;
+    }
     if (m.kind === "grab") {
       const sphere = this.boneSpheres[m.bone];
       sphere.position.copy(sphere.parent!.worldToLocal(m.start.clone()));
@@ -1093,6 +1153,7 @@ export class Viewer3D {
 
     // Fit camera to mesh
     this.fitCamera();
+    this.buildRig();
   }
 
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
@@ -1117,6 +1178,7 @@ export class Viewer3D {
     if (!mesh) return;
     this.disposeMaterial(mesh.material);
     mesh.material = this.buildMaterial(mesh.geometry);
+    if (this.rig) this.rig.mesh.material = mesh.material;
   }
 
   private disposeMaterial(material: THREE.Material | THREE.Material[]): void {
@@ -1245,6 +1307,7 @@ export class Viewer3D {
     if (sameStructure) {
       data.bones.forEach((bone, i) => this.boneSpheres[i].position.set(...bone.position));
       this.updateBoneLines();
+      this.buildRig();
       return;
     }
     this.clearSkeleton();
@@ -1305,6 +1368,7 @@ export class Viewer3D {
     } else {
       this.transformControls?.detach();
     }
+    this.buildRig();
   }
 
   /** Radio de las esferas de las articulaciones, proporcional a la malla */
@@ -1432,6 +1496,7 @@ export class Viewer3D {
     this.resetPose();
     this.weightsData = data;
     this.updateWeightsVisualization();
+    this.buildRig();
   }
 
   updateSettings(settings: Partial<ViewerSettings>): void {
@@ -1557,7 +1622,7 @@ export class Viewer3D {
       const sphere = this.boneSpheres[index];
       (sphere.material as THREE.MeshBasicMaterial).color.setHex(0xbd93f9); // Dracula purple
 
-      if (this.boneEditMode && this.transformControls) {
+      if (this.boneEditMode && this.transformControls && !this.rig) {
         this.transformControls.attach(sphere);
       }
     } else if (this.transformControls) {
@@ -1696,6 +1761,8 @@ export class Viewer3D {
         this.currentMesh.visible = this.settings.showMesh;
       }
     }
+
+    this.syncRigVisibility();
   }
 
   private updateWeightsVisualization(): void {
@@ -1757,6 +1824,218 @@ export class Viewer3D {
     this.weightsMesh = new THREE.Mesh(geometry, material);
     this.weightsMesh.visible = this.settings.showWeights;
     this.meshGroup.add(this.weightsMesh);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MODO ANIMACIÓN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Entra o sale del modo animación; devuelve si quedó activo (hacen falta pesos) */
+  setAnimationMode(enabled: boolean): boolean {
+    if (enabled === this.animationMode) return this.rig !== null;
+    this.animationMode = enabled;
+    this.resetPose();
+    this.buildRig();
+    return this.rig !== null;
+  }
+
+  /** Hay un esqueleto listo para animar */
+  isAnimating(): boolean {
+    return this.rig !== null;
+  }
+
+  /** Arma (o rehace, si cambió la malla, los pesos o el esqueleto) el rig con skin */
+  private buildRig(): void {
+    this.disposeRig();
+    const mesh = this.currentMesh;
+    const data = this.meshData;
+    const weights = this.weightsData;
+    const skeleton = this.skeletonData;
+    if (!this.animationMode || !mesh || !data || !weights || !skeleton) return;
+    const numVertices = data.positions.length / 3;
+    const numBones = skeleton.bones.length;
+    if (weights.numVertices !== numVertices || weights.numBones !== numBones) return;
+
+    const parents = skeleton.bones.map((b) => b.parent);
+    const children = parents.map((_, j) => parents.flatMap((p, b) => (p === j ? [b] : [])));
+    const position = (b: number) => new THREE.Vector3(...skeleton.bones[b].position);
+    const head = (b: number) => position(parents[b] ?? b);
+    const rest = parents.map((p, b) => (p === null ? head(b) : head(b).sub(head(p))));
+    const tip = parents.map((_, b) => position(b).sub(head(b)));
+
+    const root = new THREE.Group();
+    root.name = "rig";
+    const bones = rest.map((r, b) => {
+      const bone = new THREE.Bone();
+      bone.name = skeleton.bones[b].name;
+      bone.position.copy(r);
+      return bone;
+    });
+    bones.forEach((bone, b) => (parents[b] === null ? root : bones[parents[b]!]).add(bone));
+    this.meshGroup.add(root);
+    root.updateMatrixWorld(true);
+    const threeSkeleton = new THREE.Skeleton(bones);
+
+    // Hasta 4 influencias por vértice (como el GLB exportado), renormalizadas
+    const k = weights.maxInfluences;
+    const skinIndex = new Uint16Array(numVertices * 4);
+    const skinWeight = new Float32Array(numVertices * 4);
+    const pairs: [number, number][] = [];
+    for (let v = 0; v < numVertices; v++) {
+      pairs.length = 0;
+      for (let i = 0; i < k; i++) {
+        const w = weights.weights[(v * k + i) * 2 + 1];
+        if (w > 0) pairs.push([weights.weights[(v * k + i) * 2], w]);
+      }
+      pairs.sort((a, b) => b[1] - a[1]);
+      const top = pairs.slice(0, 4);
+      const sum = top.reduce((acc, [, w]) => acc + w, 0);
+      top.forEach(([bone, w], slot) => {
+        skinIndex[v * 4 + slot] = Math.min(bone, numBones - 1);
+        skinWeight[v * 4 + slot] = w / sum;
+      });
+      // Sin pesos: sigue a la raíz
+      if (top.length === 0) skinWeight[v * 4] = 1;
+    }
+
+    // Comparte los atributos de la malla de reposo; solo el skin es nuevo
+    const geometry = new THREE.BufferGeometry();
+    for (const name of ["position", "normal", "uv"]) {
+      const attribute = mesh.geometry.getAttribute(name);
+      if (attribute) geometry.setAttribute(name, attribute);
+    }
+    geometry.setIndex(mesh.geometry.index);
+    for (const group of mesh.geometry.groups) geometry.addGroup(group.start, group.count, group.materialIndex);
+    geometry.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skinIndex, 4));
+    geometry.setAttribute("skinWeight", new THREE.Float32BufferAttribute(skinWeight, 4));
+
+    const skinned = (material: THREE.Material | THREE.Material[]) => {
+      const m = new THREE.SkinnedMesh(geometry, material);
+      // El volumen de reposo no sirve para descartar la malla movida
+      m.frustumCulled = false;
+      m.bind(threeSkeleton);
+      this.meshGroup.add(m);
+      return m;
+    };
+    const wireframeMaterial = new THREE.MeshBasicMaterial({ color: 0x44475a, opacity: 0.5, transparent: true, wireframe: true });
+    this.rig = {
+      root,
+      bones,
+      parents,
+      children,
+      rest,
+      tip,
+      skeleton: threeSkeleton,
+      mesh: skinned(mesh.material),
+      wireframe: skinned(wireframeMaterial),
+    };
+    this.syncRigVisibility();
+    if (this.lastPose) this.setPose(this.lastPose);
+    else this.updatePosedSpheres();
+  }
+
+  private disposeRig(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    this.rig = null;
+    this.meshGroup.remove(rig.root, rig.mesh, rig.wireframe);
+    // Solo los atributos de skin son propios; los compartidos se vuelven a subir si hace falta
+    rig.mesh.geometry.deleteAttribute("skinIndex");
+    rig.mesh.geometry.deleteAttribute("skinWeight");
+    (rig.wireframe.material as THREE.Material).dispose();
+    rig.skeleton.dispose();
+    // Esferas en reposo y mallas de reposo visibles otra vez
+    this.skeletonData?.bones.forEach((bone, i) => this.boneSpheres[i]?.position.set(...bone.position));
+    this.updateBoneLines();
+    this.applySettings();
+  }
+
+  private syncRigVisibility(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    for (const o of [this.currentMesh, this.currentWireframe, this.quadWireframe, this.weightsMesh]) {
+      if (o) o.visible = false;
+    }
+    rig.mesh.visible = this.settings.showMesh;
+    rig.wireframe.visible = this.settings.showWireframe;
+  }
+
+  /** Huesos que gira la articulación: los de sus hijos (la raíz, el suyo) */
+  private jointBones(joint: number): THREE.Bone[] {
+    const rig = this.rig;
+    if (!rig || !rig.bones[joint]) return [];
+    return rig.parents[joint] === null ? [rig.bones[joint]] : rig.children[joint].map((c) => rig.bones[c]);
+  }
+
+  /** Articulaciones animables (la raíz y las que tienen algo que girar), en orden */
+  animatableJoints(): number[] {
+    const rig = this.rig;
+    if (!rig) return [];
+    return rig.parents.flatMap((p, j) => (p === null || rig.children[j].length > 0 ? [j] : []));
+  }
+
+  /**
+   * Gira la articulación `delta` (en mundo) a partir del giro local `start`:
+   * el giro local vive en el marco del hueso de la articulación (el padre de
+   * los que gira), o del rig en la raíz.
+   */
+  private rotateJoint(joint: number, start: THREE.Quaternion, delta: THREE.Quaternion): void {
+    const rig = this.rig!;
+    const frameObject = rig.parents[joint] === null ? rig.root : rig.bones[joint];
+    const frame = frameObject.getWorldQuaternion(new THREE.Quaternion());
+    const local = frame.clone().invert().multiply(delta).multiply(frame).multiply(start).normalize();
+    for (const bone of this.jointBones(joint)) bone.quaternion.copy(local);
+    this.updatePosedSpheres();
+  }
+
+  /** Pone el esqueleto en `pose`; las articulaciones que no figuran quedan en reposo */
+  setPose(pose: Pose): void {
+    const rig = this.rig;
+    this.lastPose = pose;
+    // Durante un giro o desplazamiento manda el mouse
+    if (!rig || this.modal) return;
+    rig.bones.forEach((bone, b) => {
+      bone.quaternion.identity();
+      bone.position.copy(rig.rest[b]);
+    });
+    for (const [joint, q] of pose.rotations) {
+      for (const bone of this.jointBones(joint)) bone.quaternion.set(...q);
+    }
+    for (const [joint, t] of pose.translations) {
+      if (rig.parents[joint] === null && rig.bones[joint]) {
+        rig.bones[joint].position.copy(rig.rest[joint]).add(new THREE.Vector3(...t));
+      }
+    }
+    this.updatePosedSpheres();
+  }
+
+  /** Giro local de la articulación y, si es raíz, su desplazamiento desde el reposo */
+  getJointPose(joint: number): { rotation: Quat; translation?: Vec3 } | null {
+    const rig = this.rig;
+    const bones = this.jointBones(joint);
+    if (!rig || bones.length === 0) return null;
+    const q = bones[0].quaternion;
+    const pose: { rotation: Quat; translation?: Vec3 } = { rotation: [q.x, q.y, q.z, q.w] };
+    if (rig.parents[joint] === null) {
+      const t = rig.bones[joint].position.clone().sub(rig.rest[joint]);
+      pose.translation = [t.x, t.y, t.z];
+    }
+    return pose;
+  }
+
+  /** Las articulaciones siguen a sus huesos */
+  private updatePosedSpheres(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    rig.root.updateMatrixWorld(true);
+    const p = new THREE.Vector3();
+    rig.bones.forEach((bone, b) => {
+      const sphere = this.boneSpheres[b];
+      if (!sphere?.parent) return;
+      p.copy(rig.tip[b]).applyMatrix4(bone.matrixWorld);
+      sphere.position.copy(sphere.parent.worldToLocal(p));
+    });
+    this.updateBoneLines();
   }
 
   private clearMesh(): void {

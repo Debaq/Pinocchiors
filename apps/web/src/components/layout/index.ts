@@ -24,6 +24,9 @@ export type { WelcomeScreenProps } from "./WelcomeScreen";
 export { Toolbar } from "./Toolbar";
 export type { ToolbarProps } from "./Toolbar";
 
+export { Timeline } from "./Timeline";
+export type { TimelineProps, TimelineRow } from "./Timeline";
+
 // Re-export Viewer3D types for convenience
 export type {
   Viewer3D,

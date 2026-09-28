@@ -65,9 +65,6 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     id: "animate",
     label: "Animar",
     icon: Icons.Play,
-    placeholder: true,
-    placeholderDescription:
-      "Animación procedural y edición de poses: crear ciclos de caminata, idle y acciones personalizadas sobre el esqueleto.",
   },
   {
     id: "print3d",

@@ -1,7 +1,7 @@
-import { Component, createSignal, onMount, onCleanup, Show } from "solid-js";
+import { Component, createEffect, createMemo, createSignal, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay } from "./components/layout";
+import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import * as Icons from "./components/icons";
@@ -49,6 +49,20 @@ import type { ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
+import {
+  clipsForExport,
+  createClip,
+  deleteKeys,
+  duplicateClip,
+  insertKeys,
+  keyId,
+  moveKeys,
+  parseKeyId,
+  samplePose,
+  setKeysInterpolation,
+  type AnimationClip,
+  type KeyInterpolation,
+} from "./lib/animation";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
@@ -311,6 +325,17 @@ export const App: Component = () => {
   const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
 
+  // Animación: clips con keys por articulación, cuadro actual y reproducción
+  const [clips, setClips] = createSignal<AnimationClip[]>([]);
+  const [activeClipId, setActiveClipId] = createSignal<string | undefined>();
+  const [frame, setFrame] = createSignal(0);
+  const [playing, setPlaying] = createSignal(false);
+  const [keySelection, setKeySelection] = createSignal<Set<string>>(new Set());
+  const [autoKey, setAutoKey] = createSignal(true);
+  const [keyInterpolation, setKeyInterpolation] = createSignal<KeyInterpolation>("linear");
+  /** El visor, como señal: los efectos de animación lo necesitan listo */
+  const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
+
   // UV / Piel de la malla retopologizada
   const [uvConfig, setUvConfig] = createSignal<UvConfig>(defaultUvConfig);
   const [uvInfo, setUvInfo] = createSignal<UvInfo | undefined>();
@@ -325,7 +350,7 @@ export const App: Component = () => {
   const usesQuad = () => activeQuad() && quadMeshLoaded();
   /** El visor muestra los quads: a pedido, o en las etapas que los usan */
   const displayQuad = () =>
-    (showQuadMesh() || (usesQuad() && ["uv", "skeleton"].includes(pipeline.activeStep()))) && !!quadMeshData();
+    (showQuadMesh() || (usesQuad() && ["uv", "skeleton", "animate"].includes(pipeline.activeStep()))) && !!quadMeshData();
 
   /** Los pesos ya no corresponden a la malla activa */
   const dropWeights = () => {
@@ -499,7 +524,18 @@ export const App: Component = () => {
     { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
     { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
     { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
-    { key: " ", action: () => viewerRef?.resetView(), description: "Ver todo" },
+    {
+      key: " ",
+      action: () => (animating() ? setPlaying(!playing()) : viewerRef?.resetView()),
+      description: "Reproducir (Animar) / ver todo",
+    },
+    { key: "i", action: () => animating() && handleInsertKey(), description: "Insertar key" },
+    { key: "x", action: () => animating() && handleDeleteKeys(), description: "Borrar keys" },
+    { key: "Delete", action: () => animating() && handleDeleteKeys(), description: "Borrar keys" },
+    { key: "ArrowLeft", action: () => animating() && stepFrame(-1), description: "Cuadro anterior" },
+    { key: "ArrowRight", action: () => animating() && stepFrame(1), description: "Cuadro siguiente" },
+    { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), description: "Al inicio" },
+    { key: "ArrowRight", shift: true, action: () => animating() && stepFrame(Infinity), description: "Al final" },
     { key: ".", action: () => viewerRef?.focusSelection(), description: "Centrar en la selección" },
     {
       key: "f",
@@ -559,6 +595,7 @@ export const App: Component = () => {
 
   const handleViewerReady = (v: Viewer3D) => {
     viewerRef = v;
+    setViewer(v);
   };
 
   const handleLoad = async () => {
@@ -609,6 +646,9 @@ export const App: Component = () => {
       setCanUndoRepair(false);
       setMeshAnalysis(undefined);
       setSubdivideResult(undefined);
+      setClips([]);
+      setActiveClipId(undefined);
+      setFrame(0);
       clearQuadMesh();
       setLastExport(undefined);
       setCanUndoPrintScale(false);
@@ -695,6 +735,189 @@ export const App: Component = () => {
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ANIMACIÓN
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const activeClip = () => clips().find((c) => c.id === activeClipId());
+  const boneIndex = createMemo(() => new Map((skeletonData()?.bones ?? []).map((b, i) => [b.name, i])));
+  /** Hay rig para animar: esqueleto con pesos sobre la malla que se ve */
+  const animationReady = () =>
+    autorigComplete() && !!weightsData() && !!skeletonData() && weightsData()!.numBones === skeletonData()!.bones.length;
+  const animating = () => pipeline.activeStep() === "animate" && animationReady();
+
+  // El visor entra en modo animación en el paso Animar (y rehace el rig solo
+  // cuando cambian malla, pesos o esqueleto)
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const on = animating();
+    untrack(() => {
+      if (!on) setPlaying(false);
+      v.setAnimationMode(on);
+      // La primera vez ya hay una animación donde poner keys
+      if (on && clips().length === 0) handleNewClip();
+    });
+  });
+
+  // Pose del cuadro actual
+  createEffect(() => {
+    const v = viewer();
+    if (!v || !animating()) return;
+    weightsData();
+    v.setPose(samplePose(activeClip(), frame(), boneIndex()));
+  });
+
+  // Reproducción en bucle dentro del rango del clip
+  createEffect(() => {
+    if (!playing()) return;
+    let last = performance.now();
+    let handle = requestAnimationFrame(function tick(now: number) {
+      const clip = untrack(activeClip);
+      if (!clip) {
+        setPlaying(false);
+        return;
+      }
+      let next = untrack(frame) + ((now - last) / 1000) * clip.fps;
+      last = now;
+      if (next >= clip.end + 1 || next < clip.start) next = clip.start + Math.max(0, next - clip.end - 1);
+      setFrame(next);
+      handle = requestAnimationFrame(tick);
+    });
+    onCleanup(() => {
+      cancelAnimationFrame(handle);
+      setFrame((f) => Math.round(f));
+    });
+  });
+
+  /** Filas de la línea de tiempo: articulaciones con algo que girar, en orden de árbol */
+  const timelineRows = createMemo<TimelineRow[]>(() => {
+    const bones = skeletonData()?.bones ?? [];
+    const children = bones.map((_, j) => bones.flatMap((b, i) => (b.parent === j ? [i] : [])));
+    const rows: TimelineRow[] = [];
+    const visit = (j: number, depth: number) => {
+      if (bones[j].parent === null || children[j].length > 0) rows.push({ joint: j, bone: bones[j].name, depth });
+      children[j].forEach((c) => visit(c, depth + 1));
+    };
+    bones.forEach((b, j) => b.parent === null && visit(j, 0));
+    return rows;
+  });
+
+  const replaceClip = (clip: AnimationClip) => {
+    setClips((list) => list.map((c) => (c.id === clip.id ? clip : c)));
+  };
+
+  /** Cambio de las keys del clip activo, con deshacer */
+  const editClip = async (description: string, change: (clip: AnimationClip) => AnimationClip) => {
+    const clip = activeClip();
+    if (!clip) return;
+    const next = change(clip);
+    if (next === clip) return;
+    await history.execute({ description, execute: () => replaceClip(next), undo: () => replaceClip(clip) });
+  };
+
+  const handleNewClip = () => {
+    const clip = createClip(`Acción ${clips().length + 1}`, activeClip()?.fps ?? 24);
+    setClips([...clips(), clip]);
+    setActiveClipId(clip.id);
+    setKeySelection(new Set<string>());
+    setFrame(clip.start);
+  };
+
+  const handleDuplicateClip = () => {
+    const clip = activeClip();
+    if (!clip) return;
+    const copy = duplicateClip(clip, `${clip.name} (copia)`);
+    setClips([...clips(), copy]);
+    setActiveClipId(copy.id);
+  };
+
+  const handleDeleteClip = async () => {
+    const before = clips();
+    const clip = activeClip();
+    if (!clip) return;
+    const after = before.filter((c) => c.id !== clip.id);
+    await history.execute({
+      description: "Borrar animación",
+      execute: () => {
+        setClips(after);
+        setActiveClipId(after[after.length - 1]?.id);
+      },
+      undo: () => {
+        setClips(before);
+        setActiveClipId(clip.id);
+      },
+    });
+  };
+
+  /** Keys en el cuadro actual con la pose que muestra el visor */
+  const insertKeysFor = (joints: number[]) => {
+    const v = viewer();
+    const bones = skeletonData()?.bones;
+    if (!v || !bones || !animating()) return;
+    if (!activeClip()) handleNewClip();
+    const entries = joints.flatMap((j) => {
+      const pose = v.getJointPose(j);
+      return pose && bones[j] ? [{ bone: bones[j].name, ...pose }] : [];
+    });
+    if (entries.length === 0) return;
+    const f = Math.round(frame());
+    void editClip(entries.length === 1 ? "Insertar key" : "Insertar keys", (c) =>
+      insertKeys(c, f, entries, keyInterpolation())
+    );
+    setStatusMessage(
+      entries.length === 1 ? `Key de ${entries[0].bone} en el cuadro ${f}` : `Keys de ${entries.length} articulaciones en el cuadro ${f}`
+    );
+  };
+
+  /** I: la articulación seleccionada, o todas si no hay selección */
+  const handleInsertKey = () => {
+    const selected = viewSettings().selectedBone;
+    insertKeysFor(selected >= 0 ? [selected] : timelineRows().map((r) => r.joint));
+  };
+
+  const handlePoseEdited = (joint: number) => {
+    if (autoKey()) insertKeysFor([joint]);
+  };
+
+  const handleDeleteKeys = () => {
+    const selection = keySelection();
+    if (selection.size === 0) return;
+    void editClip("Borrar keys", (c) => deleteKeys(c, selection));
+    setKeySelection(new Set<string>());
+  };
+
+  const handleMoveKeys = (delta: number) => {
+    const selection = keySelection();
+    void editClip("Mover keys", (c) => moveKeys(c, selection, delta));
+    setKeySelection(new Set([...selection].map((id) => {
+      const { bone, frame: f } = parseKeyId(id);
+      return keyId(bone, f + delta);
+    })));
+  };
+
+  const handleKeyInterpolation = (interpolation: KeyInterpolation) => {
+    setKeyInterpolation(interpolation);
+    const selection = keySelection();
+    if (selection.size > 0) void editClip("Interpolación", (c) => setKeysInterpolation(c, selection, interpolation));
+  };
+
+  const handleClipRange = (range: { start?: number; end?: number; fps?: number }) => {
+    const clip = activeClip();
+    if (!clip) return;
+    const start = Math.max(0, range.start ?? clip.start);
+    const end = Math.max(start, range.end ?? clip.end);
+    replaceClip({ ...clip, start, end, fps: range.fps ?? clip.fps });
+    setFrame((f) => Math.min(end, Math.max(start, f)));
+  };
+
+  const stepFrame = (delta: number) => {
+    const clip = activeClip();
+    if (!clip) return;
+    setPlaying(false);
+    setFrame((f) => Math.min(clip.end, Math.max(clip.start, Math.round(f) + delta)));
+  };
+
   const handleExport = async () => {
     try {
       const formats = supportedFormats();
@@ -731,6 +954,8 @@ export const App: Component = () => {
           texture_quality: opts.textureQuality > 0 ? opts.textureQuality : null,
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
+          animations: includeRig ? clipsForExport(clips(), boneIndex()) : null,
+          fps: activeClip()?.fps ?? null,
         },
       }));
 
@@ -1487,7 +1712,8 @@ export const App: Component = () => {
             onRedo={() => history.redo()}
           />
 
-          {/* Viewport */}
+          {/* Viewport y, al animar, la línea de tiempo debajo */}
+          <div class="flex flex-col flex-1 min-w-0 min-h-0">
           <div class="relative flex-1 min-w-0 min-h-0">
             <Viewport
               onViewerReady={handleViewerReady}
@@ -1496,6 +1722,7 @@ export const App: Component = () => {
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               onBoneMoveCommitted={handleBoneMoveCommitted}
+              onPoseEdited={handlePoseEdited}
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
@@ -1533,6 +1760,37 @@ export const App: Component = () => {
                 <Icons.CaretRight size={12} class="rotate-180" />
               </button>
             </Show>
+          </div>
+          <Show when={animating() && activeClip()}>
+            {(clip) => (
+              <Timeline
+                clip={clip()}
+                frame={frame()}
+                playing={playing()}
+                rows={timelineRows()}
+                selectedJoint={viewSettings().selectedBone}
+                selection={keySelection()}
+                autoKey={autoKey()}
+                interpolation={keyInterpolation()}
+                onFrame={(f) => {
+                  setPlaying(false);
+                  setFrame(f);
+                }}
+                onTogglePlay={() => setPlaying(!playing())}
+                onRangeChange={handleClipRange}
+                onSelectJoint={(joint) => {
+                  setViewSettings((prev) => ({ ...prev, selectedBone: joint }));
+                  viewerRef?.selectBone(joint);
+                }}
+                onSelection={setKeySelection}
+                onMoveKeys={handleMoveKeys}
+                onDeleteKeys={handleDeleteKeys}
+                onInsertKey={handleInsertKey}
+                onAutoKey={setAutoKey}
+                onInterpolation={handleKeyInterpolation}
+              />
+            )}
+          </Show>
           </div>
 
           {/* Context Panel (right sidebar) */}
@@ -1651,6 +1909,23 @@ export const App: Component = () => {
               subdivideResult: subdivideResult(),
               canAnalyze: meshLoaded(),
               isProcessing: isProcessing(),
+            }}
+            animateProps={{
+              ready: animationReady(),
+              clips: clips(),
+              activeClipId: activeClipId(),
+              onSelectClip: (id: string) => {
+                setActiveClipId(id);
+                setKeySelection(new Set<string>());
+              },
+              onNewClip: handleNewClip,
+              onDuplicateClip: handleDuplicateClip,
+              onDeleteClip: handleDeleteClip,
+              onRenameClip: (name: string) => {
+                const clip = activeClip();
+                if (clip) replaceClip({ ...clip, name });
+              },
+              selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
             }}
             exportProps={{
               onExport: handleExport,

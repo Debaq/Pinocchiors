@@ -24,6 +24,8 @@ export interface ViewportProps {
   onPlacementPick?: (pick: PlacementPick) => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
+  /** Modo animación: se confirmó un giro o desplazamiento de la articulación */
+  onPoseEdited?: (joint: number) => void;
   /** Fin de un movimiento con G (para deshacer) */
   onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
@@ -93,6 +95,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onHint: setHint,
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
+        onPoseEdited: (joint) => props.onPoseEdited?.(joint),
       });
 
       props.onViewerReady?.(viewer);

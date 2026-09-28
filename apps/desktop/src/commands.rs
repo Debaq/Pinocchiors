@@ -3,6 +3,7 @@
 //! Fase 1: Import/Export multi-formato usando converter-*
 //! Fase 2: Retopología con QuadriFlow
 
+use crate::animation;
 use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
 use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, PinocchioConfig, SkeletonFit};
@@ -209,6 +210,8 @@ pub struct ExportConfig {
     // USDZ
     pub arkit_compatible: Option<bool>,
     pub fps: Option<f64>,
+    /// Animaciones de la línea de tiempo (solo con el rig)
+    pub animations: Option<Vec<animation::AnimationClip>>,
 }
 
 /// Resultado de exportación
@@ -749,7 +752,8 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
             vertex_count
         ));
     }
-    Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions))
+    let clips = config.animations.as_deref().unwrap_or_default();
+    Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions, clips))
 }
 
 /// Malla de quads como escena (triangulada, en espacio mundo), con su piel si
@@ -770,12 +774,16 @@ fn quad_mesh_to_scene(
 /// un vértice sigue a un joint. Se crea un joint por hueso ubicado en la cabeza
 /// de su segmento (la posición del padre) y colgando del joint del padre, como
 /// los huesos de Blender: rotar un joint mueve su segmento y todo lo que cuelga.
+///
+/// Cada joint es además un nodo de la escena (después del de la malla), para
+/// que las animaciones de la línea de tiempo tengan a qué apuntar.
 fn rigged_scene(
     base: &Scene,
     prims: &[converter_scene::WorldPrimitive],
     vertex_weights: &[Vec<f64>],
     skeleton: &BasicSkeleton,
     joint_positions: &[Vector3],
+    clips: &[animation::AnimationClip],
 ) -> Scene {
     use converter_scene::glam::{Mat4, Vec3};
     use converter_scene::{Joint, Mesh as SceneMesh, Node, Primitive, Skeleton as SceneSkeleton, Transform};
@@ -785,22 +793,33 @@ fn rigged_scene(
     let to_vec3 = |p: Vector3| Vec3::new(p.x() as f32, p.y() as f32, p.z() as f32);
     let head = |b: usize| to_vec3(skeleton.get_parent(b).map_or(joint_positions[b], |p| joint_positions[p]));
 
-    let joints: Vec<Joint> = (0..num_bones)
-        .map(|b| {
-            let local = match skeleton.get_parent(b) {
-                Some(p) => head(b) - head(p),
-                None => head(b),
-            };
-            Joint {
-                name: skeleton.bones()[b].name.clone(),
-                children: skeleton.get_children(b),
-                inverse_bind_matrix: Mat4::from_translation(-head(b)),
-                local_transform: Mat4::from_translation(local),
-                node_index: None,
-            }
+    let parents: Vec<Option<usize>> = (0..num_bones).map(|b| skeleton.get_parent(b)).collect();
+    let rest: Vec<Vec3> = (0..num_bones)
+        .map(|b| match parents[b] {
+            Some(p) => head(b) - head(p),
+            None => head(b),
         })
         .collect();
-    let roots = (0..num_bones).filter(|&b| skeleton.get_parent(b).is_none()).collect();
+    let joint_node = |b: usize| 1 + b;
+    let joints: Vec<Joint> = (0..num_bones)
+        .map(|b| Joint {
+            name: skeleton.bones()[b].name.clone(),
+            children: skeleton.get_children(b),
+            inverse_bind_matrix: Mat4::from_translation(-head(b)),
+            local_transform: Mat4::from_translation(rest[b]),
+            node_index: Some(joint_node(b)),
+        })
+        .collect();
+    let roots: Vec<usize> = (0..num_bones).filter(|&b| parents[b].is_none()).collect();
+    let joint_nodes = (0..num_bones).map(|b| Node {
+        name: skeleton.bones()[b].name.clone(),
+        transform: Transform::Trs { translation: rest[b], rotation: Default::default(), scale: Vec3::ONE },
+        mesh: None,
+        skin: None,
+        children: skeleton.get_children(b).into_iter().map(joint_node).collect(),
+    });
+    let joint_node_indices: Vec<usize> = (0..num_bones).map(joint_node).collect();
+    let rig = animation::SkinRig { parents: &parents, joint_nodes: &joint_node_indices, rest_translation: &rest };
 
     // Hasta 4 influencias por vértice, renormalizadas
     let top_weights = |w: &[f64]| -> ([u16; 4], [f32; 4]) {
@@ -842,20 +861,21 @@ fn rigged_scene(
         })
         .collect();
 
+    let mesh_node = Node {
+        name: "rigged".into(),
+        transform: Transform::identity(),
+        mesh: Some(0),
+        skin: Some(0),
+        children: vec![],
+    };
     Scene {
         meshes: vec![SceneMesh { name: "rigged".into(), primitives }],
-        nodes: vec![Node {
-            name: "rigged".into(),
-            transform: Transform::identity(),
-            mesh: Some(0),
-            skin: Some(0),
-            children: vec![],
-        }],
-        root_nodes: vec![0],
+        nodes: std::iter::once(mesh_node).chain(joint_nodes).collect(),
+        root_nodes: std::iter::once(0).chain(roots.iter().map(|&r| joint_node(r))).collect(),
         materials: base.materials.clone(),
         textures: base.textures.clone(),
+        animations: animation::scene_animations(clips, &rig),
         skeletons: vec![SceneSkeleton { name: "pinocchio".into(), joints, roots }],
-        animations: vec![],
         meters_per_unit: base.meters_per_unit,
         y_up: base.y_up,
     }
@@ -3144,7 +3164,7 @@ mod tests {
             .iter()
             .map(|p| if p[1] < 1.0 { vec![0.0, 1.0, 0.0] } else { vec![0.0, 0.3, 0.7] })
             .collect();
-        let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints);
+        let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints, &[]);
         assert!(rigged.validate().is_ok());
         assert_eq!(rigged.materials.len(), 1, "conserva materiales");
 
@@ -3173,6 +3193,65 @@ mod tests {
         assert!(usda.contains("SkelRoot"), "{usda}");
         assert!(usda.contains("primvars:skel:jointIndices"));
         assert!(usda.contains("primvars:skel:jointWeights"));
+    }
+
+    #[test]
+    fn rigged_scene_animation_targets_skin_joints() {
+        use crate::animation::{AnimationClip, JointTrack, Key, KeyInterpolation};
+        use converter_scene::glam::Quat;
+        let scene = transformed_cube_scene();
+        let prims = scene.world_primitives();
+        let (skel, joints) = chain_skeleton();
+        let weights: Vec<Vec<f64>> = prims[0].positions.iter().map(|_| vec![0.0, 0.5, 0.5]).collect();
+        let bend = Quat::from_rotation_z(0.8).to_array();
+        let clip = AnimationClip {
+            name: "doblar".into(),
+            fps: 24.0,
+            tracks: vec![
+                // Girar en "mid" mueve el segmento mid → tip (joint 2)
+                JointTrack {
+                    joint: 1,
+                    rotation: vec![
+                        Key { frame: 0.0, value: [0.0, 0.0, 0.0, 1.0], interpolation: KeyInterpolation::Linear },
+                        Key { frame: 24.0, value: bend, interpolation: KeyInterpolation::Linear },
+                    ],
+                    translation: vec![],
+                },
+                JointTrack {
+                    joint: 0,
+                    rotation: vec![],
+                    translation: vec![Key { frame: 12.0, value: [0.0, 0.0, 1.0], interpolation: KeyInterpolation::Step }],
+                },
+            ],
+        };
+        let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints, &[clip]);
+        assert!(rigged.validate().is_ok(), "{:?}", rigged.validate());
+        assert_eq!(rigged.nodes.len(), 4, "malla + un nodo por joint");
+
+        let glb = converter_gltf_io::export_glb_bytes(&rigged, &Default::default()).unwrap();
+        let json = glb_json(&glb);
+        assert_eq!(json["nodes"].as_array().unwrap().len(), 4, "los joints no se duplican");
+        let skin_joints: Vec<u64> = json["skins"][0]["joints"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+        let channels = json["animations"][0]["channels"].as_array().unwrap();
+        let targets: Vec<(u64, &str)> = channels
+            .iter()
+            .map(|c| (c["target"]["node"].as_u64().unwrap(), c["target"]["path"].as_str().unwrap()))
+            .collect();
+        assert_eq!(targets, vec![(skin_joints[2], "rotation"), (skin_joints[0], "translation")]);
+
+        // Ida y vuelta: la animación sigue apuntando a los joints del skin
+        let back = converter_gltf_io::import_gltf_bytes(&glb).unwrap();
+        let joint_nodes: Vec<usize> = back.skeletons[0].joints.iter().filter_map(|j| j.node_index).collect();
+        assert!(back.animations[0].channels.iter().all(|c| joint_nodes.contains(&c.node)));
+
+        let usda = converter_usda::write_usda(&rigged, &Default::default()).unwrap().usda;
+        assert!(usda.contains("SkelAnimation"), "{usda}");
+    }
+
+    /// JSON de un GLB (primer chunk)
+    fn glb_json(glb: &[u8]) -> serde_json::Value {
+        let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&glb[20..20 + len]).unwrap()
     }
 
     #[test]
