@@ -81,33 +81,9 @@ interface SupportedFormats {
 }
 
 // Repair types
-interface TauriMeshDiagnosticsInfo {
-  boundary_loops: number;
-  boundary_edges: number;
-  duplicate_vertices: number;
-  degenerate_faces: number;
-  zero_area_faces: number;
-  needle_faces: number;
-  cap_faces: number;
-  non_manifold_edges: number;
-  non_manifold_vertices: number;
-  normals_consistent: boolean;
-  connected_components: number;
-  is_closed: boolean;
-  self_intersections: number;
-  needs_repair: boolean;
-  is_healthy: boolean;
-}
-
-interface TauriRepairResult {
-  vertices_merged: number;
-  faces_removed: number;
-  faces_flipped: number;
-  holes_filled: number;
-  faces_added: number;
-  non_manifold_fixed: number;
+interface TauriRepairResult extends RepairResult {
   new_mesh_info: MeshInfo;
-  new_diagnostics: TauriMeshDiagnosticsInfo;
+  new_diagnostics: MeshDiagnostics;
 }
 
 // Print3D types
@@ -260,17 +236,18 @@ export const App: Component = () => {
 
   // Repair state
   const [repairAnalysisConfig, setRepairAnalysisConfig] = createSignal<RepairAnalysisConfig>({
-    checkNonManifold: true,
     checkSelfIntersections: false,
   });
   const [repairOptions, setRepairOptions] = createSignal<RepairOptions>({
     mergeDuplicates: true,
     removeDegenerates: true,
     fixNormals: true,
+    fixNonManifold: true,
     orientOutward: true,
+    removeSmallComponents: false,
     fillHoles: true,
-    holeFillMethod: "ear_clipping",
-    fixNonManifold: false,
+    maxHoleEdges: 0,
+    refineFill: true,
   });
   const [diagnostics, setDiagnostics] = createSignal<MeshDiagnostics | undefined>();
   const [repairResult, setRepairResult] = createSignal<RepairResult | undefined>();
@@ -625,9 +602,8 @@ export const App: Component = () => {
       setIsProcessing(true);
       setStatusMessage("Analizando malla...");
       const config = repairAnalysisConfig();
-      const result = await invoke<TauriMeshDiagnosticsInfo>("analyze_mesh", {
+      const result = await invoke<MeshDiagnostics>("analyze_mesh", {
         config: {
-          check_non_manifold: config.checkNonManifold,
           check_self_intersections: config.checkSelfIntersections,
         },
       });
@@ -655,10 +631,12 @@ export const App: Component = () => {
           merge_duplicates: opts.mergeDuplicates,
           remove_degenerates: opts.removeDegenerates,
           fix_normals: opts.fixNormals,
-          orient_outward: opts.orientOutward,
-          fill_holes: opts.fillHoles,
-          hole_fill_method: opts.holeFillMethod,
           fix_non_manifold: opts.fixNonManifold,
+          orient_outward: opts.orientOutward,
+          remove_small_components: opts.removeSmallComponents,
+          fill_holes: opts.fillHoles,
+          max_hole_edges: opts.maxHoleEdges,
+          refine_fill: opts.refineFill,
         },
       });
 
@@ -679,7 +657,11 @@ export const App: Component = () => {
       });
 
       setIsProcessing(false);
-      setStatusMessage("Reparación completada");
+      setStatusMessage(
+        result.new_diagnostics.is_healthy
+          ? "Reparación completada: malla sana"
+          : "Reparación completada (revisa el diagnóstico)"
+      );
       pipeline.markCompleted("repair");
     } catch (e) {
       console.error("Repair error:", e);

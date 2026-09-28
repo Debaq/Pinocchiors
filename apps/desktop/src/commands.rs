@@ -18,7 +18,7 @@ use std::path::Path;
 use tauri::{ipc::Channel, State};
 
 // Repair & Print3D
-use pinocchio_repair::{self, AnalysisConfig as RepairAnalysisConfig, RepairConfig, HoleFillConfig, HoleFillMethod};
+use pinocchio_repair::{self, AnalysisConfig as RepairAnalysisConfig, RepairConfig, HoleFillConfig};
 use pinocchio_print3d::{self, SubdivideConfig, SubdivideStrategy};
 
 // USDZ export
@@ -1358,25 +1358,14 @@ pub fn get_quad_mesh_data(state: State<'_, AppState>) -> Result<QuadMeshData, St
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RepairAnalysisConfigInput {
-    pub check_non_manifold: Option<bool>,
     pub check_self_intersections: Option<bool>,
 }
 
+/// Diagnósticos de la librería más los veredictos derivados
 #[derive(Debug, Clone, Serialize)]
 pub struct MeshDiagnosticsInfo {
-    pub boundary_loops: usize,
-    pub boundary_edges: usize,
-    pub duplicate_vertices: usize,
-    pub degenerate_faces: usize,
-    pub zero_area_faces: usize,
-    pub needle_faces: usize,
-    pub cap_faces: usize,
-    pub non_manifold_edges: usize,
-    pub non_manifold_vertices: usize,
-    pub normals_consistent: bool,
-    pub connected_components: usize,
-    pub is_closed: bool,
-    pub self_intersections: usize,
+    #[serde(flatten)]
+    pub diagnostics: pinocchio_repair::MeshDiagnostics,
     pub needs_repair: bool,
     pub is_healthy: bool,
 }
@@ -1386,20 +1375,44 @@ pub struct RepairConfigInput {
     pub merge_duplicates: Option<bool>,
     pub remove_degenerates: Option<bool>,
     pub fix_normals: Option<bool>,
-    pub orient_outward: Option<bool>,
-    pub fill_holes: Option<bool>,
-    pub hole_fill_method: Option<String>,
     pub fix_non_manifold: Option<bool>,
+    pub orient_outward: Option<bool>,
+    pub remove_small_components: Option<bool>,
+    pub fill_holes: Option<bool>,
+    /// Máximo de aristas de un agujero a rellenar (0 = sin límite)
+    pub max_hole_edges: Option<usize>,
+    /// Refinar y suavizar los parches de relleno
+    pub refine_fill: Option<bool>,
 }
 
+impl RepairConfigInput {
+    fn to_repair_config(&self) -> RepairConfig {
+        let defaults = RepairConfig::default();
+        let refine = self.refine_fill.unwrap_or(true);
+        RepairConfig {
+            merge_duplicates: self.merge_duplicates.unwrap_or(defaults.merge_duplicates),
+            remove_degenerates: self.remove_degenerates.unwrap_or(defaults.remove_degenerates),
+            remove_duplicate_faces: self.remove_degenerates.unwrap_or(defaults.remove_duplicate_faces),
+            fix_normals: self.fix_normals.unwrap_or(defaults.fix_normals),
+            fix_non_manifold: self.fix_non_manifold.unwrap_or(defaults.fix_non_manifold),
+            orient_outward: self.orient_outward.unwrap_or(defaults.orient_outward),
+            remove_small_components: self.remove_small_components.unwrap_or(false),
+            fill_holes: self.fill_holes.unwrap_or(true),
+            hole_fill_config: HoleFillConfig {
+                max_hole_edges: self.max_hole_edges.unwrap_or(0),
+                refine,
+                fair: refine,
+            },
+            ..defaults
+        }
+    }
+}
+
+/// Resumen de la librería, la nueva malla y su diagnóstico
 #[derive(Debug, Clone, Serialize)]
 pub struct RepairResultInfo {
-    pub vertices_merged: usize,
-    pub faces_removed: usize,
-    pub faces_flipped: usize,
-    pub holes_filled: usize,
-    pub faces_added: usize,
-    pub non_manifold_fixed: usize,
+    #[serde(flatten)]
+    pub summary: pinocchio_repair::RepairSummary,
     pub new_mesh_info: MeshInfo,
     pub new_diagnostics: MeshDiagnosticsInfo,
 }
@@ -1456,85 +1469,56 @@ pub struct PieceInfo {
 
 /// Analiza la malla buscando problemas
 #[tauri::command]
-pub fn analyze_mesh(
+pub async fn analyze_mesh(
     config: RepairAnalysisConfigInput,
     state: State<'_, AppState>,
 ) -> Result<MeshDiagnosticsInfo, String> {
-    let mesh_lock = state.mesh.lock().unwrap();
-    let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
-
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
     let analysis_config = RepairAnalysisConfig {
-        check_non_manifold: config.check_non_manifold.unwrap_or(true),
         check_self_intersections: config.check_self_intersections.unwrap_or(false),
         ..RepairAnalysisConfig::default()
     };
 
-    let diagnostics = pinocchio_repair::analyze(mesh, &analysis_config);
+    let diagnostics = tauri::async_runtime::spawn_blocking(move || pinocchio_repair::analyze(&mesh, &analysis_config))
+        .await
+        .map_err(|e| format!("El análisis terminó inesperadamente: {e}"))?;
+
     let info = diagnostics_to_info(&diagnostics);
-
-    let mut diag_lock = state.diagnostics.lock().unwrap();
-    *diag_lock = Some(diagnostics);
-
+    *state.diagnostics.lock().unwrap() = Some(diagnostics);
     Ok(info)
 }
 
 /// Repara la malla con la configuración dada
+///
+/// Corre en un hilo bloqueante. Guarda la malla y la escena previas para
+/// poder deshacer.
 #[tauri::command]
-pub fn repair_mesh(
+pub async fn repair_mesh(
     config: RepairConfigInput,
     state: State<'_, AppState>,
 ) -> Result<RepairResultInfo, String> {
-    // Guardar backups
-    {
-        let mesh_lock = state.mesh.lock().unwrap();
-        let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?.clone();
-        let mut backup = state.mesh_before_repair.lock().unwrap();
-        *backup = Some(mesh);
-    }
-    {
-        let scene_lock = state.scene.lock().unwrap();
-        let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?.clone();
-        let mut backup = state.scene_before_repair.lock().unwrap();
-        *backup = Some(scene);
-    }
+    let _guard = state
+        .try_begin_processing()
+        .ok_or("Ya hay un proceso en curso")?;
 
-    // Clonar mesh y reparar
-    let mut mesh = {
-        let mesh_lock = state.mesh.lock().unwrap();
-        mesh_lock.as_ref().unwrap().clone()
-    };
+    let original_mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let original_scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+    let repair_config = config.to_repair_config();
 
-    let hole_method = match config.hole_fill_method.as_deref() {
-        Some("liepa") => HoleFillMethod::Liepa,
-        _ => HoleFillMethod::EarClipping,
-    };
+    let mesh = original_mesh.clone();
+    let (mesh, summary, diagnostics) = tauri::async_runtime::spawn_blocking(move || {
+        let mut mesh = mesh;
+        let summary = pinocchio_repair::repair_all(&mut mesh, &repair_config)?;
+        let diagnostics = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
+        Ok::<_, pinocchio_repair::RepairError>((mesh, summary, diagnostics))
+    })
+    .await
+    .map_err(|e| format!("La reparación terminó inesperadamente: {e}"))?
+    .map_err(|e| format!("Error en reparación: {e}"))?;
 
-    let repair_config = RepairConfig {
-        merge_duplicates: config.merge_duplicates.unwrap_or(true),
-        remove_degenerates: config.remove_degenerates.unwrap_or(true),
-        fix_normals: config.fix_normals.unwrap_or(true),
-        orient_outward: config.orient_outward.unwrap_or(true),
-        fill_holes: config.fill_holes.unwrap_or(true),
-        hole_fill_config: HoleFillConfig {
-            method: hole_method,
-            ..HoleFillConfig::default()
-        },
-        fix_non_manifold: config.fix_non_manifold.unwrap_or(false),
-        ..RepairConfig::default()
-    };
-
-    let summary = pinocchio_repair::repair_all(&mut mesh, &repair_config)
-        .map_err(|e| format!("Error en reparación: {:?}", e))?;
-
-    // Reconstruir Scene desde mesh reparada (la topología cambió)
-    let new_scene = {
-        let base = state.scene_before_repair.lock().unwrap();
-        mesh_to_scene(&mesh, "repaired", base.as_ref())
-    };
-
-    // Calcular nuevo MeshInfo
+    // Reconstruir Scene desde la malla reparada (la topología cambió)
+    let new_scene = mesh_to_scene(&mesh, "repaired", Some(&original_scene));
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&new_scene);
-    let bbox = calculate_scene_bounds(&new_scene);
     let new_mesh_info = MeshInfo {
         num_vertices,
         num_faces,
@@ -1542,39 +1526,21 @@ pub fn repair_mesh(
         has_normals,
         has_uvs,
         has_materials: !new_scene.materials.is_empty(),
-        bounding_box: bbox,
+        bounding_box: calculate_scene_bounds(&new_scene),
         format: "REPAIRED".to_string(),
     };
 
-    // Guardar mesh y scene reparadas
-    {
-        let mut mesh_lock = state.mesh.lock().unwrap();
-        *mesh_lock = Some(mesh.clone());
-    }
-    {
-        let mut scene_lock = state.scene.lock().unwrap();
-        *scene_lock = Some(new_scene);
-    }
+    *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
+    *state.scene_before_repair.lock().unwrap() = Some(original_scene);
+    *state.mesh.lock().unwrap() = Some(mesh);
+    *state.scene.lock().unwrap() = Some(new_scene);
     // La topología cambió: el rig anterior ya no corresponde
     *state.result.lock().unwrap() = None;
 
-    // Re-analizar
-    let new_diagnostics = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
-    let diag_info = diagnostics_to_info(&new_diagnostics);
+    let new_diagnostics = diagnostics_to_info(&diagnostics);
+    *state.diagnostics.lock().unwrap() = Some(diagnostics);
 
-    let mut diag_lock = state.diagnostics.lock().unwrap();
-    *diag_lock = Some(new_diagnostics);
-
-    Ok(RepairResultInfo {
-        vertices_merged: summary.vertices_merged,
-        faces_removed: summary.faces_removed,
-        faces_flipped: summary.faces_flipped,
-        holes_filled: summary.holes_filled,
-        faces_added: summary.faces_added,
-        non_manifold_fixed: summary.non_manifold_fixed,
-        new_mesh_info,
-        new_diagnostics: diag_info,
-    })
+    Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics })
 }
 
 /// Deshace la reparación restaurando backups
@@ -1920,23 +1886,7 @@ fn scene_to_pinocchio_mesh(scene: &Scene) -> Result<Mesh, String> {
 }
 
 fn diagnostics_to_info(d: &pinocchio_repair::MeshDiagnostics) -> MeshDiagnosticsInfo {
-    MeshDiagnosticsInfo {
-        boundary_loops: d.boundary_loops,
-        boundary_edges: d.boundary_edges,
-        duplicate_vertices: d.duplicate_vertices,
-        degenerate_faces: d.degenerate_faces,
-        zero_area_faces: d.zero_area_faces,
-        needle_faces: d.needle_faces,
-        cap_faces: d.cap_faces,
-        non_manifold_edges: d.non_manifold_edges,
-        non_manifold_vertices: d.non_manifold_vertices,
-        normals_consistent: d.normals_consistent,
-        connected_components: d.connected_components,
-        is_closed: d.is_closed,
-        self_intersections: d.self_intersections,
-        needs_repair: d.needs_repair(),
-        is_healthy: d.is_healthy(),
-    }
+    MeshDiagnosticsInfo { diagnostics: d.clone(), needs_repair: d.needs_repair(), is_healthy: d.is_healthy() }
 }
 
 /// Reconstruye una Scene (converter-scene) a partir de una Mesh de pinocchio.
