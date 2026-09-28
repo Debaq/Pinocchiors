@@ -20,3 +20,4 @@ rayon = { workspace = true, optional = true }
 
 [dev-dependencies]
 approx = { workspace = true }
+pinocchio-mesh = { workspace = true, features = ["converter"] }

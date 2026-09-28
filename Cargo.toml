@@ -116,6 +116,13 @@ opt-level = 2
 [profile.dev.package.nalgebra]
 opt-level = 2
 
+# Reparación de mallas: sin optimizar es muy lenta con modelos reales
+[profile.dev.package.pinocchio-repair]
+opt-level = 2
+
+[profile.dev.package.pinocchio-mesh]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

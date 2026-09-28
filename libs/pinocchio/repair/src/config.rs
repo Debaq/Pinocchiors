@@ -3,62 +3,73 @@
 use pinocchio_math::Real;
 use serde::{Deserialize, Serialize};
 
-/// Configuración para el análisis de mallas
+/// Configuración del análisis.
+///
+/// Las tolerancias son relativas a la diagonal de la caja envolvente, así el
+/// resultado no depende de las unidades del modelo (mm, m, ...).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AnalysisConfig {
-    /// Tolerancia para detectar vértices duplicados
+    /// Distancia (relativa) bajo la cual dos vértices se consideran el mismo
     pub duplicate_tolerance: Real,
-    /// Umbral de área para considerar una cara degenerada
-    pub degenerate_area_threshold: Real,
-    /// Umbral de ángulo mínimo (en radianes) para detectar "needles"
+    /// Altura (relativa) bajo la cual un triángulo se considera degenerado
+    pub degenerate_tolerance: Real,
+    /// Ángulo mínimo en radianes: por debajo, el triángulo es una "aguja".
+    /// Es un indicador de calidad, no un defecto.
     pub needle_angle_threshold: Real,
-    /// Umbral de ángulo máximo (en radianes) para detectar "caps"
+    /// Ángulo máximo en radianes: por encima, el triángulo es una "gorra".
+    /// Es un indicador de calidad, no un defecto.
     pub cap_angle_threshold: Real,
-    /// Si true, analiza non-manifold geometry
-    pub check_non_manifold: bool,
-    /// Si true, detecta auto-intersecciones (puede ser lento en mallas grandes)
+    /// Si true, busca auto-intersecciones (puede ser lento en mallas grandes)
     pub check_self_intersections: bool,
-    /// Tolerancia para detección de intersecciones
-    pub intersection_tolerance: Real,
 }
 
 impl Default for AnalysisConfig {
     fn default() -> Self {
         Self {
             duplicate_tolerance: 1e-6,
-            degenerate_area_threshold: 1e-10,
-            needle_angle_threshold: 0.01,                              // ~0.57 grados
-            cap_angle_threshold: std::f64::consts::PI - 0.01,          // ~179.43 grados
-            check_non_manifold: true,
-            check_self_intersections: false,  // Desactivado por defecto (puede ser lento)
-            intersection_tolerance: 1e-8,
+            degenerate_tolerance: 1e-7,
+            needle_angle_threshold: 1.0_f64.to_radians(),
+            cap_angle_threshold: 179.0_f64.to_radians(),
+            check_self_intersections: false,
         }
     }
 }
 
-/// Configuración para la reparación completa
+/// Configuración de la reparación completa ([`crate::repair_all`]).
+///
+/// Ningún paso borra geometría válida: las caras degeneradas se colapsan o se
+/// absorben en sus vecinas, y la geometría non-manifold se separa en vez de
+/// eliminarse.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RepairConfig {
-    /// Si true, fusiona vértices duplicados
+    /// Suelda vértices coincidentes
     pub merge_duplicates: bool,
-    /// Tolerancia para fusión de duplicados
+    /// Distancia de soldadura, relativa a la diagonal de la caja envolvente
     pub merge_tolerance: Real,
-    /// Si true, elimina caras degeneradas
+    /// Corrige caras de área nula (colapso de aristas cortas, absorción de
+    /// triángulos planos en sus vecinos)
     pub remove_degenerates: bool,
-    /// Configuración para detección de degeneradas
-    pub degenerate_config: DegenerateConfig,
-    /// Si true, hace las normales consistentes
+    /// Altura mínima de un triángulo, relativa a la diagonal
+    pub degenerate_tolerance: Real,
+    /// Elimina caras duplicadas (mismos vértices)
+    pub remove_duplicate_faces: bool,
+    /// Orienta las caras de forma consistente
     pub fix_normals: bool,
-    /// Si true, orienta las normales hacia afuera
-    pub orient_outward: bool,
-    /// Si true, rellena agujeros
-    pub fill_holes: bool,
-    /// Configuración para relleno de agujeros
-    pub hole_fill_config: HoleFillConfig,
-    /// Si true, repara geometría non-manifold
+    /// Separa aristas y vértices non-manifold duplicando vértices
     pub fix_non_manifold: bool,
+    /// Orienta las normales hacia afuera en cada cáscara cerrada (las cáscaras
+    /// internas de un objeto hueco quedan hacia adentro)
+    pub orient_outward: bool,
+    /// Elimina piezas sueltas pequeñas
+    pub remove_small_components: bool,
+    /// Área mínima de una pieza, relativa a la pieza más grande
+    pub small_component_ratio: Real,
+    /// Rellena agujeros
+    pub fill_holes: bool,
+    /// Opciones del relleno de agujeros
+    pub hole_fill_config: HoleFillConfig,
 }
 
 impl Default for RepairConfig {
@@ -67,128 +78,113 @@ impl Default for RepairConfig {
             merge_duplicates: true,
             merge_tolerance: 1e-6,
             remove_degenerates: true,
-            degenerate_config: DegenerateConfig::default(),
+            degenerate_tolerance: 1e-7,
+            remove_duplicate_faces: true,
             fix_normals: true,
+            fix_non_manifold: true,
             orient_outward: true,
-            fill_holes: false,  // Desactivado por defecto (puede ser destructivo)
+            remove_small_components: false,
+            small_component_ratio: 0.001,
+            fill_holes: false,
             hole_fill_config: HoleFillConfig::default(),
-            fix_non_manifold: false,  // Desactivado por defecto (complejo)
         }
     }
 }
 
-/// Configuración para detección/eliminación de caras degeneradas
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct DegenerateConfig {
-    /// Umbral de área mínima
-    pub min_area: Real,
-    /// Eliminar triángulos con ángulos muy pequeños ("needles")
-    pub remove_needles: bool,
-    /// Ángulo mínimo en radianes para needles
-    pub needle_angle: Real,
-    /// Eliminar triángulos con ángulos muy grandes ("caps")
-    pub remove_caps: bool,
-    /// Ángulo máximo en radianes para caps
-    pub cap_angle: Real,
-}
-
-impl Default for DegenerateConfig {
-    fn default() -> Self {
-        Self {
-            min_area: 1e-10,
-            remove_needles: true,
-            needle_angle: 0.01,
-            remove_caps: true,
-            cap_angle: std::f64::consts::PI - 0.01,
-        }
-    }
-}
-
-/// Configuración para relleno de agujeros
+/// Configuración del relleno de agujeros
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct HoleFillConfig {
-    /// Método de triangulación
-    pub method: HoleFillMethod,
-    /// Tamaño máximo de agujero a rellenar (en número de aristas)
-    pub max_hole_size: usize,
-    /// Si true, refina el relleno para mejor calidad
+    /// Máximo de aristas de borde de un agujero a rellenar (0 = sin límite)
+    pub max_hole_edges: usize,
+    /// Refina el parche para igualar la densidad de la malla que lo rodea
     pub refine: bool,
-    /// Número de iteraciones de suavizado
-    pub smooth_iterations: usize,
+    /// Ajusta la forma del parche para que continúe la curvatura del borde
+    /// (requiere `refine` para tener vértices interiores que mover)
+    pub fair: bool,
 }
 
 impl Default for HoleFillConfig {
     fn default() -> Self {
-        Self {
-            method: HoleFillMethod::EarClipping,
-            max_hole_size: 100,
-            refine: false,
-            smooth_iterations: 0,
-        }
+        Self { max_hole_edges: 0, refine: true, fair: true }
     }
-}
-
-/// Método de triangulación para relleno de agujeros
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum HoleFillMethod {
-    /// Ear clipping simple - O(n²), bueno para agujeros pequeños
-    EarClipping,
-    /// Método de Liepa - alta calidad, con refinamiento
-    Liepa,
 }
 
 /// Resultado del análisis de una malla
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MeshDiagnostics {
-    /// Número de boundary loops (agujeros)
+    /// Vértices
+    pub num_vertices: usize,
+    /// Triángulos
+    pub num_faces: usize,
+    /// Número de agujeros (ciclos de aristas de borde)
     pub boundary_loops: usize,
-    /// Total de aristas de borde
+    /// Aristas de borde (con una sola cara)
     pub boundary_edges: usize,
-    /// Número de vértices duplicados encontrados
+    /// Vértices duplicados en costuras (se fusionarían al soldar)
     pub duplicate_vertices: usize,
-    /// Número de caras degeneradas
+    /// Vértices que ninguna cara usa
+    pub unreferenced_vertices: usize,
+    /// Caras con índices repetidos, fuera de rango o coordenadas no finitas
+    pub invalid_faces: usize,
+    /// Caras repetidas (mismos tres vértices)
+    pub duplicate_faces: usize,
+    /// Caras de área nula (altura bajo la tolerancia)
     pub degenerate_faces: usize,
-    /// Número de caras con área cero
-    pub zero_area_faces: usize,
-    /// Número de "needles" (triángulos muy alargados)
+    /// Triángulos con un ángulo muy agudo (calidad, no defecto)
     pub needle_faces: usize,
-    /// Número de "caps" (triángulos con ángulo muy grande)
+    /// Triángulos con un ángulo casi llano (calidad, no defecto)
     pub cap_faces: usize,
-    /// Número de aristas non-manifold
+    /// Aristas con más de dos caras
     pub non_manifold_edges: usize,
-    /// Número de vértices non-manifold
+    /// Vértices donde se tocan abanicos de caras separados
     pub non_manifold_vertices: usize,
-    /// Si las normales son consistentes
+    /// Aristas cuyas dos caras tienen orientaciones opuestas
+    pub inconsistent_edges: usize,
+    /// Si todas las caras vecinas tienen la misma orientación
     pub normals_consistent: bool,
-    /// Número de componentes conectados
+    /// Si las normales apuntan hacia afuera (solo si la malla es cerrada y
+    /// consistente)
+    pub normals_outward: Option<bool>,
+    /// Piezas conectadas
     pub connected_components: usize,
-    /// Si la malla es cerrada (watertight)
+    /// Sin bordes ni aristas non-manifold
     pub is_closed: bool,
-    /// Número de pares de triángulos que se auto-intersectan
+    /// Sin aristas ni vértices non-manifold
+    pub is_manifold: bool,
+    /// Pares de triángulos que se cruzan (si se analizó)
     pub self_intersections: usize,
+    /// Área de la superficie
+    pub area: Real,
+    /// Volumen encerrado (solo significativo si es cerrada)
+    pub volume: Real,
 }
 
 impl MeshDiagnostics {
-    /// Verifica si la malla necesita reparación
+    /// Si hay defectos que [`crate::repair_all`] puede corregir
     pub fn needs_repair(&self) -> bool {
         self.duplicate_vertices > 0
+            || self.unreferenced_vertices > 0
+            || self.invalid_faces > 0
+            || self.duplicate_faces > 0
             || self.degenerate_faces > 0
             || self.non_manifold_edges > 0
             || self.non_manifold_vertices > 0
             || !self.normals_consistent
-            || self.self_intersections > 0
+            || self.normals_outward == Some(false)
+            || self.boundary_loops > 0
     }
 
-    /// Verifica si la malla está en buen estado
+    /// Cerrada, manifold, bien orientada y sin defectos
     pub fn is_healthy(&self) -> bool {
         self.is_closed
+            && self.is_manifold
             && self.normals_consistent
-            && self.degenerate_faces == 0
+            && self.normals_outward != Some(false)
             && self.duplicate_vertices == 0
-            && self.non_manifold_edges == 0
-            && self.non_manifold_vertices == 0
+            && self.invalid_faces == 0
+            && self.duplicate_faces == 0
+            && self.degenerate_faces == 0
             && self.self_intersections == 0
     }
 }
@@ -196,27 +192,43 @@ impl MeshDiagnostics {
 /// Resumen de las reparaciones realizadas
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct RepairSummary {
+    /// Caras inválidas eliminadas
+    pub invalid_faces_removed: usize,
     /// Vértices fusionados
     pub vertices_merged: usize,
-    /// Caras eliminadas
+    /// Caras degeneradas corregidas
+    pub degenerate_fixed: usize,
+    /// Caras duplicadas eliminadas
+    pub duplicate_faces_removed: usize,
+    /// Caras eliminadas en total
     pub faces_removed: usize,
     /// Caras reorientadas
     pub faces_flipped: usize,
+    /// Vértices duplicados para separar geometría non-manifold
+    pub non_manifold_fixed: usize,
+    /// Piezas sueltas eliminadas
+    pub components_removed: usize,
     /// Agujeros rellenados
     pub holes_filled: usize,
-    /// Caras añadidas (por relleno de agujeros)
+    /// Agujeros que no se rellenaron (tamaño máximo o borde inválido)
+    pub holes_skipped: usize,
+    /// Caras añadidas por el relleno
     pub faces_added: usize,
-    /// Aristas non-manifold reparadas
-    pub non_manifold_fixed: usize,
+    /// Vértices añadidos por el relleno
+    pub vertices_added: usize,
 }
 
 impl RepairSummary {
-    /// Verifica si se realizó alguna reparación
+    /// Si se realizó alguna reparación
     pub fn any_repairs(&self) -> bool {
-        self.vertices_merged > 0
+        self.invalid_faces_removed > 0
+            || self.vertices_merged > 0
+            || self.degenerate_fixed > 0
+            || self.duplicate_faces_removed > 0
             || self.faces_removed > 0
             || self.faces_flipped > 0
-            || self.holes_filled > 0
             || self.non_manifold_fixed > 0
+            || self.components_removed > 0
+            || self.holes_filled > 0
     }
 }

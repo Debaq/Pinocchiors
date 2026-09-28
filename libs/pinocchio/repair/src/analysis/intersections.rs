@@ -2,7 +2,7 @@
 //!
 //! Usa BVH para acelerar la detección de triángulos que se intersectan.
 
-use pinocchio_mesh::Mesh;
+use crate::trimesh::TriMesh;
 use pinocchio_math::{Real, Vector3, Rect};
 use serde::Serialize;
 
@@ -56,8 +56,10 @@ impl IntersectionAnalysis {
 ///
 /// # Argumentos
 ///
-/// * `mesh` - La malla a analizar
-/// * `tolerance` - Tolerancia para considerar intersección (para evitar falsos positivos en aristas compartidas)
+/// * `mesh` - La malla a analizar (conviene soldada: los triángulos que
+///   comparten un vértice no se comparan)
+/// * `tolerance` - Distancia absoluta bajo la cual un contacto no cuenta como
+///   cruce (triángulos que solo se tocan)
 ///
 /// # Algoritmo
 ///
@@ -65,7 +67,7 @@ impl IntersectionAnalysis {
 /// 2. Para cada triángulo, encontrar candidatos cuyo AABB se intersecta
 /// 3. Filtrar triángulos adyacentes (comparten vértices)
 /// 4. Test exacto de intersección triángulo-triángulo
-pub fn find_self_intersections(mesh: &Mesh, tolerance: Real) -> IntersectionAnalysis {
+pub fn find_self_intersections(mesh: &TriMesh, tolerance: Real) -> IntersectionAnalysis {
     let num_faces = mesh.num_faces();
 
     if num_faces < 2 {
@@ -75,10 +77,8 @@ pub fn find_self_intersections(mesh: &Mesh, tolerance: Real) -> IntersectionAnal
     // Construir datos de triángulos
     let triangles: Vec<TriangleData> = (0..num_faces)
         .map(|i| {
-            let [v0, v1, v2] = mesh.get_face_vertices(i);
-            let p0 = mesh.vertices[v0].position;
-            let p1 = mesh.vertices[v1].position;
-            let p2 = mesh.vertices[v2].position;
+            let [v0, v1, v2] = mesh.triangles[i];
+            let [p0, p1, p2] = mesh.corners(i);
             TriangleData {
                 vertices: [v0, v1, v2],
                 positions: [p0, p1, p2],
@@ -91,7 +91,6 @@ pub fn find_self_intersections(mesh: &Mesh, tolerance: Real) -> IntersectionAnal
     let bvh = SimpleBvh::build(&triangles);
 
     let mut analysis = IntersectionAnalysis::default();
-    let mut seen = std::collections::HashSet::new();
 
     // Para cada triángulo, buscar intersecciones
     for i in 0..num_faces {
@@ -105,13 +104,6 @@ pub fn find_self_intersections(mesh: &Mesh, tolerance: Real) -> IntersectionAnal
             if i >= j {
                 continue; // Evitar duplicados y auto-comparación
             }
-
-            // Verificar si ya lo vimos
-            let key = (i, j);
-            if seen.contains(&key) {
-                continue;
-            }
-            seen.insert(key);
 
             let tri_b = &triangles[j];
 
@@ -312,8 +304,12 @@ fn triangles_intersect(
     b0: Vector3, b1: Vector3, b2: Vector3,
     tolerance: Real,
 ) -> bool {
-    // Calcular plano del triángulo B
-    let n2 = (b1 - b0).cross(&(b2 - b0));
+    // Plano del triángulo B (normal unitaria: las distancias quedan en
+    // unidades de longitud y se comparan con `tolerance`). Un triángulo
+    // degenerado no define plano; se reporta aparte como degenerado.
+    let Some(n2) = (b1 - b0).cross(&(b2 - b0)).try_normalize() else {
+        return false;
+    };
     let d2 = -n2.dot(&b0);
 
     // Distancias signadas de vértices de A al plano de B
@@ -331,8 +327,10 @@ fn triangles_intersect(
         return false;
     }
 
-    // Calcular plano del triángulo A
-    let n1 = (a1 - a0).cross(&(a2 - a0));
+    // Plano del triángulo A
+    let Some(n1) = (a1 - a0).cross(&(a2 - a0)).try_normalize() else {
+        return false;
+    };
     let d1 = -n1.dot(&a0);
 
     // Distancias signadas de vértices de B al plano de A
@@ -354,7 +352,7 @@ fn triangles_intersect(
     let dir = n1.cross(&n2);
 
     // Si los planos son paralelos (o casi)
-    if dir.length_squared() < tolerance * tolerance {
+    if dir.length_squared() < 1e-18 {
         // Caso coplanar - verificar intersección 2D
         return triangles_intersect_coplanar(a0, a1, a2, b0, b1, b2, n1, tolerance);
     }
@@ -428,7 +426,8 @@ fn compute_interval(
 
 /// Verifica si dos intervalos se solapan
 fn intervals_overlap(a_min: Real, a_max: Real, b_min: Real, b_max: Real, tolerance: Real) -> bool {
-    a_min <= b_max + tolerance && b_min <= a_max + tolerance
+    // Estricto: los triángulos que solo se tocan no cuentan
+    a_min < b_max - tolerance && b_min < a_max - tolerance
 }
 
 /// Test de intersección para triángulos coplanares
@@ -547,7 +546,7 @@ fn sign_2d(p1: [Real; 2], p2: [Real; 2], p3: [Real; 2]) -> Real {
 mod tests {
     use super::*;
 
-    fn make_tetrahedron() -> Mesh {
+    fn make_tetrahedron() -> TriMesh {
         let vertices = vec![
             Vector3::new(0.0, 0.0, 0.0),
             Vector3::new(1.0, 0.0, 0.0),
@@ -560,7 +559,7 @@ mod tests {
             [1, 3, 2],
             [2, 3, 0],
         ];
-        Mesh::from_triangles(&vertices, &faces)
+        TriMesh::new(vertices, faces)
     }
 
     #[test]
@@ -580,7 +579,7 @@ mod tests {
             Vector3::new(0.5, 1.0, 0.0),
         ];
         let faces = vec![[0, 1, 2]];
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
 
         let analysis = find_self_intersections(&mesh, 1e-6);
         assert!(!analysis.has_intersections());
@@ -603,7 +602,7 @@ mod tests {
             [0, 1, 2],
             [3, 4, 5],
         ];
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
 
         let analysis = find_self_intersections(&mesh, 1e-6);
         assert!(analysis.has_intersections());
@@ -623,7 +622,7 @@ mod tests {
             [0, 1, 2],
             [0, 3, 1],
         ];
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
 
         let analysis = find_self_intersections(&mesh, 1e-6);
         assert!(!analysis.has_intersections());
@@ -646,7 +645,7 @@ mod tests {
             [0, 1, 2],
             [3, 4, 5],
         ];
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
 
         let analysis = find_self_intersections(&mesh, 1e-6);
         assert!(analysis.has_intersections());
@@ -669,7 +668,7 @@ mod tests {
             [0, 1, 2],
             [3, 4, 5],
         ];
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
 
         let analysis = find_self_intersections(&mesh, 1e-6);
         assert!(!analysis.has_intersections());
@@ -690,7 +689,7 @@ mod tests {
             faces.push([base, base + 1, base + 2]);
         }
 
-        let mesh = Mesh::from_triangles(&vertices, &faces);
+        let mesh = TriMesh::new(vertices, faces);
         let analysis = find_self_intersections(&mesh, 1e-6);
 
         // No hay intersecciones

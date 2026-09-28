@@ -1,9 +1,8 @@
-//! Módulos de reparación de mallas
-//!
-//! Funciones que modifican la malla para corregir problemas.
+//! Pasos de reparación. Cada uno modifica una [`crate::TriMesh`] y puede
+//! usarse por separado; [`crate::repair_all`] los encadena en el orden
+//! correcto.
 
-pub mod merge;
 pub mod cleanup;
-pub mod normals;
 pub mod holes;
 pub mod manifold;
+pub mod orient;
