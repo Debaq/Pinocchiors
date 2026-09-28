@@ -3,11 +3,11 @@
 use crate::config::SkeletonFit;
 use crate::{PinocchioConfig, PinocchioError, PinocchioOutput};
 use crate::output::ProcessStats;
-use pinocchio_attachment::{Attachment, HeatDiffusion};
-use pinocchio_embedding::{full_embedding_pipeline, EmbeddingResult};
+use pinocchio_attachment::{attach_detached_parts, Attachment, HeatDiffusion};
+use pinocchio_embedding::{fit_skeleton, EmbeddingResult, FitOptions};
 use pinocchio_math::{Real, Rect, Transform, Vector3};
 use pinocchio_mesh::{decimate, Mesh};
-use pinocchio_skeleton::{fit_to_bounds, map_positions, BasicSkeleton, Bone, Skeleton};
+use pinocchio_skeleton::{map_positions, BasicSkeleton, Bone, Skeleton};
 
 /// Etapas del auto-rigging, para reportar progreso
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,8 +44,8 @@ impl AutorigStage {
     }
 }
 
-/// Fracción de la malla que ocupa una plantilla ajustada con [`SkeletonFit::Auto`]
-const SKELETON_FILL: Real = 0.9;
+/// Resolución mínima del campo de distancias para ajustar el esqueleto
+const MIN_FIT_RESOLUTION: usize = 96;
 
 /// Transformación de normalización: `p' = (p - center) * scale`
 #[derive(Debug, Clone, Copy)]
@@ -148,19 +148,50 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
         vertex.position = normalization.apply(vertex.position);
     }
 
-    // 3. Llevar el esqueleto al espacio de trabajo de la malla
-    let working_skeleton = match config.skeleton_fit {
-        SkeletonFit::Auto => fit_to_bounds(skeleton, &working_mesh.bounding_box(), SKELETON_FILL),
-        SkeletonFit::None => map_positions(skeleton, |p| normalization.apply(p)),
-    };
-
-    // 4. Embedding del esqueleto
+    // 3-4. Esqueleto en el espacio de trabajo y ajustado a la malla
     on_stage(AutorigStage::Embedding);
-    let embedding = full_embedding_pipeline(
-        &working_mesh,
-        &working_skeleton,
-        config.distance_field_resolution,
-    )?;
+    // Colas y dedos finos necesitan celdas chicas para tener interior
+    let resolution = config.distance_field_resolution.into_iter().max().unwrap_or(64).max(MIN_FIT_RESOLUTION);
+    let (working_skeleton, embedding) = match config.skeleton_fit {
+        SkeletonFit::Auto | SkeletonFit::None => {
+            let options = FitOptions {
+                resolution,
+                search_orientation: config.skeleton_fit == SkeletonFit::Auto,
+                ..Default::default()
+            };
+            let template = match config.skeleton_fit {
+                SkeletonFit::Auto => BasicSkeleton::from_bones(skeleton.bones().to_vec()),
+                _ => map_positions(skeleton, |p| normalization.apply(p)),
+            };
+            // El ajuste usa la malla completa: la decimación es solo para
+            // abaratar los pesos, y el campo de distancias no depende del
+            // número de caras
+            let fit = if was_decimated {
+                let mut full = welded.clone();
+                for vertex in &mut full.vertices {
+                    vertex.position = normalization.apply(vertex.position);
+                }
+                fit_skeleton(&full, &template, &options)?
+            } else {
+                fit_skeleton(&working_mesh, &template, &options)?
+            };
+            let embedding = EmbeddingResult {
+                bone_positions: fit.skeleton.bones().iter().map(|b| b.position).collect(),
+                sphere_bone_map: Vec::new(),
+                quality_score: fit.quality,
+            };
+            (fit.skeleton, embedding)
+        }
+        SkeletonFit::Exact => {
+            let placed = map_positions(skeleton, |p| normalization.apply(p));
+            let embedding = EmbeddingResult {
+                bone_positions: placed.bones().iter().map(|b| b.position).collect(),
+                sphere_bone_map: Vec::new(),
+                quality_score: 1.0,
+            };
+            (placed, embedding)
+        }
+    };
 
     // 5. Pesos de skinning con el esqueleto ya embebido
     on_stage(AutorigStage::Weights);
@@ -172,9 +203,11 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
             .map(|(bone, &position)| Bone { position, ..bone.clone() })
             .collect(),
     );
-    let weights = HeatDiffusion::new(&working_mesh)
+    let mut weights = HeatDiffusion::new(&working_mesh)
         .with_diffusion_weight(config.diffusion_weight)
         .compute_weights(&embedded_skeleton)?;
+    // Piezas sueltas sin huesos (colmillos, ojos): rígidas con lo que tocan
+    attach_detached_parts(&working_mesh, &embedded_skeleton, &mut weights);
 
     // 6. Pesos por vértice de la malla original
     let welded_weights = if was_decimated {

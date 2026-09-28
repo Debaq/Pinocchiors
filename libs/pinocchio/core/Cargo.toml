@@ -24,4 +24,8 @@ wasm-bindgen = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 
 [dev-dependencies]
+pinocchio-embedding = { workspace = true }
 approx = { workspace = true }
+pinocchio-mesh = { workspace = true, features = ["converter"] }
+converter-scene = { workspace = true }
+converter-gltf-io = { workspace = true }

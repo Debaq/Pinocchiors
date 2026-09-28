@@ -27,18 +27,20 @@ use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
 /// Grilla del campo de distancias vista como grafo de celdas interiores
-struct CellGraph<'a> {
+pub(crate) struct CellGraph<'a> {
     field: &'a DistanceField,
     res: [usize; 3],
 }
 
 /// Resultado de Dijkstra desde una celda
-struct ShortestPaths {
+pub(crate) struct ShortestPaths {
     /// Celda anterior en el camino (usize::MAX si no alcanzable / origen)
-    prev: Vec<usize>,
+    pub prev: Vec<usize>,
     /// Longitud geométrica del camino
-    length: Vec<Real>,
-    reached: Vec<bool>,
+    pub length: Vec<Real>,
+    pub reached: Vec<bool>,
+    /// Celdas en el orden en que se cerraron (costo creciente)
+    pub order: Vec<usize>,
 }
 
 #[derive(PartialEq)]
@@ -60,11 +62,11 @@ impl PartialOrd for HeapItem {
 }
 
 impl<'a> CellGraph<'a> {
-    fn new(field: &'a DistanceField) -> Self {
+    pub fn new(field: &'a DistanceField) -> Self {
         Self { field, res: field.resolution() }
     }
 
-    fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.res[0] * self.res[1] * self.res[2]
     }
 
@@ -77,23 +79,23 @@ impl<'a> CellGraph<'a> {
         (z * self.res[1] + y) * self.res[0] + x
     }
 
-    fn value(&self, idx: usize) -> Real {
+    pub fn value(&self, idx: usize) -> Real {
         let (x, y, z) = self.coords(idx);
         self.field.get(x, y, z)
     }
 
-    fn is_interior(&self, idx: usize) -> bool {
+    pub fn is_interior(&self, idx: usize) -> bool {
         let v = self.value(idx);
         v > 0.0 && v.is_finite()
     }
 
-    fn center(&self, idx: usize) -> Vector3 {
+    pub fn center(&self, idx: usize) -> Vector3 {
         let (x, y, z) = self.coords(idx);
         self.field.cell_center(x, y, z)
     }
 
     /// Celda interior más cercana a `pos` (búsqueda por anillos crecientes)
-    fn nearest_interior(&self, pos: &Vector3) -> Option<usize> {
+    pub fn nearest_interior(&self, pos: &Vector3) -> Option<usize> {
         let [rx, ry, rz] = self.res;
         let bounds = self.field.bounds();
         let size = bounds.size();
@@ -131,14 +133,36 @@ impl<'a> CellGraph<'a> {
         None
     }
 
+    /// Lado de una celda (el menor de los tres ejes)
+    pub fn cell_size(&self) -> Real {
+        let size = self.field.bounds().size();
+        let [rx, ry, rz] = self.res;
+        (size.x() / rx as Real).min(size.y() / ry as Real).min(size.z() / rz as Real)
+    }
+
+    /// Celdas vecinas (26-vecindad) dentro de la grilla
+    pub fn neighbors(&self, idx: usize) -> impl Iterator<Item = usize> + '_ {
+        let (x, y, z) = self.coords(idx);
+        let [rx, ry, rz] = self.res;
+        (-1i64..=1)
+            .flat_map(|dz| (-1i64..=1).flat_map(move |dy| (-1i64..=1).map(move |dx| (dx, dy, dz))))
+            .filter(|&d| d != (0, 0, 0))
+            .filter_map(move |(dx, dy, dz)| {
+                let (nx, ny, nz) = (x as i64 + dx, y as i64 + dy, z as i64 + dz);
+                let inside = nx >= 0 && ny >= 0 && nz >= 0 && nx < rx as i64 && ny < ry as i64 && nz < rz as i64;
+                inside.then(|| self.index(nx as usize, ny as usize, nz as usize))
+            })
+    }
+
     /// Dijkstra por celdas interiores (26-vecindad), costo `longitud / d²`
-    fn shortest_paths(&self, start: usize) -> ShortestPaths {
+    pub fn shortest_paths(&self, start: usize) -> ShortestPaths {
         let n = self.len();
         let mut cost = vec![Real::INFINITY; n];
         let mut paths = ShortestPaths {
             prev: vec![usize::MAX; n],
             length: vec![Real::INFINITY; n],
             reached: vec![false; n],
+            order: Vec::new(),
         };
         let [rx, ry, rz] = self.res;
         let mut heap = BinaryHeap::new();
@@ -151,6 +175,7 @@ impl<'a> CellGraph<'a> {
                 continue;
             }
             paths.reached[idx] = true;
+            paths.order.push(idx);
             let (x, y, z) = self.coords(idx);
             let d_here = self.value(idx);
             let p_here = self.center(idx);
@@ -187,7 +212,7 @@ impl<'a> CellGraph<'a> {
 }
 
 /// Punto a distancia `s` a lo largo de la polilínea
-fn point_along(polyline: &[Vector3], s: Real) -> Vector3 {
+pub(crate) fn point_along(polyline: &[Vector3], s: Real) -> Vector3 {
     let mut remaining = s.max(0.0);
     for w in polyline.windows(2) {
         let seg = w[0].distance(&w[1]);
@@ -200,7 +225,7 @@ fn point_along(polyline: &[Vector3], s: Real) -> Vector3 {
 }
 
 /// Longitud de arco del punto de la polilínea más cercano a `p`
-fn closest_arc_length(polyline: &[Vector3], p: &Vector3) -> Real {
+pub(crate) fn closest_arc_length(polyline: &[Vector3], p: &Vector3) -> Real {
     let mut best = (Real::INFINITY, 0.0);
     let mut acc = 0.0;
     for w in polyline.windows(2) {
@@ -216,12 +241,12 @@ fn closest_arc_length(polyline: &[Vector3], p: &Vector3) -> Real {
     best.1
 }
 
-fn polyline_length(polyline: &[Vector3]) -> Real {
+pub(crate) fn polyline_length(polyline: &[Vector3]) -> Real {
     polyline.windows(2).map(|w| w[0].distance(&w[1])).sum()
 }
 
 /// Suaviza la escalera de voxels con promedios móviles, fijando los extremos
-fn smooth(polyline: &mut [Vector3], iterations: usize) {
+pub(crate) fn smooth(polyline: &mut [Vector3], iterations: usize) {
     for _ in 0..iterations {
         let copy = polyline.to_vec();
         for i in 1..polyline.len().saturating_sub(1) {
@@ -411,7 +436,7 @@ pub fn chain_embed<S: Skeleton>(
 
 /// Calidad invariante a la escala: compara la proporción de cada hueso
 /// respecto del total, en la plantilla y en el embedding (1 = idénticas)
-fn proportion_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -> Real {
+pub(crate) fn proportion_quality<S: Skeleton>(skeleton: &S, positions: &[Vector3]) -> Real {
     let bones: Vec<(Real, Real)> = (0..skeleton.num_bones())
         .filter_map(|b| {
             let p = skeleton.get_parent(b)?;

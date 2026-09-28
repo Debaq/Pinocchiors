@@ -6,12 +6,17 @@ use pinocchio_math::Real;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SkeletonFit {
     /// El esqueleto es una plantilla en su propio espacio (p. ej. los presets,
-    /// definidos con altura 1): se escala y centra dentro de la malla.
+    /// definidos con altura 1): se busca su orientación, se encaja en la malla
+    /// y sus extremos se asignan a las extremidades de la malla
+    /// (`pinocchio_embedding::fit_skeleton`).
     #[default]
     Auto,
-    /// El esqueleto ya está colocado en las coordenadas de la malla (p. ej.
-    /// ajustado a mano en un editor): se usa tal cual.
+    /// El esqueleto está colocado aproximadamente en las coordenadas de la
+    /// malla: se ajusta al eje medial sin cambiar su orientación.
     None,
+    /// El esqueleto ya está en su lugar (p. ej. ajustado a mano): se usan sus
+    /// posiciones exactas y solo se calculan los pesos.
+    Exact,
 }
 
 /// Configuración para el proceso de auto-rigging

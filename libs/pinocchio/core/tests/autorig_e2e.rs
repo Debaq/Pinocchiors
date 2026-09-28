@@ -208,7 +208,8 @@ fn autorig_humanoid_joints_inside_and_in_place() {
     // Cerca de las articulaciones reales del modelo (tolerancia en altura = 1)
     let expected = [
         ("pelvis", [0.0, 0.48, 0.0], 0.05),
-        ("head", [0.0, 0.94, 0.0], 0.03),
+        // La hoja "head" es la punta de la cabeza (el hueso es cuello → punta)
+        ("head", [0.0, 1.01, 0.0], 0.03),
         ("knee_l", [-0.08, 0.26, 0.0], 0.05),
         ("knee_r", [0.08, 0.26, 0.0], 0.05),
         ("ankle_l", [-0.09, 0.05, 0.0], 0.04),
@@ -360,3 +361,22 @@ fn autorig_adapts_to_t_pose() {
     }
 }
 
+
+#[test]
+#[ignore]
+fn debug_print_fit() {
+    let a = humanoid_mesh();
+    let decimate_at = a.num_faces() / 4;
+    for (label, mesh, decimate) in [("A", a, false), ("T", t_pose_mesh(), false), ("A decimada", humanoid_mesh(), true)] {
+        let mut config = PinocchioConfig { verify_mesh_integrity: false, ..Default::default() };
+        if decimate {
+            config = config.with_auto_decimate(decimate_at, 0.3);
+        }
+        let out = autorig(&mesh, &HumanSkeleton::new(), Some(config)).expect("autorig");
+        println!("pose {label}");
+        for (i, b) in HumanSkeleton::new().bones().iter().enumerate() {
+            let p = unit(&out.bone_positions[i]);
+            println!("  {:>10} ({:+.3}, {:+.3}, {:+.3})", b.name, p[0], p[1], p[2]);
+        }
+    }
+}
