@@ -383,11 +383,6 @@ impl<'a> HeatDiffusion<'a> {
 }
 
 /// Punto más cercano a `point` sobre el segmento `a-b`
-/// Parámetro `t` ∈ [0, 1] del punto de `a → b` más cercano a `point`.
-fn segment_parameter(point: &Vector3, a: &Vector3, b: &Vector3) -> Real {
-    segment_projection(point, a, b).0
-}
-
 /// Parámetro recortado del punto más cercano y cuánto se pasa la proyección
 /// de `point` de los extremos del segmento (en unidades de longitud).
 fn segment_projection(point: &Vector3, a: &Vector3, b: &Vector3) -> (Real, Real) {
@@ -467,10 +462,10 @@ mod tests {
     }
 
     #[test]
-    fn test_segment_parameter() {
+    fn test_segment_projection() {
         let s1 = Vector3::new(0.0, 0.0, 0.0);
         let s2 = Vector3::new(0.0, 1.0, 0.0);
-        let d = |p: Vector3| p.distance(&s1.lerp(&s2, segment_parameter(&p, &s1, &s2)));
+        let d = |p: Vector3| p.distance(&s1.lerp(&s2, segment_projection(&p, &s1, &s2).0));
         assert!((d(Vector3::new(1.0, 0.5, 0.0)) - 1.0).abs() < 1e-10);
         assert!((d(Vector3::new(0.0, 3.0, 0.0)) - 2.0).abs() < 1e-10);
         assert!((d(Vector3::new(0.0, -1.0, 0.0)) - 1.0).abs() < 1e-10);
