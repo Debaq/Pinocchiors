@@ -28,6 +28,10 @@ enum Kind {
 /// operación: más abajo, la cara se pliega.
 const MIN_NORMAL_COS: f64 = 0.2;
 
+/// Caras de un vértice por encima de las cuales no se parten las aristas
+/// opuestas hasta la próxima iteración (tras voltear).
+const MAX_FAN: usize = 64;
+
 /// Lado deseado de los triángulos en cada punto.
 pub(crate) type Target<'a> = &'a (dyn Fn(&V3) -> f64 + Sync);
 
@@ -227,6 +231,14 @@ impl Mesh {
         while let Some((_, Reverse((a, b)))) = heap.pop() {
             let faces = self.edge_faces(a, b);
             if faces.is_empty() {
+                continue;
+            }
+            // En una cuña angosta cada corte suma una cara al vértice opuesto
+            // y sus radios siguen largos: sin voltear entre medio, el abanico
+            // crece sin tope (~80 000 caras con densidad adaptativa) y el
+            // costo se vuelve cuadrático
+            let apex = |f: u32| *self.tris[f as usize].iter().find(|&&x| x != a && x != b).expect("tercer vértice");
+            if faces.iter().any(|&f| self.vf[apex(f) as usize].len() > MAX_FAN) {
                 continue;
             }
             let m = self.pos.len() as u32;
