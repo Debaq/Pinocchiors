@@ -124,6 +124,12 @@ impl AppState {
         }
     }
 
+    /// La geometría cambió: el rig y la retopología ya no le corresponden.
+    pub fn geometry_changed(&self) {
+        *self.result.lock().unwrap() = None;
+        *self.quad_mesh.lock().unwrap() = None;
+    }
+
     /// Descarta todo lo derivado de la malla actual (resultados, backups,
     /// diagnósticos, piezas). Se llama al importar un modelo nuevo.
     pub fn reset_derived(&self) {

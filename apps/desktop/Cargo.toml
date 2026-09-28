@@ -23,9 +23,11 @@ pinocchio-attachment = { workspace = true }
 
 # Converter - Multi-format I/O
 converter-scene = { workspace = true }
-converter-gltf-io = { workspace = true }
+converter-gltf-io = { workspace = true, features = ["simplify"] }
 converter-stl = { workspace = true }
 converter-obj = { workspace = true }
+converter-ply = { workspace = true }
+converter-3mf = { workspace = true }
 
 # Repair & Print3D
 pinocchio-repair = { workspace = true }

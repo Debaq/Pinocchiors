@@ -22,6 +22,7 @@ import { decodeMesh, decodeWeights } from "./lib/buffers";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
+import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -66,6 +67,7 @@ interface ExportResult {
   path: string;
   message: string;
   files_created: string[];
+  total_bytes: number;
 }
 
 interface SupportedFormats {
@@ -206,7 +208,19 @@ export const App: Component = () => {
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
   const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
+  const [exportOptions, setExportOptions] = createSignal<ExportOptions>(defaultExportOptions);
+  const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
+
+  /** Descarta la retopología: ya no corresponde a la geometría actual */
+  const clearQuadMesh = () => {
+    setQuadMeshData(undefined);
+    setQuadMeshLoaded(false);
+    setQuadMeshInfo({ vertices: 0, quads: 0 });
+    setQuadQuality(undefined);
+    setShowQuadMesh(false);
+    setExportUseRetopology(false);
+  };
 
   // Config
   const [autorigConfig, setAutorigConfig] = createSignal<AutorigConfig>({
@@ -383,11 +397,8 @@ export const App: Component = () => {
       setCanUndoRepair(false);
       setMeshAnalysis(undefined);
       setSubdivideResult(undefined);
-      setQuadMeshData(undefined);
-      setQuadMeshLoaded(false);
-      setQuadMeshInfo({ vertices: 0, quads: 0 });
-      setQuadQuality(undefined);
-      setShowQuadMesh(false);
+      clearQuadMesh();
+      setLastExport(undefined);
       setCanUndoPrintScale(false);
 
       // Pipeline: mark import as completed, navigate to next
@@ -472,33 +483,43 @@ export const App: Component = () => {
     try {
       const formats = supportedFormats();
       if (!formats) return;
+      const opts = exportOptions();
+      const format = formats.export.find((f) => f.id === opts.format);
+      if (!format) return;
 
+      const baseName = (fileName() ?? "modelo").replace(/\.[^.]+$/, "");
       const selected = await save({
-        title: "Exportar modelo",
-        filters: formats.export.map((f) => ({
-          name: f.name,
-          extensions: f.extensions,
-        })),
+        title: `Exportar ${format.name}`,
+        defaultPath: `${baseName}.${format.extensions[0]}`,
+        filters: [{ name: format.name, extensions: format.extensions }],
       });
 
       if (!selected) return;
-
-      setStatusMessage(`Exportando a ${selected.split("/").pop()}...`);
-
-      const ext = selected.split(".").pop()?.toLowerCase() || "glb";
+      // El diálogo no siempre agrega la extensión
+      const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${format.extensions[0]}`;
+      const name = path.split("/").pop();
 
       const includeRig = exportIncludeRig() && autorigComplete();
-      const result = await busy(`Exportando a ${selected.split("/").pop()}...`, () => invoke<ExportResult>("export_model", {
+      const result = await busy(`Exportando a ${name}...`, () => invoke<ExportResult>("export_model", {
         config: {
-          format: ext,
-          path: selected,
+          format: opts.format,
+          path,
           include_skeleton: includeRig,
           include_weights: includeRig,
           use_retopology: exportUseRetopology() && quadMeshLoaded(),
+          draco: opts.draco,
+          draco_level: opts.dracoLevel,
+          draco_position_bits: opts.highPrecision ? 16 : 14,
+          simplify_ratio: opts.simplifyPercent < 100 ? opts.simplifyPercent / 100 : null,
+          max_texture_size: opts.maxTextureSize > 0 ? opts.maxTextureSize : null,
+          texture_quality: opts.textureQuality > 0 ? opts.textureQuality : null,
+          optimize_geometry: opts.cleanGeometry,
+          strip_unused: opts.cleanGeometry,
         },
       }));
 
-      setStatusMessage(result.message);
+      setLastExport({ bytes: result.total_bytes, files: result.files_created });
+      setStatusMessage(`${result.message}: ${name} (${formatBytes(result.total_bytes)})`);
 
       // Pipeline: mark export as completed
       pipeline.markCompleted("export");
@@ -559,6 +580,8 @@ export const App: Component = () => {
       setQuadMeshData(quadData);
       setQuadMeshLoaded(true);
       setShowQuadMesh(true);
+      // Lo último que se ve en el visor es lo que se exporta
+      setExportUseRetopology(true);
 
       setIsProcessing(false);
       setProgress(undefined);
@@ -632,6 +655,7 @@ export const App: Component = () => {
       // El backend descarta el rig al cambiar la geometría
       setAutorigComplete(false);
       setWeightsData(undefined);
+      clearQuadMesh();
 
       // Refrescar meshData y meshInfo
       const data = await fetchMeshData();
@@ -669,6 +693,7 @@ export const App: Component = () => {
       setRepairResult(undefined);
       setAutorigComplete(false);
       setWeightsData(undefined);
+      clearQuadMesh();
       setStatusMessage("Reparación deshecha");
     } catch (e) {
       console.error("Undo repair error:", e);
@@ -705,6 +730,7 @@ export const App: Component = () => {
       setSubdivideResult(undefined);
       setAutorigComplete(false);
       setWeightsData(undefined);
+      clearQuadMesh();
       const data = await fetchMeshData();
       setMeshData(data);
       setCanUndoPrintScale(false);
@@ -727,6 +753,7 @@ export const App: Component = () => {
       // El backend descarta el rig al cambiar la geometría
       setAutorigComplete(false);
       setWeightsData(undefined);
+      clearQuadMesh();
 
       // Refrescar meshData
       const data = await fetchMeshData();
@@ -1029,6 +1056,9 @@ export const App: Component = () => {
               onIncludeRigChange: setExportIncludeRig,
               useRetopology: exportUseRetopology(),
               onUseRetopologyChange: setExportUseRetopology,
+              options: exportOptions(),
+              onOptionsChange: setExportOptions,
+              lastExport: lastExport(),
             }}
             viewSettings={viewSettings()}
             onViewSettingsChange={setViewSettings}

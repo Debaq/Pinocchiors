@@ -183,6 +183,16 @@ pub struct ExportConfig {
     pub scale_factor: Option<f64>,
     pub strip_unused: Option<bool>,
     pub export_animations: Option<bool>,
+    /// Fracción de triángulos a conservar (0-1], solo glTF/GLB
+    pub simplify_ratio: Option<f32>,
+    /// Desviación máxima de la reducción, relativa al tamaño del modelo
+    pub simplify_error: Option<f32>,
+    /// Comprimir la geometría con Draco, solo glTF/GLB
+    pub draco: Option<bool>,
+    /// Nivel de compresión Draco 0-10
+    pub draco_level: Option<u8>,
+    /// Bits de cuantización de las posiciones (precisión de la geometría)
+    pub draco_position_bits: Option<u8>,
     // USDZ
     pub arkit_compatible: Option<bool>,
     pub fps: Option<f64>,
@@ -195,6 +205,8 @@ pub struct ExportResult {
     pub path: String,
     pub message: String,
     pub files_created: Vec<String>,
+    /// Suma del tamaño de los archivos escritos, en bytes
+    pub total_bytes: u64,
 }
 
 /// Formatos de importación soportados
@@ -362,6 +374,12 @@ pub fn get_supported_formats() -> SupportedFormats {
                 description: "glTF binario (recomendado)".to_string(),
             },
             FormatInfo {
+                id: "gltf".to_string(),
+                name: "glTF".to_string(),
+                extensions: vec!["gltf".to_string()],
+                description: "glTF separado: JSON + .bin".to_string(),
+            },
+            FormatInfo {
                 id: "obj".to_string(),
                 name: "Wavefront OBJ".to_string(),
                 extensions: vec!["obj".to_string()],
@@ -372,6 +390,18 @@ pub fn get_supported_formats() -> SupportedFormats {
                 name: "STL".to_string(),
                 extensions: vec!["stl".to_string()],
                 description: "Solo geometría (impresión 3D)".to_string(),
+            },
+            FormatInfo {
+                id: "3mf".to_string(),
+                name: "3MF".to_string(),
+                extensions: vec!["3mf".to_string()],
+                description: "Impresión 3D con unidades y colores".to_string(),
+            },
+            FormatInfo {
+                id: "ply".to_string(),
+                name: "PLY".to_string(),
+                extensions: vec!["ply".to_string()],
+                description: "Geometría con color por vértice (escaneo)".to_string(),
             },
             FormatInfo {
                 id: "usdz".to_string(),
@@ -557,7 +587,7 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
     let mut files_created = Vec::new();
 
     match config.format.as_str() {
-        "glb" => {
+        "glb" | "gltf" => {
             let glb_opts = converter_gltf_io::GlbExportOptions {
                 texture_quality: config.texture_quality,
                 max_texture_size: config.max_texture_size,
@@ -567,10 +597,31 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
                 scale_factor: config.scale_factor,
                 export_animations: config.export_animations.unwrap_or(true),
                 strip_unused: config.strip_unused.unwrap_or(false),
+                simplify: config.simplify_ratio.filter(|&r| r < 1.0).map(|ratio| converter_gltf_io::Simplification {
+                    ratio,
+                    max_error: config.simplify_error.unwrap_or(0.01),
+                }),
+                draco: config.draco.unwrap_or(false).then(|| {
+                    let defaults = converter_gltf_io::DracoOptions::default();
+                    converter_gltf_io::DracoOptions {
+                        compression_level: config.draco_level.unwrap_or(defaults.compression_level),
+                        position_bits: config.draco_position_bits.unwrap_or(defaults.position_bits),
+                        ..defaults
+                    }
+                }),
             };
-            converter_gltf_io::export_glb(scene, path, &glb_opts)
-                .map_err(|e| format!("Error exportando GLB: {:?}", e))?;
-            files_created.push(config.path.clone());
+            if config.format == "gltf" {
+                let bin = converter_gltf_io::export_gltf(scene, path, &glb_opts)
+                    .map_err(|e| format!("Error exportando glTF: {e}"))?;
+                files_created.push(config.path.clone());
+                if bin.exists() {
+                    files_created.push(bin.to_string_lossy().to_string());
+                }
+            } else {
+                converter_gltf_io::export_glb(scene, path, &glb_opts)
+                    .map_err(|e| format!("Error exportando GLB: {e}"))?;
+                files_created.push(config.path.clone());
+            }
         }
         "obj" => {
             converter_obj::export_obj(scene, path)
@@ -586,6 +637,14 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
         "stl" => {
             converter_stl::export_stl(scene, path)
                 .map_err(|e| format!("Error exportando STL: {:?}", e))?;
+            files_created.push(config.path.clone());
+        }
+        "ply" => {
+            converter_ply::export_ply(scene, path).map_err(|e| format!("Error exportando PLY: {e}"))?;
+            files_created.push(config.path.clone());
+        }
+        "3mf" => {
+            converter_3mf::export_3mf(scene, path).map_err(|e| format!("Error exportando 3MF: {e}"))?;
             files_created.push(config.path.clone());
         }
         "usdz" => {
@@ -605,12 +664,18 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
         _ => return Err(format!("Formato de exportación no soportado: {}", config.format)),
     }
 
+    let total_bytes = total_size(&files_created);
     Ok(ExportResult {
         success: true,
         path: config.path,
         message: "Exportación completada".to_string(),
         files_created,
+        total_bytes,
     })
+}
+
+fn total_size(files: &[String]) -> u64 {
+    files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum()
 }
 
 /// Escena a exportar según las opciones: geometría original o retopologizada,
@@ -888,6 +953,7 @@ fn export_weights_json(config: &ExportConfig, state: &AppState) -> Result<Export
         success: true,
         path: config.path.clone(),
         message: "Pesos exportados correctamente".to_string(),
+        total_bytes: total_size(std::slice::from_ref(&config.path)),
         files_created: vec![config.path.clone()],
     })
 }
@@ -1649,8 +1715,8 @@ pub async fn repair_mesh(
     *state.scene_before_repair.lock().unwrap() = Some(original_scene);
     *state.mesh.lock().unwrap() = Some(mesh);
     *state.scene.lock().unwrap() = Some(new_scene);
-    // La topología cambió: el rig anterior ya no corresponde
-    *state.result.lock().unwrap() = None;
+    // La topología cambió: el rig y la retopología ya no corresponden
+    state.geometry_changed();
 
     let new_diagnostics = diagnostics_to_info(&diagnostics);
     *state.diagnostics.lock().unwrap() = Some(diagnostics);
@@ -1693,9 +1759,8 @@ fn undo_repair_impl(state: &AppState) -> Result<MeshInfo, String> {
     let mut scene_lock = state.scene.lock().unwrap();
     *scene_lock = Some(backup_scene);
 
-    let mut diag_lock = state.diagnostics.lock().unwrap();
-    *diag_lock = None;
-    *state.result.lock().unwrap() = None;
+    *state.diagnostics.lock().unwrap() = None;
+    state.geometry_changed();
 
     Ok(info)
 }
@@ -1796,8 +1861,8 @@ fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppState) -> Resul
         let mut scene_lock = state.scene.lock().unwrap();
         *scene_lock = Some(new_scene);
     }
-    // Las posiciones cambiaron: el rig anterior ya no corresponde
-    *state.result.lock().unwrap() = None;
+    // Las posiciones cambiaron: el rig y la retopología ya no corresponden
+    state.geometry_changed();
 
     // Re-analizar
     let analysis = pinocchio_print3d::analyze(&mesh)
@@ -1828,7 +1893,7 @@ fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String
     let analysis = pinocchio_print3d::analyze(&mesh).map_err(|e| format!("Error en análisis: {:?}", e))?;
     *state.mesh.lock().unwrap() = Some(mesh);
     *state.scene.lock().unwrap() = Some(scene);
-    *state.result.lock().unwrap() = None;
+    state.geometry_changed();
     *state.print3d_pieces.lock().unwrap() = None;
 
     Ok(analysis_to_info(&analysis, mm_per_unit(state)))
@@ -1940,6 +2005,7 @@ fn export_print3d_piece_impl(piece_index: usize, path: String, state: &AppState)
         success: true,
         path: path.clone(),
         message: format!("Pieza '{}' exportada como STL", piece.label),
+        total_bytes: total_size(std::slice::from_ref(&path)),
         files_created: vec![path],
     })
 }
