@@ -249,9 +249,9 @@ export class Viewer3D {
   private lightDrag: { x: number; y: number; azimuth: number; elevation: number } | null = null;
   private sunMarker: THREE.Mesh | null = null;
 
-  // FPS tracking
+  // Cuadros bajo demanda y FPS
   private frameCount = 0;
-  private lastFpsUpdate = 0;
+  private fpsTimer: number | null = null;
   private animationId: number | null = null;
 
   // Callbacks
@@ -290,6 +290,21 @@ export class Viewer3D {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
 
+    // Se dibuja solo cuando algo cambia (quieto no gasta CPU): todo cambio
+    // pasa por un método del visor, sea de la API o de un evento, y cada
+    // método pide un cuadro al terminar. La cámara lo pide al moverse
+    const self = this as unknown as Record<string, unknown>;
+    for (const name of Object.getOwnPropertyNames(Viewer3D.prototype)) {
+      const method = Object.getOwnPropertyDescriptor(Viewer3D.prototype, name)?.value;
+      if (name === "constructor" || name === "requestRender" || name === "dispose") continue;
+      if (typeof method !== "function") continue;
+      self[name] = (...args: unknown[]) => {
+        const result = method.apply(this, args);
+        this.requestRender();
+        return result;
+      };
+    }
+
     // Scene with Dracula background
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x282a36);
@@ -315,6 +330,8 @@ export class Viewer3D {
     this.controls.dampingFactor = 0.05;
     this.controls.target.set(0, 0.5, 0);
     this.controls.update();
+    // También durante la amortiguación, tras soltar el botón
+    this.controls.addEventListener("change", () => this.requestRender());
 
     // Groups
     this.meshGroup = new THREE.Group();
@@ -336,8 +353,11 @@ export class Viewer3D {
     // Event listeners
     this.setupEventListeners();
 
-    // Start render loop
-    this.animate();
+    this.fpsTimer = window.setInterval(() => {
+      this.callbacks.onFpsUpdate?.(this.frameCount);
+      this.frameCount = 0;
+    }, 1000);
+    this.requestRender();
   }
 
   private setupLights(): void {
@@ -988,21 +1008,19 @@ export class Viewer3D {
     this.renderer.setSize(width, height);
   }
 
-  private animate = (): void => {
-    this.animationId = requestAnimationFrame(this.animate);
+  /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
+  requestRender(): void {
+    if (this.animationId === null) {
+      this.animationId = requestAnimationFrame(this.animate);
+    }
+  }
 
+  private animate = (): void => {
+    this.animationId = null;
+    // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
-
-    // FPS counter
     this.frameCount++;
-    const now = performance.now();
-    if (now - this.lastFpsUpdate >= 1000) {
-      const fps = Math.round((this.frameCount * 1000) / (now - this.lastFpsUpdate));
-      this.callbacks.onFpsUpdate?.(fps);
-      this.frameCount = 0;
-      this.lastFpsUpdate = now;
-    }
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -1444,6 +1462,8 @@ export class Viewer3D {
         this.transformControls.setMode("translate");
         this.transformControls.setSize(0.5);
         this.scene.add(this.transformControls.getHelper());
+        // Resalta ejes al pasar el mouse sin pasar por métodos del visor
+        this.transformControls.addEventListener("change", () => this.requestRender());
 
         this.transformControls.addEventListener("dragging-changed", (event) => {
           this.controls.enabled = !event.value;
@@ -1572,6 +1592,9 @@ export class Viewer3D {
   dispose(): void {
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
+    }
+    if (this.fpsTimer !== null) {
+      clearInterval(this.fpsTimer);
     }
     if (this.transformControls) {
       this.scene.remove(this.transformControls.getHelper());
