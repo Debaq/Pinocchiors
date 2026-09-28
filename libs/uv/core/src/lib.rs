@@ -25,7 +25,7 @@ mod unwrap;
 pub use bake::{bake, BakeChannel, Baked, TexelContext};
 pub use charts::ChartOptions;
 pub use skin::{
-    checker_texture, scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions, Skin, SkinInfo,
+    checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions, Skin, SkinInfo,
 };
 pub use surface::{UvPart, UvSurface};
 pub use tangent::{corner_frames, CornerFrames};

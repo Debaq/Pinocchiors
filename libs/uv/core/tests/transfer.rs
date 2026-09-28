@@ -132,3 +132,54 @@ fn surface_without_uvs_is_none() {
     let (pos, _, tris) = grid(2, 1.0);
     assert!(UvSurface::new([UvPart { group: 0, positions: &pos, uvs: &[], normals: None, triangles: &tris }]).is_none());
 }
+
+/// Escena con dos piezas lado a lado: la izquierda con UV y textura, la
+/// derecha de color liso (sin UV)
+fn mixed_scene() -> converter_scene::Scene {
+    use converter_scene::{IndexData, Material, Mesh, Node, Primitive, Scene, Transform, VertexAttribute};
+    let (pos, uv, tris) = grid(4, 1.0);
+    let right: Vec<[f32; 3]> = pos.iter().map(|p| [p[0] + 1.0, p[1], p[2]]).collect();
+    let indices: Vec<u32> = tris.iter().flatten().copied().collect();
+    let mut scene = Scene::new();
+    scene.materials.push(Material { name: "con textura".into(), ..Material::default() });
+    scene.materials.push(Material { name: "liso".into(), ..Material::default() });
+    scene.meshes.push(Mesh {
+        name: "piezas".into(),
+        primitives: vec![
+            Primitive {
+                attributes: vec![VertexAttribute::Positions(pos), VertexAttribute::TexCoords(0, uv)],
+                indices: Some(IndexData::U32(indices.clone())),
+                material: Some(0),
+            },
+            Primitive {
+                attributes: vec![VertexAttribute::Positions(right)],
+                indices: Some(IndexData::U32(indices)),
+                material: Some(1),
+            },
+        ],
+    });
+    scene.nodes.push(Node { name: "piezas".into(), transform: Transform::identity(), mesh: Some(0), skin: None, children: vec![] });
+    scene.root_nodes.push(0);
+    scene
+}
+
+#[test]
+fn pieces_without_uvs_keep_their_material() {
+    let scene = mixed_scene();
+    let surface = uv_core::scene_surface(&scene).unwrap();
+    let targets = [[0.2, 0.2, 0.0], [0.4, 0.2, 0.0], [0.4, 0.4, 0.0], [1.6, 0.2, 0.0], [1.8, 0.2, 0.0], [1.8, 0.4, 0.0]];
+    let skin = uv_core::transferred_skin(&scene, &surface, &targets, &[[0, 1, 2], [3, 4, 5]]);
+    // Antes la pieza lisa quedaba fuera y su cara tomaba la textura vecina
+    assert_eq!(skin.face_material, vec![Some(0), Some(1)]);
+    assert!((skin.corners[0][1][0] - 0.4).abs() < 1e-5);
+}
+
+#[test]
+fn material_surface_works_without_any_uv() {
+    let mut scene = mixed_scene();
+    scene.meshes[0].primitives[0].attributes.retain(|a| !matches!(a, converter_scene::VertexAttribute::TexCoords(..)));
+    assert!(uv_core::scene_surface(&scene).is_none());
+    let surface = uv_core::material_surface(&scene).unwrap();
+    let skin = uv_core::transferred_skin(&scene, &surface, &[[0.5, 0.5, 0.0], [1.5, 0.5, 0.0], [1.5, 0.7, 0.0]], &[[0, 1, 2]]);
+    assert_eq!(skin.face_material, vec![Some(1)]);
+}

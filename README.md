@@ -183,7 +183,7 @@ El visor usa los gestos de Blender:
 | . / Inicio | Centrar en la selección / ver todo |
 | L + arrastrar | Girar la luz principal |
 
-Cada etapa trabaja con la salida de la anterior. Reparar reemplaza la malla; después de la retopología, UV / Piel, esqueleto, pesos, pincel y pose de prueba usan la malla de quads (la que se exporta), salvo que en Retopología se desmarque "Usar esta malla en las etapas siguientes". Impresión 3D sigue sobre la malla original reparada, donde importa la geometría fiel y no la topología. Si se exporta una malla distinta de la del rig, los pesos se trasladan.
+Cada etapa trabaja con la salida de la anterior. Reparar reemplaza la malla y conserva la piel: UV, materiales y texturas se trasladan desde el original (los parches de agujeros toman la textura del entorno). Los vértices partidos por costuras de UV, normales o materiales no cuentan como duplicados en el diagnóstico; después de la retopología, UV / Piel, esqueleto, pesos, pincel y pose de prueba usan la malla de quads (la que se exporta), salvo que en Retopología se desmarque "Usar esta malla en las etapas siguientes". Impresión 3D sigue sobre la malla original reparada, donde importa la geometría fiel y no la topología. Si se exporta una malla distinta de la del rig, los pesos se trasladan.
 
 ```bash
 cd apps/web

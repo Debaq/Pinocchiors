@@ -4,7 +4,7 @@
 use crate::{
     bake, corner_frames, transfer_uvs, unwrap, BakeChannel, CornerFrames, TexelContext, UnwrapOptions, UvPart, UvSurface,
 };
-use converter_scene::{AlphaMode, Material, Scene, Texture, TextureFormat, TextureRef};
+use converter_scene::{AlphaMode, Material, Scene, Texture, TextureFormat, TextureRef, WorldPrimitive};
 use image::RgbaImage;
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -41,16 +41,33 @@ pub enum SkinInfo {
 
 /// Superficie con las UV de la escena. Grupo = material + 1 (0 = sin
 /// material). `None` si ninguna primitiva tiene UV.
+///
+/// Las primitivas sin UV (una pieza de color liso) entran con UV en cero:
+/// si quedaran afuera, las caras que caen sobre ellas tomarían el material y
+/// la textura de la pieza con UV más cercana.
 pub fn scene_surface(scene: &Scene) -> Option<UvSurface> {
     let prims = scene.world_primitives();
-    UvSurface::new(prims.iter().filter_map(|p| {
-        Some(UvPart {
-            group: p.material.map_or(0, |m| m + 1),
-            positions: &p.positions,
-            uvs: p.uvs.as_deref()?,
-            normals: p.normals.as_deref(),
-            triangles: &p.triangles,
-        })
+    if !prims.iter().any(|p| p.uvs.is_some()) {
+        return None;
+    }
+    primitives_surface(&prims)
+}
+
+/// Superficie de la escena aunque no tenga UV (todas en cero): sirve para
+/// trasladar solo el material de cada cara.
+pub fn material_surface(scene: &Scene) -> Option<UvSurface> {
+    primitives_surface(&scene.world_primitives())
+}
+
+fn primitives_surface(prims: &[WorldPrimitive]) -> Option<UvSurface> {
+    let zeros: Vec<Vec<[f32; 2]>> =
+        prims.iter().map(|p| if p.uvs.is_some() { Vec::new() } else { vec![[0.0; 2]; p.positions.len()] }).collect();
+    UvSurface::new(prims.iter().zip(&zeros).map(|(p, zeros)| UvPart {
+        group: p.material.map_or(0, |m| m + 1),
+        positions: &p.positions,
+        uvs: p.uvs.as_deref().unwrap_or(zeros),
+        normals: p.normals.as_deref(),
+        triangles: &p.triangles,
     }))
 }
 

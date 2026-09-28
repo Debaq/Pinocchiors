@@ -2182,12 +2182,13 @@ pub async fn analyze_mesh(
     state: State<'_, AppState>,
 ) -> Result<MeshDiagnosticsInfo, String> {
     let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
     let analysis_config = RepairAnalysisConfig {
         check_self_intersections: config.check_self_intersections.unwrap_or(false),
         ..RepairAnalysisConfig::default()
     };
 
-    let diagnostics = tauri::async_runtime::spawn_blocking(move || pinocchio_repair::analyze(&mesh, &analysis_config))
+    let diagnostics = tauri::async_runtime::spawn_blocking(move || analyze_scene_mesh(&mesh, &scene, &analysis_config))
         .await
         .map_err(|e| format!("El análisis terminó inesperadamente: {e}"))?;
 
@@ -2235,8 +2236,10 @@ pub async fn repair_mesh(
     .map_err(|e| format!("La reparación terminó inesperadamente: {e}"))?
     .map_err(|e| format!("Error en reparación: {e}"))?;
 
-    // Reconstruir Scene desde la malla reparada (la topología cambió)
-    let new_scene = mesh_to_scene(&mesh, "repaired", Some(&original_scene));
+    // Reconstruir Scene desde la malla reparada (la topología cambió), con la
+    // piel del original. La malla queda en el orden de vértices de la escena
+    report(&on_progress, "skin", 96, "Trasladando la piel...");
+    let (new_scene, mesh) = repaired_scene(&mesh, &original_scene);
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&new_scene);
     let new_mesh_info = MeshInfo {
         num_vertices,
@@ -2618,8 +2621,84 @@ fn scene_to_pinocchio_mesh(scene: &Scene) -> Result<Mesh, String> {
     pinocchio_mesh::scene_to_mesh(scene).ok_or_else(|| "Escena vacía o sin geometría".to_string())
 }
 
+/// Analiza la malla sin contar como duplicados los vértices que la escena
+/// parte a propósito: misma posición con UV, normal o material distintos
+/// (costuras de la piel, aristas duras y bordes entre materiales de glTF/OBJ). Reparar los soldaría y al rearmar la
+/// escena con su piel volverían a partirse.
+fn analyze_scene_mesh(
+    mesh: &Mesh,
+    scene: &Scene,
+    config: &RepairAnalysisConfig,
+) -> pinocchio_repair::MeshDiagnostics {
+    let mut diagnostics = pinocchio_repair::analyze(mesh, config);
+    diagnostics.duplicate_vertices = diagnostics.duplicate_vertices.saturating_sub(split_vertices(scene));
+    diagnostics
+}
+
+/// Vértices de más por costuras de UV, normales o materiales
+fn split_vertices(scene: &Scene) -> usize {
+    use std::collections::HashSet;
+    let mut positions = HashSet::new();
+    let mut corners = HashSet::new();
+    for (prim, p) in scene.world_primitives().iter().enumerate() {
+        for &v in p.triangles.iter().flatten() {
+            let v = v as usize;
+            let Some(position) = p.positions.get(v) else { continue };
+            let position = position.map(f32::to_bits);
+            let uv = p.uvs.as_ref().and_then(|u| u.get(v)).map_or([0; 2], |u| u.map(f32::to_bits));
+            let normal = p.normals.as_ref().and_then(|n| n.get(v)).map_or([0; 3], |n| n.map(f32::to_bits));
+            positions.insert(position);
+            corners.insert((position, prim, uv, normal));
+        }
+    }
+    corners.len() - positions.len()
+}
+
 fn diagnostics_to_info(d: &pinocchio_repair::MeshDiagnostics) -> MeshDiagnosticsInfo {
     MeshDiagnosticsInfo { diagnostics: d.clone(), needs_repair: d.needs_repair(), is_healthy: d.is_healthy() }
+}
+
+/// Escena de la malla reparada con la piel del modelo original: UV,
+/// materiales y texturas llevados cara a cara. Las caras que la reparación no
+/// tocó recuperan su UV exacta; los parches de agujeros la toman del entorno.
+///
+/// Devuelve también la malla de pinocchio armada desde esa escena: las
+/// costuras UV quedan sin soldar, como al importar, y el visor y el rig
+/// comparten el orden de vértices.
+fn repaired_scene(mesh: &Mesh, original: &Scene) -> (Scene, Mesh) {
+    let has_uvs = original.world_primitives().iter().any(|p| p.uvs.is_some());
+    let surface = if has_uvs {
+        uv_core::scene_surface(original)
+    } else if !original.materials.is_empty() {
+        uv_core::material_surface(original)
+    } else {
+        None
+    };
+    let Some(surface) = surface else {
+        return (mesh_to_scene(mesh, "repaired", Some(original)), mesh.clone());
+    };
+
+    let positions: Vec<[f64; 3]> =
+        mesh.vertices.iter().map(|v| [v.position.x(), v.position.y(), v.position.z()]).collect();
+    let faces: Vec<[usize; 3]> = (0..mesh.num_faces()).map(|i| mesh.get_face_vertices(i)).collect();
+    let skin = uv_core::transferred_skin(original, &surface, &positions, &faces);
+    let (mut scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), original);
+    for m in &mut scene.meshes {
+        m.name = "repaired".into();
+        if !has_uvs {
+            // Solo se trasladaron materiales: sin UV inventadas
+            for p in &mut m.primitives {
+                p.attributes.retain(|a| !matches!(a, VertexAttribute::TexCoords(..) | VertexAttribute::Tangents(_)));
+            }
+        }
+    }
+    for n in &mut scene.nodes {
+        n.name = "repaired".into();
+    }
+    match scene_to_pinocchio_mesh(&scene) {
+        Ok(rebuilt) => (scene, rebuilt),
+        Err(_) => (mesh_to_scene(mesh, "repaired", Some(original)), mesh.clone()),
+    }
 }
 
 /// Reconstruye una Scene (converter-scene) a partir de una Mesh de pinocchio.
@@ -2832,6 +2911,140 @@ mod tests {
         assert_eq!(json["scenes"][0]["nodes"], serde_json::json!([0]));
         // Sin doble transformación: el bbox sigue siendo el de la escena original
         assert_eq!(repaired.compute_bounding_box(), scene.compute_bounding_box());
+    }
+
+    /// Cubo con una isla UV por cara, la cara de arriba con otro material (con
+    /// textura) y, si `hole`, un triángulo de menos en la cara de atrás
+    fn textured_cube_scene(hole: bool) -> Scene {
+        use converter_scene::{Texture, TextureFormat, TextureRef};
+        let p = [
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
+        ];
+        let quads = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [3, 7, 6, 2], [0, 4, 7, 3], [1, 2, 6, 5]];
+        let mut prims = vec![(Vec::new(), Vec::new(), Vec::new()); 2];
+        for (f, q) in quads.iter().enumerate() {
+            let (pos, uv, idx): &mut (Vec<[f32; 3]>, Vec<[f32; 2]>, Vec<u32>) = &mut prims[usize::from(f == 3)];
+            let base = pos.len() as u32;
+            let cell = [(f % 3) as f32 / 3.0, (f / 3) as f32 / 2.0];
+            for (k, &v) in q.iter().enumerate() {
+                let c = [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]][k];
+                pos.push(p[v]);
+                uv.push([cell[0] + 0.3 * c[0], cell[1] + 0.4 * c[1]]);
+            }
+            let tris: &[[u32; 3]] = if hole && f == 0 { &[[0, 1, 2]] } else { &[[0, 1, 2], [0, 2, 3]] };
+            for t in tris {
+                idx.extend(t.map(|k| base + k));
+            }
+        }
+        let mut scene = Scene::new();
+        scene.materials.push(Material { name: "piel".into(), ..Material::default() });
+        scene.materials.push(Material {
+            name: "techo".into(),
+            base_color_texture: Some(TextureRef { texture_index: 0, tex_coord_set: 0 }),
+            ..Material::default()
+        });
+        scene.textures.push(Texture {
+            name: "techo".into(),
+            data: vec![1, 2, 3],
+            format: TextureFormat::Png,
+            width: 1,
+            height: 1,
+        });
+        scene.meshes.push(SceneMesh {
+            name: "cubo".into(),
+            primitives: prims
+                .into_iter()
+                .enumerate()
+                .map(|(m, (pos, uv, idx))| Primitive {
+                    attributes: vec![VertexAttribute::Positions(pos), VertexAttribute::TexCoords(0, uv)],
+                    indices: Some(IndexData::U32(idx)),
+                    material: Some(m),
+                })
+                .collect(),
+        });
+        scene.nodes.push(Node {
+            name: "cubo".into(),
+            transform: Transform::identity(),
+            mesh: Some(0),
+            skin: None,
+            children: vec![],
+        });
+        scene.root_nodes.push(0);
+        scene
+    }
+
+    /// Esquinas, UV y material de un triángulo
+    type SkinTriangle = ([[f32; 3]; 3], [[f32; 2]; 3], Option<usize>);
+
+    /// UV de cada triángulo de la escena, por las posiciones de sus esquinas
+    fn corner_uvs(scene: &Scene) -> Vec<SkinTriangle> {
+        scene
+            .world_primitives()
+            .iter()
+            .flat_map(|p| {
+                let uvs = p.uvs.clone().unwrap();
+                p.triangles
+                    .iter()
+                    .map(|t| (t.map(|i| p.positions[i as usize]), t.map(|i| uvs[i as usize]), p.material))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn repair_keeps_the_skin() {
+        let original = textured_cube_scene(true);
+        let mut mesh = scene_to_pinocchio_mesh(&original).unwrap();
+        let config = RepairConfig { fill_holes: true, ..RepairConfig::default() };
+        pinocchio_repair::repair_all(&mut mesh, &config).unwrap();
+        let (scene, rebuilt) = repaired_scene(&mesh, &original);
+        assert!(scene.validate().is_ok());
+
+        // Materiales y texturas del original; agujero cerrado
+        assert_eq!(scene.materials.len(), 2);
+        assert_eq!(scene.textures.len(), 1);
+        let after = corner_uvs(&scene);
+        assert_eq!(after.len(), 12);
+
+        // Cada triángulo que ya existía conserva exactas sus UV y su material
+        let before = corner_uvs(&original);
+        for (pos, uv, material) in &before {
+            let rotations = [[0, 1, 2], [1, 2, 0], [2, 0, 1]];
+            let found = after.iter().any(|(p, u, m)| {
+                rotations.iter().any(|r| {
+                    r.iter().enumerate().all(|(k, &j)| p[j] == pos[k] && (0..2).all(|c| (u[j][c] - uv[k][c]).abs() < 1e-5))
+                }) && m == material
+            });
+            assert!(found, "triángulo {pos:?} perdió su UV {uv:?} o su material {material:?}");
+        }
+
+        // El visor y el rig ven los mismos vértices, y la malla sigue sana
+        let data = scene_mesh_data(&scene);
+        assert_eq!(data.positions.len() / 3, rebuilt.num_vertices());
+        assert!(data.uvs.is_some());
+        let diagnostics = analyze_scene_mesh(&rebuilt, &scene, &RepairAnalysisConfig::default());
+        assert!(diagnostics.is_healthy(), "{diagnostics:?}");
+        // Las costuras del original tampoco piden reparación: solo el agujero
+        let before = analyze_scene_mesh(
+            &scene_to_pinocchio_mesh(&original).unwrap(),
+            &original,
+            &RepairAnalysisConfig::default(),
+        );
+        assert_eq!((before.duplicate_vertices, before.boundary_loops), (0, 1));
+    }
+
+    #[test]
+    fn repair_keeps_materials_without_uvs() {
+        let original = transformed_cube_scene();
+        let mesh = scene_to_pinocchio_mesh(&original).unwrap();
+        let (scene, rebuilt) = repaired_scene(&mesh, &original);
+        assert!(scene.validate().is_ok());
+        assert_eq!(scene.materials.len(), 1);
+        let prims = scene.world_primitives();
+        assert!(prims.iter().all(|p| p.material == Some(0) && p.uvs.is_none()));
+        assert_eq!(rebuilt.num_vertices(), 8);
+        assert_eq!(scene.compute_bounding_box(), original.compute_bounding_box());
     }
 
     #[test]

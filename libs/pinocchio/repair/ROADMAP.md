@@ -60,7 +60,15 @@ recupera >99.5 % del volumen original.
   unas pocas aristas non-manifold (grupos de ≥3 bordes coincidentes).
 - **Uniones en T** entre piezas (vértice sobre la arista de otra sin
   degenerada que lo delate): la costura no las cierra.
-- **Atributos**: la app reconstruye la escena desde la malla reparada y
-  pierde UVs/materiales. Habría que propagar el mapa de vértices.
+- **Atributos**: la reparación trabaja sin UV ni materiales; la app los
+  vuelve a poner trasladándolos cara a cara desde la escena original
+  (`uv_core::transferred_skin`, ver `repaired_scene` en la app). Las caras
+  intactas recuperan su UV exacta; los parches de agujeros la extrapolan del
+  entorno y pueden verse estirados. Se pierden el skin y la jerarquía de
+  nodos de origen (la escena queda en espacio mundo).
+- **Duplicados**: el análisis cuenta como duplicado todo vértice que la
+  costura suelda. La app descuenta los que la escena parte a propósito (UV,
+  normal o material distintos); sin ese descuento todo glTF con textura
+  pedía reparación.
 - Rendimiento: 4.2 M caras ≈ 14 s (126 k ≈ 0.4 s). Paralelizar (feature `parallel`) e
   índices `u32` si hace falta.
