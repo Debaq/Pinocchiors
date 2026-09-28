@@ -1,5 +1,5 @@
 import { Select as KobalteSelect } from "@kobalte/core/select";
-import { Show } from "solid-js";
+import { Show, createMemo } from "solid-js";
 import { clsx } from "clsx";
 
 export interface SelectOption {
@@ -20,14 +20,21 @@ export interface SelectProps {
 }
 
 export const Select = (props: SelectProps) => {
+  // Kobalte compara la opción elegida por referencia: si `options` llega como
+  // un arreglo nuevo en cada lectura, el valor no está en la lista, Kobalte lo
+  // toma como un cambio y avisa con onChange, que vuelve a pedir el valor… en
+  // bucle. Se lee una vez por cambio y solo se avisa si el valor cambió
+  const options = createMemo(() => props.options);
+  const selected = createMemo(() => options().find((o) => o.value === props.value));
+
   return (
     <KobalteSelect
-      options={props.options}
+      options={options()}
       optionValue="value"
       optionTextValue="label"
       optionDisabled="disabled"
-      value={props.options.find((o) => o.value === props.value)}
-      onChange={(option) => option && props.onChange?.(option.value)}
+      value={selected()}
+      onChange={(option) => option && option.value !== props.value && props.onChange?.(option.value)}
       placeholder={props.placeholder ?? "Seleccionar..."}
       disabled={props.disabled}
       itemComponent={(itemProps) => (
