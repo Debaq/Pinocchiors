@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! cargo run --release -p pinocchio-core --example rig_view -- modelo.glb quad salida [--bend hueso grados] [--fit auto|none]
+//! (el preset puede ser una variante de `BodyPlan`: elephant, octopus, dragon…)
 //! ```
 
 use converter_scene::{AlphaMode, IndexData, Material, Mesh as SceneMesh, Node, Primitive, Scene, Transform, VertexAttribute};
@@ -21,7 +22,7 @@ fn preset(name: &str) -> BasicSkeleton {
         "spider" => SpiderSkeleton::new().bones().to_vec(),
         "serpent" => SerpentSkeleton::default().bones().to_vec(),
         "mech" => MechSkeleton::new().bones().to_vec(),
-        other => panic!("preset desconocido: {other}"),
+        other => return BodyPlan::variant(other).unwrap_or_else(|| panic!("preset desconocido: {other}")).build(),
     };
     BasicSkeleton::from_bones(bones)
 }

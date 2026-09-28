@@ -38,6 +38,7 @@ Implementación en Rust del algoritmo de [Pinocchio](https://people.csail.mit.ed
 - Pincel de pesos en la app (sumar, restar, suavizar, espejo) y pose de prueba para revisarlos.
 - Trabaja en las coordenadas originales del modelo, suelda costuras UV y transfiere los pesos si la malla se decima.
 - Esqueletos predefinidos: `HumanSkeleton`, `QuadSkeleton`, `HorseSkeleton`, `CentaurSkeleton`, `BirdSkeleton`, `SpiderSkeleton`, `SerpentSkeleton`, `MechSkeleton`.
+- Esqueletos por forma de cuerpo + apéndices (`BodyPlan`): bípedo, digitígrado, cuadrúpedo, radial, pez, artrópodo o cadena, con cuello, cola, trompa, orejas, alas, tentáculos, aletas, pinzas o antenas de N segmentos, y variantes listas (elefante, jirafa, dragón, pulpo, calamar, pez, delfín, cangrejo, insecto, escorpión, T-rex, ave, serpiente).
 - Decimación automática en mallas grandes, normalización y presets `fast()` / `high_quality()`.
 
 ### QuadriFlow: retopología
@@ -181,7 +182,7 @@ npx tauri build --config ../desktop/tauri.conf.json
 | Grupo | Comandos |
 |-------|----------|
 | Import/Export | `get_supported_formats`, `import_model`, `export_model`, `get_mesh_data` |
-| Esqueletos | `list_skeleton_presets`, `select_skeleton`, `get_skeleton_data`, `transform_skeleton`, `move_bone` (con espejo), `auto_fit_skeleton`, `center_bones` |
+| Esqueletos | `list_skeleton_presets`, `select_skeleton`, `get_body_plan`, `select_body_plan`, `get_skeleton_data`, `transform_skeleton`, `move_bone` (con espejo), `auto_fit_skeleton`, `center_bones` |
 | Auto-rig | `run_autorig`, `get_weights_data`, `set_vertex_weights` (pincel), `get_weight_mirror` |
 | Retopología | `run_retopology`, `get_quad_mesh_data` |
 | UV / Piel | `get_uv_info`, `run_uv_unwrap`, `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout` |

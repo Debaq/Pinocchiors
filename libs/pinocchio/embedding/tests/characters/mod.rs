@@ -189,3 +189,44 @@ pub fn elephant() -> Character {
     }
     Character { capsules, joints }
 }
+
+/// Pulpo: manto arriba, cuerpo y 8 brazos que se afinan, en los mismos
+/// ángulos que la plantilla (`arm{i}_tip_{l,r}`).
+pub fn octopus() -> Character {
+    let mut capsules = vec![Capsule([0.0, 0.6, 0.0], [0.0, 1.0, 0.0], 0.28), Capsule([0.0, 0.35, 0.0], [0.0, 0.5, 0.0], 0.24)];
+    let mut joints = Vec::new();
+    for i in 0..4 {
+        let a = std::f64::consts::PI * (i as f64 + 0.5) / 4.0;
+        for (s, side) in [(-1.0, "l"), (1.0, "r")] {
+            let dir = [(s * a).sin(), 0.0, (s * a).cos()];
+            let at = |r: f64, y: f64| [dir[0] * r, y, dir[2] * r];
+            capsules.push(Capsule(at(0.12, 0.3), at(0.55, 0.12), 0.07));
+            capsules.push(Capsule(at(0.55, 0.12), at(1.0, 0.06), 0.035));
+            let name: &'static str = Box::leak(format!("arm{}_tip_{side}", i + 1).into_boxed_str());
+            joints.push((name, at(1.0, 0.06)));
+        }
+    }
+    Character { capsules, joints }
+}
+
+/// Pez: cuerpo horizontal, cabeza al frente (+Z), cola con aleta caudal,
+/// pectorales y dorsal.
+pub fn fish() -> Character {
+    let capsules = vec![
+        Capsule([0.0, 0.5, -0.3], [0.0, 0.5, 0.35], 0.15),
+        Capsule([0.0, 0.5, 0.35], [0.0, 0.5, 0.5], 0.11),
+        Capsule([0.0, 0.5, -0.3], [0.0, 0.5, -0.8], 0.06),
+        Capsule([0.0, 0.5, -0.8], [0.0, 0.62, -0.95], 0.035),
+        Capsule([0.0, 0.5, -0.8], [0.0, 0.38, -0.95], 0.035),
+        Capsule([-0.12, 0.45, 0.2], [-0.35, 0.38, 0.1], 0.03),
+        Capsule([0.12, 0.45, 0.2], [0.35, 0.38, 0.1], 0.03),
+        Capsule([0.0, 0.6, 0.0], [0.0, 0.8, -0.1], 0.03),
+    ];
+    let joints = vec![
+        ("head", [0.0, 0.5, 0.6]),
+        ("pectoral_tip_l", [-0.35, 0.38, 0.1]),
+        ("pectoral_tip_r", [0.35, 0.38, 0.1]),
+        ("dorsal_tip", [0.0, 0.8, -0.1]),
+    ];
+    Character { capsules, joints }
+}

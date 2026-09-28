@@ -949,7 +949,7 @@ fn export_weights_json(config: &ExportConfig, state: &AppState) -> Result<Export
 /// Lista los presets de esqueleto disponibles
 #[tauri::command]
 pub fn list_skeleton_presets() -> Vec<SkeletonPreset> {
-    vec![
+    [
         SkeletonPreset {
             id: "human".to_string(),
             name: "Humanoide".to_string(),
@@ -999,6 +999,14 @@ pub fn list_skeleton_presets() -> Vec<SkeletonPreset> {
             num_bones: MechSkeleton::new().num_bones(),
         },
     ]
+    .into_iter()
+    .chain(pinocchio_skeleton::BodyPlan::variants().iter().map(|&(id, name, description)| SkeletonPreset {
+        id: format!("plan:{id}"),
+        name: name.to_string(),
+        description: format!("{description} (apéndices configurables)"),
+        num_bones: pinocchio_skeleton::BodyPlan::variant(id).map_or(0, |p| p.build().num_bones()),
+    }))
+    .collect()
 }
 
 /// Selecciona un preset de esqueleto
@@ -1013,7 +1021,10 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
         "spider" => SkeletonType::Spider,
         "serpent" => SkeletonType::Serpent,
         "mech" => SkeletonType::Mech,
-        _ => return Err(format!("Preset desconocido: {}", preset_id)),
+        other => match other.strip_prefix("plan:").and_then(pinocchio_skeleton::BodyPlan::variant) {
+            Some(plan) => SkeletonType::Template(plan.build()),
+            None => return Err(format!("Preset desconocido: {}", preset_id)),
+        },
     };
 
     let data = get_skeleton_data_for_type(&skeleton_type);
@@ -1025,6 +1036,97 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
     *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
     *state.result.lock().unwrap() = None;
 
+    Ok(data)
+}
+
+/// Forma de cuerpo + apéndices (ver `pinocchio_skeleton::BodyPlan`)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BodyPlanDto {
+    /// "biped", "digitigrade", "quadruped", "radial", "fish", "arthropod", "serpent"
+    pub shape: String,
+    pub neck: usize,
+    pub tail: usize,
+    pub trunk: usize,
+    pub ears: usize,
+    pub wings: usize,
+    pub limbs: usize,
+    pub limb_segments: usize,
+    pub fins: bool,
+    pub pincers: bool,
+    pub antennae: usize,
+}
+
+const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 7] = [
+    ("biped", pinocchio_skeleton::BodyShape::Biped),
+    ("digitigrade", pinocchio_skeleton::BodyShape::DigitigradeBiped),
+    ("quadruped", pinocchio_skeleton::BodyShape::Quadruped),
+    ("radial", pinocchio_skeleton::BodyShape::Radial),
+    ("fish", pinocchio_skeleton::BodyShape::Fish),
+    ("arthropod", pinocchio_skeleton::BodyShape::Arthropod),
+    ("serpent", pinocchio_skeleton::BodyShape::Serpent),
+];
+
+impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
+    fn from(p: pinocchio_skeleton::BodyPlan) -> Self {
+        let shape = BODY_SHAPES.iter().find(|(_, s)| *s == p.shape).map_or("biped", |(id, _)| id);
+        Self {
+            shape: shape.to_string(),
+            neck: p.neck,
+            tail: p.tail,
+            trunk: p.trunk,
+            ears: p.ears,
+            wings: p.wings,
+            limbs: p.limbs,
+            limb_segments: p.limb_segments,
+            fins: p.fins,
+            pincers: p.pincers,
+            antennae: p.antennae,
+        }
+    }
+}
+
+impl BodyPlanDto {
+    fn to_plan(&self) -> Result<pinocchio_skeleton::BodyPlan, String> {
+        let shape = BODY_SHAPES
+            .iter()
+            .find(|(id, _)| *id == self.shape)
+            .map(|(_, s)| *s)
+            .ok_or_else(|| format!("Forma desconocida: {}", self.shape))?;
+        // Límites para que la interfaz no pida esqueletos absurdos
+        let clamp = |n: usize, max: usize| n.min(max);
+        Ok(pinocchio_skeleton::BodyPlan {
+            shape,
+            neck: clamp(self.neck, 12).max(1),
+            tail: clamp(self.tail, 32),
+            trunk: clamp(self.trunk, 16),
+            ears: clamp(self.ears, 4),
+            wings: clamp(self.wings, 6),
+            limbs: clamp(self.limbs, 12),
+            limb_segments: clamp(self.limb_segments, 12),
+            fins: self.fins,
+            pincers: self.pincers,
+            antennae: clamp(self.antennae, 6),
+        })
+    }
+}
+
+/// Plan de una variante con nombre (`plan:<id>`), para editar sus apéndices
+#[tauri::command]
+pub fn get_body_plan(preset_id: String) -> Option<BodyPlanDto> {
+    let id = preset_id.strip_prefix("plan:")?;
+    pinocchio_skeleton::BodyPlan::variant(id).map(Into::into)
+}
+
+/// Genera la plantilla de un plan (forma + apéndices) y la deja como preset
+#[tauri::command]
+pub fn select_body_plan(plan: BodyPlanDto, state: State<'_, AppState>) -> Result<SkeletonData, String> {
+    let skeleton = SkeletonType::Template(plan.to_plan()?.build());
+    let data = get_skeleton_data_for_type(&skeleton);
+    *state.skeleton_preset.lock().unwrap() = Some(skeleton.clone());
+    *state.skeleton.lock().unwrap() = Some(skeleton.clone());
+    *state.original_skeleton.lock().unwrap() = Some(skeleton);
+    *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+    *state.result.lock().unwrap() = None;
     Ok(data)
 }
 
@@ -1073,7 +1175,7 @@ fn invert_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
 /// Copia editable de cualquier tipo de esqueleto
 fn to_basic_skeleton(skeleton_type: &SkeletonType) -> BasicSkeleton {
     match skeleton_type {
-        SkeletonType::Custom(s) => s.clone(),
+        SkeletonType::Custom(s) | SkeletonType::Template(s) => s.clone(),
         other => {
             let data = get_skeleton_data_for_type(other);
             let bones = data
@@ -1314,7 +1416,9 @@ pub async fn run_autorig(
             SkeletonType::Spider => autorig_with_progress(&mesh, &SpiderSkeleton::new(), config, report),
             SkeletonType::Serpent => autorig_with_progress(&mesh, &SerpentSkeleton::default(), config, report),
             SkeletonType::Mech => autorig_with_progress(&mesh, &MechSkeleton::new(), config, report),
-            SkeletonType::Custom(skel) => autorig_with_progress(&mesh, skel, config, report),
+            SkeletonType::Custom(skel) | SkeletonType::Template(skel) => {
+                autorig_with_progress(&mesh, skel, config, report)
+            }
         }
     })
     .await
@@ -2322,7 +2426,7 @@ fn get_skeleton_data_for_type(skeleton_type: &SkeletonType) -> SkeletonData {
         SkeletonType::Spider => skeleton_to_data(&SpiderSkeleton::new()),
         SkeletonType::Serpent => skeleton_to_data(&SerpentSkeleton::default()),
         SkeletonType::Mech => skeleton_to_data(&MechSkeleton::new()),
-        SkeletonType::Custom(skel) => skeleton_to_data(skel),
+        SkeletonType::Custom(skel) | SkeletonType::Template(skel) => skeleton_to_data(skel),
     }
 }
 
@@ -2354,7 +2458,7 @@ fn get_bone_names(skeleton_type: &SkeletonType) -> Vec<String> {
         SkeletonType::Spider => SpiderSkeleton::new().bones().iter().map(|b| b.name.clone()).collect(),
         SkeletonType::Serpent => SerpentSkeleton::default().bones().iter().map(|b| b.name.clone()).collect(),
         SkeletonType::Mech => MechSkeleton::new().bones().iter().map(|b| b.name.clone()).collect(),
-        SkeletonType::Custom(skel) => skel.bones().iter().map(|b| b.name.clone()).collect(),
+        SkeletonType::Custom(skel) | SkeletonType::Template(skel) => skel.bones().iter().map(|b| b.name.clone()).collect(),
     }
 }
 
@@ -2696,6 +2800,20 @@ mod tests {
         assert!(usda.contains("SkelRoot"), "{usda}");
         assert!(usda.contains("primvars:skel:jointIndices"));
         assert!(usda.contains("primvars:skel:jointWeights"));
+    }
+
+    #[test]
+    fn body_plans_round_trip_and_are_listed() {
+        for (id, _, _) in pinocchio_skeleton::BodyPlan::variants() {
+            let plan = pinocchio_skeleton::BodyPlan::variant(id).unwrap();
+            let dto = get_body_plan(format!("plan:{id}")).expect("variante");
+            assert_eq!(dto.to_plan().unwrap(), plan, "{id}");
+        }
+        assert!(get_body_plan("human".into()).is_none());
+        let presets = list_skeleton_presets();
+        assert!(presets.iter().any(|p| p.id == "plan:elephant" && p.num_bones > 20));
+        let bad = BodyPlanDto { shape: "blob".into(), ..get_body_plan("plan:fish".into()).unwrap() };
+        assert!(bad.to_plan().is_err());
     }
 
     #[test]

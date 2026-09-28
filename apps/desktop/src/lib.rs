@@ -27,6 +27,8 @@ pub fn run() {
             // Esqueletos
             commands::list_skeleton_presets,
             commands::select_skeleton,
+            commands::get_body_plan,
+            commands::select_body_plan,
             commands::get_skeleton_data,
             // Transformación de esqueleto
             commands::transform_skeleton,

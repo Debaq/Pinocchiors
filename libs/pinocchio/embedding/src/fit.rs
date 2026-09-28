@@ -14,8 +14,8 @@
 //!    extremidades con el algoritmo húngaro (costo: distancia, altura para los
 //!    extremos que tocan el suelo, diferencia de dirección vista desde el
 //!    centro del cuerpo, preferencia por las
-//!    extremidades prominentes, y cabeza gruesa / cola fina según el nombre
-//!    del hueso); gana la orientación de menor costo, con un sesgo a favor de
+//!    extremidades prominentes, y cabeza o trompa gruesa / cola fina según el
+//!    nombre del hueso); gana la orientación de menor costo, con un sesgo a favor de
 //!    la estándar (Y arriba, mirando a +Z).
 //! 3. **Colocación.** Una articulación de bifurcación (pelvis, pecho) va al
 //!    promedio de los puntos donde sus extremidades entran al tronco (donde el
@@ -49,8 +49,9 @@ const DIRECTION_WEIGHT: Real = 0.25;
 const TURN_PENALTY: Real = 0.15;
 const Z_UP_PENALTY: Real = 0.15;
 
-/// Peso del grosor: la cabeza prefiere extremidades gruesas y la cola finas
-/// (por el nombre del hueso: `head*`, `tail*`).
+/// Peso del grosor: la cabeza y la trompa prefieren extremidades gruesas (la
+/// trompa no es un colmillo) y la cola finas (por el nombre del hueso:
+/// `head*`, `trunk*`, `tail*`).
 const GIRTH_WEIGHT: Real = 0.3;
 
 /// Preferencia por las extremidades prominentes: a igual distancia, una cola
@@ -62,6 +63,13 @@ const PROMINENCE_WEIGHT: Real = 0.05;
 /// colmillos no llegan al suelo aunque queden donde la plantilla espera las
 /// patas delanteras.
 const HEIGHT_WEIGHT: Real = 0.5;
+
+/// Una extremidad "llega al suelo" si su punta está a menos de esta fracción
+/// del alto de la malla sobre su piso.
+const GROUND_BAND: Real = 0.1;
+
+/// Costo de una asignación prohibida (mayor que dejar el extremo libre).
+const FORBIDDEN: Real = 10.0;
 
 /// Fracción de la caja de la malla que ocupa la plantilla encajada.
 const FILL: Real = 0.9;
@@ -388,7 +396,7 @@ pub fn fit_skeleton<S: Skeleton>(mesh: &Mesh, template: &S, options: &FitOptions
     let girth_cost = |bone: usize, e: &Extremity| {
         let name = template.bones()[bone].name.to_lowercase();
         let g = e.girth / thickest;
-        if name.starts_with("head") {
+        if name.starts_with("head") || name.starts_with("trunk") {
             GIRTH_WEIGHT * (1.0 - g)
         } else if name.starts_with("tail") {
             GIRTH_WEIGHT * g
@@ -419,6 +427,7 @@ pub fn fit_skeleton<S: Skeleton>(mesh: &Mesh, template: &S, options: &FitOptions
         } else {
             base.clone()
         };
+        let mesh_floor = along_up(bbox.min);
         // Extremos que tocan el suelo en la plantilla
         let ground = placed.bones().iter().map(|b| along_up(b.position)).fold(Real::INFINITY, Real::min);
         let top = placed.bones().iter().map(|b| along_up(b.position)).fold(Real::NEG_INFINITY, Real::max);
@@ -432,6 +441,11 @@ pub fn fit_skeleton<S: Skeleton>(mesh: &Mesh, template: &S, options: &FitOptions
                 extremities
                     .iter()
                     .map(|e| {
+                        // Una pata sólo va a una extremidad que llega al suelo
+                        let off_ground = grounded(b) && along_up(e.tip) - mesh_floor > GROUND_BAND * height;
+                        if off_ground {
+                            return FORBIDDEN;
+                        }
                         p.distance(&e.tip) / longest
                             + height_weight * (along_up(p) - along_up(e.tip)).abs() / height
                             + direction_cost(p, e.tip)

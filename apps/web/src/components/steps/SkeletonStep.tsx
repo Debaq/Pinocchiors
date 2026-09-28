@@ -2,6 +2,7 @@ import { Component, Show } from "solid-js";
 import { Button, Checkbox, Panel, Select, Slider } from "../ui";
 import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
+import { BodyPlanPanel, type BodyPlan } from "../panels/BodyPlanPanel";
 import { ConfigPanel, type AutorigConfig } from "../panels/ConfigPanel";
 import { SkeletonTransformPanel, type SkeletonTransform } from "../panels/SkeletonTransformPanel";
 import * as Icons from "../icons";
@@ -18,6 +19,9 @@ export interface SkeletonStepProps {
   presets: SkeletonPreset[];
   selectedPreset?: string;
   onPresetChange?: (presetId: string) => void;
+  /** Plan de la plantilla generada (variantes con apéndices) */
+  bodyPlan?: BodyPlan;
+  onBodyPlanChange?: (plan: BodyPlan) => void;
   // Ajuste automático
   onAutoFit?: () => void;
   fitInfo?: SkeletonFitInfo;
@@ -88,6 +92,9 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
           selectedPreset={props.selectedPreset}
           onPresetChange={props.onPresetChange}
         />
+        <Show when={props.bodyPlan}>
+          <BodyPlanPanel plan={props.bodyPlan!} onChange={props.onBodyPlanChange} disabled={props.isProcessing} />
+        </Show>
       </div>
 
       <Show when={hasSkeleton()}>

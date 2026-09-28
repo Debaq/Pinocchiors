@@ -25,6 +25,7 @@ import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from
 import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
+import type { BodyPlan } from "./components/panels/BodyPlanPanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -318,6 +319,7 @@ export const App: Component = () => {
   });
   const [paintMirrorLoaded, setPaintMirrorLoaded] = createSignal(false);
   const [fitInfo, setFitInfo] = createSignal<SkeletonFitInfo | undefined>();
+  const [bodyPlan, setBodyPlan] = createSignal<BodyPlan | undefined>();
   const [boneEditMode, setBoneEditMode] = createSignal(false);
 
   // Active tool
@@ -497,6 +499,8 @@ export const App: Component = () => {
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonLoaded(true);
       setFitInfo(undefined);
+      setAutorigComplete(false);
+      setBodyPlan((await invoke<BodyPlan | null>("get_body_plan", { presetId })) ?? undefined);
 
       const preset = skeletonPresets().find((p) => p.id === presetId);
       if (preset) {
@@ -965,6 +969,22 @@ export const App: Component = () => {
     }
   };
 
+  /** Cambió un apéndice: se rehace la plantilla */
+  const handleBodyPlanChange = async (plan: BodyPlan) => {
+    setBodyPlan(plan);
+    try {
+      const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
+      setSkeletonData(tauriSkeletonToViewer(data));
+      setSkeletonTransform({ ...defaultTransform });
+      setFitInfo(undefined);
+      setAutorigComplete(false);
+      setStatusMessage(`Plantilla con ${data.bones.length} huesos: ajústala al modelo`);
+    } catch (e) {
+      console.error("Body plan error:", e);
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
   const handleAutoFit = async () => {
     try {
       const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
@@ -1264,6 +1284,8 @@ export const App: Component = () => {
               onTransformChange: handleTransformChange,
               onAutoFit: handleAutoFit,
               fitInfo: fitInfo(),
+              bodyPlan: bodyPlan(),
+              onBodyPlanChange: handleBodyPlanChange,
               onResetTransform: handleResetTransform,
               editing: boneEditMode() && activeTool() === "move",
               onEdit: () => useTool("move"),

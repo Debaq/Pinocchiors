@@ -405,13 +405,30 @@ fijos.
 | Insecto | artrópodo 6 patas + alas + antenas |
 | T-rex | bípedo digitígrado + cola larga + brazos cortos |
 
-**Pendientes:**
-- [ ] Modelo de datos: forma base + lista de apéndices (anclaje, segmentos, simetría) → `BasicSkeleton`
-- [ ] Formas nuevas: radial, eje horizontal con aletas, bípedo digitígrado, árbol libre
-- [ ] Apéndices: trompa, tentáculo, aleta, ala, cola, cuello, oreja, pinza
-- [ ] Variantes con nombre en `list_skeleton_presets` y en la UI
-- [ ] Auto-ajuste de cadenas (trompa, tentáculos, colas) siguiendo el eje medial de la malla: más fácil que las extremidades articuladas
-- [ ] Pesos: las cadenas largas y delgadas necesitan más segmentos para no quebrarse al doblar; validar el heat diffusion en tentáculos
+**Estado (2026-09-28):**
+- [x] Modelo de datos: `pinocchio_skeleton::BodyPlan` (forma + segmentos por
+      apéndice) → `BasicSkeleton` plantilla (Y arriba, mirando a +Z). Nombres:
+      `head*`, `tail*`, `trunk*`, sufijos `_l`/`_r`.
+- [x] Formas: bípedo, bípedo digitígrado, cuadrúpedo, radial, pez, artrópodo
+      (N pares de patas), cadena. Falta "árbol libre".
+- [x] Apéndices: cuello de N segmentos, cola, trompa, orejas, alas, brazos
+      radiales, aletas, pinzas, antenas. Faltan cuernos y mandíbula.
+- [x] Variantes con nombre (`BodyPlan::variant`): elefante, jirafa, perro,
+      dragón, pulpo, calamar, pez, delfín, cangrejo, insecto, escorpión,
+      T-rex, ave, serpiente. En la app: presets `plan:<id>` y panel
+      "Apéndices" que rehace la plantilla (`get_body_plan`, `select_body_plan`).
+- [x] Ajuste de cadenas: el ajuste por extremidades sirve igual (tests del
+      banco sintético: trompa del elefante, 8 brazos del pulpo, aletas del pez).
+      Dos reglas nuevas del ajuste: un extremo que en la plantilla toca el
+      suelo sólo va a una extremidad que llega al suelo (los colmillos no son
+      patas), y la trompa prefiere extremidades gruesas (no es un colmillo).
+- Gonfoterio con la plantilla de elefante: patas, cola, cuello, orejas y la
+      trompa real hasta la punta; al doblar la trompa se levanta y los
+      colmillos siguen a la cabeza.
+- [ ] Pesos en cadenas largas: en el gonfoterio los primeros segmentos de la
+      trompa quedan dominados por la cabeza y se nota un corte al doblarla
+      (arreglable con el pincel; falta que el calor reparta mejor a lo largo).
+- [ ] Proporciones por especie (patas cortas del elefante, rodilla alta).
 
 ---
 

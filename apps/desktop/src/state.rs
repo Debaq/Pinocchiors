@@ -20,6 +20,10 @@ pub enum SkeletonType {
     Spider,
     Serpent,
     Mech,
+    /// Plantilla generada (forma de cuerpo + apéndices): se ajusta a la malla
+    /// igual que los presets
+    Template(BasicSkeleton),
+    /// Ya colocado sobre la malla (ajustado o editado): se usa tal cual
     Custom(BasicSkeleton),
 }
 

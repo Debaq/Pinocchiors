@@ -2,7 +2,7 @@ mod characters;
 
 use characters::Character;
 use pinocchio_embedding::{fit_skeleton, FitOptions};
-use pinocchio_skeleton::{HumanSkeleton, QuadSkeleton, Skeleton};
+use pinocchio_skeleton::{BodyPlan, HumanSkeleton, QuadSkeleton, Skeleton};
 
 /// Error de cada articulación con posición real conocida, en fracción del
 /// tamaño del personaje.
@@ -56,4 +56,25 @@ fn turned_elephant_fits() {
 #[test]
 fn z_up_human_fits() {
     assert_errors(&fit_errors(characters::human().z_up(), &HumanSkeleton::new()), 0.06);
+}
+
+#[test]
+fn elephant_template_puts_the_trunk_in_the_trunk() {
+    let mut character = characters::elephant();
+    // Con la plantilla de elefante la cabeza no es hoja: se mide la trompa
+    character.joints.retain(|(name, _)| *name != "head");
+    character.joints.push(("trunk_tip", [0.0, 0.35, 1.35]));
+    character.joints.push(("tail_tip", [0.0, 0.75, -1.15]));
+    character.joints.retain(|(name, _)| *name != "tail_end");
+    assert_errors(&fit_errors(character, &BodyPlan::variant("elephant").unwrap().build()), 0.06);
+}
+
+#[test]
+fn octopus_arms_find_their_tentacles() {
+    assert_errors(&fit_errors(characters::octopus(), &BodyPlan::variant("octopus").unwrap().build()), 0.06);
+}
+
+#[test]
+fn fish_fits() {
+    assert_errors(&fit_errors(characters::fish(), &BodyPlan::variant("fish").unwrap().build()), 0.08);
 }

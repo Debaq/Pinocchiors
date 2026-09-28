@@ -11,3 +11,6 @@ export type { ViewPanelProps, ViewSettings } from "./ViewPanel";
 
 export { RetopologyPanel } from "./RetopologyPanel";
 export type { RetopologyPanelProps, RetopologyConfig, QuadQuality } from "./RetopologyPanel";
+
+export { BodyPlanPanel } from "./BodyPlanPanel";
+export type { BodyPlan, BodyPlanPanelProps } from "./BodyPlanPanel";
