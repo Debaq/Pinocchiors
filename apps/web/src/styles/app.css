@@ -154,6 +154,15 @@
   animation: spin 1s linear infinite;
 }
 
+@keyframes indeterminate {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(300%); }
+}
+
+.animate-indeterminate {
+  animation: indeterminate 1.2s ease-in-out infinite;
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    PIPELINE
    ═══════════════════════════════════════════════════════════════════════════ */

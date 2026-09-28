@@ -1,7 +1,7 @@
 import { Component, createSignal, onMount, onCleanup, Show } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { Header, StatusBar, Viewport, Toolbar } from "./components/layout";
+import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import { PipelineBar } from "./components/pipeline";
@@ -18,6 +18,7 @@ import { buildSceneTree } from "./lib/scene-tree";
 import type { ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
 import { createShortcutManager } from "./lib/shortcuts";
+import { decodeMesh, decodeWeights } from "./lib/buffers";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
@@ -52,14 +53,6 @@ interface TauriSkeletonData {
     is_leaf: boolean;
   }>;
   edges: Array<[number, number]>;
-}
-
-interface TauriWeightsData {
-  num_vertices: number;
-  num_bones: number;
-  bone_names: string[];
-  weights: number[];
-  max_influences: number;
 }
 
 interface Progress {
@@ -117,13 +110,6 @@ interface TauriQuadMeshInfo {
   quality: QuadQuality;
 }
 
-interface TauriQuadMeshData {
-  positions: number[];
-  normals: number[];
-  indices: number[];
-  quad_indices: number[];
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -137,16 +123,6 @@ function tauriSkeletonToViewer(data: TauriSkeletonData): SkeletonData {
       isLeaf: b.is_leaf,
     })),
     edges: data.edges,
-  };
-}
-
-function tauriWeightsToViewer(data: TauriWeightsData): WeightsData {
-  return {
-    numVertices: data.num_vertices,
-    numBones: data.num_bones,
-    boneNames: data.bone_names,
-    weights: data.weights,
-    maxInfluences: data.max_influences,
   };
 }
 
@@ -164,7 +140,29 @@ export const App: Component = () => {
   // State
   const [fps, setFps] = createSignal(0);
   const [statusMessage, setStatusMessage] = createSignal("Listo - Importa un modelo para comenzar");
-  const [progress, setProgress] = createSignal<{ value: number; label?: string } | undefined>();
+  // value ausente = progreso indeterminado (solo etiqueta)
+  const [progress, setProgress] = createSignal<{ value?: number; label?: string } | undefined>();
+
+  /** Canal de progreso del backend que alimenta la barra */
+  const progressChannel = () => {
+    const channel = new Channel<Progress>();
+    channel.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+    return channel;
+  };
+
+  /** Muestra la barra mientras dura `task` (indeterminada salvo que un canal informe avance) */
+  const busy = async <T,>(label: string, task: () => Promise<T>): Promise<T> => {
+    setProgress({ label });
+    try {
+      return await task();
+    } finally {
+      setProgress(undefined);
+    }
+  };
+
+  /** Malla actual del backend, en binario (sin JSON) */
+  const fetchMeshData = () =>
+    busy("Cargando en el visor...", async () => decodeMesh(await invoke<ArrayBuffer>("get_mesh_data")));
   const [fileName, setFileName] = createSignal<string | undefined>();
 
   // Skeleton presets (loaded from Tauri)
@@ -363,23 +361,19 @@ export const App: Component = () => {
       const name = filePath.split("/").pop() ?? filePath;
       setFileName(name);
       setStatusMessage(`Importando ${name}...`);
-      setProgress({ value: 30 });
 
-      const info = await invoke<MeshInfo>("import_model", { path: filePath });
-      setProgress({ value: 70 });
+      const info = await busy(`Importando ${name}...`, () =>
+        invoke<MeshInfo>("import_model", { path: filePath, onProgress: progressChannel() })
+      );
 
-      const data = await invoke<MeshData>("get_mesh_data");
+      const data = await fetchMeshData();
       setMeshData(data);
       setMeshLoaded(true);
       setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: info.format });
 
-      setProgress({ value: 100 });
-      await new Promise((resolve) => setTimeout(resolve, 200));
-
       setStatusMessage(
         `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, ${info.num_faces.toLocaleString()} caras (${info.format})`
       );
-      setProgress(undefined);
 
       // Reset other states
       setAutorigComplete(false);
@@ -451,8 +445,8 @@ export const App: Component = () => {
         onProgress,
       });
 
-      const weightsResult = await invoke<TauriWeightsData>("get_weights_data");
-      const viewerWeights = tauriWeightsToViewer(weightsResult);
+      setProgress({ value: 100, label: "Cargando pesos en el visor..." });
+      const viewerWeights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
       setWeightsData(viewerWeights);
       setBoneNames(viewerWeights.boneNames);
 
@@ -490,12 +484,11 @@ export const App: Component = () => {
       if (!selected) return;
 
       setStatusMessage(`Exportando a ${selected.split("/").pop()}...`);
-      setProgress({ value: 50 });
 
       const ext = selected.split(".").pop()?.toLowerCase() || "glb";
 
       const includeRig = exportIncludeRig() && autorigComplete();
-      const result = await invoke<ExportResult>("export_model", {
+      const result = await busy(`Exportando a ${selected.split("/").pop()}...`, () => invoke<ExportResult>("export_model", {
         config: {
           format: ext,
           path: selected,
@@ -503,13 +496,9 @@ export const App: Component = () => {
           include_weights: includeRig,
           use_retopology: exportUseRetopology() && quadMeshLoaded(),
         },
-      });
-
-      setProgress({ value: 100 });
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      }));
 
       setStatusMessage(result.message);
-      setProgress(undefined);
 
       // Pipeline: mark export as completed
       pipeline.markCompleted("export");
@@ -565,15 +554,9 @@ export const App: Component = () => {
       setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
       setQuadQuality(info.quality);
 
-      const quadData = await invoke<TauriQuadMeshData>("get_quad_mesh_data");
-
-      const meshDataForViewer: MeshData = {
-        positions: quadData.positions,
-        normals: quadData.normals,
-        indices: quadData.indices,
-        quadIndices: quadData.quad_indices,
-      };
-      setQuadMeshData(meshDataForViewer);
+      setProgress({ value: 100, label: "Cargando en el visor..." });
+      const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
+      setQuadMeshData(quadData);
       setQuadMeshLoaded(true);
       setShowQuadMesh(true);
 
@@ -602,11 +585,13 @@ export const App: Component = () => {
       setIsProcessing(true);
       setStatusMessage("Analizando malla...");
       const config = repairAnalysisConfig();
-      const result = await invoke<MeshDiagnostics>("analyze_mesh", {
-        config: {
-          check_self_intersections: config.checkSelfIntersections,
-        },
-      });
+      const result = await busy("Analizando malla...", () =>
+        invoke<MeshDiagnostics>("analyze_mesh", {
+          config: {
+            check_self_intersections: config.checkSelfIntersections,
+          },
+        })
+      );
       setDiagnostics(result);
       setIsProcessing(false);
       setStatusMessage(
@@ -626,7 +611,8 @@ export const App: Component = () => {
       setIsProcessing(true);
       setStatusMessage("Reparando malla...");
       const opts = repairOptions();
-      const result = await invoke<TauriRepairResult>("repair_mesh", {
+      const result = await busy("Reparando malla...", () => invoke<TauriRepairResult>("repair_mesh", {
+        onProgress: progressChannel(),
         config: {
           merge_duplicates: opts.mergeDuplicates,
           remove_degenerates: opts.removeDegenerates,
@@ -638,7 +624,7 @@ export const App: Component = () => {
           max_hole_edges: opts.maxHoleEdges,
           refine_fill: opts.refineFill,
         },
-      });
+      }));
 
       setRepairResult(result);
       setDiagnostics(result.new_diagnostics);
@@ -648,7 +634,7 @@ export const App: Component = () => {
       setWeightsData(undefined);
 
       // Refrescar meshData y meshInfo
-      const data = await invoke<MeshData>("get_mesh_data");
+      const data = await fetchMeshData();
       setMeshData(data);
       setMeshInfo({
         vertices: result.new_mesh_info.num_vertices,
@@ -673,9 +659,9 @@ export const App: Component = () => {
   const handleUndoRepair = async () => {
     try {
       setStatusMessage("Deshaciendo reparación...");
-      const info = await invoke<MeshInfo>("undo_repair");
+      const info = await busy("Deshaciendo reparación...", () => invoke<MeshInfo>("undo_repair"));
 
-      const data = await invoke<MeshData>("get_mesh_data");
+      const data = await fetchMeshData();
       setMeshData(data);
       setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
       setCanUndoRepair(false);
@@ -698,7 +684,7 @@ export const App: Component = () => {
     try {
       setIsProcessing(true);
       setStatusMessage("Analizando para impresión 3D...");
-      const result = await invoke<TauriPrint3dAnalysis>("analyze_print3d");
+      const result = await busy("Analizando para impresión 3D...", () => invoke<TauriPrint3dAnalysis>("analyze_print3d"));
       setMeshAnalysis(result);
       setIsProcessing(false);
       setStatusMessage(
@@ -714,12 +700,12 @@ export const App: Component = () => {
   const handleUndoPrintScale = async () => {
     try {
       setIsProcessing(true);
-      const result = await invoke<TauriPrint3dAnalysis>("undo_print_scale");
+      const result = await busy("Deshaciendo escala...", () => invoke<TauriPrint3dAnalysis>("undo_print_scale"));
       setMeshAnalysis(result);
       setSubdivideResult(undefined);
       setAutorigComplete(false);
       setWeightsData(undefined);
-      const data = await invoke<MeshData>("get_mesh_data");
+      const data = await fetchMeshData();
       setMeshData(data);
       setCanUndoPrintScale(false);
       setStatusMessage("Escala deshecha");
@@ -735,7 +721,7 @@ export const App: Component = () => {
     try {
       setIsProcessing(true);
       setStatusMessage("Escalando malla...");
-      const result = await invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params });
+      const result = await busy("Escalando malla...", () => invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params }));
       setMeshAnalysis(result);
       setCanUndoPrintScale(true);
       // El backend descarta el rig al cambiar la geometría
@@ -743,7 +729,7 @@ export const App: Component = () => {
       setWeightsData(undefined);
 
       // Refrescar meshData
-      const data = await invoke<MeshData>("get_mesh_data");
+      const data = await fetchMeshData();
       setMeshData(data);
 
       setIsProcessing(false);
@@ -761,7 +747,7 @@ export const App: Component = () => {
     try {
       setIsProcessing(true);
       setStatusMessage("Subdividiendo malla...");
-      const result = await invoke<TauriSubdivideResult>("subdivide_mesh", { config });
+      const result = await busy("Subdividiendo malla...", () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
       setSubdivideResult(result);
       setIsProcessing(false);
       setStatusMessage(`Subdivisión completada: ${result.piece_count} piezas`);
@@ -782,10 +768,12 @@ export const App: Component = () => {
       if (!selected) return;
 
       setStatusMessage(`Exportando pieza ${index + 1}...`);
-      const result = await invoke<ExportResult>("export_print3d_piece", {
-        pieceIndex: index,
-        path: selected,
-      });
+      const result = await busy(`Exportando pieza ${index + 1}...`, () =>
+        invoke<ExportResult>("export_print3d_piece", {
+          pieceIndex: index,
+          path: selected,
+        })
+      );
       setStatusMessage(result.message);
     } catch (e) {
       console.error("Export piece error:", e);
@@ -823,7 +811,7 @@ export const App: Component = () => {
 
   const handleAutoFit = async () => {
     try {
-      const data = await invoke<TauriSkeletonData>("auto_fit_skeleton");
+      const data = await busy("Ajustando esqueleto...", () => invoke<TauriSkeletonData>("auto_fit_skeleton"));
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
       setStatusMessage("Esqueleto ajustado al modelo");
@@ -964,6 +952,8 @@ export const App: Component = () => {
             <Show when={!meshLoaded()}>
               <WelcomeScreen onImport={handleLoad} />
             </Show>
+
+            <ProgressOverlay progress={progress()} />
           </div>
 
           {/* Context Panel (right sidebar) */}

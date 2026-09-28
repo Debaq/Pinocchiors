@@ -9,6 +9,9 @@ export type { SidebarProps, SidebarPosition } from "./Sidebar";
 export { StatusBar } from "./StatusBar";
 export type { StatusBarProps } from "./StatusBar";
 
+export { ProgressOverlay } from "./ProgressOverlay";
+export type { ProgressOverlayProps } from "./ProgressOverlay";
+
 export { Viewport } from "./Viewport";
 export type { ViewportProps } from "./Viewport";
 

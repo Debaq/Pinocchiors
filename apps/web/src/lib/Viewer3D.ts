@@ -12,11 +12,12 @@ import { TransformControls } from "three/addons/controls/TransformControls.js";
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface MeshData {
-  positions: number[];
-  normals: number[];
-  indices: number[];
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: Uint32Array;
+  uvs?: Float32Array;
   /** Optional quad indices for quad wireframe visualization (4 indices per quad) */
-  quadIndices?: number[];
+  quadIndices?: Uint32Array;
 }
 
 export interface SkeletonData {
@@ -35,7 +36,8 @@ export interface WeightsData {
   numVertices: number;
   numBones: number;
   boneNames: string[];
-  weights: number[];
+  /** Por vértice, `maxInfluences` pares (hueso, peso) */
+  weights: Float32Array;
   maxInfluences: number;
 }
 
@@ -97,7 +99,7 @@ export class Viewer3D {
 
   // Current objects
   private currentMesh: THREE.Mesh | null = null;
-  private currentWireframe: THREE.LineSegments | null = null;
+  private currentWireframe: THREE.Mesh | null = null;
   private quadWireframe: THREE.LineSegments | null = null;
   private weightsMesh: THREE.Mesh | null = null;
 
@@ -263,9 +265,9 @@ export class Viewer3D {
 
     // Create geometry
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(data.positions, 3));
-    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(data.normals, 3));
-    geometry.setIndex(new THREE.Uint32BufferAttribute(data.indices, 1));
+    geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
     // Material - Dracula style
     const material = new THREE.MeshStandardMaterial({
@@ -292,14 +294,16 @@ export class Viewer3D {
       this.quadWireframe.visible = this.settings.showWireframe;
       this.meshGroup.add(this.quadWireframe);
     } else {
-      // Fallback to triangle wireframe
-      const wireframeMaterial = new THREE.LineBasicMaterial({
+      // Fallback to triangle wireframe. Comparte la geometría y dibuja en modo
+      // wireframe: WireframeGeometry deduplica aristas con claves de texto en
+      // JS y congela la ventana varios segundos con mallas de millones de caras.
+      const wireframeMaterial = new THREE.MeshBasicMaterial({
         color: 0x44475a,
         opacity: 0.5,
         transparent: true,
+        wireframe: true,
       });
-      const wireframeGeometry = new THREE.WireframeGeometry(geometry);
-      this.currentWireframe = new THREE.LineSegments(wireframeGeometry, wireframeMaterial);
+      this.currentWireframe = new THREE.Mesh(geometry, wireframeMaterial);
       this.currentWireframe.visible = this.settings.showWireframe;
       this.meshGroup.add(this.currentWireframe);
     }
@@ -571,9 +575,9 @@ export class Viewer3D {
 
     // Create geometry
     const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute("position", new THREE.Float32BufferAttribute(this.meshData.positions, 3));
-    geometry.setAttribute("normal", new THREE.Float32BufferAttribute(this.meshData.normals, 3));
-    geometry.setIndex(new THREE.Uint32BufferAttribute(this.meshData.indices, 1));
+    geometry.setAttribute("position", new THREE.BufferAttribute(this.meshData.positions, 3));
+    geometry.setAttribute("normal", new THREE.BufferAttribute(this.meshData.normals, 3));
+    geometry.setIndex(new THREE.BufferAttribute(this.meshData.indices, 1));
 
     // Compute vertex colors
     const colors = new Float32Array(this.weightsData.numVertices * 3);
@@ -628,8 +632,8 @@ export class Viewer3D {
     }
 
     if (this.currentWireframe) {
+      // La geometría es la de currentMesh: se libera con ella
       this.meshGroup.remove(this.currentWireframe);
-      this.currentWireframe.geometry.dispose();
       (this.currentWireframe.material as THREE.Material).dispose();
       this.currentWireframe = null;
     }
@@ -798,7 +802,7 @@ export class Viewer3D {
    * Unlike the standard WireframeGeometry (which shows triangle edges),
    * this draws only the 4 edges of each quad.
    */
-  private createQuadWireframeGeometry(positions: number[], quadIndices: number[]): THREE.BufferGeometry {
+  private createQuadWireframeGeometry(positions: Float32Array, quadIndices: Uint32Array): THREE.BufferGeometry {
     // Each quad has 4 vertices (v0, v1, v2, v3) and we draw 4 edges:
     // v0-v1, v1-v2, v2-v3, v3-v0
     // Each edge needs 2 vertices * 3 components = 6 floats

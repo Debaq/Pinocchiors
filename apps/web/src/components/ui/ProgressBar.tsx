@@ -2,7 +2,8 @@ import { Show } from "solid-js";
 import { clsx } from "clsx";
 
 export interface ProgressBarProps {
-  value: number; // 0-100
+  /** 0-100; sin valor la barra es indeterminada (trabajo sin avance medible) */
+  value?: number;
   label?: string;
   showValue?: boolean;
   class?: string;
@@ -18,7 +19,8 @@ const variantColors: Record<string, string> = {
 };
 
 export const ProgressBar = (props: ProgressBarProps) => {
-  const value = () => Math.min(100, Math.max(0, props.value));
+  const value = () => Math.min(100, Math.max(0, props.value ?? 0));
+  const indeterminate = () => props.value === undefined;
   const size = () => props.size ?? "md";
   const variant = () => props.variant ?? "default";
 
@@ -29,7 +31,7 @@ export const ProgressBar = (props: ProgressBarProps) => {
           <Show when={props.label}>
             <span class="text-xs text-text-muted">{props.label}</span>
           </Show>
-          <Show when={props.showValue}>
+          <Show when={props.showValue && !indeterminate()}>
             <span class="text-xs font-mono text-text-muted">{value()}%</span>
           </Show>
         </div>
@@ -43,10 +45,11 @@ export const ProgressBar = (props: ProgressBarProps) => {
       >
         <div
           class={clsx(
-            "h-full rounded-full transition-all duration-300 ease-out",
+            "h-full rounded-full",
+            indeterminate() ? "w-1/3 animate-indeterminate" : "transition-all duration-300 ease-out",
             variantColors[variant()]
           )}
-          style={{ width: `${value()}%` }}
+          style={indeterminate() ? undefined : { width: `${value()}%` }}
         />
       </div>
     </div>

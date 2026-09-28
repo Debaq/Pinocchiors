@@ -5,7 +5,8 @@ import { ProgressBar } from "../ui";
 export interface StatusBarProps {
   message?: string;
   progress?: {
-    value: number;
+    /** Sin valor: indeterminado */
+    value?: number;
     label?: string;
   };
   showMemory?: boolean;
@@ -31,9 +32,11 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
               size="sm"
               class="flex-1"
             />
-            <span class="text-xs text-text-muted whitespace-nowrap">
-              {props.progress!.value}%
-            </span>
+            <Show when={props.progress!.value !== undefined}>
+              <span class="text-xs text-text-muted whitespace-nowrap">
+                {props.progress!.value}%
+              </span>
+            </Show>
           </div>
         </Show>
 

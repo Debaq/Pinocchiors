@@ -15,7 +15,7 @@ use pinocchio_skeleton::{
 use quadriflow_core::{remesh_with_callback, Rebuild, RemeshConfig, Symmetry};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::{Channel, Response}, AppHandle, Manager, State};
 
 // Repair & Print3D
 use pinocchio_repair::{self, AnalysisConfig as RepairAnalysisConfig, RepairConfig, HoleFillConfig};
@@ -49,12 +49,42 @@ pub struct BoundingBox {
 }
 
 /// Datos de la malla para Three.js
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct MeshData {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     pub uvs: Option<Vec<f32>>,
+}
+
+/// Empaqueta una malla para el visor en binario (little-endian, todo en
+/// palabras de 4 bytes para que el frontend lo lea con typed arrays sin
+/// copiar). Con JSON, una malla de un millón de caras son decenas de MB de
+/// texto que serializar y parsear en el hilo de la ventana.
+///
+/// Cabecera `u32 × 4`: vértices, índices, 1 si hay UVs, índices de quads.
+/// Luego: posiciones `f32 × 3V`, normales `f32 × 3V`, UVs `f32 × 2V` (si
+/// hay), índices `u32`, índices de quads `u32`.
+fn pack_mesh(positions: &[f32], normals: &[f32], uvs: Option<&[f32]>, indices: &[u32], quad_indices: &[u32]) -> Vec<u8> {
+    let words = 4 + positions.len() + normals.len() + uvs.map_or(0, |u| u.len()) + indices.len() + quad_indices.len();
+    let mut out = Vec::with_capacity(words * 4);
+    let header = [(positions.len() / 3) as u32, indices.len() as u32, uvs.is_some() as u32, quad_indices.len() as u32];
+    for w in header {
+        out.extend_from_slice(&w.to_le_bytes());
+    }
+    for f in positions.iter().chain(normals).chain(uvs.unwrap_or(&[])) {
+        out.extend_from_slice(&f.to_le_bytes());
+    }
+    for i in indices.iter().chain(quad_indices) {
+        out.extend_from_slice(&i.to_le_bytes());
+    }
+    out
+}
+
+impl MeshData {
+    fn to_bytes(&self) -> Vec<u8> {
+        pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[])
+    }
 }
 
 /// Preset de esqueleto
@@ -90,6 +120,12 @@ pub struct AutorigConfig {
     pub max_influences: Option<usize>,
 }
 
+/// Envía un mensaje de progreso (los errores de envío se ignoran: la
+/// ventana puede haberse cerrado)
+fn report(channel: &Channel<Progress>, stage: &str, percent: u32, message: impl Into<String>) {
+    let _ = channel.send(Progress { stage: stage.to_string(), percent, message: message.into() });
+}
+
 /// Mensaje de progreso
 #[derive(Debug, Clone, Serialize)]
 pub struct Progress {
@@ -99,13 +135,34 @@ pub struct Progress {
 }
 
 /// Datos de los pesos para visualización
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct WeightsData {
     pub num_vertices: usize,
     pub num_bones: usize,
     pub bone_names: Vec<String>,
-    pub weights: Vec<f64>,
+    /// Por vértice, `max_influences` pares (hueso, peso)
+    pub weights: Vec<f32>,
     pub max_influences: usize,
+}
+
+impl WeightsData {
+    /// Binario little-endian: cabecera `u32 × 4` (vértices, huesos,
+    /// influencias, bytes de nombres), nombres en UTF-8 separados por `\n` y
+    /// rellenos a múltiplo de 4, y los pares `f32`.
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut names = self.bone_names.join("\n").into_bytes();
+        let names_len = names.len();
+        names.resize(names_len.div_ceil(4) * 4, 0);
+        let mut out = Vec::with_capacity(16 + names.len() + self.weights.len() * 4);
+        for w in [self.num_vertices, self.num_bones, self.max_influences, names_len] {
+            out.extend_from_slice(&(w as u32).to_le_bytes());
+        }
+        out.extend_from_slice(&names);
+        for f in &self.weights {
+            out.extend_from_slice(&f.to_le_bytes());
+        }
+        out
+    }
 }
 
 /// Configuración de exportación
@@ -246,13 +303,27 @@ pub struct QuadMeshInfo {
 
 /// Datos de la malla de quads para Three.js
 /// Los quads se triangulan para renderizado
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct QuadMeshData {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     /// Índices de quads originales (para visualización de wireframe)
     pub quad_indices: Vec<u32>,
+}
+
+/// Ejecuta `f` en un hilo de trabajo con acceso al estado.
+///
+/// Los comandos síncronos de Tauri corren en el hilo de la ventana: cualquier
+/// trabajo pesado ahí congela la interfaz. Los comandos que tocan la malla
+/// pasan por aquí.
+async fn in_background<T: Send + 'static>(
+    app: AppHandle,
+    f: impl FnOnce(&AppState) -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(move || f(&app.state::<AppState>()))
+        .await
+        .map_err(|e| format!("La tarea terminó inesperadamente: {e}"))?
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -320,8 +391,13 @@ pub fn get_supported_formats() -> SupportedFormats {
 
 /// Importa un modelo 3D (auto-detecta formato)
 #[tauri::command]
-pub fn import_model(path: String, state: State<'_, AppState>) -> Result<MeshInfo, String> {
+pub async fn import_model(app: AppHandle, path: String, on_progress: Channel<Progress>) -> Result<MeshInfo, String> {
+    in_background(app, move |state| import_model_impl(path, &on_progress, state)).await
+}
+
+fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
     let path = Path::new(&path);
+    report(progress, "reading", 5, "Leyendo archivo...");
 
     let ext = path
         .extension()
@@ -362,7 +438,9 @@ pub fn import_model(path: String, state: State<'_, AppState>) -> Result<MeshInfo
     };
 
     // Convertir Scene a Mesh de pinocchio para autorig
+    report(progress, "converting", 60, "Preparando malla...");
     let mesh = scene_to_pinocchio_mesh(&scene)?;
+    report(progress, "done", 90, "Modelo importado");
 
     // Guardar en estado
     let mut scene_lock = state.scene.lock().unwrap();
@@ -384,7 +462,12 @@ pub fn import_model(path: String, state: State<'_, AppState>) -> Result<MeshInfo
 /// La geometría va en espacio mundo y en el mismo orden de vértices que la
 /// malla de pinocchio (`scene_to_mesh`), así los pesos se aplican por índice.
 #[tauri::command]
-pub fn get_mesh_data(state: State<'_, AppState>) -> Result<MeshData, String> {
+pub async fn get_mesh_data(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| get_mesh_data_impl(state).map(|d| d.to_bytes())).await?;
+    Ok(Response::new(bytes))
+}
+
+fn get_mesh_data_impl(state: &AppState) -> Result<MeshData, String> {
     let scene_lock = state.scene.lock().unwrap();
     let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
     Ok(scene_mesh_data(scene))
@@ -459,11 +542,15 @@ fn compute_vertex_normals(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> Vec
 
 /// Exporta el modelo actual
 #[tauri::command]
-pub fn export_model(config: ExportConfig, state: State<'_, AppState>) -> Result<ExportResult, String> {
+pub async fn export_model(app: AppHandle, config: ExportConfig) -> Result<ExportResult, String> {
+    in_background(app, move |state| export_model_impl(config, state)).await
+}
+
+fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportResult, String> {
     if config.format == "json" {
-        return export_weights_json(&config, &state);
+        return export_weights_json(&config, state);
     }
-    let export_scene = build_export_scene(&config, &state)?;
+    let export_scene = build_export_scene(&config, state)?;
     let scene = &export_scene;
 
     let path = Path::new(&config.path);
@@ -528,7 +615,7 @@ pub fn export_model(config: ExportConfig, state: State<'_, AppState>) -> Result<
 
 /// Escena a exportar según las opciones: geometría original o retopologizada,
 /// con o sin el rig del autorig.
-fn build_export_scene(config: &ExportConfig, state: &State<'_, AppState>) -> Result<Scene, String> {
+fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, String> {
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena para exportar")?;
     let use_retopology = config.use_retopology.unwrap_or(false);
 
@@ -740,7 +827,7 @@ fn influence_table(weights: &[Vec<f64>], max_influences: usize) -> (Vec<Vec<usiz
         .unzip()
 }
 
-fn export_weights_json(config: &ExportConfig, state: &State<'_, AppState>) -> Result<ExportResult, String> {
+fn export_weights_json(config: &ExportConfig, state: &AppState) -> Result<ExportResult, String> {
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;
 
@@ -956,7 +1043,7 @@ fn to_basic_skeleton(skeleton_type: &SkeletonType) -> BasicSkeleton {
 }
 
 /// Base actual; si no hay, se toma el esqueleto visible con gizmo identidad
-fn current_base(state: &State<'_, AppState>) -> Result<BasicSkeleton, String> {
+fn current_base(state: &AppState) -> Result<BasicSkeleton, String> {
     let mut orig = state.original_skeleton.lock().unwrap();
     if orig.is_none() {
         let skel = state.skeleton.lock().unwrap();
@@ -1019,7 +1106,11 @@ pub fn move_bone(
 /// que ve el usuario coincide con el que se embebe. El resultado pasa a ser la
 /// nueva base, sin transformación de gizmo.
 #[tauri::command]
-pub fn auto_fit_skeleton(state: State<'_, AppState>) -> Result<SkeletonData, String> {
+pub async fn auto_fit_skeleton(app: AppHandle) -> Result<SkeletonData, String> {
+    in_background(app, auto_fit_skeleton_impl).await
+}
+
+fn auto_fit_skeleton_impl(state: &AppState) -> Result<SkeletonData, String> {
     let mesh_bbox = {
         let mesh_lock = state.mesh.lock().unwrap();
         mesh_lock.as_ref().ok_or("No hay malla cargada")?.bounding_box()
@@ -1130,7 +1221,12 @@ pub async fn run_autorig(
 
 /// Obtiene los datos de pesos para visualización
 #[tauri::command]
-pub fn get_weights_data(state: State<'_, AppState>) -> Result<WeightsData, String> {
+pub async fn get_weights_data(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| get_weights_data_impl(state).map(|d| d.to_bytes())).await?;
+    Ok(Response::new(bytes))
+}
+
+fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;
 
@@ -1147,8 +1243,8 @@ pub fn get_weights_data(state: State<'_, AppState>) -> Result<WeightsData, Strin
     let mut weights = Vec::with_capacity(num_vertices * max_influences * 2);
     for vert_idx in 0..num_vertices {
         for i in 0..max_influences {
-            weights.push(indices[vert_idx][i] as f64);
-            weights.push(weights_raw[vert_idx][i]);
+            weights.push(indices[vert_idx][i] as f32);
+            weights.push(weights_raw[vert_idx][i] as f32);
         }
     }
 
@@ -1265,7 +1361,15 @@ pub async fn run_retopology(
 
 /// Obtiene los datos de la malla de quads para renderizar en Three.js
 #[tauri::command]
-pub fn get_quad_mesh_data(state: State<'_, AppState>) -> Result<QuadMeshData, String> {
+pub async fn get_quad_mesh_data(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| {
+        get_quad_mesh_data_impl(state).map(|d| pack_mesh(&d.positions, &d.normals, None, &d.indices, &d.quad_indices))
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
     let quad_mesh_lock = state.quad_mesh.lock().unwrap();
     let quad_mesh = quad_mesh_lock.as_ref().ok_or("No hay malla de quads")?;
 
@@ -1495,6 +1599,7 @@ pub async fn analyze_mesh(
 #[tauri::command]
 pub async fn repair_mesh(
     config: RepairConfigInput,
+    on_progress: Channel<Progress>,
     state: State<'_, AppState>,
 ) -> Result<RepairResultInfo, String> {
     let _guard = state
@@ -1506,9 +1611,19 @@ pub async fn repair_mesh(
     let repair_config = config.to_repair_config();
 
     let mesh = original_mesh.clone();
+    let progress = on_progress.clone();
     let (mesh, summary, diagnostics) = tauri::async_runtime::spawn_blocking(move || {
         let mut mesh = mesh;
-        let summary = pinocchio_repair::repair_all(&mut mesh, &repair_config)?;
+        let mut last = u32::MAX;
+        let summary = pinocchio_repair::repair_all_with_progress(&mut mesh, &repair_config, |fraction, stage| {
+            // Solo enviar cuando cambia el porcentaje: el canal no es gratis
+            let percent = (fraction * 90.0) as u32;
+            if percent != last {
+                last = percent;
+                report(&progress, "repair", percent, format!("{stage}..."));
+            }
+        })?;
+        report(&progress, "analyze", 92, "Analizando resultado...");
         let diagnostics = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
         Ok::<_, pinocchio_repair::RepairError>((mesh, summary, diagnostics))
     })
@@ -1545,7 +1660,11 @@ pub async fn repair_mesh(
 
 /// Deshace la reparación restaurando backups
 #[tauri::command]
-pub fn undo_repair(state: State<'_, AppState>) -> Result<MeshInfo, String> {
+pub async fn undo_repair(app: AppHandle) -> Result<MeshInfo, String> {
+    in_background(app, undo_repair_impl).await
+}
+
+fn undo_repair_impl(state: &AppState) -> Result<MeshInfo, String> {
     let backup_mesh = {
         let mut backup = state.mesh_before_repair.lock().unwrap();
         backup.take().ok_or("No hay reparación que deshacer")?
@@ -1595,22 +1714,27 @@ pub fn get_repair_diagnostics(state: State<'_, AppState>) -> Result<MeshDiagnost
 
 /// Analiza la malla para impresión 3D
 #[tauri::command]
-pub fn analyze_print3d(state: State<'_, AppState>) -> Result<Print3dAnalysisInfo, String> {
+pub async fn analyze_print3d(app: AppHandle) -> Result<Print3dAnalysisInfo, String> {
+    in_background(app, analyze_print3d_impl).await
+}
+
+fn analyze_print3d_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     let mesh_lock = state.mesh.lock().unwrap();
     let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
 
     let analysis = pinocchio_print3d::analyze(mesh)
         .map_err(|e| format!("Error en análisis: {:?}", e))?;
 
-    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
+    Ok(analysis_to_info(&analysis, mm_per_unit(state)))
 }
 
 /// Escala la malla para impresión
 #[tauri::command]
-pub fn scale_mesh_for_print(
-    params: ScalePrintInput,
-    state: State<'_, AppState>,
-) -> Result<Print3dAnalysisInfo, String> {
+pub async fn scale_mesh_for_print(app: AppHandle, params: ScalePrintInput) -> Result<Print3dAnalysisInfo, String> {
+    in_background(app, move |state| scale_mesh_for_print_impl(params, state)).await
+}
+
+fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     // Guardar backup (malla y escena) para poder deshacer
     {
         let mesh_lock = state.mesh.lock().unwrap();
@@ -1635,12 +1759,12 @@ pub fn scale_mesh_for_print(
         }
         "fit" => {
             let target_mm = params.target_size.ok_or("Falta tamaño objetivo")?;
-            let k = mm_per_unit(&state);
+            let k = mm_per_unit(state);
             let target = target_mm.map(|v| v / k);
             pinocchio_print3d::scale_to_fit(&mut mesh, target).map_err(|e| format!("No se pudo escalar: {e}"))?;
         }
         "volume" => {
-            let k = mm_per_unit(&state);
+            let k = mm_per_unit(state);
             let target_vol = params.target_volume.ok_or("Falta volumen objetivo")? / (k * k * k);
             let current_vol = pinocchio_print3d::compute_volume(&mesh);
             pinocchio_print3d::scale_to_volume(&mut mesh, current_vol, target_vol)
@@ -1678,12 +1802,16 @@ pub fn scale_mesh_for_print(
     // Re-analizar
     let analysis = pinocchio_print3d::analyze(&mesh)
         .map_err(|e| format!("Error en análisis: {:?}", e))?;
-    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
+    Ok(analysis_to_info(&analysis, mm_per_unit(state)))
 }
 
 /// Deshace el último escalado para impresión
 #[tauri::command]
-pub fn undo_print_scale(state: State<'_, AppState>) -> Result<Print3dAnalysisInfo, String> {
+pub async fn undo_print_scale(app: AppHandle) -> Result<Print3dAnalysisInfo, String> {
+    in_background(app, undo_print_scale_impl).await
+}
+
+fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     let mesh = state
         .mesh_before_print_scale
         .lock()
@@ -1703,11 +1831,11 @@ pub fn undo_print_scale(state: State<'_, AppState>) -> Result<Print3dAnalysisInf
     *state.result.lock().unwrap() = None;
     *state.print3d_pieces.lock().unwrap() = None;
 
-    Ok(analysis_to_info(&analysis, mm_per_unit(&state)))
+    Ok(analysis_to_info(&analysis, mm_per_unit(state)))
 }
 
 /// Milímetros por unidad de la escena (la UI de impresión trabaja en mm)
-fn mm_per_unit(state: &State<'_, AppState>) -> f64 {
+fn mm_per_unit(state: &AppState) -> f64 {
     state
         .scene
         .lock()
@@ -1732,10 +1860,11 @@ fn analysis_to_info(analysis: &pinocchio_print3d::MeshAnalysis, k: f64) -> Print
 
 /// Subdivide la malla en piezas para impresión
 #[tauri::command]
-pub fn subdivide_mesh(
-    config: SubdivideConfigInput,
-    state: State<'_, AppState>,
-) -> Result<SubdivideResultInfo, String> {
+pub async fn subdivide_mesh(app: AppHandle, config: SubdivideConfigInput) -> Result<SubdivideResultInfo, String> {
+    in_background(app, move |state| subdivide_mesh_impl(config, state)).await
+}
+
+fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState) -> Result<SubdivideResultInfo, String> {
     let mesh_lock = state.mesh.lock().unwrap();
     let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
 
@@ -1746,7 +1875,7 @@ pub fn subdivide_mesh(
     };
 
     // La UI trabaja en milímetros
-    let k = mm_per_unit(&state);
+    let k = mm_per_unit(state);
     let subdivide_config = SubdivideConfig {
         build_volume: config.build_volume.map(|v| v / k),
         max_dimension: None,
@@ -1785,11 +1914,11 @@ pub fn subdivide_mesh(
 
 /// Exporta una pieza individual como STL
 #[tauri::command]
-pub fn export_print3d_piece(
-    piece_index: usize,
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<ExportResult, String> {
+pub async fn export_print3d_piece(app: AppHandle, piece_index: usize, path: String) -> Result<ExportResult, String> {
+    in_background(app, move |state| export_print3d_piece_impl(piece_index, path, state)).await
+}
+
+fn export_print3d_piece_impl(piece_index: usize, path: String, state: &AppState) -> Result<ExportResult, String> {
     let pieces_lock = state.print3d_pieces.lock().unwrap();
     let pieces = pieces_lock.as_ref().ok_or("No hay piezas subdivididas")?;
 
@@ -2259,5 +2388,53 @@ mod tests {
         assert!(scene.validate().is_ok());
         let prims = scene.world_primitives();
         assert_eq!(prims[0].triangles, vec![[0, 1, 2], [0, 2, 3]]);
+    }
+
+    fn words(bytes: &[u8]) -> Vec<u32> {
+        bytes.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect()
+    }
+
+    /// El decodificador del frontend (apps/web/src/lib/buffers.ts) asume este
+    /// formato exacto
+    #[test]
+    fn mesh_binary_layout() {
+        let data = MeshData {
+            positions: vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0],
+            normals: vec![0.5; 9],
+            indices: vec![0, 1, 2],
+            uvs: Some(vec![0.25; 6]),
+        };
+        let bytes = data.to_bytes();
+        let w = words(&bytes);
+        assert_eq!(&w[..4], &[3, 3, 1, 0]);
+        assert_eq!(bytes.len(), 4 * (4 + 9 + 9 + 6 + 3));
+        assert_eq!(f32::from_bits(w[4 + 1]), 1.0);
+        assert_eq!(f32::from_bits(w[4 + 9]), 0.5);
+        assert_eq!(f32::from_bits(w[4 + 18]), 0.25);
+        assert_eq!(&w[4 + 24..], &[0, 1, 2]);
+
+        let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
+        let w = words(&quads);
+        assert_eq!(&w[..4], &[3, 3, 0, 4]);
+        assert_eq!(&w[w.len() - 7..], &[0, 1, 2, 0, 1, 2, 0]);
+    }
+
+    #[test]
+    fn weights_binary_layout() {
+        let data = WeightsData {
+            num_vertices: 1,
+            num_bones: 2,
+            bone_names: vec!["raíz".into(), "brazo".into()],
+            weights: vec![0.0, 0.75, 1.0, 0.25],
+            max_influences: 2,
+        };
+        let bytes = data.to_bytes();
+        let w = words(&bytes[..16]);
+        let names_len = "raíz\nbrazo".len();
+        assert_eq!(w, vec![1, 2, 2, names_len as u32]);
+        assert_eq!(&bytes[16..16 + names_len], "raíz\nbrazo".as_bytes());
+        let start = 16 + names_len.div_ceil(4) * 4;
+        let weights: Vec<f32> = bytes[start..].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().unwrap())).collect();
+        assert_eq!(weights, data.weights);
     }
 }
