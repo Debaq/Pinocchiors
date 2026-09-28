@@ -7,6 +7,8 @@ import {
   MeshTextures,
   PaintSettings,
   PaintStroke,
+  SceneMaterial,
+  LightSettings,
   SkeletonData,
   WeightsData,
 } from "../../lib/Viewer3D";
@@ -18,6 +20,13 @@ export interface ViewportProps {
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
+  /** La luz principal se movió arrastrando con Alt */
+  onLightsChanged?: (lights: LightSettings) => void;
+
+  /** Materiales del archivo de origen */
+  sceneMaterials?: SceneMaterial[];
+  /** Luces del visor */
+  lights?: LightSettings;
   onWeightsPainted?: (stroke: PaintStroke) => void;
 
   // Data
@@ -62,6 +71,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
+        onLightsChanged: (lights) => props.onLightsChanged?.(lights),
       });
 
       props.onViewerReady?.(viewer);
@@ -86,6 +96,15 @@ export const Viewport: Component<ViewportProps> = (props) => {
     if (viewer) {
       viewer.setTextures(props.textures ?? {});
     }
+  });
+
+  createEffect(() => {
+    const materials = props.sceneMaterials ?? [];
+    viewer?.setSceneMaterials(materials);
+  });
+
+  createEffect(() => {
+    if (viewer && props.lights) viewer.setLights(props.lights);
   });
 
   createEffect(() => {

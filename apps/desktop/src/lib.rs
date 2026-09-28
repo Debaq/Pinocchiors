@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod state;
+pub mod structure;
 
 pub use commands::*;
 pub use state::{AppState, SkeletonType};
@@ -24,6 +25,10 @@ pub fn run() {
             commands::import_model,
             commands::export_model,
             commands::get_mesh_data,
+            // Estructura del archivo de origen
+            structure::get_scene_structure,
+            structure::get_scene_materials,
+            structure::get_scene_texture,
             // Esqueletos
             commands::list_skeleton_presets,
             commands::select_skeleton,

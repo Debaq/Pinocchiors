@@ -120,6 +120,13 @@ export const GridFour = (props: IconProps) => (
 // SKELETON / BONES
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Árbol: estructura del archivo */
+export const TreeStructure = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M48,32H112a16,16,0,0,1,16,16V80a16,16,0,0,1-16,16H88v32h40v-8a16,16,0,0,1,16-16h64a16,16,0,0,1,16,16v32a16,16,0,0,1-16,16H144a16,16,0,0,1-16-16v-8H88v48h40v-8a16,16,0,0,1,16-16h64a16,16,0,0,1,16,16v32a16,16,0,0,1-16,16H144a16,16,0,0,1-16-16v-8H80a8,8,0,0,1-8-8V96H48A16,16,0,0,1,32,80V48A16,16,0,0,1,48,32Zm0,48h64V48H48Zm96,72h64V120H144Zm0,56h64V176H144Z" />
+  </Icon>
+);
+
 /** Pincel: pintar pesos */
 export const PaintBrush = (props: IconProps) => (
   <Icon {...props}>

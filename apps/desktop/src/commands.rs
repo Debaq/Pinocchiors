@@ -56,6 +56,9 @@ pub struct MeshData {
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
     pub uvs: Option<Vec<f32>>,
+    /// Rangos de índices por material: `[inicio, cantidad, material]`
+    /// (`u32::MAX` = sin material)
+    pub groups: Vec<[u32; 3]>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -83,8 +86,17 @@ fn pack_mesh(positions: &[f32], normals: &[f32], uvs: Option<&[f32]>, indices: &
 }
 
 impl MeshData {
+    /// [`pack_mesh`] y al final, si hay, los grupos por material: `u32`
+    /// cantidad y luego `[inicio, cantidad, material]` por grupo
     fn to_bytes(&self) -> Vec<u8> {
-        pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[])
+        let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
+        if !self.groups.is_empty() {
+            out.extend_from_slice(&(self.groups.len() as u32).to_le_bytes());
+            for w in self.groups.iter().flatten() {
+                out.extend_from_slice(&w.to_le_bytes());
+            }
+        }
+        out
     }
 }
 
@@ -517,9 +529,11 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut normals: Vec<f32> = Vec::new();
     let mut indices: Vec<u32> = Vec::new();
     let mut uvs: Vec<f32> = Vec::new();
+    let mut groups: Vec<[u32; 3]> = Vec::new();
 
     for prim in &prims {
         let offset = (positions.len() / 3) as u32;
+        groups.push([indices.len() as u32, (prim.triangles.len() * 3) as u32, prim.material.map_or(u32::MAX, |m| m as u32)]);
         positions.extend(prim.positions.iter().flatten());
 
         match &prim.normals {
@@ -543,6 +557,7 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
         normals,
         indices,
         uvs: if has_uvs { Some(uvs) } else { None },
+        groups,
     }
 }
 
@@ -3123,6 +3138,7 @@ mod tests {
             normals: vec![0.5; 9],
             indices: vec![0, 1, 2],
             uvs: Some(vec![0.25; 6]),
+            groups: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);
@@ -3132,6 +3148,11 @@ mod tests {
         assert_eq!(f32::from_bits(w[4 + 9]), 0.5);
         assert_eq!(f32::from_bits(w[4 + 18]), 0.25);
         assert_eq!(&w[4 + 24..], &[0, 1, 2]);
+
+        // Grupos por material al final: cantidad y [inicio, cantidad, material]
+        let grouped = MeshData { groups: vec![[0, 3, 2], [3, 0, u32::MAX]], ..data.clone() };
+        let w = words(&grouped.to_bytes());
+        assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX]);
 
         let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
         let w = words(&quads);

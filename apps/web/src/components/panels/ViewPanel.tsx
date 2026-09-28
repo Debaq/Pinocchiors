@@ -8,6 +8,8 @@ export interface ViewSettings {
   showSkeleton: boolean;
   showWeights: boolean;
   selectedBone: number;
+  /** Materiales y texturas del archivo de origen */
+  showTextures?: boolean;
 }
 
 export interface ViewPanelProps {
@@ -41,6 +43,12 @@ export const ViewPanel: Component<ViewPanelProps> = (props) => {
             label="Mostrar malla"
             checked={props.settings.showMesh}
             onChange={(checked) => updateSettings({ showMesh: checked })}
+          />
+
+          <Checkbox
+            label="Texturas del modelo"
+            checked={props.settings.showTextures !== false}
+            onChange={(checked) => updateSettings({ showTextures: checked })}
           />
 
           <Checkbox

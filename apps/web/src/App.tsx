@@ -12,7 +12,19 @@ import {
   type RetopologyConfig,
   type QuadQuality,
 } from "./components/panels";
-import { Viewer3D, MeshData, MeshTextures, PaintSettings, PaintStroke, SkeletonData, WeightsData } from "./lib/Viewer3D";
+import {
+  Viewer3D,
+  MeshData,
+  MeshTextures,
+  PaintSettings,
+  PaintStroke,
+  SceneMaterial,
+  LightSettings,
+  defaultLights,
+  SkeletonData,
+  WeightsData,
+} from "./lib/Viewer3D";
+import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import { createPipelineStore } from "./lib/pipeline";
 import { buildSceneTree } from "./lib/scene-tree";
 import type { ToolId } from "./lib/tools";
@@ -174,9 +186,63 @@ export const App: Component = () => {
     }
   };
 
-  /** Malla actual del backend, en binario (sin JSON) */
+  /** Malla actual del backend, en binario (sin JSON), con la estructura y
+   * los materiales del archivo de origen */
   const fetchMeshData = () =>
-    busy("Cargando en el visor...", async () => decodeMesh(await invoke<ArrayBuffer>("get_mesh_data")));
+    busy("Cargando en el visor...", async () => {
+      const mesh = decodeMesh(await invoke<ArrayBuffer>("get_mesh_data"));
+      await loadSceneAppearance();
+      return mesh;
+    });
+
+  // Archivo de origen: estructura, materiales y texturas
+  const [sceneStructure, setSceneStructure] = createSignal<SceneStructure | undefined>();
+  const [sceneMaterials, setSceneMaterials] = createSignal<SceneMaterial[]>([]);
+  const [textureUrls, setTextureUrls] = createSignal<string[]>([]);
+  const [lights, setLights] = createSignal<LightSettings>({ ...defaultLights });
+
+  /** Estructura, materiales y texturas de la escena (miniaturas e imágenes para el visor) */
+  const loadSceneAppearance = async () => {
+    try {
+      const [structure, materials] = await Promise.all([
+        invoke<SceneStructure>("get_scene_structure"),
+        invoke<MaterialInfo[]>("get_scene_materials"),
+      ]);
+      const buffers = await Promise.all(
+        structure.textures.map((_, index) => invoke<ArrayBuffer>("get_scene_texture", { index }))
+      );
+      const mime = (format: string) => (format === "JPEG" ? "image/jpeg" : format === "WebP" ? "image/webp" : "image/png");
+      const blobs = buffers.map((b, i) => new Blob([b], { type: mime(structure.textures[i].format) }));
+      const images = await Promise.all(blobs.map((b) => createImageBitmap(b).catch(() => undefined)));
+      textureUrls().forEach((url) => URL.revokeObjectURL(url));
+      setTextureUrls(blobs.map((b) => URL.createObjectURL(b)));
+      const image = (i: number | null) => (i === null ? undefined : images[i]);
+      setSceneMaterials(
+        materials.map((m) => ({
+          name: m.name,
+          baseColor: m.base_color,
+          metallic: m.metallic,
+          roughness: m.roughness,
+          emissive: m.emissive,
+          normalScale: m.normal_scale,
+          occlusionStrength: m.occlusion_strength,
+          alphaMode: m.alpha_mode,
+          alphaCutoff: m.alpha_cutoff,
+          unlit: m.unlit,
+          maps: {
+            base: image(m.base_color_texture),
+            metallicRoughness: image(m.metallic_roughness_texture),
+            normal: image(m.normal_texture),
+            occlusion: image(m.occlusion_texture),
+            emissive: image(m.emissive_texture),
+          },
+        }))
+      );
+      setSceneStructure(structure);
+    } catch (e) {
+      console.error("Scene structure error:", e);
+    }
+  };
   const [fileName, setFileName] = createSignal<string | undefined>();
 
   // Skeleton presets (loaded from Tauri)
@@ -328,6 +394,7 @@ export const App: Component = () => {
     showSkeleton: true,
     showWeights: false,
     selectedBone: -1,
+    showTextures: true,
   });
 
   // Skeleton transform
@@ -506,9 +573,9 @@ export const App: Component = () => {
       setLastExport(undefined);
       setCanUndoPrintScale(false);
 
-      // Pipeline: mark import as completed, navigate to next
+      // Pipeline: importado; se muestra lo que trae el archivo
       pipeline.markCompleted("import");
-      pipeline.setActiveStep("import");
+      pipeline.setActiveStep("structure");
     } catch (e) {
       console.error("Import error:", e);
       setStatusMessage(`Error: ${e}`);
@@ -1244,6 +1311,9 @@ export const App: Component = () => {
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
               meshData={displayQuad() ? quadMeshData() : meshData()}
+              sceneMaterials={sceneMaterials()}
+              lights={lights()}
+              onLightsChanged={setLights}
               textures={viewerTextures()}
               skeletonData={skeletonData()}
               weightsData={weightsData()}
@@ -1267,6 +1337,14 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
+            structureProps={{
+              structure: sceneStructure(),
+              fileName: fileName(),
+              format: meshInfo().format,
+              textureUrls: textureUrls(),
+            }}
+            lights={lights()}
+            onLightsChange={setLights}
             importProps={{
               meshInfo: meshLoaded() ? meshInfo() : undefined,
               onImport: handleLoad,

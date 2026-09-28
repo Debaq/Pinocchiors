@@ -24,7 +24,14 @@ export function decodeMesh(buffer: ArrayBuffer): MeshData {
   const uvs = hasUvs ? floats(vertices * 2) : undefined;
   const indices = uints(indexCount);
   const quadIndices = quadCount > 0 ? uints(quadCount) : undefined;
-  return { positions, normals, indices, uvs, quadIndices };
+  // Opcional al final: grupos por material, cantidad y [inicio, cantidad, material]
+  let groups: Uint32Array | undefined;
+  if (offset + 4 <= buffer.byteLength) {
+    const [count] = new Uint32Array(buffer, offset, 1);
+    offset += 4;
+    groups = uints(count * 3);
+  }
+  return { positions, normals, indices, uvs, quadIndices, groups };
 }
 
 /** Pesos: cabecera u32 × 4 (vértices, huesos, influencias, bytes de nombres) */

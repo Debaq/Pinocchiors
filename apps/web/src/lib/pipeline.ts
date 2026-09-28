@@ -7,6 +7,7 @@ import * as Icons from "../components/icons";
 
 export type PipelineStepId =
   | "import"
+  | "structure"
   | "repair"
   | "retopology"
   | "uv"
@@ -34,6 +35,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     id: "import",
     label: "Importar",
     icon: Icons.FilePlus,
+  },
+  {
+    id: "structure",
+    label: "Estructura",
+    icon: Icons.TreeStructure,
   },
   {
     id: "repair",

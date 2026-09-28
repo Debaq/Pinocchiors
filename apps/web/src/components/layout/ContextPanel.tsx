@@ -4,8 +4,11 @@ import type { PipelineStepId } from "../../lib/pipeline";
 import type { ViewSettings } from "../panels/ViewPanel";
 import type { SceneNode } from "../../lib/scene-tree";
 import { ViewPanel } from "../panels/ViewPanel";
+import { LightsPanel } from "../panels/LightsPanel";
+import type { LightSettings } from "../../lib/Viewer3D";
 import { SceneOutliner } from "../panels/SceneOutliner";
 import { ImportStep, type ImportStepProps } from "../steps/ImportStep";
+import { StructureStep, type StructureStepProps } from "../steps/StructureStep";
 import { RetopologyStep, type RetopologyStepProps } from "../steps/RetopologyStep";
 import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
 import { UvStep, type UvStepProps } from "../steps/UvStep";
@@ -19,6 +22,9 @@ export interface ContextPanelProps {
 
   // Import
   importProps: ImportStepProps;
+
+  // Estructura del archivo de origen
+  structureProps: StructureStepProps;
 
   // Repair
   repairProps: RepairStepProps;
@@ -44,6 +50,10 @@ export interface ContextPanelProps {
   boneNames?: string[];
   hasWeights?: boolean;
 
+  // Luces
+  lights: LightSettings;
+  onLightsChange?: (lights: LightSettings) => void;
+
   // Outliner
   sceneTree?: SceneNode;
   onToggleVisibility?: (nodeId: string) => void;
@@ -65,6 +75,9 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
         <Switch>
           <Match when={props.activeStep === "import"}>
             <ImportStep {...props.importProps} />
+          </Match>
+          <Match when={props.activeStep === "structure"}>
+            <StructureStep {...props.structureProps} />
           </Match>
           <Match when={props.activeStep === "repair"}>
             <RepairStep {...props.repairProps} />
@@ -102,13 +115,14 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
       </Show>
 
       {/* View Panel - always visible at bottom */}
-      <div class="shrink-0 border-t border-border px-5 py-3">
+      <div class="shrink-0 border-t border-border px-5 py-3 space-y-3 max-h-[45vh] overflow-y-auto">
         <ViewPanel
           settings={props.viewSettings}
           onChange={props.onViewSettingsChange}
           boneNames={props.boneNames}
           hasWeights={props.hasWeights}
         />
+        <LightsPanel lights={props.lights} onChange={props.onLightsChange} />
       </div>
     </aside>
   );

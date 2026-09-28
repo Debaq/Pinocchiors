@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -19,7 +20,57 @@ export interface MeshData {
   uvs?: Float32Array;
   /** Optional quad indices for quad wireframe visualization (4 indices per quad) */
   quadIndices?: Uint32Array;
+  /** Rangos de índices por material: [inicio, cantidad, material] (0xffffffff = sin material) */
+  groups?: Uint32Array;
 }
+
+/** Material del archivo de origen, con sus texturas ya decodificadas */
+export interface SceneMaterial {
+  name: string;
+  baseColor: [number, number, number, number];
+  metallic: number;
+  roughness: number;
+  emissive: [number, number, number];
+  normalScale: number;
+  occlusionStrength: number;
+  alphaMode: "opaque" | "mask" | "blend";
+  alphaCutoff: number;
+  unlit: boolean;
+  maps: {
+    base?: ImageBitmap;
+    metallicRoughness?: ImageBitmap;
+    normal?: ImageBitmap;
+    occlusion?: ImageBitmap;
+    emissive?: ImageBitmap;
+  };
+}
+
+/** Luces del visor */
+export interface LightSettings {
+  /** Dirección de la luz principal (grados): acimut alrededor del modelo y elevación */
+  azimuth: number;
+  elevation: number;
+  intensity: number;
+  color: string;
+  /** Luz de relleno (del lado opuesto) y ambiente */
+  fill: number;
+  ambient: number;
+  /** Luz que sale desde la cámara */
+  headlight: boolean;
+  /** Reflejos de entorno (iluminación por imagen) */
+  environment: number;
+}
+
+export const defaultLights: LightSettings = {
+  azimuth: 45,
+  elevation: 45,
+  intensity: 2,
+  color: "#ffffff",
+  fill: 0.6,
+  ambient: 0.3,
+  headlight: false,
+  environment: 0.6,
+};
 
 export interface SkeletonData {
   bones: BoneData[];
@@ -48,6 +99,8 @@ export interface ViewerSettings {
   showSkeleton: boolean;
   showWeights: boolean;
   selectedBone: number;
+  /** Materiales y texturas del archivo de origen */
+  showTextures?: boolean;
 }
 
 /** Opciones del pincel de pesos */
@@ -72,6 +125,8 @@ export interface PaintStroke {
 
 export interface ViewerCallbacks {
   onWeightsPainted?: (stroke: PaintStroke) => void;
+  /** La luz principal se movió arrastrando con Alt */
+  onLightsChanged?: (lights: LightSettings) => void;
   onFpsUpdate?: (fps: number) => void;
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
@@ -164,7 +219,23 @@ export class Viewer3D {
     showSkeleton: true,
     showWeights: false,
     selectedBone: -1,
+    showTextures: true,
   };
+
+  // Materiales del archivo de origen y sus texturas (compartidas entre materiales)
+  private sceneMaterials: SceneMaterial[] = [];
+  private sceneTextureCache = new Map<ImageBitmap, THREE.Texture>();
+
+  // Luces
+  private lights: LightSettings = { ...defaultLights };
+  private keyLight = new THREE.DirectionalLight(0xffffff, 1);
+  private fillLight = new THREE.DirectionalLight(0x8be9fd, 1);
+  private ambientLight = new THREE.HemisphereLight(0xffffff, 0x44475a, 1);
+  private headLight = new THREE.DirectionalLight(0xffffff, 0);
+  private environmentMap: THREE.Texture | null = null;
+  /** Arrastre de la luz principal con Alt */
+  private lightDrag: { x: number; y: number; azimuth: number; elevation: number } | null = null;
+  private sunMarker: THREE.Mesh | null = null;
 
   // FPS tracking
   private frameCount = 0;
@@ -241,25 +312,92 @@ export class Viewer3D {
   }
 
   private setupLights(): void {
-    // Ambient light
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
-    this.scene.add(ambientLight);
+    this.scene.add(this.ambientLight);
+    this.scene.add(this.keyLight, this.keyLight.target);
+    this.scene.add(this.fillLight, this.fillLight.target);
+    // Luz de cámara: cuelga de la cámara y apunta hacia adelante
+    this.camera.add(this.headLight, this.headLight.target);
+    this.headLight.target.position.set(0, 0, -1);
+    this.scene.add(this.camera);
+    // Entorno para los reflejos de los materiales PBR (metales sobre todo)
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    this.environmentMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    pmrem.dispose();
+    this.placeLights();
+  }
 
-    // Main directional light
-    const mainLight = new THREE.DirectionalLight(0xffffff, 0.8);
-    mainLight.position.set(5, 10, 5);
-    mainLight.castShadow = false;
-    this.scene.add(mainLight);
+  /** Cambia las luces */
+  setLights(lights: LightSettings): void {
+    this.lights = { ...lights };
+    this.placeLights();
+  }
 
-    // Fill light
-    const fillLight = new THREE.DirectionalLight(0x8be9fd, 0.3);
-    fillLight.position.set(-5, 5, -5);
-    this.scene.add(fillLight);
+  /** Luces actuales */
+  getLights(): LightSettings {
+    return { ...this.lights };
+  }
 
-    // Rim light (purple tint for Dracula feel)
-    const rimLight = new THREE.DirectionalLight(0xbd93f9, 0.2);
-    rimLight.position.set(0, -5, -5);
-    this.scene.add(rimLight);
+  /** Ubica las luces alrededor del modelo según `this.lights` */
+  private placeLights(): void {
+    const s = this.lights;
+    const center = this.controls.target.clone();
+    const radius = this.currentMesh
+      ? Math.max(new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3()).length(), 1e-3)
+      : 5;
+    const direction = (azimuth: number, elevation: number) => {
+      const a = THREE.MathUtils.degToRad(azimuth);
+      const e = THREE.MathUtils.degToRad(elevation);
+      return new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
+    };
+    this.keyLight.position.copy(center).addScaledVector(direction(s.azimuth, s.elevation), 2 * radius);
+    this.keyLight.target.position.copy(center);
+    this.keyLight.color.set(s.color);
+    this.keyLight.intensity = s.intensity;
+    this.fillLight.position.copy(center).addScaledVector(direction(s.azimuth + 180, 20), 2 * radius);
+    this.fillLight.target.position.copy(center);
+    this.fillLight.intensity = s.fill;
+    this.ambientLight.intensity = s.ambient;
+    this.headLight.intensity = s.headlight ? 0.6 * s.intensity : 0;
+    this.scene.environment = s.environment > 0 ? this.environmentMap : null;
+    this.scene.environmentIntensity = s.environment;
+    if (this.sunMarker) {
+      this.sunMarker.position.copy(this.keyLight.position);
+      this.sunMarker.scale.setScalar(radius * 0.03);
+    }
+  }
+
+  /** Alt + arrastrar: gira la luz principal alrededor del modelo */
+  private onLightDown(event: PointerEvent): void {
+    if (!event.altKey || event.button !== 0) return;
+    this.lightDrag = { x: event.clientX, y: event.clientY, azimuth: this.lights.azimuth, elevation: this.lights.elevation };
+    this.controls.enabled = false;
+    if (!this.sunMarker) {
+      this.sunMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(1, 16, 12),
+        new THREE.MeshBasicMaterial({ color: 0xf1fa8c, depthTest: false })
+      );
+      this.sunMarker.renderOrder = 3;
+      this.scene.add(this.sunMarker);
+    }
+    this.sunMarker.visible = true;
+    this.placeLights();
+  }
+
+  private onLightMove(event: PointerEvent): void {
+    const drag = this.lightDrag;
+    if (!drag) return;
+    const azimuth = drag.azimuth - (event.clientX - drag.x) * 0.4;
+    const elevation = THREE.MathUtils.clamp(drag.elevation + (event.clientY - drag.y) * 0.4, -10, 89);
+    this.lights = { ...this.lights, azimuth: ((azimuth % 360) + 540) % 360 - 180, elevation };
+    this.placeLights();
+    this.callbacks.onLightsChanged?.(this.getLights());
+  }
+
+  private onLightUp(): void {
+    if (!this.lightDrag) return;
+    this.lightDrag = null;
+    this.controls.enabled = true;
+    if (this.sunMarker) this.sunMarker.visible = false;
   }
 
   private setupEventListeners(): void {
@@ -271,8 +409,15 @@ export class Viewer3D {
     this.canvas.addEventListener("click", (e) => this.onCanvasClick(e));
     this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e));
 
+    // Luz principal (Alt + arrastrar), antes que el pincel
+    this.canvas.addEventListener("pointerdown", (e) => this.onLightDown(e));
+    this.canvas.addEventListener("pointermove", (e) => this.onLightMove(e));
+    window.addEventListener("pointerup", () => this.onLightUp());
+
     // Pincel de pesos
-    this.canvas.addEventListener("pointerdown", (e) => this.onPaintDown(e));
+    this.canvas.addEventListener("pointerdown", (e) => {
+      if (!this.lightDrag) this.onPaintDown(e);
+    });
     this.canvas.addEventListener("pointermove", (e) => this.onPaintMove(e));
     window.addEventListener("pointerup", () => this.finishStroke());
   }
@@ -575,14 +720,7 @@ export class Viewer3D {
     }
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
-    // Material - Dracula style
-    const material = new THREE.MeshStandardMaterial({
-      color: 0x6272a4,
-      metalness: 0.1,
-      roughness: 0.7,
-      side: THREE.DoubleSide,
-    });
-    this.applyTextures(material, geometry);
+    const material = this.buildMaterial(geometry);
 
     this.currentMesh = new THREE.Mesh(geometry, material);
     this.currentMesh.visible = this.settings.showMesh && !this.settings.showWeights;
@@ -622,9 +760,115 @@ export class Viewer3D {
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
   setTextures(textures: MeshTextures): void {
     this.textures = textures;
-    if (this.currentMesh) {
+    // Con los materiales del archivo de origen la piel del paso UV no aplica
+    if (this.currentMesh && !Array.isArray(this.currentMesh.material)) {
       this.applyTextures(this.currentMesh.material as THREE.MeshStandardMaterial, this.currentMesh.geometry);
     }
+  }
+
+  /** Materiales del archivo de origen (el índice es el de los grupos de la malla) */
+  setSceneMaterials(materials: SceneMaterial[]): void {
+    for (const texture of this.sceneTextureCache.values()) texture.dispose();
+    this.sceneTextureCache.clear();
+    this.sceneMaterials = materials;
+    this.refreshMeshMaterial();
+  }
+
+  private refreshMeshMaterial(): void {
+    const mesh = this.currentMesh;
+    if (!mesh) return;
+    this.disposeMaterial(mesh.material);
+    mesh.material = this.buildMaterial(mesh.geometry);
+  }
+
+  private disposeMaterial(material: THREE.Material | THREE.Material[]): void {
+    for (const m of Array.isArray(material) ? material : [material]) {
+      // Las texturas de los materiales de origen son compartidas (caché)
+      if (!m.userData.sceneMaterial) {
+        const standard = m as THREE.MeshStandardMaterial;
+        standard.map?.dispose();
+        standard.normalMap?.dispose();
+      }
+      m.dispose();
+    }
+  }
+
+  private defaultMaterial(): THREE.MeshStandardMaterial {
+    return new THREE.MeshStandardMaterial({ color: 0x6272a4, metalness: 0.1, roughness: 0.7, side: THREE.DoubleSide });
+  }
+
+  /**
+   * Material de la malla: los del archivo de origen por grupo (si la malla
+   * los trae y "texturas" está activo), o el neutro con la piel del paso UV.
+   */
+  private buildMaterial(geometry: THREE.BufferGeometry): THREE.Material | THREE.Material[] {
+    const groups = this.meshData?.groups;
+    geometry.clearGroups();
+    if (this.settings.showTextures !== false && groups && groups.length >= 3 && this.sceneMaterials.length > 0) {
+      const fallback = this.sceneMaterials.length;
+      for (let g = 0; g + 2 < groups.length; g += 3) {
+        geometry.addGroup(groups[g], groups[g + 1], groups[g + 2] < fallback ? groups[g + 2] : fallback);
+      }
+      const hasUv = geometry.getAttribute("uv") !== undefined;
+      return [...this.sceneMaterials.map((m) => this.threeMaterial(m, hasUv)), this.defaultMaterial()];
+    }
+    const material = this.defaultMaterial();
+    this.applyTextures(material, geometry);
+    return material;
+  }
+
+  /** Textura compartida de una imagen (convención glTF: sin voltear) */
+  private sharedTexture(image: ImageBitmap, srgb: boolean): THREE.Texture {
+    let texture = this.sceneTextureCache.get(image);
+    if (!texture) {
+      texture = new THREE.Texture(image);
+      texture.flipY = false;
+      texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+      texture.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      if (srgb) texture.colorSpace = THREE.SRGBColorSpace;
+      texture.needsUpdate = true;
+      this.sceneTextureCache.set(image, texture);
+    }
+    return texture;
+  }
+
+  /** Material de Three para un material PBR de glTF */
+  private threeMaterial(m: SceneMaterial, hasUv: boolean): THREE.Material {
+    const map = (image: ImageBitmap | undefined, srgb: boolean) => (hasUv && image ? this.sharedTexture(image, srgb) : null);
+    // Los factores de glTF son lineales, como el espacio de trabajo de Three
+    const color = new THREE.Color().setRGB(m.baseColor[0], m.baseColor[1], m.baseColor[2]);
+    const common = {
+      color,
+      map: map(m.maps.base, true),
+      transparent: m.alphaMode === "blend",
+      opacity: m.baseColor[3],
+      alphaTest: m.alphaMode === "mask" ? m.alphaCutoff : 0,
+      side: THREE.DoubleSide,
+    };
+    let material: THREE.Material;
+    if (m.unlit) {
+      material = new THREE.MeshBasicMaterial(common);
+    } else {
+      const metalRough = map(m.maps.metallicRoughness, false);
+      material = new THREE.MeshStandardMaterial({
+        ...common,
+        metalness: m.metallic,
+        roughness: m.roughness,
+        // glTF guarda rugosidad en G y metal en B, como lee Three
+        metalnessMap: metalRough,
+        roughnessMap: metalRough,
+        normalMap: map(m.maps.normal, false),
+        // Sin tangentes Three usa derivadas de pantalla, con Y opuesto a glTF
+        normalScale: new THREE.Vector2(m.normalScale, -m.normalScale),
+        aoMap: map(m.maps.occlusion, false),
+        aoMapIntensity: m.occlusionStrength,
+        emissive: new THREE.Color().setRGB(m.emissive[0], m.emissive[1], m.emissive[2]),
+        emissiveMap: map(m.maps.emissive, true),
+      });
+    }
+    material.name = m.name;
+    material.userData.sceneMaterial = true;
+    return material;
   }
 
   private applyTextures(material: THREE.MeshStandardMaterial, geometry: THREE.BufferGeometry): void {
@@ -849,7 +1093,9 @@ export class Viewer3D {
   }
 
   updateSettings(settings: Partial<ViewerSettings>): void {
+    const texturesChanged = settings.showTextures !== undefined && settings.showTextures !== this.settings.showTextures;
     this.settings = { ...this.settings, ...settings };
+    if (texturesChanged) this.refreshMeshMaterial();
     this.applySettings();
   }
 
@@ -1114,10 +1360,7 @@ export class Viewer3D {
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
       this.currentMesh.geometry.dispose();
-      const material = this.currentMesh.material as THREE.MeshStandardMaterial;
-      material.map?.dispose();
-      material.normalMap?.dispose();
-      material.dispose();
+      this.disposeMaterial(this.currentMesh.material);
       this.currentMesh = null;
     }
 
@@ -1175,6 +1418,8 @@ export class Viewer3D {
     );
     this.controls.target.copy(center);
     this.controls.update();
+    // Las luces se ubican alrededor del modelo
+    this.placeLights();
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
