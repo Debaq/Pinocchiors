@@ -49,46 +49,44 @@ impl Mesh {
     /// [`try_from_triangles`](Self::try_from_triangles) con datos no confiables.
     pub fn from_triangles(positions: &[Vector3], indices: &[[usize; 3]]) -> Self {
         let mut mesh = Self::new();
+        mesh.vertices = positions.iter().map(|&pos| MeshVertex::new(pos)).collect();
+        mesh.edges.reserve(indices.len() * 3);
+        mesh.faces.reserve(indices.len());
 
-        // Añadir vértices
-        for &pos in positions {
-            mesh.vertices.push(MeshVertex::new(pos));
-        }
-
-        // Mapa para encontrar aristas gemelas
-        let mut edge_map: HashMap<(usize, usize), usize> = HashMap::new();
-
-        // Añadir caras y aristas
-        for triangle in indices {
-            let face_idx = mesh.faces.len();
-            let base_edge = mesh.edges.len();
-
-            // Crear las 3 aristas de la cara
+        // Añadir caras y aristas: la arista `3·cara + i` va de triangle[i] a
+        // triangle[i + 1]
+        for (face_idx, triangle) in indices.iter().enumerate() {
+            let base_edge = 3 * face_idx;
             for i in 0..3 {
-                let v0 = triangle[i];
-                let v1 = triangle[(i + 1) % 3];
-                let next = base_edge + (i + 1) % 3;
-
-                let mut edge = MeshEdge::new(v1, next);
+                let mut edge = MeshEdge::new(triangle[(i + 1) % 3], base_edge + (i + 1) % 3);
                 edge.face = Some(face_idx);
-
-                // Buscar arista gemela
-                if let Some(&twin_idx) = edge_map.get(&(v1, v0)) {
-                    edge.twin = Some(twin_idx);
-                    mesh.edges[twin_idx].twin = Some(mesh.edges.len());
-                }
-
-                // Registrar esta arista
-                edge_map.insert((v0, v1), mesh.edges.len());
-
-                // Actualizar vértice
-                mesh.vertices[v0].edge = Some(mesh.edges.len());
-
+                mesh.vertices[triangle[i]].edge = Some(base_edge + i);
                 mesh.edges.push(edge);
             }
-
-            // Registrar la cara
             mesh.faces.push(base_edge);
+        }
+
+        // Aristas gemelas: se ordenan las medias aristas por arista no dirigida
+        // y en cada grupo se empareja una de cada sentido. Así los gemelos son
+        // siempre recíprocos, aun en aristas con más de dos caras.
+        debug_assert!(positions.len() <= u32::MAX as usize);
+        let mut keyed: Vec<u128> = indices
+            .iter()
+            .flat_map(|t| (0..3).map(move |i| (t[i], t[(i + 1) % 3])))
+            .enumerate()
+            .map(|(e, (a, b))| {
+                let key = ((a.min(b) as u128) << 32) | b.max(a) as u128;
+                (key << 64) | ((u128::from(a < b)) << 63) | e as u128
+            })
+            .collect();
+        keyed.sort_unstable();
+        let edge_of = |k: u128| (k as u64 & (u64::MAX >> 1)) as usize;
+        for group in keyed.chunk_by(|x, y| x >> 64 == y >> 64) {
+            let forward = group.partition_point(|k| (k >> 63) & 1 == 0);
+            for (&back, &fwd) in group[..forward].iter().zip(&group[forward..]) {
+                mesh.edges[edge_of(back)].twin = Some(edge_of(fwd));
+                mesh.edges[edge_of(fwd)].twin = Some(edge_of(back));
+            }
         }
 
         mesh.compute_vertex_normals();
