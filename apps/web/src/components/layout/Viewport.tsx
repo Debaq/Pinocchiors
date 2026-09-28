@@ -1,6 +1,15 @@
 import { Component, onMount, onCleanup, Show, createEffect } from "solid-js";
 import { clsx } from "clsx";
-import { Viewer3D, ViewerSettings, MeshData, MeshTextures, SkeletonData, WeightsData } from "../../lib/Viewer3D";
+import {
+  Viewer3D,
+  ViewerSettings,
+  MeshData,
+  MeshTextures,
+  PaintSettings,
+  PaintStroke,
+  SkeletonData,
+  WeightsData,
+} from "../../lib/Viewer3D";
 
 export interface ViewportProps {
   // Callbacks
@@ -9,6 +18,7 @@ export interface ViewportProps {
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
+  onWeightsPainted?: (stroke: PaintStroke) => void;
 
   // Data
   meshData?: MeshData;
@@ -33,6 +43,9 @@ export interface ViewportProps {
 
   // Active tool
   activeTool?: string;
+
+  /** Pincel de pesos activo (`undefined` = apagado) */
+  paintSettings?: PaintSettings;
 }
 
 export const Viewport: Component<ViewportProps> = (props) => {
@@ -48,6 +61,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onGroundSelected: props.onGroundSelected,
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
+        onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
       });
 
       props.onViewerReady?.(viewer);
@@ -109,6 +123,10 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   // React to active tool
+  createEffect(() => {
+    viewer?.setPaintMode(props.paintSettings ?? null);
+  });
+
   createEffect(() => {
     if (viewer && props.activeTool) {
       viewer.setActiveTool(props.activeTool);

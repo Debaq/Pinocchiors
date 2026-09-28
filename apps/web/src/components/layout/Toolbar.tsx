@@ -19,6 +19,7 @@ const toolIcons: Record<ToolId, Component<{ size?: number | string; class?: stri
   move: Icons.ArrowsOutCardinal,
   rotate: Icons.ArrowsClockwise,
   scale: Icons.ArrowsOut,
+  paint: Icons.PaintBrush,
   measure: Icons.Ruler,
   resetView: Icons.House,
 };

@@ -34,7 +34,8 @@ Implementación en Rust del algoritmo de [Pinocchio](https://people.csail.mit.ed
 
 - Ajusta automáticamente un esqueleto dentro de una malla: detecta las extremidades en el eje medial (patas, cabeza, cola…), busca la orientación de la plantilla (Y o Z arriba, girada) y asigna cada extremo a una extremidad; las articulaciones siguen el eje medial con las proporciones de la plantilla. Detalle en [`libs/pinocchio/ROADMAP.md`](libs/pinocchio/ROADMAP.md) (fase 8).
 - Edición manual: articulaciones en espejo (`_l`/`_r`, `.L`/`.R`, `Left`/`Right`), centrado en la sección del miembro, y un esqueleto editado se usa tal cual (`SkeletonFit::Exact`).
-- Calcula los pesos de skinning con **bone heat** (Baran & Popović): hueso visible más cercano y difusión con el Laplaciano cotangente. Las piezas sueltas sin huesos (colmillos, ojos) se mueven rígidas con la parte del cuerpo donde se apoyan.
+- Calcula los pesos de skinning con **bone heat** (Baran & Popović) y difusión con el Laplaciano cotangente. Cada vértice va con el hueso que pasa por el centro de su tubo (no el más cercano), así en un tronco gordo la panza queda con la columna y no con las patas. Las piezas sueltas sin huesos (colmillos, ojos) se mueven rígidas con la parte del cuerpo donde se apoyan.
+- Pincel de pesos en la app (sumar, restar, suavizar, espejo) y pose de prueba para revisarlos.
 - Trabaja en las coordenadas originales del modelo, suelda costuras UV y transfiere los pesos si la malla se decima.
 - Esqueletos predefinidos: `HumanSkeleton`, `QuadSkeleton`, `HorseSkeleton`, `CentaurSkeleton`, `BirdSkeleton`, `SpiderSkeleton`, `SerpentSkeleton`, `MechSkeleton`.
 - Decimación automática en mallas grandes, normalización y presets `fast()` / `high_quality()`.
@@ -181,7 +182,7 @@ npx tauri build --config ../desktop/tauri.conf.json
 |-------|----------|
 | Import/Export | `get_supported_formats`, `import_model`, `export_model`, `get_mesh_data` |
 | Esqueletos | `list_skeleton_presets`, `select_skeleton`, `get_skeleton_data`, `transform_skeleton`, `move_bone` (con espejo), `auto_fit_skeleton`, `center_bones` |
-| Auto-rig | `run_autorig`, `get_weights_data` |
+| Auto-rig | `run_autorig`, `get_weights_data`, `set_vertex_weights` (pincel), `get_weight_mirror` |
 | Retopología | `run_retopology`, `get_quad_mesh_data` |
 | UV / Piel | `get_uv_info`, `run_uv_unwrap`, `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout` |
 | Reparación | `analyze_mesh`, `repair_mesh`, `undo_repair`, `get_repair_diagnostics` |

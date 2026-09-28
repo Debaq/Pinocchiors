@@ -36,6 +36,8 @@ pub fn run() {
             // Autorig
             commands::run_autorig,
             commands::get_weights_data,
+            commands::set_vertex_weights,
+            commands::get_weight_mirror,
             // Retopología
             commands::run_retopology,
             commands::get_quad_mesh_data,

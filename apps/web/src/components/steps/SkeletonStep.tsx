@@ -1,5 +1,6 @@
 import { Component, Show } from "solid-js";
-import { Button, Checkbox, Panel } from "../ui";
+import { Button, Checkbox, Panel, Select, Slider } from "../ui";
+import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
 import { ConfigPanel, type AutorigConfig } from "../panels/ConfigPanel";
 import { SkeletonTransformPanel, type SkeletonTransform } from "../panels/SkeletonTransformPanel";
@@ -40,6 +41,14 @@ export interface SkeletonStepProps {
   isProcessing?: boolean;
   autorigComplete?: boolean;
   numBones?: number;
+  // Pincel de pesos
+  painting?: boolean;
+  onPaint?: () => void;
+  paintConfig?: Omit<PaintSettings, "bone">;
+  onPaintConfigChange?: (config: Omit<PaintSettings, "bone">) => void;
+  boneNames?: string[];
+  selectedBone?: number;
+  onSelectBone?: (index: number) => void;
   // Pose de prueba
   posing?: boolean;
   onPose?: () => void;
@@ -47,6 +56,12 @@ export interface SkeletonStepProps {
 }
 
 /** Título numerado de cada etapa del flujo */
+const PAINT_MODES = [
+  { value: "add", label: "Sumar" },
+  { value: "subtract", label: "Restar" },
+  { value: "smooth", label: "Suavizar" },
+];
+
 const Stage: Component<{ n: number; title: string }> = (props) => (
   <div class="flex items-center gap-2 text-xs font-semibold text-text">
     <span class="w-5 h-5 rounded-full bg-accent/20 text-accent flex items-center justify-center text-[10px]">{props.n}</span>
@@ -182,6 +197,65 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
                 <span class="text-text-muted ml-auto font-mono">{props.numBones} huesos</span>
               </Show>
             </div>
+            <Show when={props.paintConfig}>
+              {(config) => {
+                const update = (partial: Partial<Omit<PaintSettings, "bone">>) =>
+                  props.onPaintConfigChange?.({ ...config(), ...partial });
+                return (
+                  <Panel title="Pintar pesos" icon={<Icons.PaintBrush size={14} />} defaultOpen>
+                    <div class="space-y-4 pt-1">
+                      <p class="text-xs text-text-muted leading-relaxed">
+                        Con <span class="text-text">Pintar (B)</span> arrastra sobre la malla: el mapa de
+                        calor muestra el hueso activo (rojo = todo su peso). Recalcular los pesos
+                        descarta lo pintado.
+                      </p>
+                      <Select
+                        label="Hueso"
+                        options={(props.boneNames ?? []).map((name, i) => ({ value: String(i), label: name }))}
+                        value={props.selectedBone !== undefined && props.selectedBone >= 0 ? String(props.selectedBone) : undefined}
+                        onChange={(v) => props.onSelectBone?.(Number(v))}
+                        placeholder="Elige un hueso o haz clic en una articulación"
+                      />
+                      <Select
+                        label="Modo"
+                        options={PAINT_MODES}
+                        value={config().mode}
+                        onChange={(v) => update({ mode: v as PaintSettings["mode"] })}
+                      />
+                      <Slider
+                        label="Radio"
+                        value={Math.round(config().radius * 1000) / 10}
+                        onChange={(v) => update({ radius: v / 100 })}
+                        min={0.5}
+                        max={20}
+                        step={0.5}
+                        formatValue={(v) => `${v} %`}
+                      />
+                      <Slider
+                        label="Intensidad"
+                        value={Math.round(config().strength * 100)}
+                        onChange={(v) => update({ strength: v / 100 })}
+                        min={5}
+                        max={100}
+                        step={5}
+                        formatValue={(v) => `${v} %`}
+                      />
+                      <Checkbox
+                        label="Espejo: pintar también el lado opuesto"
+                        checked={config().mirror}
+                        onChange={(mirror) => update({ mirror })}
+                      />
+                      <Button onClick={props.onPaint} variant={props.painting ? "primary" : "default"} fullWidth>
+                        <span class="flex items-center gap-1.5">
+                          <Icons.PaintBrush size={14} />
+                          {props.painting ? "Pintando (Ctrl+Z deshace)" : "Pintar"}
+                        </span>
+                      </Button>
+                    </div>
+                  </Panel>
+                );
+              }}
+            </Show>
             <Panel title="Probar la pose" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
               <div class="space-y-3 pt-1">
                 <p class="text-xs text-text-muted leading-relaxed">

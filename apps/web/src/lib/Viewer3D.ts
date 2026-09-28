@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
+import { boneWeight, paintRow } from "./weightPaint";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -49,7 +50,28 @@ export interface ViewerSettings {
   selectedBone: number;
 }
 
+/** Opciones del pincel de pesos */
+export interface PaintSettings {
+  /** Hueso que se pinta */
+  bone: number;
+  mode: "add" | "subtract" | "smooth";
+  /** Radio en fracción de la diagonal de la malla */
+  radius: number;
+  /** Intensidad por pincelada, 0–1 */
+  strength: number;
+  /** Pintar también el vértice espejo con el hueso par */
+  mirror: boolean;
+}
+
+/** Un trazo del pincel: filas de influencias (pares hueso, peso) antes y después */
+export interface PaintStroke {
+  vertices: Uint32Array;
+  before: Float32Array;
+  after: Float32Array;
+}
+
 export interface ViewerCallbacks {
+  onWeightsPainted?: (stroke: PaintStroke) => void;
   onFpsUpdate?: (fps: number) => void;
   onGroundSelected?: () => void;
   onBoneSelected?: (index: number) => void;
@@ -116,6 +138,15 @@ export class Viewer3D {
   private meshData: MeshData | null = null;
   private weightsData: WeightsData | null = null;
   private skeletonData: SkeletonData | null = null;
+
+  // Pincel de pesos
+  private paintSettings: PaintSettings | null = null;
+  private paintMirror: { vertex: Uint32Array; bone: Uint32Array } | null = null;
+  private paintNeighbors: { offsets: Uint32Array; list: Uint32Array } | null = null;
+  /** Filas originales de los vértices tocados en el trazo en curso */
+  private stroke: Map<number, Float32Array> | null = null;
+  private lastDab: THREE.Vector3 | null = null;
+  private brushCursor: THREE.Mesh | null = null;
 
   /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
   private pose: {
@@ -239,6 +270,257 @@ export class Viewer3D {
     // Mouse events for ground selection
     this.canvas.addEventListener("click", (e) => this.onCanvasClick(e));
     this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e));
+
+    // Pincel de pesos
+    this.canvas.addEventListener("pointerdown", (e) => this.onPaintDown(e));
+    this.canvas.addEventListener("pointermove", (e) => this.onPaintMove(e));
+    window.addEventListener("pointerup", () => this.finishStroke());
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // PINCEL DE PESOS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Activa el pincel con esas opciones (`null` lo apaga) */
+  setPaintMode(settings: PaintSettings | null): void {
+    this.paintSettings = settings;
+    if (!settings) {
+      this.finishStroke();
+      if (this.brushCursor) this.brushCursor.visible = false;
+    }
+    this.canvas.style.cursor = settings ? "none" : "default";
+  }
+
+  /** Vértice espejo de cada vértice y hueso par de cada hueso (`0xffffffff` = ninguno) */
+  setPaintMirror(vertex: Uint32Array, bone: Uint32Array): void {
+    this.paintMirror = { vertex, bone };
+  }
+
+  /** Reemplaza filas de influencias (deshacer/rehacer un trazo) */
+  applyWeightRows(vertices: Uint32Array, rows: Float32Array): void {
+    const weights = this.weightsData;
+    if (!weights) return;
+    const width = weights.maxInfluences * 2;
+    vertices.forEach((v, i) => {
+      weights.weights.set(rows.subarray(i * width, (i + 1) * width), v * width);
+      this.recolorVertex(v);
+    });
+    this.markColorsDirty();
+  }
+
+  private paintableMesh(): THREE.Mesh | null {
+    const weights = this.weightsData;
+    const mesh = this.meshData;
+    if (!this.paintSettings || !weights || !mesh || weights.numVertices * 3 !== mesh.positions.length) return null;
+    return this.weightsMesh ?? this.currentMesh;
+  }
+
+  private brushHit(event: PointerEvent): THREE.Intersection | null {
+    const target = this.paintableMesh();
+    if (!target) return null;
+    this.raycaster.setFromCamera(this.getMousePosition(event), this.camera);
+    return this.raycaster.intersectObject(target)[0] ?? null;
+  }
+
+  private brushRadius(): number {
+    if (!this.paintSettings || !this.currentMesh) return 0;
+    const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
+    return this.paintSettings.radius * size.length();
+  }
+
+  private updateBrushCursor(hit: THREE.Intersection | null): void {
+    if (!hit || !hit.face) {
+      if (this.brushCursor) this.brushCursor.visible = false;
+      return;
+    }
+    if (!this.brushCursor) {
+      const ring = new THREE.RingGeometry(0.92, 1, 48);
+      const material = new THREE.MeshBasicMaterial({ color: 0xff79c6, side: THREE.DoubleSide, depthTest: false, transparent: true });
+      this.brushCursor = new THREE.Mesh(ring, material);
+      this.brushCursor.renderOrder = 2;
+      this.scene.add(this.brushCursor);
+    }
+    const radius = this.brushRadius();
+    this.brushCursor.visible = true;
+    this.brushCursor.scale.setScalar(radius);
+    this.brushCursor.position.copy(hit.point);
+    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    this.brushCursor.lookAt(hit.point.clone().add(normal));
+  }
+
+  private onPaintDown(event: PointerEvent): void {
+    if (event.button !== 0) return;
+    const hit = this.brushHit(event);
+    if (!hit) return;
+    this.controls.enabled = false;
+    this.stroke = new Map();
+    this.lastDab = null;
+    this.dab(this.meshGroup.worldToLocal(hit.point.clone()));
+  }
+
+  private onPaintMove(event: PointerEvent): void {
+    if (!this.paintSettings) return;
+    const hit = this.brushHit(event);
+    this.updateBrushCursor(hit);
+    if (!this.stroke || !hit) return;
+    const point = this.meshGroup.worldToLocal(hit.point.clone());
+    // Una pincelada cada cuarto de radio: el trazo no depende de la velocidad
+    if (this.lastDab && this.lastDab.distanceTo(point) < 0.25 * this.brushRadius()) return;
+    this.dab(point);
+  }
+
+  private finishStroke(): void {
+    const stroke = this.stroke;
+    this.stroke = null;
+    this.controls.enabled = true;
+    const weights = this.weightsData;
+    if (!stroke || stroke.size === 0 || !weights) return;
+    const width = weights.maxInfluences * 2;
+    const vertices = Uint32Array.from(stroke.keys());
+    const before = new Float32Array(vertices.length * width);
+    const after = new Float32Array(vertices.length * width);
+    vertices.forEach((v, i) => {
+      before.set(stroke.get(v)!, i * width);
+      after.set(weights.weights.subarray(v * width, (v + 1) * width), i * width);
+    });
+    this.callbacks.onWeightsPainted?.({ vertices, before, after });
+  }
+
+  /** Una pincelada centrada en `center` (coordenadas de la malla) */
+  private dab(center: THREE.Vector3): void {
+    const settings = this.paintSettings;
+    const mesh = this.meshData;
+    const weights = this.weightsData;
+    if (!settings || !mesh || !weights) return;
+    this.lastDab = center.clone();
+    const radius = this.brushRadius();
+    const r2 = radius * radius;
+    const positions = mesh.positions;
+    const hits: [number, number][] = [];
+    for (let v = 0; v < weights.numVertices; v++) {
+      const dx = positions[3 * v] - center.x;
+      const dy = positions[3 * v + 1] - center.y;
+      const dz = positions[3 * v + 2] - center.z;
+      const d2 = dx * dx + dy * dy + dz * dz;
+      if (d2 < r2) {
+        const t = 1 - d2 / r2;
+        hits.push([v, t * t]);
+      }
+    }
+    const mirror = settings.mirror ? this.paintMirror : null;
+    // El suavizado lee los pesos de antes de la pincelada
+    const smoothTargets = settings.mode === "smooth" ? this.smoothTargets(hits, settings.bone) : null;
+    hits.forEach(([v, falloff], i) => {
+      this.paintVertex(v, settings.bone, falloff * settings.strength, smoothTargets?.[i]);
+      const mv = mirror?.vertex[v];
+      if (mirror && mv !== undefined && mv !== 0xffffffff && mv !== v) {
+        const pair = mirror.bone[settings.bone];
+        const mb = pair === 0xffffffff ? settings.bone : pair;
+        const target = settings.mode === "smooth" ? this.smoothTargets([[mv, 1]], mb)[0] : undefined;
+        this.paintVertex(mv, mb, falloff * settings.strength, target);
+      }
+    });
+    this.markColorsDirty();
+  }
+
+  private boneWeight(v: number, bone: number): number {
+    const weights = this.weightsData!;
+    return boneWeight(weights.weights, v * weights.maxInfluences * 2, weights.maxInfluences, bone);
+  }
+
+  /** Promedio del peso de `bone` en los vecinos de cada vértice */
+  private smoothTargets(hits: [number, number][], bone: number): number[] {
+    const neighbors = this.neighborsOf();
+    return hits.map(([v]) => {
+      let sum = 0;
+      let count = 0;
+      for (let j = neighbors.offsets[v]; j < neighbors.offsets[v + 1]; j++) {
+        sum += this.boneWeight(neighbors.list[j], bone);
+        count++;
+      }
+      return count > 0 ? sum / count : this.boneWeight(v, bone);
+    });
+  }
+
+  /** Vecinos por aristas de la malla (formato CSR), calculados una vez */
+  private neighborsOf(): { offsets: Uint32Array; list: Uint32Array } {
+    if (this.paintNeighbors) return this.paintNeighbors;
+    const mesh = this.meshData!;
+    const n = mesh.positions.length / 3;
+    const sets: Set<number>[] = Array.from({ length: n }, () => new Set());
+    for (let t = 0; t + 2 < mesh.indices.length; t += 3) {
+      const [a, b, c] = [mesh.indices[t], mesh.indices[t + 1], mesh.indices[t + 2]];
+      sets[a].add(b).add(c);
+      sets[b].add(a).add(c);
+      sets[c].add(a).add(b);
+    }
+    // Vértices en la misma posición (costuras UV) comparten vecinos
+    const byPosition = new Map<string, number[]>();
+    for (let v = 0; v < n; v++) {
+      const key = `${mesh.positions[3 * v]},${mesh.positions[3 * v + 1]},${mesh.positions[3 * v + 2]}`;
+      const group = byPosition.get(key);
+      if (group) group.push(v);
+      else byPosition.set(key, [v]);
+    }
+    for (const group of byPosition.values()) {
+      if (group.length < 2) continue;
+      const union = new Set<number>();
+      group.forEach((v) => sets[v].forEach((w) => union.add(w)));
+      group.forEach((v) => (sets[v] = union));
+    }
+    const offsets = new Uint32Array(n + 1);
+    for (let v = 0; v < n; v++) offsets[v + 1] = offsets[v] + sets[v].size;
+    const list = new Uint32Array(offsets[n]);
+    for (let v = 0; v < n; v++) list.set([...sets[v]], offsets[v]);
+    this.paintNeighbors = { offsets, list };
+    return this.paintNeighbors;
+  }
+
+  /** Aplica el pincel al vértice `v` y guarda su fila original en el trazo */
+  private paintVertex(v: number, bone: number, amount: number, smoothTarget?: number): void {
+    const weights = this.weightsData!;
+    const k = weights.maxInfluences;
+    const base = v * k * 2;
+    if (this.stroke && !this.stroke.has(v)) {
+      this.stroke.set(v, weights.weights.slice(base, base + k * 2));
+    }
+    if (paintRow(weights.weights, base, k, bone, this.paintSettings!.mode, amount, smoothTarget, this.fallbackBone(bone))) {
+      this.recolorVertex(v);
+    }
+  }
+
+  /**
+   * Hueso que recibe el peso que pierde `bone` donde es la única influencia:
+   * su padre, o si el padre es la raíz (sin segmento), su primer hijo.
+   */
+  private fallbackBone(bone: number): number | undefined {
+    const bones = this.skeletonData?.bones;
+    if (!bones) return undefined;
+    const parent = bones[bone]?.parent;
+    if (parent !== null && parent !== undefined && bones[parent].parent !== null) return parent;
+    const child = bones.findIndex((b) => b.parent === bone);
+    return child >= 0 ? child : undefined;
+  }
+
+  /** Color del mapa de calor de un vértice según el hueso seleccionado */
+  private recolorVertex(v: number): void {
+    const colors = this.weightsMesh?.geometry.getAttribute("color") as THREE.BufferAttribute | undefined;
+    if (!colors || !this.weightsData) return;
+    const bone = this.settings.selectedBone;
+    let weight = 0;
+    const k = this.weightsData.maxInfluences;
+    for (let i = 0; i < k; i++) {
+      const w = this.weightsData.weights[(v * k + i) * 2 + 1];
+      if (bone === -1) weight = Math.max(weight, w);
+      else if (this.weightsData.weights[(v * k + i) * 2] === bone) weight = w;
+    }
+    const color = getHeatmapColor(weight);
+    colors.setXYZ(v, color.r, color.g, color.b);
+  }
+
+  private markColorsDirty(): void {
+    const colors = this.weightsMesh?.geometry.getAttribute("color");
+    if (colors) colors.needsUpdate = true;
   }
 
   private onResize(): void {
@@ -281,6 +563,7 @@ export class Viewer3D {
   loadMesh(data: MeshData): void {
     this.resetPose();
     this.meshData = data;
+    this.paintNeighbors = null;
     this.clearMesh();
 
     // Create geometry

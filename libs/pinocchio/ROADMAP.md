@@ -351,7 +351,14 @@ deja `salida_rest.glb` (malla coloreada por pesos + huesos) y
       al doblar la pata trasera se estira arriba. Lo resuelven variantes con
       proporciones propias (fase 7) o el pincel de pesos.
 - [x] Pesos en cuerpos gruesos (radio de tubo, ver arriba).
-- [ ] Pintar pesos a mano (pincel sumar/restar/suavizar por hueso, espejo).
+- [x] Pintar pesos a mano: herramienta Pincel (B) en el paso Esqueleto,
+      sumar/restar/suavizar el hueso activo con caída suave, espejo (vértice
+      reflejado en el plano del esqueleto + hueso par), deshacer por trazo.
+      La matemática está en `apps/web/src/lib/weightPaint.ts`; donde el hueso
+      es la única influencia, lo que pierde va a su padre (o primer hijo). Los
+      trazos se guardan con `set_vertex_weights` en el resultado del autorig,
+      así llegan a la exportación (también a la malla retopologizada).
+      Recalcular los pesos descarta lo pintado.
 - [ ] Pose de prueba encadenada (varias articulaciones a la vez).
 - [ ] Apéndices de la fase 7 para las extremidades sin hueso (trompa, orejas).
 

@@ -1371,6 +1371,106 @@ fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     })
 }
 
+/// Reemplaza los pesos de algunos vértices (pincel de pesos). `influences`
+/// trae, por vértice, pares `(hueso, peso)` planos; los pesos se normalizan.
+/// Es lo que usa la exportación, también para la malla retopologizada.
+#[tauri::command]
+pub async fn set_vertex_weights(app: AppHandle, vertices: Vec<u32>, influences: Vec<f32>) -> Result<(), String> {
+    in_background(app, move |state| {
+        let mut result_lock = state.result.lock().unwrap();
+        let result = result_lock.as_mut().ok_or("No hay pesos calculados")?;
+        if vertices.is_empty() {
+            return Ok(());
+        }
+        if !influences.len().is_multiple_of(2 * vertices.len()) {
+            return Err("Formato de pesos inválido".to_string());
+        }
+        let per_vertex = influences.len() / vertices.len();
+        let num_bones = result.attachment.num_bones();
+        let num_vertices = result.attachment.num_vertices();
+        for (&v, row) in vertices.iter().zip(influences.chunks(per_vertex)) {
+            let v = v as usize;
+            if v >= num_vertices {
+                return Err(format!("Vértice fuera de rango: {v}"));
+            }
+            let mut dense = vec![0.0; num_bones];
+            for pair in row.chunks(2) {
+                let (bone, weight) = (pair[0] as usize, pair[1] as f64);
+                if bone < num_bones {
+                    dense[bone] += weight.max(0.0);
+                }
+            }
+            result.attachment.set_weights(v, &dense);
+        }
+        Ok(())
+    })
+    .await
+}
+
+/// Simetría para pintar pesos en espejo: cabecera `[vértices, huesos]` (u32),
+/// luego el vértice espejo de cada vértice y el hueso par de cada hueso
+/// (`u32::MAX` = sin espejo). El plano es el de simetría del esqueleto.
+#[tauri::command]
+pub async fn get_weight_mirror(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |state| {
+        let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+        let skeleton = {
+            let lock = state.skeleton.lock().unwrap();
+            to_basic_skeleton(lock.as_ref().ok_or("No hay esqueleto")?)
+        };
+        let bones: Vec<u32> = pinocchio_skeleton::mirror_pairs(&skeleton)
+            .into_iter()
+            .map(|p| p.map_or(u32::MAX, |b| b as u32))
+            .collect();
+        let vertices = match pinocchio_skeleton::symmetry_plane(&skeleton) {
+            Some(plane) => mirror_vertices(&mesh, plane),
+            None => vec![u32::MAX; mesh.num_vertices()],
+        };
+        let mut out = Vec::with_capacity(4 * (2 + vertices.len() + bones.len()));
+        for w in [vertices.len() as u32, bones.len() as u32].iter().chain(&vertices).chain(&bones) {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
+        Ok(out)
+    })
+    .await?;
+    Ok(Response::new(bytes))
+}
+
+/// Vértice más cercano al reflejo de cada vértice (si está a menos del 2 % de
+/// la diagonal de la malla; si no, `u32::MAX`).
+fn mirror_vertices(mesh: &Mesh, plane: (Vector3, Vector3)) -> Vec<u32> {
+    use rayon::prelude::*;
+    let positions: Vec<Vector3> = mesh.vertices.iter().map(|v| v.position).collect();
+    let tolerance = mesh.bounding_box().diagonal() * 0.02;
+    let cell = tolerance.max(1e-12);
+    let key = |p: &Vector3| [p.x(), p.y(), p.z()].map(|c| (c / cell).floor() as i64);
+    let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
+    for (i, p) in positions.iter().enumerate() {
+        grid.entry(key(p)).or_default().push(i as u32);
+    }
+    positions
+        .par_iter()
+        .map(|p| {
+            let q = pinocchio_skeleton::reflect(*p, plane);
+            let [kx, ky, kz] = key(&q);
+            let mut best = (tolerance, u32::MAX);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        for &j in grid.get(&[kx + dx, ky + dy, kz + dz]).into_iter().flatten() {
+                            let d = positions[j as usize].distance(&q);
+                            if d < best.0 {
+                                best = (d, j);
+                            }
+                        }
+                    }
+                }
+            }
+            best.1
+        })
+        .collect()
+}
+
 /// Obtiene los datos del esqueleto embebido
 #[tauri::command]
 pub fn get_skeleton_data(state: State<'_, AppState>) -> Result<SkeletonData, String> {
@@ -2596,6 +2696,24 @@ mod tests {
         assert!(usda.contains("SkelRoot"), "{usda}");
         assert!(usda.contains("primvars:skel:jointIndices"));
         assert!(usda.contains("primvars:skel:jointWeights"));
+    }
+
+    #[test]
+    fn mirror_vertices_pair_both_sides() {
+        // Tira simétrica respecto de x = 0, más un vértice sin pareja
+        let positions = vec![
+            Vector3::new(-1.0, 0.0, 0.0),
+            Vector3::new(1.0, 0.0, 0.0),
+            Vector3::new(-1.0, 1.0, 0.0),
+            Vector3::new(1.0, 1.0, 0.0),
+            Vector3::new(0.0, 2.0, 0.0),
+            Vector3::new(-0.5, 5.0, 0.0),
+        ];
+        let mesh = Mesh::from_triangles(&positions, &[[0, 1, 3], [0, 3, 2], [2, 3, 4], [2, 4, 5]]);
+        let plane = (Vector3::zero(), Vector3::unit_x());
+        let mirror = mirror_vertices(&mesh, plane);
+        assert_eq!(&mirror[..5], &[1, 0, 3, 2, 4], "el del medio es su propio espejo");
+        assert_eq!(mirror[5], u32::MAX, "sin pareja cerca");
     }
 
     #[test]

@@ -12,7 +12,7 @@ import {
   type RetopologyConfig,
   type QuadQuality,
 } from "./components/panels";
-import { Viewer3D, MeshData, MeshTextures, SkeletonData, WeightsData } from "./lib/Viewer3D";
+import { Viewer3D, MeshData, MeshTextures, PaintSettings, PaintStroke, SkeletonData, WeightsData } from "./lib/Viewer3D";
 import { createPipelineStore } from "./lib/pipeline";
 import { buildSceneTree } from "./lib/scene-tree";
 import type { ToolId } from "./lib/tools";
@@ -309,6 +309,14 @@ export const App: Component = () => {
   const [skeletonTransform, setSkeletonTransform] = createSignal<SkeletonTransform>({ ...defaultTransform });
   // Edición del esqueleto
   const [symmetricEdit, setSymmetricEdit] = createSignal(true);
+  // Pincel de pesos (el hueso es el seleccionado)
+  const [paintConfig, setPaintConfig] = createSignal<Omit<PaintSettings, "bone">>({
+    mode: "add",
+    radius: 0.04,
+    strength: 0.3,
+    mirror: true,
+  });
+  const [paintMirrorLoaded, setPaintMirrorLoaded] = createSignal(false);
   const [fitInfo, setFitInfo] = createSignal<SkeletonFitInfo | undefined>();
   const [boneEditMode, setBoneEditMode] = createSignal(false);
 
@@ -384,6 +392,7 @@ export const App: Component = () => {
       { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
       { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
       { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
+      { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
     ]);
     shortcuts.attach();
 
@@ -536,6 +545,7 @@ export const App: Component = () => {
 
       setIsProcessing(false);
       setAutorigComplete(true);
+      setPaintMirrorLoaded(false);
       setProgress(undefined);
       setStatusMessage(`Autorig completado - ${viewerWeights.numBones} huesos procesados`);
 
@@ -1023,7 +1033,66 @@ export const App: Component = () => {
 
   const useTool = (tool: ToolId) => {
     setActiveTool(tool);
-    setBoneEditMode(tool !== "select");
+    setBoneEditMode(tool === "move" || tool === "rotate" || tool === "scale");
+    if (tool === "paint") void startPainting();
+  };
+
+  /** Pincel: mapa de calor del hueso activo y simetría de vértices */
+  const startPainting = async () => {
+    if (!autorigComplete()) {
+      setStatusMessage("Primero calcula los pesos");
+      return;
+    }
+    setViewSettings((prev) => ({
+      ...prev,
+      showWeights: true,
+      selectedBone: prev.selectedBone >= 0 ? prev.selectedBone : 1,
+    }));
+    setShowQuadMesh(false);
+    if (!paintMirrorLoaded()) {
+      try {
+        const buffer = await invoke<ArrayBuffer>("get_weight_mirror");
+        const [numVertices, numBones] = new Uint32Array(buffer, 0, 2);
+        const vertex = new Uint32Array(buffer, 8, numVertices);
+        const bone = new Uint32Array(buffer, 8 + numVertices * 4, numBones);
+        viewerRef?.setPaintMirror(vertex, bone);
+        setPaintMirrorLoaded(true);
+      } catch (e) {
+        console.error("Mirror map error:", e);
+      }
+    }
+  };
+
+  /** Pincel activo con el hueso seleccionado (o `undefined`) */
+  const paintSettings = (): PaintSettings | undefined => {
+    const bone = viewSettings().selectedBone;
+    if (activeTool() !== "paint" || !autorigComplete() || bone < 0) return undefined;
+    return { ...paintConfig(), bone };
+  };
+
+  /** Guarda un trazo del pincel (ya aplicado en el visor) con deshacer */
+  const handleWeightsPainted = async (stroke: PaintStroke) => {
+    const send = (rows: Float32Array) =>
+      invoke("set_vertex_weights", { vertices: Array.from(stroke.vertices), influences: Array.from(rows) });
+    let first = true;
+    try {
+      await history.execute({
+        description: "Pintar pesos",
+        execute: async () => {
+          // La primera vez el visor ya lo tiene aplicado
+          if (!first) viewerRef?.applyWeightRows(stroke.vertices, stroke.after);
+          first = false;
+          await send(stroke.after);
+        },
+        undo: async () => {
+          viewerRef?.applyWeightRows(stroke.vertices, stroke.before);
+          await send(stroke.before);
+        },
+      });
+    } catch (e) {
+      console.error("Paint error:", e);
+      setStatusMessage(`Error al guardar los pesos: ${e}`);
+    }
   };
 
   const handleBoneSelected = (index: number) => {
@@ -1093,14 +1162,7 @@ export const App: Component = () => {
           {/* Toolbar */}
           <Toolbar
             activeTool={activeTool()}
-            onToolChange={(tool) => {
-              setActiveTool(tool);
-              if (tool === "move" || tool === "rotate" || tool === "scale") {
-                setBoneEditMode(true);
-              } else {
-                setBoneEditMode(false);
-              }
-            }}
+            onToolChange={(tool) => useTool(tool)}
             onResetView={() => viewerRef?.resetView()}
             canUndo={history.canUndo()}
             canRedo={history.canRedo()}
@@ -1116,6 +1178,8 @@ export const App: Component = () => {
               onGroundSelected={handleGroundSelected}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
+              onWeightsPainted={handleWeightsPainted}
+              paintSettings={paintSettings()}
               meshData={showQuadMesh() && quadMeshData() ? quadMeshData() : meshData()}
               textures={viewerTextures()}
               skeletonData={skeletonData()}
@@ -1208,6 +1272,16 @@ export const App: Component = () => {
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
               onCenterSelected: () => handleCenterBones(true),
               onCenterAll: () => handleCenterBones(false),
+              painting: activeTool() === "paint",
+              onPaint: () => useTool("paint"),
+              paintConfig: paintConfig(),
+              onPaintConfigChange: setPaintConfig,
+              boneNames: skeletonData()?.bones.map((b) => b.name) ?? [],
+              selectedBone: viewSettings().selectedBone,
+              onSelectBone: (index: number) => {
+                setViewSettings((prev) => ({ ...prev, selectedBone: index, showWeights: true }));
+                viewerRef?.selectBone(index);
+              },
               posing: boneEditMode() && activeTool() === "rotate",
               onPose: () => useTool("rotate"),
               onResetPose: () => viewerRef?.resetPose(),

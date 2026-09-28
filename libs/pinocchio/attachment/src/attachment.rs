@@ -40,6 +40,18 @@ impl Attachment {
         &self.weights[vertex_idx]
     }
 
+    /// Reemplaza los pesos de un vértice (`[hueso]`), normalizados a suma 1.
+    /// Si todos son cero se deja el vértice como estaba.
+    pub fn set_weights(&mut self, vertex_idx: usize, weights: &[Real]) {
+        let sum: Real = weights.iter().map(|w| w.max(0.0)).sum();
+        if sum <= 1e-12 || weights.len() != self.num_bones {
+            return;
+        }
+        for (dst, &w) in self.weights[vertex_idx].iter_mut().zip(weights) {
+            *dst = w.max(0.0) / sum;
+        }
+    }
+
     /// Número de vértices
     pub fn num_vertices(&self) -> usize {
         self.rest_positions.len()
@@ -159,6 +171,19 @@ pub fn dominant_influences(weights: &[Real], max_bones: usize) -> Vec<(usize, Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_weights_normalizes_and_ignores_empty_rows() {
+        let positions = vec![Vector3::zero(), Vector3::unit_x(), Vector3::unit_y()];
+        let mesh = Mesh::from_triangles(&positions, &[[0, 1, 2]]);
+        let mut attachment = Attachment::new(&mesh, vec![vec![1.0, 0.0, 0.0]; 3], 3);
+        attachment.set_weights(1, &[1.0, 3.0, -2.0]);
+        assert_eq!(attachment.get_weights(1), &[0.25, 0.75, 0.0]);
+        attachment.set_weights(2, &[0.0, 0.0, 0.0]);
+        assert_eq!(attachment.get_weights(2), &[1.0, 0.0, 0.0], "fila nula: sin cambios");
+        attachment.set_weights(0, &[1.0]);
+        assert_eq!(attachment.get_weights(0), &[1.0, 0.0, 0.0], "largo incorrecto: sin cambios");
+    }
 
     #[test]
     fn test_attachment_creation() {

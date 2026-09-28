@@ -1,4 +1,4 @@
-export type ToolId = "select" | "move" | "rotate" | "scale" | "measure" | "resetView";
+export type ToolId = "select" | "move" | "rotate" | "scale" | "paint" | "measure" | "resetView";
 
 export interface ToolDef {
   id: ToolId;
@@ -12,6 +12,7 @@ export const TOOLS: ToolDef[] = [
   { id: "move", label: "Mover", shortcut: "G", cursor: "move" },
   { id: "rotate", label: "Rotar", shortcut: "R", cursor: "crosshair" },
   { id: "scale", label: "Escalar", shortcut: "S", cursor: "ns-resize" },
+  { id: "paint", label: "Pintar pesos", shortcut: "B", cursor: "none" },
   { id: "measure", label: "Medir", shortcut: "M", cursor: "crosshair" },
   { id: "resetView", label: "Reset Vista", shortcut: "Home", cursor: "default" },
 ];

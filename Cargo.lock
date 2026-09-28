@@ -2977,6 +2977,7 @@ dependencies = [
  "pinocchio-repair",
  "pinocchio-skeleton",
  "quadriflow-core",
+ "rayon",
  "serde",
  "serde_json",
  "tauri",
