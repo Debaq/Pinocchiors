@@ -166,6 +166,8 @@ El perfil `release` usa `lto = true` y `codegen-units = 1`.
 
 Interfaz gráfica completa para el pipeline 3D: visor Three.js, outliner de escena, edición del esqueleto, undo/redo y atajos de teclado.
 
+Cada etapa trabaja con la salida de la anterior. Reparar reemplaza la malla; después de la retopología, UV / Piel, esqueleto, pesos, pincel y pose de prueba usan la malla de quads (la que se exporta), salvo que en Retopología se desmarque "Usar esta malla en las etapas siguientes". Impresión 3D sigue sobre la malla original reparada, donde importa la geometría fiel y no la topología. Si se exporta una malla distinta de la del rig, los pesos se trasladan.
+
 ```bash
 cd apps/web
 npm install

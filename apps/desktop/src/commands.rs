@@ -716,13 +716,10 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
         .collect();
     let prims = geometry.world_primitives();
     let vertex_weights = if let Some(quad_vertex_of) = quad_vertex_of {
-        let mesh_lock = state.mesh.lock().unwrap();
-        let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
-        let quad = state.quad_mesh.lock().unwrap();
-        let weights = weights_on_quad_mesh(mesh, &source_weights, quad.as_ref().ok_or("No hay malla retopologizada")?)?;
+        let weights = weights_for(state, source_weights, WeightTarget::Retopology)?;
         quad_vertex_of.iter().map(|&v| weights[v].clone()).collect()
     } else {
-        source_weights
+        weights_for(state, source_weights, WeightTarget::Original)?
     };
 
     let vertex_count: usize = prims.iter().map(|p| p.positions.len()).sum();
@@ -883,19 +880,19 @@ fn export_weights_json(config: &ExportConfig, state: &AppState) -> Result<Export
     let skeleton_lock = state.skeleton.lock().unwrap();
     let skeleton_type = skeleton_lock.as_ref().ok_or("No hay esqueleto")?;
 
-    let mesh_lock = state.mesh.lock().unwrap();
-    let mesh = mesh_lock.as_ref().ok_or("No hay malla")?;
-
     let source_weights: Vec<Vec<f64>> = (0..result.attachment.num_vertices())
         .map(|v| result.get_weights(v).to_vec())
         .collect();
     let (source, num_vertices, num_faces, vertex_weights) = if config.use_retopology.unwrap_or(false) {
+        let weights = weights_for(state, source_weights, WeightTarget::Retopology)?;
         let quad_lock = state.quad_mesh.lock().unwrap();
         let quad = quad_lock.as_ref().ok_or("No hay malla retopologizada")?;
-        let weights = weights_on_quad_mesh(mesh, &source_weights, quad)?;
         ("retopology", quad.num_vertices(), quad.num_faces(), weights)
     } else {
-        ("original", mesh.num_vertices(), mesh.num_faces(), source_weights)
+        let weights = weights_for(state, source_weights, WeightTarget::Original)?;
+        let mesh_lock = state.mesh.lock().unwrap();
+        let mesh = mesh_lock.as_ref().ok_or("No hay malla")?;
+        ("original", mesh.num_vertices(), mesh.num_faces(), weights)
     };
 
     let max_influences = 4;
@@ -1289,7 +1286,7 @@ pub async fn auto_fit_skeleton(app: AppHandle) -> Result<AutoFitResult, String> 
 }
 
 fn auto_fit_skeleton_impl(state: &AppState) -> Result<AutoFitResult, String> {
-    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let mesh = active_mesh(state)?;
     let preset = state.skeleton_preset.lock().unwrap().clone();
     let (template, fit) = match preset {
         Some(preset) => (to_basic_skeleton(&preset), SkeletonFit::Auto),
@@ -1323,9 +1320,8 @@ pub async fn center_bones(app: AppHandle, bones: Option<Vec<usize>>) -> Result<S
         let centering = {
             let mut cache = state.joint_centering.lock().unwrap();
             if cache.is_none() {
-                let mesh_lock = state.mesh.lock().unwrap();
-                let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
-                *cache = Some(std::sync::Arc::new(pinocchio_embedding::JointCentering::new(mesh, 128)));
+                let mesh = active_mesh(state)?;
+                *cache = Some(std::sync::Arc::new(pinocchio_embedding::JointCentering::new(&mesh, 128)));
             }
             cache.clone().expect("recién calculado")
         };
@@ -1365,7 +1361,10 @@ pub async fn run_autorig(
         .try_begin_processing()
         .ok_or("Ya hay un proceso en curso")?;
 
-    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    // La malla activa: la retopologizada si la hay, así los pesos se calculan
+    // sobre la malla que se ve, se pinta y se exporta
+    let on_quad = state.active_is_quad();
+    let mesh = active_mesh(&state)?;
     let skeleton_type = state
         .skeleton
         .lock()
@@ -1433,6 +1432,7 @@ pub async fn run_autorig(
             output.stats.num_vertices, output.stats.num_bones
         ),
     });
+    state.rig_on_quad.store(on_quad, std::sync::atomic::Ordering::SeqCst);
     *state.result.lock().unwrap() = Some(output);
     Ok(())
 }
@@ -1444,7 +1444,10 @@ pub async fn get_weights_data(app: AppHandle) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
+/// Pesos en el orden de vértices del visor (con el rig sobre la malla de
+/// quads, los vértices duplicados en costuras UV repiten la fila de su vértice)
 fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
+    let view_map = rig_view_map(state)?;
     let result_lock = state.result.lock().unwrap();
     let result = result_lock.as_ref().ok_or("No hay resultado de autorig")?;
 
@@ -1452,14 +1455,15 @@ fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     let skeleton_type = skeleton_lock.as_ref().ok_or("No hay esqueleto")?;
 
     let bone_names = get_bone_names(skeleton_type);
-    let num_vertices = result.attachment.num_vertices();
     let num_bones = bone_names.len();
     let max_influences = 4;
 
     let (indices, weights_raw) = result.export_weights(max_influences);
+    let rig_vertices: Vec<usize> = view_map.unwrap_or_else(|| (0..result.attachment.num_vertices()).collect());
+    let num_vertices = rig_vertices.len();
 
     let mut weights = Vec::with_capacity(num_vertices * max_influences * 2);
-    for vert_idx in 0..num_vertices {
+    for &vert_idx in &rig_vertices {
         for i in 0..max_influences {
             weights.push(indices[vert_idx][i] as f32);
             weights.push(weights_raw[vert_idx][i] as f32);
@@ -1475,12 +1479,13 @@ fn get_weights_data_impl(state: &AppState) -> Result<WeightsData, String> {
     })
 }
 
-/// Reemplaza los pesos de algunos vértices (pincel de pesos). `influences`
-/// trae, por vértice, pares `(hueso, peso)` planos; los pesos se normalizan.
-/// Es lo que usa la exportación, también para la malla retopologizada.
+/// Reemplaza los pesos de algunos vértices (pincel de pesos). `vertices` son
+/// índices del visor y `influences` trae, por vértice, pares `(hueso, peso)`
+/// planos; los pesos se normalizan. Es lo que usa la exportación.
 #[tauri::command]
 pub async fn set_vertex_weights(app: AppHandle, vertices: Vec<u32>, influences: Vec<f32>) -> Result<(), String> {
     in_background(app, move |state| {
+        let view_map = rig_view_map(state)?;
         let mut result_lock = state.result.lock().unwrap();
         let result = result_lock.as_mut().ok_or("No hay pesos calculados")?;
         if vertices.is_empty() {
@@ -1493,7 +1498,10 @@ pub async fn set_vertex_weights(app: AppHandle, vertices: Vec<u32>, influences: 
         let num_bones = result.attachment.num_bones();
         let num_vertices = result.attachment.num_vertices();
         for (&v, row) in vertices.iter().zip(influences.chunks(per_vertex)) {
-            let v = v as usize;
+            let v = match &view_map {
+                Some(map) => *map.get(v as usize).ok_or_else(|| format!("Vértice fuera de rango: {v}"))?,
+                None => v as usize,
+            };
             if v >= num_vertices {
                 return Err(format!("Vértice fuera de rango: {v}"));
             }
@@ -1513,11 +1521,21 @@ pub async fn set_vertex_weights(app: AppHandle, vertices: Vec<u32>, influences: 
 
 /// Simetría para pintar pesos en espejo: cabecera `[vértices, huesos]` (u32),
 /// luego el vértice espejo de cada vértice y el hueso par de cada hueso
-/// (`u32::MAX` = sin espejo). El plano es el de simetría del esqueleto.
+/// (`u32::MAX` = sin espejo), en el orden de vértices del visor. El plano es el
+/// de simetría del esqueleto.
 #[tauri::command]
 pub async fn get_weight_mirror(app: AppHandle) -> Result<Response, String> {
     let bytes = in_background(app, |state| {
-        let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+        // Posiciones de los vértices del visor de la malla del rig
+        let positions: Vec<Vector3> = if state.rig_on_quad.load(std::sync::atomic::Ordering::SeqCst) {
+            let quad = state.quad_mesh.lock().unwrap();
+            let skin = state.quad_skin.lock().unwrap();
+            let (data, _) = quad_view(quad.as_ref().ok_or("No hay malla retopologizada")?, skin.as_ref());
+            data.positions.chunks(3).map(|p| Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64)).collect()
+        } else {
+            let mesh = state.mesh.lock().unwrap();
+            mesh.as_ref().ok_or("No hay malla cargada")?.vertices.iter().map(|v| v.position).collect()
+        };
         let skeleton = {
             let lock = state.skeleton.lock().unwrap();
             to_basic_skeleton(lock.as_ref().ok_or("No hay esqueleto")?)
@@ -1527,8 +1545,8 @@ pub async fn get_weight_mirror(app: AppHandle) -> Result<Response, String> {
             .map(|p| p.map_or(u32::MAX, |b| b as u32))
             .collect();
         let vertices = match pinocchio_skeleton::symmetry_plane(&skeleton) {
-            Some(plane) => mirror_vertices(&mesh, plane),
-            None => vec![u32::MAX; mesh.num_vertices()],
+            Some(plane) => mirror_vertices(&positions, plane),
+            None => vec![u32::MAX; positions.len()],
         };
         let mut out = Vec::with_capacity(4 * (2 + vertices.len() + bones.len()));
         for w in [vertices.len() as u32, bones.len() as u32].iter().chain(&vertices).chain(&bones) {
@@ -1541,11 +1559,14 @@ pub async fn get_weight_mirror(app: AppHandle) -> Result<Response, String> {
 }
 
 /// Vértice más cercano al reflejo de cada vértice (si está a menos del 2 % de
-/// la diagonal de la malla; si no, `u32::MAX`).
-fn mirror_vertices(mesh: &Mesh, plane: (Vector3, Vector3)) -> Vec<u32> {
+/// la diagonal de la caja de los vértices; si no, `u32::MAX`).
+fn mirror_vertices(positions: &[Vector3], plane: (Vector3, Vector3)) -> Vec<u32> {
     use rayon::prelude::*;
-    let positions: Vec<Vector3> = mesh.vertices.iter().map(|v| v.position).collect();
-    let tolerance = mesh.bounding_box().diagonal() * 0.02;
+    let (lo, hi) = positions.iter().fold(
+        (Vector3::new(f64::MAX, f64::MAX, f64::MAX), Vector3::new(f64::MIN, f64::MIN, f64::MIN)),
+        |(lo, hi), p| (lo.min(p), hi.max(p)),
+    );
+    let tolerance = if positions.is_empty() { 0.0 } else { lo.distance(&hi) * 0.02 };
     let cell = tolerance.max(1e-12);
     let key = |p: &Vector3| [p.x(), p.y(), p.z()].map(|c| (c / cell).floor() as i64);
     let mut grid: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
@@ -1690,6 +1711,9 @@ pub async fn run_retopology(
 
     *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
     *state.quad_skin.lock().unwrap() = skin;
+    // Las etapas siguientes pasan a usar la malla nueva: el rig anterior no le corresponde
+    state.use_retopology.store(true, std::sync::atomic::Ordering::SeqCst);
+    state.active_mesh_changed();
     Ok(info)
 }
 
@@ -1707,8 +1731,13 @@ fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
     let quad_lock = state.quad_mesh.lock().unwrap();
     let quad = quad_lock.as_ref().ok_or("No hay malla de quads")?;
     let skin_lock = state.quad_skin.lock().unwrap();
-    let skin = skin_lock.as_ref().filter(|s| s.corners.len() == quad.num_faces());
+    Ok(quad_view(quad, skin_lock.as_ref()).0)
+}
 
+/// Datos del visor de la malla de quads y, por cada vértice mostrado, su
+/// vértice de quads (con piel, un vértice se duplica en las costuras UV).
+fn quad_view(quad: &quadriflow_core::QuadMesh, skin: Option<&uv_core::Skin<4>>) -> (QuadMeshData, Vec<usize>) {
+    let skin = skin.filter(|s| s.corners.len() == quad.num_faces());
     let (positions, faces) = quad_arrays(quad);
     let no_uvs;
     let corners = match skin {
@@ -1721,6 +1750,7 @@ fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
     // Mismas normales que al exportar; con piel, un vértice por (vértice, UV)
     let frames = uv_core::corner_frames(&positions, &faces, corners);
     let mut ids: HashMap<(usize, [u32; 2]), u32> = HashMap::new();
+    let mut source = Vec::new();
     let mut data = QuadMeshData {
         positions: Vec::new(),
         normals: Vec::new(),
@@ -1737,6 +1767,7 @@ fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
                 if let Some(uvs) = &mut data.uvs {
                     uvs.extend(uv);
                 }
+                source.push(face[k]);
                 (data.positions.len() / 3 - 1) as u32
             })
         });
@@ -1744,7 +1775,97 @@ fn get_quad_mesh_data_impl(state: &AppState) -> Result<QuadMeshData, String> {
         let [a, b, c, d] = corner;
         data.indices.extend([a, b, c, a, c, d]);
     }
-    Ok(data)
+    (data, source)
+}
+
+/// La malla de quads como malla de pinocchio (vértices en el mismo orden,
+/// cada quad en dos triángulos)
+fn quad_as_mesh(quad: &quadriflow_core::QuadMesh) -> Mesh {
+    let positions: Vec<Vector3> = quad.vertices.iter().map(|v| Vector3::new(v.x, v.y, v.z)).collect();
+    let triangles: Vec<[usize; 3]> =
+        quad.faces.iter().flat_map(|f| [[f.v[0], f.v[1], f.v[2]], [f.v[0], f.v[2], f.v[3]]]).collect();
+    Mesh::from_triangles(&positions, &triangles)
+}
+
+/// Malla activa para esqueleto y pesos: la de quads tras retopologizar (si
+/// no se eligió volver a la original), si no la original.
+fn active_mesh(state: &AppState) -> Result<Mesh, String> {
+    if state.active_is_quad() {
+        let quad = state.quad_mesh.lock().unwrap();
+        return Ok(quad_as_mesh(quad.as_ref().ok_or("No hay malla retopologizada")?));
+    }
+    state.mesh.lock().unwrap().clone().ok_or_else(|| "No hay malla cargada".to_string())
+}
+
+/// Vértice del rig de cada vértice que muestra el visor (`None` = el mismo
+/// índice: el rig está sobre la malla original, que el visor muestra tal cual).
+fn rig_view_map(state: &AppState) -> Result<Option<Vec<usize>>, String> {
+    if !state.rig_on_quad.load(std::sync::atomic::Ordering::SeqCst) {
+        return Ok(None);
+    }
+    let quad = state.quad_mesh.lock().unwrap();
+    let quad = quad.as_ref().ok_or("El rig era de la malla retopologizada y ya no existe")?;
+    let skin = state.quad_skin.lock().unwrap();
+    Ok(Some(quad_view(quad, skin.as_ref()).1))
+}
+
+/// Qué malla recibe los pesos al exportar
+#[derive(Clone, Copy, PartialEq)]
+enum WeightTarget {
+    Original,
+    Retopology,
+}
+
+/// Pesos del rig (por vértice de la malla donde se calcularon) llevados a la
+/// malla que se exporta: se trasladan sólo si son mallas distintas.
+fn weights_for(state: &AppState, source: Vec<Vec<f64>>, target: WeightTarget) -> Result<Vec<Vec<f64>>, String> {
+    let on_quad = state.rig_on_quad.load(std::sync::atomic::Ordering::SeqCst);
+    let mesh_lock = state.mesh.lock().unwrap();
+    let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
+    let quad_lock = state.quad_mesh.lock().unwrap();
+    let quad = || quad_lock.as_ref().ok_or("No hay malla retopologizada");
+    let expected = |n: usize| {
+        if source.len() == n {
+            Ok(())
+        } else {
+            Err(format!(
+                "El rig no corresponde a la malla actual ({} pesos, {n} vértices): vuelve a calcular los pesos",
+                source.len()
+            ))
+        }
+    };
+    match (target, on_quad) {
+        (WeightTarget::Retopology, true) => {
+            expected(quad()?.num_vertices())?;
+            Ok(source)
+        }
+        (WeightTarget::Original, false) => {
+            expected(mesh.num_vertices())?;
+            Ok(source)
+        }
+        (WeightTarget::Retopology, false) => weights_on_quad_mesh(mesh, &source, quad()?),
+        (WeightTarget::Original, true) => {
+            let quad = quad()?;
+            expected(quad.num_vertices())?;
+            let targets: Vec<Vector3> = mesh.vertices.iter().map(|v| v.position).collect();
+            Ok(transfer_weights(&quad_as_mesh(quad), &source, &targets))
+        }
+    }
+}
+
+/// Elige si esqueleto y pesos usan la malla retopologizada (`true`) o la
+/// original. Descarta el rig: era de la otra malla.
+#[tauri::command]
+pub fn set_active_mesh(retopology: bool, state: State<'_, AppState>) -> bool {
+    state.use_retopology.store(retopology, std::sync::atomic::Ordering::SeqCst);
+    state.active_mesh_changed();
+    state.active_is_quad()
+}
+
+/// Esqueleto y pesos usan la malla retopologizada
+#[tauri::command]
+pub fn get_active_mesh(state: State<'_, AppState>) -> bool {
+    state.active_is_quad()
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2816,6 +2937,68 @@ mod tests {
         assert!(bad.to_plan().is_err());
     }
 
+    /// Tira de dos quads (6 vértices) y la misma geometría como malla original
+    fn strip() -> (quadriflow_core::QuadMesh, Mesh) {
+        use quadriflow_core::{QuadFace, QuadMesh};
+        let p = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [2.0, 0.0], [2.0, 1.0]];
+        let quad = QuadMesh {
+            vertices: p.iter().map(|q| nalgebra::Vector3::new(q[0], q[1], 0.0)).collect(),
+            faces: vec![QuadFace { v: [0, 1, 2, 3] }, QuadFace { v: [1, 4, 5, 2] }],
+        };
+        let positions: Vec<Vector3> = p.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
+        let mesh = Mesh::from_triangles(&positions, &[[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]]);
+        (quad, mesh)
+    }
+
+    #[test]
+    fn weights_follow_the_active_mesh() {
+        use std::sync::atomic::Ordering;
+        let (quad, mesh) = strip();
+        let state = AppState::new();
+        *state.mesh.lock().unwrap() = Some(mesh);
+        *state.quad_mesh.lock().unwrap() = Some(quad);
+        // Abajo hueso 0, arriba hueso 1
+        let rows: Vec<Vec<f64>> =
+            [0.0, 0.0, 1.0, 1.0, 0.0, 1.0].iter().map(|&y| if y < 0.5 { vec![1.0, 0.0] } else { vec![0.0, 1.0] }).collect();
+
+        // Rig sobre los quads: exportar los quads no traslada; la original sí
+        state.rig_on_quad.store(true, Ordering::SeqCst);
+        assert_eq!(weights_for(&state, rows.clone(), WeightTarget::Retopology).unwrap(), rows);
+        let original = weights_for(&state, rows.clone(), WeightTarget::Original).unwrap();
+        for (a, b) in original.iter().zip(&rows) {
+            assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-9));
+        }
+        // Rig sobre la original: al revés
+        state.rig_on_quad.store(false, Ordering::SeqCst);
+        assert_eq!(weights_for(&state, rows.clone(), WeightTarget::Original).unwrap(), rows);
+        assert!(weights_for(&state, rows[..3].to_vec(), WeightTarget::Original).is_err());
+
+        // La malla activa es la de quads mientras exista y se use
+        assert!(state.active_is_quad());
+        state.use_retopology.store(false, Ordering::SeqCst);
+        assert!(!state.active_is_quad());
+    }
+
+    #[test]
+    fn quad_view_maps_seam_copies_to_their_vertex() {
+        let (quad, _) = strip();
+        let skin = uv_core::Skin {
+            corners: vec![
+                [[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
+                [[0.6, 0.0], [1.0, 0.0], [1.0, 1.0], [0.6, 1.0]],
+            ],
+            face_material: vec![Some(0), Some(0)],
+            materials: vec![converter_scene::Material::default()],
+            textures: vec![],
+            info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
+        };
+        let (data, source) = quad_view(&quad, Some(&skin));
+        assert_eq!(source, vec![0, 1, 2, 3, 1, 4, 5, 2], "la arista de la costura se duplica");
+        assert_eq!(data.positions.len(), 3 * source.len());
+        let (_, plain) = quad_view(&quad, None);
+        assert_eq!(plain, vec![0, 1, 2, 3, 4, 5]);
+    }
+
     #[test]
     fn mirror_vertices_pair_both_sides() {
         // Tira simétrica respecto de x = 0, más un vértice sin pareja
@@ -2827,9 +3010,8 @@ mod tests {
             Vector3::new(0.0, 2.0, 0.0),
             Vector3::new(-0.5, 5.0, 0.0),
         ];
-        let mesh = Mesh::from_triangles(&positions, &[[0, 1, 3], [0, 3, 2], [2, 3, 4], [2, 4, 5]]);
         let plane = (Vector3::zero(), Vector3::unit_x());
-        let mirror = mirror_vertices(&mesh, plane);
+        let mirror = mirror_vertices(&positions, plane);
         assert_eq!(&mirror[..5], &[1, 0, 3, 2, 4], "el del medio es su propio espejo");
         assert_eq!(mirror[5], u32::MAX, "sin pareja cerca");
     }

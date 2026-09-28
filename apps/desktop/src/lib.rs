@@ -43,6 +43,8 @@ pub fn run() {
             // Retopología
             commands::run_retopology,
             commands::get_quad_mesh_data,
+            commands::set_active_mesh,
+            commands::get_active_mesh,
             // UV / Piel
             commands::get_uv_info,
             commands::run_uv_unwrap,

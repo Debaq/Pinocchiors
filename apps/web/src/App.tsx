@@ -232,6 +232,29 @@ export const App: Component = () => {
   const [skinTextures, setSkinTextures] = createSignal<MeshTextures>({});
   const [checkerTexture, setCheckerTexture] = createSignal<ImageBitmap | undefined>();
 
+  // Malla activa: tras retopologizar, UV, esqueleto y pesos trabajan sobre los
+  // quads (lo que se exporta), salvo que se elija volver a la original
+  const [activeQuad, setActiveQuad] = createSignal(false);
+  const usesQuad = () => activeQuad() && quadMeshLoaded();
+  /** El visor muestra los quads: a pedido, o en las etapas que los usan */
+  const displayQuad = () =>
+    (showQuadMesh() || (usesQuad() && ["uv", "skeleton"].includes(pipeline.activeStep()))) && !!quadMeshData();
+
+  /** Los pesos ya no corresponden a la malla activa */
+  const dropWeights = () => {
+    setAutorigComplete(false);
+    setWeightsData(undefined);
+    setPaintMirrorLoaded(false);
+    setViewSettings((prev) => ({ ...prev, showWeights: false }));
+  };
+
+  /** Relee los pesos en el orden de vértices del visor (cambia al desplegar UV) */
+  const reloadWeights = async () => {
+    const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+    setWeightsData(weights);
+    setPaintMirrorLoaded(false);
+  };
+
   const decodeImage = async (buffer: ArrayBuffer): Promise<ImageBitmap | undefined> =>
     buffer.byteLength > 0 ? createImageBitmap(new Blob([buffer])) : undefined;
 
@@ -253,11 +276,12 @@ export const App: Component = () => {
     setUvLayout(new Float32Array(layout));
     setSkinTextures({ base, normal });
     setQuadMeshData(decodeMesh(mesh));
+    if (autorigComplete() && usesQuad()) await reloadWeights();
   };
 
   /** Texturas que ve el visor sobre la malla de quads según la vista elegida */
   const viewerTextures = (): MeshTextures | undefined => {
-    if (!showQuadMesh() || !uvInfo()) return undefined;
+    if (!displayQuad() || !uvInfo()) return undefined;
     switch (uvPreview()) {
       case "texture":
         return skinTextures();
@@ -287,6 +311,7 @@ export const App: Component = () => {
     setQuadQuality(undefined);
     setShowQuadMesh(false);
     setExportUseRetopology(false);
+    setActiveQuad(false);
   };
 
   // Config
@@ -706,6 +731,9 @@ export const App: Component = () => {
       setProgress({ value: 100, label: "Cargando en el visor..." });
       const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
       setQuadMeshData(quadData);
+      // Las etapas siguientes usan la malla nueva: el rig anterior se descartó
+      dropWeights();
+      setActiveQuad(true);
       await refreshSkin();
       setQuadMeshLoaded(true);
       setShowQuadMesh(true);
@@ -1057,6 +1085,22 @@ export const App: Component = () => {
     if (tool === "paint") void startPainting();
   };
 
+  /** Elige la malla de las etapas siguientes (quads u original): el rig se rehace */
+  const handleActiveMesh = async (useRetopology: boolean) => {
+    try {
+      const active = await invoke<boolean>("set_active_mesh", { retopology: useRetopology });
+      setActiveQuad(active);
+      dropWeights();
+      setStatusMessage(
+        active
+          ? "UV, esqueleto y pesos usan la malla retopologizada"
+          : "UV y piel siguen en la retopología; esqueleto y pesos usan la malla original"
+      );
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
   /** Pincel: mapa de calor del hueso activo y simetría de vértices */
   const startPainting = async () => {
     if (!autorigComplete()) {
@@ -1068,7 +1112,6 @@ export const App: Component = () => {
       showWeights: true,
       selectedBone: prev.selectedBone >= 0 ? prev.selectedBone : 1,
     }));
-    setShowQuadMesh(false);
     if (!paintMirrorLoaded()) {
       try {
         const buffer = await invoke<ArrayBuffer>("get_weight_mirror");
@@ -1200,13 +1243,13 @@ export const App: Component = () => {
               onBoneMoved={handleBoneMoved}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
-              meshData={showQuadMesh() && quadMeshData() ? quadMeshData() : meshData()}
+              meshData={displayQuad() ? quadMeshData() : meshData()}
               textures={viewerTextures()}
               skeletonData={skeletonData()}
               weightsData={weightsData()}
               settings={viewSettings()}
-              vertices={showQuadMesh() ? quadMeshInfo().vertices : (meshLoaded() ? meshInfo().vertices : undefined)}
-              faces={showQuadMesh() ? quadMeshInfo().quads : (meshLoaded() ? meshInfo().faces : undefined)}
+              vertices={displayQuad() ? quadMeshInfo().vertices : (meshLoaded() ? meshInfo().vertices : undefined)}
+              faces={displayQuad() ? quadMeshInfo().quads : (meshLoaded() ? meshInfo().faces : undefined)}
               groundSelectionMode={isGroundMode()}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
@@ -1254,6 +1297,8 @@ export const App: Component = () => {
               hasResult: quadMeshLoaded(),
               showQuadMesh: showQuadMesh(),
               onShowQuadMeshChange: setShowQuadMesh,
+              useForNextSteps: activeQuad(),
+              onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),
             }}
             uvProps={{

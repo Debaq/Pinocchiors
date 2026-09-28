@@ -74,12 +74,20 @@ pub struct AppState {
     /// aunque el esqueleto visible ya esté editado
     pub skeleton_preset: Mutex<Option<SkeletonType>>,
 
-    /// Campo de distancias de la malla para centrar articulaciones (se
-    /// calcula la primera vez y se descarta si cambia la geometría)
+    /// Campo de distancias de la malla activa para centrar articulaciones
+    /// (se calcula la primera vez y se descarta si cambia la malla activa)
     pub joint_centering: Mutex<Option<std::sync::Arc<pinocchio_embedding::JointCentering>>>,
 
-    /// Resultado del autorig
+    /// Resultado del autorig, sobre la malla activa cuando se calculó
     pub result: Mutex<Option<PinocchioOutput>>,
+
+    /// El resultado del autorig se calculó sobre la malla de quads (sus
+    /// vértices son los de `quad_mesh`); si no, sobre `mesh`
+    pub rig_on_quad: AtomicBool,
+
+    /// Las etapas posteriores a la retopología (UV, esqueleto, pesos) usan la
+    /// malla de quads si existe. Se activa al retopologizar.
+    pub use_retopology: AtomicBool,
 
     /// Malla de quads resultante de retopología
     pub quad_mesh: Mutex<Option<QuadMesh>>,
@@ -120,6 +128,8 @@ impl AppState {
             skeleton_preset: Mutex::new(None),
             joint_centering: Mutex::new(None),
             result: Mutex::new(None),
+            rig_on_quad: AtomicBool::new(false),
+            use_retopology: AtomicBool::new(true),
             quad_mesh: Mutex::new(None),
             quad_skin: Mutex::new(None),
             processing: AtomicBool::new(false),
@@ -134,6 +144,17 @@ impl AppState {
 }
 
 impl AppState {
+    /// La malla activa para esqueleto y pesos es la de quads
+    pub fn active_is_quad(&self) -> bool {
+        self.use_retopology.load(Ordering::SeqCst) && self.quad_mesh.lock().unwrap().is_some()
+    }
+
+    /// La malla activa cambió: el rig y el campo para centrar ya no le corresponden
+    pub fn active_mesh_changed(&self) {
+        *self.result.lock().unwrap() = None;
+        *self.joint_centering.lock().unwrap() = None;
+    }
+
     /// Intenta marcar un proceso largo como en curso. `None` si ya hay uno.
     pub fn try_begin_processing(&self) -> Option<ProcessingGuard<'_>> {
         if self.processing.swap(true, Ordering::SeqCst) {

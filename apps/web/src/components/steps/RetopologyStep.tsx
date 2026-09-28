@@ -1,5 +1,6 @@
-import { Component } from "solid-js";
+import { Component, Show } from "solid-js";
 import { RetopologyPanel, type RetopologyConfig, type QuadQuality } from "../panels/RetopologyPanel";
+import { Checkbox } from "../ui";
 
 export interface RetopologyStepProps {
   config: RetopologyConfig;
@@ -11,6 +12,9 @@ export interface RetopologyStepProps {
   showQuadMesh?: boolean;
   onShowQuadMeshChange?: (show: boolean) => void;
   quality?: QuadQuality;
+  /** Esqueleto y pesos usan la malla retopologizada */
+  useForNextSteps?: boolean;
+  onUseForNextStepsChange?: (use: boolean) => void;
 }
 
 export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
@@ -32,6 +36,21 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
         onShowQuadMeshChange={props.onShowQuadMeshChange}
         quality={props.quality}
       />
+      <Show when={props.hasResult}>
+        <div class="space-y-2">
+          <Checkbox
+            label="Usar esta malla en las etapas siguientes"
+            checked={props.useForNextSteps}
+            onChange={props.onUseForNextStepsChange}
+            disabled={props.isProcessing}
+          />
+          <p class="text-xs text-text-muted leading-relaxed">
+            El esqueleto, los pesos, el pincel y la pose de prueba trabajan sobre la malla que se
+            exporta. Desmarcado, usan la malla original (los pesos se trasladan al exportar).
+            Cambiarlo descarta los pesos calculados.
+          </p>
+        </div>
+      </Show>
     </div>
   );
 };
