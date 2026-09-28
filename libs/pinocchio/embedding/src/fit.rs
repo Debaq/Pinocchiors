@@ -569,11 +569,21 @@ fn place_joints(
             let total = polyline_length(&polyline);
 
             // Proporciones de la plantilla; el primer tramo (p. ej. pelvis →
-            // cadera) se ancla a la proyección de la plantilla, porque cruza
-            // el tronco y no guarda proporción con el resto
+            // cadera) cruza el tronco y no guarda proporción con el resto: se
+            // ancla en la proyección de la plantilla, pero no antes de donde
+            // la extremidad entra al cuerpo ni de su parte proporcional (si
+            // no, en un tronco gordo la cadera cae sobre la pelvis y el muslo
+            // cruza toda la grupa)
             let lengths: Vec<Real> = chain.iter().map(|&b| template[b].distance(&template[placed.get_parent(b).unwrap()])).collect();
             let (start, skip) = if chain.len() >= 2 {
-                let anchor = closest_arc_length(&polyline, &template[chain[0]]).min(0.5 * total);
+                let entry = bone_extremity[end]
+                    .filter(|_| is_leaf)
+                    .map(|e| closest_arc_length(&polyline, &graph.center(entry_cell(graph, tree, &branches[e], body_radius))))
+                    .unwrap_or(0.0);
+                // Y al menos la mitad de su parte según la plantilla: un
+                // conector de largo cero (cadera sobre la pelvis) no articula
+                let share = 0.5 * lengths[0] / lengths.iter().sum::<Real>().max(1e-12) * total;
+                let anchor = closest_arc_length(&polyline, &template[chain[0]]).max(entry).max(share).min(0.5 * total);
                 positions[chain[0]] = Some(point_along(&polyline, anchor));
                 (anchor, 1)
             } else {

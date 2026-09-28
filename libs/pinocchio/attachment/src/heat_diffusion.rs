@@ -35,6 +35,11 @@ pub enum HeatDiffusionError {
 
 /// Tolerancia relativa para considerar dos huesos igual de cercanos
 const TIE_TOLERANCE: Real = 1e-4;
+
+/// Peso de lo que se pasa un vértice de los extremos de un hueso: un hueso
+/// que solo toca el tubo con una punta (el arranque del cuello en el tronco)
+/// no es el de ese tubo.
+const OVERSHOOT_WEIGHT: Real = 1.0;
 /// Margen (fracción del segmento) ignorado en los extremos del test de visibilidad
 const VISIBILITY_MARGIN: Real = 1e-3;
 
@@ -49,7 +54,8 @@ pub struct HeatDiffusion<'a> {
 struct NearestBones {
     /// Huesos igual de cercanos (empates)
     bones: Vec<usize>,
-    /// Distancia al más cercano
+    /// Distancia efectiva al más cercano: su distancia relativa al grosor
+    /// local, por el grosor mediano del esqueleto (para conservar la escala)
     distance: Real,
 }
 
@@ -176,11 +182,21 @@ impl<'a> HeatDiffusion<'a> {
         Ok(vertex_weights)
     }
 
-    /// Para cada vértice, el/los hueso(s) visible(s) más cercano(s).
+    /// Para cada vértice, el/los hueso(s) visible(s) que pasan por el centro
+    /// de su tubo.
     ///
     /// Un hueso es visible si el segmento entre el vértice y el punto más
     /// cercano del hueso no atraviesa la malla. Si ningún hueso es visible, se
     /// usa el más cercano.
+    ///
+    /// Cada vértice tiene un radio de tubo: la mitad del espesor del cuerpo
+    /// medido con un rayo hacia adentro por su normal. Le corresponde el hueso
+    /// cuya distancia más se parece a ese radio (el que va por el centro de su
+    /// tubo), no el más cercano: en un tronco gordo, la panza tiene tubo de
+    /// 0,45 y queda con la columna (a 0,45) aunque la pata esté a 0,2. En un
+    /// miembro delgado el hueso más cercano es también el del centro, y en una
+    /// articulación los dos huesos están a la misma distancia y empatan. Sin
+    /// radio (el rayo no sale), se usa el más cercano.
     fn find_nearest_visible_bones(&self, segments: &[(usize, Vector3, Vector3)]) -> Vec<NearestBones> {
         let triangles: Vec<Triangle> = (0..self.mesh.num_faces())
             .map(|i| {
@@ -189,32 +205,48 @@ impl<'a> HeatDiffusion<'a> {
             })
             .collect();
         let bvh = Bvh::build(triangles);
+        let tubes = self.tube_radii(&bvh);
+        // Radio de tubo mediano: escala de la distancia efectiva para el calor
+        let typical = {
+            let mut r: Vec<Real> = tubes.iter().flatten().copied().collect();
+            r.sort_by(Real::total_cmp);
+            r.get(r.len() / 2).copied().unwrap_or(1.0).max(Real::MIN_POSITIVE)
+        };
 
         (0..self.mesh.num_vertices())
             .into_par_iter()
             .map(|vert_idx| {
                 let pos = self.mesh.vertices[vert_idx].position;
+                let tube = tubes[vert_idx];
 
-                // (distancia, hueso, punto más cercano), ordenado por distancia
-                let mut candidates: Vec<(Real, usize, Vector3)> = segments
+                // (puntaje, hueso, punto más cercano, distancia), ordenado por
+                // cuánto difiere la distancia del radio del tubo, más cuánto se
+                // pasa el vértice de los extremos del hueso
+                let mut candidates: Vec<(Real, usize, Vector3, Real)> = segments
                     .iter()
                     .map(|&(bone, a, b)| {
-                        let closest = closest_point_on_segment(&pos, &a, &b);
-                        (pos.distance(&closest), bone, closest)
+                        let (t, overshoot) = segment_projection(&pos, &a, &b);
+                        let closest = a.lerp(&b, t);
+                        let d = pos.distance(&closest);
+                        let score = tube.map_or(d, |r| (d - r).abs() + OVERSHOOT_WEIGHT * overshoot);
+                        (score, bone, closest, d)
                     })
                     .collect();
                 candidates.sort_by(|x, y| x.0.total_cmp(&y.0));
 
-                let visible = |c: &(Real, usize, Vector3)| !bvh.segment_intersects(&pos, &c.2, VISIBILITY_MARGIN);
+                let visible = |c: &(Real, usize, Vector3, Real)| !bvh.segment_intersects(&pos, &c.2, VISIBILITY_MARGIN);
 
+                // Distancia efectiva para el calor: relativa al tubo, así un
+                // vértice del tronco se ancla tan fuerte como uno de la pata
+                let effective = |d: Real| tube.map_or(d, |r| d / r * typical);
                 let Some(first) = candidates.iter().position(visible) else {
                     return NearestBones {
                         bones: vec![candidates[0].1],
-                        distance: candidates[0].0,
+                        distance: effective(candidates[0].3),
                     };
                 };
-                let distance = candidates[first].0;
-                let limit = distance * (1.0 + TIE_TOLERANCE) + Real::MIN_POSITIVE;
+                let scale = tube.unwrap_or(candidates[first].3);
+                let limit = candidates[first].0 + TIE_TOLERANCE * scale + Real::MIN_POSITIVE;
                 let mut bones = vec![candidates[first].1];
                 bones.extend(
                     candidates[first + 1..]
@@ -223,7 +255,33 @@ impl<'a> HeatDiffusion<'a> {
                         .filter(|c| visible(c))
                         .map(|c| c.1),
                 );
-                NearestBones { bones, distance }
+                NearestBones { bones, distance: effective(candidates[first].3) }
+            })
+            .collect()
+    }
+
+    /// Radio del tubo de cada vértice: mitad de la distancia, hacia adentro
+    /// por su normal, hasta el otro lado de la malla. `None` si el rayo no
+    /// sale (malla abierta) o el vértice no tiene normal.
+    fn tube_radii(&self, bvh: &Bvh) -> Vec<Option<Real>> {
+        let mut normals = vec![Vector3::zero(); self.mesh.num_vertices()];
+        for f in 0..self.mesh.num_faces() {
+            let [a, b, c] = self.mesh.get_face_positions(f);
+            let n = (b - a).cross(&(c - a));
+            for v in self.mesh.get_face_vertices(f) {
+                normals[v] += n;
+            }
+        }
+        let reach = self.mesh.bounding_box().diagonal();
+        let eps = reach * 1e-6;
+        normals
+            .into_par_iter()
+            .enumerate()
+            .map(|(v, n)| {
+                let inward = n.try_normalize()? * -1.0;
+                let origin = self.mesh.vertices[v].position;
+                let hit = bvh.ray_distance(&origin, &inward, eps, reach)?;
+                Some(0.5 * hit).filter(|r| *r > eps)
             })
             .collect()
     }
@@ -325,15 +383,25 @@ impl<'a> HeatDiffusion<'a> {
 }
 
 /// Punto más cercano a `point` sobre el segmento `a-b`
-fn closest_point_on_segment(point: &Vector3, a: &Vector3, b: &Vector3) -> Vector3 {
-    let v = *b - *a;
-    let len2 = v.dot(&v);
-    if len2 <= 0.0 {
-        return *a;
-    }
-    let t = ((*point - *a).dot(&v) / len2).clamp(0.0, 1.0);
-    *a + v * t
+/// Parámetro `t` ∈ [0, 1] del punto de `a → b` más cercano a `point`.
+fn segment_parameter(point: &Vector3, a: &Vector3, b: &Vector3) -> Real {
+    segment_projection(point, a, b).0
 }
+
+/// Parámetro recortado del punto más cercano y cuánto se pasa la proyección
+/// de `point` de los extremos del segmento (en unidades de longitud).
+fn segment_projection(point: &Vector3, a: &Vector3, b: &Vector3) -> (Real, Real) {
+    let ab = *b - *a;
+    let len2 = ab.dot(&ab);
+    if len2 < 1e-20 {
+        // Hueso de largo nulo: no tiene tubo propio, todo es exceso
+        return (0.0, point.distance(a));
+    }
+    let t = (*point - *a).dot(&ab) / len2;
+    let overshoot = (-t).max(t - 1.0).max(0.0) * len2.sqrt();
+    (t.clamp(0.0, 1.0), overshoot)
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -399,10 +467,10 @@ mod tests {
     }
 
     #[test]
-    fn test_closest_point_on_segment() {
+    fn test_segment_parameter() {
         let s1 = Vector3::new(0.0, 0.0, 0.0);
         let s2 = Vector3::new(0.0, 1.0, 0.0);
-        let d = |p: Vector3| p.distance(&closest_point_on_segment(&p, &s1, &s2));
+        let d = |p: Vector3| p.distance(&s1.lerp(&s2, segment_parameter(&p, &s1, &s2)));
         assert!((d(Vector3::new(1.0, 0.5, 0.0)) - 1.0).abs() < 1e-10);
         assert!((d(Vector3::new(0.0, 3.0, 0.0)) - 2.0).abs() < 1e-10);
         assert!((d(Vector3::new(0.0, -1.0, 0.0)) - 1.0).abs() < 1e-10);

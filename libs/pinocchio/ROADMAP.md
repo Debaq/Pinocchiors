@@ -309,9 +309,29 @@ pecho, cuello y cabeza en un punto y cruzaba las patas.
 - Gonfoterio (500 k triángulos): orientación, 4 patas, cabeza y cola correctas;
   colmillos, trompa y orejas quedan como extremidades sin hueso.
 
-**Pesos:** piezas sueltas sin huesos adentro (colmillos, ojos) toman los pesos
-del punto del cuerpo más cercano y se mueven rígidas (antes el colmillo seguía
-a la pata delantera).
+**Pesos:**
+- Piezas sueltas sin huesos adentro (colmillos, ojos) toman los pesos del
+  punto del cuerpo más cercano y se mueven rígidas (antes el colmillo seguía a
+  la pata delantera).
+- Cuerpos gruesos: el calor asignaba cada vértice al hueso visible más
+  cercano, y en un tronco gordo la panza quedaba con las patas (a 0,2) y no
+  con la columna (a 0,45). Ahora cada vértice tiene un radio de tubo (mitad
+  del espesor del cuerpo con un rayo hacia adentro por su normal) y le toca el
+  hueso cuya distancia más se parece a ese radio, más lo que el vértice se pasa
+  de los extremos del hueso (un hueso que solo toca el tubo con una punta, como
+  el arranque del cuello, no es el de ese tubo). En una articulación los dos
+  huesos siguen empatando. El anclaje del calor usa la misma distancia
+  relativa, así el tronco se ancla tan fuerte como las patas. Huesos de largo
+  nulo no tienen tubo.
+- Probado y descartado: dividir la distancia por el grosor del hueso (por
+  mediana o local): arregla la panza pero los huesos que pasan por el tronco
+  (conectores pelvis→cadera) se quedan con la raíz de los miembros.
+- Banco `core/tests/weights_regions.rs`: fracción de cada región dominada
+  por sus huesos. Elefante sintético: panza 0 → 84 %, flanco 36 → 100 %, lomo
+  100 %, cruz 99 %, patas y cabeza 100 %; humano ≥ 97 % en todas.
+- Ajuste: el primer tramo de una cadena (pelvis → cadera) no queda antes de
+  donde la extremidad entra al cuerpo ni de la mitad de su parte proporcional:
+  en el gonfoterio la cadera caía sobre la pelvis y el muslo cruzaba la grupa.
 
 **Edición manual (app):** "Ajustar automáticamente" muestra el esqueleto para
 revisar; mover articulaciones con espejo (`hand_l` ↔ `hand_r`, `paw_fl` ↔
@@ -326,14 +346,11 @@ deja `salida_rest.glb` (malla coloreada por pesos + huesos) y
 `salida_pose.glb`; imprime qué hueso domina cuántos vértices.
 
 **Pendiente:**
-- [ ] Raíz de extremidades finas en cuerpos gordos: la base de la cola queda
-      dentro de la grupa y la cola domina parte del lomo. Probé anclar el primer
-      tramo donde el radio salta (1,6×) y rompía piernas humanas (los cambios de
-      radio entre pie y canilla también saltan).
-- [ ] Pesos en cuerpos gruesos: el calor por "hueso visible más cercano" deja
-      la columna sin vértices en la superficie del tronco (los dominan patas y
-      cuello). Evaluar difusión con peso por distancia al eje medial o
-      voxelización (Dionne & de Lasa, "geodesic voxel binding").
+- [ ] Proporciones de patas cortas y gruesas (elefante): la rodilla de la
+      plantilla cae a la altura de la panza y el muslo queda dentro del cuerpo;
+      al doblar la pata trasera se estira arriba. Lo resuelven variantes con
+      proporciones propias (fase 7) o el pincel de pesos.
+- [x] Pesos en cuerpos gruesos (radio de tubo, ver arriba).
 - [ ] Pintar pesos a mano (pincel sumar/restar/suavizar por hueso, espejo).
 - [ ] Pose de prueba encadenada (varias articulaciones a la vez).
 - [ ] Apéndices de la fase 7 para las extremidades sin hueso (trompa, orejas).
