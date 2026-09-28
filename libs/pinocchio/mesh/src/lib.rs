@@ -22,6 +22,7 @@ mod mesh;
 pub mod io;
 mod decimation;
 pub mod morph_target;
+pub mod placement;
 
 #[cfg(feature = "converter")]
 mod adapter;

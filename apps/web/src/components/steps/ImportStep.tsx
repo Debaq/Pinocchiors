@@ -1,12 +1,13 @@
 import { Component, Show } from "solid-js";
 import { Button } from "../ui";
 import * as Icons from "../icons";
+import { PlacementPanel, type PlacementPanelProps } from "../panels/PlacementPanel";
 
 export interface ImportStepProps {
   meshInfo?: { vertices: number; faces: number; format: string };
   onImport?: () => void;
-  onSetGround?: () => void;
-  isGroundMode?: boolean;
+  /** Orientación del modelo (piso, frente, origen) */
+  placement?: PlacementPanelProps;
 }
 
 export const ImportStep: Component<ImportStepProps> = (props) => {
@@ -45,18 +46,11 @@ export const ImportStep: Component<ImportStepProps> = (props) => {
         >
           {props.meshInfo ? "Importar otro modelo" : "Importar modelo"}
         </Button>
-
-        <Show when={props.meshInfo}>
-          <Button
-            onClick={props.onSetGround}
-            variant={props.isGroundMode ? "danger" : "default"}
-            fullWidth
-            icon={<Icons.Download size={16} />}
-          >
-            {props.isGroundMode ? "Cancelar selección" : "Establecer suelo"}
-          </Button>
-        </Show>
       </div>
+
+      <Show when={props.meshInfo && props.placement}>
+        <PlacementPanel {...props.placement!} />
+      </Show>
     </div>
   );
 };

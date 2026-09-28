@@ -1,6 +1,7 @@
 //! Pinocchio App - Aplicación Tauri para auto-rigging
 
 pub mod commands;
+pub mod placement;
 pub mod state;
 pub mod structure;
 
@@ -25,6 +26,9 @@ pub fn run() {
             commands::import_model,
             commands::export_model,
             commands::get_mesh_data,
+            // Orientación: piso, frente, origen
+            placement::get_placement_info,
+            placement::apply_placement,
             // Estructura del archivo de origen
             structure::get_scene_structure,
             structure::get_scene_materials,

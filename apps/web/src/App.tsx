@@ -23,7 +23,24 @@ import {
   defaultLights,
   SkeletonData,
   WeightsData,
+  type PlacementMode,
+  type PlacementPick,
 } from "./lib/Viewer3D";
+import * as THREE from "three";
+import {
+  dropMatrix,
+  floorMatrix,
+  frontMatrix,
+  mirrorMatrix,
+  originMatrix,
+  rotationMatrix,
+  zoneNormal,
+  boundsAfter,
+  type Axis,
+  type FloorCandidate,
+  type OriginMode,
+  type PlacementInfo,
+} from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import { createPipelineStore } from "./lib/pipeline";
 import { buildSceneTree } from "./lib/scene-tree";
@@ -265,8 +282,10 @@ export const App: Component = () => {
   const [boneNames, setBoneNames] = createSignal<string[]>([]);
   const [weightsData, setWeightsData] = createSignal<WeightsData | undefined>();
 
-  // Ground mode
-  const [isGroundMode, setIsGroundMode] = createSignal(false);
+  // Orientación: qué se elige con el clic y los planos candidatos a piso
+  const [placementMode, setPlacementMode] = createSignal<PlacementMode | undefined>();
+  const [floorCandidates, setFloorCandidates] = createSignal<FloorCandidate[]>([]);
+  const [centerOfMass, setCenterOfMass] = createSignal<THREE.Vector3 | undefined>();
 
   // Retopology state
   const [retopologyConfig, setRetopologyConfig] = createSignal<RetopologyConfig>({
@@ -717,19 +736,129 @@ export const App: Component = () => {
     }
   };
 
-  const handleSetGround = () => {
-    const newMode = !isGroundMode();
-    setIsGroundMode(newMode);
-    if (newMode) {
-      setStatusMessage("Haz click en una cara para establecerla como suelo");
-    } else {
-      setStatusMessage("Modo de seleccion de suelo cancelado");
+  // ── Orientación ──
+  // El backend aplica la transformación a malla, quads, esqueleto y rig;
+  // deshacer es aplicar la inversa
+
+  /** Planos candidatos y centro de masa de la malla actual */
+  const loadPlacementInfo = async () => {
+    const info = await busy("Buscando planos de apoyo...", () => invoke<PlacementInfo>("get_placement_info"));
+    setFloorCandidates(info.candidates);
+    setCenterOfMass(new THREE.Vector3(...info.center_of_mass));
+    return info;
+  };
+
+  /** Relee del backend todo lo que se movió */
+  const refreshAfterPlacement = async (skeletonReset: boolean) => {
+    setMeshData(await fetchMeshData());
+    if (quadMeshLoaded()) setQuadMeshData(decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data")));
+    // Mismos pesos por vértice, pero el visor rehace su malla de colores sobre la nueva
+    const weights = weightsData();
+    if (weights) setWeightsData({ ...weights });
+    if (skeletonReset) {
+      setSkeletonData(tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")));
+      setSkeletonTransform({ ...defaultTransform });
+    }
+    setCenterOfMass(undefined);
+    setFloorCandidates([]);
+  };
+
+  const sendPlacement = async (matrix: THREE.Matrix4) => {
+    const result = await invoke<{ skeleton_reset: boolean }>("apply_placement", { matrix: matrix.elements });
+    await refreshAfterPlacement(result.skeleton_reset);
+  };
+
+  const applyPlacement = async (matrix: THREE.Matrix4 | null, description: string) => {
+    if (!matrix) return;
+    const inverse = matrix.clone().invert();
+    try {
+      await history.execute({
+        description,
+        execute: () => sendPlacement(matrix),
+        undo: () => sendPlacement(inverse),
+      });
+      setStatusMessage(description);
+    } catch (e) {
+      console.error("Placement error:", e);
+      setStatusMessage(`Error: ${e}`);
     }
   };
 
-  const handleGroundSelected = () => {
-    setIsGroundMode(false);
-    setStatusMessage("Suelo establecido - modelo reorientado");
+  const handlePlacementMode = async (mode: PlacementMode | undefined) => {
+    if (mode === "floor") {
+      try {
+        await loadPlacementInfo();
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+        return;
+      }
+    }
+    setPlacementMode(mode);
+  };
+
+  /** Normal de la zona bajo el clic (radio: 3 % de la diagonal) */
+  const surfaceNormal = (pick: Extract<PlacementPick, { kind: "surface" }>, positions: Float32Array) => {
+    const data = meshData()!;
+    const radius = 0.03 * boundsAfter(positions).getSize(new THREE.Vector3()).length();
+    return zoneNormal(positions, data.indices, new THREE.Vector3(...pick.point), radius) ?? new THREE.Vector3(...pick.normal);
+  };
+
+  const handlePlacementPick = async (pick: PlacementPick) => {
+    const data = meshData();
+    const mode = placementMode();
+    if (!data || !mode) return;
+    setPlacementMode(undefined);
+    const positions = data.positions;
+    if (mode === "floor") {
+      const normal =
+        pick.kind === "candidate"
+          ? new THREE.Vector3(...floorCandidates()[pick.index].normal)
+          : surfaceNormal(pick, positions);
+      await applyPlacement(floorMatrix(positions, normal), "Piso elegido: modelo apoyado en la grilla");
+    } else if (pick.kind === "surface" && mode === "front") {
+      const matrix = frontMatrix(positions, surfaceNormal(pick, positions));
+      if (!matrix) {
+        setStatusMessage("Esa cara mira hacia arriba o abajo: elige una lateral");
+        return;
+      }
+      await applyPlacement(matrix, "Frente elegido: el modelo mira hacia +Z");
+    } else if (pick.kind === "surface" && mode === "point") {
+      await applyPlacement(originMatrix(positions, "point", undefined, new THREE.Vector3(...pick.point)), "Origen en el punto elegido");
+    }
+  };
+
+  const handleRotate = (axis: Axis, degrees: number) => {
+    const data = meshData();
+    if (data) applyPlacement(rotationMatrix(data.positions, axis, degrees), `Giro de ${degrees}° en ${axis.toUpperCase()}`);
+  };
+
+  const handleMirror = (axis: Axis) => {
+    const data = meshData();
+    if (data) applyPlacement(mirrorMatrix(data.positions, axis), `Espejado en ${axis.toUpperCase()}`);
+  };
+
+  const handleDrop = () => {
+    const data = meshData();
+    if (data) applyPlacement(dropMatrix(data.positions), "Modelo apoyado en el piso");
+  };
+
+  const ORIGIN_LABELS: Record<OriginMode, string> = {
+    base: "centro de la base",
+    box: "centro de la caja",
+    mass: "centro de masa",
+    point: "punto elegido",
+  };
+
+  const handleOrigin = async (mode: OriginMode) => {
+    const data = meshData();
+    if (!data) return;
+    if (mode === "point") {
+      setPlacementMode("point");
+      return;
+    }
+    let com: THREE.Vector3 | undefined;
+    if (mode === "mass") com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
+    await applyPlacement(originMatrix(data.positions, mode, com), `Origen en el ${ORIGIN_LABELS[mode]}`);
   };
 
   const handleUvUnwrap = async () => {
@@ -1353,7 +1482,7 @@ export const App: Component = () => {
             <Viewport
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
-              onGroundSelected={handleGroundSelected}
+              onPlacementPick={handlePlacementPick}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               onBoneMoveCommitted={handleBoneMoveCommitted}
@@ -1370,7 +1499,8 @@ export const App: Component = () => {
               settings={viewSettings()}
               vertices={displayQuad() ? quadMeshInfo().vertices : (meshLoaded() ? meshInfo().vertices : undefined)}
               faces={displayQuad() ? quadMeshInfo().quads : (meshLoaded() ? meshInfo().faces : undefined)}
-              groundSelectionMode={isGroundMode()}
+              placementMode={placementMode()}
+              floorCandidates={floorCandidates()}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
             />
@@ -1398,8 +1528,15 @@ export const App: Component = () => {
             importProps={{
               meshInfo: meshLoaded() ? meshInfo() : undefined,
               onImport: handleLoad,
-              onSetGround: handleSetGround,
-              isGroundMode: isGroundMode(),
+              placement: {
+                mode: placementMode(),
+                onPickMode: handlePlacementMode,
+                onRotate: handleRotate,
+                onMirror: handleMirror,
+                onDrop: handleDrop,
+                onOrigin: handleOrigin,
+                disabled: isProcessing(),
+              },
             }}
             repairProps={{
               onAnalyze: handleAnalyzeMesh,

@@ -8,6 +8,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
+import { boundsAfter, type FloorCandidate } from "./placement";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -123,12 +124,20 @@ export interface PaintStroke {
   after: Float32Array;
 }
 
+/** Qué se elige al orientar: el piso, el frente o un punto (origen) */
+export type PlacementMode = "floor" | "front" | "point";
+
+/** Lo elegido con un clic al orientar */
+export type PlacementPick =
+  | { kind: "candidate"; index: number }
+  | { kind: "surface"; point: [number, number, number]; normal: [number, number, number] };
+
 export interface ViewerCallbacks {
   onWeightsPainted?: (stroke: PaintStroke) => void;
   /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
   onFpsUpdate?: (fps: number) => void;
-  onGroundSelected?: () => void;
+  onPlacementPick?: (pick: PlacementPick) => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Fin de un movimiento con G: posición inicial y final (para deshacer) */
@@ -257,11 +266,13 @@ export class Viewer3D {
   // Callbacks
   private callbacks: ViewerCallbacks = {};
 
-  // Raycaster for ground selection
+  // Orientación: planos candidatos a piso o clic sobre la superficie
   private raycaster: THREE.Raycaster;
   private mouse: THREE.Vector2;
-  private groundSelectionMode = false;
-  private highlightedFace: THREE.Mesh | null = null;
+  private placementMode: PlacementMode | null = null;
+  private placementGroup = new THREE.Group();
+  private placementPlanes: THREE.Mesh[] = [];
+  private hoveredPlane = -1;
 
   // Bone editing
   private boneSpheres: THREE.Mesh[] = [];
@@ -337,6 +348,7 @@ export class Viewer3D {
     this.meshGroup = new THREE.Group();
     this.skeletonGroup = new THREE.Group();
     this.scene.add(this.meshGroup);
+    this.scene.add(this.placementGroup);
     this.scene.add(this.skeletonGroup);
 
     // Grid - Dracula style
@@ -516,7 +528,7 @@ export class Viewer3D {
       this.onPaintDown(e);
       return;
     }
-    if (this.groundSelectionMode) return;
+    if (this.placementMode) return;
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
     const joint = this.pickJoint(e);
@@ -1429,20 +1441,61 @@ export class Viewer3D {
     this.applySettings();
   }
 
-  setGroundSelectionMode(enabled: boolean): void {
-    this.groundSelectionMode = enabled;
-    this.canvas.style.cursor = enabled ? "crosshair" : "default";
+  /**
+   * Modo de orientación: con "floor" se dibujan los planos candidatos (verdes
+   * los estables); con "front" y "point" se elige un punto de la superficie.
+   */
+  setPlacementMode(mode: PlacementMode | null, candidates: FloorCandidate[] = []): void {
+    this.placementMode = mode;
+    this.canvas.style.cursor = mode ? "crosshair" : "default";
+    for (const child of [...this.placementGroup.children]) {
+      this.placementGroup.remove(child);
+      if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
+        child.geometry.dispose();
+        (child.material as THREE.Material).dispose();
+      }
+    }
+    this.placementPlanes = [];
+    this.hoveredPlane = -1;
+    if (mode !== "floor") return;
 
-    if (!enabled && this.highlightedFace) {
-      this.meshGroup.remove(this.highlightedFace);
-      this.highlightedFace.geometry.dispose();
-      (this.highlightedFace.material as THREE.Material).dispose();
-      this.highlightedFace = null;
+    // Un poco hacia afuera para que no parpadee contra la malla
+    const size = this.meshData ? boundsAfter(this.meshData.positions).getSize(new THREE.Vector3()).length() : 1;
+    for (const c of candidates) {
+      const normal = new THREE.Vector3(...c.normal);
+      const lift = normal.clone().multiplyScalar(size * 2e-3);
+      const ring = c.polygon.map((p) => new THREE.Vector3(...p).add(lift));
+      const fan: number[] = [];
+      for (let i = 1; i + 1 < ring.length; i++) {
+        for (const p of [ring[0], ring[i], ring[i + 1]]) fan.push(p.x, p.y, p.z);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(fan, 3));
+      const plane = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({
+          color: c.stable ? 0x50fa7b : 0xff5555,
+          transparent: true,
+          opacity: this.planeOpacity(c.stable, false),
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        })
+      );
+      plane.userData.stable = c.stable;
+      plane.renderOrder = 998;
+      this.placementPlanes.push(plane);
+      this.placementGroup.add(plane);
+      const outline = new THREE.LineLoop(
+        new THREE.BufferGeometry().setFromPoints(ring),
+        new THREE.LineBasicMaterial({ color: c.stable ? 0x50fa7b : 0xff5555, transparent: true, opacity: 0.6 })
+      );
+      this.placementGroup.add(outline);
     }
   }
 
-  isGroundSelectionMode(): boolean {
-    return this.groundSelectionMode;
+  private planeOpacity(stable: boolean, hovered: boolean): number {
+    if (hovered) return 0.6;
+    return stable ? 0.22 : 0.08;
   }
 
   resetView(): void {
@@ -1772,8 +1825,7 @@ export class Viewer3D {
     this.placeLights();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // GROUND SELECTION
+  // ORIENTACIÓN (piso, frente, origen)
   // ═══════════════════════════════════════════════════════════════════════════
 
   private getMousePosition(event: MouseEvent): THREE.Vector2 {
@@ -1784,94 +1836,40 @@ export class Viewer3D {
     );
   }
 
+  /** Clic al orientar: un plano candidato, o la superficie (Shift en modo piso) */
   private onCanvasClick(event: MouseEvent): void {
+    if (!this.placementMode || event.button !== 0 || event.altKey) return;
     this.mouse = this.getMousePosition(event);
     this.raycaster.setFromCamera(this.mouse, this.camera);
 
-    // Ground selection mode
-    if (this.groundSelectionMode && this.currentMesh) {
-      const intersects = this.raycaster.intersectObject(this.currentMesh);
-      if (intersects.length > 0 && intersects[0].face) {
-        const normal = intersects[0].face.normal.clone();
-        normal.transformDirection(this.currentMesh.matrixWorld);
-        this.alignToGround(normal);
-        this.setGroundSelectionMode(false);
-        this.callbacks.onGroundSelected?.();
-      }
+    if (this.placementMode === "floor" && !event.shiftKey) {
+      const hit = this.raycaster.intersectObjects(this.placementPlanes)[0];
+      if (hit) this.callbacks.onPlacementPick?.({ kind: "candidate", index: this.placementPlanes.indexOf(hit.object as THREE.Mesh) });
       return;
     }
-
-    // La selección de articulaciones va en onPointerDown
+    const visible = this.meshGroup.children.filter((o): o is THREE.Mesh => o instanceof THREE.Mesh && o.visible);
+    const hit = this.raycaster.intersectObjects(visible)[0];
+    if (!hit?.face) return;
+    const normal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld);
+    this.callbacks.onPlacementPick?.({
+      kind: "surface",
+      point: [hit.point.x, hit.point.y, hit.point.z],
+      normal: [normal.x, normal.y, normal.z],
+    });
   }
 
+  /** Resalta el plano candidato bajo el cursor */
   private onCanvasMouseMove(event: MouseEvent): void {
-    if (!this.groundSelectionMode || !this.currentMesh) return;
-
+    if (this.placementMode !== "floor" || this.placementPlanes.length === 0) return;
     this.mouse = this.getMousePosition(event);
     this.raycaster.setFromCamera(this.mouse, this.camera);
-
-    const intersects = this.raycaster.intersectObject(this.currentMesh);
-
-    // Clear previous highlight
-    if (this.highlightedFace) {
-      this.meshGroup.remove(this.highlightedFace);
-      this.highlightedFace.geometry.dispose();
-      (this.highlightedFace.material as THREE.Material).dispose();
-      this.highlightedFace = null;
-    }
-
-    if (intersects.length > 0 && intersects[0].face && intersects[0].faceIndex !== undefined) {
-      const intersection = intersects[0];
-      const geometry = this.currentMesh.geometry;
-      const positions = geometry.getAttribute("position");
-      const indices = geometry.getIndex();
-
-      if (indices) {
-        const faceIndex = intersection.faceIndex!;
-        const a = indices.getX(faceIndex * 3);
-        const b = indices.getX(faceIndex * 3 + 1);
-        const c = indices.getX(faceIndex * 3 + 2);
-
-        const highlightGeometry = new THREE.BufferGeometry();
-        const highlightPositions = new Float32Array([
-          positions.getX(a), positions.getY(a), positions.getZ(a),
-          positions.getX(b), positions.getY(b), positions.getZ(b),
-          positions.getX(c), positions.getY(c), positions.getZ(c),
-        ]);
-        highlightGeometry.setAttribute("position", new THREE.BufferAttribute(highlightPositions, 3));
-
-        const highlightMaterial = new THREE.MeshBasicMaterial({
-          color: 0xbd93f9, // Dracula purple
-          side: THREE.DoubleSide,
-          transparent: true,
-          opacity: 0.6,
-          depthTest: false,
-        });
-
-        this.highlightedFace = new THREE.Mesh(highlightGeometry, highlightMaterial);
-        this.highlightedFace.renderOrder = 999;
-        this.meshGroup.add(this.highlightedFace);
-      }
-    }
-  }
-
-  private alignToGround(faceNormal: THREE.Vector3): void {
-    const targetDirection = new THREE.Vector3(0, -1, 0);
-    const quaternion = new THREE.Quaternion();
-    quaternion.setFromUnitVectors(faceNormal.normalize(), targetDirection);
-
-    this.meshGroup.applyQuaternion(quaternion);
-    this.skeletonGroup.applyQuaternion(quaternion);
-
-    this.repositionOnGround();
-    this.fitCamera();
-  }
-
-  private repositionOnGround(): void {
-    const box = new THREE.Box3().setFromObject(this.meshGroup);
-    const offset = -box.min.y;
-    this.meshGroup.position.y += offset;
-    this.skeletonGroup.position.y += offset;
+    const hit = event.shiftKey ? undefined : this.raycaster.intersectObjects(this.placementPlanes)[0];
+    const index = hit ? this.placementPlanes.indexOf(hit.object as THREE.Mesh) : -1;
+    if (index === this.hoveredPlane) return;
+    this.placementPlanes.forEach((plane, i) => {
+      (plane.material as THREE.MeshBasicMaterial).opacity = this.planeOpacity(plane.userData.stable, i === index);
+    });
+    this.hoveredPlane = index;
   }
 
   /**

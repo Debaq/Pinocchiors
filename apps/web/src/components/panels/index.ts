@@ -14,3 +14,6 @@ export type { RetopologyPanelProps, RetopologyConfig, QuadQuality } from "./Reto
 
 export { BodyPlanPanel } from "./BodyPlanPanel";
 export type { BodyPlan, BodyPlanPanelProps } from "./BodyPlanPanel";
+
+export { PlacementPanel } from "./PlacementPanel";
+export type { PlacementPanelProps } from "./PlacementPanel";

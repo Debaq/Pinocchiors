@@ -11,13 +11,17 @@ import {
   LightSettings,
   SkeletonData,
   WeightsData,
+  PlacementMode,
+  PlacementPick,
 } from "../../lib/Viewer3D";
+import type { FloorCandidate } from "../../lib/placement";
 
 export interface ViewportProps {
   // Callbacks
   onViewerReady?: (viewer: Viewer3D) => void;
   onFpsUpdate?: (fps: number) => void;
-  onGroundSelected?: () => void;
+  /** Clic al orientar (plano candidato o punto de la superficie) */
+  onPlacementPick?: (pick: PlacementPick) => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Fin de un movimiento con G (para deshacer) */
@@ -48,8 +52,10 @@ export interface ViewportProps {
   faces?: number;
   showStats?: boolean;
 
-  // Ground mode
-  groundSelectionMode?: boolean;
+  /** Orientación en curso: qué se elige con el clic */
+  placementMode?: PlacementMode;
+  /** Planos candidatos a piso (modo "floor") */
+  floorCandidates?: FloorCandidate[];
 
   // Bone editing
   boneEditMode?: boolean;
@@ -60,6 +66,12 @@ export interface ViewportProps {
   /** Pincel de pesos activo (`undefined` = apagado) */
   paintSettings?: PaintSettings;
 }
+
+const PLACEMENT_HINTS: Record<PlacementMode, string> = {
+  floor: "Clic en un plano: pasa a ser el piso (verde = estable) · Shift+clic: la superficie bajo el cursor",
+  front: "Clic en la cara que debe mirar al frente (+Z)",
+  point: "Clic en el punto que será el origen",
+};
 
 export const Viewport: Component<ViewportProps> = (props) => {
   let canvasRef: HTMLCanvasElement | undefined;
@@ -73,7 +85,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
 
       viewer.setCallbacks({
         onFpsUpdate: props.onFpsUpdate,
-        onGroundSelected: props.onGroundSelected,
+        onPlacementPick: (pick) => props.onPlacementPick?.(pick),
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
         onBoneMoveCommitted: (index, from, to) => props.onBoneMoveCommitted?.(index, from, to),
@@ -136,11 +148,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
     }
   });
 
-  // React to ground selection mode
+  // Orientación: planos candidatos o clic en la superficie
   createEffect(() => {
-    if (viewer) {
-      viewer.setGroundSelectionMode(props.groundSelectionMode ?? false);
-    }
+    viewer?.setPlacementMode(props.placementMode ?? null, props.floorCandidates ?? []);
   });
 
   // React to bone edit mode
@@ -189,10 +199,10 @@ export const Viewport: Component<ViewportProps> = (props) => {
           </div>
         </div>
 
-        {/* Help text for ground selection */}
-        <Show when={props.groundSelectionMode}>
+        {/* Ayuda de la orientación */}
+        <Show when={props.placementMode}>
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-purple/90 text-bg text-xs font-medium">
-            Click en una cara para establecerla como suelo
+            {PLACEMENT_HINTS[props.placementMode!]}
           </div>
         </Show>
 
@@ -200,7 +210,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         <Show
           when={hint()}
           fallback={
-            <Show when={props.skeletonData && !props.groundSelectionMode && !props.paintSettings}>
+            <Show when={props.skeletonData && !props.placementMode && !props.paintSettings}>
               <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/80 text-text-muted text-xs">
                 Clic: seleccionar articulación · G mover · R rotar · rueda/botón central: vista
               </div>

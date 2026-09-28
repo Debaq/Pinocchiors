@@ -351,7 +351,7 @@ pub struct QuadMeshData {
 /// Los comandos síncronos de Tauri corren en el hilo de la ventana: cualquier
 /// trabajo pesado ahí congela la interfaz. Los comandos que tocan la malla
 /// pasan por aquí.
-async fn in_background<T: Send + 'static>(
+pub(crate) async fn in_background<T: Send + 'static>(
     app: AppHandle,
     f: impl FnOnce(&AppState) -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -2714,7 +2714,7 @@ fn repaired_scene(mesh: &Mesh, original: &Scene) -> (Scene, Mesh) {
 /// La malla de pinocchio está en espacio mundo, así que la escena tiene un solo
 /// nodo raíz con identidad. Conserva las unidades y el eje "arriba" de `base`.
 /// Se pierden materiales, UVs y skins: la topología pudo cambiar.
-fn mesh_to_scene(mesh: &Mesh, name: &str, base: Option<&Scene>) -> Scene {
+pub(crate) fn mesh_to_scene(mesh: &Mesh, name: &str, base: Option<&Scene>) -> Scene {
     use converter_scene::{Mesh as SceneMesh, Node, Primitive, Transform};
 
     let positions: Vec<[f32; 3]> = mesh
@@ -2757,11 +2757,25 @@ fn mesh_to_scene(mesh: &Mesh, name: &str, base: Option<&Scene>) -> Scene {
 /// envolviendo sus raíces en un nodo nuevo. Conserva materiales, UVs y texturas.
 fn scale_scene_about(scene: &Scene, factor: f64, center: Vector3) -> Scene {
     use converter_scene::glam::{Mat4, Vec3};
+
+    let c = Vec3::new(center.x() as f32, center.y() as f32, center.z() as f32);
+    let matrix = Mat4::from_translation(c) * Mat4::from_scale(Vec3::splat(factor as f32)) * Mat4::from_translation(-c);
+    wrap_scene(scene, matrix, "print_scale")
+}
+
+/// Aplica `matrix` en espacio mundo a toda la escena colgando sus raíces de
+/// un nodo nuevo `name`; si la raíz ya es ese nodo, se compone con él.
+pub(crate) fn wrap_scene(scene: &Scene, matrix: converter_scene::glam::Mat4, name: &str) -> Scene {
     use converter_scene::{Node, Transform};
 
     let mut scene = scene.clone();
-    let c = Vec3::new(center.x() as f32, center.y() as f32, center.z() as f32);
-    let matrix = Mat4::from_translation(c) * Mat4::from_scale(Vec3::splat(factor as f32)) * Mat4::from_translation(-c);
+    if let [root] = scene.root_nodes[..] {
+        let node = &mut scene.nodes[root];
+        if node.name == name && node.mesh.is_none() {
+            node.transform = Transform::Matrix(matrix * node.transform.to_matrix());
+            return scene;
+        }
+    }
 
     // Escena sin nodos: un nodo por malla para poder colgarlos del nuevo raíz
     if scene.nodes.is_empty() {
@@ -2790,7 +2804,7 @@ fn scale_scene_about(scene: &Scene, factor: f64, center: Vector3) -> Scene {
     };
 
     scene.nodes.push(Node {
-        name: "print_scale".to_string(),
+        name: name.to_string(),
         transform: Transform::Matrix(matrix),
         mesh: None,
         skin: None,
