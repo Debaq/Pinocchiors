@@ -68,7 +68,20 @@ pub(crate) fn clip(surface: &Surface, axis: usize, center: f64) -> Surface {
             triangles.push([polygon[0], polygon[k], polygon[k + 1]]);
         }
     }
-    let mut out = Surface { positions, triangles };
+    // Costuras del lado positivo; las que cruzan el plano llegan hasta el corte
+    let seams = surface
+        .seams
+        .iter()
+        .filter_map(|&(a, b)| {
+            let (da, db) = (side[a as usize], side[b as usize]);
+            if da >= 0.0 && db >= 0.0 {
+                return Some((a, b));
+            }
+            let m = *cut.get(&(a.min(b), a.max(b)))?;
+            Some(if da > 0.0 { (a, m) } else { (m, b) })
+        })
+        .collect();
+    let mut out = Surface { positions, triangles, seams };
     out.weld(epsilon * 1e-3);
     out
 }
@@ -136,6 +149,7 @@ mod tests {
                 V3::new(-1.0, 1.0, 0.0),
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
+            seams: Vec::new(),
         };
         let half = clip(&s, 0, 0.0);
         assert!((half.area() - 2.0).abs() < 1e-12, "{}", half.area());

@@ -279,7 +279,7 @@ fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>) 
     cells.sort_unstable();
     cells.dedup();
 
-    let mut surface = Surface { positions: Vec::new(), triangles: Vec::new() };
+    let mut surface = Surface::new(Vec::new(), Vec::new());
     let mut edge_vertex: HashMap<(u32, u32), u32> = HashMap::new();
     let inside = |i: u32| flags[i as usize] & INSIDE != 0;
     for cell in cells {
@@ -557,7 +557,7 @@ mod tests {
             .collect();
         let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
         let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
-        Surface { positions, triangles }
+        Surface::new(positions, triangles)
     }
 
     #[test]

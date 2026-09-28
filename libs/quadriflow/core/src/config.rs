@@ -14,6 +14,18 @@ pub struct RemeshConfig {
     /// separa las esquinas de los bordes curvos.
     pub sharp_angle: f64,
 
+    /// Alinear los quads a las costuras de la entrada: aristas donde viene
+    /// partida sin soldar (UV, normales o materiales distintos a cada lado,
+    /// como en glTF). Así cada quad cae dentro de una sola isla de UV y la
+    /// piel se traslada sin estirarse. Se ignoran las costuras de islas más
+    /// angostas que un quad. Sin efecto si la superficie se reconstruye.
+    ///
+    /// Cuesta calidad donde el atlas es enrevesado (escaneos con cientos de
+    /// islas): más vértices irregulares y algunos quads deformes junto a las
+    /// costuras. Desactivado por defecto; conviene cuando se conserva el
+    /// atlas original en vez de desplegar y hornear uno nuevo.
+    pub preserve_seams: bool,
+
     /// Iteraciones de suavizado de los campos en cada nivel de la jerarquía.
     pub smooth_iterations: usize,
 
@@ -83,6 +95,7 @@ impl Default for RemeshConfig {
             target_faces: 1000,
             preserve_sharp: false,
             sharp_angle: std::f64::consts::FRAC_PI_4, // 45°
+            preserve_seams: false,
             smooth_iterations: 10,
             rebuild: Rebuild::Auto,
             curvature_alignment: 1.0,

@@ -13,10 +13,15 @@ pub struct UvTransfer<const N: usize> {
     /// Grupo de la superficie del que cada cara toma su textura.
     pub groups: Vec<usize>,
     /// Caras que cruzan una costura del mapa original: alguna esquina toma su
-    /// UV extrapolada desde el lado del centro, así que la textura puede verse
-    /// estirada o con astillas de otra isla ahí.
+    /// UV extrapolada desde el lado del centro, más allá de la costura por
+    /// más de una décima del tamaño de la cara, así que la textura puede
+    /// verse estirada o con astillas de otra isla ahí.
     pub seam_faces: usize,
 }
+
+/// Cuánto (en radios de la cara) puede pasar una esquina la costura sin
+/// contar como cruce.
+const SEAM_TOLERANCE: f64 = 0.1;
 
 /// Lleva las UV de `surface` a las caras de `N` vértices de otra malla que
 /// recubre la misma superficie.
@@ -39,7 +44,7 @@ pub fn transfer_uvs<const N: usize>(
         .map(|face| {
             let center = face.iter().fold(Vector3::zero(), |acc, &v| acc + points[v]) * (1.0 / N as f64);
             let hit = surface.closest(&center);
-            let mut crosses = false;
+            let mut overshoot: f64 = 0.0;
             let uvs = face.map(|v| {
                 let p = &points[v];
                 let own = hits[v];
@@ -49,12 +54,15 @@ pub fn transfer_uvs<const N: usize>(
                     // Mismo punto que el más cercano (o empate en una arista)
                     surface.uv_at(t, &own.point)
                 } else {
-                    crosses = true;
+                    overshoot = overshoot.max(d - own.distance);
                     surface.uv_at(t, p)
                 };
                 uv.map(|c| c as f32)
             });
-            (uvs, surface.group(hit.triangle), crosses)
+            // Una esquina que pasa la costura por una fracción de la cara
+            // (vértice apenas corrido de ella) no se nota
+            let size = face.iter().map(|&v| points[v].distance(&center)).fold(0.0, f64::max);
+            (uvs, surface.group(hit.triangle), overshoot > SEAM_TOLERANCE * size)
         })
         .collect();
 

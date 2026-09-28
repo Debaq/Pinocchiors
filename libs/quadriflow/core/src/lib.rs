@@ -186,6 +186,10 @@ where
 {
     let mut surface = Surface::from_mesh(mesh);
     let diagonal = surface.bbox_diagonal();
+    if config.preserve_seams {
+        let quad_edge = (surface.area() / config.target_faces as f64).sqrt();
+        surface.mark_seams(diagonal * 1e-7, SEAM_MIN_THICKNESS * quad_edge);
+    }
     surface.weld(diagonal * 1e-7);
     let mut area = surface.area();
     if surface.triangles.is_empty() || area.is_nan() || area <= 0.0 {
@@ -243,6 +247,7 @@ where
         let cell = sizing.base() * ISOTROPIC_EDGE;
         surface = isotropic::remesh(&surface, &target, cell, features, ISOTROPIC_ITERATIONS);
     } else {
+        // (Las costuras se subdividen con la superficie y siguen marcadas)
         let max_edge = (scale * 0.5).min(surface.average_edge_length() * 2.0);
         surface.subdivide(max_edge);
     }
@@ -286,7 +291,7 @@ where
     fixed.resize(quads.vertices.len(), true);
     project_to_surface(&mut quads.vertices, &bvh);
     let lines = features::FeatureLines::new(&graph, sizing.base());
-    snap_to_features(&mut quads, &fixed, &lines, |p| MIN_SNAP_DISTANCE * sizing.at(p) * 0.5);
+    snap_to_features(&mut quads, &fixed, &lines, |p| sizing.at(p) * 0.5);
     smooth::optimize(&mut quads, &fixed, &bvh, &lines, config.sharp_angle, SMOOTH_ITERATIONS);
     // Restos de la extracción (burbujas en pellizcos): nunca más piezas que la entrada
     quads.keep_largest_components(original.component_count());
@@ -298,6 +303,10 @@ where
 const ISOTROPIC_EDGE: f64 = 1.0 / 3.0;
 /// Iteraciones del remallado isótropo.
 const ISOTROPIC_ITERATIONS: usize = 5;
+
+/// Grosor mínimo (en lados de quad) de las islas cuyas costuras siguen los
+/// quads.
+const SEAM_MIN_THICKNESS: f64 = 1.0;
 
 /// Vóxeles por lado de quad en la reconstrucción.
 const REBUILD_VOXELS_PER_QUAD: f64 = 3.0;
@@ -342,16 +351,24 @@ where
 /// viva y los demás vértices de sus quads.
 const MIN_SNAP_DISTANCE: f64 = 0.2;
 
+/// Distancia máxima (en lados de quad) a la que se lleva un vértice a una
+/// arista viva: más lejos, la línea más cercana es otra (costuras que corren
+/// juntas) y el salto pliega los quads.
+const MAX_SNAP_DISTANCE: f64 = 0.5;
+
 /// Lleva los vértices fijos a la arista viva o borde más cercano, salvo que
-/// quedaran encima de otro vértice fijo de sus quads: pasa con los puntos
-/// medios entre dos líneas vivas distintas cuando una cara es más angosta que
-/// un quad. (Los vértices libres cercanos los separa la relajación.)
+/// quede a más de [`MAX_SNAP_DISTANCE`] o encima de otro vértice fijo de sus
+/// quads: pasa con los puntos medios entre dos líneas vivas distintas cuando
+/// una cara es más angosta que un quad. (Los vértices libres cercanos los
+/// separa la relajación.) `quad_edge` da el lado de quad en cada punto.
 fn snap_to_features(
     quads: &mut QuadMesh,
     fixed: &[bool],
     lines: &features::FeatureLines,
-    min_distance: impl Fn(&V3) -> f64,
+    quad_edge: impl Fn(&V3) -> f64,
 ) {
+    let min_distance = |p: &V3| MIN_SNAP_DISTANCE * quad_edge(p);
+    let max_distance = |p: &V3| MAX_SNAP_DISTANCE * quad_edge(p);
     let mut faces_of: Vec<Vec<usize>> = vec![Vec::new(); quads.vertices.len()];
     for (f, face) in quads.faces.iter().enumerate() {
         for &v in &face.v {
@@ -360,6 +377,9 @@ fn snap_to_features(
     }
     for v in (0..quads.vertices.len()).filter(|&v| fixed[v]) {
         let Some(p) = lines.closest(&quads.vertices[v]) else { continue };
+        if (p - quads.vertices[v]).norm() > max_distance(&p) {
+            continue;
+        }
         let crowded = faces_of[v]
             .iter()
             .flat_map(|&f| quads.faces[f].v)

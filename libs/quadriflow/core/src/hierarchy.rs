@@ -227,6 +227,7 @@ mod tests {
                 V3::new(0.0, 1.0, 0.0),
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
+            seams: Vec::new(),
         };
         s.subdivide(0.05);
         let g = s.vertex_graph(None, 0.7);

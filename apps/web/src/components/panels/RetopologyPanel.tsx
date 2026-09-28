@@ -18,6 +18,8 @@ export interface RetopologyConfig {
   adaptiveDensity: boolean;
   /** Simetría espejo por el centro de la caja envolvente */
   symmetry: SymmetryAxis;
+  /** Los quads siguen las costuras de UV: la textura original se traslada limpia */
+  followSeams: boolean;
 }
 
 /** Calidad de la malla de quads resultante */
@@ -101,6 +103,20 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
             formatValue={(v) => `${v}°`}
           />
         </Show>
+
+        {/* UV seams */}
+        <div class="space-y-1">
+          <Checkbox
+            label="Seguir las costuras de UV"
+            checked={props.config.followSeams}
+            onChange={(checked) => updateConfig({ followSeams: checked })}
+          />
+          <p class="text-xs text-text-muted leading-relaxed">
+            Cada quad queda dentro de una isla del mapa original y la textura se traslada sin
+            estirarse en las costuras. Desmárcalo si vas a desplegar y hornear en UV / Piel: los
+            quads salen más parejos.
+          </p>
+        </div>
 
         {/* Mirror symmetry */}
         <Select

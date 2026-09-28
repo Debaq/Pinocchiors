@@ -278,6 +278,7 @@ export const App: Component = () => {
     curvatureAlignment: 1,
     adaptiveDensity: false,
     symmetry: "none",
+    followSeams: true,
   });
   const [quadQuality, setQuadQuality] = createSignal<QuadQuality | undefined>();
   const [quadMeshData, setQuadMeshData] = createSignal<MeshData | undefined>();
@@ -798,6 +799,7 @@ export const App: Component = () => {
           curvature_alignment: config.curvatureAlignment,
           adaptive_density: config.adaptiveDensity,
           symmetry: config.symmetry,
+          follow_seams: config.followSeams,
         },
         onProgress,
       });

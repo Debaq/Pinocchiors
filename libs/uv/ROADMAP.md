@@ -35,8 +35,13 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   lados: una costura corta la vecindad aunque no separe islas (cilindro).
 - Si el punto más cercano real queda al otro lado de una costura, se
   extrapola el mapa afín del lado del centro de la cara.
-- Gonfoterio (500 k triángulos, 448 islas, 5000 quads): 2,9 s, 39 % de caras
+- Gonfoterio (500 k triángulos, 448 islas, 5000 quads): 2,9 s, 35 % de caras
   cruzan costuras; astillas finas en esas caras. Las corrige la fase 4.
+- Solo cuenta como cruce una esquina que pasa la costura por más de un décimo
+  de su cara (antes contaba cualquier vértice apenas corrido de ella).
+- Con `RemeshConfig::preserve_seams` los quads siguen las costuras de las
+  islas gruesas (ver `libs/quadriflow/ROADMAP.md`): Suzanne 5,8 % → 1,7 %,
+  gonfoterio 35 % → 22,6 %.
 
 ## Fase 1 — Islas ✅
 

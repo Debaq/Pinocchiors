@@ -52,7 +52,7 @@ Port de [QuadriFlow](https://github.com/hjwdzh/QuadriFlow) (SGP 2018).
 ### UV / Piel (`uv-core`)
 La "piel" de la malla: coordenadas UV, materiales y texturas.
 
-- Traspaso de UV del modelo original a la malla retopologizada, sin saltar entre islas en las costuras.
+- Traspaso de UV del modelo original a la malla retopologizada, sin saltar entre islas en las costuras. Con "Seguir las costuras de UV" (activada por defecto si el modelo tiene UV) los quads siguen las costuras del atlas y cada uno cae dentro de una sola isla.
 - Desplegado propio: islas que crecen a la vez (desviación de normal acotada, nunca cruzan aristas vivas) y siempre son discos, LSCM + ARAP, empaquetado con densidad de texel uniforme.
 - Horneado de las texturas originales sobre el mapa nuevo (color, metal/rugosidad, oclusión, emisión) y de la normal: la malla liviana conserva el relieve de la original como normal map, con tangentes glTF exportadas.
 - Plan y detalles en [`libs/uv/ROADMAP.md`](libs/uv/ROADMAP.md).
@@ -299,6 +299,7 @@ let (bone_indices, weights) = result.export_weights(4);
 use quadriflow_core::{remesh_with_callback, RemeshConfig};
 
 let config = RemeshConfig::quality(5_000); // o RemeshConfig::fast(n)
+// preserve_seams: true → los quads siguen las costuras de UV (para trasladar la piel)
 let quads = remesh_with_callback(&mesh, &config, |stage, msg| {
     println!("[{}] {msg}", stage.name());
 })?;

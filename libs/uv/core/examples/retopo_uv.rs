@@ -2,8 +2,10 @@
 //! con las texturas horneadas.
 //!
 //! ```text
-//! cargo run --release -p uv-core --example retopo_uv -- modelo.glb 5000 salida.glb [--unwrap] [--checker] [--size 2048]
+//! cargo run --release -p uv-core --example retopo_uv -- modelo.glb 5000 salida.glb [--unwrap] [--checker] [--size 2048] [--seams]
 //! ```
+//!
+//! `--seams`: los quads siguen las costuras de UV del modelo.
 
 use quadriflow_core::{remesh, RemeshConfig};
 use std::time::Instant;
@@ -12,7 +14,7 @@ use uv_core::{scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeO
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (Some(input), Some(output)) = (args.get(1), args.get(3)) else {
-        panic!("uso: retopo_uv <modelo.glb> <quads> <salida.glb> [--unwrap] [--checker] [--size px]");
+        panic!("uso: retopo_uv <modelo.glb> <quads> <salida.glb> [--unwrap] [--checker] [--size px] [--seams]");
     };
     let target = args[2].parse().expect("quads");
     let flag = |name: &str| args.iter().any(|a| a == name);
@@ -26,8 +28,17 @@ fn main() {
     let scene = converter_gltf_io::import_gltf(input).expect("importar");
     let mesh = pinocchio_mesh::scene_to_mesh(&scene).expect("malla");
     let start = Instant::now();
-    let quads = remesh(&mesh, &RemeshConfig { target_faces: target, ..Default::default() }).expect("retopología");
+    let config = RemeshConfig { target_faces: target, preserve_seams: flag("--seams"), ..Default::default() };
+    let quads = remesh(&mesh, &config).expect("retopología");
     println!("retopología: {} vértices, {} quads; {:.2} s", quads.num_vertices(), quads.num_faces(), start.elapsed().as_secs_f64());
+    let quality = quadriflow_core::quality::analyze(&quads, None);
+    println!(
+        "calidad: {:.1} % irregulares, {} plegados, {} malos, {} estirados",
+        quality.irregular_percent(),
+        quality.folded_quads,
+        quality.poor_quads,
+        quality.stretched_quads
+    );
 
     let positions: Vec<[f64; 3]> = quads.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
     let faces: Vec<[usize; 4]> = quads.faces.iter().map(|f| f.v).collect();

@@ -96,6 +96,7 @@ mod tests {
                 V3::new(0.0, 1.0, 0.0),
             ],
             triangles: vec![[0, 1, 2], [0, 2, 3]],
+            seams: Vec::new(),
         };
         let lines = FeatureLines::new(&s.vertex_graph(None, 0.7), 0.25);
         let q = lines.closest(&V3::new(0.4, 0.1, 0.0)).unwrap();

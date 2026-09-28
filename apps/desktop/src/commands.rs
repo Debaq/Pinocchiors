@@ -256,6 +256,9 @@ pub struct RetopologyConfig {
     pub adaptive_density: Option<bool>,
     /// Simetría espejo: "none", "x", "y" o "z"
     pub symmetry: Option<String>,
+    /// Los quads siguen las costuras de UV (por defecto sí; solo si el
+    /// modelo tiene UV)
+    pub follow_seams: Option<bool>,
 }
 
 impl RetopologyConfig {
@@ -283,6 +286,7 @@ impl RetopologyConfig {
             curvature_alignment: self.curvature_alignment.unwrap_or(defaults.curvature_alignment).clamp(0.0, 1.0),
             adaptive_density: self.adaptive_density.unwrap_or(defaults.adaptive_density),
             symmetry,
+            preserve_seams: self.follow_seams.unwrap_or(true),
         })
     }
 }
@@ -1676,7 +1680,11 @@ pub async fn run_retopology(
         message: "Preparando retopología...".to_string(),
     });
 
-    let remesh_config = config.to_remesh_config()?;
+    let mut remesh_config = config.to_remesh_config()?;
+    // Sin UV no hay piel que conservar: las costuras serían solo de normales
+    // o materiales
+    let has_uvs = scene.as_ref().is_some_and(|s| s.world_primitives().iter().any(|p| p.uvs.is_some()));
+    remesh_config.preserve_seams &= has_uvs;
 
     let progress = on_progress.clone();
     let (quad_mesh, quality, skin) = tauri::async_runtime::spawn_blocking(move || {
@@ -2827,6 +2835,7 @@ mod tests {
             curvature_alignment: Some(2.0),
             adaptive_density: Some(true),
             symmetry: Some("x".into()),
+            follow_seams: Some(false),
         };
         let r = config.to_remesh_config().unwrap();
         assert_eq!(r.target_faces, 3000);
@@ -2837,6 +2846,7 @@ mod tests {
         assert_eq!(r.curvature_alignment, 1.0);
         assert!(r.adaptive_density);
         assert_eq!(r.symmetry, Symmetry::X);
+        assert!(!r.preserve_seams);
 
         let unknown = RetopologyConfig { symmetry: Some("w".into()), ..config };
         assert!(unknown.to_remesh_config().is_err());

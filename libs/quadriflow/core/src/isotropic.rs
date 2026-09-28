@@ -13,7 +13,7 @@ use crate::surface::Surface;
 use crate::V3;
 use pinocchio_spatial::{Bvh, Triangle};
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Kind {
@@ -38,7 +38,7 @@ pub(crate) fn remesh(surface: &Surface, target: Target, cell: f64, sharp_angle: 
     let bvh = triangle_bvh(surface);
     let segments: Vec<(V3, V3)> = mesh
         .features
-        .iter()
+        .keys()
         .map(|&(a, b)| (mesh.pos[a as usize], mesh.pos[b as usize]))
         .collect();
     let lines = FeatureLines::from_segments(segments, cell);
@@ -62,8 +62,9 @@ struct Mesh {
     alive: Vec<bool>,
     /// Caras de cada vértice
     vf: Vec<Vec<u32>>,
-    /// Aristas vivas y de borde, `(menor, mayor)`
-    features: HashSet<(u32, u32)>,
+    /// Aristas vivas, de borde y costuras, `(menor, mayor)`; el valor dice
+    /// si es costura (la geometría no la delata: hay que devolverla)
+    features: HashMap<(u32, u32), bool>,
 }
 
 fn key(a: u32, b: u32) -> (u32, u32) {
@@ -87,10 +88,11 @@ impl Mesh {
             tris: surface.triangles.clone(),
             alive: vec![true; surface.triangles.len()],
             vf,
-            features: HashSet::new(),
+            features: HashMap::new(),
         };
 
         let cos_sharp = sharp_angle.map(f64::cos);
+        mesh.features.extend(surface.seams.iter().map(|&e| (e, true)));
         let mut edges: Vec<(u32, u32)> =
             surface.triangles.iter().flat_map(|t| (0..3).map(move |k| key(t[k], t[(k + 1) % 3]))).collect();
         edges.sort_unstable();
@@ -106,25 +108,30 @@ impl Mesh {
                 _ => false,
             };
             if feature {
-                mesh.features.insert((a, b));
+                mesh.features.entry((a, b)).or_insert(false);
             }
         }
 
-        // Vértices sobre rasgos: línea si tienen dos aristas casi alineadas
-        let mut feature_neighbors: Vec<Vec<u32>> = vec![Vec::new(); n];
-        for &(a, b) in &mesh.features {
-            feature_neighbors[a as usize].push(b);
-            feature_neighbors[b as usize].push(a);
+        // Vértices sobre rasgos: línea si tienen dos aristas casi alineadas.
+        // Una costura sigue siendo línea aunque quiebre: viene del atlas en
+        // zigzag a la escala de la malla densa, y con una esquina en cada
+        // quiebre no se podría simplificar
+        let mut feature_neighbors: Vec<Vec<(u32, bool)>> = vec![Vec::new(); n];
+        for (&(a, b), &seam) in &mesh.features {
+            feature_neighbors[a as usize].push((b, seam));
+            feature_neighbors[b as usize].push((a, seam));
         }
         let cos_corner = sharp_angle.unwrap_or(std::f64::consts::FRAC_PI_4).cos();
         for (v, around) in feature_neighbors.iter().enumerate() {
             let p = mesh.pos[v];
             let dirs: Vec<V3> = around
                 .iter()
-                .filter_map(|&u| (mesh.pos[u as usize] - p).try_normalize(1e-30))
+                .filter_map(|&(u, _)| (mesh.pos[u as usize] - p).try_normalize(1e-30))
                 .collect();
+            let seam = around.iter().all(|&(_, seam)| seam);
             mesh.kind[v] = match dirs.as_slice() {
                 [] => Kind::Free,
+                [_, _] if seam => Kind::Line,
                 [d0, d1] if (-d0).dot(d1) > cos_corner => Kind::Line,
                 _ => Kind::Corner,
             };
@@ -227,12 +234,12 @@ impl Mesh {
             self.pos.push(mid);
             self.goal.push(target(&mid));
             let feature = self.features.remove(&(a, b));
-            self.kind.push(if feature { Kind::Line } else { Kind::Free });
+            self.kind.push(if feature.is_some() { Kind::Line } else { Kind::Free });
             self.alive_vertex.push(true);
             self.vf.push(Vec::new());
-            if feature {
-                self.features.insert(key(a, m));
-                self.features.insert(key(m, b));
+            if let Some(seam) = feature {
+                self.features.insert(key(a, m), seam);
+                self.features.insert(key(m, b), seam);
             }
             let mut new_edges = vec![key(a, m), key(m, b)];
             for f in faces {
@@ -254,7 +261,7 @@ impl Mesh {
 
     /// Intenta fundir `a` en `b`. Devuelve si lo hizo.
     fn try_collapse(&mut self, a: u32, b: u32) -> bool {
-        let feature_edge = self.features.contains(&key(a, b));
+        let feature_edge = self.features.contains_key(&key(a, b));
         match self.kind[a as usize] {
             Kind::Corner => return false,
             Kind::Line if !feature_edge => return false,
@@ -314,12 +321,12 @@ impl Mesh {
             let t = self.tris[f as usize].map(|i| if i == a { b } else { i });
             self.set_face(f, t);
         }
-        let moved: Vec<(u32, u32)> = self.features.iter().copied().filter(|&(x, y)| x == a || y == a).collect();
+        let moved: Vec<(u32, u32)> = self.features.keys().copied().filter(|&(x, y)| x == a || y == a).collect();
         for (x, y) in moved {
-            self.features.remove(&(x, y));
+            let seam = self.features.remove(&(x, y)).unwrap_or(false);
             let other = if x == a { y } else { x };
             if other != b {
-                self.features.insert(key(other, b));
+                *self.features.entry(key(other, b)).or_insert(seam) |= seam;
             }
         }
         self.pos[b as usize] = target;
@@ -357,7 +364,7 @@ impl Mesh {
             .collect();
         let target = |v: u32| if boundary[v as usize] { 4 } else { 6 };
         for (a, b) in self.edges() {
-            if self.features.contains(&(a, b)) {
+            if self.features.contains_key(&(a, b)) {
                 continue;
             }
             let faces = self.edge_faces(a, b);
@@ -416,7 +423,7 @@ impl Mesh {
             }
         }
         let mut feature_neighbors: Vec<Vec<u32>> = vec![Vec::new(); n];
-        for &(a, b) in &self.features {
+        for &(a, b) in self.features.keys() {
             feature_neighbors[a as usize].push(b);
             feature_neighbors[b as usize].push(a);
         }
@@ -484,7 +491,16 @@ impl Mesh {
                 index[v as usize]
             }));
         }
-        Surface { positions, triangles }
+        let mut seams: Vec<(u32, u32)> = self
+            .features
+            .iter()
+            .filter(|&(_, &seam)| seam)
+            .map(|(&(a, b), _)| (index[a as usize], index[b as usize]))
+            .filter(|&(a, b)| a != u32::MAX && b != u32::MAX)
+            .map(|(a, b)| (a.min(b), a.max(b)))
+            .collect();
+        seams.sort_unstable();
+        Surface { positions, triangles, seams }
     }
 }
 
@@ -512,7 +528,7 @@ mod tests {
             .collect();
         let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
         let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
-        Surface { positions, triangles }
+        Surface::new(positions, triangles)
     }
 
     fn edge_lengths(s: &Surface) -> Vec<f64> {

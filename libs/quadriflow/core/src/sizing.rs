@@ -191,7 +191,7 @@ mod tests {
             .collect();
         let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
         let triangles = quads.iter().flat_map(|q| [[q[0], q[1], q[2]], [q[0], q[2], q[3]]]).collect();
-        Surface { positions, triangles }
+        Surface::new(positions, triangles)
     }
 
     /// Cubo de 10 y, aparte, una aleta de 0.5 de espesor.

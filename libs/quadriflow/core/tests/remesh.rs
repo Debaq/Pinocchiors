@@ -503,3 +503,63 @@ fn invalid_input_is_rejected() {
     let p = vec![Vector3::new(0.0, 0.0, 0.0); 3];
     assert!(matches!(remesh(&Mesh::from_triangles(&p, &[[0, 1, 2]]), &config(10)), Err(RemeshError::EmptyMesh)));
 }
+
+/// Parte la malla sin soldar entre las caras con `side(centro)` y las demás,
+/// como una costura de UV de glTF: los vértices del borde se duplican.
+fn split_along(p: &mut Vec<Vector3>, t: &mut [[usize; 3]], side: impl Fn(&V3<f64>) -> bool) {
+    let center = |t: &[usize; 3]| t.iter().map(|&i| p[i].0).sum::<V3<f64>>() / 3.0;
+    let marked: Vec<bool> = t.iter().map(|t| side(&center(t))).collect();
+    let mut copy: HashMap<usize, usize> = HashMap::new();
+    for (tri, _) in t.iter_mut().zip(&marked).filter(|(_, m)| **m) {
+        for v in tri.iter_mut() {
+            *v = *copy.entry(*v).or_insert_with(|| {
+                p.push(p[*v]);
+                p.len() - 1
+            });
+        }
+    }
+}
+
+/// Esfera de latitud y longitud con una costura sobre el paralelo de
+/// ángulo polar `theta` (no es geodésica: el campo no la sigue solo).
+fn sphere_with_seam(theta: f64) -> (Mesh, f64) {
+    let (nu, nv) = (96, 48);
+    let (mut p, mut t) = param_surface(nu, nv, true, false, |u, v| {
+        let (a, b) = (2.0 * PI * u, PI * v);
+        [b.sin() * a.cos(), b.sin() * a.sin(), b.cos()]
+    });
+    // El paralelo más cercano de la grilla
+    let row = (theta / PI * nv as f64).round() / nv as f64 * PI;
+    let z0 = row.cos();
+    split_along(&mut p, &mut t, |c| c.z < z0);
+    (Mesh::from_triangles(&p, &t), z0)
+}
+
+/// Quads con vértices a ambos lados del plano z = z0 (más allá de `tol`).
+fn quads_crossing(q: &QuadMesh, z0: f64, tol: f64) -> usize {
+    q.faces
+        .iter()
+        .filter(|f| {
+            let d = f.v.map(|v| q.vertices[v].z - z0);
+            d.iter().any(|&x| x < -tol) && d.iter().any(|&x| x > tol)
+        })
+        .count()
+}
+
+#[test]
+fn quads_follow_uv_seams() {
+    let (mesh, z0) = sphere_with_seam(0.35 * PI);
+    for target in [600, 1500] {
+        let edge = (4.0 * PI / target as f64).sqrt();
+        let with = remesh(&mesh, &RemeshConfig { preserve_seams: true, ..config(target) }).unwrap();
+        let without = remesh(&mesh, &config(target)).unwrap();
+        assert_closed_manifold(&with, 2);
+        let (a, b) = (quads_crossing(&with, z0, 0.05 * edge), quads_crossing(&without, z0, 0.05 * edge));
+        assert!(a * 10 <= b, "{a} quads cruzan la costura (sin seguirla: {b})");
+    }
+    // Con simetría las costuras se recortan en el plano y se reflejan
+    let config = RemeshConfig { preserve_seams: true, symmetry: Symmetry::X, ..config(600) };
+    let q = remesh(&mesh, &config).unwrap();
+    let edge = (4.0 * PI / 600.0).sqrt();
+    assert_eq!(quads_crossing(&q, z0, 0.05 * edge), 0);
+}

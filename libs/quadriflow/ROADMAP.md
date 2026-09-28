@@ -18,7 +18,7 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 | `isotropic.rs` | Remallado isótropo con rasgos (Botsch-Kobbelt): partir, colapsar, voltear y relajar; aristas vivas y bordes se conservan, sus vértices se deslizan sobre la línea y las esquinas quedan fijas |
 | `sizing.rs` | Densidad adaptativa (opcional): grosor local por rayos hacia adentro y afuera desde muestras de la superficie, gradación geodésica y base calibrada para conservar la cantidad de quads |
 | `symmetry.rs` | Simetría espejo: recorte de la mitad positiva, retopología de la mitad y reflexión soldando la costura |
-| `surface.rs` | Soldado de costuras, subdivisión (arista más larga primero), normales, áreas, adyacencia, bordes y aristas vivas → restricciones |
+| `surface.rs` | Soldado de costuras, costuras de UV a seguir (`mark_seams`), subdivisión (arista más larga primero), normales, áreas, adyacencia, bordes, aristas vivas y costuras → restricciones |
 | `hierarchy.rs` | Niveles por emparejamiento de vértices vecinos + coloreo para Gauss-Seidel paralelo |
 | `field.rs` | Campos extrínsecos de orientación (4-RoSy) y posición (4-PoSy), de grueso a fino; guía de curvatura (tensor de forma suavizado, sin cruzar aristas vivas) en los niveles gruesos |
 | `integer.rs` | Desplazamientos enteros por arista y eliminación de singularidades de posición (cargas unitarias por caminos mínimos en el grafo dual, sin invertir caras) |
@@ -38,6 +38,8 @@ Sorkine-Hornung, SIGGRAPH Asia 2015), la base de QuadriFlow.
 - Invariante a la escala (exacta para potencias de 2).
 - Bordes abiertos: los vértices de borde quedan sobre el borde original.
 - Con `preserve_sharp`, ningún quad cruza una arista viva.
+- Con `preserve_seams`, ningún quad cruza una costura de UV entre islas
+  gruesas (esfera partida en un paralelo, también con simetría).
 - Determinista (mismo resultado con cualquier número de hilos).
 - Toro (admite un campo sin singularidades): < 2 % de vértices irregulares.
 - Esfera, toro y cilindro sin quads plegados.
@@ -170,6 +172,46 @@ Plan hacia una retopología lista para producción (una fase por commit):
         de vóxeles a las aristas vivas de la entrada crea dientes de sierra
         (audiómetro: plegados 33 → 155). Requiere otra extracción (dual
         contouring con QEF).
+
+## Costuras de UV (`RemeshConfig::preserve_seams`)
+
+Para trasladar la piel del original sin estirarla, los quads siguen las
+costuras de UV: así cada quad cae dentro de una sola isla.
+
+- **Detección sin UV:** antes del soldado la entrada viene partida (glTF duplica
+  los vértices de las costuras de UV, normales o materiales). Toda arista de
+  borde con una gemela en la misma posición es costura; se marca y el soldado
+  la conserva (`Surface::seams`, que siguen la subdivisión, el remallado
+  isótropo y el recorte de simetría).
+- **Solo islas gruesas:** se ignoran las costuras de piezas con
+  `2·área/perímetro` menor que un lado de quad (en ambos lados). Un modelo
+  sombreado plano no marca ninguna.
+- **Líneas sin esquinas por quiebres:** las costuras de un atlas zigzaguean a
+  la escala de la malla densa; con una esquina en cada quiebre el remallado
+  isótropo no podía simplificarlas y el campo se llenaba de esquinas. Un
+  vértice con dos aristas de costura es siempre línea.
+- **Pegado acotado:** un vértice fijo se lleva a la línea más cercana solo si
+  está a menos de medio quad (`MAX_SNAP_DISTANCE`); más lejos, la línea es otra
+  (costuras que corren juntas) y el salto plegaba quads. Esto mejora también
+  las aristas vivas de CAD: Ender 3 a 4000 quads, plegados 35 → 8; espéculo,
+  36 → 21.
+
+Banco (`uv-core --example retopo_uv ... [--seams]`; caras cuya esquina pasa la
+costura por más de un décimo de la cara):
+
+| Modelo | Sin costuras | Con costuras | Costo |
+|---|---|---|---|
+| Suzanne (5 islas hechas a mano), 3000 quads | 173 cruzan (5,8 %) | 53 (1,7 %) | irregulares 2,1 → 3,3 %, malos 19 → 45 |
+| Gonfoterio (448 islas de escaneo), 5000 quads | 1656 (35 %) | 1037 (22,6 %) | irregulares 3,1 → 7,2 %, plegados 3 → 30 |
+
+Desactivado por defecto en el crate. La app lo activa si el modelo trae UV,
+con una casilla para apagarlo cuando se va a desplegar y hornear. Con un atlas
+fragmentado (escaneos) conviene hornear: la mitad del largo de sus costuras es
+de islas más angostas que un quad y no se puede seguir.
+
+Pendiente: costuras de islas angostas (unirlas a la vecina y hornear solo esa
+zona); suavizar la dirección de la restricción a lo largo de la costura (la
+extracción ya sale con más plegados, 25 → 78 en el gonfoterio).
 
 ## Pendiente (fase 8 en adelante)
 
