@@ -271,6 +271,57 @@ let result = autorig(&mesh, &skeleton, Some(PinocchioConfig::default()))?;
 - [ ] Compute shaders para heat diffusion
 - [ ] LOD automático
 
+### Fase 7: Esqueletos por forma de cuerpo + variantes (acordado 2026-09-27)
+
+Los presets actuales cubren un animal por forma y les faltan apéndices: con
+`QuadSkeleton` un elefante queda con la trompa rígida (solo tiene cuello,
+cabeza, cola de 2 huesos y 4 patas). En vez de un preset cerrado por especie,
+construir el esqueleto como **forma base + apéndices** con cantidad de
+segmentos configurable (como `SerpentSkeleton::with_segments`), y ofrecer
+variantes con nombre ya armadas para la UI.
+
+**Formas base** (existentes y nuevas):
+
+| Forma | Estado | Cubre |
+|---|---|---|
+| Bípedo | existe (`Human`) | humanoides, primates |
+| Bípedo digitígrado con cola | nueva | dinosaurios, aves no voladoras, canguro |
+| Cuadrúpedo | existe (`Quad`, `Horse`) | perro, felino, caballo, elefante |
+| Radial | nueva | pulpo, calamar, medusa, estrella de mar: cabeza/manto + N cadenas largas desde el centro |
+| Eje horizontal con aletas | nueva | pez, tiburón, delfín: columna + aletas dorsal, pectorales, pélvicas, caudal |
+| Artrópodo | existe (`Spider`) | ampliar a N patas: insectos (6), arañas (8), cangrejo/escorpión (+ pinzas) |
+| Cadena | existe (`Serpent`) | serpiente, gusano, anguila |
+| Árbol libre | nueva | plantas, cuerdas, props: cadenas ramificadas sin anatomía |
+| Mecánico | existe (`Mech`) | robots |
+
+**Apéndices** enganchables a cualquier forma, con segmentos configurables:
+trompa (cadena desde la cabeza), cola larga, alas (cadena tipo `Bird`),
+aletas, tentáculos, orejas móviles, mandíbula, cuello largo, pinzas, cuernos
+fijos.
+
+**Variantes con nombre** (forma + apéndices):
+
+| Variante | Receta |
+|---|---|
+| Elefante | cuadrúpedo + trompa (8-12 segmentos) + orejas + colmillos fijos |
+| Jirafa | cuadrúpedo + cuello largo (5-7 segmentos) |
+| Dragón | cuadrúpedo + alas + cola larga + cuello largo |
+| Pulpo | radial con 8 tentáculos |
+| Calamar | radial con 8 brazos + 2 tentáculos largos + aletas del manto |
+| Pez | eje horizontal con aletas |
+| Delfín / ballena | eje horizontal, aleta caudal horizontal |
+| Cangrejo | artrópodo 8 patas + 2 pinzas |
+| Insecto | artrópodo 6 patas + alas + antenas |
+| T-rex | bípedo digitígrado + cola larga + brazos cortos |
+
+**Pendientes:**
+- [ ] Modelo de datos: forma base + lista de apéndices (anclaje, segmentos, simetría) → `BasicSkeleton`
+- [ ] Formas nuevas: radial, eje horizontal con aletas, bípedo digitígrado, árbol libre
+- [ ] Apéndices: trompa, tentáculo, aleta, ala, cola, cuello, oreja, pinza
+- [ ] Variantes con nombre en `list_skeleton_presets` y en la UI
+- [ ] Auto-ajuste de cadenas (trompa, tentáculos, colas) siguiendo el eje medial de la malla: más fácil que las extremidades articuladas
+- [ ] Pesos: las cadenas largas y delgadas necesitan más segmentos para no quebrarse al doblar; validar el heat diffusion en tentáculos
+
 ---
 
 ## Dependencias
