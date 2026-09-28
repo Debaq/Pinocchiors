@@ -4,6 +4,7 @@ use converter_scene::{
     VertexAttribute,
 };
 use glam::{Mat4, Quat, Vec3};
+use crate::draco;
 use std::collections::HashSet;
 use std::path::Path;
 use thiserror::Error;
@@ -18,6 +19,8 @@ pub enum GltfImportError {
     Gltf(#[from] gltf::Error),
     #[error("extensión no soportada: {0} (requerida por el archivo, {1})")]
     UnsupportedExtension(String, String),
+    #[error("geometría Draco inválida: {0}")]
+    Draco(String),
 }
 
 /// Transform de textura pendiente para bakear en UVs.
@@ -95,6 +98,16 @@ fn collect_texture_transforms_occlusion(
 }
 
 /// Resuelve el tex_coord con override de texture_transform.
+/// Imagen de una textura. Con `EXT_texture_webp` la imagen está en la
+/// extensión y `source` puede faltar (gltf haría panic al pedirlo).
+fn texture_image(texture: &gltf::Texture) -> usize {
+    texture
+        .extension_value("EXT_texture_webp")
+        .and_then(|ext| ext["source"].as_u64())
+        .map(|i| i as usize)
+        .unwrap_or_else(|| texture.source().index())
+}
+
 fn resolve_tex_coord(info: &gltf::texture::Info) -> u32 {
     if let Some(tt) = info.texture_transform() {
         tt.tex_coord().unwrap_or_else(|| info.tex_coord())
@@ -110,17 +123,7 @@ fn resolve_tex_coord(info: &gltf::texture::Info) -> u32 {
 /// y animaciones.
 pub fn import_gltf(path: impl AsRef<Path>) -> Result<Scene, GltfImportError> {
     let path = path.as_ref();
-    let (doc, buffers, images) = gltf::import(path)?;
-
-    // Verificar extensiones requeridas no soportadas
-    for ext in doc.extensions_required() {
-        if ext == "KHR_draco_mesh_compression" {
-            return Err(GltfImportError::UnsupportedExtension(
-                ext.to_string(),
-                "decodificación Draco no implementada".to_string(),
-            ));
-        }
-    }
+    let (doc, buffers, images) = load(path)?;
 
     let base_dir = path.parent().unwrap_or_else(|| Path::new("."));
 
@@ -128,13 +131,27 @@ pub fn import_gltf(path: impl AsRef<Path>) -> Result<Scene, GltfImportError> {
 
     import_textures(&doc, &buffers, &images, base_dir, &mut scene)?;
     let pending_uv_transforms = import_materials(&doc, &mut scene);
-    import_meshes(&doc, &buffers, &pending_uv_transforms, &mut scene);
+    import_meshes(&doc, &buffers, &pending_uv_transforms, &mut scene)?;
     import_nodes(&doc, &mut scene);
     import_skins(&doc, &buffers, &mut scene);
     import_animations(&doc, &buffers, &mut scene);
 
     scene.validate_geometry()?;
     Ok(scene)
+}
+
+/// Carga documento, buffers e imágenes. `gltf::import` rechaza toda extensión
+/// requerida que no conoce, Draco incluida: esos archivos se cargan sin
+/// validar y Draco se decodifica aquí. Las imágenes no se decodifican (pueden
+/// venir en WebP): las dimensiones se leen de los bytes.
+fn load(path: &Path) -> Result<(gltf::Document, Vec<gltf::buffer::Data>, Vec<gltf::image::Data>), GltfImportError> {
+    let bytes = std::fs::read(path)?;
+    let gltf = gltf::Gltf::from_slice_without_validation(&bytes)?;
+    if !gltf.extensions_required().any(|e| e == draco::EXTENSION) {
+        return Ok(gltf::import(path)?);
+    }
+    let buffers = gltf::import_buffers(&gltf.document, path.parent(), gltf.blob.clone())?;
+    Ok((gltf.document, buffers, Vec::new()))
 }
 
 /// Importa un GLB desde bytes en memoria (útil para WASM).
@@ -145,16 +162,6 @@ pub fn import_gltf_bytes(data: &[u8]) -> Result<Scene, GltfImportError> {
     let root: gltf::json::Root = gltf::json::Root::from_slice(&json)
         .map_err(gltf::Error::Deserialize)?;
     let doc = gltf::Document::from_json_without_validation(root);
-
-    // Verificar extensiones requeridas
-    for ext in doc.extensions_required() {
-        if ext == "KHR_draco_mesh_compression" {
-            return Err(GltfImportError::UnsupportedExtension(
-                ext.to_string(),
-                "decodificación Draco no implementada".to_string(),
-            ));
-        }
-    }
 
     // El bin chunk es el único buffer para GLB
     let buffers: Vec<gltf::buffer::Data> = if let Some(bin_data) = bin {
@@ -172,7 +179,7 @@ pub fn import_gltf_bytes(data: &[u8]) -> Result<Scene, GltfImportError> {
 
     import_textures(&doc, &buffers, &images, base_dir, &mut scene)?;
     let pending_uv_transforms = import_materials(&doc, &mut scene);
-    import_meshes(&doc, &buffers, &pending_uv_transforms, &mut scene);
+    import_meshes(&doc, &buffers, &pending_uv_transforms, &mut scene)?;
     import_nodes(&doc, &mut scene);
     import_skins(&doc, &buffers, &mut scene);
     import_animations(&doc, &buffers, &mut scene);
@@ -276,7 +283,7 @@ fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTra
                 let bc_tex = sg.diffuse_texture().map(|info| {
                     collect_texture_transforms(&info, mat_idx, &mut pending_transforms);
                     TextureRef {
-                        texture_index: info.texture().source().index(),
+                        texture_index: texture_image(&info.texture()),
                         tex_coord_set: resolve_tex_coord(&info),
                     }
                 });
@@ -286,14 +293,14 @@ fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTra
                 let bc_tex = pbr.base_color_texture().map(|info| {
                     collect_texture_transforms(&info, mat_idx, &mut pending_transforms);
                     TextureRef {
-                        texture_index: info.texture().source().index(),
+                        texture_index: texture_image(&info.texture()),
                         tex_coord_set: resolve_tex_coord(&info),
                     }
                 });
                 let mr_tex = pbr.metallic_roughness_texture().map(|info| {
                     collect_texture_transforms(&info, mat_idx, &mut pending_transforms);
                     TextureRef {
-                        texture_index: info.texture().source().index(),
+                        texture_index: texture_image(&info.texture()),
                         tex_coord_set: resolve_tex_coord(&info),
                     }
                 });
@@ -304,21 +311,21 @@ fn import_materials(doc: &gltf::Document, scene: &mut Scene) -> Vec<PendingUvTra
         let normal_texture = mat.normal_texture().map(|info| {
             collect_texture_transforms_normal(&info, mat_idx, &mut pending_transforms);
             TextureRef {
-                texture_index: info.texture().source().index(),
+                texture_index: texture_image(&info.texture()),
                 tex_coord_set: info.tex_coord(),
             }
         });
         let occlusion_texture = mat.occlusion_texture().map(|info| {
             collect_texture_transforms_occlusion(&info, mat_idx, &mut pending_transforms);
             TextureRef {
-                texture_index: info.texture().source().index(),
+                texture_index: texture_image(&info.texture()),
                 tex_coord_set: info.tex_coord(),
             }
         });
         let emissive_texture = mat.emissive_texture().map(|info| {
             collect_texture_transforms(&info, mat_idx, &mut pending_transforms);
             TextureRef {
-                texture_index: info.texture().source().index(),
+                texture_index: texture_image(&info.texture()),
                 tex_coord_set: resolve_tex_coord(&info),
             }
         });
@@ -363,7 +370,7 @@ fn import_meshes(
     buffers: &[gltf::buffer::Data],
     pending_transforms: &[PendingUvTransform],
     scene: &mut Scene,
-) {
+) -> Result<(), GltfImportError> {
     for mesh in doc.meshes() {
         let mut primitives = Vec::new();
 
@@ -378,35 +385,74 @@ fn import_meshes(
                 continue;
             }
 
-            let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
+            let (mut attributes, indices) = if let Some(ext) = prim.extension_value(draco::EXTENSION) {
+                draco_primitive(doc, buffers, &prim, ext)?
+            } else {
+                let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
 
-            // Posiciones (obligatorias)
-            let positions: Vec<[f32; 3]> = match reader.read_positions() {
-                Some(iter) => iter.collect(),
-                None => continue,
-            };
-            let vertex_count = positions.len();
-            let mut attributes = vec![VertexAttribute::Positions(positions)];
+                // Posiciones (obligatorias)
+                let positions: Vec<[f32; 3]> = match reader.read_positions() {
+                    Some(iter) => iter.collect(),
+                    None => continue,
+                };
+                let vertex_count = positions.len();
+                let mut attributes = vec![VertexAttribute::Positions(positions)];
 
-            // Normales
-            if let Some(iter) = reader.read_normals() {
-                attributes.push(VertexAttribute::Normals(iter.collect()));
-            }
-
-            // Tangentes
-            if let Some(iter) = reader.read_tangents() {
-                attributes.push(VertexAttribute::Tangents(iter.collect()));
-            }
-
-            // Coordenadas UV (hasta 4 sets)
-            for set in 0..4u32 {
-                if let Some(iter) = reader.read_tex_coords(set) {
-                    attributes
-                        .push(VertexAttribute::TexCoords(set, iter.into_f32().collect()));
-                } else {
-                    break;
+                // Normales
+                if let Some(iter) = reader.read_normals() {
+                    attributes.push(VertexAttribute::Normals(iter.collect()));
                 }
-            }
+
+                // Tangentes
+                if let Some(iter) = reader.read_tangents() {
+                    attributes.push(VertexAttribute::Tangents(iter.collect()));
+                }
+
+                // Coordenadas UV (hasta 4 sets)
+                for set in 0..4u32 {
+                    if let Some(iter) = reader.read_tex_coords(set) {
+                        attributes
+                            .push(VertexAttribute::TexCoords(set, iter.into_f32().collect()));
+                    } else {
+                        break;
+                    }
+                }
+
+                // Colores de vértice
+                if let Some(iter) = reader.read_colors(0) {
+                    attributes.push(VertexAttribute::Colors(iter.into_rgba_f32().collect()));
+                }
+
+                // Joint indices (skinning)
+                if let Some(iter) = reader.read_joints(0) {
+                    attributes.push(VertexAttribute::JointIndices(iter.into_u16().collect()));
+                }
+
+                // Joint weights (skinning)
+                if let Some(iter) = reader.read_weights(0) {
+                    attributes.push(VertexAttribute::JointWeights(iter.into_f32().collect()));
+                }
+
+                // Índices
+                let indices = if mode == gltf::mesh::Mode::Triangles {
+                    reader
+                        .read_indices()
+                        .map(|iter| IndexData::U32(iter.into_u32().collect()))
+                } else {
+                    // TriangleStrip / TriangleFan → convertir a lista de triángulos
+                    let raw: Vec<u32> = reader
+                        .read_indices()
+                        .map(|iter| iter.into_u32().collect())
+                        .unwrap_or_else(|| (0..vertex_count as u32).collect());
+                    let converted = convert_indices_for_mode(raw, mode);
+                    if converted.is_empty() {
+                        // Sin triángulos: `None` se interpretaría como lista implícita
+                        continue;
+                    }
+                    Some(IndexData::U32(converted))
+                };
+                (attributes, indices)
+            };
 
             // Aplicar transforms de textura pendientes (KHR_texture_transform)
             if let Some(mat_idx) = prim.material().index() {
@@ -429,40 +475,6 @@ fn import_meshes(
                 }
             }
 
-            // Colores de vértice
-            if let Some(iter) = reader.read_colors(0) {
-                attributes.push(VertexAttribute::Colors(iter.into_rgba_f32().collect()));
-            }
-
-            // Joint indices (skinning)
-            if let Some(iter) = reader.read_joints(0) {
-                attributes.push(VertexAttribute::JointIndices(iter.into_u16().collect()));
-            }
-
-            // Joint weights (skinning)
-            if let Some(iter) = reader.read_weights(0) {
-                attributes.push(VertexAttribute::JointWeights(iter.into_f32().collect()));
-            }
-
-            // Índices
-            let indices = if mode == gltf::mesh::Mode::Triangles {
-                reader
-                    .read_indices()
-                    .map(|iter| IndexData::U32(iter.into_u32().collect()))
-            } else {
-                // TriangleStrip / TriangleFan → convertir a lista de triángulos
-                let raw: Vec<u32> = reader
-                    .read_indices()
-                    .map(|iter| iter.into_u32().collect())
-                    .unwrap_or_else(|| (0..vertex_count as u32).collect());
-                let converted = convert_indices_for_mode(raw, mode);
-                if converted.is_empty() {
-                    // Sin triángulos: `None` se interpretaría como lista implícita
-                    continue;
-                }
-                Some(IndexData::U32(converted))
-            };
-
             primitives.push(Primitive {
                 attributes,
                 indices,
@@ -475,6 +487,92 @@ fn import_meshes(
             primitives,
         });
     }
+    Ok(())
+}
+
+/// Decodifica una primitiva `KHR_draco_mesh_compression`.
+fn draco_primitive(
+    doc: &gltf::Document,
+    buffers: &[gltf::buffer::Data],
+    prim: &gltf::mesh::Primitive,
+    ext: &serde_json::Value,
+) -> Result<(Vec<VertexAttribute>, Option<IndexData>), GltfImportError> {
+    use draco_core::{DecoderBuffer, FaceIndex, Mesh as DracoMesh, MeshDecoder};
+
+    let invalid = |msg: &str| GltfImportError::Draco(msg.to_string());
+    let view = ext["bufferView"]
+        .as_u64()
+        .and_then(|i| doc.views().nth(i as usize))
+        .ok_or_else(|| invalid("bufferView ausente"))?;
+    let data = buffers
+        .get(view.buffer().index())
+        .and_then(|b| b.get(view.offset()..view.offset() + view.length()))
+        .ok_or_else(|| invalid("bufferView fuera del buffer"))?;
+
+    let mut mesh = DracoMesh::new();
+    MeshDecoder::new()
+        .decode(&mut DecoderBuffer::new(data), &mut mesh)
+        .map_err(|e| GltfImportError::Draco(format!("{e:?}")))?;
+    let num_points = mesh.num_points();
+
+    // Atributo por id único, leído como f32 en orden de punto
+    let read = |name: &str, components: usize| -> Option<Vec<f32>> {
+        let id = ext["attributes"][name].as_u64()? as u32;
+        let attribute = (0..mesh.num_attributes()).map(|i| mesh.attribute(i)).find(|a| a.unique_id() == id)?;
+        Some(attribute.read_f32s(num_points, components))
+    };
+    let vec3 = |v: Vec<f32>| v.as_chunks::<3>().0.to_vec();
+    let vec4 = |v: Vec<f32>| v.as_chunks::<4>().0.to_vec();
+
+    let positions = read("POSITION", 3).ok_or_else(|| invalid("sin POSITION"))?;
+    let mut attributes = vec![VertexAttribute::Positions(vec3(positions))];
+    // Atributos sin comprimir de la misma primitiva (permitido por la extensión)
+    let reader = prim.reader(|buf| Some(&buffers[buf.index()]));
+    if let Some(v) = read("NORMAL", 3) {
+        attributes.push(VertexAttribute::Normals(vec3(v)));
+    } else if let Some(iter) = reader.read_normals() {
+        attributes.push(VertexAttribute::Normals(iter.collect()));
+    }
+    if let Some(v) = read("TANGENT", 4) {
+        attributes.push(VertexAttribute::Tangents(vec4(v)));
+    }
+    for set in 0..4u32 {
+        match read(&format!("TEXCOORD_{set}"), 2) {
+            Some(v) => attributes.push(VertexAttribute::TexCoords(
+                set,
+                v.as_chunks::<2>().0.to_vec(),
+            )),
+            None => break,
+        }
+    }
+    if let Some(v) = read("COLOR_0", 4) {
+        attributes.push(VertexAttribute::Colors(vec4(v)));
+    }
+    if let Some(v) = read("JOINTS_0", 4) {
+        let joints = v
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| c.map(|j| j as u16))
+            .collect();
+        attributes.push(VertexAttribute::JointIndices(joints));
+    }
+    if let Some(v) = read("WEIGHTS_0", 4) {
+        // La cuantización deja sumas de 0.9998: glTF exige 1 (±2e-7 por peso)
+        let weights = vec4(v)
+            .into_iter()
+            .map(|w| {
+                let sum: f32 = w.iter().sum();
+                if sum > 0.0 { w.map(|x| x / sum) } else { w }
+            })
+            .collect();
+        attributes.push(VertexAttribute::JointWeights(weights));
+    }
+
+    let indices = (0..mesh.num_faces())
+        .flat_map(|f| mesh.face(FaceIndex(f as u32)).map(|p| p.0))
+        .collect();
+    Ok((attributes, Some(IndexData::U32(indices))))
 }
 
 /// Convierte TriangleStrip o TriangleFan a lista de triángulos.
@@ -1180,19 +1278,8 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn draco_required_error() {
-        let positions: [[f32; 3]; 3] = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]];
-        let indices: [u16; 3] = [0, 1, 2];
-
-        let mut bin = Vec::new();
-        for p in &positions {
-            for &v in p { bin.extend_from_slice(&v.to_le_bytes()); }
-        }
-        for &i in &indices {
-            bin.extend_from_slice(&i.to_le_bytes());
-        }
-        while bin.len() % 4 != 0 { bin.push(0); }
-
+    fn corrupt_draco_data_is_an_error() {
+        let bin = vec![0u8; 16];
         let json = serde_json::json!({
             "asset": { "version": "2.0" },
             "extensionsUsed": ["KHR_draco_mesh_compression"],
@@ -1203,33 +1290,25 @@ mod tests {
             "meshes": [{
                 "primitives": [{
                     "attributes": { "POSITION": 0 },
-                    "indices": 1
+                    "indices": 1,
+                    "extensions": { "KHR_draco_mesh_compression": {
+                        "bufferView": 0, "attributes": { "POSITION": 0 }
+                    }}
                 }]
             }],
             "accessors": [
-                { "bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3",
+                { "componentType": 5126, "count": 3, "type": "VEC3",
                   "max": [1.0, 1.0, 0.0], "min": [0.0, 0.0, 0.0] },
-                { "bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR",
-                  "max": [2], "min": [0] }
+                { "componentType": 5123, "count": 3, "type": "SCALAR" }
             ],
-            "bufferViews": [
-                { "buffer": 0, "byteOffset": 0, "byteLength": 36 },
-                { "buffer": 0, "byteOffset": 36, "byteLength": 6 }
-            ],
+            "bufferViews": [{ "buffer": 0, "byteOffset": 0, "byteLength": 16 }],
             "buffers": [{ "byteLength": bin.len() }]
         });
 
         let glb = build_glb_from_json_bin(&json, &bin);
         let (_dir, path) = write_glb(&glb);
-        let result = import_gltf(&path);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(
-            err.to_string().contains("KHR_draco_mesh_compression"),
-            "error debería mencionar Draco: {}",
-            err
-        );
+        let err = import_gltf(&path).unwrap_err();
+        assert!(matches!(err, GltfImportError::Draco(_)), "{err}");
     }
 
     // -----------------------------------------------------------------------

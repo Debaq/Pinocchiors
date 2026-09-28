@@ -10,7 +10,7 @@ use wasm_bindgen::prelude::*;
 /// # Argumentos
 /// - `input_bytes`: bytes del archivo de entrada
 /// - `input_format`: formato de entrada ("glb", "stl")
-/// - `output_format`: formato de salida ("glb", "usda", "usdz", "stl")
+/// - `output_format`: formato de salida ("glb", "usda", "usdz", "stl", "ply", "3mf")
 /// - `options_json`: opciones en formato JSON (opcional)
 ///
 /// # Retorna
@@ -50,7 +50,7 @@ pub fn import_to_json(input_bytes: &[u8], format: &str) -> Result<String, JsErro
 // de wasm, y así se puede testear de forma nativa.
 
 const IMPORT_FORMATS: &[&str] = &["glb", "stl"];
-const EXPORT_FORMATS: &[&str] = &["glb", "usda", "usdz", "stl"];
+const EXPORT_FORMATS: &[&str] = &["glb", "usda", "usdz", "stl", "ply", "3mf"];
 
 fn convert_impl(
     input_bytes: &[u8],
@@ -98,6 +98,7 @@ struct WasmOptions {
     generate_normals: bool,
     flatten_transforms: bool,
     strip_unused: bool,
+    draco: bool,
 }
 
 fn parse_options(json: Option<&str>) -> Result<WasmOptions, String> {
@@ -142,6 +143,7 @@ fn parse_options(json: Option<&str>) -> Result<WasmOptions, String> {
         generate_normals: v.get("generate_normals").and_then(|v| v.as_bool()).unwrap_or(false),
         flatten_transforms: v.get("flatten_transforms").and_then(|v| v.as_bool()).unwrap_or(false),
         strip_unused: v.get("strip_unused").and_then(|v| v.as_bool()).unwrap_or(false),
+        draco: v.get("draco").and_then(|v| v.as_bool()).unwrap_or(false),
     })
 }
 
@@ -169,6 +171,8 @@ fn export_scene(
         scale_factor: options.scale_factor,
         export_animations: options.export_animations,
         strip_unused: options.strip_unused,
+        draco: options.draco.then(converter_gltf_io::DracoOptions::default),
+        ..Default::default()
     };
 
     match format.to_ascii_lowercase().as_str() {
@@ -180,6 +184,8 @@ fn export_scene(
             .map_err(|e| e.to_string()),
         "usdz" => converter_usda::write_usdz_bytes(scene, &usda_opts).map_err(|e| e.to_string()),
         "stl" => converter_stl::export_stl_bytes(scene).map_err(|e| e.to_string()),
+        "ply" => converter_ply::export_ply_bytes(scene).map_err(|e| e.to_string()),
+        "3mf" => converter_3mf::export_3mf_bytes(scene).map_err(|e| e.to_string()),
         _ => Err(format!("formato de exportación no soportado: {}", format)),
     }
 }

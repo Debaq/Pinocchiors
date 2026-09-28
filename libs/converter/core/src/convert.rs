@@ -28,6 +28,10 @@ pub enum ConvertError {
     ObjImport(#[from] converter_obj::ObjImportError),
     #[error("error OBJ export: {0}")]
     ObjExport(#[from] converter_obj::ObjExportError),
+    #[error("error PLY export: {0}")]
+    PlyExport(#[from] converter_ply::PlyExportError),
+    #[error("error 3MF export: {0}")]
+    ThreeMfExport(#[from] converter_3mf::ThreeMfExportError),
     #[error("error USDA: {0}")]
     Usda(#[from] converter_usda::UsdaWriteError),
     #[error("error USDZ: {0}")]
@@ -98,7 +102,12 @@ pub fn export(
 
     match format {
         Format::Gltf => {
-            converter_gltf_io::export_glb(scene, path, &glb_opts)?;
+            let separate = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("gltf"));
+            if separate {
+                converter_gltf_io::export_gltf(scene, path, &glb_opts)?;
+            } else {
+                converter_gltf_io::export_glb(scene, path, &glb_opts)?;
+            }
         }
         Format::Usda => {
             let output = converter_usda::write_usda(scene, &usda_opts)?;
@@ -113,6 +122,8 @@ pub fn export(
         Format::Obj => {
             converter_obj::export_obj(scene, path)?;
         }
+        Format::Ply => converter_ply::export_ply(scene, path)?,
+        Format::ThreeMf => converter_3mf::export_3mf(scene, path)?,
     }
 
     Ok(())
@@ -135,7 +146,7 @@ pub fn import_bytes(data: &[u8], format: Format) -> Result<Scene, ConvertError> 
 
 /// Exporta una escena a bytes en memoria.
 ///
-/// Soporta: GLB (`Format::Gltf`), USDA, USDZ y STL. OBJ no, porque sus
+/// Soporta: GLB (`Format::Gltf`), USDA, USDZ, STL, PLY y 3MF. OBJ no, porque sus
 /// materiales y texturas van en archivos aparte.
 pub fn export_bytes(
     scene: &Scene,
@@ -153,6 +164,8 @@ pub fn export_bytes(
         }
         Format::Usdz => Ok(converter_usda::write_usdz_bytes(scene, &options.to_usda_options())?),
         Format::Stl => Ok(converter_stl::export_stl_bytes(scene)?),
+        Format::Ply => Ok(converter_ply::export_ply_bytes(scene)?),
+        Format::ThreeMf => Ok(converter_3mf::export_3mf_bytes(scene)?),
         _ => Err(ConvertError::ExportNotSupported(format.name().to_string())),
     }
 }
@@ -307,6 +320,26 @@ mod tests {
     fn export_usda_bytes() {
         let bytes = export_bytes(&triangle_scene(), Format::Usda, &ConvertOptions::default()).unwrap();
         assert!(String::from_utf8(bytes).unwrap().starts_with("#usda 1.0"));
+    }
+
+    #[test]
+    fn gltf_extension_writes_separate_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("modelo.gltf");
+        export(&triangle_scene(), &path, &ConvertOptions::default()).unwrap();
+        let json = std::fs::read(&path).unwrap();
+        assert_eq!(json[0], b'{', "debe ser JSON, no GLB");
+        assert!(dir.path().join("modelo.bin").exists());
+        assert!(import(&path).is_ok());
+    }
+
+    #[test]
+    fn draco_option_reaches_glb() {
+        let opts = ConvertOptions { draco: Some(crate::DracoOptions::default()), ..Default::default() };
+        let glb = export_bytes(&triangle_scene(), Format::Gltf, &opts).unwrap();
+        let text = String::from_utf8_lossy(&glb);
+        assert!(text.contains("KHR_draco_mesh_compression"));
+        assert!(import_bytes(&glb, Format::Gltf).is_ok());
     }
 
     #[test]

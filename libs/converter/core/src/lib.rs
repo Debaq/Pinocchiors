@@ -22,6 +22,7 @@ mod convert;
 
 pub use format::Format;
 pub use options::ConvertOptions;
+pub use converter_gltf_io::{DracoOptions, Simplification};
 pub use convert::{convert, import, export, import_bytes, export_bytes, ConvertError};
 
 // Re-export completo de converter-scene para que consumidores no necesiten

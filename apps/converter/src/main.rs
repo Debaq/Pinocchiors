@@ -62,11 +62,27 @@ struct Cli {
     #[arg(long)]
     strip_unused: bool,
 
+    /// Comprimir la geometría con Draco (glTF/GLB).
+    #[arg(long)]
+    draco: bool,
+
+    /// Nivel de compresión Draco 0-10 (implica `--draco`).
+    #[arg(long, value_parser = clap::value_parser!(u8).range(0..=10))]
+    draco_level: Option<u8>,
+
+    /// Fracción de triángulos a conservar, 0-1 (glTF/GLB).
+    #[arg(long)]
+    simplify: Option<f32>,
+
+    /// Error máximo de la reducción, relativo al tamaño del modelo.
+    #[arg(long, default_value = "0.01", requires = "simplify")]
+    simplify_error: f32,
+
     /// Modo batch: convertir varios archivos de entrada (requiere `--format`).
     #[arg(long)]
     batch: bool,
 
-    /// Formato de salida: glb, usda, usdz, stl, obj. Obligatorio si no se da
+    /// Formato de salida: glb, gltf, usda, usdz, stl, obj, ply, 3mf. Obligatorio si no se da
     /// archivo de salida y en modo batch.
     #[arg(long)]
     format: Option<String>,
@@ -82,7 +98,7 @@ fn parse_format(format: &str) -> Result<String, String> {
     match Format::from_extension(Path::new("x").with_extension(&ext)) {
         Some(f) if f.can_export() => Ok(ext),
         _ => Err(format!(
-            "formato de salida no soportado: {format} (usa glb, usda, usdz, stl u obj)"
+            "formato de salida no soportado: {format} (usa glb, gltf, usda, usdz, stl, obj, ply o 3mf)"
         )),
     }
 }
@@ -147,6 +163,14 @@ fn main() {
         generate_normals: cli.generate_normals,
         flatten_transforms: cli.flatten_transforms,
         strip_unused: cli.strip_unused,
+        simplify: cli.simplify.map(|ratio| converter_core::Simplification {
+            ratio,
+            max_error: cli.simplify_error,
+        }),
+        draco: (cli.draco || cli.draco_level.is_some()).then(|| converter_core::DracoOptions {
+            compression_level: cli.draco_level.unwrap_or(7),
+            ..Default::default()
+        }),
     };
 
     let jobs = match plan(&cli) {

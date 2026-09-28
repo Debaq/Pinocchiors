@@ -7,10 +7,12 @@ description = "Unified facade for 3D format conversion"
 
 [dependencies]
 converter-scene = { workspace = true }
-converter-gltf-io = { workspace = true }
+converter-gltf-io = { workspace = true, features = ["simplify"] }
 converter-usda = { workspace = true }
 converter-stl = { workspace = true }
 converter-obj = { workspace = true }
+converter-ply = { workspace = true }
+converter-3mf = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

@@ -1,3 +1,4 @@
+use crate::draco;
 use crate::geometry;
 use crate::options::GlbExportOptions;
 use crate::texture_process;
@@ -21,6 +22,10 @@ pub enum GlbExportError {
     Json(#[from] serde_json::Error),
     #[error("error procesando textura: {0}")]
     TextureProcess(String),
+    #[error("compresión Draco falló: {0}")]
+    Draco(String),
+    #[error("opción no disponible en esta compilación: {0}")]
+    Unsupported(&'static str),
 }
 
 /// Exporta una `Scene` a un archivo GLB en disco.
@@ -43,10 +48,47 @@ pub fn export_glb_bytes(
     scene: &Scene,
     options: &GlbExportOptions,
 ) -> Result<Vec<u8>, GlbExportError> {
-    let scene = preprocess_scene(scene, options);
+    let (root, bin) = build_document(scene, options)?;
+    pack_glb(root, bin)
+}
+
+/// Exporta una `Scene` como glTF separado: `path` (JSON) y un `.bin` con el
+/// mismo nombre al lado, que guarda geometría, animación e imágenes.
+///
+/// Retorna la ruta del `.bin` escrito.
+pub fn export_gltf(
+    scene: &Scene,
+    path: impl AsRef<Path>,
+    options: &GlbExportOptions,
+) -> Result<std::path::PathBuf, GlbExportError> {
+    let path = path.as_ref();
+    let bin_path = path.with_extension("bin");
+    let (mut root, bin) = build_document(scene, options)?;
+    if !bin.is_empty() {
+        let name = bin_path.file_name().and_then(|n| n.to_str()).unwrap_or("scene.bin");
+        root["buffers"][0]["uri"] = json!(percent_encode(name));
+        std::fs::write(&bin_path, &bin)?;
+    }
+    std::fs::write(path, serde_json::to_vec_pretty(&root)?)?;
+    Ok(bin_path)
+}
+
+/// Codifica los caracteres que una URI relativa no admite tal cual
+fn percent_encode(name: &str) -> String {
+    name.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
+
+/// Documento glTF (JSON) y su buffer binario.
+fn build_document(scene: &Scene, options: &GlbExportOptions) -> Result<(Value, Vec<u8>), GlbExportError> {
+    let scene = preprocess_scene(scene, options)?;
 
     let mut builder = GlbBuilder::new(options);
-    builder.write_meshes(&scene);
+    builder.write_meshes(&scene)?;
     builder.write_materials(&scene);
     builder.write_textures(&scene)?;
     builder.write_nodes(&scene);
@@ -57,12 +99,47 @@ pub fn export_glb_bytes(
     builder.build()
 }
 
+/// Empaqueta JSON y buffer en un GLB (header + chunk JSON + chunk BIN).
+fn pack_glb(root: Value, bin: Vec<u8>) -> Result<Vec<u8>, GlbExportError> {
+    let mut json_bytes = serde_json::to_vec(&root)?;
+    // Pad JSON a 4 bytes con espacios (spec GLB)
+    while json_bytes.len() % 4 != 0 {
+        json_bytes.push(b' ');
+    }
+
+    let has_bin = !bin.is_empty();
+    let total_length = 12
+        + 8 + json_bytes.len()
+        + if has_bin { 8 + bin.len() } else { 0 };
+
+    let mut glb = Vec::with_capacity(total_length);
+
+    // Header (12 bytes)
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&(total_length as u32).to_le_bytes());
+
+    // JSON chunk
+    glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+    glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
+    glb.extend_from_slice(&json_bytes);
+
+    // BIN chunk
+    if has_bin {
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
+        glb.extend_from_slice(&bin);
+    }
+
+    Ok(glb)
+}
+
 /// Preprocesa la escena según las opciones activas.
-fn preprocess_scene(scene: &Scene, options: &GlbExportOptions) -> Scene {
+fn preprocess_scene(scene: &Scene, options: &GlbExportOptions) -> Result<Scene, GlbExportError> {
     // glTF usa metros: convertir si la escena está en otra unidad (p. ej. STL en mm)
     let to_meters = scene.meters_per_unit;
     if !options.needs_preprocessing() && to_meters == 1.0 {
-        return scene.clone();
+        return Ok(scene.clone());
     }
 
     let mut scene = scene.clone();
@@ -93,17 +170,37 @@ fn preprocess_scene(scene: &Scene, options: &GlbExportOptions) -> Scene {
         }
     }
 
-    // 5. Strip unused
+    // 5. Reducir triángulos
+    if let Some(simplification) = &options.simplify {
+        simplify_scene(&mut scene, simplification)?;
+    }
+
+    // 6. Strip unused
     if options.strip_unused {
         strip_unused_data(&mut scene);
     }
 
-    // 6. Eliminar animaciones si no se exportan
+    // 7. Eliminar animaciones si no se exportan
     if !options.export_animations {
         scene.animations.clear();
     }
 
-    scene
+    Ok(scene)
+}
+
+#[cfg(feature = "simplify")]
+fn simplify_scene(scene: &mut Scene, options: &crate::options::Simplification) -> Result<(), GlbExportError> {
+    for mesh in &mut scene.meshes {
+        for prim in &mut mesh.primitives {
+            crate::simplify::simplify_primitive(prim, options);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(feature = "simplify"))]
+fn simplify_scene(_: &mut Scene, _: &crate::options::Simplification) -> Result<(), GlbExportError> {
+    Err(GlbExportError::Unsupported("reducción de triángulos (feature `simplify`)"))
 }
 
 /// Elimina materiales y texturas no referenciados por ninguna primitiva.
@@ -221,6 +318,7 @@ struct GlbBuilder<'a> {
     skins: Vec<Value>,
     animations: Vec<Value>,
     extensions_used: Vec<String>,
+    extensions_required: Vec<String>,
     /// Mapa: skeleton index → (primer nodo de joint en nodes[], cantidad de joints)
     skin_joint_offsets: Vec<(usize, usize)>,
 }
@@ -240,6 +338,7 @@ impl<'a> GlbBuilder<'a> {
             skins: Vec::new(),
             animations: Vec::new(),
             extensions_used: Vec::new(),
+            extensions_required: Vec::new(),
             skin_joint_offsets: Vec::new(),
         }
     }
@@ -266,6 +365,16 @@ impl<'a> GlbBuilder<'a> {
         let idx = self.buffer_views.len();
         self.buffer_views.push(bv);
         idx
+    }
+
+    /// Declara una extensión; `required` si un lector sin ella no puede mostrar el modelo.
+    fn use_extension(&mut self, name: &str, required: bool) {
+        if !self.extensions_used.iter().any(|e| e == name) {
+            self.extensions_used.push(name.to_string());
+        }
+        if required && !self.extensions_required.iter().any(|e| e == name) {
+            self.extensions_required.push(name.to_string());
+        }
     }
 
     /// Crea un accessor y retorna su índice.
@@ -299,11 +408,19 @@ impl<'a> GlbBuilder<'a> {
     // Meshes
     // -----------------------------------------------------------------------
 
-    fn write_meshes(&mut self, scene: &Scene) {
+    fn write_meshes(&mut self, scene: &Scene) -> Result<(), GlbExportError> {
         for mesh in &scene.meshes {
             let mut primitives_json = Vec::new();
 
             for prim in &mesh.primitives {
+                if let Some(draco_options) = &self.options.draco {
+                    let mut prim_json = self.write_draco_primitive(prim, draco_options)?;
+                    if let Some(mat_idx) = prim.material {
+                        prim_json["material"] = json!(mat_idx);
+                    }
+                    primitives_json.push(prim_json);
+                    continue;
+                }
                 let mut attributes = serde_json::Map::new();
 
                 for attr in &prim.attributes {
@@ -393,6 +510,61 @@ impl<'a> GlbBuilder<'a> {
             }
             self.meshes.push(mesh_json);
         }
+        Ok(())
+    }
+
+    /// Primitiva comprimida con Draco: los accessors describen los datos
+    /// decodificados y no apuntan a ningún bufferView.
+    fn write_draco_primitive(
+        &mut self,
+        prim: &converter_scene::Primitive,
+        options: &crate::options::DracoOptions,
+    ) -> Result<Value, GlbExportError> {
+        let encoded = draco::encode_primitive(prim, options).map_err(GlbExportError::Draco)?;
+        let bv = self.push_buffer_view(&encoded.bytes, None);
+        self.use_extension(draco::EXTENSION, true);
+
+        let mut attributes = serde_json::Map::new();
+        for attr in &prim.attributes {
+            let (name, component_type, accessor_type, bounds) = match attr {
+                VertexAttribute::Positions(p) => ("POSITION".to_string(), 5126, "VEC3", Some(compute_vec3_bounds(p))),
+                VertexAttribute::Normals(_) => ("NORMAL".to_string(), 5126, "VEC3", None),
+                VertexAttribute::Tangents(_) => ("TANGENT".to_string(), 5126, "VEC4", None),
+                VertexAttribute::TexCoords(set, _) => (format!("TEXCOORD_{set}"), 5126, "VEC2", None),
+                VertexAttribute::Colors(_) => ("COLOR_0".to_string(), 5126, "VEC4", None),
+                VertexAttribute::JointIndices(_) => ("JOINTS_0".to_string(), 5123, "VEC4", None),
+                VertexAttribute::JointWeights(_) => ("WEIGHTS_0".to_string(), 5126, "VEC4", None),
+            };
+            let mut accessor = json!({
+                "componentType": component_type,
+                "count": encoded.num_points,
+                "type": accessor_type,
+            });
+            if let Some((min, max)) = bounds {
+                accessor["min"] = json!(min);
+                accessor["max"] = json!(max);
+            }
+            attributes.insert(name, json!(self.accessors.len()));
+            self.accessors.push(accessor);
+        }
+
+        let index_type = if encoded.num_points > u16::MAX as usize { 5125 } else { 5123 };
+        let indices = self.accessors.len();
+        self.accessors.push(json!({
+            "componentType": index_type,
+            "count": encoded.num_indices,
+            "type": "SCALAR",
+        }));
+
+        let ids: serde_json::Map<String, Value> =
+            encoded.attribute_ids.into_iter().map(|(name, id)| (name, json!(id))).collect();
+        Ok(json!({
+            "attributes": Value::Object(attributes),
+            "indices": indices,
+            "extensions": {
+                draco::EXTENSION: { "bufferView": bv, "attributes": ids }
+            }
+        }))
     }
 
     // -----------------------------------------------------------------------
@@ -464,9 +636,7 @@ impl<'a> GlbBuilder<'a> {
                 mat_json["extensions"] = json!({
                     "KHR_materials_unlit": {}
                 });
-                if !self.extensions_used.contains(&"KHR_materials_unlit".to_string()) {
-                    self.extensions_used.push("KHR_materials_unlit".to_string());
-                }
+                self.use_extension("KHR_materials_unlit", false);
             }
 
             self.materials.push(mat_json);
@@ -475,13 +645,13 @@ impl<'a> GlbBuilder<'a> {
 
     fn write_textures(&mut self, scene: &Scene) -> Result<(), GlbExportError> {
         for tex in &scene.textures {
-            let (data, mime) = if self.options.needs_texture_processing() {
+            // WebP no es parte del núcleo de glTF: process_texture lo pasa a PNG
+            let (data, mime) = if self.options.needs_texture_processing() || tex.format == TextureFormat::WebP {
                 texture_process::process_texture(tex, self.options)?
             } else {
                 let mime = match tex.format {
                     TextureFormat::Png => "image/png",
-                    TextureFormat::Jpeg => "image/jpeg",
-                    TextureFormat::WebP => "image/webp",
+                    _ => "image/jpeg",
                 };
                 (tex.data.clone(), mime)
             };
@@ -731,7 +901,7 @@ impl<'a> GlbBuilder<'a> {
     // Build GLB
     // -----------------------------------------------------------------------
 
-    fn build(self) -> Result<Vec<u8>, GlbExportError> {
+    fn build(self) -> Result<(Value, Vec<u8>), GlbExportError> {
         let mut root = json!({
             "asset": { "version": "2.0", "generator": "converter-gltf-io" },
         });
@@ -765,6 +935,9 @@ impl<'a> GlbBuilder<'a> {
         }
         if !self.extensions_used.is_empty() {
             root["extensionsUsed"] = json!(self.extensions_used);
+        }
+        if !self.extensions_required.is_empty() {
+            root["extensionsRequired"] = json!(self.extensions_required);
         }
 
         // Scene + scenes — recopilar root_nodes de los nodos que NO son joints de skins
@@ -810,37 +983,7 @@ impl<'a> GlbBuilder<'a> {
             root["buffers"] = json!([{ "byteLength": bin_padded.len() }]);
         }
 
-        let mut json_bytes = serde_json::to_vec(&root)?;
-        // Pad JSON a 4 bytes con espacios (spec GLB)
-        while json_bytes.len() % 4 != 0 {
-            json_bytes.push(b' ');
-        }
-
-        let has_bin = !bin_padded.is_empty();
-        let total_length = 12
-            + 8 + json_bytes.len()
-            + if has_bin { 8 + bin_padded.len() } else { 0 };
-
-        let mut glb = Vec::with_capacity(total_length);
-
-        // Header (12 bytes)
-        glb.extend_from_slice(b"glTF");
-        glb.extend_from_slice(&2u32.to_le_bytes());
-        glb.extend_from_slice(&(total_length as u32).to_le_bytes());
-
-        // JSON chunk
-        glb.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
-        glb.extend_from_slice(&0x4E4F534Au32.to_le_bytes());
-        glb.extend_from_slice(&json_bytes);
-
-        // BIN chunk
-        if has_bin {
-            glb.extend_from_slice(&(bin_padded.len() as u32).to_le_bytes());
-            glb.extend_from_slice(&0x004E4942u32.to_le_bytes());
-            glb.extend_from_slice(&bin_padded);
-        }
-
-        Ok(glb)
+        Ok((root, bin_padded))
     }
 }
 
@@ -939,6 +1082,114 @@ mod tests {
         });
         scene.root_nodes.push(0);
         scene
+    }
+
+    /// Esfera UV con normales y UVs: suficientes vértices para comprimir
+    fn sphere_scene(rings: u32) -> Scene {
+        let segments = rings * 2;
+        let (mut positions, mut normals, mut uvs) = (Vec::new(), Vec::new(), Vec::new());
+        for r in 0..=rings {
+            let theta = std::f32::consts::PI * r as f32 / rings as f32;
+            for sgm in 0..=segments {
+                let phi = std::f32::consts::TAU * sgm as f32 / segments as f32;
+                let n = [theta.sin() * phi.cos(), theta.cos(), theta.sin() * phi.sin()];
+                positions.push(n);
+                normals.push(n);
+                uvs.push([sgm as f32 / segments as f32, r as f32 / rings as f32]);
+            }
+        }
+        let mut indices = Vec::new();
+        for r in 0..rings {
+            for sgm in 0..segments {
+                let a = r * (segments + 1) + sgm;
+                let b = a + segments + 1;
+                indices.extend_from_slice(&[a, b, a + 1, a + 1, b, b + 1]);
+            }
+        }
+        let mut scene = triangle_scene();
+        scene.meshes[0].primitives[0] = Primitive {
+            attributes: vec![
+                VertexAttribute::Positions(positions),
+                VertexAttribute::Normals(normals),
+                VertexAttribute::TexCoords(0, uvs),
+            ],
+            indices: Some(IndexData::U32(indices)),
+            material: None,
+        };
+        scene
+    }
+
+    fn glb_json(glb: &[u8]) -> Value {
+        let len = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        serde_json::from_slice(&glb[20..20 + len]).unwrap()
+    }
+
+    fn triangles(scene: &Scene) -> usize {
+        scene.meshes[0].primitives[0].indices.as_ref().map_or(0, |i| match i {
+            IndexData::U16(v) => v.len(),
+            IndexData::U32(v) => v.len(),
+        }) / 3
+    }
+
+    #[test]
+    fn gltf_export_writes_json_and_bin() {
+        let scene = sphere_scene(8);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mi modelo.gltf");
+        let bin = export_gltf(&scene, &path, &GlbExportOptions::default()).unwrap();
+        assert_eq!(bin, dir.path().join("mi modelo.bin"));
+        let json: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(json["buffers"][0]["uri"], "mi%20modelo.bin");
+        let imported = crate::import_gltf(&path).unwrap();
+        assert_eq!(triangles(&imported), triangles(&scene));
+    }
+
+    #[test]
+    fn draco_export_is_smaller_and_reimports() {
+        let scene = sphere_scene(32);
+        let plain = export_glb_bytes(&scene, &GlbExportOptions::default()).unwrap();
+        let options = GlbExportOptions { draco: Some(crate::DracoOptions::default()), ..Default::default() };
+        let compressed = export_glb_bytes(&scene, &options).unwrap();
+        assert!(compressed.len() * 3 < plain.len(), "{} vs {}", compressed.len(), plain.len());
+
+        let json = glb_json(&compressed);
+        assert_eq!(json["extensionsRequired"], json!(["KHR_draco_mesh_compression"]));
+        let prim = &json["meshes"][0]["primitives"][0];
+        let ext = &prim["extensions"]["KHR_draco_mesh_compression"];
+        assert!(ext["bufferView"].is_u64());
+        assert!(ext["attributes"]["TEXCOORD_0"].is_u64());
+        // Los accessors describen los datos decodificados, sin bufferView
+        let position = &json["accessors"][prim["attributes"]["POSITION"].as_u64().unwrap() as usize];
+        assert!(position.get("bufferView").is_none());
+        assert!(position["min"].is_array());
+
+        let imported = crate::import_gltf_bytes(&compressed).unwrap();
+        assert_eq!(triangles(&imported), triangles(&scene));
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("draco.glb");
+        std::fs::write(&path, &compressed).unwrap();
+        let imported = crate::import_gltf(&path).unwrap();
+        let prim = &imported.meshes[0].primitives[0];
+        assert_eq!(prim.attributes.len(), 3);
+        for attr in &prim.attributes {
+            if let VertexAttribute::Positions(p) = attr {
+                // Siguen sobre la esfera unitaria (cuantizadas)
+                assert!(p.iter().all(|v| ((v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() - 1.0).abs() < 1e-3));
+            }
+        }
+    }
+
+    #[cfg(feature = "simplify")]
+    #[test]
+    fn simplify_option_reduces_triangles() {
+        let scene = sphere_scene(32);
+        let options = GlbExportOptions {
+            simplify: Some(crate::Simplification { ratio: 0.25, max_error: 0.05 }),
+            ..Default::default()
+        };
+        let glb = export_glb_bytes(&scene, &options).unwrap();
+        let imported = crate::import_gltf_bytes(&glb).unwrap();
+        assert!(triangles(&imported) <= triangles(&scene) / 3);
     }
 
     #[test]

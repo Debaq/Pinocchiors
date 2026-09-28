@@ -25,6 +25,10 @@ pub struct ConvertOptions {
     pub flatten_transforms: bool,
     /// Eliminar materiales/texturas no referenciados.
     pub strip_unused: bool,
+    /// Reducir triángulos (solo glTF/GLB). `None` = geometría intacta.
+    pub simplify: Option<converter_gltf_io::Simplification>,
+    /// Compresión Draco (solo glTF/GLB). `None` = sin comprimir.
+    pub draco: Option<converter_gltf_io::DracoOptions>,
 }
 
 impl Default for ConvertOptions {
@@ -42,6 +46,8 @@ impl Default for ConvertOptions {
             generate_normals: false,
             flatten_transforms: false,
             strip_unused: false,
+            simplify: None,
+            draco: None,
         }
     }
 }
@@ -71,6 +77,8 @@ impl ConvertOptions {
             scale_factor: self.scale_factor,
             export_animations: self.export_animations,
             strip_unused: self.strip_unused,
+            simplify: self.simplify,
+            draco: self.draco,
         }
     }
 }

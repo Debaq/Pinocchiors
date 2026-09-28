@@ -63,18 +63,7 @@ fn deduplicate_vertices(prim: &mut Primitive) {
         return; // No hay duplicados
     }
 
-    // Reindexar atributos
-    for attr in &mut prim.attributes {
-        match attr {
-            VertexAttribute::Positions(v) => *v = reindex_vec3(v, &unique_indices),
-            VertexAttribute::Normals(v) => *v = reindex_vec3(v, &unique_indices),
-            VertexAttribute::Tangents(v) => *v = reindex_vec4(v, &unique_indices),
-            VertexAttribute::TexCoords(_, v) => *v = reindex_vec2(v, &unique_indices),
-            VertexAttribute::Colors(v) => *v = reindex_vec4(v, &unique_indices),
-            VertexAttribute::JointIndices(v) => *v = reindex_u16x4(v, &unique_indices),
-            VertexAttribute::JointWeights(v) => *v = reindex_vec4(v, &unique_indices),
-        }
-    }
+    reindex_attributes(prim, &unique_indices);
 
     // Remapear índices
     match &mut prim.indices {
@@ -164,6 +153,40 @@ fn append_u16x4(key: &mut Vec<u8>, v: &[u16; 4]) {
 }
 
 // -- Helpers para reindexación --
+
+/// Deja en cada atributo solo los vértices de `indices`, en ese orden.
+pub(crate) fn reindex_attributes(prim: &mut Primitive, indices: &[usize]) {
+    for attr in &mut prim.attributes {
+        match attr {
+            VertexAttribute::Positions(v) => *v = reindex_vec3(v, indices),
+            VertexAttribute::Normals(v) => *v = reindex_vec3(v, indices),
+            VertexAttribute::Tangents(v) => *v = reindex_vec4(v, indices),
+            VertexAttribute::TexCoords(_, v) => *v = reindex_vec2(v, indices),
+            VertexAttribute::Colors(v) => *v = reindex_vec4(v, indices),
+            VertexAttribute::JointIndices(v) => *v = reindex_u16x4(v, indices),
+            VertexAttribute::JointWeights(v) => *v = reindex_vec4(v, indices),
+        }
+    }
+}
+
+/// Índices de la primitiva como u32 (secuenciales si no tiene).
+pub(crate) fn indices_u32(prim: &Primitive) -> Vec<u32> {
+    match &prim.indices {
+        Some(IndexData::U16(idx)) => idx.iter().map(|&i| i as u32).collect(),
+        Some(IndexData::U32(idx)) => idx.clone(),
+        None => (0..vertex_count(prim) as u32).collect(),
+    }
+}
+
+pub(crate) fn vertex_count(prim: &Primitive) -> usize {
+    prim.attributes
+        .iter()
+        .find_map(|a| match a {
+            VertexAttribute::Positions(p) => Some(p.len()),
+            _ => None,
+        })
+        .unwrap_or(0)
+}
 
 fn reindex_vec3(data: &[[f32; 3]], indices: &[usize]) -> Vec<[f32; 3]> {
     indices.iter().map(|&i| data[i]).collect()

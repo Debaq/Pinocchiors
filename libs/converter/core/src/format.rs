@@ -1,10 +1,12 @@
 use std::path::Path;
 
 /// Todos los formatos disponibles.
-const ALL_FORMATS: [Format; 5] = [
+const ALL_FORMATS: [Format; 7] = [
     Format::Gltf,
     Format::Stl,
     Format::Obj,
+    Format::Ply,
+    Format::ThreeMf,
     Format::Usda,
     Format::Usdz,
 ];
@@ -17,6 +19,8 @@ pub enum Format {
     Usdz,
     Stl,
     Obj,
+    Ply,
+    ThreeMf,
 }
 
 impl Format {
@@ -34,6 +38,8 @@ impl Format {
             "usdz" => Some(Format::Usdz),
             "stl" => Some(Format::Stl),
             "obj" => Some(Format::Obj),
+            "ply" => Some(Format::Ply),
+            "3mf" => Some(Format::ThreeMf),
             _ => None,
         }
     }
@@ -46,6 +52,8 @@ impl Format {
             Format::Usdz => "USDZ",
             Format::Stl => "STL",
             Format::Obj => "OBJ",
+            Format::Ply => "PLY",
+            Format::ThreeMf => "3MF",
         }
     }
 
@@ -57,6 +65,8 @@ impl Format {
             Format::Usdz => &["usdz"],
             Format::Stl => &["stl"],
             Format::Obj => &["obj"],
+            Format::Ply => &["ply"],
+            Format::ThreeMf => &["3mf"],
         }
     }
 
@@ -68,6 +78,8 @@ impl Format {
             Format::Usdz => "Universal Scene Description (paquete AR)",
             Format::Stl => "Stereolithography",
             Format::Obj => "Wavefront OBJ",
+            Format::Ply => "Stanford Polygon (escaneo, color por vértice)",
+            Format::ThreeMf => "3D Manufacturing Format (impresión 3D)",
         }
     }
 
@@ -78,7 +90,7 @@ impl Format {
 
     /// Indica si el formato soporta exportación.
     pub fn can_export(self) -> bool {
-        matches!(self, Format::Gltf | Format::Usda | Format::Usdz | Format::Stl | Format::Obj)
+        true
     }
 
     /// Indica si el formato soporta operaciones en memoria (bytes).
@@ -88,7 +100,7 @@ impl Format {
 
     /// Indica si el formato soporta exportación a bytes en memoria.
     pub fn can_export_bytes(self) -> bool {
-        matches!(self, Format::Gltf | Format::Usda | Format::Usdz | Format::Stl)
+        !matches!(self, Format::Obj)
     }
 
     /// Todos los formatos disponibles.
@@ -119,6 +131,8 @@ mod tests {
         assert_eq!(Format::from_extension("scene.usdz"), Some(Format::Usdz));
         assert_eq!(Format::from_extension("mesh.stl"), Some(Format::Stl));
         assert_eq!(Format::from_extension("mesh.obj"), Some(Format::Obj));
+        assert_eq!(Format::from_extension("scan.PLY"), Some(Format::Ply));
+        assert_eq!(Format::from_extension("pieza.3mf"), Some(Format::ThreeMf));
         assert_eq!(Format::from_extension("unknown.fbx"), None);
         assert_eq!(Format::from_extension("no_extension"), None);
     }
@@ -136,8 +150,11 @@ mod tests {
         assert_eq!(importable, vec![Format::Gltf, Format::Stl, Format::Obj]);
 
         let exportable: Vec<Format> = Format::exportable().collect();
-        assert_eq!(exportable, vec![Format::Gltf, Format::Stl, Format::Obj, Format::Usda, Format::Usdz]);
+        assert_eq!(
+            exportable,
+            vec![Format::Gltf, Format::Stl, Format::Obj, Format::Ply, Format::ThreeMf, Format::Usda, Format::Usdz]
+        );
 
-        assert_eq!(Format::all().len(), 5);
+        assert_eq!(Format::all().len(), 7);
     }
 }

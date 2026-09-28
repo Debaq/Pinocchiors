@@ -21,6 +21,8 @@ members = [
     "libs/converter/usda",
     "libs/converter/stl",
     "libs/converter/obj",
+    "libs/converter/ply",
+    "libs/converter/threemf",
     "libs/converter/core",
     "libs/converter/wasm",
     # Apps
@@ -47,7 +49,7 @@ petgraph = "0.7"
 
 # I/O mallas
 tobj = "4.0"
-gltf = { version = "1.4", features = ["KHR_materials_unlit", "KHR_texture_transform", "KHR_materials_pbrSpecularGlossiness"] }
+gltf = { version = "1.4", features = ["KHR_materials_unlit", "KHR_texture_transform", "KHR_materials_pbrSpecularGlossiness", "extensions"] }
 stl_io = "0.10"
 
 # 3D math (ligero, para converter)
@@ -55,6 +57,10 @@ glam = "0.29"
 
 # Procesamiento de texturas
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+
+# Compresión Draco (Rust puro) y reducción de triángulos
+draco-core = { version = "2.2", default-features = false, features = ["encoder", "decoder", "edgebreaker_valence_encode", "edgebreaker_valence_decode"] }
+meshopt = "0.6"
 
 # Empaquetado USDZ
 zip = { version = "4", default-features = false }
@@ -96,10 +102,12 @@ quadriflow-core = { path = "libs/quadriflow/core" }
 
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }
-converter-gltf-io = { path = "libs/converter/gltf-io" }
+converter-gltf-io = { path = "libs/converter/gltf-io", default-features = false }
 converter-usda = { path = "libs/converter/usda" }
 converter-stl = { path = "libs/converter/stl" }
 converter-obj = { path = "libs/converter/obj" }
+converter-ply = { path = "libs/converter/ply" }
+converter-3mf = { path = "libs/converter/threemf" }
 converter-core = { path = "libs/converter/core" }
 
 # CLI

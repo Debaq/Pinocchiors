@@ -13,6 +13,8 @@ converter-scene = { workspace = true }
 converter-gltf-io = { workspace = true }
 converter-usda = { workspace = true }
 converter-stl = { workspace = true }
+converter-ply = { workspace = true }
+converter-3mf = { workspace = true }
 wasm-bindgen = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
