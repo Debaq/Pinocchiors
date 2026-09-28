@@ -56,6 +56,15 @@ pub struct HoleFillReport {
 
 /// Rellena los agujeros de la malla según `config`.
 pub fn fill_holes(mesh: &mut TriMesh, config: &HoleFillConfig) -> HoleFillReport {
+    fill_holes_with_progress(mesh, config, |_, _| {})
+}
+
+/// Como [`fill_holes`], llamando `progress(hechos, total)` tras cada agujero.
+pub fn fill_holes_with_progress(
+    mesh: &mut TriMesh,
+    config: &HoleFillConfig,
+    mut progress: impl FnMut(usize, usize),
+) -> HoleFillReport {
     let topo = EdgeTopology::build(&mesh.triangles);
     let loops = topology::boundary_loops(&mesh.triangles, &topo);
     let mut report = HoleFillReport::default();
@@ -72,7 +81,8 @@ pub fn fill_holes(mesh: &mut TriMesh, config: &HoleFillConfig) -> HoleFillReport
     let mut new_vertices = Vec::new();
     let mut new_faces = Vec::new();
 
-    for hole in &loops {
+    for (done, hole) in loops.iter().enumerate() {
+        progress(done, loops.len());
         let piece = topo
             .find(hole.vertices[0], hole.vertices[1 % hole.vertices.len()])
             .map(|e| component_area[component[topo.faces(e)[0].face]])

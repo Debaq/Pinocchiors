@@ -56,9 +56,21 @@ pub fn analyze(mesh: &Mesh, config: &AnalysisConfig) -> MeshDiagnostics {
 
 /// Repara una malla en su lugar. Ver [`repair_trimesh`].
 pub fn repair_all(mesh: &mut Mesh, config: &RepairConfig) -> RepairResult<RepairSummary> {
+    repair_all_with_progress(mesh, config, |_, _| {})
+}
+
+/// Como [`repair_all`], informando el avance: `progress(fracción 0..=1, etapa)`.
+pub fn repair_all_with_progress(
+    mesh: &mut Mesh,
+    config: &RepairConfig,
+    mut progress: impl FnMut(f32, &str),
+) -> RepairResult<RepairSummary> {
+    progress(0.0, "Preparando malla");
     let mut trimesh = TriMesh::from_mesh(mesh);
-    let summary = repair_trimesh(&mut trimesh, config)?;
+    let summary = repair_trimesh_with_progress(&mut trimesh, config, |f, stage| progress(0.02 + 0.9 * f, stage))?;
+    progress(0.93, "Reconstruyendo malla");
     *mesh = trimesh.to_mesh();
+    progress(1.0, "Listo");
     Ok(summary)
 }
 
@@ -79,16 +91,27 @@ pub fn repair_all(mesh: &mut Mesh, config: &RepairConfig) -> RepairResult<Repair
 ///
 /// [`RepairError::EmptyMesh`] si la malla no tiene caras.
 pub fn repair_trimesh(mesh: &mut TriMesh, config: &RepairConfig) -> RepairResult<RepairSummary> {
+    repair_trimesh_with_progress(mesh, config, |_, _| {})
+}
+
+/// Como [`repair_trimesh`], informando el avance: `progress(fracción 0..=1, etapa)`.
+pub fn repair_trimesh_with_progress(
+    mesh: &mut TriMesh,
+    config: &RepairConfig,
+    mut progress: impl FnMut(f32, &str),
+) -> RepairResult<RepairSummary> {
     if mesh.num_faces() == 0 {
         return Err(RepairError::EmptyMesh);
     }
     let mut summary = RepairSummary::default();
     let diagonal = mesh.diagonal();
 
+    progress(0.0, "Eliminando caras inválidas");
     summary.invalid_faces_removed = cleanup::remove_invalid_faces(mesh);
     summary.faces_removed += summary.invalid_faces_removed;
 
     if config.merge_duplicates {
+        progress(0.03, "Soldando costuras");
         let (merged, collapsed) = cleanup::weld_vertices(mesh, config.merge_tolerance * diagonal);
         summary.vertices_merged = merged;
         summary.degenerate_fixed += collapsed;
@@ -96,17 +119,20 @@ pub fn repair_trimesh(mesh: &mut TriMesh, config: &RepairConfig) -> RepairResult
     }
 
     if config.remove_degenerates {
+        progress(0.15, "Corrigiendo caras degeneradas");
         let before = mesh.num_faces();
         summary.degenerate_fixed += cleanup::fix_degenerate_faces(mesh, config.degenerate_tolerance * diagonal);
         summary.faces_removed += before.saturating_sub(mesh.num_faces());
     }
 
     if config.remove_duplicate_faces {
+        progress(0.25, "Eliminando caras repetidas");
         summary.duplicate_faces_removed = cleanup::remove_duplicate_faces(mesh);
         summary.faces_removed += summary.duplicate_faces_removed;
     }
 
     if config.fix_normals || config.fix_non_manifold {
+        progress(0.30, "Orientando y separando geometría non-manifold");
         let report = manifold::orient_and_split(mesh, config.fix_normals, config.fix_non_manifold);
         summary.faces_flipped += report.faces_flipped;
         summary.non_manifold_fixed = report.vertices_split;
@@ -122,13 +148,17 @@ pub fn repair_trimesh(mesh: &mut TriMesh, config: &RepairConfig) -> RepairResult
     }
 
     if config.remove_small_components {
+        progress(0.50, "Eliminando piezas sueltas");
         let (components, faces) = cleanup::remove_small_components(mesh, config.small_component_ratio);
         summary.components_removed = components;
         summary.faces_removed += faces;
     }
 
     if config.fill_holes {
-        let report = holes::fill_holes(mesh, &config.hole_fill_config);
+        progress(0.55, "Rellenando agujeros");
+        let report = holes::fill_holes_with_progress(mesh, &config.hole_fill_config, |done, total| {
+            progress(0.55 + 0.35 * done as f32 / total.max(1) as f32, &format!("Rellenando agujeros ({done}/{total})"));
+        });
         summary.holes_filled = report.filled;
         summary.holes_skipped = report.skipped;
         summary.faces_added = report.faces_added;
@@ -136,10 +166,12 @@ pub fn repair_trimesh(mesh: &mut TriMesh, config: &RepairConfig) -> RepairResult
     }
 
     if config.orient_outward {
+        progress(0.90, "Orientando normales hacia afuera");
         summary.faces_flipped += orient::orient_outward(mesh);
     }
 
     mesh.remove_unreferenced_vertices();
+    progress(1.0, "Listo");
     Ok(summary)
 }
 
