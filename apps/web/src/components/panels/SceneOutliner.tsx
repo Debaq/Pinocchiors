@@ -107,22 +107,16 @@ const OutlinerNode: Component<{
 export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
   return (
     <div class="space-y-0.5">
-      <div class="flex items-center gap-1.5 px-2 pb-1.5">
-        <Icons.SidebarSimple size={12} class="text-text-muted" />
-        <span class="text-xs font-semibold text-text-muted uppercase tracking-wider">Outliner</span>
-      </div>
-      <div class="max-h-48 overflow-y-auto">
-        <For each={props.tree.children}>
-          {(node) => (
-            <OutlinerNode
-              node={node}
-              depth={0}
-              onToggleVisibility={props.onToggleVisibility}
-              onSelectNode={props.onSelectNode}
-            />
-          )}
-        </For>
-      </div>
+      <For each={props.tree.children}>
+        {(node) => (
+          <OutlinerNode
+            node={node}
+            depth={0}
+            onToggleVisibility={props.onToggleVisibility}
+            onSelectNode={props.onSelectNode}
+          />
+        )}
+      </For>
     </div>
   );
 };

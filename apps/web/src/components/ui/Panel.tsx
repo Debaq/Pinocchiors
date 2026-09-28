@@ -1,8 +1,11 @@
 import { JSX, ParentComponent, createSignal, splitProps, Show } from "solid-js";
 import { clsx } from "clsx";
+import { createPersisted } from "../../lib/ui-state";
 
 export interface PanelProps {
   title: string;
+  /** Si se da, el panel recuerda si quedó abierto o cerrado */
+  id?: string;
   icon?: JSX.Element;
   defaultOpen?: boolean;
   collapsible?: boolean;
@@ -13,6 +16,7 @@ export interface PanelProps {
 export const Panel: ParentComponent<PanelProps> = (props) => {
   const [local, _rest] = splitProps(props, [
     "title",
+    "id",
     "icon",
     "defaultOpen",
     "collapsible",
@@ -21,7 +25,9 @@ export const Panel: ParentComponent<PanelProps> = (props) => {
     "children",
   ]);
 
-  const [isOpen, setIsOpen] = createSignal(local.defaultOpen ?? true);
+  const [isOpen, setIsOpen] = local.id
+    ? createPersisted(`panel.${local.id}`, local.defaultOpen ?? true)
+    : createSignal(local.defaultOpen ?? true);
 
   const toggleOpen = () => {
     if (local.collapsible !== false) {

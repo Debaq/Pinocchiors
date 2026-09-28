@@ -12,7 +12,7 @@ export interface LightsPanelProps {
 export const LightsPanel: Component<LightsPanelProps> = (props) => {
   const update = (partial: Partial<LightSettings>) => props.onChange?.({ ...props.lights, ...partial });
   return (
-    <Panel title="Luces" icon={<Icons.Lightning size={14} />} defaultOpen={false}>
+    <Panel id="lights" title="Luces" icon={<Icons.Lightning size={14} />} defaultOpen>
       <div class="space-y-4 pt-1">
         <p class="text-xs text-text-muted leading-relaxed">
           Mantén <span class="text-text">L</span> y arrastra con clic izquierdo en el visor: gira la luz principal alrededor

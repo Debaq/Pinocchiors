@@ -35,7 +35,7 @@ export const ViewPanel: Component<ViewPanelProps> = (props) => {
   };
 
   return (
-    <Panel title="Visualización" icon={<Icons.Eye size={14} />} defaultOpen>
+    <Panel id="view" title="Visualización" icon={<Icons.Eye size={14} />} defaultOpen>
       <div class="space-y-3">
         {/* Checkboxes */}
         <div class="space-y-2">

@@ -4,6 +4,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
+import * as Icons from "./components/icons";
 import { PipelineBar } from "./components/pipeline";
 import {
   type SkeletonPreset,
@@ -46,7 +47,7 @@ import { createPipelineStore } from "./lib/pipeline";
 import { buildSceneTree } from "./lib/scene-tree";
 import type { ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
-import { createShortcutManager } from "./lib/shortcuts";
+import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
@@ -489,35 +490,44 @@ export const App: Component = () => {
   // Shortcuts
   const shortcuts = createShortcutManager();
 
+  const shortcutDefs: ShortcutDef[] = [
+    { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
+    { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
+    { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
+    // Como en Blender: G y R son operaciones modales sobre la articulación
+    // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
+    { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
+    { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
+    { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
+    { key: " ", action: () => viewerRef?.resetView(), description: "Ver todo" },
+    { key: ".", action: () => viewerRef?.focusSelection(), description: "Centrar en la selección" },
+    {
+      key: "f",
+      action: () => (paintSettings() ? viewerRef?.startModal("radius") : viewerRef?.focusSelection()),
+      description: "Radio del pincel / centrar",
+    },
+    { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), description: "Intensidad del pincel" },
+    { key: "n", action: () => setShowContextPanel(!showContextPanel()), description: "Mostrar/ocultar panel" },
+    { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
+    { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
+    { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
+    { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), description: "Vista trasera" },
+    { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), description: "Vista izquierda" },
+    { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
+    { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
+  ];
+
+  // Para la pestaña de atajos del panel derecho
+  const keyName = (key: string) => (key === " " ? "Espacio" : key.length === 1 ? key.toUpperCase() : key);
+  const shortcutHints = shortcutDefs.map((d) => ({
+    keys: [d.ctrl && "Ctrl", d.shift && "Shift", d.alt && "Alt", keyName(d.key)].filter(Boolean).join("+"),
+    description: d.description,
+  }));
+
   // Load presets on mount
   onMount(async () => {
     // Register keyboard shortcuts
-    shortcuts.register([
-      { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
-      { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
-      { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
-      // Como en Blender: G y R son operaciones modales sobre la articulación
-      // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
-      { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
-      { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
-      { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
-      { key: " ", action: () => viewerRef?.resetView(), description: "Ver todo" },
-      { key: ".", action: () => viewerRef?.focusSelection(), description: "Centrar en la selección" },
-      {
-        key: "f",
-        action: () => (paintSettings() ? viewerRef?.startModal("radius") : viewerRef?.focusSelection()),
-        description: "Radio del pincel / centrar",
-      },
-      { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), description: "Intensidad del pincel" },
-      { key: "n", action: () => setShowContextPanel(!showContextPanel()), description: "Toggle panel" },
-      { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
-      { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
-      { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
-      { key: "1", ctrl: true, action: () => viewerRef?.setView("back"), description: "Vista trasera" },
-      { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), description: "Vista izquierda" },
-      { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
-      { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
-    ]);
+    shortcuts.register(shortcutDefs);
     shortcuts.attach();
 
     try {
@@ -1511,6 +1521,18 @@ export const App: Component = () => {
             </Show>
 
             <ProgressOverlay progress={progress()} />
+
+            {/* Con el panel derecho oculto, una pestaña para traerlo de vuelta */}
+            <Show when={!showContextPanel()}>
+              <button
+                class="absolute top-1/2 -translate-y-1/2 right-0 z-10 w-5 h-10 flex items-center justify-center rounded-l-md bg-bg-lighter border border-r-0 border-border text-text-muted hover:text-text"
+                onClick={() => setShowContextPanel(true)}
+                title="Mostrar panel (N)"
+                aria-label="Mostrar panel"
+              >
+                <Icons.CaretRight size={12} class="rotate-180" />
+              </button>
+            </Show>
           </div>
 
           {/* Context Panel (right sidebar) */}
@@ -1650,6 +1672,16 @@ export const App: Component = () => {
             sceneTree={meshLoaded() ? sceneTree() : undefined}
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
+            stats={{
+              fileName: fileName(),
+              format: meshInfo().format,
+              vertices: meshLoaded() ? meshInfo().vertices : undefined,
+              faces: meshLoaded() ? meshInfo().faces : undefined,
+              quads: quadMeshLoaded() ? quadMeshInfo().quads : undefined,
+              bones: skeletonData()?.bones.length,
+            }}
+            shortcuts={shortcutHints}
+            onHide={() => setShowContextPanel(false)}
           />
           </Show>
         </div>
