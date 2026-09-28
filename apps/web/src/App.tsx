@@ -24,6 +24,7 @@ import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
 import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
+import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -45,6 +46,13 @@ interface TauriSkeletonPreset {
   name: string;
   description: string;
   num_bones: number;
+}
+
+interface TauriAutoFitResult {
+  skeleton: TauriSkeletonData;
+  quality: number;
+  extremities: number;
+  unused_extremities: [number, number, number][];
 }
 
 interface TauriSkeletonData {
@@ -299,6 +307,9 @@ export const App: Component = () => {
   // Skeleton transform
   const defaultTransform: SkeletonTransform = { scale: 1, translation: [0, 0, 0], rotation: [0, 0, 0] };
   const [skeletonTransform, setSkeletonTransform] = createSignal<SkeletonTransform>({ ...defaultTransform });
+  // Edición del esqueleto
+  const [symmetricEdit, setSymmetricEdit] = createSignal(true);
+  const [fitInfo, setFitInfo] = createSignal<SkeletonFitInfo | undefined>();
   const [boneEditMode, setBoneEditMode] = createSignal(false);
 
   // Active tool
@@ -476,6 +487,7 @@ export const App: Component = () => {
       const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonLoaded(true);
+      setFitInfo(undefined);
 
       const preset = skeletonPresets().find((p) => p.id === presetId);
       if (preset) {
@@ -945,10 +957,20 @@ export const App: Component = () => {
 
   const handleAutoFit = async () => {
     try {
-      const data = await busy("Ajustando esqueleto...", () => invoke<TauriSkeletonData>("auto_fit_skeleton"));
-      setSkeletonData(tauriSkeletonToViewer(data));
+      const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
+        invoke<TauriAutoFitResult>("auto_fit_skeleton")
+      );
+      setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
       setSkeletonTransform({ ...defaultTransform });
-      setStatusMessage("Esqueleto ajustado al modelo");
+      setAutorigComplete(false);
+      setFitInfo({
+        quality: fit.quality,
+        extremities: fit.extremities,
+        unusedExtremities: fit.unused_extremities.length,
+      });
+      setStatusMessage(
+        `Esqueleto ajustado: ${fit.extremities} extremidades, proporciones ${Math.round(fit.quality * 100)} %`
+      );
     } catch (e) {
       console.error("Auto-fit error:", e);
       setStatusMessage(`Error: ${e}`);
@@ -974,11 +996,34 @@ export const App: Component = () => {
       const data = await invoke<TauriSkeletonData>("move_bone", {
         boneIndex: index,
         position,
+        mirror: symmetricEdit(),
       });
       setSkeletonData(tauriSkeletonToViewer(data));
     } catch (e) {
       console.error("Move bone error:", e);
     }
+  };
+
+  /** Centra en el volumen la articulación seleccionada, o todas */
+  const handleCenterBones = async (onlySelected: boolean) => {
+    const selected = viewSettings().selectedBone;
+    try {
+      const data = await busy("Centrando articulaciones...", () =>
+        invoke<TauriSkeletonData>("center_bones", { bones: onlySelected && selected >= 0 ? [selected] : null })
+      );
+      setSkeletonData(tauriSkeletonToViewer(data));
+      setSkeletonTransform({ ...defaultTransform });
+      setAutorigComplete(false);
+      setStatusMessage(onlySelected ? "Articulación centrada en el miembro" : "Articulaciones centradas");
+    } catch (e) {
+      console.error("Center bones error:", e);
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  const useTool = (tool: ToolId) => {
+    setActiveTool(tool);
+    setBoneEditMode(tool !== "select");
   };
 
   const handleBoneSelected = (index: number) => {
@@ -1154,7 +1199,18 @@ export const App: Component = () => {
               skeletonTransform: skeletonTransform(),
               onTransformChange: handleTransformChange,
               onAutoFit: handleAutoFit,
+              fitInfo: fitInfo(),
               onResetTransform: handleResetTransform,
+              editing: boneEditMode() && activeTool() === "move",
+              onEdit: () => useTool("move"),
+              symmetric: symmetricEdit(),
+              onSymmetricChange: setSymmetricEdit,
+              selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
+              onCenterSelected: () => handleCenterBones(true),
+              onCenterAll: () => handleCenterBones(false),
+              posing: boneEditMode() && activeTool() === "rotate",
+              onPose: () => useTool("rotate"),
+              onResetPose: () => viewerRef?.resetPose(),
             }}
             print3dProps={{
               onAnalyze: handleAnalyzePrint3d,

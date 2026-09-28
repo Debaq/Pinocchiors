@@ -20,6 +20,7 @@ pinocchio-mesh = { workspace = true, features = ["converter"] }
 pinocchio-skeleton = { workspace = true, features = ["converter"] }
 pinocchio-math = { workspace = true }
 pinocchio-attachment = { workspace = true }
+pinocchio-embedding = { workspace = true }
 
 # Converter - Multi-format I/O
 converter-scene = { workspace = true }

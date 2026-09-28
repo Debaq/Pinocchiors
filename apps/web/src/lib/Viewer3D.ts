@@ -115,6 +115,16 @@ export class Viewer3D {
   // Data
   private meshData: MeshData | null = null;
   private weightsData: WeightsData | null = null;
+  private skeletonData: SkeletonData | null = null;
+
+  /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
+  private pose: {
+    joint: number;
+    positions: Float32Array;
+    normals: Float32Array;
+    /** Huesos que se mueven (descendientes de la articulación) */
+    moving: boolean[];
+  } | null = null;
 
   // Settings
   private settings: ViewerSettings = {
@@ -269,6 +279,7 @@ export class Viewer3D {
   }
 
   loadMesh(data: MeshData): void {
+    this.resetPose();
     this.meshData = data;
     this.clearMesh();
 
@@ -358,6 +369,19 @@ export class Viewer3D {
   }
 
   loadSkeleton(data: SkeletonData): void {
+    this.resetPose();
+    const sameStructure =
+      this.skeletonData !== null &&
+      this.boneSpheres.length === data.bones.length &&
+      data.bones.every((b, i) => b.parent === this.skeletonData!.bones[i].parent);
+    this.skeletonData = data;
+    // Misma estructura (mover un hueso, centrar, espejo): actualizar en el
+    // lugar, así el gizmo sigue enganchado a su esfera durante el arrastre
+    if (sameStructure) {
+      data.bones.forEach((bone, i) => this.boneSpheres[i].position.set(...bone.position));
+      this.updateBoneLines();
+      return;
+    }
     this.clearSkeleton();
     this.boneSpheres = [];
 
@@ -366,7 +390,7 @@ export class Viewer3D {
     this.skeletonGroup.add(bonesGroup);
 
     // Joint spheres
-    const jointGeometry = new THREE.SphereGeometry(0.02, 16, 16);
+    const jointGeometry = new THREE.SphereGeometry(this.jointRadius(), 16, 16);
     const jointMaterial = new THREE.MeshBasicMaterial({ color: 0xffb86c }); // Dracula orange
     const leafMaterial = new THREE.MeshBasicMaterial({ color: 0x50fa7b }); // Dracula green
 
@@ -377,6 +401,7 @@ export class Viewer3D {
       sphere.position.set(bone.position[0], bone.position[1], bone.position[2]);
       sphere.userData.boneName = bone.name;
       sphere.userData.boneIndex = i;
+      sphere.userData.isLeaf = bone.isLeaf;
       bonesGroup.add(sphere);
       this.boneSpheres.push(sphere);
     }
@@ -405,9 +430,137 @@ export class Viewer3D {
     }
 
     this.skeletonGroup.visible = this.settings.showSkeleton;
+    // Las esferas son nuevas: volver a marcar (y enganchar) la seleccionada
+    if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
+      this.selectBone(this.selectedBoneIndex);
+    } else {
+      this.transformControls?.detach();
+    }
+  }
+
+  /** Radio de las esferas de las articulaciones, proporcional a la malla */
+  private jointRadius(): number {
+    if (!this.currentMesh) return 0.02;
+    const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
+    return Math.max(size.length() * 0.006, 1e-4);
+  }
+
+  /** Redibuja las líneas de los huesos con las posiciones de las esferas */
+  private updateBoneLines(): void {
+    const lines = this.skeletonGroup.getObjectByName("boneLines") as THREE.LineSegments | undefined;
+    if (!lines || !this.skeletonData) return;
+    const attr = lines.geometry.getAttribute("position") as THREE.BufferAttribute;
+    this.skeletonData.edges.forEach(([parent, child], k) => {
+      const a = this.boneSpheres[parent].position;
+      const b = this.boneSpheres[child].position;
+      attr.setXYZ(2 * k, a.x, a.y, a.z);
+      attr.setXYZ(2 * k + 1, b.x, b.y, b.z);
+    });
+    attr.needsUpdate = true;
+    lines.geometry.computeBoundingSphere();
+  }
+
+  /**
+   * Pose de prueba: gira la articulación `joint` y deforma la malla con los
+   * pesos (skinning lineal), para ver si los pesos doblan bien. El peso de un
+   * hueso es el de su segmento padre → hueso, así que se mueven los huesos
+   * descendientes de la articulación.
+   */
+  private applyPose(joint: number, rotation: THREE.Quaternion): void {
+    const mesh = this.meshData;
+    const weights = this.weightsData;
+    const skeleton = this.skeletonData;
+    if (!mesh || !weights || !skeleton || weights.numVertices * 3 !== mesh.positions.length) return;
+
+    if (!this.pose || this.pose.joint !== joint) {
+      this.resetPose();
+      const moving = skeleton.bones.map((_, b) => {
+        for (let p = skeleton.bones[b].parent; p !== null; p = skeleton.bones[p].parent) {
+          if (p === joint) return true;
+        }
+        return false;
+      });
+      this.pose = { joint, positions: mesh.positions.slice(), normals: mesh.normals.slice(), moving };
+    }
+    const { positions: rest, normals: restNormals, moving } = this.pose;
+    const center = this.boneSpheres[joint].position.clone();
+    const p = new THREE.Vector3();
+    const n = new THREE.Vector3();
+    const k = weights.maxInfluences;
+    for (let v = 0; v < weights.numVertices; v++) {
+      let w = 0;
+      for (let i = 0; i < k; i++) {
+        const bone = weights.weights[(v * k + i) * 2];
+        if (moving[bone]) w += weights.weights[(v * k + i) * 2 + 1];
+      }
+      const o = 3 * v;
+      if (w <= 0) {
+        mesh.positions[o] = rest[o];
+        mesh.positions[o + 1] = rest[o + 1];
+        mesh.positions[o + 2] = rest[o + 2];
+        mesh.normals[o] = restNormals[o];
+        mesh.normals[o + 1] = restNormals[o + 1];
+        mesh.normals[o + 2] = restNormals[o + 2];
+        continue;
+      }
+      p.set(rest[o], rest[o + 1], rest[o + 2]).sub(center).applyQuaternion(rotation).add(center);
+      mesh.positions[o] = rest[o] + w * (p.x - rest[o]);
+      mesh.positions[o + 1] = rest[o + 1] + w * (p.y - rest[o + 1]);
+      mesh.positions[o + 2] = rest[o + 2] + w * (p.z - rest[o + 2]);
+      n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(rotation);
+      n.set(
+        restNormals[o] + w * (n.x - restNormals[o]),
+        restNormals[o + 1] + w * (n.y - restNormals[o + 1]),
+        restNormals[o + 2] + w * (n.z - restNormals[o + 2])
+      ).normalize();
+      mesh.normals[o] = n.x;
+      mesh.normals[o + 1] = n.y;
+      mesh.normals[o + 2] = n.z;
+    }
+    this.markMeshDirty();
+
+    // Articulaciones descendientes, giradas
+    skeleton.bones.forEach((bone, b) => {
+      if (!moving[b]) return;
+      p.set(...bone.position).sub(center).applyQuaternion(rotation).add(center);
+      this.boneSpheres[b].position.copy(p);
+    });
+    this.updateBoneLines();
+  }
+
+  /** Vuelve a la pose de reposo (malla y esqueleto) */
+  resetPose(): void {
+    const pose = this.pose;
+    this.pose = null;
+    if (!pose) return;
+    if (this.meshData && this.meshData.positions.length === pose.positions.length) {
+      this.meshData.positions.set(pose.positions);
+      this.meshData.normals.set(pose.normals);
+      this.markMeshDirty();
+    }
+    if (this.skeletonData) {
+      this.skeletonData.bones.forEach((bone, b) => this.boneSpheres[b]?.position.set(...bone.position));
+      this.boneSpheres[pose.joint]?.quaternion.identity();
+      this.updateBoneLines();
+    }
+  }
+
+  /** Hay una pose de prueba aplicada */
+  isPosed(): boolean {
+    return this.pose !== null;
+  }
+
+  private markMeshDirty(): void {
+    for (const mesh of [this.currentMesh, this.weightsMesh]) {
+      if (!mesh) continue;
+      mesh.geometry.getAttribute("position").needsUpdate = true;
+      mesh.geometry.getAttribute("normal").needsUpdate = true;
+      mesh.geometry.computeBoundingSphere();
+    }
   }
 
   loadWeights(data: WeightsData): void {
+    this.resetPose();
     this.weightsData = data;
     this.updateWeightsVisualization();
   }
@@ -456,8 +609,13 @@ export class Viewer3D {
         });
 
         this.transformControls.addEventListener("objectChange", () => {
-          if (this.selectedBoneIndex >= 0 && this.transformControls?.object) {
-            const pos = this.transformControls.object.position;
+          const object = this.transformControls?.object;
+          if (this.selectedBoneIndex < 0 || !object) return;
+          if (this.transformControls?.getMode() === "rotate") {
+            // Rotar una articulación con pesos calculados: pose de prueba
+            this.applyPose(this.selectedBoneIndex, object.quaternion);
+          } else {
+            const pos = object.position;
             this.callbacks.onBoneMoved?.(this.selectedBoneIndex, [pos.x, pos.y, pos.z]);
           }
         });
@@ -500,6 +658,7 @@ export class Viewer3D {
   }
 
   setActiveTool(tool: string): void {
+    if (tool !== "rotate") this.resetPose();
     if (!this.transformControls) return;
 
     switch (tool) {

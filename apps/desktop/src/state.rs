@@ -66,6 +66,14 @@ pub struct AppState {
     /// Transformación de gizmo aplicada sobre `original_skeleton`
     pub skeleton_transform: Mutex<SkeletonTransformParams>,
 
+    /// Preset elegido: la plantilla que parte de cero el ajuste automático,
+    /// aunque el esqueleto visible ya esté editado
+    pub skeleton_preset: Mutex<Option<SkeletonType>>,
+
+    /// Campo de distancias de la malla para centrar articulaciones (se
+    /// calcula la primera vez y se descarta si cambia la geometría)
+    pub joint_centering: Mutex<Option<std::sync::Arc<pinocchio_embedding::JointCentering>>>,
+
     /// Resultado del autorig
     pub result: Mutex<Option<PinocchioOutput>>,
 
@@ -105,6 +113,8 @@ impl AppState {
             skeleton: Mutex::new(None),
             original_skeleton: Mutex::new(None),
             skeleton_transform: Mutex::new(SkeletonTransformParams::default()),
+            skeleton_preset: Mutex::new(None),
+            joint_centering: Mutex::new(None),
             result: Mutex::new(None),
             quad_mesh: Mutex::new(None),
             quad_skin: Mutex::new(None),
@@ -134,6 +144,7 @@ impl AppState {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
         *self.quad_skin.lock().unwrap() = None;
+        *self.joint_centering.lock().unwrap() = None;
     }
 
     /// Descarta todo lo derivado de la malla actual (resultados, backups,
@@ -142,6 +153,7 @@ impl AppState {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
         *self.quad_skin.lock().unwrap() = None;
+        *self.joint_centering.lock().unwrap() = None;
         *self.diagnostics.lock().unwrap() = None;
         *self.mesh_before_repair.lock().unwrap() = None;
         *self.scene_before_repair.lock().unwrap() = None;

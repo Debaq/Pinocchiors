@@ -1,4 +1,4 @@
-import { Component } from "solid-js";
+import { Component, Show } from "solid-js";
 import { Panel, Slider, NumberInput, Button } from "../ui";
 import * as Icons from "../icons";
 
@@ -112,23 +112,26 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
 
         {/* Actions */}
         <div class="flex gap-2">
-          <Button
-            onClick={props.onAutoFit}
-            disabled={props.disabled}
-            variant="primary"
-            fullWidth
-          >
-            <span class="flex items-center gap-1.5">
-              <Icons.MagicWand size={14} />
-              Auto-fit
-            </span>
-          </Button>
+          <Show when={props.onAutoFit}>
+            <Button
+              onClick={props.onAutoFit}
+              disabled={props.disabled}
+              variant="primary"
+              fullWidth
+            >
+              <span class="flex items-center gap-1.5">
+                <Icons.MagicWand size={14} />
+                Auto-fit
+              </span>
+            </Button>
+          </Show>
           <Button
             onClick={props.onReset}
             disabled={props.disabled}
             variant="ghost"
+            fullWidth={!props.onAutoFit}
           >
-            Resetear
+            Volver al preset
           </Button>
         </div>
       </div>

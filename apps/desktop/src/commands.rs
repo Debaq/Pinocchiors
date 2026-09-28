@@ -9,7 +9,7 @@ use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, Pino
 use pinocchio_mesh::Mesh;
 use pinocchio_math::Vector3;
 use pinocchio_skeleton::{
-    fit_to_bounds, BasicSkeleton, BirdSkeleton, Bone, CentaurSkeleton, HorseSkeleton, HumanSkeleton,
+    BasicSkeleton, BirdSkeleton, Bone, CentaurSkeleton, HorseSkeleton, HumanSkeleton,
     MechSkeleton, QuadSkeleton, SerpentSkeleton, SpiderSkeleton, Skeleton,
 };
 use quadriflow_core::{remesh_with_callback, Rebuild, RemeshConfig, Symmetry};
@@ -1019,6 +1019,7 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
     let data = get_skeleton_data_for_type(&skeleton_type);
 
     // El preset pasa a ser la base, sin transformación de gizmo
+    *state.skeleton_preset.lock().unwrap() = Some(skeleton_type.clone());
     *state.skeleton.lock().unwrap() = Some(skeleton_type.clone());
     *state.original_skeleton.lock().unwrap() = Some(skeleton_type);
     *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
@@ -1123,11 +1124,14 @@ pub fn transform_skeleton(
     Ok(data)
 }
 
-/// Mueve un hueso individual (posición en coordenadas del esqueleto visible)
+/// Mueve un hueso individual (posición en coordenadas del esqueleto visible).
+/// Con `mirror`, su par del otro lado (`hand_l` ↔ `hand_r`) se mueve al
+/// reflejo en el plano de simetría del esqueleto.
 #[tauri::command]
 pub fn move_bone(
     bone_index: usize,
     position: [f64; 3],
+    mirror: Option<bool>,
     state: State<'_, AppState>,
 ) -> Result<SkeletonData, String> {
     let mut base = current_base(&state)?;
@@ -1136,9 +1140,19 @@ pub fn move_bone(
     }
     let params = *state.skeleton_transform.lock().unwrap();
 
-    // La base guarda la edición sin el gizmo, así sobrevive a cambios de transformación
-    let pos = Vector3::new(position[0], position[1], position[2]);
-    base.bones_mut()[bone_index].position = invert_gizmo(pos, &params);
+    // La base guarda la edición sin el gizmo, así sobrevive a cambios de transformación.
+    // El plano de simetría se mide en la base antes de mover (la base no tiene
+    // el giro del gizmo, así que el reflejo no depende de él)
+    let pos = invert_gizmo(Vector3::new(position[0], position[1], position[2]), &params);
+    let pair = mirror
+        .unwrap_or(false)
+        .then(|| pinocchio_skeleton::mirror_pairs(&base)[bone_index])
+        .flatten();
+    let plane = pair.and_then(|_| pinocchio_skeleton::symmetry_plane(&base));
+    base.bones_mut()[bone_index].position = pos;
+    if let (Some(pair), Some(plane)) = (pair, plane) {
+        base.bones_mut()[pair].position = pinocchio_skeleton::reflect(pos, plane);
+    }
 
     let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
     let data = skeleton_to_data(&skel);
@@ -1150,35 +1164,85 @@ pub fn move_bone(
     Ok(data)
 }
 
-/// Auto-ajusta el esqueleto al bounding box de la malla
+/// Resultado del ajuste automático
+#[derive(Debug, Clone, Serialize)]
+pub struct AutoFitResult {
+    pub skeleton: SkeletonData,
+    /// Similitud de proporciones con la plantilla (1 = idénticas)
+    pub quality: f64,
+    /// Extremidades detectadas en la malla
+    pub extremities: usize,
+    /// Puntas de extremidades que ningún hueso usa (trompa, orejas…)
+    pub unused_extremities: Vec<[f64; 3]>,
+}
+
+/// Ajusta el esqueleto a la malla: detecta las extremidades, busca la
+/// orientación de la plantilla y coloca cada articulación en el eje medial.
 ///
-/// Usa el mismo criterio que `autorig` con `SkeletonFit::Auto`, así el esqueleto
-/// que ve el usuario coincide con el que se embebe. El resultado pasa a ser la
-/// nueva base, sin transformación de gizmo.
+/// Parte del preset elegido (no de las ediciones) y usa el mismo algoritmo que
+/// `autorig`. El resultado pasa a ser la base editable, sin gizmo.
 #[tauri::command]
-pub async fn auto_fit_skeleton(app: AppHandle) -> Result<SkeletonData, String> {
+pub async fn auto_fit_skeleton(app: AppHandle) -> Result<AutoFitResult, String> {
     in_background(app, auto_fit_skeleton_impl).await
 }
 
-fn auto_fit_skeleton_impl(state: &AppState) -> Result<SkeletonData, String> {
-    let mesh_bbox = {
-        let mesh_lock = state.mesh.lock().unwrap();
-        mesh_lock.as_ref().ok_or("No hay malla cargada")?.bounding_box()
+fn auto_fit_skeleton_impl(state: &AppState) -> Result<AutoFitResult, String> {
+    let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+    let preset = state.skeleton_preset.lock().unwrap().clone();
+    let (template, fit) = match preset {
+        Some(preset) => (to_basic_skeleton(&preset), SkeletonFit::Auto),
+        None => {
+            let skeleton_lock = state.skeleton.lock().unwrap();
+            (to_basic_skeleton(skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?), SkeletonFit::None)
+        }
     };
-    let current = {
-        let skeleton_lock = state.skeleton.lock().unwrap();
-        to_basic_skeleton(skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?)
-    };
+    let report = pinocchio_core::fit_to_mesh(&mesh, &template, fit, 96).map_err(|e| format!("No se pudo ajustar: {e}"))?;
+    let data = skeleton_to_data(&report.skeleton);
+    let to_array = |p: Vector3| [p.x(), p.y(), p.z()];
 
-    let skel = fit_to_bounds(&current, &mesh_bbox, 0.9);
-    let data = skeleton_to_data(&skel);
-
-    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel.clone()));
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(report.skeleton.clone()));
     *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
-    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(report.skeleton));
     *state.result.lock().unwrap() = None;
 
-    Ok(data)
+    Ok(AutoFitResult {
+        skeleton: data,
+        quality: report.quality,
+        extremities: report.extremities.len(),
+        unused_extremities: report.unused_extremities.iter().map(|&e| to_array(report.extremities[e])).collect(),
+    })
+}
+
+/// Centra articulaciones en el volumen de la malla (en la sección del
+/// miembro, sin deslizarlas a lo largo). Sin `bones`, todas.
+#[tauri::command]
+pub async fn center_bones(app: AppHandle, bones: Option<Vec<usize>>) -> Result<SkeletonData, String> {
+    in_background(app, move |state| {
+        let centering = {
+            let mut cache = state.joint_centering.lock().unwrap();
+            if cache.is_none() {
+                let mesh_lock = state.mesh.lock().unwrap();
+                let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
+                *cache = Some(std::sync::Arc::new(pinocchio_embedding::JointCentering::new(mesh, 128)));
+            }
+            cache.clone().expect("recién calculado")
+        };
+        let visible = {
+            let skeleton_lock = state.skeleton.lock().unwrap();
+            to_basic_skeleton(skeleton_lock.as_ref().ok_or("No hay esqueleto seleccionado")?)
+        };
+        let joints = bones.unwrap_or_else(|| (0..visible.num_bones()).collect());
+        let centered = centering.center(&visible, &joints);
+        let data = skeleton_to_data(&centered);
+
+        // El resultado es la nueva base, sin gizmo
+        *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(centered.clone()));
+        *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+        *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(centered));
+        *state.result.lock().unwrap() = None;
+        Ok(data)
+    })
+    .await
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1219,9 +1283,9 @@ pub async fn run_autorig(
         pinocchio_config = pinocchio_config.with_max_influences(mi);
     }
     // Los presets son plantillas que autorig encaja en la malla; un esqueleto
-    // Custom ya fue colocado por el usuario sobre la malla y se respeta.
+    // Custom ya fue ajustado o editado sobre la malla y se usa tal cual.
     let pinocchio_config = pinocchio_config.with_skeleton_fit(match skeleton_type {
-        SkeletonType::Custom(_) => SkeletonFit::None,
+        SkeletonType::Custom(_) => SkeletonFit::Exact,
         _ => SkeletonFit::Auto,
     });
 

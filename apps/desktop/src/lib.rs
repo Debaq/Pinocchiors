@@ -32,6 +32,7 @@ pub fn run() {
             commands::transform_skeleton,
             commands::move_bone,
             commands::auto_fit_skeleton,
+            commands::center_bones,
             // Autorig
             commands::run_autorig,
             commands::get_weights_data,

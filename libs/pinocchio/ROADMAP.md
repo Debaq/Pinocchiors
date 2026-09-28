@@ -166,13 +166,18 @@ Cálculo de pesos de skinning via heat diffusion.
 | `mirror_weights()` | Copia pesos de un lado al otro |
 
 ### pinocchio-embedding
-Embedding del esqueleto dentro de la malla.
+Ajuste del esqueleto dentro de la malla.
 
 | Función | Descripción |
 |---------|-------------|
-| `embed_skeleton()` | Ajusta posiciones de huesos a la malla |
+| `fit_skeleton()` | Ajuste automático por extremidades con búsqueda de orientación (ver fase 8) |
+| `JointCentering` | Centra articulaciones en la sección del miembro (edición manual) |
+| `chain_embed()` | Embedding por cadenas anterior (se conserva, ya no lo usa `autorig`) |
 | Superficie medial | Aproximación del eje medial |
-| Fitting | Optimización de posiciones |
+
+**pinocchio-skeleton:** `mirror_pairs`, `symmetry_plane`, `reflect` para editar en espejo.
+**pinocchio-attachment:** `attach_detached_parts` hace rígidas las piezas sueltas sin huesos.
+**pinocchio-core:** `fit_to_mesh` (ajuste sin pesos, para revisar) y `SkeletonFit::{Auto, None, Exact}`.
 
 ### pinocchio-core
 API principal.
@@ -270,6 +275,68 @@ let result = autorig(&mesh, &skeleton, Some(PinocchioConfig::default()))?;
 - [ ] `wgpu` para campo de distancias
 - [ ] Compute shaders para heat diffusion
 - [ ] LOD automático
+
+### Fase 8: Ajuste de esqueleto y pesos ✅ (2026-09-28)
+
+El embedding por cadenas solo escalaba la plantilla a la caja de la malla y
+repartía las cadenas por cercanía a la plantilla: en el gonfoterio dejaba
+pecho, cuello y cabeza en un punto y cruzaba las patas.
+
+**Ajuste automático (`fit.rs`):**
+- Extremidades: Dijkstra desde la celda más profunda con costo `longitud / d²`;
+  se extrae la rama que más sobresale (distancia a su unión menos el radio
+  medial máximo en el camino) y se cubre el tubo alrededor de su camino (así la
+  celda vecina de la misma pata no es otra extremidad).
+- Orientación: 8 giros de la plantilla (Y o Z arriba), con sesgo a favor de la
+  estándar (Y arriba, mirando a +Z) para no invertir izquierda/derecha en
+  cuerpos casi simétricos.
+- Asignación húngara de extremos de la plantilla (hojas, y la raíz de una
+  cadena) a extremidades. Costo: distancia; altura solo para los extremos que
+  tocan el suelo (patas contra colmillos); dirección desde el centro;
+  prominencia; cabeza gruesa / cola fina (por nombre, grosor medido en el
+  tercio de la rama junto a la punta). Sin asignar cuesta 0,6.
+- Colocación: bifurcaciones en el promedio de los puntos donde sus
+  extremidades entran al tronco (radio ≥ 75 % del tronco), sin la rama
+  dominante (la columna desde la pelvis). Hojas en la celda más avanzada en la
+  dirección del hueso (dedos del pie, no el talón). Cadenas intermedias con las
+  proporciones de la plantilla; el primer tramo se ancla a la proyección de la
+  plantilla.
+- Resolución mínima 96 celdas (colas finas); el ajuste usa la malla completa
+  aunque los pesos se calculen en la decimada.
+- Tests con personajes sintéticos (cápsulas + marching tetrahedra, en
+  `embedding/tests/characters`): humano, elefante con trompa y cola, girado 90°
+  y con Z arriba. Todas las articulaciones a menos de 6 % del tamaño.
+- Gonfoterio (500 k triángulos): orientación, 4 patas, cabeza y cola correctas;
+  colmillos, trompa y orejas quedan como extremidades sin hueso.
+
+**Pesos:** piezas sueltas sin huesos adentro (colmillos, ojos) toman los pesos
+del punto del cuerpo más cercano y se mueven rígidas (antes el colmillo seguía
+a la pata delantera).
+
+**Edición manual (app):** "Ajustar automáticamente" muestra el esqueleto para
+revisar; mover articulaciones con espejo (`hand_l` ↔ `hand_r`, `paw_fl` ↔
+`paw_fr`, `.L/.R`, `Left/Right`); centrar la seleccionada o todas en la
+sección del miembro; un esqueleto ajustado o editado se usa tal cual
+(`SkeletonFit::Exact`) al calcular los pesos. "Probar la pose": con Rotar se
+gira una articulación y la malla se dobla con los pesos (skinning lineal en el
+visor).
+
+**Banco:** `cargo run --release -p pinocchio-core --example rig_view -- modelo.glb quad salida [--bend hueso grados] [--extremities]`
+deja `salida_rest.glb` (malla coloreada por pesos + huesos) y
+`salida_pose.glb`; imprime qué hueso domina cuántos vértices.
+
+**Pendiente:**
+- [ ] Raíz de extremidades finas en cuerpos gordos: la base de la cola queda
+      dentro de la grupa y la cola domina parte del lomo. Probé anclar el primer
+      tramo donde el radio salta (1,6×) y rompía piernas humanas (los cambios de
+      radio entre pie y canilla también saltan).
+- [ ] Pesos en cuerpos gruesos: el calor por "hueso visible más cercano" deja
+      la columna sin vértices en la superficie del tronco (los dominan patas y
+      cuello). Evaluar difusión con peso por distancia al eje medial o
+      voxelización (Dionne & de Lasa, "geodesic voxel binding").
+- [ ] Pintar pesos a mano (pincel sumar/restar/suavizar por hueso, espejo).
+- [ ] Pose de prueba encadenada (varias articulaciones a la vez).
+- [ ] Apéndices de la fase 7 para las extremidades sin hueso (trompa, orejas).
 
 ### Fase 7: Esqueletos por forma de cuerpo + variantes (acordado 2026-09-27)
 

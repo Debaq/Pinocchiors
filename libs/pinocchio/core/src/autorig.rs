@@ -152,45 +152,25 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
     on_stage(AutorigStage::Embedding);
     // Colas y dedos finos necesitan celdas chicas para tener interior
     let resolution = config.distance_field_resolution.into_iter().max().unwrap_or(64).max(MIN_FIT_RESOLUTION);
-    let (working_skeleton, embedding) = match config.skeleton_fit {
-        SkeletonFit::Auto | SkeletonFit::None => {
-            let options = FitOptions {
-                resolution,
-                search_orientation: config.skeleton_fit == SkeletonFit::Auto,
-                ..Default::default()
-            };
-            let template = match config.skeleton_fit {
-                SkeletonFit::Auto => BasicSkeleton::from_bones(skeleton.bones().to_vec()),
-                _ => map_positions(skeleton, |p| normalization.apply(p)),
-            };
-            // El ajuste usa la malla completa: la decimación es solo para
-            // abaratar los pesos, y el campo de distancias no depende del
-            // número de caras
-            let fit = if was_decimated {
-                let mut full = welded.clone();
-                for vertex in &mut full.vertices {
-                    vertex.position = normalization.apply(vertex.position);
-                }
-                fit_skeleton(&full, &template, &options)?
-            } else {
-                fit_skeleton(&working_mesh, &template, &options)?
-            };
-            let embedding = EmbeddingResult {
-                bone_positions: fit.skeleton.bones().iter().map(|b| b.position).collect(),
-                sphere_bone_map: Vec::new(),
-                quality_score: fit.quality,
-            };
-            (fit.skeleton, embedding)
+    // El ajuste usa la malla completa: la decimación es solo para abaratar
+    // los pesos, y el campo de distancias no depende del número de caras
+    let full_normalized;
+    let fit_mesh = if was_decimated {
+        let mut full = welded.clone();
+        for vertex in &mut full.vertices {
+            vertex.position = normalization.apply(vertex.position);
         }
-        SkeletonFit::Exact => {
-            let placed = map_positions(skeleton, |p| normalization.apply(p));
-            let embedding = EmbeddingResult {
-                bone_positions: placed.bones().iter().map(|b| b.position).collect(),
-                sphere_bone_map: Vec::new(),
-                quality_score: 1.0,
-            };
-            (placed, embedding)
-        }
+        full_normalized = full;
+        &full_normalized
+    } else {
+        &working_mesh
+    };
+    let fitted = fit_in_workspace(fit_mesh, skeleton, config.skeleton_fit, &normalization, resolution)?;
+    let working_skeleton = fitted.skeleton;
+    let embedding = EmbeddingResult {
+        bone_positions: working_skeleton.bones().iter().map(|b| b.position).collect(),
+        sphere_bone_map: Vec::new(),
+        quality_score: fitted.quality,
     };
 
     // 5. Pesos de skinning con el esqueleto ya embebido
@@ -246,6 +226,78 @@ pub fn autorig_with_progress<S: Skeleton + Sync>(
         bone_positions,
         bone_rest_transforms,
         stats,
+    })
+}
+
+/// Esqueleto ajustado a una malla, en las coordenadas de la malla.
+#[derive(Debug, Clone)]
+pub struct SkeletonFitReport {
+    /// Las mismas articulaciones de la plantilla, colocadas sobre la malla.
+    pub skeleton: BasicSkeleton,
+    /// Similitud de proporciones con la plantilla (1 = idénticas).
+    pub quality: Real,
+    /// Puntas de las extremidades detectadas en la malla.
+    pub extremities: Vec<Vector3>,
+    /// Extremidades que ningún hueso usa (p. ej. una trompa con la plantilla
+    /// de cuadrúpedo): candidatas a una cadena nueva.
+    pub unused_extremities: Vec<usize>,
+}
+
+/// Ajuste en el espacio de trabajo (malla ya normalizada con `normalization`).
+fn fit_in_workspace<S: Skeleton>(
+    mesh: &Mesh,
+    skeleton: &S,
+    fit: SkeletonFit,
+    normalization: &Normalization,
+    resolution: usize,
+) -> Result<SkeletonFitReport, PinocchioError> {
+    let placed = || map_positions(skeleton, |p| normalization.apply(p));
+    let (template, search_orientation) = match fit {
+        SkeletonFit::Exact => {
+            return Ok(SkeletonFitReport {
+                skeleton: placed(),
+                quality: 1.0,
+                extremities: Vec::new(),
+                unused_extremities: Vec::new(),
+            });
+        }
+        SkeletonFit::Auto => (BasicSkeleton::from_bones(skeleton.bones().to_vec()), true),
+        SkeletonFit::None => (placed(), false),
+    };
+    let options = FitOptions { resolution, search_orientation, ..Default::default() };
+    let result = fit_skeleton(mesh, &template, &options)?;
+    Ok(SkeletonFitReport {
+        unused_extremities: result.unused_extremities(),
+        extremities: result.extremities.iter().map(|e| e.tip).collect(),
+        skeleton: result.skeleton,
+        quality: result.quality,
+    })
+}
+
+/// Ajusta `skeleton` a `mesh` como lo haría [`autorig`], sin calcular pesos:
+/// para mostrar el esqueleto y dejar que se corrija a mano antes de los pesos.
+pub fn fit_to_mesh<S: Skeleton>(
+    mesh: &Mesh,
+    skeleton: &S,
+    fit: SkeletonFit,
+    resolution: usize,
+) -> Result<SkeletonFitReport, PinocchioError> {
+    if mesh.num_vertices() == 0 {
+        return Err(PinocchioError::EmptyMesh);
+    }
+    if skeleton.num_bones() == 0 {
+        return Err(PinocchioError::EmptySkeleton);
+    }
+    let (mut welded, _) = mesh.welded(mesh.bounding_box().diagonal() * 1e-7);
+    let normalization = Normalization::for_bounds(&welded.bounding_box());
+    for vertex in &mut welded.vertices {
+        vertex.position = normalization.apply(vertex.position);
+    }
+    let report = fit_in_workspace(&welded, skeleton, fit, &normalization, resolution.max(MIN_FIT_RESOLUTION))?;
+    Ok(SkeletonFitReport {
+        skeleton: map_positions(&report.skeleton, |p| normalization.invert(p)),
+        extremities: report.extremities.iter().map(|&p| normalization.invert(p)).collect(),
+        ..report
     })
 }
 

@@ -2970,6 +2970,7 @@ dependencies = [
  "nalgebra",
  "pinocchio-attachment",
  "pinocchio-core",
+ "pinocchio-embedding",
  "pinocchio-math",
  "pinocchio-mesh",
  "pinocchio-print3d",
