@@ -2,6 +2,7 @@ use glam::Mat4;
 
 /// Un joint individual dentro del esqueleto.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Joint {
     pub name: String,
     pub children: Vec<usize>,
@@ -14,6 +15,7 @@ pub struct Joint {
 
 /// Esqueleto completo para skinning.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Skeleton {
     pub name: String,
     pub joints: Vec<Joint>,

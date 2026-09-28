@@ -2,6 +2,7 @@ use crate::TextureRef;
 
 /// Modo de alpha blending.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AlphaMode {
     Opaque,
     Mask(f32),
@@ -10,6 +11,7 @@ pub enum AlphaMode {
 
 /// Material PBR metallic-roughness (compatible glTF y UsdPreviewSurface).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Material {
     pub name: String,
 

@@ -25,7 +25,7 @@ mod error;
 mod autorig;
 
 pub use config::{PinocchioConfig, SkeletonFit};
-pub use output::PinocchioOutput;
+pub use output::{PinocchioOutput, ProcessStats};
 pub use error::PinocchioError;
 pub use autorig::{autorig, autorig_with_progress, fit_to_mesh, transfer_weights, AutorigStage, SkeletonFitReport};
 

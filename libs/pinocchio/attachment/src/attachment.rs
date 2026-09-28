@@ -52,6 +52,11 @@ impl Attachment {
         }
     }
 
+    /// Posiciones de reposo de los vértices (las de la malla al calcular los pesos)
+    pub fn rest_positions(&self) -> &[Vector3] {
+        &self.rest_positions
+    }
+
     /// Número de vértices
     pub fn num_vertices(&self) -> usize {
         self.rest_positions.len()

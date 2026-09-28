@@ -1,5 +1,6 @@
 /// Datos de índices de una primitiva.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IndexData {
     U16(Vec<u16>),
     U32(Vec<u32>),
@@ -7,6 +8,7 @@ pub enum IndexData {
 
 /// Atributo de vértice con semántica conocida.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VertexAttribute {
     /// Posiciones [x, y, z] — siempre presente.
     Positions(Vec<[f32; 3]>),
@@ -26,6 +28,7 @@ pub enum VertexAttribute {
 
 /// Una primitiva geométrica (submesh con un solo material).
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Primitive {
     pub attributes: Vec<VertexAttribute>,
     pub indices: Option<IndexData>,
@@ -34,6 +37,7 @@ pub struct Primitive {
 
 /// Malla compuesta de una o más primitivas.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Mesh {
     pub name: String,
     pub primitives: Vec<Primitive>,

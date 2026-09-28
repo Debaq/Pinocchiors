@@ -2,6 +2,7 @@ use glam::{Mat4, Quat, Vec3};
 
 /// Transform de un nodo — TRS o matrix.
 #[derive(Debug, Clone, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Transform {
     /// Translation, Rotation, Scale por separado.
     Trs {

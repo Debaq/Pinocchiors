@@ -73,6 +73,8 @@ rayon = "1.10"
 # Serialización
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+serde_bytes = "0.11"
+rmp-serde = "1"
 
 # Errores
 thiserror = "2.0"

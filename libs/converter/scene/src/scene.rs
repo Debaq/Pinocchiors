@@ -3,6 +3,7 @@ use thiserror::Error;
 
 /// Nodo del grafo de escena.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Node {
     pub name: String,
     pub transform: Transform,
@@ -35,6 +36,7 @@ pub enum SceneError {
 
 /// Escena 3D completa — formato pivote entre todos los conversores.
 #[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Scene {
     pub nodes: Vec<Node>,
     pub root_nodes: Vec<usize>,
