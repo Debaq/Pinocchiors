@@ -34,11 +34,22 @@ pub struct SkeletonTransformParams {
     pub translation: [f64; 3],
     /// Euler XYZ en grados
     pub rotation: [f64; 3],
+    /// Centro de la escala y la rotación, en el espacio de la base. Se fija al
+    /// empezar a transformar (centro de la caja de la base) y no cambia al
+    /// editar huesos: si no, mover una articulación correría las demás
+    pub pivot: [f64; 3],
+}
+
+impl SkeletonTransformParams {
+    /// Sin escala, giro ni desplazamiento (el pivote no importa)
+    pub fn is_identity(&self) -> bool {
+        self.scale == 1.0 && self.translation == [0.0; 3] && self.rotation == [0.0; 3]
+    }
 }
 
 impl Default for SkeletonTransformParams {
     fn default() -> Self {
-        Self { scale: 1.0, translation: [0.0; 3], rotation: [0.0; 3] }
+        Self { scale: 1.0, translation: [0.0; 3], rotation: [0.0; 3], pivot: [0.0; 3] }
     }
 }
 

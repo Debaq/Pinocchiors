@@ -137,7 +137,8 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
           <p class="text-xs text-text-muted leading-relaxed">
             Como en Blender: clic cerca de una articulación la selecciona y{" "}
             <span class="text-text">G</span> la mueve con el mouse (X/Y/Z la limita a un eje; clic
-            confirma, clic derecho o Esc cancela). La herramienta Mover también tiene gizmo.
+            confirma, clic derecho o Esc cancela). La herramienta Mover también tiene gizmo;{" "}
+            <span class="text-text">Escalar</span> (S) agranda o achica el esqueleto entero desde su centro.
             Mira desde dos vistas: una articulación puede verse bien de frente y estar corrida de
             costado. <span class="text-text">Centrar</span> la devuelve al medio del miembro.
           </p>

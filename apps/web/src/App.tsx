@@ -108,6 +108,8 @@ interface TauriSkeletonData {
     is_leaf: boolean;
   }>;
   edges: Array<[number, number]>;
+  /** Centro de escala y rotación, si el esqueleto está transformado */
+  pivot?: [number, number, number];
 }
 
 interface Progress {
@@ -181,6 +183,7 @@ function tauriSkeletonToViewer(data: TauriSkeletonData): SkeletonData {
       isLeaf: b.is_leaf,
     })),
     edges: data.edges,
+    pivot: data.pivot,
   };
 }
 
@@ -523,6 +526,7 @@ export const App: Component = () => {
     // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
     { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
     { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
+    { key: "s", action: () => useTool("scale"), description: "Escalar el esqueleto entero" },
     { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
     {
       key: " ",
@@ -1440,6 +1444,35 @@ export const App: Component = () => {
     }
   };
 
+  /**
+   * Se soltó el gizmo del esqueleto entero: se compone con la transformación
+   * del panel (la escala multiplica, el giro se aplica antes del que había)
+   */
+  const handleSkeletonGizmo = (change: { scale: number } | { rotation: [number, number, number, number] }) => {
+    const current = skeletonTransform();
+    if ("scale" in change) {
+      const scale = Math.round(THREE.MathUtils.clamp(current.scale * change.scale, 0.1, 5) * 1000) / 1000;
+      void handleTransformChange({ ...current, scale });
+      return;
+    }
+    // El backend gira X, luego Y, luego Z: la matriz es Rz·Ry·Rx (orden "ZYX" de three)
+    const toRad = THREE.MathUtils.degToRad;
+    const before = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(toRad(current.rotation[0]), toRad(current.rotation[1]), toRad(current.rotation[2]), "ZYX")
+    );
+    const after = new THREE.Quaternion(...change.rotation).multiply(before);
+    const euler = new THREE.Euler().setFromQuaternion(after, "ZYX");
+    // Cada giro tiene dos juegos de ángulos: el más parecido a los de antes
+    // (girar 100° en Y da 0, 100, 0 y no 180, 80, 180)
+    const wrap = (a: number) => Math.atan2(Math.sin(a), Math.cos(a));
+    const alt = [wrap(euler.x + Math.PI), wrap(Math.PI - euler.y), wrap(euler.z + Math.PI)];
+    const prev = current.rotation.map(toRad);
+    const distance = (angles: number[]) => angles.reduce((sum, a, k) => sum + Math.abs(wrap(a - prev[k])), 0);
+    const best = distance(alt) < distance([euler.x, euler.y, euler.z]) ? alt : [euler.x, euler.y, euler.z];
+    const deg = (r: number) => Math.round(THREE.MathUtils.radToDeg(r) * 100) / 100;
+    void handleTransformChange({ ...current, rotation: [deg(best[0]), deg(best[1]), deg(best[2])] });
+  };
+
   /** Cambió un apéndice: se rehace la plantilla */
   const handleBodyPlanChange = async (plan: BodyPlan) => {
     setBodyPlan(plan);
@@ -1722,6 +1755,7 @@ export const App: Component = () => {
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               onBoneMoveCommitted={handleBoneMoveCommitted}
+              onSkeletonTransformed={handleSkeletonGizmo}
               onPoseEdited={handlePoseEdited}
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}

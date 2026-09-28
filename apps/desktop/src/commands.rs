@@ -115,6 +115,10 @@ pub struct SkeletonPreset {
 pub struct SkeletonData {
     pub bones: Vec<BoneData>,
     pub edges: Vec<[usize; 2]>,
+    /// Centro de escala y rotación del esqueleto visible, si está transformado
+    /// (si no, el visor usa el centro de su caja, que es lo que se elegiría)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pivot: Option<[f64; 3]>,
 }
 
 /// Datos de un hueso
@@ -1175,20 +1179,22 @@ pub fn select_body_plan(plan: BodyPlanDto, state: State<'_, AppState>) -> Result
 // gizmo. Cada edición mantiene esa relación para que no se pierda al cambiar
 // de herramienta.
 
-/// Aplica la transformación de gizmo: escala → rotación XYZ → traslación
+/// Aplica la transformación de gizmo: escala → rotación XYZ alrededor del
+/// pivote → traslación
 fn apply_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
     let [rx, ry, rz] = t.rotation.map(f64::to_radians);
     let (sx, cx) = rx.sin_cos();
     let (sy, cy) = ry.sin_cos();
     let (sz, cz) = rz.sin_cos();
-    let (x, y, z) = (p.x() * t.scale, p.y() * t.scale, p.z() * t.scale);
+    let [px, py, pz] = t.pivot;
+    let (x, y, z) = ((p.x() - px) * t.scale, (p.y() - py) * t.scale, (p.z() - pz) * t.scale);
     // X
     let (y, z) = (y * cx - z * sx, y * sx + z * cx);
     // Y
     let (x, z) = (x * cy + z * sy, -x * sy + z * cy);
     // Z
     let (x, y) = (x * cz - y * sz, x * sz + y * cz);
-    Vector3::new(x + t.translation[0], y + t.translation[1], z + t.translation[2])
+    Vector3::new(x + px + t.translation[0], y + py + t.translation[1], z + pz + t.translation[2])
 }
 
 /// Inversa de [`apply_gizmo`]
@@ -1197,7 +1203,12 @@ fn invert_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
     let (sx, cx) = rx.sin_cos();
     let (sy, cy) = ry.sin_cos();
     let (sz, cz) = rz.sin_cos();
-    let (x, y, z) = (p.x() - t.translation[0], p.y() - t.translation[1], p.z() - t.translation[2]);
+    let [px, py, pz] = t.pivot;
+    let (x, y, z) = (
+        p.x() - t.translation[0] - px,
+        p.y() - t.translation[1] - py,
+        p.z() - t.translation[2] - pz,
+    );
     // Z⁻¹
     let (x, y) = (x * cz + y * sz, -x * sz + y * cz);
     // Y⁻¹
@@ -1205,7 +1216,28 @@ fn invert_gizmo(p: Vector3, t: &SkeletonTransformParams) -> Vector3 {
     // X⁻¹
     let (y, z) = (y * cx + z * sx, -y * sx + z * cx);
     let inv = if t.scale.abs() > 1e-12 { 1.0 / t.scale } else { 1.0 };
-    Vector3::new(x * inv, y * inv, z * inv)
+    Vector3::new(x * inv + px, y * inv + py, z * inv + pz)
+}
+
+/// Centro de la caja de las articulaciones
+fn joints_center(skeleton: &BasicSkeleton) -> [f64; 3] {
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for b in skeleton.bones() {
+        for (k, v) in [b.position.x(), b.position.y(), b.position.z()].into_iter().enumerate() {
+            min[k] = min[k].min(v);
+            max[k] = max[k].max(v);
+        }
+    }
+    if skeleton.num_bones() == 0 {
+        return [0.0; 3];
+    }
+    [0, 1, 2].map(|k| (min[k] + max[k]) / 2.0)
+}
+
+/// Pivote del esqueleto visible (el de la base, llevado por el gizmo)
+fn visible_pivot(t: &SkeletonTransformParams) -> Option<[f64; 3]> {
+    (!t.is_identity()).then(|| [0, 1, 2].map(|k| t.pivot[k] + t.translation[k]))
 }
 
 /// Copia editable de cualquier tipo de esqueleto
@@ -1251,9 +1283,14 @@ pub fn transform_skeleton(
     state: State<'_, AppState>,
 ) -> Result<SkeletonData, String> {
     let base = current_base(&state)?;
-    let params = SkeletonTransformParams { scale, translation, rotation };
+    // El pivote se elige al salir de la identidad y se mantiene mientras dure
+    // la transformación
+    let current = *state.skeleton_transform.lock().unwrap();
+    let pivot = if current.is_identity() { joints_center(&base) } else { current.pivot };
+    let params = SkeletonTransformParams { scale, translation, rotation, pivot };
     let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
-    let data = skeleton_to_data(&skel);
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
 
     *state.skeleton_transform.lock().unwrap() = params;
     *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
@@ -1293,7 +1330,8 @@ pub fn move_bone(
     }
 
     let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
-    let data = skeleton_to_data(&skel);
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
 
     *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
     *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
@@ -1668,9 +1706,12 @@ pub fn get_skeleton_data(state: State<'_, AppState>) -> Result<SkeletonData, Str
         Ok(SkeletonData {
             bones,
             edges: base_data.edges,
+            pivot: visible_pivot(&state.skeleton_transform.lock().unwrap()),
         })
     } else {
-        Ok(get_skeleton_data_for_type(skeleton_type))
+        let mut data = get_skeleton_data_for_type(skeleton_type);
+        data.pivot = visible_pivot(&state.skeleton_transform.lock().unwrap());
+        Ok(data)
     }
 }
 
@@ -2612,7 +2653,7 @@ fn skeleton_to_data<S: Skeleton>(skeleton: &S) -> SkeletonData {
     let edges = skeleton.get_graph_edges();
     let edges: Vec<[usize; 2]> = edges.into_iter().map(|(a, b)| [a, b]).collect();
 
-    SkeletonData { bones, edges }
+    SkeletonData { bones, edges, pivot: None }
 }
 
 fn get_bone_names(skeleton_type: &SkeletonType) -> Vec<String> {
@@ -3110,6 +3151,7 @@ mod tests {
             scale: 1.7,
             translation: [3.0, -2.0, 0.5],
             rotation: [30.0, -45.0, 120.0],
+            pivot: [0.5, 1.0, -2.0],
         };
         for p in [Vector3::new(0.0, 0.0, 0.0), Vector3::new(1.0, 2.0, 3.0), Vector3::new(-0.4, 0.9, -1.2)] {
             let back = invert_gizmo(apply_gizmo(p, &params), &params);
@@ -3119,6 +3161,25 @@ mod tests {
         let id = SkeletonTransformParams::default();
         let p = Vector3::new(1.0, 2.0, 3.0);
         assert!(apply_gizmo(p, &id).distance(&p) < 1e-12);
+    }
+
+    #[test]
+    fn gizmo_scales_and_rotates_around_pivot() {
+        let skeleton = BasicSkeleton::from_bones(vec![
+            Bone::new("raiz", Vector3::new(10.0, 1.0, 0.0)),
+            Bone::with_parent("punta", Vector3::new(12.0, 3.0, 4.0), 0),
+        ]);
+        let pivot = joints_center(&skeleton);
+        assert_eq!(pivot, [11.0, 2.0, 2.0]);
+        let params = SkeletonTransformParams { scale: 2.0, rotation: [0.0, 90.0, 0.0], translation: [1.0, 0.0, 0.0], pivot };
+        // El pivote solo se desplaza: el esqueleto no se aleja del modelo
+        let moved = apply_gizmo(Vector3::new(11.0, 2.0, 2.0), &params);
+        assert!(moved.distance(&Vector3::new(12.0, 2.0, 2.0)) < 1e-9);
+        assert_eq!(visible_pivot(&params), Some([12.0, 2.0, 2.0]));
+        assert_eq!(visible_pivot(&SkeletonTransformParams { pivot, ..Default::default() }), None);
+        // La raíz queda al doble de distancia del centro
+        let root = apply_gizmo(Vector3::new(10.0, 1.0, 0.0), &params);
+        assert!((root.distance(&moved) - 2.0 * 6f64.sqrt()).abs() < 1e-9);
     }
 
     #[test]

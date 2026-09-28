@@ -13,6 +13,7 @@ import {
   WeightsData,
   PlacementMode,
   PlacementPick,
+  ViewerCallbacks,
 } from "../../lib/Viewer3D";
 import type { FloorCandidate } from "../../lib/placement";
 
@@ -28,6 +29,8 @@ export interface ViewportProps {
   onPoseEdited?: (joint: number) => void;
   /** Fin de un movimiento con G (para deshacer) */
   onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
+  /** Se soltó el gizmo del esqueleto entero (herramienta Escalar, o Rotar sin pesos) */
+  onSkeletonTransformed?: ViewerCallbacks["onSkeletonTransformed"];
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
   onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
   /** La luz principal se movió arrastrando con L */
@@ -96,6 +99,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
         onPoseEdited: (joint) => props.onPoseEdited?.(joint),
+        onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
       });
 
       props.onViewerReady?.(viewer);

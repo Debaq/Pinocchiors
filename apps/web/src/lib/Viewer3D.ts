@@ -77,6 +77,8 @@ export const defaultLights: LightSettings = {
 export interface SkeletonData {
   bones: BoneData[];
   edges: [number, number][];
+  /** Centro de escala y rotación del esqueleto entero (por defecto, el de su caja) */
+  pivot?: [number, number, number];
 }
 
 export interface BoneData {
@@ -153,6 +155,8 @@ export interface ViewerCallbacks {
   onPaintSettingsChanged?: (change: Partial<PaintSettings>) => void;
   /** Modo animación: se confirmó un giro (R) o desplazamiento (G) de la articulación */
   onPoseEdited?: (joint: number) => void;
+  /** Se soltó el gizmo del esqueleto entero: factor de escala o giro (x, y, z, w) alrededor del pivote */
+  onSkeletonTransformed?: (change: { scale: number } | { rotation: [number, number, number, number] }) => void;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -305,6 +309,11 @@ export class Viewer3D {
   private boneEditMode = false;
   private transformControls: TransformControls | null = null;
   private selectedBoneIndex = -1;
+  private activeTool = "select";
+  /** Asa del gizmo del esqueleto entero (herramienta Escalar, o Rotar sin pesos) */
+  private skeletonPivot = new THREE.Object3D();
+  /** Posiciones de las articulaciones al empezar a arrastrar ese gizmo */
+  private pivotDragStart: THREE.Vector3[] | null = null;
 
   // Gestos de Blender
   private keysDown = new Set<string>();
@@ -1308,6 +1317,7 @@ export class Viewer3D {
       data.bones.forEach((bone, i) => this.boneSpheres[i].position.set(...bone.position));
       this.updateBoneLines();
       this.buildRig();
+      this.attachGizmo();
       return;
     }
     this.clearSkeleton();
@@ -1365,10 +1375,9 @@ export class Viewer3D {
     // Las esferas son nuevas: volver a marcar (y enganchar) la seleccionada
     if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
       this.selectBone(this.selectedBoneIndex);
-    } else {
-      this.transformControls?.detach();
     }
     this.buildRig();
+    this.attachGizmo();
   }
 
   /** Radio de las esferas de las articulaciones, proporcional a la malla */
@@ -1497,6 +1506,8 @@ export class Viewer3D {
     this.weightsData = data;
     this.updateWeightsVisualization();
     this.buildRig();
+    // Con pesos, Rotar pasa a probar poses por articulación
+    this.attachGizmo();
   }
 
   updateSettings(settings: Partial<ViewerSettings>): void {
@@ -1577,7 +1588,10 @@ export class Viewer3D {
     if (enabled) {
       if (!this.transformControls) {
         this.transformControls = new TransformControls(this.camera, this.canvas);
-        this.transformControls.setMode("translate");
+        // La herramienta puede haberse elegido antes de que existiera el gizmo
+        this.transformControls.setMode(
+          this.activeTool === "rotate" ? "rotate" : this.activeTool === "scale" ? "scale" : "translate"
+        );
         this.transformControls.setSize(0.5);
         this.scene.add(this.transformControls.getHelper());
         // Resalta ejes al pasar el mouse sin pasar por métodos del visor
@@ -1585,10 +1599,17 @@ export class Viewer3D {
 
         this.transformControls.addEventListener("dragging-changed", (event) => {
           this.controls.enabled = !event.value;
+          if (this.transformControls?.object !== this.skeletonPivot) return;
+          if (event.value) this.pivotDragStart = this.boneSpheres.map((s) => s.position.clone());
+          else this.commitSkeletonGizmo();
         });
 
         this.transformControls.addEventListener("objectChange", () => {
           const object = this.transformControls?.object;
+          if (object === this.skeletonPivot) {
+            this.previewSkeletonGizmo();
+            return;
+          }
           if (this.selectedBoneIndex < 0 || !object) return;
           if (this.transformControls?.getMode() === "rotate") {
             // Rotar una articulación con pesos calculados: pose de prueba
@@ -1599,6 +1620,7 @@ export class Viewer3D {
           }
         });
       }
+      this.attachGizmo();
     } else {
       if (this.transformControls) {
         this.transformControls.detach();
@@ -1622,12 +1644,84 @@ export class Viewer3D {
       const sphere = this.boneSpheres[index];
       (sphere.material as THREE.MeshBasicMaterial).color.setHex(0xbd93f9); // Dracula purple
 
-      if (this.boneEditMode && this.transformControls && !this.rig) {
-        this.transformControls.attach(sphere);
-      }
-    } else if (this.transformControls) {
-      this.transformControls.detach();
     }
+    this.attachGizmo();
+  }
+
+  /**
+   * Herramienta que actúa sobre el esqueleto entero: Escalar siempre (escalar
+   * una articulación no significa nada) y Rotar mientras no haya pesos para
+   * probar poses
+   */
+  private wholeSkeletonTool(): "scale" | "rotate" | null {
+    if (this.rig || this.boneSpheres.length === 0) return null;
+    if (this.activeTool === "scale") return "scale";
+    if (this.activeTool === "rotate" && !this.canPose()) return "rotate";
+    return null;
+  }
+
+  /** Engancha el gizmo a lo que corresponde según la herramienta y la selección */
+  private attachGizmo(): void {
+    const controls = this.transformControls;
+    if (!controls || controls.dragging) return;
+    if (!this.boneEditMode) {
+      controls.detach();
+      return;
+    }
+    if (this.wholeSkeletonTool()) {
+      const pivot = this.skeletonPivot;
+      if (pivot.parent !== this.skeletonGroup) this.skeletonGroup.add(pivot);
+      pivot.position.copy(this.skeletonCenter());
+      pivot.quaternion.identity();
+      pivot.scale.setScalar(1);
+      controls.attach(pivot);
+      return;
+    }
+    const sphere = this.boneSpheres[this.selectedBoneIndex];
+    if (sphere && !this.rig) controls.attach(sphere);
+    else controls.detach();
+  }
+
+  /** Pivote del esqueleto entero, en el espacio de las articulaciones */
+  private skeletonCenter(): THREE.Vector3 {
+    const pivot = this.skeletonData?.pivot;
+    if (pivot) return new THREE.Vector3(...pivot);
+    return new THREE.Box3().setFromPoints(this.boneSpheres.map((s) => s.position)).getCenter(new THREE.Vector3());
+  }
+
+  /** Mientras se arrastra el gizmo del esqueleto: las articulaciones lo siguen */
+  private previewSkeletonGizmo(): void {
+    const start = this.pivotDragStart;
+    if (!start) return;
+    const pivot = this.skeletonPivot;
+    const s = pivot.scale;
+    // Un eje del gizmo escala solo ese eje: el esqueleto se escala parejo
+    const factor = [s.x, s.y, s.z].reduce((a, b) => (Math.abs(b - 1) > Math.abs(a - 1) ? b : a), 1);
+    const scale = Math.max(factor, 0.01);
+    const offset = new THREE.Vector3();
+    this.boneSpheres.forEach((sphere, i) => {
+      offset.copy(start[i]).sub(pivot.position);
+      if (this.transformControls?.getMode() === "scale") offset.multiplyScalar(scale);
+      else offset.applyQuaternion(pivot.quaternion);
+      sphere.position.copy(pivot.position).add(offset);
+    });
+    this.updateBoneLines();
+  }
+
+  private commitSkeletonGizmo(): void {
+    this.pivotDragStart = null;
+    const pivot = this.skeletonPivot;
+    if (this.transformControls?.getMode() === "scale") {
+      const s = pivot.scale;
+      const factor = [s.x, s.y, s.z].reduce((a, b) => (Math.abs(b - 1) > Math.abs(a - 1) ? b : a), 1);
+      if (Math.abs(factor - 1) > 1e-4) this.callbacks.onSkeletonTransformed?.({ scale: Math.max(factor, 0.01) });
+    } else {
+      const q = pivot.quaternion;
+      if (Math.abs(q.w) < 1 - 1e-8) this.callbacks.onSkeletonTransformed?.({ rotation: [q.x, q.y, q.z, q.w] });
+    }
+    // Hasta que responda el backend quedan las posiciones de la vista previa
+    pivot.quaternion.identity();
+    pivot.scale.setScalar(1);
   }
 
   setGridVisible(visible: boolean): void {
@@ -1638,6 +1732,14 @@ export class Viewer3D {
 
   setActiveTool(tool: string): void {
     if (tool !== "rotate") this.resetPose();
+    const changed = tool !== this.activeTool;
+    this.activeTool = tool;
+    if (changed && this.boneSpheres.length > 0 && !this.rig) {
+      if (tool === "scale") this.flashHint("Escalar: el gizmo escala el esqueleto entero desde su centro");
+      else if (tool === "rotate" && !this.canPose()) {
+        this.flashHint("Rotar sin pesos gira el esqueleto entero; con pesos prueba poses por articulación");
+      }
+    }
     if (!this.transformControls) return;
 
     switch (tool) {
@@ -1655,11 +1757,9 @@ export class Viewer3D {
         break;
       default:
         this.canvas.style.cursor = "default";
-        if (this.transformControls) {
-          this.transformControls.detach();
-        }
         break;
     }
+    this.attachGizmo();
   }
 
   setView(name: string): void {
@@ -1836,6 +1936,7 @@ export class Viewer3D {
     this.animationMode = enabled;
     this.resetPose();
     this.buildRig();
+    this.attachGizmo();
     return this.rig !== null;
   }
 
