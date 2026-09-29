@@ -6,6 +6,7 @@
 //! ```
 //!
 //! `--seams`: los quads siguen las costuras de UV del modelo.
+//! `--paint`: distribución para pintar (con `--unwrap`).
 
 use quadriflow_core::{remesh, RemeshConfig};
 use std::time::Instant;
@@ -48,7 +49,10 @@ fn main() {
     let skin = match &surface {
         Some(surface) if !flag("--unwrap") => transferred_skin(&scene, surface, &positions, &faces),
         _ => {
-            let options = BakeOptions { texture_size: size, ..Default::default() };
+            let mut options = BakeOptions { texture_size: size, ..Default::default() };
+            if flag("--paint") {
+                options.unwrap.layout = uv_core::Layout::Paintable;
+            }
             unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options)
         }
     };

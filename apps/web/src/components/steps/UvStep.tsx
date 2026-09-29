@@ -7,9 +7,16 @@ export interface UvConfig {
   textureSize: number;
   padding: number;
   maxAngle: number;
+  /** Legible para pintar a mano o lo más apretado posible */
+  layout: "paintable" | "compact";
 }
 
-export const defaultUvConfig: UvConfig = { textureSize: 2048, padding: 4, maxAngle: 55 };
+export const defaultUvConfig: UvConfig = { textureSize: 2048, padding: 4, maxAngle: 55, layout: "paintable" };
+
+const LAYOUT_OPTIONS = [
+  { value: "paintable", label: "Para pintar" },
+  { value: "compact", label: "Compacta" },
+];
 
 /** Estado de la piel (ver `UvInfo` en apps/desktop) */
 export interface UvInfo {
@@ -67,6 +74,17 @@ const Row: Component<{ label: string; value: string; warn?: boolean }> = (props)
 /** Tamaño de textura, margen y curvatura: comunes a los dos desplegados */
 const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<UvConfig>) => void }> = (props) => (
   <>
+    <Select
+      label="Distribución"
+      options={LAYOUT_OPTIONS}
+      value={props.config.layout ?? "paintable"}
+      onChange={(v) => props.onChange({ layout: v as UvConfig["layout"] })}
+    />
+    <p class="text-xs text-text-muted leading-relaxed">
+      {(props.config.layout ?? "paintable") === "paintable"
+        ? "Islas grandes y derechas, ubicadas como en el modelo: un lado arriba y el otro abajo, como una hoja de vistas."
+        : "Islas acomodadas para aprovechar al máximo la textura. Difícil de pintar a mano."}
+    </p>
     <Select
       label="Tamaño de textura"
       options={SIZE_OPTIONS}

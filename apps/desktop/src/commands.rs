@@ -2366,6 +2366,23 @@ pub struct UvUnwrapConfig {
     pub padding: u32,
     /// Máxima desviación de normal dentro de una isla (grados)
     pub max_angle: f64,
+    /// "paintable" (legible para pintar) o "compact" (máximo aprovechamiento)
+    #[serde(default)]
+    pub layout: Option<String>,
+}
+
+impl UvUnwrapConfig {
+    fn unwrap_options(&self) -> uv_core::UnwrapOptions {
+        uv_core::UnwrapOptions {
+            charts: uv_core::ChartOptions { max_angle: self.max_angle.clamp(15.0, 85.0), ..Default::default() },
+            padding: self.padding.clamp(1, 64),
+            layout: match self.layout.as_deref() {
+                Some("paintable") => uv_core::Layout::Paintable,
+                _ => uv_core::Layout::Compact,
+            },
+            ..Default::default()
+        }
+    }
 }
 
 /// Estado de la piel de la malla retopologizada
@@ -2453,14 +2470,7 @@ pub async fn run_uv_unwrap(
         let surface = uv_core::scene_surface(&scene);
         let options = uv_core::BakeOptions {
             texture_size: config.texture_size,
-            unwrap: uv_core::UnwrapOptions {
-                charts: uv_core::ChartOptions {
-                    max_angle: config.max_angle.clamp(15.0, 85.0),
-                    ..Default::default()
-                },
-                padding: config.padding.clamp(1, 64),
-                ..Default::default()
-            },
+            unwrap: config.unwrap_options(),
         };
         uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options)
     })
@@ -2531,11 +2541,7 @@ fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<Unw
         let surface = uv_core::scene_surface(&scene);
         let options = uv_core::BakeOptions {
             texture_size: config.texture_size,
-            unwrap: uv_core::UnwrapOptions {
-                charts: uv_core::ChartOptions { max_angle: config.max_angle.clamp(15.0, 85.0), ..Default::default() },
-                padding: config.padding.clamp(1, 64),
-                ..Default::default()
-            },
+            unwrap: config.unwrap_options(),
         };
         let skin = uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options);
         let (mut new_scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &scene);
@@ -3571,7 +3577,7 @@ mod tests {
         *state.scene.lock().unwrap() = Some(scene.clone());
         *state.mesh_before_repair.lock().unwrap() = Some(scene_to_pinocchio_mesh(&scene).unwrap());
 
-        let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0 };
+        let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0, layout: None };
         let info = unwrap_original_impl(&state, &config).unwrap();
         assert_eq!(info.uv.num_charts, Some(6), "una isla por cara del cubo");
         assert!(info.mesh_info.has_uvs);

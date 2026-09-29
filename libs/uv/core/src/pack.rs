@@ -297,6 +297,12 @@ impl Atlas {
     }
 }
 
+/// Espejo en v. La parametrización deja cada carta en sentido antihorario
+/// con v hacia arriba, pero en glTF (y en la imagen) la v crece hacia abajo:
+/// sin espejar, la carta se vería en la textura como desde adentro del
+/// modelo, y lo que se pinte en la imagen aparecería invertido sobre él.
+const MIRROR_V: [[f64; 2]; 2] = [[1.0, 0.0], [0.0, -1.0]];
+
 /// Giro de `o` cuartos de vuelta.
 fn quarter_turn(o: usize) -> [[f64; 2]; 2] {
     match o % 4 {
@@ -394,7 +400,7 @@ pub(crate) fn pack(charts: &[ChartShape], texture_size: u32, padding: u32) -> (V
             let scale = if c.area_uv > 0.0 { (c.area_3d / c.area_uv).sqrt() } else { 1.0 };
             let points: Vec<[f64; 2]> = c.triangles.iter().flatten().map(|p| [p[0] * scale, p[1] * scale]).collect();
             let (cos, sin) = min_box(&points);
-            [[scale * cos, -scale * sin], [scale * sin, scale * cos]]
+            mul(MIRROR_V, [[scale * cos, -scale * sin], [scale * sin, scale * cos]])
         })
         .collect();
     let total_3d: f64 = charts.iter().map(|c| c.area_3d).sum();
@@ -435,4 +441,206 @@ pub(crate) fn pack(charts: &[ChartShape], texture_size: u32, padding: u32) -> (V
         (None, Some((_, coverage, placements))) => (placements, coverage),
         (None, None) => panic!("no se pudieron empaquetar {} cartas", charts.len()),
     }
+}
+
+/// Datos 3D de una carta para la distribución para pintar.
+pub(crate) struct Paint {
+    /// Centro (ponderado por área) en el modelo.
+    pub center: [f64; 3],
+    /// Suma de normales por área.
+    pub normal: [f64; 3],
+    /// Gradiente de x, y, z del modelo en las UV de la carta.
+    pub gradient: [[f64; 2]; 3],
+}
+
+fn dot3(a: [f64; 3], b: [f64; 3]) -> f64 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Gradiente en UV de la coordenada `p · axis`.
+fn gradient_along(paint: &Paint, axis: [f64; 3]) -> [f64; 2] {
+    [0, 1].map(|k| (0..3).map(|c| paint.gradient[c][k] * axis[c]).sum())
+}
+
+/// Giro que lleva la dirección `from` a `to` (2D).
+fn rotation_between(from: [f64; 2], to: [f64; 2]) -> [[f64; 2]; 2] {
+    let angle = to[1].atan2(to[0]) - from[1].atan2(from[0]);
+    let (sin, cos) = angle.sin_cos();
+    [[cos, -sin], [sin, cos]]
+}
+
+impl Atlas {
+    /// Posición libre más cercana (por anillos) a `(x, y)` para `mask`,
+    /// dentro de `[margin, size − margin]`.
+    fn find_near(&self, mask: &Mask, x: isize, y: isize, margin: usize) -> Option<(usize, usize)> {
+        let (x_max, y_max) = (
+            (self.size - margin).checked_sub(mask.w)? as isize,
+            (self.size - margin).checked_sub(mask.h)? as isize,
+        );
+        let (lo, x0, y0) = (margin as isize, x.clamp(margin as isize, x_max), y.clamp(margin as isize, y_max));
+        if x_max < lo || y_max < lo {
+            return None;
+        }
+        let limit = self.size as isize;
+        for r in 0..=limit {
+            let mut ring: Vec<(isize, isize)> = Vec::with_capacity(8 * r as usize + 1);
+            for dy in -r..=r {
+                let step = if dy.abs() == r { 1 } else { 2 * r.max(1) };
+                let mut dx = -r;
+                while dx <= r {
+                    ring.push((x0 + dx, y0 + dy));
+                    dx += step;
+                }
+            }
+            let found = ring
+                .into_par_iter()
+                .filter(|&(px, py)| (lo..=x_max).contains(&px) && (lo..=y_max).contains(&py))
+                .filter(|&(px, py)| self.fits(mask, px as usize, py as usize))
+                .min_by_key(|&(px, py)| ((px - x0).pow(2) + (py - y0).pow(2), py, px));
+            if let Some((px, py)) = found {
+                return Some((px as usize, py as usize));
+            }
+        }
+        None
+    }
+}
+
+/// Distribución para pintar: cada carta derecha (lo de arriba del modelo
+/// arriba en la imagen) y cerca de donde cae en una hoja de dos vistas del
+/// modelo (el lado ancho y el opuesto). Devuelve la transformación de cada
+/// carta y la fracción del cuadrado que cubren.
+pub(crate) fn pack_paintable(
+    charts: &[ChartShape],
+    paint: &[Paint],
+    (lo, hi): ([f64; 3], [f64; 3]),
+    texture_size: u32,
+    padding: u32,
+) -> (Vec<Placement>, f64) {
+    if charts.is_empty() {
+        return (Vec::new(), 0.0);
+    }
+    let texture_size = texture_size.max(1) as usize;
+    let resolution = texture_size.min(512);
+    let pad = (padding as usize * resolution).div_ceil(texture_size);
+    let margin = pad.div_ceil(2);
+
+    // Vistas: se mira el lado ancho (de costado un cuadrúpedo largo en z, de
+    // frente un humanoide ancho en x). Y arriba.
+    let depth = if hi[0] - lo[0] < hi[2] - lo[2] { [1.0, 0.0, 0.0] } else { [0.0, 0.0, 1.0] };
+    let up = [0.0, 1.0, 0.0];
+    // Derecha en pantalla mirando desde +depth: (−depth) × up
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let right_front = cross(depth.map(|c| -c), up);
+    let right_back = right_front.map(|c| -c);
+    let corners: Vec<[f64; 3]> =
+        (0..8).map(|i| [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }]).collect();
+    let span = |axis: [f64; 3]| {
+        let v: Vec<f64> = corners.iter().map(|&c| dot3(c, axis)).collect();
+        (v.iter().copied().fold(f64::INFINITY, f64::min), v.iter().copied().fold(f64::NEG_INFINITY, f64::max))
+    };
+    let (panel_w, panel_h) = ((span(right_front).1 - span(right_front).0).max(1e-9), (hi[1] - lo[1]).max(1e-9));
+    // Paneles lado a lado o uno sobre otro: lo que quede más cuadrado
+    let side_by_side = (2.0 * panel_w / panel_h).ln().abs() <= (panel_w / (2.0 * panel_h)).ln().abs();
+    let (sheet_w, sheet_h) = if side_by_side { (2.2 * panel_w, 1.1 * panel_h) } else { (1.1 * panel_w, 2.2 * panel_h) };
+
+    // Por carta: panel, giro y lugar deseado en la hoja ([0, 1]²)
+    struct Target {
+        rotation: [[f64; 2]; 2],
+        spot: [f64; 2],
+    }
+    let targets: Vec<Target> = paint
+        .iter()
+        .map(|p| {
+            let back = dot3(p.normal, depth) < 0.0;
+            let right = if back { right_back } else { right_front };
+            // Derecha: el gradiente de la altura apunta a −v (arriba en la
+            // imagen). Si la carta es casi horizontal (lomo, planta), manda
+            // la dirección "derecha" de su vista
+            let flip = |g: [f64; 2]| [g[0], -g[1]];
+            let g_up = flip(gradient_along(p, up));
+            let g_right = flip(gradient_along(p, right));
+            let norm = |g: [f64; 2]| (g[0] * g[0] + g[1] * g[1]).sqrt();
+            let rotation = mul(
+                if norm(g_up) >= 0.5 * norm(g_right) {
+                    rotation_between(g_up, [0.0, -1.0])
+                } else {
+                    rotation_between(g_right, [1.0, 0.0])
+                },
+                MIRROR_V,
+            );
+            let (r_lo, r_hi) = span(right);
+            let local = [(dot3(p.center, right) - r_lo) / (r_hi - r_lo).max(1e-9), (hi[1] - p.center[1]) / panel_h];
+            let panel = if back { 1.0 } else { 0.0 };
+            let spot = if side_by_side {
+                [(0.05 * panel_w + (panel * 1.1 + local[0]) * panel_w) / sheet_w, (0.05 * panel_h + local[1] * panel_h) / sheet_h]
+            } else {
+                [(0.05 * panel_w + local[0] * panel_w) / sheet_w, (0.05 * panel_h + (panel * 1.1 + local[1]) * panel_h) / sheet_h]
+            };
+            Target { rotation, spot }
+        })
+        .collect();
+    let scales: Vec<f64> = charts.iter().map(|c| if c.area_uv > 0.0 { (c.area_3d / c.area_uv).sqrt() } else { 1.0 }).collect();
+    let total_3d: f64 = charts.iter().map(|c| c.area_3d).sum();
+
+    // Escala: la más grande (desde el 45 % del cuadrado) con la que caben todas
+    let aspect = sheet_w / sheet_h;
+    let (sheet_cells_w, sheet_cells_h) =
+        if aspect >= 1.0 { (resolution as f64, resolution as f64 / aspect) } else { (resolution as f64 * aspect, resolution as f64) };
+    let mut k = if total_3d > 0.0 { (0.45 * (resolution * resolution) as f64 / total_3d).sqrt() } else { 1.0 };
+    for _ in 0..30 {
+        let oriented: Vec<Oriented> = charts
+            .par_iter()
+            .zip(&targets)
+            .zip(&scales)
+            .map(|((chart, target), &s)| Oriented::new(chart, target.rotation.map(|row| row.map(|v| v * s * k)), pad))
+            .collect();
+        let cells = |i: usize| oriented[i].mask.bits.iter().map(|w| w.count_ones() as usize).sum::<usize>();
+        let sizes: Vec<usize> = (0..charts.len()).map(cells).collect();
+        let mut order: Vec<usize> = (0..charts.len()).collect();
+        order.sort_by(|&a, &b| sizes[b].cmp(&sizes[a]).then(a.cmp(&b)));
+
+        let mut atlas = Atlas::new(resolution);
+        let mut spots = vec![(0usize, 0usize); charts.len()];
+        let offset = [(resolution as f64 - sheet_cells_w) / 2.0, (resolution as f64 - sheet_cells_h) / 2.0];
+        let placed_all = order.iter().all(|&i| {
+            let o = &oriented[i];
+            let want = [offset[0] + targets[i].spot[0] * sheet_cells_w, offset[1] + targets[i].spot[1] * sheet_cells_h];
+            let (x, y) = (want[0] - o.mask.w as f64 / 2.0, want[1] - o.mask.h as f64 / 2.0);
+            match atlas.find_near(&o.mask, x.round() as isize, y.round() as isize, margin) {
+                Some((x, y)) => {
+                    atlas.insert(&o.halo, x, y, pad);
+                    spots[i] = (x, y);
+                    true
+                }
+                None => false,
+            }
+        });
+        if !placed_all {
+            k *= 0.9;
+            continue;
+        }
+        // Recortar al cuadrado que ocupan
+        let (mut min, mut max) = ([usize::MAX; 2], [0usize; 2]);
+        for (&(x, y), o) in spots.iter().zip(&oriented) {
+            min = [min[0].min(x), min[1].min(y)];
+            max = [max[0].max(x + o.mask.w), max[1].max(y + o.mask.h)];
+        }
+        let side = (max[0] - min[0]).max(max[1] - min[1]) + 2 * margin;
+        let shift = [
+            margin as f64 - min[0] as f64 + ((side - 2 * margin) - (max[0] - min[0])) as f64 / 2.0,
+            margin as f64 - min[1] as f64 + ((side - 2 * margin) - (max[1] - min[1])) as f64 / 2.0,
+        ];
+        let s = side as f64;
+        let placements = spots
+            .iter()
+            .zip(&oriented)
+            .map(|(&(x, y), o)| Placement {
+                m: o.m.map(|row| row.map(|c| c / s)),
+                t: [(o.shift[0] + x as f64 + shift[0]) / s, (o.shift[1] + y as f64 + shift[1]) / s],
+            })
+            .collect();
+        return (placements, total_3d * k * k / (s * s));
+    }
+    // No debería pasar: como último recurso, compacto
+    pack(charts, texture_size as u32, padding)
 }

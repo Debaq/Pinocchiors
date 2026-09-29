@@ -2,9 +2,23 @@
 
 use crate::charts::{chart_faces, is_disk, segment, split, ChartOptions};
 use crate::geometry::PolyMesh;
-use crate::pack::{pack, ChartShape};
+use crate::pack::{pack, pack_paintable, ChartShape, Paint};
 use crate::param::{parametrize, ChartUv};
+use crate::surface::uv_derivatives;
+use pinocchio_math::Vector3;
 use rayon::prelude::*;
+
+/// Cómo se acomodan las cartas en el atlas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// Lo más apretado posible: máxima resolución por texel (para exportar).
+    #[default]
+    Compact,
+    /// Legible para pintar a mano: cartas más grandes, derechas (lo de
+    /// arriba del modelo arriba en la imagen) y ubicadas donde están en el
+    /// modelo, en dos paneles como una hoja de vistas (un lado y el otro).
+    Paintable,
+}
 
 /// Opciones del desplegado.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -19,6 +33,7 @@ pub struct UnwrapOptions {
     pub texture_size: u32,
     /// Margen entre cartas (px).
     pub padding: u32,
+    pub layout: Layout,
 }
 
 impl Default for UnwrapOptions {
@@ -29,6 +44,7 @@ impl Default for UnwrapOptions {
             arap_iterations: 10,
             texture_size: 2048,
             padding: 4,
+            layout: Layout::Compact,
         }
     }
 }
@@ -73,6 +89,52 @@ fn into_disks(mesh: &PolyMesh, faces: Vec<usize>) -> Vec<Vec<usize>> {
     out
 }
 
+/// Caja del modelo.
+fn bounds(positions: &[[f64; 3]]) -> ([f64; 3], [f64; 3]) {
+    let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+    for p in positions {
+        for k in 0..3 {
+            lo[k] = lo[k].min(p[k]);
+            hi[k] = hi[k].max(p[k]);
+        }
+    }
+    (lo, hi)
+}
+
+/// Dónde está la carta en el modelo y hacia dónde crecen en ella sus
+/// coordenadas 3D: para acomodarla derecha y en su lugar.
+fn paint_info(mesh: &PolyMesh, chart_faces: &[usize], uv: &ChartUv) -> Paint {
+    let (mut center, mut normal, mut area) = (Vector3::zero(), Vector3::zero(), 0.0);
+    // Gradiente de cada coordenada 3D en el plano UV de la carta
+    let mut gradient = [[0.0f64; 2]; 3];
+    for &f in chart_faces {
+        center += mesh.centroids[f] * mesh.areas[f];
+        normal += mesh.normals[f] * mesh.areas[f];
+        area += mesh.areas[f];
+        for tri in mesh.fan(f) {
+            let p = tri.map(|v| mesh.points[v]);
+            let t = tri.map(|v| uv.vertex_uv[&v]);
+            let (dpdu, dpdv) = uv_derivatives(p, t);
+            let weight = (p[1] - p[0]).cross(&(p[2] - p[0])).length();
+            for (c, g) in gradient.iter_mut().enumerate() {
+                let (du, dv) = match c {
+                    0 => (dpdu.x(), dpdv.x()),
+                    1 => (dpdu.y(), dpdv.y()),
+                    _ => (dpdu.z(), dpdv.z()),
+                };
+                g[0] += weight * du;
+                g[1] += weight * dv;
+            }
+        }
+    }
+    let center = center * (1.0 / area.max(f64::MIN_POSITIVE));
+    Paint {
+        center: [center.x(), center.y(), center.z()],
+        normal: [normal.x(), normal.y(), normal.z()],
+        gradient,
+    }
+}
+
 /// Triángulos que cubren el polígono aunque no sea convexo: los abanicos
 /// desde cada vértice (un quad queda cubierto por sus dos triangulaciones).
 fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 3]> {
@@ -85,6 +147,14 @@ fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 
 /// Despliega una malla de caras de `N` vértices en un atlas UV.
 pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], options: &UnwrapOptions) -> Unwrap<N> {
     let mesh = PolyMesh::new(positions, faces);
+    let mut options = *options;
+    if options.layout == Layout::Paintable {
+        // Cartas más grandes a cambio de algo de estiramiento: menos piezas
+        // que reconocer (gonfoterio: 74 → 42)
+        options.charts.max_angle = options.charts.max_angle.max(85.0);
+        options.max_stretch = options.max_stretch.max(2.0);
+    }
+    let options = &options;
     let initial = chart_faces(&segment(&mesh, &options.charts));
 
     let mut accepted: Vec<(Vec<usize>, ChartUv)> = Vec::new();
@@ -124,7 +194,13 @@ pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], opti
             area_uv: uv.area_uv,
         })
         .collect();
-    let (placements, coverage) = pack(&shapes, options.texture_size, options.padding);
+    let (placements, coverage) = match options.layout {
+        Layout::Compact => pack(&shapes, options.texture_size, options.padding),
+        Layout::Paintable => {
+            let paint: Vec<Paint> = accepted.iter().map(|(chart_faces, uv)| paint_info(&mesh, chart_faces, uv)).collect();
+            pack_paintable(&shapes, &paint, bounds(positions), options.texture_size, options.padding)
+        }
+    };
 
     let mut chart_of_face = vec![0; faces.len()];
     let mut corners = vec![[[0.0f32; 2]; N]; faces.len()];

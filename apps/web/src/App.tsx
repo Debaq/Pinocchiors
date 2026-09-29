@@ -3374,7 +3374,13 @@ export const App: Component = () => {
       onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
       const config = uvConfig();
       const info = await invoke<UvInfo>("run_uv_unwrap", {
-        config: { texture_size: config.textureSize, padding: config.padding, max_angle: config.maxAngle },
+        config: {
+          texture_size: config.textureSize,
+          padding: config.padding,
+          max_angle: config.maxAngle,
+          // Proyectos viejos no guardaban la distribución
+          layout: config.layout ?? "paintable",
+        },
         onProgress,
       });
       history.milestone("Desplegar UV");
@@ -3408,7 +3414,13 @@ export const App: Component = () => {
       onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
       const config = uvConfig();
       const result = await invoke<{ uv: UvInfo; mesh_info: MeshInfo; rig_kept: boolean }>("unwrap_original_mesh", {
-        config: { texture_size: config.textureSize, padding: config.padding, max_angle: config.maxAngle },
+        config: {
+          texture_size: config.textureSize,
+          padding: config.padding,
+          max_angle: config.maxAngle,
+          // Proyectos viejos no guardaban la distribución
+          layout: config.layout ?? "paintable",
+        },
         onProgress,
       });
       history.milestone("Desplegar UV del original");

@@ -1,5 +1,5 @@
 use std::f64::consts::TAU;
-use uv_core::{unwrap, Unwrap, UnwrapOptions};
+use uv_core::{unwrap, Unwrap, UnwrapOptions, Layout};
 
 type Quads = (Vec<[f64; 3]>, Vec<[usize; 4]>);
 
@@ -187,6 +187,42 @@ fn charts_keep_padding_and_fill_the_atlas() {
                     }
                 }
             }
+        }
+    }
+}
+
+/// Derivadas de (u, v) respecto de (derecha, arriba) vistas desde fuera de
+/// la cara `f` de una malla plana.
+fn screen_jacobian(points: &[[f64; 3]], faces: &[[usize; 4]], result: &Unwrap<4>, f: usize) -> [[f64; 2]; 2] {
+    let p = faces[f].map(|v| points[v]);
+    let sub = |a: [f64; 3], b: [f64; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let n = cross(sub(p[1], p[0]), sub(p[2], p[0]));
+    let up = [0.0, 1.0, 0.0];
+    // Mirando desde afuera (hacia −n), la derecha es (−n) × arriba
+    let right = cross(n.map(|c| -c), up);
+    let screen = |q: [f64; 3]| [dot(q, right), dot(q, up)];
+    let (a, b, c) = (screen(sub(p[1], p[0])), screen(sub(p[3], p[0])), result.corners[f]);
+    let (du1, du2) = ([c[1][0] - c[0][0], c[1][1] - c[0][1]], [c[3][0] - c[0][0], c[3][1] - c[0][1]]);
+    // [du dv]ᵀ = J · [dx dy]ᵀ con dos aristas
+    let det = a[0] * b[1] - a[1] * b[0];
+    let solve = |d1: f64, d2: f64| [(d1 * b[1] - d2 * a[1]) / det, (d2 * a[0] - d1 * b[0]) / det];
+    [solve(du1[0] as f64, du2[0] as f64), solve(du1[1] as f64, du2[1] as f64)]
+}
+
+#[test]
+fn islands_are_not_mirrored_in_the_image() {
+    // Plano vertical (normal ±z): en la imagen la v crece hacia abajo, así
+    // que "arriba" en pantalla es −v
+    let (points, faces) = grid(8, 5, false, false, |i, j| [i as f64 * 0.3, j as f64 * 0.3, 0.0]);
+    for layout in [Layout::Compact, Layout::Paintable] {
+        let result = unwrap(&points, &faces, &UnwrapOptions { layout, ..Default::default() });
+        let [du, dv] = screen_jacobian(&points, &faces, &result, 0);
+        let det = du[0] * (-dv[1]) - du[1] * (-dv[0]);
+        assert!(det > 0.0, "{layout:?}: carta espejada (du {du:?}, dv {dv:?})");
+        if layout == Layout::Paintable {
+            assert!(du[0] > 0.0 && dv[1] < 0.0, "carta no derecha: du {du:?}, dv {dv:?}");
         }
     }
 }

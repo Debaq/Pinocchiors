@@ -93,6 +93,35 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   área empeora (66,8 %).
 - Banco: `cargo run --release -p uv-core --example unwrap_bench -- modelo.glb 2000 8000`.
 
+## Fase 3b — Distribución para pintar ✅ (paso 1 de 4)
+
+Pedido del usuario (2026-09-29): el atlas compacto es ilegible para los
+dibujantes. Flujo acordado: pintar sobre un mapa legible y compactar recién
+al exportar (re-horneando lo pintado, que es exacto porque es la misma
+superficie).
+
+- `UnwrapOptions::layout`: `Compact` (el de siempre) o `Paintable`.
+- `Paintable`: cartas más grandes (85°, estiramiento hasta 2,0: gonfoterio
+  74 → 42 cartas), cada una derecha (el gradiente de la altura del modelo
+  apunta arriba en la imagen; las casi horizontales alinean la "derecha" de
+  su vista) y en el hueco libre más cercano a donde cae su centro en una hoja
+  de dos vistas: se mira el lado ancho del modelo (costado de un cuadrúpedo,
+  frente de un humanoide); las cartas que miran al otro lado van al segundo
+  panel. Paneles lado a lado o apilados, lo más cuadrado. Cobertura ~40–48 %.
+- Espejo en v (`MIRROR_V`) en los dos modos: la parametrización deja las
+  cartas antihorarias con v hacia arriba, pero en glTF la v crece hacia abajo,
+  así que en la imagen se veían como desde adentro y lo pintado aparecía
+  invertido sobre el modelo.
+- App: selector "Distribución" en el paso UV, "Para pintar" por omisión.
+
+Pendiente de este flujo:
+2. Compactar al exportar: reempaquetar las mismas cartas (`Compact`) y
+   re-hornear todos los canales desde el mapa para pintar.
+3. Partes del cuerpo por el esqueleto (cabeza, torso, cada pata, cola) como
+   cartas, con cortes escondidos para abrir los cilindros (cara interna de
+   las patas, panza).
+4. Nombres de cada parte en la capa guía del PSD/XCF.
+
 ## Fase 4 — Horneado ✅
 
 - Por texel: triángulo destino (rasterizado), punto 3D y proyección al
