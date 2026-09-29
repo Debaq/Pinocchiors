@@ -1,0 +1,11 @@
+[package]
+name = "converter-layers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Imágenes con capas (PSD y XCF) para editar texturas en GIMP, Krita o Photoshop"
+
+[dependencies]
+thiserror = { workspace = true }
+flate2 = { workspace = true }
+image = { workspace = true }

@@ -567,6 +567,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "converter-layers"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "image",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "converter-obj"
 version = "0.1.0"
 dependencies = [

@@ -25,6 +25,7 @@ members = [
     "libs/converter/obj",
     "libs/converter/ply",
     "libs/converter/threemf",
+    "libs/converter/layers",
     "libs/converter/core",
     "libs/converter/wasm",
     # Apps
@@ -63,6 +64,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 # Compresión Draco (Rust puro) y reducción de triángulos
 draco-core = { version = "2.2", default-features = false, features = ["encoder", "decoder", "edgebreaker_valence_encode", "edgebreaker_valence_decode"] }
 meshopt = "0.6"
+
+# Compresión zlib (capas de XCF y PSD)
+flate2 = "1"
 
 # Empaquetado USDZ
 zip = { version = "4", default-features = false }
@@ -115,6 +119,7 @@ converter-stl = { path = "libs/converter/stl" }
 converter-obj = { path = "libs/converter/obj" }
 converter-ply = { path = "libs/converter/ply" }
 converter-3mf = { path = "libs/converter/threemf" }
+converter-layers = { path = "libs/converter/layers" }
 converter-core = { path = "libs/converter/core" }
 
 # CLI
