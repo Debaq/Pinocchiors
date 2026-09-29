@@ -5,6 +5,7 @@ use crate::geometry::PolyMesh;
 use crate::pack::{pack, ChartShape};
 use crate::param::{parametrize, ChartUv};
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 /// Opciones del desplegado.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -49,6 +50,9 @@ pub struct Unwrap<const N: usize> {
     /// Fracción del cuadrado UV cubierta por cartas.
     pub coverage: f64,
 }
+
+/// Puntos UV de una carta y sus triángulos (índices a los puntos).
+type ChartGeometry = (Vec<[f64; 2]>, Vec<[usize; 3]>);
 
 /// Rondas máximas de partir cartas malas.
 const MAX_SPLIT_ROUNDS: usize = 10;
@@ -107,11 +111,27 @@ pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], opti
     // Orden estable: por la primera cara de cada carta
     accepted.sort_by_key(|(faces, _)| faces.iter().copied().min().unwrap_or(usize::MAX));
 
-    let points: Vec<Vec<[f64; 2]>> = accepted.iter().map(|(_, uv)| uv.vertex_uv.values().copied().collect()).collect();
+    // Puntos y triángulos de cada carta para el empaquetado
+    let geometry: Vec<ChartGeometry> = accepted
+        .iter()
+        .map(|(chart_faces, uv)| {
+            let mut index = HashMap::new();
+            let mut points = Vec::new();
+            let mut local = |v: usize| {
+                *index.entry(v).or_insert_with(|| {
+                    points.push(uv.vertex_uv[&v]);
+                    points.len() - 1
+                })
+            };
+            let triangles: Vec<[usize; 3]> =
+                chart_faces.iter().flat_map(|&f| mesh.fan(f).collect::<Vec<_>>()).map(|t| t.map(&mut local)).collect();
+            (points, triangles)
+        })
+        .collect();
     let shapes: Vec<ChartShape> = accepted
         .iter()
-        .zip(&points)
-        .map(|((_, uv), points)| ChartShape { points, area_3d: uv.area_3d, area_uv: uv.area_uv })
+        .zip(&geometry)
+        .map(|((_, uv), (points, triangles))| ChartShape { points, triangles, area_3d: uv.area_3d, area_uv: uv.area_uv })
         .collect();
     let (placements, coverage) = pack(&shapes, options.texture_size, options.padding);
 

@@ -23,7 +23,7 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 | `geometry` | `PolyMesh`: normales de Newell, áreas, vecindad por aristas, abanicos. |
 | `charts` | Segmentación en islas (crecimiento simultáneo + relajación, ver abajo); garantiza discos. |
 | `param` | LSCM + ARAP por isla; métricas de inversión y estiramiento L2. |
-| `pack` | Escala a densidad de texel uniforme, caja mínima, skyline con giro de 90°. |
+| `pack` | Escala a densidad de texel uniforme, caja mínima; rasterizado conservador con giros de 90° (o skyline de cajas si deja menos lado). |
 | `unwrap` | Orquesta: islas → parametrización (en paralelo) → partir las malas → empaquetar. |
 | `tangent` | `corner_frames`: normales y tangentes por esquina, las mismas al hornear y al exportar. |
 | `bake` | `bake`: rasteriza el mapa nuevo, busca el punto del original por texel y evalúa canales; dilata los bordes. |
@@ -73,6 +73,26 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   tamaño de textura destino (se itera porque depende del lado final).
 - Gonfoterio: 74 islas, 44 % del atlas cubierto.
 
+### Empaquetado por rasterizado ✅
+
+- Como xatlas: cada isla se rasteriza de forma conservadora (toda celda que
+  toque un triángulo) en una grilla de hasta 1024 celdas por lado del atlas,
+  en sus cuatro giros de 90° (nunca reflejada).
+- Se estampa la máscara propia y se prueba la dilatada por el margen: dos
+  islas quedan a ≥ margen texels aunque encajen en los huecos de la otra.
+- Franja de ancho fijo, islas de mayor a menor área, posición de tope más
+  bajo. Búsqueda con máscaras de 64 bits: unas celdas de muestra descartan
+  en bloque las x imposibles antes de probar la máscara entera (~20× más
+  rápido).
+- El tamaño de celda se ajusta en hasta 3 rondas para que el lado final
+  quede en la grilla; si el lado se pasa, el margen no se cumple y esa
+  ronda se descarta. Se queda con el mejor entre rasterizado y skyline.
+- Mallas sintéticas (densidad por defecto, 2048 px, margen 4): esfera
+  51 % → 63 %, toro 44 % → 56 %, esfera ondulada 57 % → 65 %. Suma
+  ~0,1–0,4 s por desplegado en release.
+- Probado un atlas que crece como cuadrado (lado mínimo por colocación):
+  +2 puntos en el toro y 3× el tiempo; descartado.
+
 ## Fase 4 — Horneado ✅
 
 - Por texel: triángulo destino (rasterizado), punto 3D, punto más cercano
@@ -101,8 +121,8 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 ## Pendiente
 
-- Empaquetado por rasterizado (como xatlas) para pasar de ~45 % a ~70 % de
-  uso del atlas.
+- Medir el empaquetado por rasterizado en el gonfoterio (44 % con skyline).
+  Más uso del atlas: probar giros arbitrarios además de los de 90°.
 - Horneado con rayos por la normal además del punto más cercano: en zonas
   finas o muy juntas (colmillo contra pata) el más cercano puede ser la otra
   pieza; se ve una rayita clara en el gonfoterio.

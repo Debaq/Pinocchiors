@@ -141,3 +141,66 @@ fn torus_charts_are_disks() {
     let result = unwrap(&points, &faces, &UnwrapOptions::default());
     check(&result, UnwrapOptions::default().max_stretch);
 }
+
+/// Distancia mínima entre aristas UV de cartas distintas.
+fn min_chart_gap<const N: usize>(result: &Unwrap<N>) -> f64 {
+    let seg_point = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+        let len2 = dx * dx + dy * dy;
+        let t = if len2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
+    };
+    let edges: Vec<(usize, [f64; 2], [f64; 2])> = result
+        .corners
+        .iter()
+        .enumerate()
+        .flat_map(|(f, uvs)| {
+            let uvs = uvs.map(|p| [p[0] as f64, p[1] as f64]);
+            (0..N).map(move |k| (result.chart_of_face[f], uvs[k], uvs[(k + 1) % N])).collect::<Vec<_>>()
+        })
+        .collect();
+    let mut gap = f64::INFINITY;
+    for (i, &(ca, a0, a1)) in edges.iter().enumerate() {
+        for &(cb, b0, b1) in &edges[i + 1..] {
+            if ca != cb {
+                // Sin cruces (ver `overlapping_texels`), la distancia entre dos
+                // segmentos es la de algún extremo al otro segmento
+                let d = seg_point(a0, b0, b1).min(seg_point(a1, b0, b1)).min(seg_point(b0, a0, a1)).min(seg_point(b1, a0, a1));
+                gap = gap.min(d);
+            }
+        }
+    }
+    gap
+}
+
+#[test]
+fn charts_keep_padding_apart() {
+    let (points, faces) = cube(6, true);
+    for (texture_size, padding) in [(256, 4), (512, 2), (1024, 8)] {
+        let options = UnwrapOptions { texture_size, padding, ..UnwrapOptions::default() };
+        let result = unwrap(&points, &faces, &options);
+        check(&result, options.max_stretch);
+        let gap = min_chart_gap(&result) * texture_size as f64;
+        assert!(gap >= padding as f64 * 0.999, "margen {gap} px < {padding} px");
+    }
+}
+
+#[test]
+fn packing_fills_the_atlas() {
+    let (points, faces) = cube(16, true);
+    let sphere = unwrap(&points, &faces, &UnwrapOptions::default());
+    check(&sphere, UnwrapOptions::default().max_stretch);
+    let (points, faces) = grid(40, 20, true, false, |i, j| {
+        let (a, b) = (TAU * i as f64 / 40.0, std::f64::consts::PI * (j as f64 / 20.0 * 0.96 + 0.02));
+        let r = 1.0 + 0.3 * (5.0 * a).sin() * (4.0 * b).sin();
+        [r * b.sin() * a.cos(), r * b.sin() * a.sin(), r * b.cos()]
+    });
+    let bumpy = unwrap(&points, &faces, &UnwrapOptions::default());
+    check(&bumpy, UnwrapOptions::default().max_stretch);
+    eprintln!(
+        "cobertura: esfera {:.3} ({} cartas), ondulada {:.3} ({} cartas)",
+        sphere.coverage, sphere.num_charts, bumpy.coverage, bumpy.num_charts
+    );
+    assert!(sphere.coverage > 0.6, "esfera: cobertura {}", sphere.coverage);
+    assert!(bumpy.coverage > 0.6, "ondulada: cobertura {}", bumpy.coverage);
+}
