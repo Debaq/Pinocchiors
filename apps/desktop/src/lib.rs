@@ -70,7 +70,6 @@ pub fn run() {
             commands::get_checker_texture,
             commands::get_skin_materials,
             commands::get_skin_texture,
-            commands::get_uv_layout,
             // Reparación
             commands::analyze_mesh,
             commands::repair_mesh,

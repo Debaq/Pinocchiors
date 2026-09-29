@@ -1,7 +1,6 @@
-import { Component, Show, createEffect, onCleanup } from "solid-js";
+import { Component, Show } from "solid-js";
 import { Panel, Slider, Button, Select } from "../ui";
 import * as Icons from "../icons";
-import { currentTheme, themeColor } from "../../lib/theme";
 
 /** Opciones del desplegado (ver `UvUnwrapConfig` en apps/desktop) */
 export interface UvConfig {
@@ -37,10 +36,8 @@ export interface UvStepProps {
   onRestore?: () => void;
   preview: UvPreview;
   onPreviewChange?: (preview: UvPreview) => void;
-  /** UV de las esquinas de cada quad (8 floats por quad) */
-  layout?: Float32Array;
-  /** Imagen de fondo del atlas (color base) */
-  atlasImage?: ImageBitmap;
+  /** Abre la piel en el editor de texturas */
+  onOpenEditor?: () => void;
 }
 
 const SIZE_OPTIONS = [512, 1024, 2048, 4096].map((s) => ({ value: String(s), label: `${s} × ${s} px` }));
@@ -57,45 +54,6 @@ const Row: Component<{ label: string; value: string; warn?: boolean }> = (props)
     <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
   </div>
 );
-
-/** Atlas UV: el color base de fondo y las aristas de los quads encima */
-const Atlas: Component<{ layout: Float32Array; image?: ImageBitmap }> = (props) => {
-  let canvas: HTMLCanvasElement | undefined;
-  const size = 520;
-
-  createEffect(() => {
-    const ctx = canvas?.getContext("2d");
-    if (!ctx) return;
-    currentTheme();
-    ctx.fillStyle = themeColor("viewport");
-    ctx.fillRect(0, 0, size, size);
-    if (props.image) {
-      ctx.drawImage(props.image, 0, 0, size, size);
-    }
-    const uv = props.layout;
-    ctx.strokeStyle = themeColor("uv-edge");
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let q = 0; q + 8 <= uv.length; q += 8) {
-      ctx.moveTo(uv[q] * size, uv[q + 1] * size);
-      for (let k = 1; k <= 4; k++) {
-        const i = q + (k % 4) * 2;
-        ctx.lineTo(uv[i] * size, uv[i + 1] * size);
-      }
-    }
-    ctx.stroke();
-  });
-  onCleanup(() => canvas?.getContext("2d")?.clearRect(0, 0, size, size));
-
-  return (
-    <canvas
-      ref={canvas}
-      width={size}
-      height={size}
-      class="w-full aspect-square rounded border border-border bg-viewport"
-    />
-  );
-};
 
 export const UvStep: Component<UvStepProps> = (props) => {
   const update = (partial: Partial<UvConfig>) => props.onChange?.({ ...props.config, ...partial });
@@ -208,9 +166,9 @@ export const UvStep: Component<UvStepProps> = (props) => {
                 value={props.preview}
                 onChange={(v) => props.onPreviewChange?.(v as UvPreview)}
               />
-              <Show when={props.layout}>
-                <Atlas layout={props.layout!} image={props.atlasImage} />
-              </Show>
+              <Button class="w-full" onClick={() => props.onOpenEditor?.()}>
+                Abrir en el editor de texturas
+              </Button>
             </div>
           </Panel>
         </Show>

@@ -2206,18 +2206,6 @@ pub async fn get_skin_texture(app: AppHandle, index: usize) -> Result<Response, 
     Ok(Response::new(bytes))
 }
 
-/// UV de las esquinas de cada quad (8 f32 por quad), para dibujar el atlas
-#[tauri::command]
-pub async fn get_uv_layout(app: AppHandle) -> Result<Response, String> {
-    let bytes = in_background(app, |state| {
-        let skin = state.quad_skin.lock().unwrap();
-        let skin = skin.as_ref().ok_or("La malla no tiene UV")?;
-        Ok(skin.corners.iter().flatten().flatten().flat_map(|c| c.to_le_bytes()).collect::<Vec<u8>>())
-    })
-    .await?;
-    Ok(Response::new(bytes))
-}
-
 /// Posiciones y caras de la malla de quads en el formato de `uv-core`.
 fn quad_arrays(quad: &quadriflow_core::QuadMesh) -> (Vec<[f64; 3]>, Vec<[usize; 4]>) {
     (quad.vertices.iter().map(|v| [v.x, v.y, v.z]).collect(), quad.faces.iter().map(|f| f.v).collect())

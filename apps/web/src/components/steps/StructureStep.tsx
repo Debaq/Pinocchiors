@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js";
 import { Panel } from "../ui";
 import * as Icons from "../icons";
+import type { TextureSelection, TextureSlot } from "../layout/TextureEditor";
 
 // Tipos de `SceneStructure` (apps/desktop/src/structure.rs)
 
@@ -67,7 +68,18 @@ export interface StructureStepProps {
   format?: string;
   /** URL (blob) de cada textura, para las miniaturas */
   textureUrls?: string[];
+  /** Clic en una textura: abrirla en el editor de texturas */
+  onOpenTexture?: (selection: TextureSelection) => void;
 }
+
+/** Canales de un material con su índice de textura y su mapa en el visor */
+const materialChannels = (m: MaterialInfo): [string, number | null, TextureSlot][] => [
+  ["Color", m.base_color_texture, "base"],
+  ["Metal / rugosidad", m.metallic_roughness_texture, "metallicRoughness"],
+  ["Normal", m.normal_texture, "normal"],
+  ["Oclusión", m.occlusion_texture, "occlusion"],
+  ["Emisión", m.emissive_texture, "emissive"],
+];
 
 /** Formatos que se leen con Z arriba (STL; se pasan a la escena con Y arriba) */
 const Z_UP_FORMATS = ["STL", "PLY", "3MF"];
@@ -200,13 +212,7 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   <div class="space-y-3 pt-1">
                     <For each={structure().materials}>
                       {(m, i) => {
-                        const channels = [
-                          ["Color", m.base_color_texture],
-                          ["Metal / rugosidad", m.metallic_roughness_texture],
-                          ["Normal", m.normal_texture],
-                          ["Oclusión", m.occlusion_texture],
-                          ["Emisión", m.emissive_texture],
-                        ] as [string, number | null][];
+                        const channels = materialChannels(m);
                         return (
                           <div class="space-y-1.5">
                             <div class="flex items-center gap-2">
@@ -236,16 +242,23 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                             </Show>
                             <div class="grid grid-cols-3 gap-1.5">
                               <For each={channels.filter(([, t]) => t !== null)}>
-                                {([label, t]) => (
-                                  <div class="space-y-0.5">
+                                {([label, t, slot]) => (
+                                  <button
+                                    class="space-y-0.5 text-left group"
+                                    title="Abrir en el editor de texturas"
+                                    onClick={() => props.onOpenTexture?.({ material: i(), slot })}
+                                  >
                                     <Show
                                       when={thumb(t)}
                                       fallback={<div class="aspect-square rounded bg-bg-lighter" />}
                                     >
-                                      <img src={thumb(t)} class="aspect-square w-full object-cover rounded border border-border" />
+                                      <img
+                                        src={thumb(t)}
+                                        class="aspect-square w-full object-cover rounded border border-border group-hover:border-accent transition-colors"
+                                      />
                                     </Show>
-                                    <div class="text-[10px] text-text-muted truncate">{label}</div>
-                                  </div>
+                                    <div class="text-[10px] text-text-muted truncate group-hover:text-text">{label}</div>
+                                  </button>
                                 )}
                               </For>
                             </div>
@@ -262,7 +275,17 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   <div class="space-y-2 pt-1">
                     <For each={structure().textures}>
                       {(t, i) => (
-                        <div class="flex gap-2 items-center">
+                        <button
+                          class="flex gap-2 items-center w-full text-left rounded hover:bg-surface/40 transition-colors"
+                          title="Abrir en el editor de texturas"
+                          onClick={() => {
+                            // Primer material y mapa que usan esta textura
+                            for (const [material, m] of structure().materials.entries()) {
+                              const channel = materialChannels(m).find(([, index]) => index === i());
+                              if (channel) return props.onOpenTexture?.({ material, slot: channel[2] });
+                            }
+                          }}
+                        >
                           <Show when={thumb(i())} fallback={<div class="w-10 h-10 rounded bg-bg-lighter shrink-0" />}>
                             <img src={thumb(i())} class="w-10 h-10 object-cover rounded border border-border shrink-0" />
                           </Show>
@@ -272,7 +295,7 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                               {t.format} · {t.width}×{t.height} · {formatBytes(t.bytes)}
                             </div>
                           </div>
-                        </div>
+                        </button>
                       )}
                     </For>
                   </div>

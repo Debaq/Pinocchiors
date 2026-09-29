@@ -51,7 +51,8 @@ import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
-import { createPersisted } from "./lib/ui-state";
+import { createPersisted, startDrag } from "./lib/ui-state";
+import { TextureEditor, type TextureSelection } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
 import {
@@ -419,7 +420,6 @@ export const App: Component = () => {
   const [uvConfig, setUvConfig] = createSignal<UvConfig>(defaultUvConfig);
   const [uvInfo, setUvInfo] = createSignal<UvInfo | undefined>();
   const [uvPreview, setUvPreview] = createSignal<UvPreview>("texture");
-  const [uvLayout, setUvLayout] = createSignal<Float32Array | undefined>();
   /** Materiales de la piel (color, metal/rugosidad, normal, oclusión, emisión) */
   const [skinMaterials, setSkinMaterials] = createSignal<SceneMaterial[]>([]);
   const [checkerTexture, setCheckerTexture] = createSignal<ImageBitmap | undefined>();
@@ -455,12 +455,10 @@ export const App: Component = () => {
     const info = await invoke<UvInfo | null>("get_uv_info");
     setUvInfo(info ?? undefined);
     if (!info) {
-      setUvLayout(undefined);
       setSkinMaterials([]);
       return;
     }
-    const [layout, materials, mesh] = await Promise.all([
-      invoke<ArrayBuffer>("get_uv_layout"),
+    const [materials, mesh] = await Promise.all([
       invoke<MaterialInfo[]>("get_skin_materials"),
       invoke<ArrayBuffer>("get_quad_mesh_data"),
     ]);
@@ -480,10 +478,28 @@ export const App: Component = () => {
         used.has(index) ? invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage) : undefined
       )
     );
-    setUvLayout(new Float32Array(layout));
     setSkinMaterials(toSceneMaterials(materials, images));
     setQuadMeshData(decodeMesh(mesh));
     if (autorigComplete() && usesQuad()) await reloadWeights();
+  };
+
+  // Editor de texturas: la textura abierta (sobre la malla que muestra el
+  // visor) y qué fracción del ancho ocupa
+  const [textureEditor, setTextureEditor] = createSignal<TextureSelection | undefined>();
+  const [editorFraction, setEditorFraction] = createPersisted("textureEditor.fraction", 0.5);
+  let splitRef: HTMLDivElement | undefined;
+  const resizeEditor = (e: PointerEvent) => {
+    const start = editorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setEditorFraction(Math.min(0.8, Math.max(0.2, start + dx / width))));
+  };
+  /** Los quads se muestran siempre en esta etapa (no se puede elegir la original) */
+  const quadForced = () => usesQuad() && ["uv", "skeleton", "animate"].includes(pipeline.activeStep());
+  const editorMaterials = () => (displayQuad() ? skinMaterials() : sceneMaterials());
+  /** Abre una textura en el editor, sobre la malla original o la retopología */
+  const openTextureEditor = (target: "original" | "quad", selection: TextureSelection) => {
+    setShowQuadMesh(target === "quad");
+    setTextureEditor(selection);
   };
 
   /** Materiales del visor: los de la piel sobre los quads (con la vista
@@ -509,7 +525,6 @@ export const App: Component = () => {
   /** Descarta la retopología: ya no corresponde a la geometría actual */
   const clearQuadMesh = () => {
     setUvInfo(undefined);
-    setUvLayout(undefined);
     setSkinMaterials([]);
     setQuadMeshData(undefined);
     setQuadMeshLoaded(false);
@@ -2008,7 +2023,6 @@ export const App: Component = () => {
     setKeySelection(new Set<string>());
     setLastExport(undefined);
     setPaintMirrorLoaded(false);
-    setUvLayout(undefined);
     setSkinMaterials([]);
     setUvInfo(undefined);
 
@@ -2275,6 +2289,29 @@ export const App: Component = () => {
 
           {/* Viewport y, al animar, la línea de tiempo debajo */}
           <div class="flex flex-col flex-1 min-w-0 min-h-0">
+          <div ref={splitRef} class="flex flex-1 min-w-0 min-h-0">
+          {/* Editor de texturas a la izquierda del visor */}
+          <Show when={textureEditor()}>
+            {(selection) => (
+              <>
+                <div class="shrink-0 min-w-0" style={{ width: `${100 * editorFraction()}%` }}>
+                  <TextureEditor
+                    materials={editorMaterials()}
+                    mesh={displayQuad() ? quadMeshData() : meshData()}
+                    selection={selection()}
+                    onSelect={setTextureEditor}
+                    target={quadMeshData() && !quadForced() ? (displayQuad() ? "quad" : "original") : undefined}
+                    onTargetChange={(t) => setShowQuadMesh(t === "quad")}
+                    onClose={() => setTextureEditor(undefined)}
+                  />
+                </div>
+                <div
+                  class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors"
+                  onPointerDown={resizeEditor}
+                />
+              </>
+            )}
+          </Show>
           <div class="relative flex-1 min-w-0 min-h-0">
             <Viewport
               onViewerReady={handleViewerReady}
@@ -2332,6 +2369,7 @@ export const App: Component = () => {
               </button>
             </Show>
           </div>
+          </div>
           <Show when={animating() && activeClip()}>
             {(clip) => (
               <Timeline
@@ -2373,6 +2411,7 @@ export const App: Component = () => {
               fileName: fileName(),
               format: meshInfo().format,
               textureUrls: textureUrls(),
+              onOpenTexture: (selection) => openTextureEditor("original", selection),
             }}
             lights={lights()}
             onLightsChange={setLights}
@@ -2431,8 +2470,8 @@ export const App: Component = () => {
               onRestore: handleUvRestore,
               preview: uvPreview(),
               onPreviewChange: handleUvPreview,
-              layout: uvLayout(),
-              atlasImage: skinMaterials().find((m) => m.maps.base)?.maps.base,
+              onOpenEditor: () =>
+                openTextureEditor("quad", { material: Math.max(0, skinMaterials().findIndex((m) => m.maps.base)), slot: "base" }),
             }}
             skeletonProps={{
               presets: skeletonPresets(),
