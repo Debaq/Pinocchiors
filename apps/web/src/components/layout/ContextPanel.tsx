@@ -1,6 +1,6 @@
 import { Component, Switch, Match, Show, For, createEffect, on, type JSX } from "solid-js";
 import { clsx } from "clsx";
-import { PIPELINE_STEPS, type PipelineStepId } from "../../lib/pipeline";
+import { stepInfo, workspaceOf, type PipelineStepId } from "../../lib/pipeline";
 import { createPersisted, startDrag } from "../../lib/ui-state";
 import { Panel, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -12,7 +12,7 @@ import type { LightSettings } from "../../lib/Viewer3D";
 import { SceneOutliner } from "../panels/SceneOutliner";
 import { HistoryPanel } from "../panels/HistoryPanel";
 import type { HistoryStore } from "../../lib/history";
-import { ImportStep, type ImportStepProps } from "../steps/ImportStep";
+import { ObjectTab, type ObjectTabProps } from "../panels/ObjectTab";
 import { StructureStep, type StructureStepProps } from "../steps/StructureStep";
 import { RetopologyStep, type RetopologyStepProps } from "../steps/RetopologyStep";
 import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
@@ -24,9 +24,11 @@ import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
 
 export interface ContextPanelProps {
   activeStep: PipelineStepId;
+  /** Se eligió una sección del espacio activo (pestaña vertical) */
+  onSection?: (step: PipelineStepId) => void;
 
-  // Import
-  importProps: ImportStepProps;
+  /** Pestaña Objeto: el modelo y sus transformaciones */
+  objectProps: ObjectTabProps;
 
   // Estructura del archivo de origen
   structureProps: StructureStepProps;
@@ -91,7 +93,8 @@ export interface ShortcutHint {
   description: string;
 }
 
-type TabId = "tool" | "view" | "lights" | "history" | "info";
+/** "section" = la sección activa del espacio de trabajo; el resto, pestañas fijas */
+type TabId = "section" | "object" | "view" | "lights" | "history" | "info";
 
 /** Gestos del visor que no pasan por el gestor de atajos */
 const MOUSE_HINTS: ShortcutHint[] = [
@@ -100,6 +103,14 @@ const MOUSE_HINTS: ShortcutHint[] = [
   { keys: "Rueda / Ctrl+Central", description: "Zoom" },
   { keys: "Clic", description: "Seleccionar articulación" },
   { keys: "L+arrastrar", description: "Girar la luz" },
+];
+
+const FIXED_TABS: { id: Exclude<TabId, "section">; label: string; icon: Component<{ size?: number }> }[] = [
+  { id: "object", label: "Objeto", icon: Icons.Cube },
+  { id: "view", label: "Visualización", icon: Icons.Eye },
+  { id: "lights", label: "Luces", icon: Icons.Lightning },
+  { id: "history", label: "Historial", icon: Icons.Clock },
+  { id: "info", label: "Escena y atajos", icon: Icons.Info },
 ];
 
 const MIN_WIDTH = 260;
@@ -115,24 +126,36 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
   const [width, setWidth] = createPersisted("dock.width", 320);
   const [outlinerOpen, setOutlinerOpen] = createPersisted("dock.outliner.open", true);
   const [outlinerHeight, setOutlinerHeight] = createPersisted("dock.outliner.height", 180);
-  const [tab, setTab] = createPersisted<TabId>("dock.tab", "tool");
+  const [storedTab, setTab] = createPersisted<string>("dock.tab", "section");
+  const tab = (): TabId => (FIXED_TABS.some((t) => t.id === storedTab()) ? (storedTab() as TabId) : "section");
 
-  // Al cambiar de paso en el pipeline, mostrar sus herramientas
-  createEffect(on(() => props.activeStep, () => setTab("tool"), { defer: true }));
+  // Al cambiar de sección (o de espacio), mostrar sus herramientas
+  createEffect(on(() => props.activeStep, () => setTab("section"), { defer: true }));
 
-  const step = () => PIPELINE_STEPS.find((s) => s.id === props.activeStep) ?? PIPELINE_STEPS[0];
+  // Cada pestaña se abre desde arriba
+  let scrollRef: HTMLDivElement | undefined;
+  createEffect(on([tab, () => props.activeStep], () => scrollRef?.scrollTo({ top: 0 }), { defer: true }));
 
-  const tabs = (): { id: TabId; label: string; icon: JSX.Element }[] => {
-    const StepIcon = step().icon;
-    return [
-      { id: "tool", label: `Herramientas: ${step().label}`, icon: <StepIcon size={16} /> },
-      { id: "view", label: "Visualización", icon: <Icons.Eye size={16} /> },
-      { id: "lights", label: "Luces", icon: <Icons.Lightning size={16} /> },
-      { id: "history", label: "Historial", icon: <Icons.Clock size={16} /> },
-      { id: "info", label: "Escena y atajos", icon: <Icons.Info size={16} /> },
-    ];
-  };
-  const tabTitle = () => (tab() === "tool" ? step().label : tabs().find((t) => t.id === tab())?.label);
+  /** Secciones del espacio activo (al exportar, solo exportar) */
+  const sections = () => workspaceOf(props.activeStep)?.sections ?? [props.activeStep];
+  const tabTitle = () =>
+    tab() === "section" ? stepInfo(props.activeStep).label : FIXED_TABS.find((t) => t.id === tab())?.label;
+
+  const TabButton = (p: { label: string; active: boolean; onClick: () => void; children: JSX.Element }) => (
+    <Tooltip content={p.label} placement="left">
+      <button
+        class={clsx(
+          "w-7 h-7 flex items-center justify-center rounded transition-colors",
+          p.active ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-current/50"
+        )}
+        onClick={() => p.onClick()}
+        aria-label={p.label}
+        aria-pressed={p.active}
+      >
+        {p.children}
+      </button>
+    </Tooltip>
+  );
 
   const resizeWidth = (e: PointerEvent) => {
     const start = width();
@@ -201,23 +224,31 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
       <div class="flex flex-1 min-h-0 border-t border-border">
         {/* Pestañas verticales */}
         <nav class="flex flex-col items-center gap-1 w-9 shrink-0 py-2 bg-bg-darker border-r border-border">
-          <For each={tabs()}>
-            {(t) => (
-              <Tooltip content={t.label} placement="left">
-                <button
-                  class={clsx(
-                    "w-7 h-7 flex items-center justify-center rounded transition-colors",
-                    tab() === t.id
-                      ? "bg-accent/20 text-accent"
-                      : "text-text-muted hover:text-text hover:bg-current/50"
-                  )}
-                  onClick={() => setTab(t.id)}
-                  aria-label={t.label}
-                  aria-pressed={tab() === t.id}
+          {/* Secciones del espacio de trabajo */}
+          <For each={sections()}>
+            {(id) => {
+              const info = stepInfo(id);
+              return (
+                <TabButton
+                  label={info.label}
+                  active={tab() === "section" && props.activeStep === id}
+                  onClick={() => {
+                    setTab("section");
+                    props.onSection?.(id);
+                  }}
                 >
-                  {t.icon}
-                </button>
-              </Tooltip>
+                  <info.icon size={16} />
+                </TabButton>
+              );
+            }}
+          </For>
+          <div class="w-5 h-px my-1 bg-border" />
+          {/* Fijas: en cualquier espacio */}
+          <For each={FIXED_TABS}>
+            {(t) => (
+              <TabButton label={t.label} active={tab() === t.id} onClick={() => setTab(t.id)}>
+                <t.icon size={16} />
+              </TabButton>
             )}
           </For>
         </nav>
@@ -226,10 +257,13 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
           <div class="h-8 shrink-0 flex items-center px-3 border-b border-border text-xs font-semibold text-text truncate">
             {tabTitle()}
           </div>
-          <div class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
+          <div ref={scrollRef} class="flex-1 min-h-0 overflow-y-auto px-4 py-4">
             <Switch>
-              <Match when={tab() === "tool"}>
+              <Match when={tab() === "section"}>
                 <StepContent {...props} />
+              </Match>
+              <Match when={tab() === "object"}>
+                <ObjectTab {...props.objectProps} />
               </Match>
               <Match when={tab() === "view"}>
                 <ViewPanel
@@ -285,9 +319,6 @@ const AreaHeader: Component<{
 
 const StepContent: Component<ContextPanelProps> = (props) => (
   <Switch>
-    <Match when={props.activeStep === "import"}>
-      <ImportStep {...props.importProps} />
-    </Match>
     <Match when={props.activeStep === "structure"}>
       <StructureStep {...props.structureProps} />
     </Match>

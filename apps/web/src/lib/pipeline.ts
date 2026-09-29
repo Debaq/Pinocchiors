@@ -16,8 +16,6 @@ export type PipelineStepId =
   | "print3d"
   | "export";
 
-export type StepStatus = "locked" | "available" | "active" | "completed";
-
 export interface PipelineStep {
   id: PipelineStepId;
   label: string;
@@ -79,18 +77,50 @@ export const PIPELINE_STEPS: PipelineStep[] = [
 ];
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ESPACIOS DE TRABAJO
+// Como en Blender: no hay un camino obligatorio. Cada espacio agrupa sus
+// secciones (las pestañas del panel de propiedades) y se puede saltar entre
+// ellos en cualquier momento. Importar y exportar abren y cierran el trabajo
+// (menú Archivo); transformar el modelo está siempre en la pestaña Objeto.
+// ═══════════════════════════════════════════════════════════════════════════
+
+export type WorkspaceId = "prepare" | "rig" | "print";
+
+export interface Workspace {
+  id: WorkspaceId;
+  label: string;
+  sections: PipelineStepId[];
+}
+
+export const WORKSPACES: Workspace[] = [
+  { id: "prepare", label: "Preparar", sections: ["structure", "repair", "retopology", "uv"] },
+  { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"] },
+  { id: "print", label: "Imprimir 3D", sections: ["print3d"] },
+];
+
+export const stepInfo = (id: PipelineStepId) => PIPELINE_STEPS.find((s) => s.id === id) ?? PIPELINE_STEPS[0];
+
+/** Espacio al que pertenece una sección (`undefined` para exportar) */
+export const workspaceOf = (step: PipelineStepId): Workspace | undefined =>
+  WORKSPACES.find((w) => w.sections.includes(step));
+
+// ═══════════════════════════════════════════════════════════════════════════
 // STORE
 // ═══════════════════════════════════════════════════════════════════════════
 
-export interface PipelineState {
-  meshLoaded: boolean;
-  retopologyDone: boolean;
-  autorigDone: boolean;
-}
-
 export function createPipelineStore() {
-  const [activeStep, setActiveStep] = createSignal<PipelineStepId>("import");
+  const [activeStep, setActive] = createSignal<PipelineStepId>("structure");
   const [completedSteps, setCompletedSteps] = createSignal<Set<PipelineStepId>>(new Set());
+  // Última sección abierta de cada espacio: volver a él lleva ahí
+  const lastSection: Partial<Record<WorkspaceId, PipelineStepId>> = {};
+
+  const setActiveStep = (step: PipelineStepId) => {
+    // "import" ya no es una sección (proyectos viejos)
+    const next = step === "import" ? "structure" : step;
+    const ws = workspaceOf(next);
+    if (ws) lastSection[ws.id] = next;
+    setActive(next);
+  };
 
   const markCompleted = (stepId: PipelineStepId) => {
     setCompletedSteps((prev) => {
@@ -100,32 +130,22 @@ export function createPipelineStore() {
     });
   };
 
-  const getStepStatus = (stepId: PipelineStepId, meshLoaded: boolean): StepStatus => {
-    if (activeStep() === stepId) return "active";
-    if (completedSteps().has(stepId)) return "completed";
-    // Import siempre disponible
-    if (stepId === "import") return "available";
-    // El resto requiere modelo cargado
-    if (!meshLoaded) return "locked";
-    return "available";
-  };
-
-  const navigateTo = (stepId: PipelineStepId, meshLoaded: boolean) => {
-    const status = getStepStatus(stepId, meshLoaded);
-    if (status === "locked") return;
-    setActiveStep(stepId);
-  };
-
-  /** Reemplaza los pasos completados (al abrir un proyecto) */
+  /** Reemplaza los pasos hechos (al abrir un proyecto) */
   const setCompleted = (steps: PipelineStepId[]) => setCompletedSteps(new Set(steps));
+
+  const openWorkspace = (id: WorkspaceId) => {
+    const ws = WORKSPACES.find((w) => w.id === id)!;
+    setActiveStep(lastSection[id] ?? ws.sections[0]);
+  };
 
   return {
     activeStep,
     setActiveStep,
+    /** Espacio activo (`undefined` mientras se exporta) */
+    workspace: () => workspaceOf(activeStep()),
+    openWorkspace,
     completedSteps,
     markCompleted,
     setCompleted,
-    getStepStatus,
-    navigateTo,
   };
 }

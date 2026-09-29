@@ -1,9 +1,10 @@
 //! Orientación del modelo: piso, frente, origen.
 //!
-//! El frontend compone la transformación rígida (rotación, traslación y
-//! quizás un espejo) y el backend la aplica a todo lo que depende de la
-//! posición: escena, malla, quads, esqueleto colocado, rig y respaldos. Al ser
-//! rígida no se descarta nada, a diferencia de reparar o escalar.
+//! El frontend compone la transformación del modelo (rotación, traslación,
+//! escala uniforme y quizás un espejo) y el backend la aplica a todo lo que
+//! depende de la posición: escena, malla, quads, esqueleto colocado, rig y
+//! respaldos. Al conservar las formas (sin cizalla ni escala dispareja) no se
+//! descarta nada, a diferencia de reparar.
 
 use crate::commands::{in_background, wrap_scene};
 use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
@@ -71,11 +72,13 @@ pub async fn apply_placement(app: AppHandle, matrix: [f64; 16]) -> Result<Placem
     in_background(app, move |state| apply_placement_impl(state, matrix)).await
 }
 
-/// Rotación (quizás con espejo) más traslación
+/// Rotación (quizás con espejo), escala uniforme y traslación: `p' = s·R·p + t`
 #[derive(Debug, Clone, Copy)]
 struct Rigid {
-    /// Por filas
+    /// Por filas, ortonormal
     rotation: [[f64; 3]; 3],
+    /// Escala uniforme (1 = sin escala)
+    scale: f64,
     translation: [f64; 3],
     /// Determinante negativo: invierte la orientación de las caras
     mirrored: bool,
@@ -89,25 +92,30 @@ impl Rigid {
         if m[3].abs() > 1e-9 || m[7].abs() > 1e-9 || m[11].abs() > 1e-9 || (m[15] - 1.0).abs() > 1e-9 {
             return Err("La matriz no es afín".into());
         }
-        let rotation = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]];
-        // Columnas ortonormales: sin escala ni cizalla
+        let linear = [[m[0], m[4], m[8]], [m[1], m[5], m[9]], [m[2], m[6], m[10]]];
+        // Columnas ortogonales y del mismo largo: escala uniforme, sin cizalla
+        let scale = (0..3).map(|k| linear[k][0] * linear[k][0]).sum::<f64>().sqrt();
+        if !(scale > 1e-9) {
+            return Err("La escala es cero".into());
+        }
+        let rotation = linear.map(|row| row.map(|x| x / scale));
         for i in 0..3 {
             for j in 0..3 {
                 let dot: f64 = (0..3).map(|k| rotation[k][i] * rotation[k][j]).sum();
                 if (dot - if i == j { 1.0 } else { 0.0 }).abs() > 1e-6 {
-                    return Err("La transformación no es rígida (tiene escala o cizalla)".into());
+                    return Err("La transformación deforma el modelo (escala dispareja o cizalla)".into());
                 }
             }
         }
         let r = rotation;
         let det = r[0][0] * (r[1][1] * r[2][2] - r[1][2] * r[2][1]) - r[0][1] * (r[1][0] * r[2][2] - r[1][2] * r[2][0])
             + r[0][2] * (r[1][0] * r[2][1] - r[1][1] * r[2][0]);
-        Ok(Self { rotation, translation: [m[12], m[13], m[14]], mirrored: det < 0.0 })
+        Ok(Self { rotation, scale, translation: [m[12], m[13], m[14]], mirrored: det < 0.0 })
     }
 
     fn apply(&self, p: [f64; 3]) -> [f64; 3] {
-        let r = &self.rotation;
-        std::array::from_fn(|i| r[i][0] * p[0] + r[i][1] * p[1] + r[i][2] * p[2] + self.translation[i])
+        let (r, s) = (&self.rotation, self.scale);
+        std::array::from_fn(|i| s * (r[i][0] * p[0] + r[i][1] * p[1] + r[i][2] * p[2]) + self.translation[i])
     }
 
     fn point(&self, p: Vector3) -> Vector3 {
@@ -116,7 +124,7 @@ impl Rigid {
     }
 
     fn transform(&self) -> Transform {
-        let r = &self.rotation;
+        let r = self.rotation.map(|row| row.map(|x| x * self.scale));
         let [x, y, z] = self.translation;
         Transform::new(
             Matrix3::new(r[0][0], r[0][1], r[0][2], r[1][0], r[1][1], r[1][2], r[2][0], r[2][1], r[2][2]),
@@ -125,7 +133,7 @@ impl Rigid {
     }
 
     fn glam(&self) -> converter_scene::glam::Mat4 {
-        let r = &self.rotation;
+        let r = self.rotation.map(|row| row.map(|x| x * self.scale));
         let t = &self.translation;
         converter_scene::glam::Mat4::from_cols_array(&[
             r[0][0] as f32, r[1][0] as f32, r[2][0] as f32, 0.0,
@@ -279,9 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn rejects_scale_and_detects_mirror() {
-        let scaled = column_major([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3]);
-        assert!(Rigid::from_column_major(scaled).is_err());
+    fn accepts_uniform_scale_rejects_uneven_and_detects_mirror() {
+        let uneven = column_major([[2.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3]);
+        assert!(Rigid::from_column_major(uneven).is_err());
+        let uniform = column_major([[0.0, -2.0, 0.0], [2.0, 0.0, 0.0], [0.0, 0.0, 2.0]], [1.0, 0.0, 0.0]);
+        let r = Rigid::from_column_major(uniform).unwrap();
+        assert!((r.scale - 2.0).abs() < 1e-12 && !r.mirrored);
+        assert!(close(r.apply([1.0, 0.0, 0.0]), [1.0, 2.0, 0.0]));
         assert!(!Rigid::from_column_major(z_up_to_y_up()).unwrap().mirrored);
         let mirror = column_major([[-1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], [0.0; 3]);
         assert!(Rigid::from_column_major(mirror).unwrap().mirrored);
@@ -322,6 +334,32 @@ mod tests {
         assert!(before.iter().zip(&positions(&state)).all(|(b, a)| close(*b, *a)));
         let scene = state.scene.lock().unwrap().clone().unwrap();
         assert_eq!(scene.nodes.iter().filter(|n| n.name == PLACEMENT_NODE).count(), 1);
+    }
+
+    #[test]
+    fn uniform_scale_moves_mesh_scene_and_skeleton_and_undoes() {
+        let state = cube_state();
+        let before = positions(&state);
+        let skeleton = BasicSkeleton::from_bones(vec![Bone::new("raiz", Vector3::new(0.5, 1.0, 0.5))]);
+        *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skeleton));
+
+        // ×1000 (metros → milímetros) con el origen fijo
+        let k = 1000.0;
+        apply_placement_impl(&state, column_major([[k, 0.0, 0.0], [0.0, k, 0.0], [0.0, 0.0, k]], [0.0; 3])).unwrap();
+        let after = positions(&state);
+        assert!(before.iter().zip(&after).all(|(b, a)| close(b.map(|x| x * k), *a)));
+        let root = match state.skeleton.lock().unwrap().as_ref().unwrap() {
+            SkeletonType::Custom(s) => s.bones()[0].position,
+            _ => unreachable!(),
+        };
+        assert!(close([root.x(), root.y(), root.z()], [500.0, 1000.0, 500.0]));
+        let scene = state.scene.lock().unwrap().clone().unwrap();
+        let world: Vec<[f32; 3]> = scene.world_primitives().into_iter().flat_map(|p| p.positions).collect();
+        assert!(world.iter().zip(&after).all(|(w, a)| (0..3).all(|i| (f64::from(w[i]) - a[i]).abs() < 1e-2)));
+
+        let inv = 1.0 / k;
+        apply_placement_impl(&state, column_major([[inv, 0.0, 0.0], [0.0, inv, 0.0], [0.0, 0.0, inv]], [0.0; 3])).unwrap();
+        assert!(before.iter().zip(&positions(&state)).all(|(b, a)| close(*b, *a)));
     }
 
     #[test]

@@ -1,4 +1,5 @@
-import { Component, Show, createSignal, onMount, onCleanup } from "solid-js";
+import { Component, For, Show, createSignal, onMount, onCleanup } from "solid-js";
+import { WORKSPACES, type WorkspaceId } from "../../lib/pipeline";
 import { clsx } from "clsx";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { IconButton, Tooltip } from "../ui";
@@ -12,6 +13,13 @@ export interface HeaderProps {
   /** Ítems del menú Archivo (se arman al abrirlo) */
   fileMenu?: () => MenuEntry[];
   onOpenSettings?: () => void;
+  /** Espacio de trabajo activo (`undefined` mientras se exporta) */
+  workspace?: WorkspaceId;
+  onWorkspace?: (id: WorkspaceId) => void;
+  exporting?: boolean;
+  onExport?: () => void;
+  /** Sin modelo no hay espacios ni exportar */
+  hasModel?: boolean;
 }
 
 export const Header: Component<HeaderProps> = (props) => {
@@ -85,18 +93,55 @@ export const Header: Component<HeaderProps> = (props) => {
         </Show>
       </div>
 
-      {/* Center - File name */}
-      <Show when={props.fileName}>
-        <div class="flex items-center gap-2 no-drag">
-          <Icons.Cube size={14} class="text-text-muted" />
-          <span class="text-xs text-text-muted font-mono">
-            {props.fileName}
-          </span>
-        </div>
+      {/* Espacios de trabajo */}
+      <Show when={props.onWorkspace}>
+        <nav class="flex items-center gap-1 no-drag">
+          <For each={WORKSPACES}>
+            {(ws) => (
+              <button
+                class={clsx(
+                  "h-7 px-3 rounded-md text-xs transition-colors",
+                  "disabled:opacity-40 disabled:pointer-events-none",
+                  props.workspace === ws.id
+                    ? "bg-accent/20 text-accent font-medium"
+                    : "text-text-muted hover:text-text hover:bg-current/40"
+                )}
+                disabled={!props.hasModel}
+                onClick={() => props.onWorkspace?.(ws.id)}
+              >
+                {ws.label}
+              </button>
+            )}
+          </For>
+        </nav>
       </Show>
 
       {/* Right - Status & Actions */}
       <div class="flex items-center gap-3 no-drag">
+        <Show when={props.fileName}>
+          <div class="flex items-center gap-1.5 max-w-56">
+            <Icons.Cube size={13} class="text-text-muted shrink-0" />
+            <span class="text-xs text-text-muted font-mono truncate">{props.fileName}</span>
+          </div>
+        </Show>
+
+        <Show when={props.onExport}>
+          <button
+            class={clsx(
+              "h-7 px-3 rounded-md text-xs flex items-center gap-1.5 transition-colors",
+              "disabled:opacity-40 disabled:pointer-events-none",
+              props.exporting
+                ? "bg-accent text-bg font-medium"
+                : "border border-border text-text hover:border-accent hover:text-accent"
+            )}
+            disabled={!props.hasModel}
+            onClick={() => props.onExport?.()}
+          >
+            <Icons.Export size={13} />
+            Exportar
+          </button>
+        </Show>
+
         {/* FPS Counter */}
         <Show when={props.fps !== undefined}>
           <span class="text-xs font-mono text-text-dim">

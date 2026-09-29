@@ -5,7 +5,6 @@ import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay, Timeline, type T
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import * as Icons from "./components/icons";
-import { PipelineBar } from "./components/pipeline";
 import {
   type SkeletonPreset,
   type AutorigConfig,
@@ -24,6 +23,7 @@ import {
   defaultLights,
   SkeletonData,
   WeightsData,
+  type GridUnits,
   type PlacementMode,
   type PlacementPick,
 } from "./lib/Viewer3D";
@@ -35,6 +35,8 @@ import {
   mirrorMatrix,
   originMatrix,
   rotationMatrix,
+  scaleMatrix,
+  translationMatrix,
   zoneNormal,
   boundsAfter,
   type Axis,
@@ -592,6 +594,7 @@ export const App: Component = () => {
     { key: "s", ctrl: true, action: () => handleSaveProject(), description: "Guardar proyecto" },
     { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), description: "Guardar proyecto como" },
     { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
+    { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
     { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
     { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
     { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
@@ -1143,6 +1146,17 @@ export const App: Component = () => {
   const handleMirror = (axis: Axis) => {
     const data = meshData();
     if (data) applyPlacement(mirrorMatrix(data.positions, axis), `Espejado en ${axis.toUpperCase()}`);
+  };
+
+  const handleScaleModel = (factor: number, description: string) => {
+    const data = meshData();
+    if (data && factor > 0 && factor !== 1) applyPlacement(scaleMatrix(data.positions, factor), description);
+  };
+
+  const handleMoveModel = (offset: [number, number, number]) => {
+    const u = gridUnits();
+    const shown = offset.map((v) => Number((v * (u.metersPerUnit / u.unitMeters)).toPrecision(5)));
+    applyPlacement(translationMatrix(offset), `Mover ${shown.join(", ")} ${u.unitLabel}`);
   };
 
   const handleDrop = () => {
@@ -1831,10 +1845,9 @@ export const App: Component = () => {
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
 
-  // La grilla se mide en unidades reales: las del archivo, o las que elija el usuario
-  createEffect(() => {
-    const v = viewer();
-    if (!v) return;
+  // La grilla (y las medidas del panel Orientación) se miden en unidades
+  // reales: las del archivo, o las que elija el usuario
+  const gridUnits = createMemo((): GridUnits => {
     const grid = gridSettings();
     const metersPerUnit =
       grid.modelUnit === "auto" ? (sceneStructure()?.meters_per_unit ?? 1) : UNIT_METERS[grid.modelUnit];
@@ -1845,7 +1858,16 @@ export const App: Component = () => {
         : (Object.keys(UNIT_METERS) as LengthUnit[]).reduce((best, u) =>
             Math.abs(Math.log(UNIT_METERS[u] / metersPerUnit)) < Math.abs(Math.log(UNIT_METERS[best] / metersPerUnit)) ? u : best
           );
-    v.setGridUnits({ metersPerUnit, unitMeters: UNIT_METERS[unit], unitLabel: unit === "in" ? "pulg" : unit });
+    return { metersPerUnit, unitMeters: UNIT_METERS[unit], unitLabel: unit === "in" ? "pulg" : unit };
+  });
+  createEffect(() => viewer()?.setGridUnits(gridUnits()));
+
+  /** Medidas de la caja del modelo (unidades de la escena) */
+  const modelSize = createMemo((): [number, number, number] | undefined => {
+    const data = meshData();
+    if (!data) return undefined;
+    const s = boundsAfter(data.positions).getSize(new THREE.Vector3());
+    return [s.x, s.y, s.z];
   });
   const [recovery, setRecovery] = createSignal<RecoveryInfo | undefined>();
 
@@ -2062,7 +2084,8 @@ export const App: Component = () => {
     { label: "Guardar", shortcut: "Ctrl+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject() },
     { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject(true) },
     { separator: true },
-    { label: "Importar modelo…", onSelect: () => handleLoad() },
+    { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
+    { label: "Exportar…", disabled: !meshLoaded(), onSelect: () => pipeline.setActiveStep("export") },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
     { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
@@ -2143,12 +2166,11 @@ export const App: Component = () => {
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
           fileMenu={fileMenuItems}
           onOpenSettings={() => setSettingsOpen(true)}
-        />
-
-        {/* Pipeline Bar */}
-        <PipelineBar
-          getStepStatus={(stepId) => pipeline.getStepStatus(stepId, meshLoaded())}
-          onStepClick={(stepId) => pipeline.navigateTo(stepId, meshLoaded())}
+          workspace={pipeline.workspace()?.id}
+          onWorkspace={pipeline.openWorkspace}
+          exporting={pipeline.activeStep() === "export"}
+          onExport={() => pipeline.setActiveStep("export")}
+          hasModel={meshLoaded()}
         />
 
         {/* Main Content */}
@@ -2264,9 +2286,9 @@ export const App: Component = () => {
             }}
             lights={lights()}
             onLightsChange={setLights}
-            importProps={{
+            onSection={pipeline.setActiveStep}
+            objectProps={{
               meshInfo: meshLoaded() ? meshInfo() : undefined,
-              onImport: handleLoad,
               placement: {
                 mode: placementMode(),
                 onPickMode: handlePlacementMode,
@@ -2274,6 +2296,10 @@ export const App: Component = () => {
                 onMirror: handleMirror,
                 onDrop: handleDrop,
                 onOrigin: handleOrigin,
+                onScale: handleScaleModel,
+                onMove: handleMoveModel,
+                size: modelSize(),
+                unit: { label: gridUnits().unitLabel, perSceneUnit: gridUnits().metersPerUnit / gridUnits().unitMeters },
                 disabled: isProcessing(),
               },
             }}

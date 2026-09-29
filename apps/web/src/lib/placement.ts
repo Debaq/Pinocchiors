@@ -89,6 +89,25 @@ export function mirrorMatrix(positions: Float32Array, axis: Axis): THREE.Matrix4
   return aboutCenter(positions, new THREE.Matrix4().makeScale(s.x, s.y, s.z));
 }
 
+/**
+ * Escala uniforme por `factor` en torno al centro de la base: si estaba
+ * apoyado en la grilla, sigue apoyado
+ */
+export function scaleMatrix(positions: Float32Array, factor: number): THREE.Matrix4 {
+  const box = boundsAfter(positions);
+  const c = box.getCenter(new THREE.Vector3());
+  const pivot = new THREE.Vector3(c.x, box.min.y, c.z);
+  return new THREE.Matrix4()
+    .makeTranslation(pivot.x, pivot.y, pivot.z)
+    .multiply(new THREE.Matrix4().makeScale(factor, factor, factor))
+    .multiply(new THREE.Matrix4().makeTranslation(-pivot.x, -pivot.y, -pivot.z));
+}
+
+/** Traslación simple */
+export function translationMatrix(offset: [number, number, number]): THREE.Matrix4 {
+  return new THREE.Matrix4().makeTranslation(...offset);
+}
+
 /** Solo baja (o sube) el modelo hasta tocar la grilla */
 export function dropMatrix(positions: Float32Array): THREE.Matrix4 {
   return seated(positions, new THREE.Matrix4(), false);

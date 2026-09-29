@@ -1,6 +1,3 @@
-export { ImportStep } from "./ImportStep";
-export type { ImportStepProps } from "./ImportStep";
-
 export { RetopologyStep } from "./RetopologyStep";
 export type { RetopologyStepProps } from "./RetopologyStep";
 
