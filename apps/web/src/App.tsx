@@ -95,6 +95,7 @@ import {
   type AnimationClip,
   type KeyInterpolation,
 } from "./lib/animation";
+import { analyzeBody, availableAnimations, generateAnimation, type PresetAnimationId } from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
@@ -1258,6 +1259,33 @@ export const App: Component = () => {
       kind: "clips",
       data: { before, after, activeBefore: clip.id, activeAfter: after[after.length - 1]?.id },
     });
+  };
+
+  // Animaciones básicas que admite el esqueleto (ver lib/presetAnimations.ts)
+  const body = createMemo(() => analyzeBody(skeletonData()?.bones ?? []));
+  const presetAnimations = createMemo(() => {
+    const b = body();
+    return b ? availableAnimations(b) : [];
+  });
+
+  const handleAddPresetClip = async (id: PresetAnimationId) => {
+    const b = body();
+    const preset = presetAnimations().find((p) => p.id === id);
+    if (!b || !preset) return;
+    const before = clips();
+    const active = activeClip();
+    // La acción vacía que se crea al entrar al paso sobra
+    const kept = active && active.tracks.length === 0 ? before.filter((c) => c.id !== active.id) : before;
+    const names = new Set(kept.map((c) => c.name));
+    let name = preset.name;
+    for (let i = 2; names.has(name); i++) name = `${preset.name} ${i}`;
+    const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name);
+    await history.execute(`Animación: ${name}`, {
+      kind: "clips",
+      data: { before, after: [...kept, clip], activeBefore: active?.id, activeAfter: clip.id },
+    });
+    setKeySelection(new Set<string>());
+    setFrame(clip.start);
   };
 
   /** Keys en el cuadro actual con la pose que muestra el visor */
@@ -2864,6 +2892,8 @@ export const App: Component = () => {
                 const clip = activeClip();
                 if (clip) replaceClip({ ...clip, name });
               },
+              presets: presetAnimations(),
+              onAddPreset: handleAddPresetClip,
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
             }}
             exportProps={{

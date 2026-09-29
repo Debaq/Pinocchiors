@@ -3,6 +3,7 @@ import { clsx } from "clsx";
 import { Button } from "../ui";
 import * as Icons from "../icons";
 import type { AnimationClip } from "../../lib/animation";
+import type { PresetAnimation, PresetAnimationId } from "../../lib/presetAnimations";
 
 export interface AnimateStepProps {
   /** Hay esqueleto con pesos sobre la malla que se ve */
@@ -14,6 +15,9 @@ export interface AnimateStepProps {
   onDuplicateClip?: () => void;
   onDeleteClip?: () => void;
   onRenameClip?: (name: string) => void;
+  /** Animaciones básicas que admite el esqueleto */
+  presets?: PresetAnimation[];
+  onAddPreset?: (id: PresetAnimationId) => void;
   selectedBoneName?: string;
 }
 
@@ -92,6 +96,25 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
             )}
           </Show>
         </div>
+
+        {/* Animaciones básicas generadas a partir del esqueleto */}
+        <Show when={(props.presets?.length ?? 0) > 0}>
+          <div class="space-y-2">
+            <span class="text-xs font-semibold text-text">Animaciones básicas</span>
+            <div class="grid grid-cols-2 gap-1">
+              <For each={props.presets}>
+                {(preset) => (
+                  <Button size="sm" title={preset.description} onClick={() => props.onAddPreset?.(preset.id)}>
+                    {preset.name}
+                  </Button>
+                )}
+              </For>
+            </div>
+            <p class="text-xs text-text-dim leading-relaxed">
+              Cada una se agrega como animación nueva, con keys que puedes ajustar en la línea de tiempo.
+            </p>
+          </div>
+        </Show>
 
         <div class="text-xs">
           <span class="text-text-muted">Articulación: </span>
