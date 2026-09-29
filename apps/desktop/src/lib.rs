@@ -1,6 +1,7 @@
 //! Pinocchio App - Aplicación Tauri para auto-rigging
 
 pub mod animation;
+pub mod bvh;
 pub mod imported_rig;
 pub mod commands;
 pub mod placement;
@@ -50,6 +51,7 @@ pub fn run() {
             commands::select_skeleton,
             commands::remove_object,
             project::save_project,
+            project::new_project,
             project::open_project,
             project::revert_to_original,
             project::recovery_project_path,

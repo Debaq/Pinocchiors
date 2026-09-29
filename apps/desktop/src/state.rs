@@ -170,6 +170,21 @@ impl AppState {
 }
 
 impl AppState {
+    /// Proyecto nuevo: todo como al abrir la app (menos el proceso en curso)
+    pub fn clear_all(&self) {
+        *self.original_model.lock().unwrap() = None;
+        *self.last_saved_hash.lock().unwrap() = None;
+        *self.scene.lock().unwrap() = None;
+        *self.mesh.lock().unwrap() = None;
+        *self.skeleton.lock().unwrap() = None;
+        *self.original_skeleton.lock().unwrap() = None;
+        *self.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+        *self.skeleton_preset.lock().unwrap() = None;
+        self.rig_on_quad.store(false, Ordering::SeqCst);
+        self.use_retopology.store(true, Ordering::SeqCst);
+        self.reset_derived();
+    }
+
     /// La malla activa para esqueleto y pesos es la de quads
     pub fn active_is_quad(&self) -> bool {
         self.use_retopology.load(Ordering::SeqCst) && self.quad_mesh.lock().unwrap().is_some()
@@ -217,5 +232,26 @@ impl AppState {
 impl Default for AppState {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clear_all_leaves_state_as_new() {
+        let state = AppState::new();
+        *state.scene.lock().unwrap() = Some(Scene::new());
+        *state.skeleton.lock().unwrap() = Some(SkeletonType::Human);
+        *state.skeleton_preset.lock().unwrap() = Some(SkeletonType::Human);
+        state.rig_on_quad.store(true, Ordering::SeqCst);
+        state.use_retopology.store(false, Ordering::SeqCst);
+        state.clear_all();
+        assert!(state.scene.lock().unwrap().is_none());
+        assert!(state.skeleton.lock().unwrap().is_none());
+        assert!(state.skeleton_preset.lock().unwrap().is_none());
+        assert!(!state.rig_on_quad.load(Ordering::SeqCst));
+        assert!(state.use_retopology.load(Ordering::SeqCst), "como AppState::new");
     }
 }

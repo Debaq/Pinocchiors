@@ -43,6 +43,57 @@ pub struct AnimationClip {
     pub name: String,
     pub fps: f32,
     pub tracks: Vec<JointTrack>,
+    /// Rango que se reproduce (inclusive); sin él, de la primera a la última key
+    #[serde(default)]
+    pub start: Option<f32>,
+    #[serde(default)]
+    pub end: Option<f32>,
+}
+
+impl AnimationClip {
+    /// Cuadros enteros que se reproducen
+    pub fn frames(&self) -> std::ops::RangeInclusive<i64> {
+        let keys = self.tracks.iter().flat_map(|t| t.rotation.iter().map(|k| k.frame).chain(t.translation.iter().map(|k| k.frame)));
+        let (first, last) = keys.fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), f| (a.min(f), b.max(f)));
+        let start = self.start.unwrap_or(if first.is_finite() { first } else { 0.0 });
+        let end = self.end.unwrap_or(if last.is_finite() { last } else { start }).max(start);
+        start.round() as i64..=end.round() as i64
+    }
+}
+
+/// Valor de las keys en `frame` (como la línea de tiempo: antes de la primera
+/// key, la primera; después de la última, la última)
+fn sample<T: Copy>(keys: &[Key<T>], frame: f32, mix: impl Fn(T, T, f32) -> T) -> Option<T> {
+    let mut keys: Vec<&Key<T>> = keys.iter().collect();
+    keys.sort_by(|a, b| a.frame.total_cmp(&b.frame));
+    let first = keys.first()?;
+    if frame <= first.frame {
+        return Some(first.value);
+    }
+    for pair in keys.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        if frame < b.frame {
+            return Some(match a.interpolation {
+                KeyInterpolation::Step => a.value,
+                KeyInterpolation::Linear => mix(a.value, b.value, (frame - a.frame) / (b.frame - a.frame)),
+            });
+        }
+    }
+    keys.last().map(|k| k.value)
+}
+
+/// Giro local de la articulación en `frame` (identidad si no tiene keys)
+pub fn sample_rotation(track: Option<&JointTrack>, frame: f32) -> Quat {
+    track
+        .and_then(|t| sample(&t.rotation, frame, |a, b, t| Quat::from_array(a).slerp(Quat::from_array(b), t).to_array()))
+        .map_or(Quat::IDENTITY, |q| Quat::from_array(q).normalize())
+}
+
+/// Desplazamiento de la raíz respecto del reposo en `frame`
+pub fn sample_translation(track: Option<&JointTrack>, frame: f32) -> Vec3 {
+    track
+        .and_then(|t| sample(&t.translation, frame, |a, b, t| Vec3::from(a).lerp(Vec3::from(b), t).to_array()))
+        .map_or(Vec3::ZERO, Vec3::from)
 }
 
 /// Esqueleto de la escena con skin: padre de cada articulación, nodo de
@@ -188,7 +239,7 @@ mod tests {
     }
 
     fn clip(tracks: Vec<JointTrack>) -> AnimationClip {
-        AnimationClip { name: "c".into(), fps: 24.0, tracks }
+        AnimationClip { name: "c".into(), fps: 24.0, tracks, start: None, end: None }
     }
 
     #[test]

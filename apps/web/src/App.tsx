@@ -1,7 +1,7 @@
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
@@ -64,6 +64,7 @@ import {
   type GridSettings,
   type LengthUnit,
 } from "./components/layout/SettingsDialog";
+import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 
 interface ProjectSaved {
   written: boolean;
@@ -99,7 +100,7 @@ import { analyzeBody, availableAnimations, generateAnimation, type PresetAnimati
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
-import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
+import { SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import type { ScanMeshSettings } from "./components/steps/ScanStep";
@@ -408,8 +409,19 @@ export const App: Component = () => {
   const [quadMeshInfo, setQuadMeshInfo] = createSignal({ vertices: 0, quads: 0 });
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
   const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
+  /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
+  const [exportBoneShapes, setExportBoneShapes] = createSignal(false);
+  /** Hay algo con qué trabajar: un modelo o, sin modelo, un esqueleto */
+  const hasWork = () => meshLoaded() || !!skeletonData();
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
   const [exportOptions, setExportOptions] = createSignal<ExportOptions>(defaultExportOptions);
+  // Sin modelo solo sirven los formatos que llevan el esqueleto solo
+  createEffect(() => {
+    const opts = exportOptions();
+    if (!meshLoaded() && skeletonData() && !SKELETON_FORMATS.includes(opts.format)) {
+      untrack(() => setExportOptions({ ...opts, format: "glb" }));
+    }
+  });
   const [lastExport, setLastExport] = createSignal<{ bytes: number; files: string[] } | undefined>();
   const [canUndoPrintScale, setCanUndoPrintScale] = createSignal(false);
 
@@ -788,6 +800,7 @@ export const App: Component = () => {
   const shortcutDefs: ShortcutDef[] = [
     { key: "s", ctrl: true, action: () => handleSaveProject(), description: "Guardar proyecto" },
     { key: "s", ctrl: true, shift: true, action: () => handleSaveProject(true), description: "Guardar proyecto como" },
+    { key: "n", ctrl: true, action: () => handleNewProject(), description: "Proyecto nuevo" },
     { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
     { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
     { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
@@ -932,9 +945,11 @@ export const App: Component = () => {
   /** Modelo del escáner (Orizon3D): reemplaza al abierto */
   const handleScanModel = async (settings: ScanMeshSettings) => {
     if (meshLoaded()) {
-      const ok = await ask("El modelo del escáner reemplaza al abierto. ¿Continuar?", {
+      const ok = await confirmAction({
         title: "Crear modelo del escáner",
-        kind: "warning",
+        message: "El modelo del escáner reemplaza al abierto.",
+        confirmLabel: "Reemplazar",
+        danger: true,
       });
       if (!ok) return;
     }
@@ -955,6 +970,8 @@ export const App: Component = () => {
 
   /** Muestra el modelo recién cargado en el backend y limpia lo del anterior */
   const showNewModel = async (info: MeshInfo, milestone: string) => {
+    // Se venía animando el esqueleto solo: sus animaciones pasan al modelo
+    const keepClips = !info.rig && !meshLoaded() && !!skeletonData() && clips().some((c) => c.tracks.length > 0);
     // Modelo nuevo: historial nuevo
     history.clear();
     history.milestone(milestone);
@@ -976,12 +993,18 @@ export const App: Component = () => {
     setCanUndoRepair(false);
     setMeshAnalysis(undefined);
     setSubdivideResult(undefined);
-    setClips([]);
-    setActiveClipId(undefined);
+    if (!keepClips) {
+      setClips([]);
+      setActiveClipId(undefined);
+    }
     setFrame(0);
     clearQuadMesh();
     setLastExport(undefined);
     setCanUndoPrintScale(false);
+
+    if (keepClips) {
+      setStatusMessage("Modelo cargado: calcula los pesos en Esqueleto para ver las animaciones sobre él");
+    }
 
     // El archivo trae esqueleto y pesos: queda listo para animar sus clips
     if (info.rig) {
@@ -1091,7 +1114,9 @@ export const App: Component = () => {
   const boneIndex = createMemo(() => new Map((skeletonData()?.bones ?? []).map((b, i) => [b.name, i])));
   /** Hay rig para animar: esqueleto con pesos sobre la malla que se ve */
   const animationReady = () =>
-    autorigComplete() && !!weightsData() && !!skeletonData() && weightsData()!.numBones === skeletonData()!.bones.length;
+    !!skeletonData() &&
+    (!meshLoaded() ||
+      (autorigComplete() && !!weightsData() && weightsData()!.numBones === skeletonData()!.bones.length));
   const animating = () => pipeline.activeStep() === "animate" && animationReady();
 
   // Fuera del paso Animar, las animaciones del modelo se reproducen una tras
@@ -1364,7 +1389,7 @@ export const App: Component = () => {
       const format = formats.export.find((f) => f.id === opts.format);
       if (!format) return;
 
-      const baseName = (fileName() ?? "modelo").replace(/\.[^.]+$/, "");
+      const baseName = (fileName() ?? (meshLoaded() ? "modelo" : "esqueleto")).replace(/\.[^.]+$/, "");
       const selected = await save({
         title: `Exportar ${format.name}`,
         defaultPath: `${baseName}.${format.extensions[0]}`,
@@ -1377,6 +1402,11 @@ export const App: Component = () => {
       const name = path.split("/").pop();
 
       const includeRig = exportIncludeRig() && autorigComplete();
+      // Sin modelo va el esqueleto solo; BVH lleva el esqueleto y la animación activa
+      const skeletonOnly = !meshLoaded();
+      const bvh = opts.format === "bvh";
+      const exported = bvh ? clips().filter((c) => c.id === activeClipId()) : clips();
+      const withAnimations = bvh || skeletonOnly || includeRig;
       const result = await busy(`Exportando a ${name}...`, () => invoke<ExportResult>("export_model", {
         config: {
           format: opts.format,
@@ -1392,7 +1422,9 @@ export const App: Component = () => {
           texture_quality: opts.textureQuality > 0 ? opts.textureQuality : null,
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
-          animations: includeRig ? clipsForExport(clips(), boneIndex()) : null,
+          animations: withAnimations ? clipsForExport(exported, boneIndex()) : null,
+          skeleton_only: skeletonOnly,
+          bone_shapes: exportBoneShapes(),
           fps: activeClip()?.fps ?? null,
         },
       }));
@@ -2070,7 +2102,8 @@ export const App: Component = () => {
   });
 
   const toolDisabledReason = (tool: ToolId) => {
-    if (!meshLoaded()) return "importa un modelo";
+    // Sin modelo se trabaja sobre el esqueleto solo
+    if (!meshLoaded() && (toolCtx() === "object" || tool === "paint")) return "importa un modelo";
     if (toolCtx() !== "object" && tool !== "select" && tool !== "measure" && !skeletonData()) return "primero elige un esqueleto";
     if (tool === "paint" && !autorigComplete()) return "primero calcula los pesos";
     return undefined;
@@ -2250,6 +2283,16 @@ export const App: Component = () => {
   const [projectPath, setProjectPath] = createSignal<string | undefined>();
   const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  /** Pregunta pendiente del diálogo de confirmación */
+  const [confirmation, setConfirmation] = createSignal<(ConfirmRequest & { resolve: (ok: boolean) => void }) | undefined>();
+  /** Pregunta con el diálogo de la app; `true` si se confirma */
+  const confirmAction = (request: ConfirmRequest) =>
+    new Promise<boolean>((resolve) => setConfirmation({ ...request, resolve }));
+  const answerConfirmation = (ok: boolean) => {
+    const pending = confirmation();
+    setConfirmation(undefined);
+    pending?.resolve(ok);
+  };
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
   const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
   createEffect(() => applyTheme(themeSetting()));
@@ -2289,6 +2332,8 @@ export const App: Component = () => {
     return JSON.stringify({
       version: PROJECT_UI_VERSION,
       fileName: fileName(),
+      // false: proyecto de solo esqueleto
+      model: meshLoaded(),
       meshInfo: meshInfo(),
       pipeline: { active: pipeline.activeStep(), completed: [...pipeline.completedSteps()] },
       lights: lights(),
@@ -2377,8 +2422,14 @@ export const App: Component = () => {
     if (ui.animation?.interpolation) setKeyInterpolation(ui.animation.interpolation);
 
     // Lo que dibuja el visor sale del backend
-    setMeshData(await fetchMeshData());
-    setMeshLoaded(true);
+    if (ui.model === false) {
+      viewerRef?.unloadMesh();
+      setMeshData(undefined);
+      setMeshLoaded(false);
+    } else {
+      setMeshData(await fetchMeshData());
+      setMeshLoaded(true);
+    }
     const hasSkeleton = ui.skeleton?.loaded === true;
     setSkeletonData(hasSkeleton ? tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")) : undefined);
     setSkeletonLoaded(hasSkeleton);
@@ -2405,8 +2456,8 @@ export const App: Component = () => {
 
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
-    if (!meshLoaded()) {
-      setStatusMessage("No hay nada que guardar: importa un modelo primero");
+    if (!hasWork()) {
+      setStatusMessage("No hay nada que guardar: importa un modelo o elige un esqueleto");
       return;
     }
     let path = as ? undefined : projectPath();
@@ -2434,10 +2485,12 @@ export const App: Component = () => {
 
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
   const handleOpenProject = async (path?: string, recovered = false) => {
-    if (meshLoaded()) {
-      const ok = await ask("Lo que no esté guardado del trabajo actual se pierde. ¿Abrir otro proyecto?", {
+    if (hasWork()) {
+      const ok = await confirmAction({
         title: "Abrir proyecto",
-        kind: "warning",
+        message: "Lo que no esté guardado del trabajo actual se pierde.",
+        confirmLabel: "Abrir otro proyecto",
+        danger: true,
       });
       if (!ok) return;
     }
@@ -2462,11 +2515,42 @@ export const App: Component = () => {
     }
   };
 
+  /** Empieza de cero: sin modelo, esqueleto, animaciones ni historial */
+  const handleNewProject = async () => {
+    if (isProcessing()) return setStatusMessage("Hay un proceso en curso: espera a que termine");
+    if (hasWork()) {
+      const ok = await confirmAction({
+        title: "Proyecto nuevo",
+        message: "Se cierran el modelo, el esqueleto, las animaciones y el historial. Lo que no esté guardado se pierde.",
+        confirmLabel: "Empezar de cero",
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    try {
+      await invoke("new_project");
+      clearSkeletonUi();
+      // Un proyecto vacío y sin modelo deja la interfaz como al abrir la app
+      await restoreProjectUi(JSON.stringify({ model: false }));
+      setSceneStructure(undefined);
+      setSceneMaterials([]);
+      setMeshInfo({ vertices: 0, faces: 0, format: "" });
+      setUvPreview("texture");
+      setTextureEditor(undefined);
+      setProjectPath(undefined);
+      setStatusMessage("Proyecto nuevo");
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
   /** Descarta todo lo hecho sobre el modelo y vuelve al archivo importado */
   const handleRevertToOriginal = async () => {
-    const ok = await ask("Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.", {
+    const ok = await confirmAction({
       title: "Volver al modelo original",
-      kind: "warning",
+      message: "Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.",
+      confirmLabel: "Descartar",
+      danger: true,
     });
     if (!ok) return;
     try {
@@ -2489,12 +2573,13 @@ export const App: Component = () => {
   };
 
   const fileMenuItems = (): MenuEntry[] => [
+    { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
-    { label: "Guardar", shortcut: "Ctrl+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject() },
-    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !meshLoaded(), onSelect: () => handleSaveProject(true) },
+    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasWork(), onSelect: () => handleSaveProject() },
+    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
-    { label: "Exportar…", disabled: !meshLoaded(), onSelect: () => pipeline.setActiveStep("export") },
+    { label: "Exportar…", disabled: !hasWork(), onSelect: () => pipeline.setActiveStep("export") },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
     { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
@@ -2505,7 +2590,7 @@ export const App: Component = () => {
   let autosaving = false;
   const autosaveTimer = setInterval(async () => {
     const settings = autosave();
-    if (!settings.enabled || autosaving || !meshLoaded() || isProcessing() || progress()) return;
+    if (!settings.enabled || autosaving || !hasWork() || isProcessing() || progress()) return;
     if (Date.now() - lastAutosave < settings.minutes * 60_000) return;
     autosaving = true;
     lastAutosave = Date.now();
@@ -2583,6 +2668,7 @@ export const App: Component = () => {
           exporting={pipeline.activeStep() === "export"}
           onExport={() => pipeline.setActiveStep("export")}
           hasModel={meshLoaded()}
+          canExport={hasWork()}
         />
 
         {/* Main Content */}
@@ -2678,9 +2764,10 @@ export const App: Component = () => {
             />
 
             {/* Welcome Screen overlay */}
-            <Show when={!meshLoaded() && pipeline.activeStep() !== "scan"}>
+            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig"}>
               <WelcomeScreen
                 onImport={handleLoad}
+                onSkeletonOnly={() => pipeline.setActiveStep("skeleton")}
                 onOpenProject={() => handleOpenProject()}
                 recovery={recovery()}
                 onRecover={() => handleOpenProject(recovery()!.path, true)}
@@ -2830,6 +2917,7 @@ export const App: Component = () => {
               onAutorigConfigChange: setAutorigConfig,
               onAutorig: handleAutorig,
               canAutorig: meshLoaded() && skeletonLoaded(),
+              hasModel: meshLoaded(),
               isProcessing: isProcessing(),
               autorigComplete: autorigComplete(),
               numBones: boneNames().length || undefined,
@@ -2898,7 +2986,11 @@ export const App: Component = () => {
             }}
             exportProps={{
               onExport: handleExport,
-              canExport: meshLoaded(),
+              canExport: hasWork(),
+              skeletonOnly: !meshLoaded(),
+              hasSkeleton: !!skeletonData(),
+              boneShapes: exportBoneShapes(),
+              onBoneShapesChange: setExportBoneShapes,
               autorigComplete: autorigComplete(),
               hasQuadMesh: quadMeshLoaded(),
               includeRig: exportIncludeRig(),
@@ -2954,6 +3046,16 @@ export const App: Component = () => {
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}
         />
+      </Show>
+
+      <Show when={confirmation()}>
+        {(request) => (
+          <ConfirmDialog
+            {...request()}
+            onConfirm={() => answerConfirmation(true)}
+            onCancel={() => answerConfirmation(false)}
+          />
+        )}
       </Show>
     </div>
   );

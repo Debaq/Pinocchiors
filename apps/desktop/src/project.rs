@@ -627,6 +627,14 @@ pub fn recovery_info(app: AppHandle) -> Option<RecoveryInfo> {
     })
 }
 
+/// Proyecto nuevo: descarta el modelo, el esqueleto y todo lo derivado
+#[tauri::command]
+pub fn new_project(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.try_begin_processing().ok_or("Hay un proceso en curso: espera a que termine")?;
+    state.clear_all();
+    Ok(())
+}
+
 /// Vuelve al modelo tal como se importó: descarta todo lo generado después
 #[tauri::command]
 pub fn revert_to_original(state: tauri::State<'_, AppState>) -> Result<(), String> {

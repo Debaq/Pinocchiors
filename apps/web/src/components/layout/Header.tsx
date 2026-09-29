@@ -20,6 +20,8 @@ export interface HeaderProps {
   onExport?: () => void;
   /** Sin modelo no hay espacios ni exportar */
   hasModel?: boolean;
+  /** Hay algo que exportar (un modelo o un esqueleto solo) */
+  canExport?: boolean;
 }
 
 export const Header: Component<HeaderProps> = (props) => {
@@ -134,7 +136,7 @@ export const Header: Component<HeaderProps> = (props) => {
                 ? "bg-accent text-bg font-medium"
                 : "border border-border text-text hover:border-accent hover:text-accent"
             )}
-            disabled={!props.hasModel}
+            disabled={!(props.canExport ?? props.hasModel)}
             onClick={() => props.onExport?.()}
           >
             <Icons.Export size={13} />

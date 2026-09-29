@@ -5,6 +5,8 @@ import * as Icons from "../icons";
 
 export interface WelcomeScreenProps {
   onImport?: () => void;
+  /** Trabajar sin modelo: elegir un esqueleto, animarlo y exportarlo */
+  onSkeletonOnly?: () => void;
   onOpenProject?: () => void;
   /** Última sesión guardada por el guardado automático */
   recovery?: { saved_at: number; source_name: string | null };
@@ -55,6 +57,9 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
         </Button>
 
         <div class="flex flex-col items-center gap-2 -mt-2">
+          <Button onClick={props.onSkeletonOnly} variant="ghost" size="sm" icon={<Icons.Bone size={14} />}>
+            Empezar solo con un esqueleto
+          </Button>
           <Button onClick={props.onOpenProject} variant="ghost" size="sm" icon={<Icons.FolderOpen size={14} />}>
             Abrir proyecto (.pinocchio)
           </Button>

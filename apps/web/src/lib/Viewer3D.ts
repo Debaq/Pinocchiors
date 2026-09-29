@@ -387,8 +387,9 @@ export class Viewer3D {
     /** Articulación respecto de la cabeza de su segmento (reposo) */
     tip: THREE.Vector3[];
     skeleton: THREE.Skeleton;
-    mesh: THREE.SkinnedMesh;
-    wireframe: THREE.SkinnedMesh;
+    /** Malla con skin; sin modelo (solo esqueleto) el rig son solo los huesos */
+    mesh: THREE.SkinnedMesh | null;
+    wireframe: THREE.SkinnedMesh | null;
   } | null = null;
 
   // Settings
@@ -1471,7 +1472,7 @@ export class Viewer3D {
     if (!mesh) return;
     this.disposeMaterial(mesh.material);
     mesh.material = this.buildMaterial(mesh.geometry);
-    if (this.rig) this.rig.mesh.material = mesh.material;
+    if (this.rig?.mesh) this.rig.mesh.material = mesh.material;
     this.applyXray();
   }
 
@@ -1709,15 +1710,27 @@ export class Viewer3D {
     if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
       this.selectBone(this.selectedBoneIndex);
     }
+    // Sin modelo, el esqueleto es lo que hay que encuadrar
+    if (!this.currentMesh) this.fitCamera();
     this.buildRig();
     this.attachGizmo();
   }
 
-  /** Radio de las esferas de las articulaciones, proporcional a la malla */
+  /** Radio de las esferas de las articulaciones, proporcional a la malla (o al esqueleto, sin malla) */
   private jointRadius(): number {
-    if (!this.currentMesh) return 0.02;
-    const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
-    return Math.max(size.length() * 0.012, 1e-4);
+    const size = this.currentMesh
+      ? new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3())
+      : this.skeletonBox()?.getSize(new THREE.Vector3());
+    return size ? Math.max(size.length() * 0.012, 1e-4) : 0.02;
+  }
+
+  /** Caja de las articulaciones en reposo, en el espacio del visor */
+  private skeletonBox(): THREE.Box3 | null {
+    const bones = this.skeletonData?.bones;
+    if (!bones || bones.length === 0) return null;
+    const box = new THREE.Box3();
+    for (const b of bones) box.expandByPoint(new THREE.Vector3(...b.position));
+    return box.applyMatrix4(this.meshGroup.matrixWorld);
   }
 
   /** Redibuja las líneas de los huesos con las posiciones de las esferas */
@@ -2633,17 +2646,21 @@ export class Viewer3D {
     return this.rig !== null;
   }
 
-  /** Arma (o rehace, si cambió la malla, los pesos o el esqueleto) el rig con skin */
+  /**
+   * Arma (o rehace, si cambió la malla, los pesos o el esqueleto) el rig con
+   * skin. Sin modelo se anima el esqueleto solo; con modelo hacen falta sus pesos.
+   */
   private buildRig(): void {
     this.disposeRig();
     const mesh = this.currentMesh;
     const data = this.meshData;
     const weights = this.weightsData;
     const skeleton = this.skeletonData;
-    if (!this.animationMode || !mesh || !data || !weights || !skeleton) return;
-    const numVertices = data.positions.length / 3;
+    if (!this.animationMode || !skeleton || skeleton.bones.length === 0) return;
     const numBones = skeleton.bones.length;
-    if (weights.numVertices !== numVertices || weights.numBones !== numBones) return;
+    const skin = mesh && data && weights ? { mesh, data, weights } : null;
+    if (mesh && !skin) return;
+    if (skin && (skin.weights.numVertices !== skin.data.positions.length / 3 || skin.weights.numBones !== numBones)) return;
 
     const parents = skeleton.bones.map((b) => b.parent);
     const children = parents.map((_, j) => parents.flatMap((p, b) => (p === j ? [b] : [])));
@@ -2665,6 +2682,31 @@ export class Viewer3D {
     root.updateMatrixWorld(true);
     const threeSkeleton = new THREE.Skeleton(bones);
 
+    const skinned = skin ? this.skinRig(skin, threeSkeleton) : null;
+    this.rig = {
+      root,
+      bones,
+      parents,
+      children,
+      rest,
+      tip,
+      skeleton: threeSkeleton,
+      mesh: skinned?.mesh ?? null,
+      wireframe: skinned?.wireframe ?? null,
+    };
+    this.syncRigVisibility();
+    if (this.lastPose) this.setPose(this.lastPose);
+    else this.updatePosedSpheres();
+  }
+
+  /** Mallas con skin (sólida y alambre) que comparten los atributos de la malla de reposo */
+  private skinRig(
+    skin: { mesh: THREE.Mesh; data: MeshData; weights: WeightsData },
+    threeSkeleton: THREE.Skeleton
+  ): { mesh: THREE.SkinnedMesh; wireframe: THREE.SkinnedMesh } {
+    const { mesh, data, weights } = skin;
+    const numBones = threeSkeleton.bones.length;
+    const numVertices = data.positions.length / 3;
     // Hasta 4 influencias por vértice (como el GLB exportado), renormalizadas
     const k = weights.maxInfluences;
     const skinIndex = new Uint16Array(numVertices * 4);
@@ -2706,31 +2748,21 @@ export class Viewer3D {
       this.meshGroup.add(m);
       return m;
     };
-    this.rig = {
-      root,
-      bones,
-      parents,
-      children,
-      rest,
-      tip,
-      skeleton: threeSkeleton,
-      mesh: skinned(mesh.material),
-      wireframe: skinned(wireframeMaterial()),
-    };
-    this.syncRigVisibility();
-    if (this.lastPose) this.setPose(this.lastPose);
-    else this.updatePosedSpheres();
+    return { mesh: skinned(mesh.material), wireframe: skinned(wireframeMaterial()) };
   }
 
   private disposeRig(): void {
     const rig = this.rig;
     if (!rig) return;
     this.rig = null;
-    this.meshGroup.remove(rig.root, rig.mesh, rig.wireframe);
-    // Solo los atributos de skin son propios; los compartidos se vuelven a subir si hace falta
-    rig.mesh.geometry.deleteAttribute("skinIndex");
-    rig.mesh.geometry.deleteAttribute("skinWeight");
-    (rig.wireframe.material as THREE.Material).dispose();
+    this.meshGroup.remove(rig.root);
+    if (rig.mesh && rig.wireframe) {
+      this.meshGroup.remove(rig.mesh, rig.wireframe);
+      // Solo los atributos de skin son propios; los compartidos se vuelven a subir si hace falta
+      rig.mesh.geometry.deleteAttribute("skinIndex");
+      rig.mesh.geometry.deleteAttribute("skinWeight");
+      (rig.wireframe.material as THREE.Material).dispose();
+    }
     rig.skeleton.dispose();
     // Esferas en reposo y mallas de reposo visibles otra vez
     this.skeletonData?.bones.forEach((bone, i) => this.boneSpheres[i]?.position.set(...bone.position));
@@ -2740,7 +2772,7 @@ export class Viewer3D {
 
   private syncRigVisibility(): void {
     const rig = this.rig;
-    if (!rig) return;
+    if (!rig?.mesh || !rig.wireframe) return;
     for (const o of [this.currentMesh, this.currentWireframe, this.quadWireframe, this.weightsMesh]) {
       if (o) o.visible = false;
     }
@@ -2826,6 +2858,15 @@ export class Viewer3D {
     this.updateBoneLines();
   }
 
+  /** Quita el modelo (proyecto de solo esqueleto): el esqueleto se anima solo */
+  unloadMesh(): void {
+    this.disposeRig();
+    this.meshData = null;
+    this.estimatedInfluence = null;
+    this.clearMesh();
+    this.buildRig();
+  }
+
   private clearMesh(): void {
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
@@ -2875,10 +2916,10 @@ export class Viewer3D {
   }
 
   private fitCamera(): void {
-    if (!this.currentMesh) return;
+    const box = this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox();
+    if (!box) return;
     this.viewTransition = null;
 
-    const box = new THREE.Box3().setFromObject(this.currentMesh);
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
 

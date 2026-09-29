@@ -231,6 +231,10 @@ pub struct ExportConfig {
     pub fps: Option<f64>,
     /// Animaciones de la línea de tiempo (solo con el rig)
     pub animations: Option<Vec<animation::AnimationClip>>,
+    /// Exportar solo el esqueleto con sus animaciones, sin malla (glTF/GLB)
+    pub skeleton_only: Option<bool>,
+    /// Con `skeleton_only`: una figura por hueso para verlo en cualquier visor
+    pub bone_shapes: Option<bool>,
 }
 
 /// Resultado de exportación
@@ -459,6 +463,12 @@ pub fn get_supported_formats() -> SupportedFormats {
                 description: "Universal Scene Description (Apple AR)".to_string(),
             },
             FormatInfo {
+                id: "bvh".to_string(),
+                name: "BVH".to_string(),
+                extensions: vec!["bvh".to_string()],
+                description: "Esqueleto y animación (captura de movimiento)".to_string(),
+            },
+            FormatInfo {
                 id: "json".to_string(),
                 name: "JSON (pesos)".to_string(),
                 extensions: vec!["json".to_string()],
@@ -670,7 +680,15 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
     if config.format == "json" {
         return export_weights_json(&config, state);
     }
-    let export_scene = build_export_scene(&config, state)?;
+    if config.format == "bvh" {
+        return export_bvh(&config, state);
+    }
+    let skeleton_only = config.skeleton_only.unwrap_or(false);
+    if skeleton_only && !matches!(config.format.as_str(), "glb" | "gltf") {
+        return Err(format!("Solo el esqueleto se exporta en GLB, glTF o BVH, no en {}", config.format));
+    }
+    let export_scene =
+        if skeleton_only { skeleton_scene(&config, state)? } else { build_export_scene(&config, state)? };
     let scene = &export_scene;
 
     let path = Path::new(&config.path);
@@ -818,6 +836,140 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions, clips))
 }
 
+/// Esqueleto actual y posición de cada articulación: la del autorig si lo hay
+/// (el esqueleto ajustado a la malla), si no la del esqueleto tal cual
+fn current_joints(state: &AppState) -> Result<(BasicSkeleton, Vec<Vector3>), String> {
+    let skeleton = to_basic_skeleton(state.skeleton.lock().unwrap().as_ref().ok_or("No hay esqueleto")?);
+    let positions = match state.result.lock().unwrap().as_ref() {
+        Some(result) if result.bone_positions.len() == skeleton.num_bones() => result.bone_positions.clone(),
+        _ => skeleton.bones().iter().map(|b| b.position).collect(),
+    };
+    Ok((skeleton, positions))
+}
+
+/// Escena con solo el esqueleto (un nodo por articulación, con su skin) y las
+/// animaciones. Con `bone_shapes`, un octaedro por hueso pegado a él, para
+/// que se vea en visores que no dibujan esqueletos.
+fn skeleton_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, String> {
+    let (skeleton, positions) = current_joints(state)?;
+    let clips = config.animations.as_deref().unwrap_or_default();
+    Ok(skeleton_only_scene(&skeleton, &positions, clips, config.bone_shapes.unwrap_or(false)))
+}
+
+fn skeleton_only_scene(
+    skeleton: &BasicSkeleton,
+    positions: &[Vector3],
+    clips: &[animation::AnimationClip],
+    with_shapes: bool,
+) -> Scene {
+    let (prims, weights) = if with_shapes { bone_shapes(skeleton, positions) } else { (vec![], vec![]) };
+    let with_shapes = !prims.is_empty();
+    let base = Scene::new();
+    let mut scene = rigged_scene(&base, &prims, &weights, skeleton, positions, clips);
+    if !with_shapes {
+        // Sin malla: el nodo 0 queda como contenedor del esqueleto
+        scene.meshes.clear();
+        let roots: Vec<usize> = scene.root_nodes.iter().copied().filter(|&n| n != 0).collect();
+        let node = &mut scene.nodes[0];
+        node.name = "esqueleto".into();
+        node.mesh = None;
+        node.skin = None;
+        node.children = roots;
+        scene.root_nodes = vec![0];
+    } else if let Some(mesh) = scene.meshes.first_mut() {
+        mesh.name = "huesos".into();
+        scene.nodes[0].name = "huesos".into();
+    }
+    scene
+}
+
+/// Octaedro de cada hueso (del padre a la articulación), con peso 1 en su hueso
+fn bone_shapes(skeleton: &BasicSkeleton, positions: &[Vector3]) -> (Vec<converter_scene::WorldPrimitive>, Vec<Vec<f64>>) {
+    use converter_scene::glam::Vec3;
+    let n = skeleton.num_bones();
+    let v = |p: Vector3| Vec3::new(p.x() as f32, p.y() as f32, p.z() as f32);
+    let mut out_positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut weights = Vec::new();
+    for b in 0..n {
+        let Some(parent) = skeleton.get_parent(b) else { continue };
+        let (head, tail) = (v(positions[parent]), v(positions[b]));
+        let axis = tail - head;
+        let len = axis.length();
+        if len < 1e-6 {
+            continue;
+        }
+        let dir = axis / len;
+        let side = dir.any_orthonormal_vector() * (0.1 * len);
+        let other = dir.cross(side);
+        let waist = head + axis * 0.2;
+        let ring = [waist + side, waist + other, waist - side, waist - other];
+        for i in 0..4 {
+            let (a, c) = (ring[i], ring[(i + 1) % 4]);
+            for tri in [[head, c, a], [tail, a, c]] {
+                let normal = (tri[1] - tri[0]).cross(tri[2] - tri[0]).normalize_or_zero();
+                for p in tri {
+                    out_positions.push(p.to_array());
+                    normals.push(normal.to_array());
+                    let mut w = vec![0.0; n];
+                    w[b] = 1.0;
+                    weights.push(w);
+                }
+            }
+        }
+    }
+    if out_positions.is_empty() {
+        return (vec![], vec![]);
+    }
+    let triangles = (0..out_positions.len() as u32 / 3).map(|t| [3 * t, 3 * t + 1, 3 * t + 2]).collect();
+    let prim = converter_scene::WorldPrimitive {
+        instance: 0,
+        mesh: 0,
+        primitive: 0,
+        node: None,
+        positions: out_positions,
+        normals: Some(normals),
+        uvs: None,
+        triangles,
+        material: None,
+    };
+    (vec![prim], weights)
+}
+
+/// BVH del esqueleto con la primera animación que llega (el frontend manda la activa)
+fn export_bvh(config: &ExportConfig, state: &AppState) -> Result<ExportResult, String> {
+    use converter_scene::glam::Vec3;
+    let (skeleton, positions) = current_joints(state)?;
+    let joints: Vec<crate::bvh::BvhJoint> = skeleton
+        .bones()
+        .iter()
+        .zip(&positions)
+        .map(|(bone, p)| crate::bvh::BvhJoint {
+            name: &bone.name,
+            parent: bone.parent,
+            position: Vec3::new(p.x() as f32, p.y() as f32, p.z() as f32),
+        })
+        .collect();
+    let rest = animation::AnimationClip {
+        name: "reposo".into(),
+        fps: config.fps.unwrap_or(24.0) as f32,
+        tracks: vec![],
+        start: None,
+        end: None,
+    };
+    let clip = config.animations.as_ref().and_then(|c| c.first()).unwrap_or(&rest);
+    let text = crate::bvh::write_bvh(&joints, clip)?;
+    std::fs::write(&config.path, text).map_err(|e| format!("Error escribiendo BVH: {e}"))?;
+    let files_created = vec![config.path.clone()];
+    Ok(ExportResult {
+        success: true,
+        path: config.path.clone(),
+        message: "Exportación completada".to_string(),
+        total_bytes: total_size(&files_created),
+        files_created,
+    })
+}
+
 /// Malla de quads como escena (triangulada, en espacio mundo), con su piel si
 /// la tiene. Devuelve también el vértice de quads de cada vértice exportado.
 fn quad_mesh_to_scene(
@@ -891,8 +1043,9 @@ fn rigged_scene(
         let mut weights = [0f32; MAX_INFLUENCES];
         let sum: f64 = idx.iter().take(MAX_INFLUENCES).map(|&i| w[i].max(0.0)).sum();
         for (slot, &i) in idx.iter().take(MAX_INFLUENCES).enumerate() {
-            joints[slot] = i as u16;
             weights[slot] = if sum > 0.0 { (w[i].max(0.0) / sum) as f32 } else if slot == 0 { 1.0 } else { 0.0 };
+            // Una casilla sin peso apunta al joint 0 (glTF avisa si no)
+            joints[slot] = if weights[slot] > 0.0 { i as u16 } else { 0 };
         }
         (joints, weights)
     };
@@ -3503,6 +3656,42 @@ mod tests {
     }
 
     #[test]
+    fn skeleton_only_glb_has_skin_and_animation_without_mesh() {
+        use crate::animation::{AnimationClip, JointTrack, Key, KeyInterpolation};
+        let (skel, joints) = chain_skeleton();
+        let clip = AnimationClip {
+            name: "doblar".into(),
+            fps: 24.0,
+            tracks: vec![JointTrack {
+                joint: 1,
+                rotation: vec![
+                    Key { frame: 0.0, value: [0.0, 0.0, 0.0, 1.0], interpolation: KeyInterpolation::Linear },
+                    Key { frame: 24.0, value: Quat::from_rotation_z(0.8).to_array(), interpolation: KeyInterpolation::Linear },
+                ],
+                translation: vec![],
+            }],
+            start: None,
+            end: None,
+        };
+        for with_shapes in [false, true] {
+            let scene = skeleton_only_scene(&skel, &joints, std::slice::from_ref(&clip), with_shapes);
+            assert!(scene.validate().is_ok(), "{:?}", scene.validate());
+            let glb = converter_gltf_io::export_glb_bytes(&scene, &Default::default()).unwrap();
+            if let Ok(dir) = std::env::var("PINOCCHIO_EXPORT_DIR") {
+                std::fs::write(format!("{dir}/esqueleto_{with_shapes}.glb"), &glb).unwrap();
+            }
+            let json = glb_json(&glb);
+            assert_eq!(json["skins"].as_array().unwrap().len(), 1);
+            assert_eq!(json["animations"].as_array().unwrap().len(), 1);
+            assert_eq!(json["nodes"].as_array().unwrap().len(), 1 + skel.num_bones(), "contenedor + joints");
+            let meshes = json.get("meshes").and_then(|m| m.as_array()).map_or(0, |m| m.len());
+            assert_eq!(meshes, usize::from(with_shapes));
+            // El skin es válido y lo usa la malla de huesos (si la hay)
+            assert_eq!(json["nodes"][0].get("skin").is_some(), with_shapes);
+        }
+    }
+
+    #[test]
     fn rigged_scene_animation_targets_skin_joints() {
         use crate::animation::{AnimationClip, JointTrack, Key, KeyInterpolation};
         use converter_scene::glam::Quat;
@@ -3530,6 +3719,8 @@ mod tests {
                     translation: vec![Key { frame: 12.0, value: [0.0, 0.0, 1.0], interpolation: KeyInterpolation::Step }],
                 },
             ],
+            start: None,
+            end: None,
         };
         let rigged = rigged_scene(&scene, &prims, &weights, &skel, &joints, &[clip]);
         assert!(rigged.validate().is_ok(), "{:?}", rigged.validate());

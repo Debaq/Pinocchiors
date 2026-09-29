@@ -28,6 +28,8 @@ export interface SkeletonStepProps {
   onBodyPlanChange?: (plan: BodyPlan) => void;
   // Ajuste automático
   onAutoFit?: () => void;
+  /** Sin modelo se edita el esqueleto solo: no hay a qué ajustarlo ni pesos */
+  hasModel?: boolean;
   fitInfo?: SkeletonFitInfo;
   // Edición manual
   editing?: boolean;
@@ -117,39 +119,49 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
         </Show>
       </div>
 
+      <Show when={hasSkeleton() && props.hasModel === false}>
+        <p class="text-xs text-text-muted leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
+          Sin modelo: mueve las articulaciones o transforma el esqueleto y anímalo en Animar. Se exporta solo (GLB,
+          glTF o BVH). Si después importas un modelo, el esqueleto y sus animaciones se conservan: ajústalo y calcula
+          los pesos.
+        </p>
+      </Show>
+
       <Show when={hasSkeleton()}>
         {/* 2. Ajuste automático */}
-        <div class="space-y-3">
-          <Stage n={2} title="Ajustar al modelo" />
-          <Button onClick={props.onAutoFit} disabled={props.isProcessing} variant="primary" fullWidth>
-            <span class="flex items-center gap-1.5">
-              <Icons.MagicWand size={14} />
-              Ajustar automáticamente
-            </span>
-          </Button>
-          <Show when={props.fitInfo}>
-            {(info) => (
-              <div class="space-y-1 text-xs">
-                <div class="flex justify-between">
-                  <span class="text-text-muted">Extremidades detectadas</span>
-                  <span class="text-text">{info().extremities}</span>
+        <Show when={props.hasModel !== false}>
+          <div class="space-y-3">
+            <Stage n={2} title="Ajustar al modelo" />
+            <Button onClick={props.onAutoFit} disabled={props.isProcessing} variant="primary" fullWidth>
+              <span class="flex items-center gap-1.5">
+                <Icons.MagicWand size={14} />
+                Ajustar automáticamente
+              </span>
+            </Button>
+            <Show when={props.fitInfo}>
+              {(info) => (
+                <div class="space-y-1 text-xs">
+                  <div class="flex justify-between">
+                    <span class="text-text-muted">Extremidades detectadas</span>
+                    <span class="text-text">{info().extremities}</span>
+                  </div>
+                  <div class="flex justify-between">
+                    <span class="text-text-muted">Proporciones vs. plantilla</span>
+                    <span class={info().quality < 0.5 ? "text-warning" : "text-text"}>
+                      {Math.round(info().quality * 100)} %
+                    </span>
+                  </div>
+                  <Show when={info().unusedExtremities > 0}>
+                    <p class="text-text-muted leading-relaxed pt-1">
+                      {info().unusedExtremities} extremidad(es) sin hueso (trompa, orejas, colmillos…): se
+                      moverán con la parte del cuerpo más cercana.
+                    </p>
+                  </Show>
                 </div>
-                <div class="flex justify-between">
-                  <span class="text-text-muted">Proporciones vs. plantilla</span>
-                  <span class={info().quality < 0.5 ? "text-warning" : "text-text"}>
-                    {Math.round(info().quality * 100)} %
-                  </span>
-                </div>
-                <Show when={info().unusedExtremities > 0}>
-                  <p class="text-text-muted leading-relaxed pt-1">
-                    {info().unusedExtremities} extremidad(es) sin hueso (trompa, orejas, colmillos…): se
-                    moverán con la parte del cuerpo más cercana.
-                  </p>
-                </Show>
-              </div>
-            )}
-          </Show>
-        </div>
+              )}
+            </Show>
+          </div>
+        </Show>
 
         {/* 3. Corrección manual */}
         <div class="space-y-3">
@@ -173,18 +185,20 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
             checked={props.symmetric}
             onChange={props.onSymmetricChange}
           />
-          <div class="flex gap-2">
-            <Button
-              onClick={props.onCenterSelected}
-              disabled={props.isProcessing || !props.selectedBoneName}
-              fullWidth
-            >
-              Centrar {props.selectedBoneName ?? "selección"}
-            </Button>
-            <Button onClick={props.onCenterAll} disabled={props.isProcessing} fullWidth>
-              Centrar todas
-            </Button>
-          </div>
+          <Show when={props.hasModel !== false}>
+            <div class="flex gap-2">
+              <Button
+                onClick={props.onCenterSelected}
+                disabled={props.isProcessing || !props.selectedBoneName}
+                fullWidth
+              >
+                Centrar {props.selectedBoneName ?? "selección"}
+              </Button>
+              <Button onClick={props.onCenterAll} disabled={props.isProcessing} fullWidth>
+                Centrar todas
+              </Button>
+            </div>
+          </Show>
           <SkeletonTransformPanel
             transform={props.skeletonTransform!}
             onChange={props.onTransformChange}
@@ -194,118 +208,120 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
         </div>
 
         {/* 4. Pesos */}
-        <div class="space-y-3">
-          <Stage n={4} title="Pesos" />
-          <ConfigPanel config={props.autorigConfig} onChange={props.onAutorigConfigChange} />
-          <Button
-            onClick={props.onAutorig}
-            disabled={!props.canAutorig || props.isProcessing}
-            variant="primary"
-            fullWidth
-          >
-            <Show
-              when={!props.isProcessing}
-              fallback={
-                <span class="flex items-center gap-2">
-                  <span class="animate-spin">&#9203;</span>
-                  Procesando...
-                </span>
-              }
+        <Show when={props.hasModel !== false}>
+          <div class="space-y-3">
+            <Stage n={4} title="Pesos" />
+            <ConfigPanel config={props.autorigConfig} onChange={props.onAutorigConfigChange} />
+            <Button
+              onClick={props.onAutorig}
+              disabled={!props.canAutorig || props.isProcessing}
+              variant="primary"
+              fullWidth
             >
-              <span class="flex items-center gap-2">
-                <Icons.PersonArmsSpread size={16} />
-                Calcular pesos
-              </span>
-            </Show>
-          </Button>
-
-          <Show when={props.autorigComplete}>
-            <div class="flex items-center gap-2 text-xs text-green p-2 rounded-md bg-green/10 border border-green/20">
-              <Icons.Check size={14} />
-              Pesos calculados
-              <Show when={props.numBones}>
-                <span class="text-text-muted ml-auto font-mono">{props.numBones} huesos</span>
+              <Show
+                when={!props.isProcessing}
+                fallback={
+                  <span class="flex items-center gap-2">
+                    <span class="animate-spin">&#9203;</span>
+                    Procesando...
+                  </span>
+                }
+              >
+                <span class="flex items-center gap-2">
+                  <Icons.PersonArmsSpread size={16} />
+                  Calcular pesos
+                </span>
               </Show>
-            </div>
-            <Show when={props.paintConfig}>
-              {(config) => {
-                const update = (partial: Partial<Omit<PaintSettings, "bone">>) =>
-                  props.onPaintConfigChange?.({ ...config(), ...partial });
-                return (
-                  <Panel title="Pintar pesos" icon={<Icons.PaintBrush size={14} />} defaultOpen>
-                    <div class="space-y-4 pt-1">
-                      <p class="text-xs text-text-muted leading-relaxed">
-                        Con <span class="text-text">Pintar (B)</span> arrastra sobre la malla: el mapa de
-                        calor muestra el hueso activo (rojo = todo su peso). Ctrl invierte el modo,
-                        Shift suaviza, <span class="text-text">F</span> cambia el radio y Shift+F la
-                        intensidad. Recalcular los pesos descarta lo pintado.
-                      </p>
-                      <Select
-                        label="Hueso"
-                        options={(props.boneNames ?? []).map((name, i) => ({ value: String(i), label: name }))}
-                        value={props.selectedBone !== undefined && props.selectedBone >= 0 ? String(props.selectedBone) : undefined}
-                        onChange={(v) => props.onSelectBone?.(Number(v))}
-                        placeholder="Elige un hueso o haz clic en una articulación"
-                      />
-                      <Select
-                        label="Modo"
-                        options={PAINT_MODES}
-                        value={config().mode}
-                        onChange={(v) => update({ mode: v as PaintSettings["mode"] })}
-                      />
-                      <Slider
-                        label="Radio"
-                        value={Math.round(config().radius * 1000) / 10}
-                        onChange={(v) => update({ radius: v / 100 })}
-                        min={0.5}
-                        max={20}
-                        step={0.5}
-                        formatValue={(v) => `${v} %`}
-                      />
-                      <Slider
-                        label="Intensidad"
-                        value={Math.round(config().strength * 100)}
-                        onChange={(v) => update({ strength: v / 100 })}
-                        min={5}
-                        max={100}
-                        step={5}
-                        formatValue={(v) => `${v} %`}
-                      />
-                      <Checkbox
-                        label="Espejo: pintar también el lado opuesto"
-                        checked={config().mirror}
-                        onChange={(mirror) => update({ mirror })}
-                      />
-                      <Button onClick={props.onPaint} variant={props.painting ? "primary" : "default"} fullWidth>
-                        <span class="flex items-center gap-1.5">
-                          <Icons.PaintBrush size={14} />
-                          {props.painting ? "Pintando (Ctrl+Z deshace)" : "Pintar"}
-                        </span>
-                      </Button>
-                    </div>
-                  </Panel>
-                );
-              }}
-            </Show>
-            <Panel title="Probar la pose" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
-              <div class="space-y-3 pt-1">
-                <p class="text-xs text-text-muted leading-relaxed">
-                  Selecciona una articulación y pulsa <span class="text-text">R</span>: gira con el
-                  mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Si se estira o arrastra partes que no
-                  corresponden, mueve esa articulación y vuelve a calcular.
-                </p>
-                <div class="flex gap-2">
-                  <Button onClick={props.onPose} variant={props.posing ? "primary" : "default"} fullWidth>
-                    {props.posing ? "Girando articulaciones" : "Girar articulaciones"}
-                  </Button>
-                  <Button onClick={props.onResetPose} fullWidth>
-                    Restablecer pose
-                  </Button>
-                </div>
+            </Button>
+
+            <Show when={props.autorigComplete}>
+              <div class="flex items-center gap-2 text-xs text-green p-2 rounded-md bg-green/10 border border-green/20">
+                <Icons.Check size={14} />
+                Pesos calculados
+                <Show when={props.numBones}>
+                  <span class="text-text-muted ml-auto font-mono">{props.numBones} huesos</span>
+                </Show>
               </div>
-            </Panel>
-          </Show>
-        </div>
+              <Show when={props.paintConfig}>
+                {(config) => {
+                  const update = (partial: Partial<Omit<PaintSettings, "bone">>) =>
+                    props.onPaintConfigChange?.({ ...config(), ...partial });
+                  return (
+                    <Panel title="Pintar pesos" icon={<Icons.PaintBrush size={14} />} defaultOpen>
+                      <div class="space-y-4 pt-1">
+                        <p class="text-xs text-text-muted leading-relaxed">
+                          Con <span class="text-text">Pintar (B)</span> arrastra sobre la malla: el mapa de
+                          calor muestra el hueso activo (rojo = todo su peso). Ctrl invierte el modo,
+                          Shift suaviza, <span class="text-text">F</span> cambia el radio y Shift+F la
+                          intensidad. Recalcular los pesos descarta lo pintado.
+                        </p>
+                        <Select
+                          label="Hueso"
+                          options={(props.boneNames ?? []).map((name, i) => ({ value: String(i), label: name }))}
+                          value={props.selectedBone !== undefined && props.selectedBone >= 0 ? String(props.selectedBone) : undefined}
+                          onChange={(v) => props.onSelectBone?.(Number(v))}
+                          placeholder="Elige un hueso o haz clic en una articulación"
+                        />
+                        <Select
+                          label="Modo"
+                          options={PAINT_MODES}
+                          value={config().mode}
+                          onChange={(v) => update({ mode: v as PaintSettings["mode"] })}
+                        />
+                        <Slider
+                          label="Radio"
+                          value={Math.round(config().radius * 1000) / 10}
+                          onChange={(v) => update({ radius: v / 100 })}
+                          min={0.5}
+                          max={20}
+                          step={0.5}
+                          formatValue={(v) => `${v} %`}
+                        />
+                        <Slider
+                          label="Intensidad"
+                          value={Math.round(config().strength * 100)}
+                          onChange={(v) => update({ strength: v / 100 })}
+                          min={5}
+                          max={100}
+                          step={5}
+                          formatValue={(v) => `${v} %`}
+                        />
+                        <Checkbox
+                          label="Espejo: pintar también el lado opuesto"
+                          checked={config().mirror}
+                          onChange={(mirror) => update({ mirror })}
+                        />
+                        <Button onClick={props.onPaint} variant={props.painting ? "primary" : "default"} fullWidth>
+                          <span class="flex items-center gap-1.5">
+                            <Icons.PaintBrush size={14} />
+                            {props.painting ? "Pintando (Ctrl+Z deshace)" : "Pintar"}
+                          </span>
+                        </Button>
+                      </div>
+                    </Panel>
+                  );
+                }}
+              </Show>
+              <Panel title="Probar la pose" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
+                <div class="space-y-3 pt-1">
+                  <p class="text-xs text-text-muted leading-relaxed">
+                    Selecciona una articulación y pulsa <span class="text-text">R</span>: gira con el
+                    mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Si se estira o arrastra partes que no
+                    corresponden, mueve esa articulación y vuelve a calcular.
+                  </p>
+                  <div class="flex gap-2">
+                    <Button onClick={props.onPose} variant={props.posing ? "primary" : "default"} fullWidth>
+                      {props.posing ? "Girando articulaciones" : "Girar articulaciones"}
+                    </Button>
+                    <Button onClick={props.onResetPose} fullWidth>
+                      Restablecer pose
+                    </Button>
+                  </div>
+                </div>
+              </Panel>
+            </Show>
+          </div>
+        </Show>
       </Show>
     </div>
   );

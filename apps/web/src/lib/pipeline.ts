@@ -96,13 +96,14 @@ export interface Workspace {
   id: WorkspaceId;
   label: string;
   sections: PipelineStepId[];
-  /** Se abre aunque no haya modelo (el escáner lo crea) */
+  /** Se abre aunque no haya modelo */
   withoutModel?: boolean;
 }
 
 export const WORKSPACES: Workspace[] = [
   { id: "prepare", label: "Preparar", sections: ["structure", "repair", "retopology", "uv"] },
-  { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"] },
+  // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
+  { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", label: "Imprimir 3D", sections: ["print3d"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
 ];

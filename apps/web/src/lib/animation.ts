@@ -210,6 +210,8 @@ export function clipsForExport(clips: AnimationClip[], boneIndex: Map<string, nu
   return clips.map((clip) => ({
     name: clip.name,
     fps: clip.fps,
+    start: clip.start,
+    end: clip.end,
     tracks: clip.tracks.flatMap((t) => {
       const joint = boneIndex.get(t.bone);
       return joint === undefined ? [] : [{ joint, rotation: t.rotation, translation: t.translation }];

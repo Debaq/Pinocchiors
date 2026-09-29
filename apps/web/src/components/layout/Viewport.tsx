@@ -107,7 +107,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
     const v = viewer;
     const items: MenuEntry[] = [
       { header: "Vista" },
-      { label: "Ver todo", shortcut: "Inicio", onSelect: () => v.resetView(), disabled: !props.meshData },
+      { label: "Ver todo", shortcut: "Inicio", onSelect: () => v.resetView(), disabled: !props.meshData && !props.skeletonData },
       { label: "Frente", shortcut: "1", onSelect: () => v.setView("front") },
       { label: "Derecha", shortcut: "3", onSelect: () => v.setView("right") },
       { label: "Arriba", shortcut: "7", onSelect: () => v.setView("top") },
@@ -243,7 +243,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         <Show
           when={hint()}
           fallback={
-            <Show when={props.meshData && props.toolHint && !props.placementMode && !props.paintSettings}>
+            <Show when={(props.meshData || props.skeletonData) && props.toolHint && !props.placementMode && !props.paintSettings}>
               <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/80 text-text-muted text-xs">
                 {props.toolHint}
               </div>
