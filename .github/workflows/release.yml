@@ -11,7 +11,9 @@
 # O a mano (Actions → Release → Run workflow, o
 # `gh workflow run Release -f plataformas=linux`): publica el commit de la rama
 # elegida con el mismo formato de tag, que crea la propia release. Con
-# `plataformas=linux` solo compila CLI y app de Linux (más WASM).
+# `plataformas=linux` solo compila CLI y app de Linux (más WASM). Con
+# `plataformas=windows` solo el binario .exe de la app, sin tests, CLI, WASM
+# ni instaladores.
 #
 # Artefactos:
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
@@ -29,7 +31,7 @@ on:
       plataformas:
         description: "Plataformas a compilar"
         type: choice
-        options: [linux, todas]
+        options: [linux, windows, todas]
         default: linux
 
 permissions:
@@ -47,6 +49,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       cli: ${{ steps.matrix.outputs.cli }}
       desktop: ${{ steps.matrix.outputs.desktop }}
+      extras: ${{ steps.matrix.outputs.extras }}
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +74,16 @@ jobs:
       - id: matrix
         env:
           SOLO_LINUX: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas == 'linux' }}
+          SOLO_WINDOWS: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas == 'windows' }}
         run: |
+          # Solo Windows: el binario de la app y nada más (tests, CLI y WASM no corren)
+          if [[ "$SOLO_WINDOWS" == true ]]; then
+            echo 'cli=[]' >> "$GITHUB_OUTPUT"
+            echo 'desktop=[{"os":"windows-latest","platform":"windows","bundle":false}]' >> "$GITHUB_OUTPUT"
+            echo "extras=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "extras=true" >> "$GITHUB_OUTPUT"
           cli='[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu"}'
           desktop='[{"os":"ubuntu-22.04","platform":"linux"}'
           if [[ "$SOLO_LINUX" != true ]]; then
@@ -87,6 +99,8 @@ jobs:
   # ───────────────────────────────────────────────────────────────────────────
   test:
     name: Tests
+    needs: version
+    if: needs.version.outputs.extras == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,6 +119,7 @@ jobs:
   cli:
     name: CLI (${{ matrix.target }})
     needs: [version, test]
+    if: needs.version.outputs.extras == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -150,6 +165,8 @@ jobs:
   desktop:
     name: Desktop (${{ matrix.platform }})
     needs: [version, test]
+    # Sin tests (solo Windows) el job de tests queda omitido, no fallido
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -188,7 +205,9 @@ jobs:
         working-directory: apps/desktop
         run: |
           # Linux: sin .deb ni .rpm; el binario suelto se publica aparte
-          if [[ "${{ matrix.platform }}" == linux ]]; then
+          if [[ "${{ matrix.bundle }}" == false ]]; then
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build --no-bundle
+          elif [[ "${{ matrix.platform }}" == linux ]]; then
             node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage
           else
             node ../web/node_modules/@tauri-apps/cli/tauri.js build
@@ -223,6 +242,18 @@ jobs:
             cp "$bin" "dist/Pinocchio-${TAG}-linux-x86_64"
             chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
           fi
+          # Binario Windows suelto (usa el WebView2 que trae Windows 10/11)
+          if [[ "${{ matrix.bundle }}" == false && "${{ matrix.platform }}" == windows ]]; then
+            bin=""
+            for candidate in target/release/pinocchio-app.exe target/release/Pinocchio.exe; do
+              if [[ -f "$candidate" ]]; then bin="$candidate"; break; fi
+            done
+            if [[ -z "$bin" ]]; then
+              echo "::error::No se encontró el binario de la app en target/release"
+              exit 1
+            fi
+            cp "$bin" "dist/Pinocchio-${TAG}-windows-x64.exe"
+          fi
           ls -la dist
 
       - uses: actions/upload-artifact@v4
@@ -235,6 +266,7 @@ jobs:
   wasm:
     name: WASM
     needs: [version, test]
+    if: needs.version.outputs.extras == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -277,6 +309,8 @@ jobs:
   release:
     name: Publicar pre-release
     needs: [version, cli, desktop, wasm]
+    # CLI y WASM omitidos (solo Windows) no bloquean la publicación
+    if: ${{ !failure() && !cancelled() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
