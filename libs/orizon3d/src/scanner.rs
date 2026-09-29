@@ -101,6 +101,18 @@ pub struct ScannerStatus {
     pub tracking_ok: bool,
 }
 
+/// Tamaño del objeto en el cuadro actual, para calibrar. El ancho y el alto se
+/// miden entre los percentiles 2 y 98 de la nube (ignora motas en el borde)
+#[derive(Debug, Clone, Copy)]
+pub struct Measurement {
+    /// Ancho (X de la cámara) y alto (Y) del objeto, mm
+    pub width_mm: f32,
+    pub height_mm: f32,
+    /// Mediana de la profundidad del objeto, mm
+    pub distance_mm: f32,
+    pub points: usize,
+}
+
 /// Imagen RGBA para la vista previa.
 pub struct Preview {
     pub width: u32,
@@ -228,19 +240,27 @@ impl Scanner {
 
     /// Nube limpia: la fusionada del escaneo si hay, o la del cuadro actual
     pub fn cloud(&self) -> Option<PointCloud> {
-        let settings = self.settings();
         let fused = self.shared.session.lock().unwrap().as_ref().filter(|s| s.point_count() > 0).map(|s| s.fused_cloud());
-        let base = match fused {
-            Some(cloud) => cloud,
-            None => {
-                let params = effective_params(&self.shared, &settings)?;
-                let latest = self.shared.latest.lock().unwrap();
-                let frames = latest.as_ref()?;
-                let smoothed = smoothed_depth(&self.shared, &frames.depth, &settings);
-                PointCloud::generate(smoothed.as_ref().unwrap_or(&frames.depth), frames.rgb.as_ref(), &params)
-            }
-        };
-        Some(clean(base, &settings))
+        match fused {
+            Some(cloud) => Some(clean(cloud, &self.settings())),
+            None => self.frame_cloud(),
+        }
+    }
+
+    /// Nube limpia del cuadro actual, con la calibración vigente
+    pub fn frame_cloud(&self) -> Option<PointCloud> {
+        let settings = self.settings();
+        let params = effective_params(&self.shared, &settings)?;
+        let latest = self.shared.latest.lock().unwrap();
+        let frames = latest.as_ref()?;
+        let smoothed = smoothed_depth(&self.shared, &frames.depth, &settings);
+        let cloud = PointCloud::generate(smoothed.as_ref().unwrap_or(&frames.depth), frames.rgb.as_ref(), &params);
+        Some(clean(cloud, &settings))
+    }
+
+    /// Mide el objeto del cuadro actual (ver [`Measurement`])
+    pub fn measure(&self) -> Option<Measurement> {
+        measure_cloud(&self.frame_cloud()?)
     }
 
     /// Reconstruye la malla (coordenadas de cámara, mm) desde [`Scanner::cloud`]
@@ -375,6 +395,25 @@ fn clean(cloud: PointCloud, settings: &ScanSettings) -> PointCloud {
     }
 }
 
+fn measure_cloud(cloud: &PointCloud) -> Option<Measurement> {
+    if cloud.points.len() < 50 {
+        return None;
+    }
+    let sorted = |f: fn(&crate::pointcloud::Point) -> f32| {
+        let mut v: Vec<f32> = cloud.points.iter().map(f).collect();
+        v.sort_by(f32::total_cmp);
+        v
+    };
+    let at = |v: &[f32], q: f32| v[((v.len() - 1) as f32 * q).round() as usize];
+    let (xs, ys, zs) = (sorted(|p| p.x), sorted(|p| p.y), sorted(|p| p.z));
+    Some(Measurement {
+        width_mm: at(&xs, 0.98) - at(&xs, 0.02),
+        height_mm: at(&ys, 0.98) - at(&ys, 0.02),
+        distance_mm: at(&zs, 0.5),
+        points: cloud.points.len(),
+    })
+}
+
 /// Guarda los últimos mapas para la mediana temporal
 fn push_history(shared: &Shared, depth: &DepthFrame, settings: &ScanSettings) {
     let mut history = shared.history.lock().unwrap();
@@ -467,6 +506,7 @@ fn hsv_to_rgb(h: f32) -> [u8; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pointcloud::Point;
 
     fn frame(values: Vec<u16>, width: u32, height: u32) -> DepthFrame {
         DepthFrame { width, height, depth: values, timestamp_ms: 0.0 }
@@ -478,6 +518,24 @@ mod tests {
         assert_eq!(&preview.rgba[0..4], &[0, 0, 0, 255]);
         assert_eq!(&preview.rgba[4..8], &[255, 0, 0, 255]);
         assert_eq!(&preview.rgba[12..16], &[0, 0, 255, 255]);
+    }
+
+    #[test]
+    fn measure_ignores_stray_points_at_the_edges() {
+        let mut points = Vec::new();
+        for i in 0..=100 {
+            for j in 0..=50 {
+                points.push(Point { x: i as f32 - 50.0, y: j as f32, z: 300.0, rgb: [0; 3], view: [0.0; 3] });
+            }
+        }
+        // Motas sueltas lejos del objeto
+        for _ in 0..20 {
+            points.push(Point { x: 500.0, y: 500.0, z: 300.0, rgb: [0; 3], view: [0.0; 3] });
+        }
+        let m = measure_cloud(&PointCloud { points, has_color: false }).unwrap();
+        assert!((m.width_mm - 96.0).abs() < 1.5, "ancho {}", m.width_mm);
+        assert!((m.height_mm - 48.0).abs() < 1.5, "alto {}", m.height_mm);
+        assert_eq!(m.distance_mm, 300.0);
     }
 
     #[test]

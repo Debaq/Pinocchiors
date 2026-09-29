@@ -21,4 +21,4 @@ pub use capture::DepthControls;
 pub use mesh::Mesh;
 pub use pointcloud::PointCloud;
 pub use scan::ScanStats;
-pub use scanner::{MeshSettings, Preview, ScanSettings, Scanner, ScannerState, ScannerStatus};
+pub use scanner::{Measurement, MeshSettings, Preview, ScanSettings, Scanner, ScannerState, ScannerStatus};
