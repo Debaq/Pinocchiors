@@ -215,12 +215,13 @@ function wireframeMaterial(): THREE.MeshBasicMaterial {
 // HEATMAP COLORS
 // ═══════════════════════════════════════════════════════════════════════════
 
+// Escala clásica de los editores 3D: azul (sin peso) → cian → verde → amarillo → rojo (peso 1)
 const HEATMAP_COLORS = [
-  new THREE.Color(0x6272a4), // 0.0 - Dracula comment (blue-gray)
-  new THREE.Color(0x8be9fd), // 0.25 - cyan
-  new THREE.Color(0x50fa7b), // 0.5 - green
-  new THREE.Color(0xf1fa8c), // 0.75 - yellow
-  new THREE.Color(0xff5555), // 1.0 - red
+  new THREE.Color(0x0000ff),
+  new THREE.Color(0x00ffff),
+  new THREE.Color(0x00ff00),
+  new THREE.Color(0xffff00),
+  new THREE.Color(0xff0000),
 ];
 
 function getHeatmapColor(value: number): THREE.Color {
@@ -844,24 +845,48 @@ export class Viewer3D {
     if (e.target === this.canvas) this.onPaintMove(e);
   }
 
-  /** Articulación a menos de 16 px del cursor en pantalla (-1 si ninguna) */
+  /**
+   * Articulación a menos de 16 px del cursor en pantalla; si no hay, el hueso
+   * (segmento padre → articulación) a menos de 10 px, que se elige por su
+   * articulación hija: es la que lleva sus pesos. -1 si ninguno.
+   */
   private pickJoint(e: PointerEvent): number {
     if (!this.settings.showSkeleton || this.boneSpheres.length === 0) return -1;
     const rect = this.canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+    const p = new THREE.Vector3();
+    const screen = this.boneSpheres.map((sphere) => {
+      sphere.getWorldPosition(p).project(this.camera);
+      return p.z > 1 ? null : { x: ((p.x + 1) / 2) * rect.width, y: ((1 - p.y) / 2) * rect.height };
+    });
     let best = -1;
     let bestDistance = 16;
-    const p = new THREE.Vector3();
-    this.boneSpheres.forEach((sphere, i) => {
-      sphere.getWorldPosition(p).project(this.camera);
-      if (p.z > 1) return;
-      const d = Math.hypot(((p.x + 1) / 2) * rect.width - mx, ((1 - p.y) / 2) * rect.height - my);
+    screen.forEach((s, i) => {
+      if (!s) return;
+      const d = Math.hypot(s.x - mx, s.y - my);
       if (d < bestDistance) {
         bestDistance = d;
         best = i;
       }
     });
+    if (best >= 0 || !this.skeletonData) return best;
+
+    bestDistance = 10;
+    for (const [parent, child] of this.skeletonData.edges) {
+      const a = screen[parent];
+      const b = screen[child];
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len2 = dx * dx + dy * dy;
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((mx - a.x) * dx + (my - a.y) * dy) / len2)) : 0;
+      const d = Math.hypot(a.x + t * dx - mx, a.y + t * dy - my);
+      if (d < bestDistance) {
+        bestDistance = d;
+        best = child;
+      }
+    }
     return best;
   }
 
@@ -2578,7 +2603,8 @@ export class Viewer3D {
 
     geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
 
-    const material = new THREE.MeshBasicMaterial({
+    // Con luz, para que se lea la forma bajo los colores
+    const material = new THREE.MeshLambertMaterial({
       vertexColors: true,
       side: THREE.DoubleSide,
     });
