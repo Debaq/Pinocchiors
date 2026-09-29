@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 
 /**
  * Historial en árbol: deshacer y hacer otra cosa abre una rama nueva en vez
@@ -168,19 +168,22 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
     canReach,
     nodes,
     current,
-    clear: () => {
-      setNodes([root()]);
-      setCurrent(0);
-    },
-    save: () => ({ version: 1, nodes: nodes(), current: current() }),
-    load: (saved) => {
-      if (!saved || saved.version !== 1 || !saved.nodes?.length || !saved.nodes[saved.current]) {
+    // Lista e índice juntos: con la lista nueva y el índice viejo, nodes()[current()] no existe
+    clear: () =>
+      batch(() => {
         setNodes([root()]);
         setCurrent(0);
-        return;
-      }
-      setNodes(saved.nodes.map((n) => ({ ...n, children: [...n.children] })));
-      setCurrent(saved.current);
-    },
+      }),
+    save: () => ({ version: 1, nodes: nodes(), current: current() }),
+    load: (saved) =>
+      batch(() => {
+        if (!saved || saved.version !== 1 || !saved.nodes?.length || !saved.nodes[saved.current]) {
+          setNodes([root()]);
+          setCurrent(0);
+          return;
+        }
+        setNodes(saved.nodes.map((n) => ({ ...n, children: [...n.children] })));
+        setCurrent(saved.current);
+      }),
   };
 }
