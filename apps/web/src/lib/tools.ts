@@ -41,9 +41,9 @@ export const TOOLSETS: Record<ToolContext, ToolDef[]> = {
     MEASURE,
   ],
   animate: [
-    { id: "select", label: "Seleccionar articulación", shortcut: "Q", hint: "Clic: articulación · R girar · G mover la raíz · I insertar key" },
+    { id: "select", label: "Seleccionar articulación", shortcut: "Q", hint: "Clic: articulación (Shift suma, doble clic: cadena) · R girar · G mover · I insertar key" },
     { id: "rotate", label: "Girar articulación", hint: "Selecciona una articulación y gira el gizmo (R: girar con el mouse)" },
-    { id: "move", label: "Mover raíz", hint: "Selecciona la raíz y arrastra el gizmo (G: mover con el mouse)" },
+    { id: "move", label: "Mover articulación", hint: "Selecciona una articulación y arrastra el gizmo (G: mover con el mouse)" },
     MEASURE,
   ],
 };

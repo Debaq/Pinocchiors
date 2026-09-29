@@ -235,6 +235,8 @@ pub struct ExportConfig {
     pub skeleton_only: Option<bool>,
     /// Con `skeleton_only`: una figura por hueso para verlo en cualquier visor
     pub bone_shapes: Option<bool>,
+    /// Huesos que no deforman: su peso pasa al primer ancestro que sí
+    pub non_deforming: Option<Vec<usize>>,
 }
 
 /// Resultado de exportación
@@ -832,8 +834,38 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
             vertex_count
         ));
     }
+    let vertex_weights = match config.non_deforming.as_deref() {
+        Some(bones) if !bones.is_empty() => reassign_non_deforming(vertex_weights, &skeleton, bones),
+        _ => vertex_weights,
+    };
     let clips = config.animations.as_deref().unwrap_or_default();
     Ok(rigged_scene(&geometry, &prims, &vertex_weights, &skeleton, &result.bone_positions, clips))
+}
+
+/// Pasa el peso de los huesos que no deforman al primer ancestro que sí
+/// (el propio hueso si ninguno deforma)
+fn reassign_non_deforming(weights: Vec<Vec<f64>>, skeleton: &BasicSkeleton, non_deforming: &[usize]) -> Vec<Vec<f64>> {
+    let n = skeleton.num_bones();
+    let off: std::collections::HashSet<usize> = non_deforming.iter().copied().filter(|&b| b < n).collect();
+    let target: Vec<usize> = (0..n)
+        .map(|b| {
+            let mut t = Some(b);
+            while let Some(j) = t.filter(|j| off.contains(j)) {
+                t = skeleton.get_parent(j);
+            }
+            t.unwrap_or(b)
+        })
+        .collect();
+    weights
+        .into_iter()
+        .map(|w| {
+            let mut out = vec![0.0; w.len()];
+            for (b, &x) in w.iter().enumerate() {
+                out[target.get(b).copied().unwrap_or(b).min(w.len() - 1)] += x;
+            }
+            out
+        })
+        .collect()
 }
 
 /// Esqueleto actual y posición de cada articulación: la del autorig si lo hay
@@ -1599,9 +1631,40 @@ pub fn move_bone(
     Ok(data)
 }
 
+/// Pose como reposo: cada articulación pasa a estar donde la deja la pose
+/// (`positions`, en coordenadas del esqueleto visible). Los pesos se
+/// conservan: la piel queda ligada a los huesos en su lugar nuevo, así que la
+/// malla en reposo no cambia.
+#[tauri::command]
+pub fn apply_rest_pose(positions: Vec<[f64; 3]>, state: State<'_, AppState>) -> Result<SkeletonData, String> {
+    let mut base = current_base(&state)?;
+    if positions.len() != base.num_bones() {
+        return Err(format!("Se esperaban {} articulaciones, llegaron {}", base.num_bones(), positions.len()));
+    }
+    let params = *state.skeleton_transform.lock().unwrap();
+    let visible: Vec<Vector3> = positions.iter().map(|p| Vector3::new(p[0], p[1], p[2])).collect();
+    for (bone, &p) in base.bones_mut().iter_mut().zip(&visible) {
+        bone.position = invert_gizmo(p, &params);
+    }
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
+
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    if let Some(result) = state.result.lock().unwrap().as_mut() {
+        if result.bone_positions.len() == visible.len() {
+            result.bone_rest_transforms = visible.iter().map(|&p| pinocchio_math::Transform::from_translation(p)).collect();
+            result.bone_positions = visible;
+        }
+    }
+    Ok(data)
+}
+
 /// Resultado del ajuste automático
 #[derive(Debug, Clone, Serialize)]
 pub struct AutoFitResult {
+
     pub skeleton: SkeletonData,
     /// Similitud de proporciones con la plantilla (1 = idénticas)
     pub quality: f64,

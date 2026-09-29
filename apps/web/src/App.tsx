@@ -87,15 +87,39 @@ import {
   createClip,
   deleteKeys,
   duplicateClip,
+  emptyPose,
   insertKeys,
   keyId,
   moveKeys,
   parseKeyId,
-  samplePose,
   setKeysInterpolation,
   type AnimationClip,
   type KeyInterpolation,
+  type Pose,
 } from "./lib/animation";
+import {
+  applyRotationLocks,
+  bakeClip,
+  boneColor as rigBoneColor,
+  boneProps,
+  createRigContext,
+  emptyRigSettings,
+  eulerDegrees,
+  evaluatePose,
+  fromEulerDegrees,
+  isBoneHidden,
+  loadRigSettings,
+  newRigId,
+  reflectVector,
+  rollToward,
+  vec,
+  withAutoGroups,
+  withBoneProps,
+  type BoneProps,
+  type RigControl,
+  type RigSettings,
+} from "./lib/rig";
+import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { analyzeBody, availableAnimations, generateAnimation, type PresetAnimationId } from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
@@ -256,6 +280,14 @@ export const App: Component = () => {
         setClips(d.before);
         setActiveClipId(d.activeBefore);
       },
+    },
+    rig: {
+      apply: (d: { after: RigSettings }) => void setRigSettings(d.after),
+      revert: (d: { before: RigSettings }) => void setRigSettings(d.before),
+    },
+    restPose: {
+      apply: (d: { to: Vec3[] }) => sendRestPose(d.to),
+      revert: (d: { from: Vec3[] }) => sendRestPose(d.from),
     },
     placement: {
       apply: (d: { matrix: number[] }) => sendPlacement(new THREE.Matrix4().fromArray(d.matrix)),
@@ -433,6 +465,13 @@ export const App: Component = () => {
   const [keySelection, setKeySelection] = createSignal<Set<string>>(new Set());
   const [autoKey, setAutoKey] = createSignal(true);
   const [keyInterpolation, setKeyInterpolation] = createSignal<KeyInterpolation>("linear");
+  /** Lo que el rig agrega al esqueleto (ver lib/rig.ts): se guarda en el proyecto */
+  const [rigSettings, setRigSettings] = createSignal<RigSettings>(emptyRigSettings());
+  /** Articulaciones elegidas en el visor (la activa es viewSettings().selectedBone) */
+  const [selectedJoints, setSelectedJoints] = createSignal<number[]>([]);
+  const [selectedControl, setSelectedControl] = createSignal<string | undefined>();
+  /** Cambia cada vez que el visor muestra otra pose (el panel del hueso la relee) */
+  const [poseTick, setPoseTick] = createSignal(0);
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
 
@@ -996,6 +1035,7 @@ export const App: Component = () => {
     if (!keepClips) {
       setClips([]);
       setActiveClipId(undefined);
+      setRigSettings(emptyRigSettings());
     }
     setFrame(0);
     clearQuadMesh();
@@ -1112,6 +1152,55 @@ export const App: Component = () => {
 
   const activeClip = () => clips().find((c) => c.id === activeClipId());
   const boneIndex = createMemo(() => new Map((skeletonData()?.bones ?? []).map((b, i) => [b.name, i])));
+  const rigBones = createMemo(() =>
+    (skeletonData()?.bones ?? []).map((b) => ({ name: b.name, position: b.position as Vec3, parent: b.parent }))
+  );
+  /** Esqueleto + rig: orientación de las articulaciones, simetría y la pila de evaluación */
+  const rigCtx = createMemo(() => createRigContext(rigBones(), rigSettings()));
+
+  // Grupos automáticos la primera vez que aparece un esqueleto (no pasa por el historial)
+  createEffect(
+    on(
+      () => rigBones().map((b) => b.name).join("|"),
+      (names) => {
+        if (!names) return;
+        const s = untrack(rigSettings);
+        if (s.groups.length === 0) setRigSettings(withAutoGroups(s, untrack(rigBones)));
+      }
+    )
+  );
+
+  // Lo que el visor dibuja y permite del rig
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const ctx = rigCtx();
+    if (ctx.bones.length === 0) {
+      v.setRigDisplay(null);
+      return;
+    }
+    const s = ctx.settings;
+    const props = ctx.bones.map((b) => boneProps(s, b.name));
+    v.setRigDisplay({
+      colors: ctx.bones.map((b) => rigBoneColor(s, b.name)),
+      hidden: ctx.bones.map((b) => isBoneHidden(s, b.name)),
+      locked: props.map((p) => p.locked),
+      shapes: props.map((p) => p.shape),
+      lockTranslation: props.map((p) => p.lockTranslation),
+      deform: props.map((p) => p.deform),
+      frames: ctx.frames,
+      constrain: (j, q) => (props[j] ? applyRotationLocks(q, ctx.frames[j], props[j].lockRotation, props[j].rotationMode) : q),
+      controls: s.controls,
+    });
+  });
+
+  // La selección múltiple la lleva el visor: al cambiar la activa, se relee
+  createEffect(
+    on(
+      () => viewSettings().selectedBone,
+      () => queueMicrotask(() => setSelectedJoints(viewerRef?.getSelection() ?? []))
+    )
+  );
   /** Hay rig para animar: esqueleto con pesos sobre la malla que se ve */
   const animationReady = () =>
     !!skeletonData() &&
@@ -1177,8 +1266,10 @@ export const App: Component = () => {
     const v = viewer();
     if (!v) return;
     weightsData();
+    const ctx = rigCtx();
     if (animating()) {
-      v.setPose(samplePose(activeClip(), frame(), boneIndex()));
+      v.setPose(evaluatePose(activeClip(), frame(), ctx));
+      setPoseTick((t) => t + 1);
       return;
     }
     const t = previewTime();
@@ -1186,7 +1277,7 @@ export const App: Component = () => {
     const segments = sequence();
     const segment = segments.find((s) => t < s.start + s.duration) ?? segments[segments.length - 1];
     const local = Math.min(t - segment.start, segment.duration);
-    v.setPose(samplePose(segment.clip, segment.clip.start + local * segment.clip.fps, boneIndex()));
+    v.setPose(evaluatePose(segment.clip, segment.clip.start + local * segment.clip.fps, ctx));
   });
 
   // Reproducción de la barra: al terminar vuelve a empezar (repetir) o se detiene
@@ -1233,16 +1324,22 @@ export const App: Component = () => {
     });
   });
 
-  /** Filas de la línea de tiempo: articulaciones con algo que girar, en orden de árbol */
+  /**
+   * Filas de la línea de tiempo: articulaciones con algo que girar, en orden
+   * de árbol (sin las ocultas), y después los controles
+   */
   const timelineRows = createMemo<TimelineRow[]>(() => {
     const bones = skeletonData()?.bones ?? [];
+    const s = rigSettings();
     const children = bones.map((_, j) => bones.flatMap((b, i) => (b.parent === j ? [i] : [])));
     const rows: TimelineRow[] = [];
     const visit = (j: number, depth: number) => {
-      if (bones[j].parent === null || children[j].length > 0) rows.push({ joint: j, bone: bones[j].name, depth });
+      const animatable = bones[j].parent === null || children[j].length > 0;
+      if (animatable && !isBoneHidden(s, bones[j].name)) rows.push({ joint: j, bone: bones[j].name, depth });
       children[j].forEach((c) => visit(c, depth + 1));
     };
     bones.forEach((b, j) => b.parent === null && visit(j, 0));
+    for (const c of s.controls) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, control: true });
     return rows;
   });
 
@@ -1313,35 +1410,259 @@ export const App: Component = () => {
     setFrame(clip.start);
   };
 
-  /** Keys en el cuadro actual con la pose que muestra el visor */
-  const insertKeysFor = (joints: number[]) => {
+  /**
+   * Keys en el cuadro actual con la pose que muestra el visor. El
+   * desplazamiento solo se guarda en la raíz, en las articulaciones corridas
+   * y en las que ya tienen keys de desplazamiento.
+   */
+  const insertKeysFor = (joints: number[], controls: string[] = []) => {
     const v = viewer();
     const bones = skeletonData()?.bones;
     if (!v || !bones || !animating()) return;
     if (!activeClip()) handleNewClip();
-    const entries = joints.flatMap((j) => {
-      const pose = v.getJointPose(j);
-      return pose && bones[j] ? [{ bone: bones[j].name, ...pose }] : [];
-    });
+    const clip = activeClip();
+    const s = rigSettings();
+    const entries = [
+      ...joints.flatMap((j) => {
+        const pose = v.getJointPose(j);
+        if (!pose || !bones[j]) return [];
+        const name = bones[j].name;
+        const track = clip?.tracks.find((t) => t.bone === name && !t.kind);
+        const moved = Math.hypot(...pose.translation) > 1e-9;
+        const withOffset =
+          !boneProps(s, name).lockTranslation && (bones[j].parent === null || moved || (track?.translation.length ?? 0) > 0);
+        return [{ bone: name, rotation: pose.rotation, translation: withOffset ? pose.translation : undefined }];
+      }),
+      ...controls.map((id) => ({ bone: id, kind: "control" as const, ...v.getControlPose(id) })),
+    ];
     if (entries.length === 0) return;
     const f = Math.round(frame());
     void editClip(entries.length === 1 ? "Insertar key" : "Insertar keys", (c) =>
       insertKeys(c, f, entries, keyInterpolation())
     );
+    const label = (e: (typeof entries)[number]) => ("kind" in e ? s.controls.find((c) => c.id === e.bone)?.name ?? e.bone : e.bone);
     setStatusMessage(
-      entries.length === 1 ? `Key de ${entries[0].bone} en el cuadro ${f}` : `Keys de ${entries.length} articulaciones en el cuadro ${f}`
+      entries.length === 1 ? `Key de ${label(entries[0])} en el cuadro ${f}` : `Keys de ${entries.length} articulaciones en el cuadro ${f}`
     );
   };
 
-  /** I: la articulación seleccionada, o todas si no hay selección */
+  /** I: el control o las articulaciones elegidas, o todas si no hay selección */
   const handleInsertKey = () => {
-    const selected = viewSettings().selectedBone;
-    insertKeysFor(selected >= 0 ? [selected] : timelineRows().map((r) => r.joint));
+    const control = selectedControl();
+    if (control) return insertKeysFor([], [control]);
+    const selected = selectedJoints().length > 0 ? selectedJoints() : viewSettings().selectedBone >= 0 ? [viewSettings().selectedBone] : [];
+    insertKeysFor(selected.length > 0 ? selected : timelineRows().flatMap((r) => (r.control ? [] : [r.joint])));
   };
 
-  const handlePoseEdited = (joint: number) => {
-    if (autoKey()) insertKeysFor([joint]);
+  const handlePoseEdited = (joints: number[]) => {
+    setPoseTick((t) => t + 1);
+    if (autoKey()) insertKeysFor(joints);
   };
+
+  const handleControlPoseEdited = (id: string) => {
+    if (autoKey()) insertKeysFor([], [id]);
+  };
+
+  /**
+   * Cambio de pose hecho por una herramienta (reiniciar, espejo, pegar,
+   * biblioteca…): se ve en el visor y, con auto-key, queda en keys
+   */
+  const applyPoseEdit = (pose: Pose, status?: string) => {
+    const v = viewer();
+    if (!v || !animating()) return;
+    v.applyPartialPose(pose);
+    setPoseTick((t) => t + 1);
+    const joints = [...new Set([...pose.rotations.keys(), ...pose.translations.keys()])];
+    if (autoKey()) insertKeysFor(joints, [...pose.controls.keys()]);
+    if (status) setStatusMessage(status);
+  };
+
+  // ─── Rig: propiedades de los huesos, grupos, controles y reposo ───────────
+
+  const changeRig = (description: string, next: RigSettings) =>
+    history.execute(description, { kind: "rig", data: { before: rigSettings(), after: next } });
+
+  /** Articulaciones elegidas (la activa incluida), o ninguna */
+  const jointSelection = () => {
+    const active = viewSettings().selectedBone;
+    const set = new Set(selectedJoints());
+    if (active >= 0) set.add(active);
+    return [...set].filter((j) => j < rigBones().length);
+  };
+
+  const changeBoneProps = (description: string, change: Partial<BoneProps>) => {
+    const names = jointSelection().map((j) => rigBones()[j].name);
+    if (names.length > 0) void changeRig(description, withBoneProps(rigSettings(), names, change));
+  };
+
+  /** Roll de los huesos elegidos: automático, hacia la cámara, la superficie o el espejo */
+  const handleRoll = (mode: RollMode) => {
+    const ctx = rigCtx();
+    const v = viewer();
+    let next = rigSettings();
+    for (const j of jointSelection()) {
+      const frame = ctx.frames[j];
+      let roll: number | null = 0;
+      if (mode === "view" && v) roll = rollToward(frame, vec.cross(frame.y, v.cameraDirection()));
+      else if (mode === "normal" && v) {
+        const n = v.nearestNormal(ctx.bones[j].position);
+        roll = n ? rollToward(frame, vec.cross(frame.y, n)) : null;
+      } else if (mode === "mirror") {
+        const m = ctx.mirror[j];
+        roll = m === null ? null : rollToward(frame, vec.scale(reflectVector(ctx.frames[m].x, ctx.symmetry.normal), -1));
+      }
+      if (roll !== null) next = withBoneProps(next, [ctx.bones[j].name], { roll: Math.abs(roll) < 1e-9 ? undefined : roll });
+    }
+    if (next !== rigSettings()) void changeRig("Roll", next);
+  };
+
+  /** Giro (ejes locales, grados) y desplazamiento de la articulación activa, como los muestra el visor */
+  const activeJointPose = createMemo(() => {
+    poseTick();
+    const v = viewer();
+    const j = viewSettings().selectedBone;
+    const ctx = rigCtx();
+    if (!v || !animating() || j < 0 || !ctx.bones[j]) return undefined;
+    const pose = v.getJointPose(j);
+    if (!pose) return undefined;
+    const mode = boneProps(ctx.settings, ctx.bones[j].name).rotationMode;
+    return { rotation: eulerDegrees(pose.rotation, ctx.frames[j], mode), translation: pose.translation };
+  });
+
+  const setActiveJointPose = (change: { rotation?: Vec3; translation?: Vec3 }) => {
+    const j = viewSettings().selectedBone;
+    const ctx = rigCtx();
+    if (j < 0 || !ctx.bones[j]) return;
+    const pose = emptyPose();
+    if (change.rotation) {
+      const p = boneProps(ctx.settings, ctx.bones[j].name);
+      const q = fromEulerDegrees(change.rotation, ctx.frames[j], p.rotationMode);
+      pose.rotations.set(j, applyRotationLocks(q, ctx.frames[j], p.lockRotation, p.rotationMode));
+    }
+    if (change.translation) pose.translations.set(j, change.translation);
+    applyPoseEdit(pose);
+  };
+
+  const handleAutoGroups = () => void changeRig("Grupos automáticos", withAutoGroups(rigSettings(), rigBones()));
+
+  const handleNewGroup = () => {
+    const names = jointSelection().map((j) => rigBones()[j].name);
+    if (names.length === 0) return;
+    const s = rigSettings();
+    const id = newRigId("group");
+    const hue = (s.groups.length * 67) % 360;
+    const color = `#${new THREE.Color().setHSL(hue / 360, 0.65, 0.58).getHexString()}`;
+    const next = withBoneProps({ ...s, groups: [...s.groups, { id, name: `Grupo ${s.groups.length + 1}`, color }] }, names, { group: id });
+    void changeRig("Grupo nuevo", next);
+  };
+
+  const handleSelectGroup = (groupId: string) => {
+    const s = rigSettings();
+    const joints = rigBones().flatMap((b, i) => (s.bones[b.name]?.group === groupId && !isBoneHidden(s, b.name) ? [i] : []));
+    if (joints.length > 0) selectJoints(joints, joints[0]);
+  };
+
+  /** Selección desde la app (panel, línea de tiempo, atajos): el visor la muestra */
+  const selectJoints = (joints: number[], active: number) => {
+    setSelectedControl(undefined);
+    viewerRef?.setSelection(joints, active);
+    setSelectedJoints(viewerRef?.getSelection() ?? joints);
+    setViewSettings((prev) => ({ ...prev, selectedBone: active }));
+  };
+
+  const handleSelectControl = (id: string | null) => {
+    setSelectedControl(id ?? undefined);
+    viewerRef?.selectControl(id);
+    if (id) {
+      setSelectedJoints([]);
+      setViewSettings((prev) => ({ ...prev, selectedBone: -1 }));
+    }
+  };
+
+  const handleAddControl = async () => {
+    const ctx = rigCtx();
+    const s = rigSettings();
+    const j = viewSettings().selectedBone;
+    const bone = ctx.bones[j];
+    // En la articulación activa, o en el centro del esqueleto
+    const center = ([0, 1, 2] as const).map(
+      (k) => ctx.bones.reduce((sum, b) => sum + b.position[k], 0) / Math.max(ctx.bones.length, 1)
+    ) as Vec3;
+    const position: Vec3 = bone ? [...bone.position] : center;
+
+    const control: RigControl = {
+      id: newRigId("ctl"),
+      name: bone ? `${bone.name}_ctl` : `Control ${s.controls.length + 1}`,
+      parent: bone?.name ?? null,
+      shape: "circle",
+      position,
+      size: (ctx.body?.size ?? 1) * 0.05,
+    };
+    await changeRig("Agregar control", { ...s, controls: [...s.controls, control] });
+    handleSelectControl(control.id);
+  };
+
+  const sendRestPose = async (positions: Vec3[]) => {
+    const data = await invoke<TauriSkeletonData>("apply_rest_pose", { positions });
+    setSkeletonData(tauriSkeletonToViewer(data));
+  };
+
+  const handleApplyRest = async () => {
+    const v = viewer();
+    const skeleton = skeletonData();
+    if (!v || !skeleton || !animating()) return;
+    const from = skeleton.bones.map((b) => [...b.position] as Vec3);
+    const to = v.getPosedJointPositions();
+    try {
+      await history.execute("Aplicar pose como reposo", { kind: "restPose", data: { from, to } });
+      setStatusMessage(
+        clips().some((c) => c.tracks.length > 0)
+          ? "Pose aplicada como reposo: las keys ahora giran desde el reposo nuevo"
+          : "Pose aplicada como reposo"
+      );
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  /** Todas las articulaciones y controles al reposo */
+  const handleClearPose = () => {
+    const v = viewer();
+    if (!v) return;
+    const current = v.getPose();
+    const reset = emptyPose();
+    for (const j of current.rotations.keys()) reset.rotations.set(j, [0, 0, 0, 1]);
+    for (const j of current.translations.keys()) reset.translations.set(j, [0, 0, 0]);
+    for (const id of current.controls.keys()) reset.controls.set(id, { rotation: [0, 0, 0, 1], translation: [0, 0, 0] });
+    applyPoseEdit(reset, "Pose de reposo");
+  };
+
+  const rigPanel = (
+    <RigPanel
+      boneNames={rigBones().map((b) => b.name)}
+      settings={rigSettings()}
+      selection={jointSelection()}
+      active={viewSettings().selectedBone}
+      hasMirror={(rigCtx().mirror[viewSettings().selectedBone] ?? null) !== null}
+      hasMesh={meshLoaded()}
+      rotation={activeJointPose()?.rotation}
+      translation={activeJointPose()?.translation}
+      posing={animating()}
+      selectedControl={selectedControl()}
+      onChange={(description, next) => void changeRig(description, next)}
+      onBoneProps={changeBoneProps}
+      onRoll={handleRoll}
+      onRotation={(rotation) => setActiveJointPose({ rotation })}
+      onTranslation={(translation) => setActiveJointPose({ translation })}
+      onAutoGroups={handleAutoGroups}
+      onSelectGroup={handleSelectGroup}
+      onNewGroup={handleNewGroup}
+      onAddControl={() => void handleAddControl()}
+      onSelectControl={handleSelectControl}
+      onApplyRest={() => void handleApplyRest()}
+      onClearPose={handleClearPose}
+    />
+  );
 
   const handleDeleteKeys = () => {
     const selection = keySelection();
@@ -1422,7 +1743,9 @@ export const App: Component = () => {
           texture_quality: opts.textureQuality > 0 ? opts.textureQuality : null,
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
-          animations: withAnimations ? clipsForExport(exported, boneIndex()) : null,
+          // La pila de evaluación horneada a giros por cuadro: lo único que entienden glTF, USD y BVH
+          animations: withAnimations ? clipsForExport(exported.map((c) => bakeClip(c, rigCtx())), boneIndex()) : null,
+          non_deforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
           skeleton_only: skeletonOnly,
           bone_shapes: exportBoneShapes(),
           fps: activeClip()?.fps ?? null,
@@ -2240,6 +2563,9 @@ export const App: Component = () => {
     setClips([]);
     setActiveClipId(undefined);
     setFrame(0);
+    setRigSettings(emptyRigSettings());
+    setSelectedJoints([]);
+    setSelectedControl(undefined);
     setViewSettings((prev) => ({ ...prev, selectedBone: -1 }));
   };
 
@@ -2363,6 +2689,7 @@ export const App: Component = () => {
       print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale() },
       export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
+      rig: rigSettings(),
       history: history.save(),
     });
   };
@@ -2415,6 +2742,9 @@ export const App: Component = () => {
       setExportUseRetopology(ui.export.useRetopology === true);
       if (ui.export.options) setExportOptions(ui.export.options);
     }
+    setRigSettings(loadRigSettings(ui.rig));
+    setSelectedJoints([]);
+    setSelectedControl(undefined);
     setClips(ui.animation?.clips ?? []);
     setActiveClipId(ui.animation?.activeClipId);
     setFrame(ui.animation?.frame ?? 0);
@@ -2726,6 +3056,12 @@ export const App: Component = () => {
               onBoneMoveCommitted={handleBoneMoveCommitted}
               onSkeletonTransformed={handleSkeletonGizmo}
               onPoseEdited={handlePoseEdited}
+              onSelectionChanged={(joints) => {
+                setSelectedJoints(joints);
+                if (joints.length > 0) setSelectedControl(undefined);
+              }}
+              onControlSelected={(id) => setSelectedControl(id ?? undefined)}
+              onControlPoseEdited={handleControlPoseEdited}
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
@@ -2821,10 +3157,9 @@ export const App: Component = () => {
                 }}
                 onTogglePlay={() => setPlaying(!playing())}
                 onRangeChange={handleClipRange}
-                onSelectJoint={(joint) => {
-                  setViewSettings((prev) => ({ ...prev, selectedBone: joint }));
-                  viewerRef?.selectBone(joint);
-                }}
+                onSelectJoint={(joint) => selectJoints([joint], joint)}
+                selectedControl={selectedControl()}
+                onSelectControl={handleSelectControl}
                 onSelection={setKeySelection}
                 onMoveKeys={handleMoveKeys}
                 onDeleteKeys={handleDeleteKeys}
@@ -2983,8 +3318,10 @@ export const App: Component = () => {
               presets: presetAnimations(),
               onAddPreset: handleAddPresetClip,
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
+              rigPanel,
             }}
             exportProps={{
+
               onExport: handleExport,
               canExport: hasWork(),
               skeletonOnly: !meshLoaded(),

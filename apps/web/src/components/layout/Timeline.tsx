@@ -13,10 +13,15 @@ import {
 } from "../../lib/animation";
 
 export interface TimelineRow {
+  /** Articulación (−1 en los controles) */
   joint: number;
+  /** Nombre del hueso, o id del control: la pista que muestra */
   bone: string;
+  /** Texto de la fila (por defecto, `bone`) */
+  label?: string;
   /** Profundidad en el árbol (sangría) */
   depth: number;
+  control?: boolean;
 }
 
 export interface TimelineProps {
@@ -25,6 +30,7 @@ export interface TimelineProps {
   playing: boolean;
   rows: TimelineRow[];
   selectedJoint: number;
+  selectedControl?: string;
   /** Keys seleccionadas (ver `keyId`) */
   selection: Set<string>;
   autoKey: boolean;
@@ -33,6 +39,7 @@ export interface TimelineProps {
   onTogglePlay: () => void;
   onRangeChange: (range: { start?: number; end?: number; fps?: number }) => void;
   onSelectJoint: (joint: number) => void;
+  onSelectControl?: (id: string) => void;
   onSelection: (selection: Set<string>) => void;
   onMoveKeys: (delta: number) => void;
   onDeleteKeys: () => void;
@@ -88,6 +95,9 @@ export const Timeline: Component<TimelineProps> = (props) => {
   });
 
   const tracks = createMemo(() => new Map<string, BoneTrack>(props.clip.tracks.map((t) => [t.bone, t])));
+  const isActive = (row: TimelineRow) => (row.control ? row.bone === props.selectedControl : row.joint === props.selectedJoint);
+  const selectRow = (row: TimelineRow) => (row.control ? props.onSelectControl?.(row.bone) : props.onSelectJoint(row.joint));
+
   const summaryFrames = createMemo(() => [...new Set(props.clip.tracks.flatMap(keyFrames))].sort((a, b) => a - b));
 
   const scrub = (e: PointerEvent) => {
@@ -245,13 +255,16 @@ export const Timeline: Component<TimelineProps> = (props) => {
               {(row) => (
                 <div
                   class={clsx(
-                    "flex items-center text-xs truncate cursor-pointer border-b border-border/40",
-                    row.joint === props.selectedJoint ? "bg-accent/15 text-accent" : "text-text-muted hover:text-text"
+                    "flex items-center gap-1 text-xs truncate cursor-pointer border-b border-border/40",
+                    isActive(row) ? "bg-accent/15 text-accent" : "text-text-muted hover:text-text"
                   )}
                   style={{ height: `${ROW}px`, "padding-left": `${8 + row.depth * 10}px` }}
-                  onClick={() => props.onSelectJoint(row.joint)}
+                  onClick={() => selectRow(row)}
                 >
-                  {row.bone}
+                  <Show when={row.control}>
+                    <span class="w-2 h-2 rounded-full border border-current shrink-0" />
+                  </Show>
+                  {row.label ?? row.bone}
                 </div>
               )}
             </For>
@@ -268,10 +281,10 @@ export const Timeline: Component<TimelineProps> = (props) => {
                 const isStep = (f: number) => track()?.rotation.find((k) => k.frame === f)?.interpolation === "step";
                 return (
                   <Lane
-                    active={row.joint === props.selectedJoint}
+                    active={isActive(row)}
                     onClick={() => {
                       props.onSelection(new Set());
-                      props.onSelectJoint(row.joint);
+                      selectRow(row);
                     }}
                   >
                     <For each={keyFrames(track())}>

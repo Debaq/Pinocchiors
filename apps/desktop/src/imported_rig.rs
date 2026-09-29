@@ -10,8 +10,10 @@
 //!
 //! Las animaciones se muestrean cuadro a cuadro: `D_J = mundo(J, t) · IBM_J`
 //! es el giro que el skin aplica a lo que sigue a `J`, y el giro local de la
-//! app es `D_padre⁻¹ · D_J` (la raíz además se desplaza). Después se quitan
-//! las keys que la interpolación lineal ya reproduce.
+//! app es `D_padre⁻¹ · D_J`. Si el archivo además corre la articulación (la
+//! raíz, o un joint con traslación animada), el desplazamiento es lo que
+//! `D_J` la aleja de donde la deja `D_padre`, en el marco del padre. Después
+//! se quitan las keys que la interpolación lineal ya reproduce.
 
 use crate::animation::{Key, KeyInterpolation};
 use converter_scene::glam::{Mat4, Quat, Vec3};
@@ -378,6 +380,7 @@ fn sample_clip(
     let frames = ((end - start) * fps).round().max(0.0) as usize;
 
     let pose = NodePose::new(scene, rig.node_parent);
+    let animatable = |a: usize| rig.joints[a].parent.is_none() || rig.joints.iter().any(|j| j.parent == Some(a));
 
     // Giro local (y desplazamiento de las raíces) de cada articulación por cuadro
     let num = rig.joints.len();
@@ -401,15 +404,19 @@ fn sample_clip(
                 None => rotation(a),
             };
             rotations[a].push(q.normalize());
-            if joint.parent.is_none() {
-                translations[a].push(delta[a].transform_point3(joint.position) - joint.position);
+            match joint.parent {
+                None => translations[a].push(delta[a].transform_point3(joint.position) - joint.position),
+                Some(p) if animatable(a) => {
+                    let moved = delta[a].transform_point3(joint.position) - delta[p].transform_point3(joint.position);
+                    translations[a].push(rotation(p).inverse() * moved);
+                }
+                Some(_) => {}
             }
         }
     }
 
     let rot_tol = 2e-3;
     let pos_tol = 1e-4 * rig.diag;
-    let animatable = |a: usize| rig.joints[a].parent.is_none() || rig.joints.iter().any(|j| j.parent == Some(a));
     let tracks: Vec<TrackDto> = (0..num)
         .filter(|&a| animatable(a))
         .filter_map(|a| {
@@ -681,10 +688,13 @@ mod tests {
         }
         let mut matrix = vec![Mat4::IDENTITY; bones.len()];
         for b in 0..bones.len() {
+            // El desplazamiento de la articulación `p` corre los huesos que salen de ella
             let local = match bones[b].parent {
+                Some(p) if bones[p].parent.is_some() => Mat4::from_rotation_translation(rotation[b], head(b) - head(p) + offset[p]),
                 Some(p) => Mat4::from_rotation_translation(rotation[b], head(b) - head(p)),
                 None => Mat4::from_rotation_translation(rotation[b], head(b) + offset[b]),
             };
+
             matrix[b] = bones[b].parent.map_or(Mat4::IDENTITY, |p| matrix[p]) * local;
         }
         let a = &rig.output.attachment;
@@ -843,7 +853,26 @@ mod tests {
         assert!(err < 2e-3, "error relativo {err}");
     }
 
+    /// Un joint que no es raíz con traslación animada: el codo se corre
+    #[test]
+    fn translated_middle_joint_keeps_file_pose() {
+        let mut scene = arm_scene();
+        scene.animations[0].channels.push(Channel {
+            node: 2,
+            interpolation: Interpolation::Linear,
+            times: vec![0.0, 1.0],
+            values: KeyframeValues::Translation(vec![[0.0, 100.0, 0.0], [20.0, 130.0, 5.0]]),
+        });
+        let mesh = pinocchio_mesh::scene_to_mesh(&scene).unwrap();
+        let rig = from_scene(&scene, mesh.num_vertices()).unwrap();
+        let codo = rig.clips[0].tracks.iter().find(|t| t.bone == "codo").unwrap();
+        assert!(codo.translation.len() >= 2, "{:?}", codo.translation.len());
+        let err = max_pose_error(&scene);
+        assert!(err < 2e-3, "error relativo {err}");
+    }
+
     /// Como el Fox de Khronos: un joint "root" sin pesos encima del hombro, que
+
     /// es el que se traslada
     #[test]
     fn unweighted_root_above_translated_joint_is_dropped() {

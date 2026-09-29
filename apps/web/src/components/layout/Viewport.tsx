@@ -26,8 +26,12 @@ export interface ViewportProps {
   onPlacementPick?: (pick: PlacementPick) => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
-  /** Modo animación: se confirmó un giro o desplazamiento de la articulación */
-  onPoseEdited?: (joint: number) => void;
+  /** Modo animación: se confirmó un giro o desplazamiento de estas articulaciones */
+  onPoseEdited?: (joints: number[]) => void;
+  /** Selección múltiple de articulaciones y controles del rig */
+  onSelectionChanged?: ViewerCallbacks["onSelectionChanged"];
+  onControlSelected?: ViewerCallbacks["onControlSelected"];
+  onControlPoseEdited?: ViewerCallbacks["onControlPoseEdited"];
   /** Fin de un movimiento con G (para deshacer) */
   onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
   /** Se soltó el gizmo del modelo (herramientas Mover, Rotar y Escalar del modelo) */
@@ -132,7 +136,11 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onHint: setHint,
         onWeightsPainted: (stroke) => props.onWeightsPainted?.(stroke),
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
-        onPoseEdited: (joint) => props.onPoseEdited?.(joint),
+        onPoseEdited: (joints) => props.onPoseEdited?.(joints),
+        onSelectionChanged: (joints, active) => props.onSelectionChanged?.(joints, active),
+        onControlSelected: (id) => props.onControlSelected?.(id),
+        onControlPoseEdited: (id) => props.onControlPoseEdited?.(id),
+
         onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
         onObjectTransformed: (matrix, mode) => props.onObjectTransformed?.(matrix, mode),
         onMeasure: setMeasure,

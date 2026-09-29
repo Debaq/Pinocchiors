@@ -1,4 +1,4 @@
-import { Component, For, Show } from "solid-js";
+import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { Button } from "../ui";
 import * as Icons from "../icons";
@@ -19,12 +19,18 @@ export interface AnimateStepProps {
   presets?: PresetAnimation[];
   onAddPreset?: (id: PresetAnimationId) => void;
   selectedBoneName?: string;
+  /** Propiedades del rig (hueso activo, grupos, controles, reposo) */
+  rigPanel?: JSX.Element;
 }
 
 const SHORTCUTS: [string, string][] = [
   ["Clic", "Seleccionar articulación"],
-  ["R", "Girar (X/Y/Z restringe al eje)"],
-  ["G", "Desplazar la raíz"],
+  ["Shift+clic", "Sumar a la selección"],
+  ["Doble clic", "Seleccionar la cadena"],
+  ["R", "Girar (X/Y/Z eje; dos veces, local)"],
+  ["G", "Desplazar"],
+  ["Ctrl al girar", "Pasos de 5° (con Shift, 15°)"],
+  ["Número al girar", "Grados exactos"],
   ["I", "Insertar key"],
   ["X / Supr", "Borrar keys seleccionadas"],
   ["Espacio", "Reproducir / pausar"],
@@ -46,8 +52,8 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
         }
       >
         <p class="text-xs text-text-muted leading-relaxed">
-          Elige una articulación, gírala con R (la raíz también se desplaza con G) e inserta keys en la línea de
-          tiempo. Con auto-key, cada giro confirmado crea su key.
+          Elige una articulación, gírala con R (o desplázala con G) e inserta keys en la línea de tiempo. Con
+          auto-key, cada cambio confirmado crea su key.
         </p>
 
         {/* Animaciones */}
@@ -120,6 +126,9 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           <span class="text-text-muted">Articulación: </span>
           <span class="text-text">{props.selectedBoneName ?? "ninguna (clic en una esfera)"}</span>
         </div>
+
+        {props.rigPanel}
+
 
         <div class="space-y-1">
           <For each={SHORTCUTS}>

@@ -59,12 +59,16 @@ pub fn write_bvh(joints: &[BvhJoint], clip: &AnimationClip) -> Result<String, St
         })
         .collect();
 
+    let tracks: Vec<Option<&JointTrack>> = (0..n).map(|j| clip.tracks.iter().find(|t| t.joint == j)).collect();
+    // Articulaciones que se desplazan: la raíz y las que tienen keys de traslación
+    let positioned: Vec<bool> = (0..n).map(|j| j == root || tracks[j].is_some_and(|t| !t.translation.is_empty())).collect();
+
     let mut out = String::from("HIERARCHY\n");
     // Orden de los canales en MOTION: una entrada por JOINT escrito
     let mut order = Vec::new();
-    write_joint(&mut out, &mut order, joints, &children, &names, root, 0);
+    let tree = Tree { joints, children: &children, names: &names, positioned: &positioned };
+    write_joint(&mut out, &mut order, &tree, root, 0);
 
-    let tracks: Vec<Option<&JointTrack>> = (0..n).map(|j| clip.tracks.iter().find(|t| t.joint == j)).collect();
     let fps = if clip.fps > 0.0 { clip.fps } else { 24.0 };
     let frames = clip.frames();
     let _ = writeln!(out, "MOTION\nFrames: {}\nFrame Time: {:.6}", frames.clone().count(), 1.0 / fps);
@@ -74,6 +78,11 @@ pub fn write_bvh(joints: &[BvhJoint], clip: &AnimationClip) -> Result<String, St
         for &j in &order {
             if j == root {
                 let p = joints[root].position + sample_translation(tracks[root], f);
+                let _ = write!(line, "{} {} {} ", num(p.x), num(p.y), num(p.z));
+            } else if positioned[j] {
+                // OFFSET más el desplazamiento, en el marco del padre
+                let offset = joints[j].parent.map_or(Vec3::ZERO, |p| joints[j].position - joints[p].position);
+                let p = offset + sample_translation(tracks[j], f);
                 let _ = write!(line, "{} {} {} ", num(p.x), num(p.y), num(p.z));
             }
             // Canales Z X Y: R = Rz · Rx · Ry
@@ -92,15 +101,16 @@ fn num(x: f32) -> String {
     if s == "-0" { "0".into() } else { s.into() }
 }
 
-fn write_joint(
-    out: &mut String,
-    order: &mut Vec<usize>,
-    joints: &[BvhJoint],
-    children: &[Vec<usize>],
-    names: &[String],
-    j: usize,
-    depth: usize,
-) {
+struct Tree<'a> {
+    joints: &'a [BvhJoint<'a>],
+    children: &'a [Vec<usize>],
+    names: &'a [String],
+    /// Lleva canales de posición
+    positioned: &'a [bool],
+}
+
+fn write_joint(out: &mut String, order: &mut Vec<usize>, tree: &Tree, j: usize, depth: usize) {
+    let Tree { joints, children, names, positioned } = *tree;
     let pad = "  ".repeat(depth);
     let is_root = depth == 0;
     // La raíz va en el origen: sus canales de posición son absolutos
@@ -111,7 +121,7 @@ fn write_joint(
     let _ = writeln!(out, "{pad}{} {}", if is_root { "ROOT" } else { "JOINT" }, names[j]);
     let _ = writeln!(out, "{pad}{{");
     let _ = writeln!(out, "{pad}  OFFSET {} {} {}", num(offset.x), num(offset.y), num(offset.z));
-    if is_root {
+    if is_root || positioned[j] {
         let _ = writeln!(out, "{pad}  CHANNELS 6 Xposition Yposition Zposition Zrotation Xrotation Yrotation");
     } else {
         let _ = writeln!(out, "{pad}  CHANNELS 3 Zrotation Xrotation Yrotation");
@@ -131,7 +141,7 @@ fn write_joint(
         }
         _ => {
             for &c in kids {
-                write_joint(out, order, joints, children, names, c, depth + 1);
+                write_joint(out, order, tree, c, depth + 1);
             }
         }
     }
@@ -207,7 +217,25 @@ mod tests {
     }
 
     #[test]
+    fn translated_joints_get_position_channels() {
+        let clip = AnimationClip {
+            name: "a".into(),
+            fps: 24.0,
+            tracks: vec![JointTrack { joint: 1, rotation: vec![], translation: vec![key(0.0, [0.0, 0.0, 0.25])] }],
+            start: None,
+            end: None,
+        };
+        let bvh = write_bvh(&joints(), &clip).unwrap();
+        assert_eq!(bvh.matches("CHANNELS 6").count(), 2, "raíz y spine");
+        // raíz (6) + spine (6: OFFSET 0 0.5 0 corrido 0.25 en Z) + leg (3)
+        let c = channels(&bvh, 0);
+        assert_eq!(c.len(), 15);
+        assert_eq!(&c[6..9], &[0.0, 0.5, 0.25]);
+    }
+
+    #[test]
     fn leaves_next_to_branches_become_joints() {
+
         let mut j = joints();
         // Una segunda hoja colgando de la cadera, junto a spine y leg
         j.push(BvhJoint { name: "tail tip", parent: Some(0), position: Vec3::new(0.0, 0.9, -0.3) });

@@ -2,7 +2,9 @@
  * Animaciones de la línea de tiempo: keys por articulación, en cuadros.
  *
  * Se anima cada articulación (esfera del visor): su giro mueve todo lo que
- * cuelga de ella, y la raíz además se desplaza. Las pistas se guardan por
+ * cuelga de ella, y cualquiera puede además desplazarse (salvo que su hueso
+ * lo bloquee, ver `rig.ts`). Los controles del rig tienen pistas propias
+ * (`kind: "control"`, con el id del control). Las pistas se guardan por
  * nombre de hueso, así sobreviven a editar el esqueleto (mover articulaciones)
  * y las de huesos que ya no existen se ignoran. El backend recibe los clips
  * con el índice de cada articulación (ver `apps/desktop/src/animation.rs`).
@@ -20,10 +22,12 @@ export interface Key<T> {
 }
 
 export interface BoneTrack {
+  /** Nombre del hueso, o id del control si `kind` es "control" */
   bone: string;
+  kind?: "control";
   /** Giro local (x, y, z, w) */
   rotation: Key<Quat>[];
-  /** Solo la raíz: desplazamiento respecto del reposo */
+  /** Desplazamiento respecto del reposo, en el marco del padre */
   translation: Key<Vec3>[];
 }
 
@@ -37,13 +41,26 @@ export interface AnimationClip {
   tracks: BoneTrack[];
 }
 
-/** Pose de las articulaciones, por índice; las que faltan están en reposo */
+/** Giro y desplazamiento de un control respecto de su reposo */
+export interface ControlPose {
+  rotation: Quat;
+  translation: Vec3;
+}
+
+/** Pose de las articulaciones, por índice, y de los controles, por id; lo que falta está en reposo */
 export interface Pose {
   rotations: Map<number, Quat>;
   translations: Map<number, Vec3>;
+  controls: Map<string, ControlPose>;
 }
 
-export const emptyPose = (): Pose => ({ rotations: new Map(), translations: new Map() });
+export const emptyPose = (): Pose => ({ rotations: new Map(), translations: new Map(), controls: new Map() });
+
+export const clonePose = (pose: Pose): Pose => ({
+  rotations: new Map(pose.rotations),
+  translations: new Map(pose.translations),
+  controls: new Map(pose.controls),
+});
 
 let nextId = 0;
 export function createClip(name: string, fps = 24): AnimationClip {
@@ -57,7 +74,7 @@ export function duplicateClip(clip: AnimationClip, name: string): AnimationClip 
 
 // ─── Muestreo ───────────────────────────────────────────────────────────────
 
-function slerp(a: Quat, b: Quat, t: number): Quat {
+export function slerp(a: Quat, b: Quat, t: number): Quat {
   let [bx, by, bz, bw] = b;
   let dot = a[0] * bx + a[1] * by + a[2] * bz + a[3] * bw;
   // El camino corto: q y -q son el mismo giro
@@ -104,6 +121,14 @@ function sample<T>(keys: Key<T>[], frame: number, mix: (a: T, b: T, t: number) =
 export function samplePose(clip: AnimationClip | undefined, frame: number, boneIndex: Map<string, number>): Pose {
   const pose = emptyPose();
   for (const track of clip?.tracks ?? []) {
+    if (track.kind === "control") {
+      const rotation = sample(track.rotation, frame, slerp);
+      const translation = sample(track.translation, frame, lerp3);
+      if (rotation || translation) {
+        pose.controls.set(track.bone, { rotation: rotation ?? [0, 0, 0, 1], translation: translation ?? [0, 0, 0] });
+      }
+      continue;
+    }
     const joint = boneIndex.get(track.bone);
     if (joint === undefined) continue;
     const rotation = sample(track.rotation, frame, slerp);
@@ -134,14 +159,15 @@ function withKey<T>(keys: Key<T>[], key: Key<T>): Key<T>[] {
 export function insertKeys(
   clip: AnimationClip,
   frame: number,
-  entries: { bone: string; rotation: Quat; translation?: Vec3 }[],
+  entries: { bone: string; kind?: "control"; rotation: Quat; translation?: Vec3 }[],
   interpolation: KeyInterpolation
 ): AnimationClip {
   const tracks = clip.tracks.map((t) => ({ ...t }));
   for (const entry of entries) {
-    let track = tracks.find((t) => t.bone === entry.bone);
+    let track = tracks.find((t) => t.bone === entry.bone && t.kind === entry.kind);
     if (!track) {
       track = { bone: entry.bone, rotation: [], translation: [] };
+      if (entry.kind) track.kind = entry.kind;
       tracks.push(track);
     }
     track.rotation = withKey(track.rotation, { frame, value: entry.rotation, interpolation });
@@ -213,6 +239,7 @@ export function clipsForExport(clips: AnimationClip[], boneIndex: Map<string, nu
     start: clip.start,
     end: clip.end,
     tracks: clip.tracks.flatMap((t) => {
+      if (t.kind === "control") return [];
       const joint = boneIndex.get(t.bone);
       return joint === undefined ? [] : [{ joint, rotation: t.rotation, translation: t.translation }];
     }),

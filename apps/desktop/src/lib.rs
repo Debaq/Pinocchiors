@@ -49,6 +49,7 @@ pub fn run() {
             // Esqueletos
             commands::list_skeleton_presets,
             commands::select_skeleton,
+            commands::apply_rest_pose,
             commands::remove_object,
             project::save_project,
             project::new_project,

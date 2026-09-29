@@ -6,6 +6,8 @@
 //! la cabeza de su segmento, la posición de `padre(b)`; así que el giro de `J`
 //! va a los joints de sus hijos, que están justo en `J`. La raíz no tiene
 //! segmento: su giro y su traslación van a su propio joint y mueven todo.
+//! El desplazamiento de otra articulación también va a los joints de sus
+//! hijos: corre el punto `J` (en el marco de su padre) con todo lo que cuelga.
 
 use converter_scene::glam::{Quat, Vec3};
 use converter_scene::{Animation, Channel, Interpolation, KeyframeValues};
@@ -26,8 +28,8 @@ pub struct Key<T> {
     pub interpolation: KeyInterpolation,
 }
 
-/// Keys de una articulación: giro local (x, y, z, w) y, en la raíz,
-/// desplazamiento respecto del reposo
+/// Keys de una articulación: giro local (x, y, z, w) y desplazamiento
+/// respecto del reposo (en el marco del padre)
 #[derive(Debug, Clone, Deserialize)]
 pub struct JointTrack {
     pub joint: usize,
@@ -89,7 +91,7 @@ pub fn sample_rotation(track: Option<&JointTrack>, frame: f32) -> Quat {
         .map_or(Quat::IDENTITY, |q| Quat::from_array(q).normalize())
 }
 
-/// Desplazamiento de la raíz respecto del reposo en `frame`
+/// Desplazamiento de la articulación respecto del reposo en `frame`
 pub fn sample_translation(track: Option<&JointTrack>, frame: f32) -> Vec3 {
     track
         .and_then(|t| sample(&t.translation, frame, |a, b, t| Vec3::from(a).lerp(Vec3::from(b), t).to_array()))
@@ -133,12 +135,12 @@ pub fn scene_animations(clips: &[AnimationClip], rig: &SkinRig) -> Vec<Animation
                         });
                     }
                 }
-                // Solo la raíz se desplaza: el resto está sujeto a su padre
-                if rig.parents[track.joint].is_none() {
-                    let rest = rig.rest_translation[track.joint];
+                // Se desplazan los mismos joints que gira la articulación
+                for joint in rig.rotated_joints(track.joint) {
+                    let rest = rig.rest_translation[joint];
                     if let Some((interpolation, times, values)) = translation_samples(&track.translation, fps, rest) {
                         channels.push(Channel {
-                            node: rig.joint_nodes[track.joint],
+                            node: rig.joint_nodes[joint],
                             interpolation,
                             times,
                             values: KeyframeValues::Translation(values),
@@ -259,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn root_translation_is_offset_from_rest_and_only_root_moves() {
+    fn root_translation_is_offset_from_rest() {
         let (parents, nodes, rest) = rig();
         let r = SkinRig { parents: &parents, joint_nodes: &nodes, rest_translation: &rest };
         let tracks = vec![
@@ -268,7 +270,6 @@ mod tests {
                 rotation: vec![],
                 translation: vec![key(0.0, [0.0, 0.0, 0.0], KeyInterpolation::Linear), key(12.0, [2.0, 0.0, 0.0], KeyInterpolation::Linear)],
             },
-            JointTrack { joint: 1, rotation: vec![], translation: vec![key(0.0, [5.0, 0.0, 0.0], KeyInterpolation::Linear)] },
         ];
         let anims = scene_animations(&[clip(tracks)], &r);
         assert_eq!(anims[0].channels.len(), 1);
@@ -282,7 +283,30 @@ mod tests {
     }
 
     #[test]
+    fn joint_translation_moves_its_children_joints() {
+        let (parents, nodes, rest) = rig();
+        let r = SkinRig { parents: &parents, joint_nodes: &nodes, rest_translation: &rest };
+        let tracks = vec![JointTrack {
+            joint: 1,
+            rotation: vec![],
+            translation: vec![key(0.0, [0.5, 0.0, 0.0], KeyInterpolation::Linear)],
+        }];
+        let anims = scene_animations(&[clip(tracks)], &r);
+        let targets: Vec<(usize, Vec<[f32; 3]>)> = anims[0]
+            .channels
+            .iter()
+            .map(|c| match &c.values {
+                KeyframeValues::Translation(v) => (c.node, v.clone()),
+                other => panic!("{other:?}"),
+            })
+            .collect();
+        // Los hijos 2 y 3 (en J = 1) corridos desde su reposo (0, 1, 0)
+        assert_eq!(targets, vec![(12, vec![[0.5, 1.0, 0.0]]), (13, vec![[0.5, 1.0, 0.0]])]);
+    }
+
+    #[test]
     fn mixed_interpolation_is_baked_per_frame() {
+
         let a = Quat::IDENTITY.to_array();
         let b = Quat::from_rotation_x(1.0).to_array();
         let keys = vec![
