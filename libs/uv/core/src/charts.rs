@@ -20,6 +20,9 @@ const UNASSIGNED: usize = usize::MAX;
 /// Peso del término de redondez frente al de normales.
 const ROUNDNESS_WEIGHT: f64 = 0.1;
 
+/// [`ChartOptions::old_seam_weight`] por omisión.
+const OLD_SEAM_WEIGHT: f64 = 0.5;
+
 /// Opciones de la segmentación.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ChartOptions {
@@ -33,11 +36,16 @@ pub struct ChartOptions {
     /// Alisar los bordes de las cartas al final (costuras más cortas, ver
     /// [`smooth_seams`]).
     pub smooth_seams: bool,
+    /// Preferencia por cortar sobre las costuras del mapa original, cuando se
+    /// conocen (ver [`crate::unwrap_with_regions`]): costo de unir una cara
+    /// a una carta a través de una costura vieja, y descuento del largo de
+    /// borde que cae sobre ellas al alisar (`1 / (1 + peso)`). 0 las ignora.
+    pub old_seam_weight: f64,
 }
 
 impl Default for ChartOptions {
     fn default() -> Self {
-        Self { max_angle: 55.0, sharp_angle: 70.0, relax_iterations: 4, smooth_seams: true }
+        Self { max_angle: 55.0, sharp_angle: 70.0, relax_iterations: 4, smooth_seams: true, old_seam_weight: OLD_SEAM_WEIGHT }
     }
 }
 
@@ -70,6 +78,7 @@ impl Ord for Entry {
 struct Grower<'a> {
     mesh: &'a PolyMesh,
     cos_max: f64,
+    old_seam_weight: f64,
     /// Arista local `k` de la cara `f` que la carta no puede cruzar.
     crossable: Vec<Vec<bool>>,
     chart_of: Vec<usize>,
@@ -91,6 +100,7 @@ impl<'a> Grower<'a> {
         Self {
             mesh,
             cos_max: options.max_angle.to_radians().cos(),
+            old_seam_weight: options.old_seam_weight,
             crossable,
             chart_of: vec![UNASSIGNED; mesh.num_faces()],
             normal_sums: Vec::new(),
@@ -108,15 +118,20 @@ impl<'a> Grower<'a> {
         if dot < self.cos_max {
             return f64::INFINITY;
         }
-        let (mut shared, mut total) = (0.0, 0.0);
+        let (mut shared, mut total, mut over_seams) = (0.0, 0.0, 0.0);
         for (k, len) in mesh.edge_lengths[f].iter().enumerate() {
             total += len;
             if mesh.adjacent[f][k].is_some_and(|g| self.chart_of[g] == chart) {
                 shared += len;
+                if mesh.old_seams[f][k] {
+                    over_seams += len;
+                }
             }
         }
         let roundness = if total > 0.0 { 1.0 - 2.0 * shared / total } else { 0.0 };
-        (1.0 - dot) + ROUNDNESS_WEIGHT * roundness
+        // Unirse a través de una costura vieja: mejor que la carta pare ahí
+        let seam = if shared > 0.0 { over_seams / shared } else { 0.0 };
+        (1.0 - dot) + ROUNDNESS_WEIGHT * roundness + self.old_seam_weight * seam
     }
 
     fn add_chart(&mut self, seed: usize) -> usize {
@@ -206,7 +221,7 @@ pub(crate) fn segment(mesh: &PolyMesh, options: &ChartOptions) -> Vec<usize> {
         }
         seeds = new_seeds;
     }
-    ensure_disks(mesh, compact(chart_of))
+    ensure_disks(mesh, compact(chart_of), options.old_seam_weight)
 }
 
 /// Alisa los bordes de las cartas: una cara de borde pasa a la carta vecina
@@ -244,7 +259,7 @@ fn smooth_seams(grower: &mut Grower) {
                     .filter_map(|(k, g)| g.map(|g| (k, g)))
                     .map(|(k, g)| {
                         let c = grower.chart_of[g];
-                        mesh.edge_lengths[f][k] * ((c != b) as u8 as f64 - (c != a) as u8 as f64)
+                        mesh.seam_length(f, k, grower.old_seam_weight) * ((c != b) as u8 as f64 - (c != a) as u8 as f64)
                     })
                     .sum();
                 if delta < -1e-12 && best.is_none_or(|(d, _)| delta < d) {
@@ -385,9 +400,11 @@ fn component(mesh: &PolyMesh, faces: &[usize]) -> HashSet<usize> {
 }
 
 /// Parte una carta en dos: semillas en dos caras alejadas y cada cara va a
-/// la más cercana (Dijkstra por centroides, solo dentro de la carta).
-/// Devuelve `None` si la carta tiene una sola cara.
-pub(crate) fn split(mesh: &PolyMesh, faces: &[usize]) -> Option<(Vec<usize>, Vec<usize>)> {
+/// la más cercana (Dijkstra por centroides, solo dentro de la carta). Pasar
+/// por una costura vieja cuesta `1 + old_seam_weight` veces más, así el
+/// corte tiende a caer sobre ellas. Devuelve `None` si la carta tiene una
+/// sola cara.
+pub(crate) fn split(mesh: &PolyMesh, faces: &[usize], old_seam_weight: f64) -> Option<(Vec<usize>, Vec<usize>)> {
     if faces.len() < 2 {
         return None;
     }
@@ -407,11 +424,13 @@ pub(crate) fn split(mesh: &PolyMesh, faces: &[usize]) -> Option<(Vec<usize>, Vec
             if best.get(&face).is_some_and(|&(d, _)| d < cost) {
                 continue;
             }
-            for (g, _) in mesh.neighbors(face) {
+            for (k, g) in mesh.adjacent[face].iter().enumerate() {
+                let Some(g) = *g else { continue };
                 if !inside.contains(&g) {
                     continue;
                 }
-                let d = cost + mesh.centroids[face].distance(&mesh.centroids[g]);
+                let step = mesh.centroids[face].distance(&mesh.centroids[g]);
+                let d = cost + if mesh.old_seams[face][k] { step * (1.0 + old_seam_weight) } else { step };
                 if best.get(&g).is_none_or(|&(old, _)| d < old) {
                     best.insert(g, (d, chart));
                     heap.push(Entry { cost: d, face: g, chart });
@@ -440,7 +459,7 @@ pub(crate) fn split(mesh: &PolyMesh, faces: &[usize]) -> Option<(Vec<usize>, Vec
 }
 
 /// Parte las cartas que no son discos hasta que todas lo sean.
-fn ensure_disks(mesh: &PolyMesh, chart_of: Vec<usize>) -> Vec<usize> {
+fn ensure_disks(mesh: &PolyMesh, chart_of: Vec<usize>, old_seam_weight: f64) -> Vec<usize> {
     let mut pending = chart_faces(&chart_of);
     let mut done = Vec::new();
     while let Some(faces) = pending.pop() {
@@ -451,7 +470,7 @@ fn ensure_disks(mesh: &PolyMesh, chart_of: Vec<usize>) -> Vec<usize> {
             done.push(faces);
             continue;
         }
-        match split(mesh, &faces) {
+        match split(mesh, &faces, old_seam_weight) {
             Some((a, b)) => {
                 pending.push(a);
                 pending.push(b);

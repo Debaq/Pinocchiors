@@ -29,5 +29,5 @@ pub use skin::{
 };
 pub use surface::{UvPart, UvSurface};
 pub use tangent::{corner_frames, mikk_tangents, CornerFrames};
-pub use transfer::{transfer_uvs, UvTransfer};
-pub use unwrap::{unwrap, Layout, Unwrap, UnwrapOptions};
+pub use transfer::{original_regions, transfer_uvs, UvTransfer};
+pub use unwrap::{unwrap, unwrap_with_regions, Layout, Unwrap, UnwrapOptions};

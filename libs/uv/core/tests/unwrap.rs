@@ -1,5 +1,5 @@
 use std::f64::consts::TAU;
-use uv_core::{unwrap, Unwrap, UnwrapOptions, Layout};
+use uv_core::{unwrap, unwrap_with_regions, Layout, Unwrap, UnwrapOptions};
 
 type Quads = (Vec<[f64; 3]>, Vec<[usize; 4]>);
 
@@ -225,4 +225,58 @@ fn islands_are_not_mirrored_in_the_image() {
             assert!(du[0] > 0.0 && dv[1] < 0.0, "carta no derecha: du {du:?}, dv {dv:?}");
         }
     }
+}
+
+/// Largo de costura nueva y cuánto de él cae sobre costuras viejas
+/// (aristas entre caras de regiones distintas).
+fn seams_on_regions(points: &[[f64; 3]], faces: &[[usize; 4]], charts: &[usize], regions: &[usize]) -> (f64, f64) {
+    let mut edges: std::collections::HashMap<(usize, usize), Vec<usize>> = Default::default();
+    for (f, q) in faces.iter().enumerate() {
+        for k in 0..4 {
+            let (a, b) = (q[k], q[(k + 1) % 4]);
+            edges.entry((a.min(b), a.max(b))).or_default().push(f);
+        }
+    }
+    let (mut total, mut on_old) = (0.0, 0.0);
+    for ((a, b), users) in &edges {
+        if let [f, g] = users[..]
+            && charts[f] != charts[g]
+        {
+            let len = (0..3).map(|k| (points[*a][k] - points[*b][k]).powi(2)).sum::<f64>().sqrt();
+            total += len;
+            if regions[f] != regions[g] {
+                on_old += len;
+            }
+        }
+    }
+    (total, on_old)
+}
+
+#[test]
+fn seams_follow_the_original_map() {
+    // "Mapa original" de la esfera: gajos de 60° girados 17° y dos casquetes
+    let (points, faces) = cube(20, true);
+    let regions: Vec<usize> = faces
+        .iter()
+        .map(|q| {
+            let c: Vec<f64> = (0..3).map(|k| q.iter().map(|&v| points[v][k]).sum::<f64>() / 4.0).collect();
+            let z = c[2] / (c[0] * c[0] + c[1] * c[1] + c[2] * c[2]).sqrt();
+            if z.abs() > 0.75 {
+                return 100 + (z > 0.0) as usize;
+            }
+            ((c[1].atan2(c[0]).to_degrees() + 377.0) % 360.0 / 60.0) as usize
+        })
+        .collect();
+
+    let ignore = UnwrapOptions { charts: uv_core::ChartOptions { old_seam_weight: 0.0, ..Default::default() }, ..Default::default() };
+    let before = unwrap_with_regions(&points, &faces, Some(&regions), &ignore);
+    let after = unwrap_with_regions(&points, &faces, Some(&regions), &UnwrapOptions::default());
+    check(&after, UnwrapOptions::default().max_stretch);
+    let (total_before, on_before) = seams_on_regions(&points, &faces, &before.chart_of_face, &regions);
+    let (total_after, on_after) = seams_on_regions(&points, &faces, &after.chart_of_face, &regions);
+    eprintln!("sobre costuras viejas: {:.0} % → {:.0} %", 100.0 * on_before / total_before, 100.0 * on_after / total_after);
+    assert!(on_after / total_after > 0.6, "{on_after} de {total_after}");
+    assert!(on_after / total_after > 3.0 * on_before / total_before);
+    // Sin alargar las costuras
+    assert!(total_after < 1.1 * total_before, "{total_after} vs {total_before}");
 }

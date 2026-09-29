@@ -70,3 +70,17 @@ pub fn transfer_uvs<const N: usize>(
     let (corners, groups) = per_face.into_iter().map(|(uv, g, _)| (uv, g)).unzip();
     UvTransfer { corners, groups, seam_faces }
 }
+
+/// Isla del mapa de `surface` bajo el centro de cada cara: una arista entre
+/// caras de islas distintas cae sobre una costura del original (ver
+/// [`crate::unwrap_with_regions`]).
+pub fn original_regions<const N: usize>(surface: &UvSurface, positions: &[[f64; 3]], faces: &[[usize; N]]) -> Vec<usize> {
+    faces
+        .par_iter()
+        .map(|face| {
+            let center = face.iter().fold(Vector3::zero(), |acc, &v| acc + Vector3::new(positions[v][0], positions[v][1], positions[v][2]))
+                * (1.0 / N as f64);
+            surface.chart(surface.closest(&center).triangle)
+        })
+        .collect()
+}

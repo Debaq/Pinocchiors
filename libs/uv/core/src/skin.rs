@@ -2,7 +2,8 @@
 //! esquina de cara más los materiales y texturas que usan.
 
 use crate::{
-    bake, corner_frames, transfer_uvs, unwrap, BakeChannel, CornerFrames, TexelContext, UnwrapOptions, UvPart, UvSurface,
+    bake, corner_frames, original_regions, transfer_uvs, unwrap_with_regions, BakeChannel, CornerFrames, TexelContext,
+    UnwrapOptions, UvPart, UvSurface,
 };
 use converter_scene::{AlphaMode, Material, Scene, Texture, TextureFormat, TextureRef, WorldPrimitive};
 use image::RgbaImage;
@@ -121,7 +122,9 @@ pub fn unwrapped_skin<const N: usize>(
 ) -> Skin<N> {
     let size = options.texture_size.max(1);
     let unwrap_options = UnwrapOptions { texture_size: size, ..options.unwrap };
-    let layout = unwrap(positions, faces, &unwrap_options);
+    // Con UV de origen, las cartas nuevas prefieren cortar por sus costuras
+    let regions = surface.map(|s| original_regions(s, positions, faces));
+    let layout = unwrap_with_regions(positions, faces, regions.as_deref(), &unwrap_options);
 
     let geometry = if surface.is_none() { material_surface(scene) } else { None };
     let (material, textures) = match surface.or(geometry.as_ref()) {

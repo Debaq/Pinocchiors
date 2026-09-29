@@ -60,6 +60,18 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   por cara). Como costo extra del crecimiento casi no cambia el largo visible
   (9,34 → 9,22) y agrega islas; como peso en el alisado mejora ~1 % sobre el
   alisado por largo solo, y cuesta ~0,4 s.
+- Costuras del original (`unwrap_with_regions`, `original_regions`): con UV
+  de origen, cada cara nueva sabe en qué isla vieja cae; una arista entre
+  islas viejas distintas es costura vieja, donde quien modeló suele
+  esconderlas. Unirse a una carta a través de ellas cuesta
+  `old_seam_weight` (0,5) por la fracción del borde compartido que cae ahí;
+  al alisar, su largo pesa `1 / (1 + peso)`, y al partir cartas malas
+  cruzarlas cuesta `1 + peso` veces más. Gajos girados 17° + casquetes como
+  mapa viejo: costura nueva sobre la vieja, esfera 1 % → 79 % (costuras más
+  cortas, 12 → 8 cartas, atlas 66 → 75 %), esfera ondulada 9 → 20 % (sigue
+  el 63 % de las viejas, +2 cartas), toro 2 → 26 % (+6 cartas). Peso 2
+  alinea más la esfera (94 %) pero baja el atlas; 0,25 alinea menos.
+  Aplica al desplegar la retopología y la malla original.
 - Discos: χ = 1, un lazo de borde, conexa. Si no, se parte en dos con
   Dijkstra por centroides desde dos caras lejanas.
 
@@ -184,8 +196,6 @@ Pendiente de este flujo:
 
 ## Pendiente
 
-- Costuras alineadas a las costuras viejas del original. (Esconderlas por
-  oclusión no rindió, ver fase 1.)
 
 ## Verificación
 

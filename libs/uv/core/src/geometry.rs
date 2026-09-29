@@ -17,6 +17,9 @@ pub(crate) struct PolyMesh {
     pub adjacent: Vec<Vec<Option<usize>>>,
     /// Longitud de cada arista local.
     pub edge_lengths: Vec<Vec<f64>>,
+    /// Arista local sobre una costura vieja: las dos caras caen en islas
+    /// distintas del mapa original (ver [`PolyMesh::with_regions`]).
+    pub old_seams: Vec<Vec<bool>>,
 }
 
 impl PolyMesh {
@@ -63,7 +66,28 @@ impl PolyMesh {
             }
         }
 
-        Self { points, faces, normals, areas, centroids, adjacent, edge_lengths }
+        let old_seams = faces.iter().map(|f| vec![false; f.len()]).collect();
+        Self { points, faces, normals, areas, centroids, adjacent, edge_lengths, old_seams }
+    }
+
+    /// Marca como costura vieja cada arista entre caras de regiones
+    /// distintas (`regions[f]`: la isla del original bajo la cara `f`).
+    pub fn with_regions(mut self, regions: &[usize]) -> Self {
+        if regions.len() == self.num_faces() {
+            for (f, seams) in self.old_seams.iter_mut().enumerate() {
+                for (k, seam) in seams.iter_mut().enumerate() {
+                    *seam = self.adjacent[f][k].is_some_and(|g| regions[g] != regions[f]);
+                }
+            }
+        }
+        self
+    }
+
+    /// Largo de la arista local `k` de `f` como costura: las que caen sobre
+    /// una costura vieja pesan `1 / (1 + weight)`.
+    pub fn seam_length(&self, f: usize, k: usize, weight: f64) -> f64 {
+        let len = self.edge_lengths[f][k];
+        if self.old_seams[f][k] { len / (1.0 + weight) } else { len }
     }
 
     pub fn num_faces(&self) -> usize {

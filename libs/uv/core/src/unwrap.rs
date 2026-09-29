@@ -70,7 +70,7 @@ pub struct Unwrap<const N: usize> {
 const MAX_SPLIT_ROUNDS: usize = 10;
 
 /// Parte `faces` hasta que cada parte sea un disco.
-fn into_disks(mesh: &PolyMesh, faces: Vec<usize>) -> Vec<Vec<usize>> {
+fn into_disks(mesh: &PolyMesh, faces: Vec<usize>, old_seam_weight: f64) -> Vec<Vec<usize>> {
     let mut pending = vec![faces];
     let mut out = Vec::new();
     while let Some(faces) = pending.pop() {
@@ -81,7 +81,7 @@ fn into_disks(mesh: &PolyMesh, faces: Vec<usize>) -> Vec<Vec<usize>> {
             out.push(faces);
             continue;
         }
-        match split(mesh, &faces) {
+        match split(mesh, &faces, old_seam_weight) {
             Some((a, b)) => pending.extend([a, b]),
             None => out.push(faces),
         }
@@ -146,7 +146,24 @@ fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 
 
 /// Despliega una malla de caras de `N` vértices en un atlas UV.
 pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], options: &UnwrapOptions) -> Unwrap<N> {
+    unwrap_with_regions(positions, faces, None, options)
+}
+
+/// Como [`unwrap`], sabiendo en qué isla del mapa original cae cada cara
+/// (`regions[f]`, ver [`crate::original_regions`]): las cartas nuevas
+/// prefieren cortar donde cortaba el original, que suele esconder sus
+/// costuras (ver [`ChartOptions::old_seam_weight`]).
+pub fn unwrap_with_regions<const N: usize>(
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    regions: Option<&[usize]>,
+    options: &UnwrapOptions,
+) -> Unwrap<N> {
     let mesh = PolyMesh::new(positions, faces);
+    let mesh = match regions {
+        Some(regions) => mesh.with_regions(regions),
+        None => mesh,
+    };
     let mut options = *options;
     if options.layout == Layout::Paintable {
         // Cartas más grandes a cambio de algo de estiramiento: menos piezas
@@ -173,11 +190,12 @@ pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], opti
         pending = Vec::new();
         for (faces, uv) in results {
             let bad = uv.flipped > 0 || uv.stretch > options.max_stretch;
-            let parts = if bad && round < MAX_SPLIT_ROUNDS { split(&mesh, &faces) } else { None };
+            let weight = options.charts.old_seam_weight;
+            let parts = if bad && round < MAX_SPLIT_ROUNDS { split(&mesh, &faces, weight) } else { None };
             match parts {
                 Some((a, b)) => {
-                    pending.extend(into_disks(&mesh, a));
-                    pending.extend(into_disks(&mesh, b));
+                    pending.extend(into_disks(&mesh, a, weight));
+                    pending.extend(into_disks(&mesh, b, weight));
                 }
                 None => accepted.push((faces, uv)),
             }
