@@ -127,7 +127,7 @@ fn vertex_count(attributes: &[VertexAttribute]) -> usize {
         .unwrap_or(0)
 }
 
-fn material_info(m: &converter_scene::Material) -> MaterialInfo {
+pub(crate) fn material_info(m: &converter_scene::Material) -> MaterialInfo {
     let (alpha_mode, alpha_cutoff) = match m.alpha_mode {
         AlphaMode::Opaque => ("opaque", 0.5),
         AlphaMode::Mask(cutoff) => ("mask", cutoff),

@@ -309,6 +309,30 @@ export const App: Component = () => {
   const [textureUrls, setTextureUrls] = createSignal<string[]>([]);
   const [lights, setLights] = createSignal<LightSettings>({ ...defaultLights });
 
+  /** Materiales para el visor con sus texturas (por índice) ya decodificadas */
+  const toSceneMaterials = (materials: MaterialInfo[], images: (ImageBitmap | undefined)[]): SceneMaterial[] => {
+    const image = (i: number | null) => (i === null ? undefined : images[i]);
+    return materials.map((m) => ({
+      name: m.name,
+      baseColor: m.base_color,
+      metallic: m.metallic,
+      roughness: m.roughness,
+      emissive: m.emissive,
+      normalScale: m.normal_scale,
+      occlusionStrength: m.occlusion_strength,
+      alphaMode: m.alpha_mode,
+      alphaCutoff: m.alpha_cutoff,
+      unlit: m.unlit,
+      maps: {
+        base: image(m.base_color_texture),
+        metallicRoughness: image(m.metallic_roughness_texture),
+        normal: image(m.normal_texture),
+        occlusion: image(m.occlusion_texture),
+        emissive: image(m.emissive_texture),
+      },
+    }));
+  };
+
   /** Estructura, materiales y texturas de la escena (miniaturas e imágenes para el visor) */
   const loadSceneAppearance = async () => {
     try {
@@ -324,28 +348,7 @@ export const App: Component = () => {
       const images = await Promise.all(blobs.map((b) => createImageBitmap(b).catch(() => undefined)));
       textureUrls().forEach((url) => URL.revokeObjectURL(url));
       setTextureUrls(blobs.map((b) => URL.createObjectURL(b)));
-      const image = (i: number | null) => (i === null ? undefined : images[i]);
-      setSceneMaterials(
-        materials.map((m) => ({
-          name: m.name,
-          baseColor: m.base_color,
-          metallic: m.metallic,
-          roughness: m.roughness,
-          emissive: m.emissive,
-          normalScale: m.normal_scale,
-          occlusionStrength: m.occlusion_strength,
-          alphaMode: m.alpha_mode,
-          alphaCutoff: m.alpha_cutoff,
-          unlit: m.unlit,
-          maps: {
-            base: image(m.base_color_texture),
-            metallicRoughness: image(m.metallic_roughness_texture),
-            normal: image(m.normal_texture),
-            occlusion: image(m.occlusion_texture),
-            emissive: image(m.emissive_texture),
-          },
-        }))
-      );
+      setSceneMaterials(toSceneMaterials(materials, images));
       setSceneStructure(structure);
     } catch (e) {
       console.error("Scene structure error:", e);
@@ -417,7 +420,8 @@ export const App: Component = () => {
   const [uvInfo, setUvInfo] = createSignal<UvInfo | undefined>();
   const [uvPreview, setUvPreview] = createSignal<UvPreview>("texture");
   const [uvLayout, setUvLayout] = createSignal<Float32Array | undefined>();
-  const [skinTextures, setSkinTextures] = createSignal<MeshTextures>({});
+  /** Materiales de la piel (color, metal/rugosidad, normal, oclusión, emisión) */
+  const [skinMaterials, setSkinMaterials] = createSignal<SceneMaterial[]>([]);
   const [checkerTexture, setCheckerTexture] = createSignal<ImageBitmap | undefined>();
 
   // Malla activa: tras retopologizar, UV, esqueleto y pesos trabajan sobre los
@@ -452,37 +456,51 @@ export const App: Component = () => {
     setUvInfo(info ?? undefined);
     if (!info) {
       setUvLayout(undefined);
-      setSkinTextures({});
+      setSkinMaterials([]);
       return;
     }
-    const [layout, base, normal, mesh] = await Promise.all([
+    const [layout, materials, mesh] = await Promise.all([
       invoke<ArrayBuffer>("get_uv_layout"),
-      invoke<ArrayBuffer>("get_uv_texture", { kind: "base" }).then(decodeImage),
-      invoke<ArrayBuffer>("get_uv_texture", { kind: "normal" }).then(decodeImage),
+      invoke<MaterialInfo[]>("get_skin_materials"),
       invoke<ArrayBuffer>("get_quad_mesh_data"),
     ]);
+    // Solo las texturas que usa algún material
+    const used = new Set(
+      materials.flatMap((m) => [
+        m.base_color_texture,
+        m.metallic_roughness_texture,
+        m.normal_texture,
+        m.occlusion_texture,
+        m.emissive_texture,
+      ])
+    );
+    const count = Math.max(0, ...[...used].map((i) => (i ?? -1) + 1));
+    const images = await Promise.all(
+      Array.from({ length: count }, (_, index) =>
+        used.has(index) ? invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage) : undefined
+      )
+    );
     setUvLayout(new Float32Array(layout));
-    setSkinTextures({ base, normal });
+    setSkinMaterials(toSceneMaterials(materials, images));
     setQuadMeshData(decodeMesh(mesh));
     if (autorigComplete() && usesQuad()) await reloadWeights();
   };
 
-  /** Texturas que ve el visor sobre la malla de quads según la vista elegida */
-  const viewerTextures = (): MeshTextures | undefined => {
-    if (!displayQuad() || !uvInfo()) return undefined;
-    switch (uvPreview()) {
-      case "texture":
-        return skinTextures();
-      case "checker":
-        return { base: checkerTexture() };
-      default:
-        return {};
-    }
-  };
+  /** Materiales del visor: los de la piel sobre los quads (con la vista
+   * "textura"), si no los del archivo de origen */
+  const noMaterials: SceneMaterial[] = [];
+  const viewerMaterials = createMemo(() => {
+    if (!displayQuad()) return sceneMaterials();
+    return uvInfo() && uvPreview() === "texture" ? skinMaterials() : noMaterials;
+  });
+
+  /** Tablero sobre los quads para ver la distorsión de las UV */
+  const viewerTextures = (): MeshTextures | undefined =>
+    displayQuad() && uvInfo() && uvPreview() === "checker" ? { base: checkerTexture() } : undefined;
 
   const handleUvPreview = async (preview: UvPreview) => {
     if (preview === "checker" && !checkerTexture()) {
-      setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_uv_texture", { kind: "checker" })));
+      setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
     }
     setUvPreview(preview);
     setShowQuadMesh(true);
@@ -492,7 +510,7 @@ export const App: Component = () => {
   const clearQuadMesh = () => {
     setUvInfo(undefined);
     setUvLayout(undefined);
-    setSkinTextures({});
+    setSkinMaterials([]);
     setQuadMeshData(undefined);
     setQuadMeshLoaded(false);
     setQuadMeshInfo({ vertices: 0, quads: 0 });
@@ -1991,7 +2009,7 @@ export const App: Component = () => {
     setLastExport(undefined);
     setPaintMirrorLoaded(false);
     setUvLayout(undefined);
-    setSkinTextures({});
+    setSkinMaterials([]);
     setUvInfo(undefined);
 
     setFileName(ui.fileName);
@@ -2271,7 +2289,7 @@ export const App: Component = () => {
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
               meshData={displayQuad() ? quadMeshData() : meshData()}
-              sceneMaterials={sceneMaterials()}
+              sceneMaterials={viewerMaterials()}
               lights={lights()}
               onLightsChanged={setLights}
               textures={viewerTextures()}
@@ -2414,7 +2432,7 @@ export const App: Component = () => {
               preview: uvPreview(),
               onPreviewChange: handleUvPreview,
               layout: uvLayout(),
-              atlasImage: skinTextures().base,
+              atlasImage: skinMaterials().find((m) => m.maps.base)?.maps.base,
             }}
             skeletonProps={{
               presets: skeletonPresets(),

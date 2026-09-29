@@ -100,13 +100,18 @@ impl MeshData {
     /// cantidad y luego `[inicio, cantidad, material]` por grupo
     fn to_bytes(&self) -> Vec<u8> {
         let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
-        if !self.groups.is_empty() {
-            out.extend_from_slice(&(self.groups.len() as u32).to_le_bytes());
-            for w in self.groups.iter().flatten() {
-                out.extend_from_slice(&w.to_le_bytes());
-            }
-        }
+        append_groups(&mut out, &self.groups);
         out
+    }
+}
+
+/// Grupos por material al final de [`pack_mesh`] (nada si no hay)
+fn append_groups(out: &mut Vec<u8>, groups: &[[u32; 3]]) {
+    if !groups.is_empty() {
+        out.extend_from_slice(&(groups.len() as u32).to_le_bytes());
+        for w in groups.iter().flatten() {
+            out.extend_from_slice(&w.to_le_bytes());
+        }
     }
 }
 
@@ -360,6 +365,9 @@ pub struct QuadMeshData {
     pub indices: Vec<u32>,
     /// Índices de quads originales (para visualización de wireframe)
     pub quad_indices: Vec<u32>,
+    /// Con piel, los triángulos van ordenados por material de la piel:
+    /// `[inicio, cantidad, material]` (`u32::MAX` = sin material)
+    pub groups: Vec<[u32; 3]>,
 }
 
 /// Ejecuta `f` en un hilo de trabajo con acceso al estado.
@@ -1870,7 +1878,11 @@ pub async fn run_retopology(
 #[tauri::command]
 pub async fn get_quad_mesh_data(app: AppHandle) -> Result<Response, String> {
     let bytes = in_background(app, |state| {
-        get_quad_mesh_data_impl(state).map(|d| pack_mesh(&d.positions, &d.normals, d.uvs.as_deref(), &d.indices, &d.quad_indices))
+        get_quad_mesh_data_impl(state).map(|d| {
+            let mut out = pack_mesh(&d.positions, &d.normals, d.uvs.as_deref(), &d.indices, &d.quad_indices);
+            append_groups(&mut out, &d.groups);
+            out
+        })
     })
     .await?;
     Ok(Response::new(bytes))
@@ -1906,8 +1918,16 @@ fn quad_view(quad: &quadriflow_core::QuadMesh, skin: Option<&uv_core::Skin<4>>) 
         uvs: skin.map(|_| Vec::new()),
         indices: Vec::with_capacity(faces.len() * 6),
         quad_indices: Vec::with_capacity(faces.len() * 4),
+        groups: Vec::new(),
     };
-    for (f, face) in faces.iter().enumerate() {
+    // Con piel, las caras en orden de material para que cada uno sea un rango
+    let material = |f: usize| skin.and_then(|s| s.face_material[f]).map_or(u32::MAX, |m| m as u32);
+    let mut order: Vec<usize> = (0..faces.len()).collect();
+    if skin.is_some() {
+        order.sort_by_key(|&f| material(f));
+    }
+    for f in order {
+        let face = &faces[f];
         let corner: [u32; 4] = std::array::from_fn(|k| {
             let uv = corners[f][k];
             *ids.entry((face[k], uv.map(f32::to_bits))).or_insert_with(|| {
@@ -1922,7 +1942,14 @@ fn quad_view(quad: &quadriflow_core::QuadMesh, skin: Option<&uv_core::Skin<4>>) 
         });
         data.quad_indices.extend(corner);
         let [a, b, c, d] = corner;
+        let start = data.indices.len() as u32;
         data.indices.extend([a, b, c, a, c, d]);
+        if skin.is_some() {
+            match data.groups.last_mut() {
+                Some(group) if group[2] == material(f) => group[1] += 6,
+                _ => data.groups.push([start, 6, material(f)]),
+            }
+        }
     }
     (data, source)
 }
@@ -2152,26 +2179,28 @@ pub async fn restore_transferred_uvs(app: AppHandle) -> Result<UvInfo, String> {
     .await
 }
 
-/// Imagen (PNG/JPEG tal cual) para la vista previa: `"base"` (color base),
-/// `"normal"` o `"checker"` (tablero). Vacía si la piel no tiene ese canal.
+/// Tablero de ajedrez (PNG) para ver la distorsión de las UV
 #[tauri::command]
-pub async fn get_uv_texture(app: AppHandle, kind: String) -> Result<Response, String> {
+pub async fn get_checker_texture(app: AppHandle) -> Result<Response, String> {
+    let bytes = in_background(app, |_| Ok(uv_core::checker_texture(1024, 16).data)).await?;
+    Ok(Response::new(bytes))
+}
+
+/// Materiales de la piel de la malla retopologizada (el índice es el de los
+/// grupos de `get_quad_mesh_data`)
+#[tauri::command]
+pub fn get_skin_materials(state: State<'_, AppState>) -> Vec<crate::structure::MaterialInfo> {
+    let skin = state.quad_skin.lock().unwrap();
+    skin.as_ref().map_or_else(Vec::new, |s| s.materials.iter().map(crate::structure::material_info).collect())
+}
+
+/// Imagen de una textura de la piel, tal cual (PNG, JPEG o WebP)
+#[tauri::command]
+pub async fn get_skin_texture(app: AppHandle, index: usize) -> Result<Response, String> {
     let bytes = in_background(app, move |state| {
-        if kind == "checker" {
-            return Ok(uv_core::checker_texture(1024, 16).data);
-        }
         let skin = state.quad_skin.lock().unwrap();
-        let Some(skin) = skin.as_ref() else { return Ok(Vec::new()) };
-        // Material de la primera cara que tenga ese canal
-        let texture = skin.face_material.iter().flatten().find_map(|&m| {
-            let material = skin.materials.get(m)?;
-            let reference = match kind.as_str() {
-                "normal" => material.normal_texture.as_ref(),
-                _ => material.base_color_texture.as_ref(),
-            }?;
-            skin.textures.get(reference.texture_index)
-        });
-        Ok(texture.map(|t| t.data.clone()).unwrap_or_default())
+        let skin = skin.as_ref().ok_or("La malla no tiene piel")?;
+        skin.textures.get(index).map(|t| t.data.clone()).ok_or_else(|| format!("No existe la textura {index}"))
     })
     .await?;
     Ok(Response::new(bytes))
@@ -3482,6 +3511,24 @@ mod tests {
         assert_eq!(data.positions.len(), 3 * source.len());
         let (_, plain) = quad_view(&quad, None);
         assert_eq!(plain, vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    /// Con piel, los triángulos quedan en rangos por material
+    #[test]
+    fn quad_view_groups_faces_by_material() {
+        let (quad, _) = strip();
+        let skin = uv_core::Skin {
+            corners: vec![[[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]]; 2],
+            face_material: vec![Some(1), Some(0)],
+            materials: vec![converter_scene::Material::default(); 2],
+            textures: vec![],
+            info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
+        };
+        let (data, source) = quad_view(&quad, Some(&skin));
+        assert_eq!(data.groups, vec![[0, 6, 0], [6, 6, 1]]);
+        // La primera cara del visor es la segunda de la malla (material 0)
+        assert_eq!(&source[..4], &quad.faces[1].v);
+        assert!(quad_view(&quad, None).0.groups.is_empty());
     }
 
     #[test]

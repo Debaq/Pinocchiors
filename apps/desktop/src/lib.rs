@@ -67,7 +67,9 @@ pub fn run() {
             commands::get_uv_info,
             commands::run_uv_unwrap,
             commands::restore_transferred_uvs,
-            commands::get_uv_texture,
+            commands::get_checker_texture,
+            commands::get_skin_materials,
+            commands::get_skin_texture,
             commands::get_uv_layout,
             // Reparación
             commands::analyze_mesh,
