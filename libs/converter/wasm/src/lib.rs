@@ -9,7 +9,7 @@ use wasm_bindgen::prelude::*;
 ///
 /// # Argumentos
 /// - `input_bytes`: bytes del archivo de entrada
-/// - `input_format`: formato de entrada ("glb", "stl")
+/// - `input_format`: formato de entrada ("glb", "stl", "ply")
 /// - `output_format`: formato de salida ("glb", "usda", "usdz", "stl", "ply", "3mf")
 /// - `options_json`: opciones en formato JSON (opcional)
 ///
@@ -49,7 +49,7 @@ pub fn import_to_json(input_bytes: &[u8], format: &str) -> Result<String, JsErro
 // La lógica devuelve `String` como error: `JsError::new` solo funciona dentro
 // de wasm, y así se puede testear de forma nativa.
 
-const IMPORT_FORMATS: &[&str] = &["glb", "stl"];
+const IMPORT_FORMATS: &[&str] = &["glb", "stl", "ply"];
 const EXPORT_FORMATS: &[&str] = &["glb", "usda", "usdz", "stl", "ply", "3mf"];
 
 fn convert_impl(
@@ -82,6 +82,7 @@ fn import_scene(data: &[u8], format: &str) -> Result<converter_scene::Scene, Str
     match format.to_ascii_lowercase().as_str() {
         "glb" | "gltf" => converter_gltf_io::import_gltf_bytes(data).map_err(|e| e.to_string()),
         "stl" => converter_stl::import_stl_bytes(data).map_err(|e| e.to_string()),
+        "ply" => converter_ply::import_ply_bytes(data).map_err(|e| e.to_string()),
         _ => Err(format!("formato de importación no soportado: {}", format)),
     }
 }
@@ -225,10 +226,15 @@ mod tests {
         let formats: serde_json::Value = serde_json::from_str(&supported_formats()).unwrap();
         let glb = triangle_glb();
         let stl = convert_impl(&glb, "glb", "stl", None).unwrap();
+        let ply = convert_impl(&glb, "glb", "ply", None).unwrap();
 
         for input in formats["import"].as_array().unwrap() {
             let input = input.as_str().unwrap();
-            let bytes = if input == "stl" { &stl } else { &glb };
+            let bytes = match input {
+                "stl" => &stl,
+                "ply" => &ply,
+                _ => &glb,
+            };
             for output in formats["export"].as_array().unwrap() {
                 let output = output.as_str().unwrap();
                 let out = convert_impl(bytes, input, output, None)

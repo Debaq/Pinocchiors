@@ -3,7 +3,7 @@ name = "converter-ply"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "PLY export for converter-scene"
+description = "PLY import and export for converter-scene"
 
 [dependencies]
 converter-scene = { workspace = true }

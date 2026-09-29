@@ -5,7 +5,7 @@ use std::process;
 
 /// Conversor de formatos 3D.
 ///
-/// Convierte entre glTF/GLB, USDA, USDZ, STL y OBJ.
+/// Lee glTF/GLB, STL, OBJ y PLY; escribe además USDA, USDZ y 3MF.
 ///
 /// Uso: `converter <entrada> [salida]` o `converter <entrada> --format <fmt>`.
 /// Con `--batch` se aceptan varios archivos de entrada.

@@ -1,10 +1,15 @@
-//! Exportación PLY (Stanford Polygon File Format), binario little-endian.
+//! PLY (Stanford Polygon File Format): importación ([`import_ply`], ver el
+//! módulo `import`) y exportación binaria little-endian.
 //!
-//! Todas las primitivas se fusionan en espacio mundo. Guarda posiciones y,
+//! Al exportar, todas las primitivas se fusionan en espacio mundo. Guarda posiciones y,
 //! cuando todas las primitivas los tienen, normales, UV (`s`, `t`) y colores
 //! de vértice RGBA de 8 bits. Las coordenadas quedan en las unidades de la
 //! escena: PLY no declara unidades. Sale con Z arriba, como lo leen Blender
 //! y los programas de escaneo.
+
+mod import;
+
+pub use import::{import_ply, import_ply_bytes, PlyImportError};
 
 use converter_scene::{Scene, VertexAttribute};
 use std::io::Write;

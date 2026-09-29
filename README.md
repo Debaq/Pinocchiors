@@ -1,6 +1,6 @@
 # Pinocchiors
 
-Suite de procesamiento 3D en **Rust puro**: auto-rigging, retopología a quads, mapas UV con horneado de texturas, reparación de mallas, preparación para impresión 3D y conversión entre formatos (glTF/GLB, OBJ, STL, USDA/USDZ).
+Suite de procesamiento 3D en **Rust puro**: auto-rigging, retopología a quads, mapas UV con horneado de texturas, reparación de mallas, preparación para impresión 3D y conversión entre formatos (glTF/GLB, OBJ, STL, PLY, USDA/USDZ).
 
 Incluye una app de escritorio (Tauri + SolidJS + Three.js), una CLI de conversión y bindings WASM.
 
@@ -75,6 +75,7 @@ Conversor inspirado en `usd_from_gltf` de Google, sin FFI ni dependencias C/C++.
 | glTF / GLB | ✅ | ✅ | PBR, texturas, esqueletos, animaciones, `KHR_materials_unlit`, `KHR_texture_transform` |
 | OBJ + MTL | ✅ | ✅ | Materiales y texturas |
 | STL | ✅ | ✅ | Lectura ASCII/binario, escritura binaria |
+| PLY | ✅ | ✅ | Lectura ASCII/binario (ambos endian), color por vértice, UV por vértice o por esquina y textura de MeshLab; escritura binaria |
 | USDA | — | ✅ | UsdSkel (esqueleto, SkelAnimation, binding) |
 | USDZ | — | ✅ | ZIP sin compresión alineado a 64 bytes, compatible con AR Quick Look |
 

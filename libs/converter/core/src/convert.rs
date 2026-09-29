@@ -28,6 +28,8 @@ pub enum ConvertError {
     ObjImport(#[from] converter_obj::ObjImportError),
     #[error("error OBJ export: {0}")]
     ObjExport(#[from] converter_obj::ObjExportError),
+    #[error("error PLY: {0}")]
+    PlyImport(#[from] converter_ply::PlyImportError),
     #[error("error PLY export: {0}")]
     PlyExport(#[from] converter_ply::PlyExportError),
     #[error("error 3MF export: {0}")]
@@ -73,6 +75,7 @@ pub fn import(path: impl AsRef<Path>) -> Result<Scene, ConvertError> {
         Format::Gltf => Ok(converter_gltf_io::import_gltf(path)?),
         Format::Stl => Ok(converter_stl::import_stl(path)?),
         Format::Obj => Ok(converter_obj::import_obj(path)?),
+        Format::Ply => Ok(converter_ply::import_ply(path)?),
         _ => Err(ConvertError::ImportNotSupported(format.name().to_string())),
     }
 }
@@ -131,7 +134,7 @@ pub fn export(
 
 /// Importa una escena desde bytes en memoria.
 ///
-/// Soporta: GLB (`Format::Gltf`) y STL (`Format::Stl`).
+/// Soporta: GLB (`Format::Gltf`), STL (`Format::Stl`) y PLY (`Format::Ply`).
 pub fn import_bytes(data: &[u8], format: Format) -> Result<Scene, ConvertError> {
     if !format.can_import_bytes() {
         return Err(ConvertError::ImportNotSupported(format.name().to_string()));
@@ -140,6 +143,7 @@ pub fn import_bytes(data: &[u8], format: Format) -> Result<Scene, ConvertError> 
     match format {
         Format::Gltf => Ok(converter_gltf_io::import_gltf_bytes(data)?),
         Format::Stl => Ok(converter_stl::import_stl_bytes(data)?),
+        Format::Ply => Ok(converter_ply::import_ply_bytes(data)?),
         _ => Err(ConvertError::ImportNotSupported(format.name().to_string())),
     }
 }
@@ -354,7 +358,7 @@ mod tests {
                 "export_bytes {format:?}"
             );
             let input = match format {
-                Format::Stl => export_bytes(&scene, Format::Stl, &opts).unwrap(),
+                Format::Stl | Format::Ply => export_bytes(&scene, format, &opts).unwrap(),
                 _ => glb.clone(),
             };
             let imported = import_bytes(&input, format);

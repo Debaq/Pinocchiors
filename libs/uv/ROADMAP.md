@@ -149,6 +149,9 @@ Pendiente de este flujo:
   map, los factores por material y los colores de vértice (`COLOR_0`,
   `UvPart::colors`, multiplicados al color base en espacio lineal). Cabeza
   escaneada de 126 k triángulos a 4000 quads: la oreja recupera sus pliegues.
+  Los escaneos llegan también en PLY (`converter-ply::import_ply`: ASCII y
+  binario, color por vértice, UV por vértice o por esquina y la textura de
+  `comment TextureFile` de MeshLab).
 - BVH: un rayo con una componente ±0 (inversa ±inf) es paralelo a ese eje y
   toca una caja solo si su origen está en la franja; antes, con −0 y el
   origen en el borde, 0 · (−inf) = NaN descartaba la caja. Ya no hace falta
@@ -181,8 +184,6 @@ Pendiente de este flujo:
 
 ## Pendiente
 
-- Importar PLY (hoy solo se exporta): es el formato típico de escaneos con
-  color por vértice.
 - Costuras alineadas a las costuras viejas del original. (Esconderlas por
   oclusión no rindió, ver fase 1.)
 

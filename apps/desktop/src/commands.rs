@@ -420,6 +420,12 @@ pub fn get_supported_formats() -> SupportedFormats {
                 extensions: vec!["stl".to_string()],
                 description: "Stereolithography (impresión 3D)".to_string(),
             },
+            FormatInfo {
+                id: "ply".to_string(),
+                name: "PLY".to_string(),
+                extensions: vec!["ply".to_string()],
+                description: "Stanford Polygon (escaneos con color por vértice)".to_string(),
+            },
         ],
         export: vec![
             FormatInfo {
@@ -510,6 +516,7 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
             converter_stl::import_stl(path)
                 .map_err(|e| format!("Error importando STL: {:?}", e))?
         }
+        "ply" => converter_ply::import_ply(path).map_err(|e| format!("Error importando PLY: {e}"))?,
         _ => return Err(format!("Formato no soportado: .{}", ext)),
     };
 

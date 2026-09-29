@@ -85,7 +85,7 @@ impl Format {
 
     /// Indica si el formato soporta importación.
     pub fn can_import(self) -> bool {
-        matches!(self, Format::Gltf | Format::Stl | Format::Obj)
+        matches!(self, Format::Gltf | Format::Stl | Format::Obj | Format::Ply)
     }
 
     /// Indica si el formato soporta exportación.
@@ -95,7 +95,7 @@ impl Format {
 
     /// Indica si el formato soporta operaciones en memoria (bytes).
     pub fn can_import_bytes(self) -> bool {
-        matches!(self, Format::Gltf | Format::Stl)
+        matches!(self, Format::Gltf | Format::Stl | Format::Ply)
     }
 
     /// Indica si el formato soporta exportación a bytes en memoria.
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn format_enumeration() {
         let importable: Vec<Format> = Format::importable().collect();
-        assert_eq!(importable, vec![Format::Gltf, Format::Stl, Format::Obj]);
+        assert_eq!(importable, vec![Format::Gltf, Format::Stl, Format::Obj, Format::Ply]);
 
         let exportable: Vec<Format> = Format::exportable().collect();
         assert_eq!(
