@@ -111,26 +111,6 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
   const s = () => props.structure;
   const thumb = (index: number | null) => (index === null ? undefined : props.textureUrls?.[index]);
 
-  /** Nodo del árbol con sus hijos, indentado */
-  const NodeTree: Component<{ index: number; depth: number }> = (p) => {
-    const node = () => s()!.nodes[p.index];
-    return (
-      <>
-        <div class="flex items-center gap-1.5 text-xs py-0.5" style={{ "padding-left": `${p.depth * 12}px` }}>
-          <span class="text-text-muted">{node().children.length > 0 ? "▾" : "•"}</span>
-          <span class="text-text truncate">{node().name || `nodo ${p.index}`}</span>
-          <Show when={node().mesh !== null}>
-            <Chip text={`malla ${node().mesh}`} />
-          </Show>
-          <Show when={node().skin !== null}>
-            <Chip text={`skin ${node().skin}`} />
-          </Show>
-        </div>
-        <For each={node().children}>{(child) => <NodeTree index={child} depth={p.depth + 1} />}</For>
-      </>
-    );
-  };
-
   return (
     <div class="space-y-4">
       <h3 class="text-sm font-semibold text-text">Estructura del archivo</h3>
@@ -156,7 +136,7 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   <Row label="Formato" value={props.format ?? "--"} />
                   <Row label="Unidades" value={`1 unidad = ${structure().meters_per_unit} m`} />
                   <Row label="Eje arriba del archivo" value={Z_UP_FORMATS.includes(props.format ?? "") || !structure().y_up ? "Z" : "Y"} />
-                  <Row label="Nodos" value={structure().nodes.length} />
+                  <Row label="Nodos (en el outliner)" value={structure().nodes.length} />
                   <Row label="Mallas / primitivas" value={`${structure().meshes.length} / ${totals().primitives}`} />
                   <Row label="Vértices" value={totals().vertices.toLocaleString()} />
                   <Row label="Triángulos" value={totals().triangles.toLocaleString()} />
@@ -169,14 +149,6 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   <Row label="Animaciones" value={structure().animations.length} />
                 </div>
               </Panel>
-
-              <Show when={structure().nodes.length > 0}>
-                <Panel title={`Nodos (${structure().nodes.length})`} icon={<Icons.TreeStructure size={14} />} defaultOpen>
-                  <div class="pt-1 max-h-64 overflow-y-auto">
-                    <For each={structure().roots}>{(root) => <NodeTree index={root} depth={0} />}</For>
-                  </div>
-                </Panel>
-              </Show>
 
               <Panel title={`Mallas (${structure().meshes.length})`} icon={<Icons.Cube size={14} />} defaultOpen={false}>
                 <div class="space-y-3 pt-1">

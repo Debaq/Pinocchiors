@@ -203,3 +203,15 @@ Leyenda: 🔴 crítico · 🟠 alto · 🟡 medio · 🔵 bajo/limpieza · ✅ c
 8. ~~Singularidades de posición (#21)~~ ✅
 
 Queda abierto: densidad adaptativa y celdas triangulares en singularidades de orientación (#21), limitación de cadera (#19).
+
+---
+
+## Pendiente — app
+
+### Outliner: nodos del archivo editables
+- **Hoy:** la jerarquía de nodos del archivo importado sale en el outliner como hijos de "Malla", solo lectura (sin ojo ni selección). Al importar, todas las primitivas se unen en una sola malla, así que no hay de dónde colgar un nodo suelto.
+- [ ] Guardar por vértice/triángulo el nodo de origen (rangos por primitiva en `AppState`) para poder mapear nodo → sub-malla.
+- [ ] Ocultar/mostrar un nodo (y sus hijos) en el visor.
+- [ ] Seleccionar un nodo desde el outliner y resaltarlo en el visor (y al revés: clic en el visor → nodo).
+- [ ] Mostrar la transformación del nodo en la pestaña Objeto; decidir si editarla o solo verla.
+- [ ] Borrar un nodo (quitar su geometría de la malla unida y de la escena exportada).

@@ -733,6 +733,7 @@ export const App: Component = () => {
     showQuadMesh: showQuadMesh(),
     skeletonData: skeletonData(),
     selectedBone: viewSettings().selectedBone,
+    structure: sceneStructure(),
   });
 
   // Shortcuts
