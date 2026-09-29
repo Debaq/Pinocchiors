@@ -162,6 +162,14 @@ opt-level = 2
 [profile.dev.package.pinocchio-sparse]
 opt-level = 2
 
+# Escáner 3D: sin optimizar procesa ~2 cuadros por segundo al escanear y el
+# seguimiento se pierde entre cuadros; el color MJPG se decodifica en cada uno
+[profile.dev.package.orizon3d-core]
+opt-level = 2
+
+[profile.dev.package.zune-jpeg]
+opt-level = 2
+
 [profile.release]
 lto = true
 codegen-units = 1

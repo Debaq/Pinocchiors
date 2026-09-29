@@ -138,22 +138,23 @@ fn corner_pos(origin: [f32; 3], voxel: f32, i: usize, j: usize, k: usize, c: usi
     ]
 }
 
-/// Orienta las normales (sin signo) hacia la cámara. El escáner está en el origen
-/// mirando +Z y solo ve la cara frontal del objeto, así que la normal de la
-/// superficie observada apunta hacia la cámara (lado "fuera"). Con ello el campo
-/// con signo es positivo delante (hacia la cámara) y negativo detrás (dentro del
-/// objeto), de modo que la isosuperficie F=0 es una sola pared bien orientada.
-fn orient_normals(pos: &[[f32; 3]], nrm: &mut [[f32; 3]]) {
-    for (p, n) in pos.iter().zip(nrm.iter_mut()) {
-        // n·(−p) = proyección de la normal sobre la dirección punto→cámara.
-        let toward_cam = -(n[0] * p[0] + n[1] * p[1] + n[2] * p[2]);
-        if toward_cam < 0.0 {
+/// Orienta las normales (sin signo) hacia la cámara que vio cada punto: la
+/// superficie observada mira a la cámara (lado "fuera"). Con ello el campo con
+/// signo es positivo delante y negativo dentro del objeto, y la isosuperficie
+/// F=0 es una sola pared bien orientada. En un escaneo de 360° cada punto trae
+/// su propia dirección de vista; sin ella se asume la cámara en el origen, lo
+/// que en la cara de atrás del objeto invertiría el campo.
+fn orient_normals(pos: &[[f32; 3]], views: &[[f32; 3]], nrm: &mut [[f32; 3]]) {
+    for ((p, v), n) in pos.iter().zip(views).zip(nrm.iter_mut()) {
+        let toward_cam = if v[0] != 0.0 || v[1] != 0.0 || v[2] != 0.0 { *v } else { [-p[0], -p[1], -p[2]] };
+        if n[0] * toward_cam[0] + n[1] * toward_cam[1] + n[2] * toward_cam[2] < 0.0 {
             n[0] = -n[0];
             n[1] = -n[1];
             n[2] = -n[2];
         }
     }
 }
+
 /// Reconstruye una malla de la nube. `voxel` (mm) controla el detalle (menor =
 /// más fino); `fill` engrosa el radio de influencia del campo MLS
 /// (r = (1.5+fill)·voxel) → cierra huecos mayores a costa de algo de suavizado;
@@ -209,8 +210,9 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
     let r_norm = (2.5 * voxel).max(3.0);
 
     let pos: Vec<[f32; 3]> = cloud.points.iter().map(|p| [p.x, p.y, p.z]).collect();
+    let views: Vec<[f32; 3]> = cloud.points.iter().map(|p| p.view).collect();
     let mut nrm = crate::scan::estimate_normals(&pos, r_norm);
-    orient_normals(&pos, &mut nrm);
+    orient_normals(&pos, &views, &mut nrm);
 
     let mut fnum = vec![0f32; ng];
     let mut wsum = vec![0f32; ng];
@@ -268,16 +270,19 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
         }
     }
 
-    // Campo final con signo; +∞ (sin soporte) = "fuera". F<0 = dentro del objeto.
+    // Campo final con signo; NaN = sin datos suficientes (desconocido). F<0 =
+    // dentro del objeto. Lo desconocido no cuenta ni como dentro ni como fuera:
+    // tratarlo como "fuera" hacía que el borde del soporte, a un radio `r` DETRÁS
+    // de cada superficie, cambiara de signo y se mallara como una segunda pared
+    // invertida pegada a la buena
     let wmin = 0.15f32;
-    let mut field = vec![f32::INFINITY; ng];
+    let mut field = vec![f32::NAN; ng];
     for id in 0..ng {
-        if wsum[id] > 0.0 {
+        if wsum[id] >= wmin {
             field[id] = fnum[id] / wsum[id];
         }
     }
     let iso = 0.0f32;
-    let clampf = |v: f32| if v.is_finite() { v } else { r };
 
     // Un vértice por celda activa.
     let mut cell_vert: HashMap<(usize, usize, usize), u32> = HashMap::new();
@@ -287,26 +292,24 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
         for j in 0..ny - 1 {
             for i in 0..nx - 1 {
                 let mut below = 0u8;
-                let mut any_conf = false;
+                let mut known = true;
                 for (ci, off) in CORNERS.iter().enumerate() {
-                    let id = idx(
+                    let f = field[idx(
                         i + off[0] as usize,
                         j + off[1] as usize,
                         k + off[2] as usize,
-                    );
-                    if field[id] < iso {
+                    )];
+                    if f.is_nan() {
+                        known = false;
+                        break;
+                    }
+                    if f < iso {
                         below |= 1 << ci;
                     }
-                    if wsum[id] >= wmin {
-                        any_conf = true;
-                    }
                 }
-                if below == 0 || below == 0xFF {
-                    continue;
-                }
-                // Sin confianza en ninguna esquina: no malles (fondo / borde de una
-                // superficie abierta) — evita envolver el vacío en una oblea.
-                if !any_conf {
+                // Solo celdas con las 8 esquinas conocidas: evita envolver el
+                // vacío (fondo, borde de una superficie abierta, atrás del soporte)
+                if !known || below == 0 || below == 0xFF {
                     continue;
                 }
 
@@ -357,8 +360,7 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
                             j + CORNERS[b][1] as usize,
                             k + CORNERS[b][2] as usize,
                         );
-                        let fa = clampf(field[ida]);
-                        let fb = clampf(field[idb]);
+                        let (fa, fb) = (field[ida], field[idb]);
                         if (fa < iso) != (fb < iso) {
                             let t = (iso - fa) / (fb - fa);
                             let pa = corner_pos(origin, voxel, i, j, k, a);
@@ -390,7 +392,8 @@ pub fn reconstruct(cloud: &PointCloud, voxel: f32, fill: u32, smooth: u32) -> Me
     }
 
     // Caras: por cada arista de rejilla con cambio de signo, conecta las 4
-    // celdas que la rodean. `inside` = campo < iso.
+    // celdas que la rodean (todas deben ser activas, así que ambos extremos de
+    // la arista son conocidos). `inside` = campo < iso.
     let inside = |i: usize, j: usize, k: usize| field[idx(i, j, k)] < iso;
     let gather = |cv: &HashMap<(usize, usize, usize), u32>,
                   cells: [(usize, usize, usize); 4]|
@@ -628,6 +631,7 @@ mod tests {
                             y: j as f32 * step,
                             z: k as f32 * step,
                             rgb: [120, 130, 140],
+                            view: [0.0; 3],
                         });
                     }
                 }

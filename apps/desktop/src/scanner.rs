@@ -32,10 +32,24 @@ pub struct ScanSettingsDto {
     pub isolate_object: bool,
     pub edge_filter: bool,
     pub temporal_frames: usize,
+    /// Calibración: escala de la focal (achica X e Y al subir) y milímetros por
+    /// unidad de profundidad. Opcionales para leer ajustes guardados antes
+    #[serde(default = "unit")]
+    pub fx_scale: f32,
+    #[serde(default = "default_depth_scale")]
+    pub depth_scale: f32,
+}
+
+fn unit() -> f32 {
+    1.0
+}
+
+fn default_depth_scale() -> f32 {
+    orizon3d_core::camera::DEFAULT_DEPTH_SCALE
 }
 
 impl ScanSettingsDto {
-    fn apply(self, base: ScanSettings) -> ScanSettings {
+    fn apply(self) -> ScanSettings {
         ScanSettings {
             clip_min_mm: self.clip_min_mm,
             clip_max_mm: self.clip_max_mm.max(self.clip_min_mm + 10.0),
@@ -44,7 +58,8 @@ impl ScanSettingsDto {
             isolate_object: self.isolate_object,
             edge_filter: self.edge_filter,
             temporal_frames: self.temporal_frames.clamp(1, 10),
-            ..base
+            fx_scale: self.fx_scale.clamp(0.5, 2.0),
+            depth_scale: self.depth_scale.clamp(0.05, 0.2),
         }
     }
 }
@@ -127,7 +142,7 @@ pub fn scanner_connect(handle: State<'_, ScannerHandle>, settings: ScanSettingsD
     let mut lock = handle.0.lock().unwrap();
     // Soltar la conexión anterior libera los /dev/video* antes de reabrirlos
     lock.take();
-    *lock = Some(Arc::new(Scanner::connect(settings.apply(ScanSettings::default()))));
+    *lock = Some(Arc::new(Scanner::connect(settings.apply())));
     status_of(lock.as_deref())
 }
 
@@ -144,7 +159,7 @@ pub fn scanner_status(handle: State<'_, ScannerHandle>) -> ScannerStatusDto {
 #[tauri::command]
 pub fn scanner_set_settings(handle: State<'_, ScannerHandle>, settings: ScanSettingsDto) {
     if let Some(scanner) = handle.get() {
-        scanner.set_settings(settings.apply(scanner.settings()));
+        scanner.set_settings(settings.apply());
     }
 }
 
@@ -187,6 +202,22 @@ pub fn scanner_scan(handle: State<'_, ScannerHandle>, action: String) -> Result<
         _ => return Err(format!("Acción desconocida: {action}")),
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct MeasurementDto {
+    pub width_mm: f32,
+    pub height_mm: f32,
+    pub distance_mm: f32,
+    pub points: usize,
+}
+
+/// Tamaño del objeto en el cuadro actual, para calibrar
+#[tauri::command]
+pub fn scanner_measure(handle: State<'_, ScannerHandle>) -> Result<MeasurementDto, String> {
+    let scanner = handle.get().ok_or("El escáner no está conectado")?;
+    let m = scanner.measure().ok_or("No hay un objeto a la vista dentro del volumen de escaneo")?;
+    Ok(MeasurementDto { width_mm: m.width_mm, height_mm: m.height_mm, distance_mm: m.distance_mm, points: m.points })
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

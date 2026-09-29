@@ -1,7 +1,7 @@
 import { Component, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { Panel, Slider, Checkbox, Button } from "../ui";
+import { Panel, Slider, Checkbox, Button, NumberInput } from "../ui";
 import { createPersisted } from "../../lib/ui-state";
 import * as Icons from "../icons";
 
@@ -33,6 +33,18 @@ interface ScanSettings {
   isolate_object: boolean;
   edge_filter: boolean;
   temporal_frames: number;
+  /** Calibración: escala de la focal (más = objeto más angosto) */
+  fx_scale: number;
+  /** Calibración: milímetros por unidad del mapa de profundidad */
+  depth_scale: number;
+}
+
+/** Tamaño del objeto en el cuadro actual (`MeasurementDto`) */
+interface Measurement {
+  width_mm: number;
+  height_mm: number;
+  distance_mm: number;
+  points: number;
 }
 
 /** Reconstrucción de la malla (`MeshSettingsDto`) */
@@ -50,7 +62,12 @@ const DEFAULT_SETTINGS: ScanSettings = {
   isolate_object: true,
   edge_filter: true,
   temporal_frames: 3,
+  fx_scale: 1,
+  depth_scale: 0.1,
 };
+
+/** Ancho de una tarjeta bancaria o de identidad (ISO/IEC 7810 ID-1), en mm */
+const CARD_WIDTH_MM = 85.6;
 
 const DEFAULT_MESH: ScanMeshSettings = { voxel_mm: 2, fill: 1, smooth: 2 };
 
@@ -77,11 +94,17 @@ export interface ScanStepProps {
  */
 export const ScanStep: Component<ScanStepProps> = (props) => {
   const [status, setStatus] = createSignal<ScannerStatus>();
-  const [settings, setSettings] = createPersisted<ScanSettings>("scan.settings", DEFAULT_SETTINGS);
+  const [stored, setSettings] = createPersisted<ScanSettings>("scan.settings", DEFAULT_SETTINGS);
+  // Los ajustes guardados antes de la calibración no traen sus campos
+  const settings = (): ScanSettings => ({ ...DEFAULT_SETTINGS, ...stored() });
   const [mesh, setMesh] = createPersisted<ScanMeshSettings>("scan.mesh", DEFAULT_MESH);
   const [gain, setGain] = createPersisted("scan.gain", 1);
   const [view, setView] = createPersisted<"depth" | "color">("scan.view", "depth");
   const [hasFrame, setHasFrame] = createSignal(false);
+  const [realDistance, setRealDistance] = createPersisted("scan.calib.distance", 300);
+  const [realWidth, setRealWidth] = createPersisted("scan.calib.width", CARD_WIDTH_MM);
+  const [measured, setMeasured] = createSignal<Measurement>();
+  const [measureError, setMeasureError] = createSignal<string>();
   let canvas: HTMLCanvasElement | undefined;
   let timer: number | undefined;
   let alive = true;
@@ -149,6 +172,39 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
   };
 
   const streaming = () => status()?.state === "streaming";
+
+  const measure = async () => {
+    try {
+      setMeasured(await invoke<Measurement>("scanner_measure"));
+      setMeasureError(undefined);
+    } catch (e) {
+      setMeasured(undefined);
+      setMeasureError(String(e));
+    }
+  };
+
+  /** La distancia escala con los mm por unidad de profundidad */
+  const calibrateDepth = () => {
+    const now = status()!.distance_cm * 10;
+    if (now <= 0 || realDistance() <= 0) return;
+    updateSettings({ depth_scale: (settings().depth_scale * realDistance()) / now });
+    setMeasured(undefined);
+  };
+
+  /** El ancho escala con 1 / focal: se corrige la focal en la proporción medida */
+  const calibrateWidth = async () => {
+    const m = measured();
+    if (!m || m.width_mm <= 0 || realWidth() <= 0) return;
+    updateSettings({ fx_scale: (settings().fx_scale * m.width_mm) / realWidth() });
+    // Deja que llegue un cuadro con la focal nueva antes de volver a medir
+    await new Promise((r) => setTimeout(r, 300));
+    await measure();
+  };
+
+  const resetCalibration = () => {
+    updateSettings({ fx_scale: DEFAULT_SETTINGS.fx_scale, depth_scale: DEFAULT_SETTINGS.depth_scale });
+    setMeasured(undefined);
+  };
 
   return (
     <div class="space-y-5">
@@ -325,6 +381,79 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
               checked={settings().edge_filter}
               onChange={(v) => updateSettings({ edge_filter: v })}
             />
+          </div>
+        </Panel>
+
+        <Panel id="scan.calibration" title="Calibración" icon={<Icons.Ruler size={14} />} defaultOpen={false}>
+          <div class="space-y-4 text-xs">
+            <p class="text-text-muted leading-relaxed">
+              Se hace una vez por escáner y queda guardada. Primero la profundidad y después el ancho, porque el ancho
+              medido depende de la distancia.
+            </p>
+
+            <div class="space-y-2">
+              <p class="text-text font-medium">1. Profundidad</p>
+              <p class="text-text-muted leading-relaxed">
+                Pon una superficie plana (un libro, una caja) de frente al escáner, al centro de la imagen, y mide con
+                una regla desde el frente del escáner hasta ella.
+              </p>
+              <div class="flex justify-between">
+                <span class="text-text-muted">El escáner mide</span>
+                <span class="text-text font-mono">
+                  {streaming() && status()!.distance_cm > 0 ? `${(status()!.distance_cm * 10).toFixed(0)} mm` : "—"}
+                </span>
+              </div>
+              <div class="flex items-center gap-2">
+                <span class="text-text-muted shrink-0">Distancia real</span>
+                <NumberInput value={realDistance()} min={50} max={1500} step={1} suffix="mm" onChange={setRealDistance} />
+              </div>
+              <Button
+                size="sm"
+                fullWidth
+                disabled={!streaming() || !(status()!.distance_cm > 0)}
+                onClick={calibrateDepth}
+              >
+                Ajustar profundidad
+              </Button>
+            </div>
+
+            <div class="space-y-2">
+              <p class="text-text font-medium">2. Ancho</p>
+              <p class="text-text-muted leading-relaxed">
+                Sostén de frente un objeto plano de ancho conocido, sin nada más dentro del volumen de escaneo. Una
+                tarjeta bancaria mide {CARD_WIDTH_MM} mm.
+              </p>
+              <Button size="sm" fullWidth disabled={!streaming()} icon={<Icons.Ruler size={14} />} onClick={measure}>
+                Medir objeto
+              </Button>
+              <Show when={measureError()}>
+                <p class="text-error leading-relaxed">{measureError()}</p>
+              </Show>
+              <Show when={measured()}>
+                <div class="flex justify-between">
+                  <span class="text-text-muted">Ancho × alto medidos</span>
+                  <span class="text-text font-mono">
+                    {measured()!.width_mm.toFixed(1)} × {measured()!.height_mm.toFixed(1)} mm
+                  </span>
+                </div>
+              </Show>
+              <div class="flex items-center gap-2">
+                <span class="text-text-muted shrink-0">Ancho real</span>
+                <NumberInput value={realWidth()} min={10} max={800} step={0.1} suffix="mm" onChange={setRealWidth} />
+              </div>
+              <Button size="sm" fullWidth disabled={!streaming() || !measured()} onClick={calibrateWidth}>
+                Ajustar ancho
+              </Button>
+            </div>
+
+            <div class="flex items-center justify-between gap-2 pt-1 border-t border-border">
+              <span class="text-text-dim font-mono">
+                focal ×{settings().fx_scale.toFixed(3)} · {settings().depth_scale.toFixed(4)} mm/u
+              </span>
+              <Button size="sm" variant="ghost" onClick={resetCalibration}>
+                Restablecer
+              </Button>
+            </div>
           </div>
         </Panel>
 
