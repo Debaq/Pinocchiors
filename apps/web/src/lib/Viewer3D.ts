@@ -4,6 +4,7 @@
  */
 
 import * as THREE from "three";
+import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -398,9 +399,10 @@ export class Viewer3D {
       };
     }
 
-    // Scene with Dracula background
+    // Fondo y grilla salen del tema (styles/app.css)
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color(0x282a36);
+    this.scene.background = new THREE.Color(themeHex("viewport"));
+    window.addEventListener(THEME_EVENT, () => this.applyTheme());
 
     // Camera
     const aspect = canvas.clientWidth / canvas.clientHeight;
@@ -1896,6 +1898,13 @@ export class Viewer3D {
   }
 
   /** Unidades de la grilla: en qué está el modelo y en qué se muestra */
+  /** Relee los colores del tema (cambió claro/oscuro) */
+  applyTheme(): void {
+    (this.scene.background as THREE.Color).setHex(themeHex("viewport"));
+    this.rebuildGrid();
+    this.viewCube.applyTheme();
+  }
+
   setGridUnits(units: GridUnits): void {
     this.gridUnits = units;
     this.rebuildGrid();
@@ -1950,10 +1959,10 @@ export class Viewer3D {
       );
     const h = half * toScene;
     this.grid.add(
-      lines(step, 0x44475a, 0.35, 10),
-      lines(major, 0x6272a4, 0.45),
-      axis(new THREE.Vector3(-h, 0, 0), new THREE.Vector3(h, 0, 0), 0xff5555),
-      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), 0x8be9fd)
+      lines(step, themeHex("grid-minor"), 0.35, 10),
+      lines(major, themeHex("grid-major"), 0.45),
+      axis(new THREE.Vector3(-h, 0, 0), new THREE.Vector3(h, 0, 0), themeHex("axis-x")),
+      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), themeHex("axis-z"))
     );
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;

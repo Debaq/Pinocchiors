@@ -100,7 +100,7 @@ const AxisPicker = (props: { value: Axis; onChange: (axis: Axis) => void }) => (
         <button
           class={clsx(
             "w-7 h-7 text-xs font-medium",
-            props.value === axis ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-current/40"
+            props.value === axis ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-surface/40"
           )}
           onClick={() => props.onChange(axis)}
         >

@@ -75,8 +75,8 @@ export const Header: Component<HeaderProps> = (props) => {
           <button
             class={clsx(
               "h-7 px-2.5 rounded-md text-xs text-text-muted",
-              "hover:text-text hover:bg-current/40",
-              fileMenu() && "text-text bg-current/40"
+              "hover:text-text hover:bg-surface/40",
+              fileMenu() && "text-text bg-surface/40"
             )}
             onClick={(e) => {
               // El clic que acaba de cerrar el menú (clic fuera) no lo vuelve a abrir
@@ -104,7 +104,7 @@ export const Header: Component<HeaderProps> = (props) => {
                   "disabled:opacity-40 disabled:pointer-events-none",
                   props.workspace === ws.id
                     ? "bg-accent/20 text-accent font-medium"
-                    : "text-text-muted hover:text-text hover:bg-current/40"
+                    : "text-text-muted hover:text-text hover:bg-surface/40"
                 )}
                 disabled={!props.hasModel}
                 onClick={() => props.onWorkspace?.(ws.id)}

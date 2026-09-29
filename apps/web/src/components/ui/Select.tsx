@@ -45,8 +45,8 @@ export const Select = (props: SelectProps) => {
             "px-3 py-2 text-sm",
             "cursor-pointer outline-none",
             "text-text-muted",
-            "hover:bg-current/50 hover:text-text",
-            "data-[highlighted]:bg-current/50 data-[highlighted]:text-text",
+            "hover:bg-surface/50 hover:text-text",
+            "data-[highlighted]:bg-surface/50 data-[highlighted]:text-text",
             "data-[selected]:text-accent data-[selected]:bg-accent/10",
             "data-[disabled]:opacity-50 data-[disabled]:pointer-events-none"
           )}

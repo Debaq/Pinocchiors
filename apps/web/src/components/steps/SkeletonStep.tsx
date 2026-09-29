@@ -116,7 +116,7 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
                 </div>
                 <div class="flex justify-between">
                   <span class="text-text-muted">Proporciones vs. plantilla</span>
-                  <span class={info().quality < 0.5 ? "text-amber-400" : "text-text"}>
+                  <span class={info().quality < 0.5 ? "text-warning" : "text-text"}>
                     {Math.round(info().quality * 100)} %
                   </span>
                 </div>

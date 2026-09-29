@@ -190,7 +190,7 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
                     "flex justify-between items-center gap-2 px-2 py-1.5 rounded text-xs border",
                     badge.bad
                       ? "bg-red/5 border-red/20 text-red"
-                      : "bg-current/20 border-border text-text-muted"
+                      : "bg-surface/20 border-border text-text-muted"
                   )}
                 >
                   <span class="truncate">{badge.label}</span>

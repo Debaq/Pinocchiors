@@ -146,7 +146,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
       <button
         class={clsx(
           "w-7 h-7 flex items-center justify-center rounded transition-colors",
-          p.active ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-current/50"
+          p.active ? "bg-accent/20 text-accent" : "text-text-muted hover:text-text hover:bg-surface/50"
         )}
         onClick={() => p.onClick()}
         aria-label={p.label}
@@ -191,7 +191,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
         >
           <Tooltip content="Ocultar panel (N)" placement="left">
             <button
-              class="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-current/50"
+              class="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/50"
               onClick={() => props.onHide?.()}
               aria-label="Ocultar panel"
             >
@@ -363,7 +363,7 @@ const HintList: Component<{ hints: ShortcutHint[] }> = (props) => (
       {(h) => (
         <div class="flex items-center justify-between gap-3 text-xs">
           <span class="text-text-muted truncate">{h.description}</span>
-          <kbd class="shrink-0 px-1.5 rounded bg-current/60 border border-border font-mono text-[11px] text-text">
+          <kbd class="shrink-0 px-1.5 rounded bg-surface/60 border border-border font-mono text-[11px] text-text">
             {h.keys}
           </kbd>
         </div>

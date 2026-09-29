@@ -14,7 +14,7 @@ export const PlaceholderStep: Component<PlaceholderStepProps> = (props) => {
       <div
         class={clsx(
           "w-14 h-14 rounded-full",
-          "bg-current/30 border border-border",
+          "bg-surface/30 border border-border",
           "flex items-center justify-center",
           "text-text-muted"
         )}

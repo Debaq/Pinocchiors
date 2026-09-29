@@ -51,7 +51,7 @@ export const Panel: ParentComponent<PanelProps> = (props) => {
           "rounded",
           "text-xs font-semibold uppercase tracking-wider text-text-muted",
           "transition-colors duration-100",
-          local.collapsible !== false && "hover:bg-current/30 cursor-pointer",
+          local.collapsible !== false && "hover:bg-surface/30 cursor-pointer",
           local.collapsible === false && "cursor-default"
         )}
         onClick={toggleOpen}

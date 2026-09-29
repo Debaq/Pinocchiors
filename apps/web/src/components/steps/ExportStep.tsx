@@ -143,7 +143,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
                 class={`px-2 py-1.5 rounded-md text-xs font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   opts().format === f.id
                     ? "bg-accent/20 border-accent text-text"
-                    : "bg-current/30 border-border text-text-muted hover:text-text"
+                    : "bg-surface/30 border-border text-text-muted hover:text-text"
                 }`}
               >
                 {f.name}
@@ -156,7 +156,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
 
       {/* Contenido */}
       <Show when={opts().format !== "json"}>
-        <div class="space-y-3 p-3 rounded-md bg-current/30 border border-border">
+        <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Checkbox
             label="Incluir esqueleto y pesos"
             checked={props.includeRig && props.autorigComplete && keepsRig()}
@@ -178,7 +178,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
 
       {/* Optimización web */}
       <Show when={isGltf(opts().format)}>
-        <div class="space-y-3 p-3 rounded-md bg-current/30 border border-border">
+        <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Select
             label="Optimización web"
             options={PRESET_OPTIONS}
@@ -265,7 +265,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
 
       <Show when={props.lastExport}>
         {(last) => (
-          <div class="p-3 rounded-md bg-current/30 border border-border space-y-1">
+          <div class="p-3 rounded-md bg-surface/30 border border-border space-y-1">
             <div class="flex justify-between text-xs">
               <span class="text-text-muted">Última exportación</span>
               <span class="font-medium text-text">{formatBytes(last().bytes)}</span>

@@ -52,6 +52,7 @@ import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted } from "./lib/ui-state";
+import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
 import {
   SettingsDialog,
@@ -1844,6 +1845,9 @@ export const App: Component = () => {
   const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
+  const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
+  createEffect(() => applyTheme(themeSetting()));
+  onCleanup(followSystemTheme(themeSetting));
 
   // La grilla (y las medidas del panel Orientación) se miden en unidades
   // reales: las del archivo, o las que elija el usuario
@@ -2464,6 +2468,8 @@ export const App: Component = () => {
           onAutosaveChange={setAutosave}
           grid={gridSettings()}
           onGridChange={setGridSettings}
+          theme={themeSetting()}
+          onThemeChange={setThemeSetting}
           fileMetersPerUnit={sceneStructure()?.meters_per_unit}
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}

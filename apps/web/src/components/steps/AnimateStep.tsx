@@ -81,7 +81,7 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
             {(clip) => (
               <div class="flex items-center gap-2">
                 <input
-                  class="flex-1 min-w-0 px-2 py-1 rounded bg-current/40 border border-border text-xs text-text outline-none focus:border-accent"
+                  class="flex-1 min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
                   value={clip().name}
                   onChange={(e) => props.onRenameClip?.(e.currentTarget.value.trim() || clip().name)}
                 />

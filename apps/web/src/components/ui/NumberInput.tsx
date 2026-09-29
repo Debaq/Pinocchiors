@@ -39,7 +39,7 @@ export const NumberInput = (props: NumberInputProps) => {
         disabled={props.disabled}
         class={clsx(
           "w-full min-w-0 px-2 py-1 rounded",
-          "bg-current/40 border border-border",
+          "bg-surface/40 border border-border",
           "text-xs text-text font-mono",
           "outline-none focus:border-accent",
           "disabled:opacity-50",

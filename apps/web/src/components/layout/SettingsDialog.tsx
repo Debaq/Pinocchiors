@@ -1,6 +1,7 @@
 import { Component, Show, onCleanup, onMount } from "solid-js";
 import { Checkbox, Select, Slider } from "../ui";
 import * as Icons from "../icons";
+import { THEME_OPTIONS, type ThemeSetting } from "../../lib/theme";
 
 export interface AutosaveSettings {
   enabled: boolean;
@@ -31,6 +32,8 @@ export interface SettingsDialogProps {
   onAutosaveChange: (settings: AutosaveSettings) => void;
   grid: GridSettings;
   onGridChange: (settings: GridSettings) => void;
+  theme: ThemeSetting;
+  onThemeChange: (theme: ThemeSetting) => void;
   /** Metros por unidad que declara el archivo abierto */
   fileMetersPerUnit?: number;
   /** Archivo del proyecto abierto (sin él, el automático va al de recuperación) */
@@ -65,7 +68,7 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
             Configuración
           </h2>
           <button
-            class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-current/40"
+            class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40"
             aria-label="Cerrar"
             onClick={props.onClose}
           >
@@ -75,6 +78,16 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
 
         <div class="p-4 space-y-4">
           <section class="space-y-3">
+            <h3 class="text-[11px] uppercase tracking-wide text-text-muted">Apariencia</h3>
+            <Select
+              label="Tema"
+              options={THEME_OPTIONS}
+              value={props.theme}
+              onChange={(theme) => props.onThemeChange(theme as ThemeSetting)}
+            />
+          </section>
+
+          <section class="space-y-3 pt-3 border-t border-border">
             <h3 class="text-[11px] uppercase tracking-wide text-text-muted">Proyecto</h3>
             <Checkbox
               label="Guardado automático"

@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { themeColor, themeHex } from "./theme";
 
 /** Lado del cubo en pantalla (px CSS) y margen a la esquina superior derecha */
 const SIZE = 130;
@@ -6,20 +7,22 @@ const MARGIN = 8;
 /** Fracción de cada cara que pertenece al centro; el resto es arista o vértice */
 const EDGE = 0.6;
 
-const COLORS = {
-  face: "#44475a",
-  border: "#6272a4",
-  text: "#f8f8f2",
-  hover: 0xbd93f9,
-  x: 0xff5555,
-  y: 0x50fa7b,
-  z: 0x8be9fd,
-};
+/** Colores del tema actual (styles/app.css) */
+const colors = () => ({
+  face: themeColor("cube-face"),
+  border: themeColor("cube-border"),
+  text: themeColor("cube-text"),
+  hover: themeHex("accent"),
+  x: themeHex("axis-x"),
+  y: themeHex("axis-y"),
+  z: themeHex("axis-z"),
+});
+type Colors = ReturnType<typeof colors>;
 
 /** Convención del proyecto: Y arriba, frente hacia +Z. Orden de BoxGeometry: +X −X +Y −Y +Z −Z */
 const FACE_LABELS = ["DERECHA", "IZQUIERDA", "ARRIBA", "ABAJO", "FRENTE", "ATRÁS"];
 
-function faceTexture(label: string): THREE.CanvasTexture {
+function faceTexture(label: string, COLORS: Colors): THREE.CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = 128;
   const ctx = canvas.getContext("2d")!;
@@ -70,15 +73,30 @@ function axisLabel(text: string, color: number): THREE.Sprite {
 export class ViewCube {
   private scene = new THREE.Scene();
   private camera = new THREE.OrthographicCamera(-2.3, 2.3, 2.3, -2.3, 0.1, 20);
-  private cube: THREE.Mesh;
-  private highlight: THREE.Mesh;
+  private cube!: THREE.Mesh;
+  private highlight!: THREE.Mesh;
   private raycaster = new THREE.Raycaster();
   private disposables: { dispose(): void }[] = [];
 
   constructor() {
+    this.build();
+  }
+
+  /** Vuelve a armar el cubo con los colores del tema actual */
+  applyTheme(): void {
+    const hover = this.highlight.visible ? this.highlight.userData.key : null;
+    this.dispose();
+    this.disposables = [];
+    this.scene.clear();
+    this.build();
+    if (hover !== null) this.setHover(new THREE.Vector3(...(hover as string).split(",").map(Number)));
+  }
+
+  private build(): void {
+    const COLORS = colors();
     const geometry = new THREE.BoxGeometry(2, 2, 2);
     const materials = FACE_LABELS.map((label) => {
-      const map = faceTexture(label);
+      const map = faceTexture(label, COLORS);
       const material = new THREE.MeshBasicMaterial({ map });
       this.disposables.push(map, material);
       return material;

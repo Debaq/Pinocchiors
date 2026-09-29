@@ -1,6 +1,7 @@
 import { Component, Show, createEffect, onCleanup } from "solid-js";
 import { Panel, Slider, Button, Select } from "../ui";
 import * as Icons from "../icons";
+import { currentTheme, themeColor } from "../../lib/theme";
 
 /** Opciones del desplegado (ver `UvUnwrapConfig` en apps/desktop) */
 export interface UvConfig {
@@ -53,7 +54,7 @@ const PREVIEW_OPTIONS = [
 const Row: Component<{ label: string; value: string; warn?: boolean }> = (props) => (
   <div class="flex justify-between text-xs">
     <span class="text-text-muted">{props.label}</span>
-    <span class={props.warn ? "text-amber-400" : "text-text"}>{props.value}</span>
+    <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
   </div>
 );
 
@@ -65,13 +66,14 @@ const Atlas: Component<{ layout: Float32Array; image?: ImageBitmap }> = (props) 
   createEffect(() => {
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
-    ctx.fillStyle = "#1e1f29";
+    currentTheme();
+    ctx.fillStyle = themeColor("viewport");
     ctx.fillRect(0, 0, size, size);
     if (props.image) {
       ctx.drawImage(props.image, 0, 0, size, size);
     }
     const uv = props.layout;
-    ctx.strokeStyle = "rgba(80, 250, 123, 0.7)";
+    ctx.strokeStyle = themeColor("uv-edge");
     ctx.lineWidth = 1;
     ctx.beginPath();
     for (let q = 0; q + 8 <= uv.length; q += 8) {
@@ -90,7 +92,7 @@ const Atlas: Component<{ layout: Float32Array; image?: ImageBitmap }> = (props) 
       ref={canvas}
       width={size}
       height={size}
-      class="w-full aspect-square rounded border border-border bg-bg-dark"
+      class="w-full aspect-square rounded border border-border bg-viewport"
     />
   );
 };
@@ -112,7 +114,7 @@ export const UvStep: Component<UvStepProps> = (props) => {
       <Show
         when={props.hasRetopology}
         fallback={
-          <p class="text-xs text-amber-400 leading-relaxed">
+          <p class="text-xs text-warning leading-relaxed">
             Primero ejecuta la retopología: el mapa se hace sobre la malla de quads.
           </p>
         }

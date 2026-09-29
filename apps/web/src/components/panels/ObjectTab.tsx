@@ -15,7 +15,7 @@ export const ObjectTab: Component<ObjectTabProps> = (props) => (
   >
     {(info) => (
       <div class="space-y-4">
-        <div class="flex justify-between gap-2 text-xs px-3 py-2 rounded-md bg-current/30 border border-border">
+        <div class="flex justify-between gap-2 text-xs px-3 py-2 rounded-md bg-surface/30 border border-border">
           <span class="text-text font-mono uppercase">{info().format}</span>
           <span class="text-text-muted">
             <span class="text-text font-mono">{info().vertices.toLocaleString()}</span> vértices ·{" "}

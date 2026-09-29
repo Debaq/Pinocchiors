@@ -99,7 +99,7 @@ export const Sidebar: ParentComponent<SidebarProps> = (props) => {
                 "bg-bg-lighter border border-border",
                 "flex items-center justify-center",
                 "text-text-muted hover:text-text",
-                "hover:bg-current/50",
+                "hover:bg-surface/50",
                 "transition-all duration-100"
               )}
               onClick={() => setCollapsed(!collapsed())}

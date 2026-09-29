@@ -39,7 +39,7 @@ export const ProgressBar = (props: ProgressBarProps) => {
 
       <div
         class={clsx(
-          "w-full rounded-full bg-current overflow-hidden",
+          "w-full rounded-full bg-surface overflow-hidden",
           size() === "sm" ? "h-1" : "h-2"
         )}
       >

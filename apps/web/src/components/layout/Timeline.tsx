@@ -197,7 +197,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
         </div>
         <Tooltip content="Auto-key: girar o mover una articulación crea la key">
           <IconButton size="sm" variant={props.autoKey ? "primary" : "ghost"} aria-label="Auto-key" onClick={() => props.onAutoKey(!props.autoKey)}>
-            <span class={clsx("w-2.5 h-2.5 rounded-full", props.autoKey ? "bg-red-400" : "border border-text-muted")} />
+            <span class={clsx("w-2.5 h-2.5 rounded-full", props.autoKey ? "bg-red" : "border border-text-muted")} />
           </IconButton>
         </Tooltip>
         <Tooltip content="Insertar key (I)">

@@ -82,7 +82,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
                   "transition-colors duration-100",
                   preset.id === props.selectedPreset
                     ? "bg-accent/15 text-accent"
-                    : "text-text hover:bg-current/40"
+                    : "text-text hover:bg-surface/40"
                 )}
                 title={preset.description}
                 onClick={() => props.onPresetChange?.(preset.id)}
@@ -96,7 +96,7 @@ export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
 
         {/* Selected Info */}
         <Show when={selectedPreset()}>
-          <div class="p-2 rounded bg-current/30 space-y-1">
+          <div class="p-2 rounded bg-surface/30 space-y-1">
             <p class="text-xs text-text-muted">
               {selectedPreset()!.description}
             </p>

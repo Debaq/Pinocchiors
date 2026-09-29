@@ -55,7 +55,7 @@ const OutlinerNode: Component<{
       <div
         class={clsx(
           "flex items-center gap-1 px-1.5 py-0.5 rounded-sm cursor-pointer group",
-          "hover:bg-current/30",
+          "hover:bg-surface/30",
           props.node.selected && "bg-accent/20 border-l-2 border-accent"
         )}
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}

@@ -1,16 +1,18 @@
 @import "tailwindcss";
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   DRACULA THEME - Tailwind v4 Custom Theme
+   TEMAS — Todos los colores de la app viven acá (también los del visor 3D,
+   que los lee con getComputedStyle en lib/theme.ts). Oscuro = Dracula,
+   claro = variante Alucard. `data-theme` en <html> elige cuál.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-@theme {
-  /* Dracula Palette */
+@theme static {
+  /* Paleta */
   --color-bg: #282a36;
   --color-bg-darker: #21222c;
   --color-bg-lighter: #343746;
-  --color-current: #44475a;
-  --color-selection: #44475a;
+  /* Botones, campos y filas resaltadas (no usar `current`: en Tailwind es currentColor) */
+  --color-surface: #44475a;
   --color-fg: #f8f8f2;
   --color-comment: #6272a4;
 
@@ -22,7 +24,7 @@
   --color-red: #ff5555;
   --color-yellow: #f1fa8c;
 
-  /* Semantic Colors */
+  /* Semánticos */
   --color-accent: #bd93f9;
   --color-accent-hover: #caa8ff;
   --color-accent-dim: #9d7cd8;
@@ -32,14 +34,26 @@
   --color-error: #ff5555;
   --color-info: #8be9fd;
 
-  /* Text Colors */
+  /* Texto */
   --color-text: #f8f8f2;
-  --color-text-muted: #6272a4;
-  --color-text-dim: #565f89;
+  --color-text-muted: #8a93bd;
+  --color-text-dim: #6272a4;
 
-  /* Border */
-  --color-border: #3d4054;
-  --color-border-hover: #565f89;
+  /* Bordes */
+  --color-border: #44475a;
+  --color-border-hover: #6272a4;
+
+  /* Visor 3D y lienzos */
+  --color-viewport: #282a36;
+  --color-grid-minor: #44475a;
+  --color-grid-major: #6272a4;
+  --color-axis-x: #ff5555;
+  --color-axis-y: #50fa7b;
+  --color-axis-z: #8be9fd;
+  --color-cube-face: #44475a;
+  --color-cube-border: #6272a4;
+  --color-cube-text: #f8f8f2;
+  --color-uv-edge: #50fa7bb3;
 
   /* Layout Sizes */
   --size-header: 44px;
@@ -60,6 +74,63 @@
   --transition-fast: 100ms;
   --transition-normal: 150ms;
   --transition-slow: 300ms;
+}
+
+/* Tema claro: sobrescribe las mismas variables. Los colores de acento son más
+   oscuros para que el texto de color se lea sobre fondo claro */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --color-bg: #f4f4f7;
+  --color-bg-darker: #e4e4ea;
+  --color-bg-lighter: #ffffff;
+  --color-surface: #d4d5df;
+  --color-fg: #1f2030;
+  --color-comment: #5c6380;
+
+  --color-cyan: #0a6f8c;
+  --color-green: #19803a;
+  --color-orange: #b0520c;
+  --color-pink: #b4236a;
+  --color-purple: #6b4bcf;
+  --color-red: #c92a2a;
+  --color-yellow: #876f00;
+
+  --color-accent: #6b4bcf;
+  --color-accent-hover: #5a3bbd;
+  --color-accent-dim: #8d74dc;
+
+  --color-success: #19803a;
+  --color-warning: #b0520c;
+  --color-error: #c92a2a;
+  --color-info: #0a6f8c;
+
+  --color-text: #1f2030;
+  --color-text-muted: #545a73;
+  --color-text-dim: #7a7f96;
+
+  --color-border: #c5c6d3;
+  --color-border-hover: #9095ad;
+
+  --color-viewport: #dcdde5;
+  --color-grid-minor: #b9bbca;
+  --color-grid-major: #878ba5;
+  --color-axis-x: #d63a3a;
+  --color-axis-y: #25913f;
+  --color-axis-z: #1b7fa3;
+  --color-cube-face: #eceef4;
+  --color-cube-border: #878ba5;
+  --color-cube-text: #1f2030;
+  --color-uv-edge: #19803acc;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+.theme-switching,
+.theme-switching * {
+  transition: none !important;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -94,7 +165,7 @@
   }
 
   ::-webkit-scrollbar-thumb {
-    background: var(--color-current);
+    background: var(--color-surface);
     border-radius: 9999px;
   }
 
@@ -169,10 +240,10 @@
 
 @keyframes pipeline-glow {
   0%, 100% {
-    box-shadow: 0 0 8px 2px rgba(189, 147, 249, 0.3);
+    box-shadow: 0 0 8px 2px color-mix(in srgb, var(--color-accent) 30%, transparent);
   }
   50% {
-    box-shadow: 0 0 14px 4px rgba(189, 147, 249, 0.5);
+    box-shadow: 0 0 14px 4px color-mix(in srgb, var(--color-accent) 50%, transparent);
   }
 }
 
@@ -209,7 +280,7 @@
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .window-close-btn:hover {
-  background-color: rgba(255, 85, 85, 0.2) !important;
+  background-color: color-mix(in srgb, var(--color-red) 20%, transparent) !important;
   color: var(--color-red) !important;
 }
 

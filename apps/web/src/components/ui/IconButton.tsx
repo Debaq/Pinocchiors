@@ -13,14 +13,14 @@ export interface IconButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElem
 
 const variantClasses: Record<IconButtonVariant, string> = {
   default: `
-    bg-current/60 border-border text-text-muted
-    hover:bg-current hover:text-text hover:border-border-hover
+    bg-surface/60 border-border text-text-muted
+    hover:bg-surface hover:text-text hover:border-border-hover
     active:bg-bg-lighter
   `,
   ghost: `
     bg-transparent border-transparent text-text-muted
-    hover:bg-current/50 hover:text-text
-    active:bg-current
+    hover:bg-surface/50 hover:text-text
+    active:bg-surface
   `,
   primary: `
     bg-accent/20 border-accent/50 text-accent

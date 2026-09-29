@@ -2,6 +2,10 @@
 import { render } from "solid-js/web";
 import { App } from "./App";
 import "./styles/app.css";
+import { applyTheme, storedTheme } from "./lib/theme";
+
+// Antes del primer cuadro, para no pasar por el tema oscuro al abrir en claro
+applyTheme(storedTheme());
 
 const root = document.getElementById("root");
 

@@ -61,7 +61,7 @@ export interface RetopologyPanelProps {
 const QualityRow: Component<{ label: string; value: string; warn?: boolean }> = (props) => (
   <div class="flex justify-between text-xs">
     <span class="text-text-muted">{props.label}</span>
-    <span class={props.warn ? "text-amber-400" : "text-text"}>{props.value}</span>
+    <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
   </div>
 );
 
@@ -193,7 +193,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
         {/* Result indicator and toggle */}
         <Show when={props.hasResult}>
           <div class="space-y-2 pt-2 border-t border-border">
-            <div class="flex items-center gap-2 text-xs text-green-400">
+            <div class="flex items-center gap-2 text-xs text-success">
               <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="20 6 9 17 4 12" />
               </svg>
@@ -202,7 +202,7 @@ export const RetopologyPanel: Component<RetopologyPanelProps> = (props) => {
 
             <Show when={props.quality}>
               {(q) => (
-                <div class="space-y-1 rounded bg-current/20 p-2">
+                <div class="space-y-1 rounded bg-surface/20 p-2">
                   <QualityRow
                     label="Vértices irregulares"
                     value={`${q().irregular_percent.toFixed(1)}%`}

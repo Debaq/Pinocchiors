@@ -79,7 +79,7 @@ export const HistoryPanel: Component<HistoryPanelProps> = (props) => {
                   row.kind === "past" && "text-text",
                   row.kind === "future" && "text-text-muted",
                   row.kind === "branch" && "text-text-muted/70",
-                  reachable() && row.kind !== "current" ? "hover:bg-current/40" : "cursor-default"
+                  reachable() && row.kind !== "current" ? "hover:bg-surface/40" : "cursor-default"
                 )}
                 style={{ "padding-left": `${8 + row.depth * 12}px` }}
                 title={reachable() ? undefined : "Hay un hito en el medio: no se puede volver hasta acá"}

@@ -109,7 +109,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
 
       {/* Resultados del análisis */}
       <Show when={props.analysis}>
-        <div class="space-y-2 p-3 rounded-md bg-current/30 border border-border">
+        <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border">
           <div class="space-y-1.5">
             <div class="flex justify-between text-xs">
               <span class="text-text-muted">Dimensiones</span>
@@ -287,7 +287,7 @@ export const Print3DPanel: Component<Print3DPanelProps> = (props) => {
           <div class="space-y-1.5 max-h-48 overflow-y-auto">
             <For each={props.subdivideResult!.pieces}>
               {(piece) => (
-                <div class="flex items-center justify-between px-2 py-1.5 rounded bg-current/20 border border-border">
+                <div class="flex items-center justify-between px-2 py-1.5 rounded bg-surface/20 border border-border">
                   <div>
                     <span class="text-xs font-mono font-semibold text-text">{piece.label}</span>
                     <span class="text-[10px] text-text-dim ml-2">

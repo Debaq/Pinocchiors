@@ -15,8 +15,8 @@ export interface ButtonProps extends JSX.ButtonHTMLAttributes<HTMLButtonElement>
 
 const variantClasses: Record<ButtonVariant, string> = {
   default: `
-    bg-current/80 border-border text-text
-    hover:bg-current hover:border-border-hover
+    bg-surface/80 border-border text-text
+    hover:bg-surface hover:border-border-hover
     active:bg-bg-lighter
   `,
   primary: `
@@ -26,8 +26,8 @@ const variantClasses: Record<ButtonVariant, string> = {
   `,
   ghost: `
     bg-transparent border-transparent text-text-muted
-    hover:bg-current/50 hover:text-text
-    active:bg-current
+    hover:bg-surface/50 hover:text-text
+    active:bg-surface
   `,
   danger: `
     bg-red/20 border-red/50 text-red

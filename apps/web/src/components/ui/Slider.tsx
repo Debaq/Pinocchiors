@@ -61,7 +61,7 @@ export const Slider = (props: SliderProps) => {
               <KobalteSlider.ValueLabel
                 class={clsx(
                   "text-xs font-mono text-text-muted rounded-sm px-1 -mx-1",
-                  !props.disabled && "cursor-text hover:bg-current/30"
+                  !props.disabled && "cursor-text hover:bg-surface/30"
                 )}
                 title={props.disabled ? undefined : "Doble clic para escribir el valor"}
                 onDblClick={() => !props.disabled && setEditing(true)}
@@ -89,7 +89,7 @@ export const Slider = (props: SliderProps) => {
       <KobalteSlider.Track
         class={clsx(
           "relative h-1.5 w-full rounded-full",
-          "bg-current",
+          "bg-surface",
           "data-[disabled]:opacity-50"
         )}
       >
