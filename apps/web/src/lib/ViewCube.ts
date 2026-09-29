@@ -19,7 +19,10 @@ const colors = () => ({
 });
 type Colors = ReturnType<typeof colors>;
 
-/** Convención del proyecto: Y arriba, frente hacia +Z. Orden de BoxGeometry: +X −X +Y −Y +Z −Z */
+/**
+ * El visor es Y arriba con el frente hacia +Z (se muestra como Z arriba y
+ * frente hacia −Y, ver lib/axes.ts). Orden de BoxGeometry: +X −X +Y −Y +Z −Z
+ */
 const FACE_LABELS = ["DERECHA", "IZQUIERDA", "ARRIBA", "ABAJO", "FRENTE", "ATRÁS"];
 
 function faceTexture(label: string, COLORS: Colors): THREE.CanvasTexture {
@@ -58,7 +61,8 @@ function axisLabel(text: string, color: number): THREE.Sprite {
   ctx.fillText(text, 32, 34);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = THREE.SRGBColorSpace;
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
+  // Con prueba de profundidad: la Y apunta hacia atrás y detrás del cubo no se ve
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture }));
   sprite.scale.setScalar(0.5);
   sprite.renderOrder = 2;
   return sprite;
@@ -67,8 +71,8 @@ function axisLabel(text: string, color: number): THREE.Sprite {
 /**
  * Cubo de orientación en la esquina del visor: gira con la cámara y, al
  * hacer clic en una cara, arista o vértice, lleva la cámara a esa vista.
- * Los ejes salen del vértice izquierdo-inferior-trasero con los colores de
- * siempre (X rojo, Y verde, Z celeste), paralelos a la grilla del piso.
+ * Los ejes salen del vértice izquierdo-inferior-delantero con los colores de
+ * Blender (X rojo, Y verde, Z azul), con Z hacia arriba.
  */
 export class ViewCube {
   private scene = new THREE.Scene();
@@ -111,12 +115,14 @@ export class ViewCube {
     this.scene.add(this.highlight);
     this.disposables.push(geometry, highlightMaterial, highlightGeometry);
 
-    // Ejes desde el vértice (−X, −Y, −Z), apenas por fuera del cubo
-    const origin = new THREE.Vector3(-1.04, -1.04, -1.04);
+    // Ejes como en Blender (Z arriba, Y hacia atrás) desde el vértice
+    // izquierdo-inferior-delantero, apenas por fuera del cubo. En el visor
+    // Y es arriba y +Z el frente: Y de la vista es −Z del visor
+    const origin = new THREE.Vector3(-1.04, -1.04, 1.04);
     const axes: [THREE.Vector3, number, string][] = [
       [new THREE.Vector3(1, 0, 0), COLORS.x, "X"],
-      [new THREE.Vector3(0, 1, 0), COLORS.y, "Y"],
-      [new THREE.Vector3(0, 0, 1), COLORS.z, "Z"],
+      [new THREE.Vector3(0, 0, -1), COLORS.y, "Y"],
+      [new THREE.Vector3(0, 1, 0), COLORS.z, "Z"],
     ];
     for (const [dir, color, text] of axes) {
       const end = origin.clone().addScaledVector(dir, 2.4);

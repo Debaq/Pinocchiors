@@ -1,5 +1,5 @@
 use converter_scene::{
-    IndexData, Mesh, Node, Primitive, Scene, Transform, VertexAttribute,
+    z_up_to_y_up, IndexData, Mesh, Node, Primitive, Scene, Transform, VertexAttribute,
 };
 use std::io::{Read, Seek};
 use std::path::Path;
@@ -16,7 +16,8 @@ pub enum StlImportError {
 /// Importa un archivo STL (ASCII o binario) y lo convierte a `Scene`.
 ///
 /// STL solo contiene triángulos y normales — la escena resultante tendrá
-/// un único mesh sin materiales, texturas, esqueleto ni animaciones.
+/// un único mesh sin materiales, texturas, esqueleto ni animaciones. Se lee
+/// con Z arriba (como lo escriben Blender y los slicers) y se pasa a Y arriba.
 pub fn import_stl(path: impl AsRef<Path>) -> Result<Scene, StlImportError> {
     let path = path.as_ref();
     let mut file = std::fs::File::open(path)?;
@@ -36,11 +37,11 @@ fn read_scene<R: Read + Seek>(reader: &mut R, name: &str) -> Result<Scene, StlIm
         return Err(StlImportError::Empty);
     }
 
-    // Convertir vértices: stl_io::Vertex → [f32; 3]
+    // STL viene con Z arriba (Blender, CAD, slicers); la escena es Y arriba
     let positions: Vec<[f32; 3]> = stl_mesh
         .vertices
         .iter()
-        .map(|v| [v[0], v[1], v[2]])
+        .map(|v| z_up_to_y_up([v[0], v[1], v[2]]))
         .collect();
 
     // Convertir índices: stl_io usa usize, nosotros u32
@@ -56,7 +57,7 @@ fn read_scene<R: Read + Seek>(reader: &mut R, name: &str) -> Result<Scene, StlIm
     // STL provee normales por cara, no por vértice.
     let mut vertex_normals = vec![[0.0f32; 3]; positions.len()];
     for face in &stl_mesh.faces {
-        let n = [face.normal[0], face.normal[1], face.normal[2]];
+        let n = z_up_to_y_up([face.normal[0], face.normal[1], face.normal[2]]);
         for &vi in &face.vertices {
             vertex_normals[vi][0] += n[0];
             vertex_normals[vi][1] += n[1];
@@ -224,8 +225,10 @@ mod tests {
         let scene = import_stl_bytes(ASCII_TRIANGLE.as_bytes()).unwrap();
         assert!(scene.validate().is_ok());
         let (min, max) = scene.compute_bounding_box().unwrap();
-        assert_eq!(min, [0.0, 0.0, 0.0]);
-        assert_eq!(max, [2.0, 3.0, 0.0]);
+        // El triángulo está en el plano XY del STL (el piso, con Z arriba):
+        // en la escena (Y arriba) queda en XZ, con Y del STL hacia −Z
+        assert_eq!(min, [0.0, 0.0, -3.0]);
+        assert_eq!(max, [2.0, 0.0, 0.0]);
     }
 
     #[test]

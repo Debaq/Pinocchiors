@@ -39,15 +39,15 @@ import {
   translationMatrix,
   zoneNormal,
   boundsAfter,
-  type Axis,
   type FloorCandidate,
   type OriginMode,
   type PlacementInfo,
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import { createPipelineStore } from "./lib/pipeline";
+import { VIEW_AXES, fromView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree } from "./lib/scene-tree";
-import type { ToolId } from "./lib/tools";
+import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
@@ -598,12 +598,22 @@ export const App: Component = () => {
     { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
     { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
     { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
-    { key: "q", action: () => { setActiveTool("select"); setBoneEditMode(false); }, description: "Seleccionar" },
-    // Como en Blender: G y R son operaciones modales sobre la articulación
+    { key: "q", action: () => useTool("select"), description: "Seleccionar" },
+    // Sobre el modelo, G/R/S eligen el gizmo. Sobre el esqueleto, como en
+    // Blender, G y R son operaciones modales sobre la articulación
     // seleccionada (el mouse mueve, clic confirma, clic derecho/Esc cancela)
-    { key: "g", action: () => viewerRef?.startModal("grab"), description: "Mover articulación" },
-    { key: "r", action: () => viewerRef?.startModal("rotate"), description: "Rotar (pose de prueba)" },
-    { key: "s", action: () => useTool("scale"), description: "Escalar el esqueleto entero" },
+    {
+      key: "g",
+      action: () => (toolCtx() === "object" ? useTool("move") : viewerRef?.startModal("grab")),
+      description: "Mover (modelo o articulación)",
+    },
+    {
+      key: "r",
+      action: () => (toolCtx() === "object" ? useTool("rotate") : viewerRef?.startModal("rotate")),
+      description: "Rotar (modelo, o pose de prueba)",
+    },
+    { key: "s", action: () => useTool("scale"), description: "Escalar (modelo o esqueleto entero)" },
+    { key: "m", action: () => useTool("measure"), description: "Medir" },
     { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
     {
       key: " ",
@@ -1086,13 +1096,15 @@ export const App: Component = () => {
   };
 
   const applyPlacement = async (matrix: THREE.Matrix4 | null, description: string) => {
-    if (!matrix) return;
+    if (!matrix) return false;
     try {
       await history.execute(description, { kind: "placement", data: { matrix: matrix.toArray() } });
       setStatusMessage(description);
+      return true;
     } catch (e) {
       console.error("Placement error:", e);
       setStatusMessage(`Error: ${e}`);
+      return false;
     }
   };
 
@@ -1133,20 +1145,22 @@ export const App: Component = () => {
         setStatusMessage("Esa cara mira hacia arriba o abajo: elige una lateral");
         return;
       }
-      await applyPlacement(matrix, "Frente elegido: el modelo mira hacia +Z");
+      await applyPlacement(matrix, "Frente elegido: el modelo mira hacia −Y (vista frontal)");
     } else if (pick.kind === "surface" && mode === "point") {
       await applyPlacement(originMatrix(positions, "point", undefined, new THREE.Vector3(...pick.point)), "Origen en el punto elegido");
     }
   };
 
+  /** Giro en torno a un eje como se muestra (Z arriba) */
   const handleRotate = (axis: Axis, degrees: number) => {
     const data = meshData();
-    if (data) applyPlacement(rotationMatrix(data.positions, axis, degrees), `Giro de ${degrees}° en ${axis.toUpperCase()}`);
+    const { axis: inner, sign } = VIEW_AXES[axis];
+    if (data) applyPlacement(rotationMatrix(data.positions, inner, sign * degrees), `Giro de ${degrees}° en ${axis.toUpperCase()}`);
   };
 
   const handleMirror = (axis: Axis) => {
     const data = meshData();
-    if (data) applyPlacement(mirrorMatrix(data.positions, axis), `Espejado en ${axis.toUpperCase()}`);
+    if (data) applyPlacement(mirrorMatrix(data.positions, VIEW_AXES[axis].axis), `Espejado en ${axis.toUpperCase()}`);
   };
 
   const handleScaleModel = (factor: number, description: string) => {
@@ -1154,10 +1168,11 @@ export const App: Component = () => {
     if (data && factor > 0 && factor !== 1) applyPlacement(scaleMatrix(data.positions, factor), description);
   };
 
+  /** Traslación en los ejes que se muestran (Z arriba) */
   const handleMoveModel = (offset: [number, number, number]) => {
     const u = gridUnits();
     const shown = offset.map((v) => Number((v * (u.metersPerUnit / u.unitMeters)).toPrecision(5)));
-    applyPlacement(translationMatrix(offset), `Mover ${shown.join(", ")} ${u.unitLabel}`);
+    applyPlacement(translationMatrix(fromView(offset)), `Mover ${shown.join(", ")} ${u.unitLabel}`);
   };
 
   const handleDrop = () => {
@@ -1686,10 +1701,37 @@ export const App: Component = () => {
     }
   };
 
+  /** Herramientas de la sección abierta: modelo, esqueleto o animación */
+  const toolCtx = createMemo(() => toolContext(pipeline.activeStep(), animating()));
+  const tools = () => TOOLSETS[toolCtx()];
+
   const useTool = (tool: ToolId) => {
+    if (!tools().some((t) => t.id === tool)) return;
     setActiveTool(tool);
-    setBoneEditMode(tool === "move" || tool === "rotate" || tool === "scale");
+    setBoneEditMode(toolCtx() !== "object" && (tool === "move" || tool === "rotate" || tool === "scale"));
     if (tool === "paint") void startPainting();
+  };
+
+  // Al cambiar de contexto, la herramienta sigue si existe en el nuevo
+  createEffect(() => {
+    const ctx = toolCtx();
+    untrack(() => useTool(TOOLSETS[ctx].some((t) => t.id === activeTool()) ? activeTool() : "select"));
+  });
+
+  const toolDisabledReason = (tool: ToolId) => {
+    if (!meshLoaded()) return "importa un modelo";
+    if (toolCtx() !== "object" && tool !== "select" && tool !== "measure" && !skeletonData()) return "primero elige un esqueleto";
+    if (tool === "paint" && !autorigComplete()) return "primero calcula los pesos";
+    return undefined;
+  };
+
+  /** Se soltó el gizmo del modelo: se aplica como las demás transformaciones del modelo */
+  const handleObjectGizmo = async (matrix: number[], mode: "translate" | "rotate" | "scale") => {
+    const m = new THREE.Matrix4().fromArray(matrix);
+    const factor = Number(new THREE.Vector3().setFromMatrixScale(m).x.toPrecision(4));
+    const description =
+      mode === "translate" ? "Mover el modelo" : mode === "rotate" ? "Rotar el modelo" : `Escalar el modelo ×${factor.toLocaleString()}`;
+    if (!(await applyPlacement(m, description))) viewerRef?.clearObjectPreview();
   };
 
   /** Elige la malla de las etapas siguientes (quads u original): el rig se rehace */
@@ -2181,6 +2223,8 @@ export const App: Component = () => {
         <div class="flex flex-1 min-h-0 overflow-hidden">
           {/* Toolbar */}
           <Toolbar
+            tools={tools()}
+            disabledReason={toolDisabledReason}
             activeTool={activeTool()}
             onToolChange={(tool) => useTool(tool)}
             onResetView={() => viewerRef?.resetView()}
@@ -2219,6 +2263,9 @@ export const App: Component = () => {
               floorCandidates={floorCandidates()}
               boneEditMode={boneEditMode()}
               activeTool={activeTool()}
+              objectTools={toolCtx() === "object"}
+              toolHint={toolDisabledReason(activeTool()) ? undefined : tools().find((t) => t.id === activeTool())?.hint}
+              onObjectTransformed={handleObjectGizmo}
               contextMenuItems={viewportMenuItems}
             />
 
@@ -2302,7 +2349,7 @@ export const App: Component = () => {
                 onOrigin: handleOrigin,
                 onScale: handleScaleModel,
                 onMove: handleMoveModel,
-                size: modelSize(),
+                size: modelSize() && viewSize(modelSize()!),
                 unit: { label: gridUnits().unitLabel, perSceneUnit: gridUnits().metersPerUnit / gridUnits().unitMeters },
                 disabled: isProcessing(),
               },

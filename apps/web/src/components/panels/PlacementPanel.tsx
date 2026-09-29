@@ -3,12 +3,14 @@ import { clsx } from "clsx";
 import { Panel, Button, Select } from "../ui";
 import * as Icons from "../icons";
 import type { PlacementMode } from "../../lib/Viewer3D";
-import type { Axis, OriginMode } from "../../lib/placement";
+import type { OriginMode } from "../../lib/placement";
+import { AXES, type Axis } from "../../lib/axes";
 
 export interface PlacementPanelProps {
   /** Qué se está eligiendo con el clic (`undefined` = nada) */
   mode?: PlacementMode;
   onPickMode?: (mode: PlacementMode | undefined) => void;
+  /** Ejes como se muestran: Z arriba, frente hacia −Y */
   onRotate?: (axis: Axis, degrees: number) => void;
   onMirror?: (axis: Axis) => void;
   onDrop?: () => void;
@@ -18,7 +20,7 @@ export interface PlacementPanelProps {
   onScale?: (factor: number, description: string) => void;
   /** Traslación en unidades de la escena */
   onMove?: (offset: [number, number, number]) => void;
-  /** Medidas de la caja del modelo, en unidades de la escena */
+  /** Medidas de la caja del modelo en X, Y, Z (Z arriba), en unidades de la escena */
   size?: [number, number, number];
   /** Unidad en que se muestran las medidas (la de la grilla) */
   unit?: { label: string; perSceneUnit: number };
@@ -31,8 +33,6 @@ const ORIGIN_OPTIONS = [
   { value: "mass", label: "Centro de masa" },
   { value: "point", label: "Punto con clic" },
 ];
-
-const AXES: Axis[] = ["x", "y", "z"];
 
 /** Conversiones típicas de un modelo que vino en otra unidad */
 const CONVERSIONS: { label: string; factor: number; title: string }[] = [
@@ -113,7 +113,7 @@ const AxisPicker = (props: { value: Axis; onChange: (axis: Axis) => void }) => (
 
 export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
   const [origin, setOrigin] = createSignal<OriginMode>("base");
-  const [rotAxis, setRotAxis] = createSignal<Axis>("y");
+  const [rotAxis, setRotAxis] = createSignal<Axis>("z");
   const [rotDegrees, setRotDegrees] = createSignal(45);
   const [factor, setFactor] = createSignal(2);
   const [move, setMove] = createSignal<[number, number, number]>([0, 0, 0]);
@@ -128,7 +128,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
   const setDimension = (axis: number, value: number) => {
     const current = dims()[axis];
     if (!(value > 0) || !(current > 0)) return;
-    const names = ["ancho", "alto", "fondo"];
+    const names = ["ancho", "fondo", "alto"];
     props.onScale?.(value / current, `Escalar: ${names[axis]} ${fmt(value)} ${unitLabel()}`);
   };
 
@@ -179,9 +179,15 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
               Girar
             </Button>
           </div>
-          <Button size="sm" fullWidth onClick={() => props.onRotate?.("x", -90)} disabled={props.disabled}>
-            Z arriba → Y arriba
-          </Button>
+          {/* STL, PLY y 3MF se leen con Z arriba; GLB y OBJ con Y arriba. Si el archivo no seguía la costumbre, queda acostado */}
+          <div class="grid grid-cols-2 gap-1.5">
+            <Button size="sm" onClick={() => props.onRotate?.("x", -90)} disabled={props.disabled}>
+              <span title="Para un GLB u OBJ que quedó acostado: su programa usaba Z arriba">Venía con Z arriba</span>
+            </Button>
+            <Button size="sm" onClick={() => props.onRotate?.("x", 90)} disabled={props.disabled}>
+              <span title="Para un STL, PLY o 3MF que quedó acostado: su programa usaba Y arriba">Venía con Y arriba</span>
+            </Button>
+          </div>
         </Section>
 
         <Section title="Espejar">
@@ -198,7 +204,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
 
         <Section title={`Tamaño${unitLabel() ? ` (${unitLabel()})` : ""}`}>
           <div class="grid grid-cols-3 gap-1.5">
-            <For each={["Ancho", "Alto", "Fondo"]}>
+            <For each={["Ancho", "Fondo", "Alto"]}>
               {(name, i) => (
                 <div class="space-y-0.5">
                   <span class="text-[10px] text-text-muted">

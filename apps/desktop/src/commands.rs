@@ -2465,9 +2465,10 @@ fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppState) -> Resul
             pinocchio_print3d::scale(&mut mesh, factor);
         }
         "fit" => {
-            let target_mm = params.target_size.ok_or("Falta tamaño objetivo")?;
+            // La UI da ancho, fondo y alto (Z arriba); la malla es Y arriba
+            let [w, d, h] = params.target_size.ok_or("Falta tamaño objetivo")?;
             let k = mm_per_unit(state);
-            let target = target_mm.map(|v| v / k);
+            let target = [w, h, d].map(|v| v / k);
             pinocchio_print3d::scale_to_fit(&mut mesh, target).map_err(|e| format!("No se pudo escalar: {e}"))?;
         }
         "volume" => {
@@ -2541,6 +2542,26 @@ fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String
     Ok(analysis_to_info(&analysis, mm_per_unit(state)))
 }
 
+/// Medidas de la malla (Y arriba) en el orden de la impresión: ancho, fondo, alto
+fn print_size([x, y, z]: [f64; 3]) -> [f64; 3] {
+    [x, z, y]
+}
+
+/// La malla girada 90° en X: de Y arriba a Z arriba (`to_z_up`) o al revés.
+/// Es un giro, no un espejo: las caras siguen hacia afuera
+fn mesh_reoriented(mesh: &Mesh, to_z_up: bool) -> Mesh {
+    let turn = |v: &Vector3| {
+        let (x, y, z) = (v.x(), v.y(), v.z());
+        if to_z_up { Vector3::new(x, -z, y) } else { Vector3::new(x, z, -y) }
+    };
+    let mut out = mesh.clone();
+    for v in &mut out.vertices {
+        v.position = turn(&v.position);
+        v.normal = turn(&v.normal);
+    }
+    out
+}
+
 /// Milímetros por unidad de la escena (la UI de impresión trabaja en mm)
 fn mm_per_unit(state: &AppState) -> f64 {
     state
@@ -2557,7 +2578,7 @@ fn analysis_to_info(analysis: &pinocchio_print3d::MeshAnalysis, k: f64) -> Print
         volume: analysis.volume * k * k * k,
         surface_area: analysis.surface_area * k * k,
         center_of_mass: analysis.center_of_mass.map(|c| c * k),
-        dimensions: analysis.bounding_box.dimensions().map(|d| d * k),
+        dimensions: print_size(analysis.bounding_box.dimensions()).map(|d| d * k),
         is_closed: analysis.is_closed,
         vertex_count: analysis.vertex_count,
         triangle_count: analysis.triangle_count,
@@ -2591,7 +2612,8 @@ fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState) -> Result
         margin: config.margin.unwrap_or(2.0) / k,
     };
 
-    let mut pieces = pinocchio_print3d::subdivide(mesh, &subdivide_config)
+    // El volumen de impresión y las capas son con Z arriba (la plataforma)
+    let mut pieces = pinocchio_print3d::subdivide(&mesh_reoriented(mesh, true), &subdivide_config)
         .map_err(|e| format!("Error subdividiendo: {:?}", e))?;
 
     // Calcular vecinos
@@ -2609,6 +2631,10 @@ fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState) -> Result
     }).collect();
 
     let piece_count = pieces.len();
+    // De vuelta a Y arriba, como el resto de la escena (al exportar vuelven a Z)
+    for piece in &mut pieces {
+        piece.mesh = mesh_reoriented(&piece.mesh, false);
+    }
 
     let mut pieces_lock = state.print3d_pieces.lock().unwrap();
     *pieces_lock = Some(pieces);

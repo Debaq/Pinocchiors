@@ -17,7 +17,8 @@ pub enum StlExportError {
 /// de triángulos. Solo exporta geometría — materiales, texturas,
 /// esqueletos y animaciones se descartan. Como STL no guarda unidades y los
 /// slicers asumen milímetros, las coordenadas se convierten según
-/// `scene.meters_per_unit` (una escena glTF en metros sale ×1000).
+/// `scene.meters_per_unit` (una escena glTF en metros sale ×1000). Sale con
+/// Z arriba, como lo esperan los slicers y Blender.
 pub fn export_stl(scene: &Scene, path: impl AsRef<Path>) -> Result<(), StlExportError> {
     let triangles = extract_triangles(scene)?;
 
@@ -45,7 +46,7 @@ fn extract_triangles(scene: &Scene) -> Result<Vec<stl_io::Triangle>, StlExportEr
     let mut triangles = Vec::new();
 
     let to_mm = (scene.meters_per_unit * 1000.0) as f32;
-    for prim in scene.world_primitives() {
+    for prim in scene.world_primitives_z_up() {
         for tri in &prim.triangles {
             let [v0, v1, v2] = tri.map(|i| prim.positions[i as usize].map(|c| c * to_mm));
             triangles.push(stl_io::Triangle {
@@ -122,8 +123,30 @@ mod tests {
         assert_eq!(tris.len(), 1);
         let v1 = tris[0].vertices[1];
         assert_eq!([v1[0], v1[1], v1[2]], [10.5, 0.0, 0.0]);
+        // El triángulo mira a +Z de la escena (el frente): con Z arriba es −Y
         let n = tris[0].normal;
-        assert_eq!([n[0], n[1], n[2]], [0.0, 0.0, 1.0]);
+        assert_eq!([n[0], n[1], n[2]], [0.0, -1.0, 0.0]);
+    }
+
+    #[test]
+    fn up_stays_up() {
+        // Y arriba en la escena → Z arriba en el STL
+        let mut scene = Scene::new();
+        scene.meters_per_unit = 0.001;
+        scene.meshes.push(Mesh {
+            name: "tri".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 5.0, 0.0]])],
+                indices: Some(IndexData::U16(vec![0, 1, 2])),
+                material: None,
+            }],
+        });
+        let tris = extract_triangles(&scene).unwrap();
+        let top = tris[0].vertices[2];
+        assert_eq!([top[0], top[1], top[2]], [0.0, 0.0, 5.0]);
+        // Y de vuelta al importar
+        let back = crate::import_stl_bytes(&export_stl_bytes(&scene).unwrap()).unwrap();
+        assert_eq!(back.compute_bounding_box().unwrap().1, [1.0, 5.0, 0.0]);
     }
 
     #[test]

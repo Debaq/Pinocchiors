@@ -1,4 +1,5 @@
-import { Component, Show } from "solid-js";
+import { Component, For, Show } from "solid-js";
+import { AXES, VIEW_AXES } from "../../lib/axes";
 import { Panel, Slider, NumberInput, Button } from "../ui";
 import * as Icons from "../icons";
 
@@ -48,65 +49,40 @@ export const SkeletonTransformPanel: Component<SkeletonTransformPanelProps> = (p
           disabled={props.disabled}
         />
 
-        {/* Translation */}
+        {/* Posición y giro en los ejes que se muestran (Z arriba) */}
         <div class="space-y-1.5">
           <span class="text-xs text-text-muted">Posición</span>
           <div class="flex gap-2">
-            <NumberInput
-              label="X"
-              value={props.transform.translation[0]}
-              onChange={(v) => updateTranslation(0, v)}
-              step={0.05}
-              disabled={props.disabled}
-            />
-            <NumberInput
-              label="Y"
-              value={props.transform.translation[1]}
-              onChange={(v) => updateTranslation(1, v)}
-              step={0.05}
-              disabled={props.disabled}
-            />
-            <NumberInput
-              label="Z"
-              value={props.transform.translation[2]}
-              onChange={(v) => updateTranslation(2, v)}
-              step={0.05}
-              disabled={props.disabled}
-            />
+            <For each={AXES}>
+              {(axis) => (
+                <NumberInput
+                  label={axis.toUpperCase()}
+                  value={VIEW_AXES[axis].sign * props.transform.translation[VIEW_AXES[axis].index]}
+                  onChange={(v) => updateTranslation(VIEW_AXES[axis].index, VIEW_AXES[axis].sign * v)}
+                  step={0.05}
+                  disabled={props.disabled}
+                />
+              )}
+            </For>
           </div>
         </div>
 
-        {/* Rotation */}
         <div class="space-y-1.5">
           <span class="text-xs text-text-muted">Rotación (grados)</span>
           <div class="flex gap-2">
-            <NumberInput
-              label="X"
-              value={props.transform.rotation[0]}
-              onChange={(v) => updateRotation(0, v)}
-              step={5}
-              min={-180}
-              max={180}
-              disabled={props.disabled}
-            />
-            <NumberInput
-              label="Y"
-              value={props.transform.rotation[1]}
-              onChange={(v) => updateRotation(1, v)}
-              step={5}
-              min={-180}
-              max={180}
-              disabled={props.disabled}
-            />
-            <NumberInput
-              label="Z"
-              value={props.transform.rotation[2]}
-              onChange={(v) => updateRotation(2, v)}
-              step={5}
-              min={-180}
-              max={180}
-              disabled={props.disabled}
-            />
+            <For each={AXES}>
+              {(axis) => (
+                <NumberInput
+                  label={axis.toUpperCase()}
+                  value={VIEW_AXES[axis].sign * props.transform.rotation[VIEW_AXES[axis].index]}
+                  onChange={(v) => updateRotation(VIEW_AXES[axis].index, VIEW_AXES[axis].sign * v)}
+                  step={5}
+                  min={-180}
+                  max={180}
+                  disabled={props.disabled}
+                />
+              )}
+            </For>
           </div>
         </div>
 

@@ -30,6 +30,8 @@ export interface ViewportProps {
   onPoseEdited?: (joint: number) => void;
   /** Fin de un movimiento con G (para deshacer) */
   onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
+  /** Se soltó el gizmo del modelo (herramientas Mover, Rotar y Escalar del modelo) */
+  onObjectTransformed?: ViewerCallbacks["onObjectTransformed"];
   /** Se soltó el gizmo del esqueleto entero (herramienta Escalar, o Rotar sin pesos) */
   onSkeletonTransformed?: ViewerCallbacks["onSkeletonTransformed"];
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
@@ -68,6 +70,10 @@ export interface ViewportProps {
 
   // Active tool
   activeTool?: string;
+  /** Las herramientas actúan sobre el modelo entero en vez del esqueleto */
+  objectTools?: boolean;
+  /** Ayuda de la herramienta activa (cuando no hay otra operación en curso) */
+  toolHint?: string;
 
   /** Pincel de pesos activo (`undefined` = apagado) */
   paintSettings?: PaintSettings;
@@ -78,7 +84,7 @@ export interface ViewportProps {
 
 const PLACEMENT_HINTS: Record<PlacementMode, string> = {
   floor: "Clic en un plano: pasa a ser el piso (verde = estable) · Shift+clic: la superficie bajo el cursor",
-  front: "Clic en la cara que debe mirar al frente (+Z)",
+  front: "Clic en la cara que debe mirar al frente (hacia −Y, la vista frontal)",
   point: "Clic en el punto que será el origen",
 };
 
@@ -87,6 +93,8 @@ export const Viewport: Component<ViewportProps> = (props) => {
   let viewer: Viewer3D | undefined;
   /** Ayuda de la operación modal en curso (G, R, F…) */
   const [hint, setHint] = createSignal<string | null>(null);
+  /** Resultado de la herramienta Medir */
+  const [measure, setMeasure] = createSignal<string | null>(null);
   /** Tamaño de celda de la grilla */
   const [gridLabel, setGridLabel] = createSignal<string | null>(null);
   /** Menú del clic derecho abierto, con sus ítems */
@@ -124,6 +132,8 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onLightsChanged: (lights) => props.onLightsChanged?.(lights),
         onPoseEdited: (joint) => props.onPoseEdited?.(joint),
         onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
+        onObjectTransformed: (matrix, mode) => props.onObjectTransformed?.(matrix, mode),
+        onMeasure: setMeasure,
         onContextMenu: openMenu,
         onGridChanged: setGridLabel,
       });
@@ -199,6 +209,10 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   createEffect(() => {
+    viewer?.setObjectTools(props.objectTools ?? false);
+  });
+
+  createEffect(() => {
     if (viewer && props.activeTool) {
       viewer.setActiveTool(props.activeTool);
     }
@@ -221,19 +235,26 @@ export const Viewport: Component<ViewportProps> = (props) => {
           </div>
         </Show>
 
-        {/* Ayuda de la operación en curso, o de los gestos del esqueleto */}
+        {/* Ayuda de la operación en curso, o de la herramienta activa */}
         <Show
           when={hint()}
           fallback={
-            <Show when={props.skeletonData && !props.placementMode && !props.paintSettings}>
+            <Show when={props.meshData && props.toolHint && !props.placementMode && !props.paintSettings}>
               <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/80 text-text-muted text-xs">
-                Clic: seleccionar articulación · G mover · R rotar · rueda/botón central: vista
+                {props.toolHint}
               </div>
             </Show>
           }
         >
           <div class="absolute top-3 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-orange/90 text-bg text-xs font-medium">
             {hint()}
+          </div>
+        </Show>
+
+        {/* Medida de la herramienta Medir */}
+        <Show when={measure()}>
+          <div class="absolute top-12 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md bg-bg-darker/90 border border-yellow/60 text-text text-xs font-mono">
+            {measure()}
           </div>
         </Show>
 

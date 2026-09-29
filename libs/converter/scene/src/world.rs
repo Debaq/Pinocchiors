@@ -111,6 +111,24 @@ impl Scene {
 
     /// Geometría de todas las instancias en espacio mundo. Omite las primitivas
     /// sin posiciones y los triángulos con índices fuera de rango.
+    /// Como [`Scene::world_primitives`], pero con Z arriba: para los formatos
+    /// de impresión y CAD (STL, PLY, 3MF), que Blender y los slicers leen con Z
+    /// arriba. Si la escena ya es Z arriba, no cambia nada.
+    pub fn world_primitives_z_up(&self) -> Vec<WorldPrimitive> {
+        let mut prims = self.world_primitives();
+        if self.y_up {
+            for prim in &mut prims {
+                for p in &mut prim.positions {
+                    *p = crate::y_up_to_z_up(*p);
+                }
+                for n in prim.normals.iter_mut().flatten() {
+                    *n = crate::y_up_to_z_up(*n);
+                }
+            }
+        }
+        prims
+    }
+
     pub fn world_primitives(&self) -> Vec<WorldPrimitive> {
         let mut out = Vec::new();
         for (instance_idx, instance) in self.mesh_instances().into_iter().enumerate() {

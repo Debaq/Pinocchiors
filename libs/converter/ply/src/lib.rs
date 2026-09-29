@@ -3,7 +3,8 @@
 //! Todas las primitivas se fusionan en espacio mundo. Guarda posiciones y,
 //! cuando todas las primitivas los tienen, normales, UV (`s`, `t`) y colores
 //! de vértice RGBA de 8 bits. Las coordenadas quedan en las unidades de la
-//! escena: PLY no declara unidades.
+//! escena: PLY no declara unidades. Sale con Z arriba, como lo leen Blender
+//! y los programas de escaneo.
 
 use converter_scene::{Scene, VertexAttribute};
 use std::io::Write;
@@ -27,7 +28,7 @@ pub fn export_ply(scene: &Scene, path: impl AsRef<Path>) -> Result<(), PlyExport
 
 /// Exporta una `Scene` a PLY binario en memoria.
 pub fn export_ply_bytes(scene: &Scene) -> Result<Vec<u8>, PlyExportError> {
-    let prims = scene.world_primitives();
+    let prims = scene.world_primitives_z_up();
     if prims.iter().all(|p| p.triangles.is_empty()) {
         return Err(PlyExportError::NoGeometry);
     }

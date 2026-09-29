@@ -69,6 +69,9 @@ export interface StructureStepProps {
   textureUrls?: string[];
 }
 
+/** Formatos que se leen con Z arriba (STL; se pasan a la escena con Y arriba) */
+const Z_UP_FORMATS = ["STL", "PLY", "3MF"];
+
 const formatBytes = (n: number) =>
   n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`;
 
@@ -140,7 +143,7 @@ export const StructureStep: Component<StructureStepProps> = (props) => {
                   <Row label="Archivo" value={props.fileName ?? "--"} />
                   <Row label="Formato" value={props.format ?? "--"} />
                   <Row label="Unidades" value={`1 unidad = ${structure().meters_per_unit} m`} />
-                  <Row label="Eje arriba" value={structure().y_up ? "Y" : "Z"} />
+                  <Row label="Eje arriba del archivo" value={Z_UP_FORMATS.includes(props.format ?? "") || !structure().y_up ? "Z" : "Y"} />
                   <Row label="Nodos" value={structure().nodes.length} />
                   <Row label="Mallas / primitivas" value={`${structure().meshes.length} / ${totals().primitives}`} />
                   <Row label="Vértices" value={totals().vertices.toLocaleString()} />

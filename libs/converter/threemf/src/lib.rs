@@ -4,7 +4,8 @@
 //!
 //! Cada primitiva en espacio mundo es un objeto; los materiales se escriben
 //! como `basematerials` con su color base. Igual que STL, las coordenadas se
-//! pasan a milímetros según `scene.meters_per_unit` sin reorientar la escena.
+//! pasan a milímetros según `scene.meters_per_unit` y salen con Z arriba (la
+//! plataforma del slicer).
 
 use converter_scene::Scene;
 use std::collections::HashMap;
@@ -61,7 +62,7 @@ pub fn export_3mf_bytes(scene: &Scene) -> Result<Vec<u8>, ThreeMfExportError> {
 }
 
 fn model_xml(scene: &Scene) -> Result<String, ThreeMfExportError> {
-    let prims: Vec<_> = scene.world_primitives().into_iter().filter(|p| !p.triangles.is_empty()).collect();
+    let prims: Vec<_> = scene.world_primitives_z_up().into_iter().filter(|p| !p.triangles.is_empty()).collect();
     if prims.is_empty() {
         return Err(ThreeMfExportError::NoGeometry);
     }
@@ -194,6 +195,8 @@ mod tests {
 
         assert!(model.contains("unit=\"millimeter\""));
         assert!(model.contains("<vertex x=\"10\" y=\"0\" z=\"0\"/>"), "cm → mm");
+        // Lo que en la escena es arriba (Y) sale arriba en la plataforma (Z)
+        assert!(model.contains("<vertex x=\"0\" y=\"0\" z=\"10\"/>"), "Y arriba → Z arriba");
         assert!(model.contains("displaycolor=\"#FF0000FF\""));
         assert!(model.contains("name=\"Rojo &amp; brillante\""));
         assert!(model.contains("pid=\"1\" pindex=\"0\""));

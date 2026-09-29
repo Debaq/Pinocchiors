@@ -178,6 +178,14 @@ export interface ViewerCallbacks {
   onPoseEdited?: (joint: number) => void;
   /** Se soltó el gizmo del esqueleto entero: factor de escala o giro (x, y, z, w) alrededor del pivote */
   onSkeletonTransformed?: (change: { scale: number } | { rotation: [number, number, number, number] }) => void;
+  /**
+   * Se soltó el gizmo del modelo: transformación a aplicar (matriz 4×4 por
+   * columnas, como `apply_placement`). La malla queda en la vista previa
+   * hasta que llegue la nueva (o `clearObjectPreview` si falla)
+   */
+  onObjectTransformed?: (matrix: number[], mode: "translate" | "rotate" | "scale") => void;
+  /** Texto de la herramienta Medir (null: sin medida) */
+  onMeasure?: (text: string | null) => void;
 }
 
 /**
@@ -357,6 +365,24 @@ export class Viewer3D {
   private skeletonPivot = new THREE.Object3D();
   /** Posiciones de las articulaciones al empezar a arrastrar ese gizmo */
   private pivotDragStart: THREE.Vector3[] | null = null;
+  /** Las herramientas actúan sobre el modelo entero (no sobre el esqueleto) */
+  private objectTools = false;
+  /** Pivote del gizmo del modelo: la malla lo sigue como vista previa */
+  private objectPivot = new THREE.Object3D();
+  private objectDragStart: THREE.Matrix4 | null = null;
+  /** Tras soltar el gizmo del modelo, la malla nueva llega sin mover la cámara */
+  private keepCamera = false;
+  /** Pivote del gizmo de pose en la animación (el rig gira huesos, no esferas) */
+  private posePivot = new THREE.Object3D();
+  private poseDragStart: {
+    joint: number;
+    rotation?: THREE.Quaternion;
+    position: THREE.Vector3;
+    pivot: THREE.Vector3;
+  } | null = null;
+  /** Herramienta Medir: puntos elegidos (0 a 2) y su dibujo */
+  private measurePoints: THREE.Vector3[] = [];
+  private measureGroup = new THREE.Group();
 
   // Gestos de Blender
   private keysDown = new Set<string>();
@@ -434,6 +460,7 @@ export class Viewer3D {
     this.scene.add(this.meshGroup);
     this.scene.add(this.placementGroup);
     this.scene.add(this.skeletonGroup);
+    this.scene.add(this.measureGroup);
 
     // Grid - Dracula style
     this.scene.add(this.grid);
@@ -706,6 +733,10 @@ export class Viewer3D {
       return;
     }
     if (this.placementMode) return;
+    if (this.activeTool === "measure") {
+      this.onMeasureDown(e);
+      return;
+    }
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
     const joint = this.pickJoint(e);
@@ -843,8 +874,9 @@ export class Viewer3D {
     e.stopImmediatePropagation();
   }
 
+  /** Eje de la tecla X/Y/Z como se muestra (Z arriba), en coordenadas del visor */
   private axisVector(axis: "x" | "y" | "z"): THREE.Vector3 {
-    return new THREE.Vector3(axis === "x" ? 1 : 0, axis === "y" ? 1 : 0, axis === "z" ? 1 : 0);
+    return new THREE.Vector3(axis === "x" ? 1 : 0, axis === "z" ? 1 : 0, axis === "y" ? -1 : 0);
   }
 
   private modalMove(x: number, y: number): void {
@@ -1260,6 +1292,8 @@ export class Viewer3D {
 
   loadMesh(data: MeshData): void {
     this.resetPose();
+    this.resetObjectPreview();
+    this.clearMeasure();
     this.meshData = data;
     this.paintNeighbors = null;
     this.clearMesh();
@@ -1300,10 +1334,13 @@ export class Viewer3D {
       this.meshGroup.add(this.currentWireframe);
     }
 
-    // Fit camera to mesh
-    this.fitCamera();
+    // Tras mover el modelo con el gizmo, la cámara queda donde estaba
+    if (this.keepCamera) this.placeLights();
+    else this.fitCamera();
+    this.keepCamera = false;
     this.rebuildGrid();
     this.buildRig();
+    this.attachGizmo();
   }
 
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
@@ -1693,6 +1730,8 @@ export class Viewer3D {
   setPlacementMode(mode: PlacementMode | null, candidates: FloorCandidate[] = []): void {
     this.placementMode = mode;
     this.canvas.style.cursor = mode ? "crosshair" : "default";
+    // Al elegir piso, frente u origen el gizmo del modelo estorba
+    this.attachGizmo();
     for (const child of [...this.placementGroup.children]) {
       this.placementGroup.remove(child);
       if (child instanceof THREE.Mesh || child instanceof THREE.LineLoop) {
@@ -1753,49 +1792,93 @@ export class Viewer3D {
 
   setBoneEditMode(enabled: boolean): void {
     this.boneEditMode = enabled;
+    if (enabled) this.ensureTransformControls();
+    this.attachGizmo();
+  }
 
-    if (enabled) {
-      if (!this.transformControls) {
-        this.transformControls = new TransformControls(this.camera, this.canvas);
-        // La herramienta puede haberse elegido antes de que existiera el gizmo
-        this.transformControls.setMode(
-          this.activeTool === "rotate" ? "rotate" : this.activeTool === "scale" ? "scale" : "translate"
-        );
-        this.transformControls.setSize(0.5);
-        this.scene.add(this.transformControls.getHelper());
-        // Resalta ejes al pasar el mouse sin pasar por métodos del visor
-        this.transformControls.addEventListener("change", () => this.requestRender());
+  /** Herramientas sobre el modelo entero (Preparar, Imprimir 3D) o sobre el esqueleto */
+  setObjectTools(enabled: boolean): void {
+    if (enabled === this.objectTools) return;
+    this.objectTools = enabled;
+    this.attachGizmo();
+  }
 
-        this.transformControls.addEventListener("dragging-changed", (event) => {
-          this.controls.enabled = !event.value;
-          if (this.transformControls?.object !== this.skeletonPivot) return;
-          if (event.value) this.pivotDragStart = this.boneSpheres.map((s) => s.position.clone());
-          else this.commitSkeletonGizmo();
-        });
+  /**
+   * Colores del gizmo como en la vista (Z arriba): el eje vertical del visor
+   * (Y) es Z, azul; el de profundidad (Z) es Y, verde. Los materiales son
+   * compartidos entre asas: se cambian una vez cada uno.
+   */
+  private recolorGizmo(controls: TransformControls): void {
+    const colors = new Map([
+      [0xff0000, themeHex("axis-x")],
+      [0x00ff00, themeHex("axis-z")],
+      [0x0000ff, themeHex("axis-y")],
+    ]);
+    const seen = new Set<THREE.Material>();
+    controls.getHelper().traverse((object) => {
+      const material = (object as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined;
+      if (!material?.color || seen.has(material)) return;
+      seen.add(material);
+      const color = colors.get(material.color.getHex());
+      if (color !== undefined) material.color.setHex(color);
+    });
+  }
 
-        this.transformControls.addEventListener("objectChange", () => {
-          const object = this.transformControls?.object;
-          if (object === this.skeletonPivot) {
-            this.previewSkeletonGizmo();
-            return;
-          }
-          if (this.selectedBoneIndex < 0 || !object) return;
-          if (this.transformControls?.getMode() === "rotate") {
-            // Rotar una articulación con pesos calculados: pose de prueba
-            this.applyPose(this.selectedBoneIndex, object.quaternion);
-          } else {
-            const pos = object.position;
-            this.callbacks.onBoneMoved?.(this.selectedBoneIndex, [pos.x, pos.y, pos.z]);
-          }
-        });
+  private gizmoMode(): "translate" | "rotate" | "scale" {
+    return this.activeTool === "rotate" ? "rotate" : this.activeTool === "scale" ? "scale" : "translate";
+  }
+
+  /** El gizmo se crea la primera vez que una herramienta lo necesita */
+  private ensureTransformControls(): TransformControls {
+    if (this.transformControls) return this.transformControls;
+    const controls = new TransformControls(this.camera, this.canvas);
+    this.transformControls = controls;
+    controls.setMode(this.gizmoMode());
+    controls.setSize(0.5);
+    this.recolorGizmo(controls);
+    this.scene.add(controls.getHelper());
+    // Resalta ejes al pasar el mouse sin pasar por métodos del visor
+    controls.addEventListener("change", () => this.requestRender());
+
+    controls.addEventListener("dragging-changed", (event) => {
+      this.controls.enabled = !event.value;
+      const object = controls.object;
+      if (object === this.objectPivot) {
+        if (event.value) this.objectDragStart = this.pivotMatrix(this.objectPivot);
+        else this.commitObjectGizmo();
+      } else if (object === this.posePivot) {
+        if (event.value) this.startPoseGizmo();
+        else this.commitPoseGizmo();
+      } else if (object === this.skeletonPivot) {
+        if (event.value) this.pivotDragStart = this.boneSpheres.map((s) => s.position.clone());
+        else this.commitSkeletonGizmo();
       }
-      this.attachGizmo();
-    } else {
-      if (this.transformControls) {
-        this.transformControls.detach();
+    });
+
+    controls.addEventListener("objectChange", () => {
+      const object = controls.object;
+      if (object === this.objectPivot) {
+        this.previewObjectGizmo();
+        return;
       }
-      this.selectedBoneIndex = -1;
-    }
+      if (object === this.posePivot) {
+        this.previewPoseGizmo();
+        return;
+      }
+      if (object === this.skeletonPivot) {
+        this.previewSkeletonGizmo();
+        return;
+      }
+      if (this.selectedBoneIndex < 0 || !object) return;
+      if (controls.getMode() === "rotate") {
+        // Rotar una articulación con pesos calculados: pose de prueba
+        this.applyPose(this.selectedBoneIndex, object.quaternion);
+      } else {
+        const pos = object.position;
+        this.callbacks.onBoneMoved?.(this.selectedBoneIndex, [pos.x, pos.y, pos.z]);
+      }
+    });
+    return controls;
   }
 
   selectBone(index: number): void {
@@ -1831,12 +1914,27 @@ export class Viewer3D {
 
   /** Engancha el gizmo a lo que corresponde según la herramienta y la selección */
   private attachGizmo(): void {
+    if (this.transformControls?.dragging) return;
+    if (this.objectTools) {
+      const wanted = ["move", "rotate", "scale"].includes(this.activeTool);
+      if (!wanted || !this.currentMesh || this.placementMode) {
+        this.transformControls?.detach();
+        return;
+      }
+      const controls = this.ensureTransformControls();
+      controls.setMode(this.gizmoMode());
+      controls.setSize(0.9);
+      this.placeObjectPivot();
+      controls.attach(this.objectPivot);
+      return;
+    }
     const controls = this.transformControls;
-    if (!controls || controls.dragging) return;
+    if (!controls) return;
     if (!this.boneEditMode) {
       controls.detach();
       return;
     }
+    controls.setSize(0.5);
     if (this.wholeSkeletonTool()) {
       const pivot = this.skeletonPivot;
       if (pivot.parent !== this.skeletonGroup) this.skeletonGroup.add(pivot);
@@ -1846,9 +1944,210 @@ export class Viewer3D {
       controls.attach(pivot);
       return;
     }
-    const sphere = this.boneSpheres[this.selectedBoneIndex];
-    if (sphere && !this.rig) controls.attach(sphere);
+    const joint = this.selectedBoneIndex;
+    const sphere = this.boneSpheres[joint];
+    const rig = this.rig;
+    if (sphere && rig) {
+      // Animación: girar articulaciones con hijos; mover solo la raíz
+      const can =
+        (this.activeTool === "rotate" && this.jointBones(joint).length > 0) ||
+        (this.activeTool === "move" && rig.parents[joint] === null);
+      if (!can) {
+        controls.detach();
+        return;
+      }
+      const pivot = this.posePivot;
+      if (pivot.parent !== this.scene) this.scene.add(pivot);
+      sphere.getWorldPosition(pivot.position);
+      pivot.quaternion.identity();
+      pivot.scale.setScalar(1);
+      controls.attach(pivot);
+      return;
+    }
+    if (sphere) controls.attach(sphere);
     else controls.detach();
+  }
+
+  private pivotMatrix(object: THREE.Object3D): THREE.Matrix4 {
+    return new THREE.Matrix4().compose(object.position, object.quaternion, object.scale);
+  }
+
+  /** Pivote del modelo: centro de la caja para girar, centro de la base para mover y escalar */
+  private placeObjectPivot(): void {
+    const geometry = this.currentMesh!.geometry;
+    if (!geometry.boundingBox) geometry.computeBoundingBox();
+    const box = geometry.boundingBox!;
+    const pivot = this.objectPivot;
+    box.getCenter(pivot.position);
+    if (this.activeTool !== "rotate") pivot.position.y = box.min.y;
+    pivot.quaternion.identity();
+    pivot.scale.setScalar(1);
+    if (pivot.parent !== this.scene) this.scene.add(pivot);
+  }
+
+  /** Cambio del pivote desde que empezó el arrastre */
+  private objectDelta(): THREE.Matrix4 {
+    return this.pivotMatrix(this.objectPivot).multiply(this.objectDragStart!.clone().invert());
+  }
+
+  /** Mientras se arrastra el gizmo del modelo: la malla lo sigue */
+  private previewObjectGizmo(): void {
+    if (!this.objectDragStart) return;
+    const pivot = this.objectPivot;
+    if (this.transformControls?.getMode() === "scale") {
+      // apply_placement solo acepta escala pareja: manda el eje que más cambió
+      const s = pivot.scale;
+      const factor = [s.x, s.y, s.z].reduce((a, b) => (Math.abs(b - 1) > Math.abs(a - 1) ? b : a), 1);
+      pivot.scale.setScalar(Math.max(factor, 0.01));
+    }
+    this.objectDelta().decompose(this.meshGroup.position, this.meshGroup.quaternion, this.meshGroup.scale);
+  }
+
+  private commitObjectGizmo(): void {
+    if (!this.objectDragStart) return;
+    const delta = this.objectDelta();
+    this.objectDragStart = null;
+    const identity = new THREE.Matrix4();
+    if (delta.elements.every((v, i) => Math.abs(v - identity.elements[i]) < 1e-7)) {
+      this.resetObjectPreview();
+      return;
+    }
+    this.keepCamera = true;
+    this.callbacks.onObjectTransformed?.(delta.toArray(), this.transformControls?.getMode() ?? "translate");
+  }
+
+  private resetObjectPreview(): void {
+    this.meshGroup.position.set(0, 0, 0);
+    this.meshGroup.quaternion.identity();
+    this.meshGroup.scale.setScalar(1);
+    this.meshGroup.updateMatrixWorld(true);
+  }
+
+  /** Deshace la vista previa del gizmo del modelo (la transformación no se aplicó) */
+  clearObjectPreview(): void {
+    this.keepCamera = false;
+    this.resetObjectPreview();
+    this.attachGizmo();
+  }
+
+  /** Animación: arranca un giro (o desplazamiento de la raíz) con el gizmo */
+  private startPoseGizmo(): void {
+    const rig = this.rig;
+    const joint = this.selectedBoneIndex;
+    if (!rig || !rig.bones[joint]) return;
+    this.poseDragStart = {
+      joint,
+      rotation: this.jointBones(joint)[0]?.quaternion.clone(),
+      position: rig.bones[joint].position.clone(),
+      pivot: this.posePivot.position.clone(),
+    };
+  }
+
+  private previewPoseGizmo(): void {
+    const start = this.poseDragStart;
+    const rig = this.rig;
+    if (!start || !rig) return;
+    if (this.transformControls?.getMode() === "rotate") {
+      // El pivote empieza sin giro: su giro es el delta en mundo
+      if (start.rotation) this.rotateJoint(start.joint, start.rotation, this.posePivot.quaternion);
+      return;
+    }
+    const from = rig.root.worldToLocal(start.pivot.clone());
+    const to = rig.root.worldToLocal(this.posePivot.position.clone());
+    rig.bones[start.joint].position.copy(start.position).add(to.sub(from));
+    this.updatePosedSpheres();
+  }
+
+  private commitPoseGizmo(): void {
+    const start = this.poseDragStart;
+    this.poseDragStart = null;
+    if (start) this.callbacks.onPoseEdited?.(start.joint);
+    this.attachGizmo();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MEDIR
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Clic con Medir: un punto de la superficie (Ctrl: el vértice más cercano) */
+  private onMeasureDown(e: PointerEvent): void {
+    this.raycaster.setFromCamera(this.getMousePosition(e), this.camera);
+    const targets = this.meshGroup.children.filter(
+      (o): o is THREE.Mesh =>
+        o instanceof THREE.Mesh && o.visible && o !== this.currentWireframe && o !== this.rig?.wireframe
+    );
+    const hit = this.raycaster.intersectObjects(targets, false)[0];
+    if (!hit) return;
+    let point = hit.point.clone();
+    if ((e.ctrlKey || e.metaKey) && hit.face) {
+      const mesh = hit.object as THREE.Mesh;
+      const v = new THREE.Vector3();
+      let best = Infinity;
+      for (const index of [hit.face.a, hit.face.b, hit.face.c]) {
+        mesh.getVertexPosition(index, v).applyMatrix4(mesh.matrixWorld);
+        const d = v.distanceToSquared(hit.point);
+        if (d < best) {
+          best = d;
+          point = v.clone();
+        }
+      }
+    }
+    if (this.measurePoints.length >= 2) this.measurePoints = [];
+    this.measurePoints.push(point);
+    this.drawMeasure();
+  }
+
+  private clearMeasureGraphics(): void {
+    for (const child of [...this.measureGroup.children]) {
+      this.measureGroup.remove(child);
+      const object = child as THREE.Mesh | THREE.Line;
+      object.geometry.dispose();
+      (object.material as THREE.Material).dispose();
+    }
+  }
+
+  private clearMeasure(): void {
+    const had = this.measurePoints.length > 0;
+    this.measurePoints = [];
+    this.clearMeasureGraphics();
+    if (had) this.callbacks.onMeasure?.(null);
+  }
+
+  /** Puntos y línea por delante de la malla, y el texto con la distancia */
+  private drawMeasure(): void {
+    this.clearMeasureGraphics();
+    const points = this.measurePoints;
+    if (points.length === 0) return;
+    const color = themeHex("yellow");
+    const radius = this.jointRadius() * 0.6;
+    for (const p of points) {
+      const dot = new THREE.Mesh(
+        new THREE.SphereGeometry(radius, 12, 12),
+        new THREE.MeshBasicMaterial({ color, depthTest: false })
+      );
+      dot.position.copy(p);
+      dot.renderOrder = 3;
+      this.measureGroup.add(dot);
+    }
+    if (points.length < 2) {
+      this.callbacks.onMeasure?.("Medir: clic en el segundo punto");
+      return;
+    }
+    const line = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(points),
+      new THREE.LineBasicMaterial({ color, depthTest: false })
+    );
+    line.renderOrder = 3;
+    this.measureGroup.add(line);
+
+    const { metersPerUnit, unitMeters, unitLabel } = this.gridUnits;
+    const toUnit = metersPerUnit / unitMeters;
+    const format = (v: number) => `${Number((v * toUnit).toPrecision(4)).toLocaleString()} ${unitLabel}`;
+    // Ejes como se muestran: Z es la altura (Y del visor)
+    const d = points[1].clone().sub(points[0]);
+    this.callbacks.onMeasure?.(
+      `Distancia ${format(d.length())} · X ${format(Math.abs(d.x))} · Y ${format(Math.abs(d.z))} · Z ${format(Math.abs(d.y))}`
+    );
   }
 
   /** Pivote del esqueleto entero, en el espacio de las articulaciones */
@@ -1903,11 +2202,13 @@ export class Viewer3D {
     (this.scene.background as THREE.Color).setHex(themeHex("viewport"));
     this.rebuildGrid();
     this.viewCube.applyTheme();
+    this.drawMeasure();
   }
 
   setGridUnits(units: GridUnits): void {
     this.gridUnits = units;
     this.rebuildGrid();
+    this.drawMeasure();
   }
 
   /**
@@ -1962,7 +2263,8 @@ export class Viewer3D {
       lines(step, themeHex("grid-minor"), 0.35, 10),
       lines(major, themeHex("grid-major"), 0.45),
       axis(new THREE.Vector3(-h, 0, 0), new THREE.Vector3(h, 0, 0), themeHex("axis-x")),
-      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), themeHex("axis-z"))
+      // Z del visor = Y de la vista (Z arriba, como Blender): verde
+      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), themeHex("axis-y"))
     );
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
@@ -1971,33 +2273,11 @@ export class Viewer3D {
 
   setActiveTool(tool: string): void {
     if (tool !== "rotate") this.resetPose();
-    const changed = tool !== this.activeTool;
+    if (tool !== "measure") this.clearMeasure();
     this.activeTool = tool;
-    if (changed && this.boneSpheres.length > 0 && !this.rig) {
-      if (tool === "scale") this.flashHint("Escalar: el gizmo escala el esqueleto entero desde su centro");
-      else if (tool === "rotate" && !this.canPose()) {
-        this.flashHint("Rotar sin pesos gira el esqueleto entero; con pesos prueba poses por articulación");
-      }
-    }
-    if (!this.transformControls) return;
-
-    switch (tool) {
-      case "move":
-        this.transformControls.setMode("translate");
-        this.canvas.style.cursor = "move";
-        break;
-      case "rotate":
-        this.transformControls.setMode("rotate");
-        this.canvas.style.cursor = "crosshair";
-        break;
-      case "scale":
-        this.transformControls.setMode("scale");
-        this.canvas.style.cursor = "ns-resize";
-        break;
-      default:
-        this.canvas.style.cursor = "default";
-        break;
-    }
+    const cursors: Record<string, string> = { move: "move", rotate: "crosshair", scale: "ns-resize", measure: "crosshair" };
+    this.canvas.style.cursor = cursors[tool] ?? "default";
+    this.transformControls?.setMode(this.gizmoMode());
     this.attachGizmo();
   }
 
@@ -2314,7 +2594,7 @@ export class Viewer3D {
     const rig = this.rig;
     this.lastPose = pose;
     // Durante un giro o desplazamiento manda el mouse
-    if (!rig || this.modal) return;
+    if (!rig || this.modal || this.poseDragStart) return;
     rig.bones.forEach((bone, b) => {
       bone.quaternion.identity();
       bone.position.copy(rig.rest[b]);

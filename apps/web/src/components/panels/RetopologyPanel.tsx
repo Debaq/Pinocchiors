@@ -34,9 +34,10 @@ export interface QuadQuality {
 
 const SYMMETRY_OPTIONS = [
   { value: "none", label: "Sin simetría" },
-  { value: "x", label: "Espejo en X" },
-  { value: "y", label: "Espejo en Y" },
-  { value: "z", label: "Espejo en Z" },
+  // Ejes como se muestran (Z arriba): el valor es el eje interno (Y arriba)
+  { value: "x", label: "Espejo en X (izquierda-derecha)" },
+  { value: "z", label: "Espejo en Y (frente-atrás)" },
+  { value: "y", label: "Espejo en Z (arriba-abajo)" },
 ];
 
 const REBUILD_OPTIONS = [
