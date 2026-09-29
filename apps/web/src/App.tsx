@@ -53,6 +53,7 @@ import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
+import { PlaybackBar, type PlaybackSegment } from "./components/layout/PlaybackBar";
 import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
@@ -763,8 +764,9 @@ export const App: Component = () => {
     { key: "Home", action: () => viewerRef?.resetView(), description: "Ver todo" },
     {
       key: " ",
-      action: () => (animating() ? setPlaying(!playing()) : viewerRef?.resetView()),
-      description: "Reproducir (Animar) / ver todo",
+      action: () =>
+        animating() ? setPlaying(!playing()) : showPlayback() ? togglePreview() : viewerRef?.resetView(),
+      description: "Reproducir / ver todo",
     },
     { key: "i", action: () => animating() && handleInsertKey(), description: "Insertar key" },
     { key: "x", action: () => animating() && handleDeleteKeys(), description: "Borrar keys" },
@@ -1010,15 +1012,54 @@ export const App: Component = () => {
     autorigComplete() && !!weightsData() && !!skeletonData() && weightsData()!.numBones === skeletonData()!.bones.length;
   const animating = () => pipeline.activeStep() === "animate" && animationReady();
 
-  // El visor entra en modo animación en el paso Animar (y rehace el rig solo
-  // cuando cambian malla, pesos o esqueleto)
+  // Fuera del paso Animar, las animaciones del modelo se reproducen una tras
+  // otra con la barra de reproducción (sin editar keys)
+  const [previewTime, setPreviewTime] = createSignal<number | null>(null);
+  const [previewPlaying, setPreviewPlaying] = createSignal(false);
+  const [previewLoop, setPreviewLoop] = createPersisted("playback.loop", true);
+  /** Clips con keys en fila, cada uno desde donde termina el anterior (segundos) */
+  const sequence = createMemo(() => {
+    let start = 0;
+    return clips()
+      .filter((c) => c.tracks.length > 0 && c.fps > 0)
+      .map((clip) => {
+        const duration = (clip.end - clip.start + 1) / clip.fps;
+        const segment = { clip, start, duration };
+        start += duration;
+        return segment;
+      });
+  });
+  const sequenceLength = () => sequence().reduce((sum, s) => sum + s.duration, 0);
+  const playbackSegments = createMemo<PlaybackSegment[]>(() =>
+    sequence().map((s) => ({ name: s.clip.name, start: s.start, duration: s.duration }))
+  );
+  const showPlayback = () => pipeline.activeStep() !== "animate" && animationReady() && sequence().length > 0;
+  /** La barra muestra una pose (reproduciendo o en pausa fuera del reposo) */
+  const previewing = () => showPlayback() && previewTime() !== null;
+  const togglePreview = () => {
+    if (previewPlaying()) return setPreviewPlaying(false);
+    if (previewTime() === null || previewTime()! >= sequenceLength()) setPreviewTime(0);
+    setPreviewPlaying(true);
+  };
+  const stopPreview = () => {
+    setPreviewPlaying(false);
+    setPreviewTime(null);
+  };
+  // Sin barra (paso Animar, sin rig): vuelve al reposo
+  createEffect(() => {
+    if (!showPlayback()) untrack(stopPreview);
+  });
+
+  // El visor entra en modo animación en el paso Animar o al reproducir con la
+  // barra (y rehace el rig solo cuando cambian malla, pesos o esqueleto)
   createEffect(() => {
     const v = viewer();
     if (!v) return;
     const on = animating();
+    const preview = previewing();
     untrack(() => {
       if (!on) setPlaying(false);
-      v.setAnimationMode(on);
+      v.setAnimationMode(on || preview);
       // La primera vez ya hay una animación donde poner keys
       if (on && clips().length === 0) handleNewClip();
     });
@@ -1027,9 +1068,40 @@ export const App: Component = () => {
   // Pose del cuadro actual
   createEffect(() => {
     const v = viewer();
-    if (!v || !animating()) return;
+    if (!v) return;
     weightsData();
-    v.setPose(samplePose(activeClip(), frame(), boneIndex()));
+    if (animating()) {
+      v.setPose(samplePose(activeClip(), frame(), boneIndex()));
+      return;
+    }
+    const t = previewTime();
+    if (!previewing() || t === null) return;
+    const segments = sequence();
+    const segment = segments.find((s) => t < s.start + s.duration) ?? segments[segments.length - 1];
+    const local = Math.min(t - segment.start, segment.duration);
+    v.setPose(samplePose(segment.clip, segment.clip.start + local * segment.clip.fps, boneIndex()));
+  });
+
+  // Reproducción de la barra: al terminar vuelve a empezar (repetir) o se detiene
+  createEffect(() => {
+    if (!previewPlaying()) return;
+    let last = performance.now();
+    let handle = requestAnimationFrame(function tick(now: number) {
+      const total = untrack(sequenceLength);
+      let t = (untrack(previewTime) ?? 0) + (now - last) / 1000;
+      last = now;
+      if (t >= total) {
+        if (!untrack(previewLoop)) {
+          setPreviewTime(total);
+          setPreviewPlaying(false);
+          return;
+        }
+        t = total > 0 ? t % total : 0;
+      }
+      setPreviewTime(t);
+      handle = requestAnimationFrame(tick);
+    });
+    onCleanup(() => cancelAnimationFrame(handle));
   });
 
   // Reproducción en bucle dentro del rango del clip
@@ -2486,6 +2558,21 @@ export const App: Component = () => {
             </Show>
           </div>
           </div>
+          <Show when={showPlayback()}>
+            <PlaybackBar
+              segments={playbackSegments()}
+              time={previewTime()}
+              playing={previewPlaying()}
+              loop={previewLoop()}
+              onTogglePlay={togglePreview}
+              onStop={stopPreview}
+              onLoop={setPreviewLoop}
+              onSeek={(t) => {
+                setPreviewPlaying(false);
+                setPreviewTime(t);
+              }}
+            />
+          </Show>
           <Show when={animating() && activeClip()}>
             {(clip) => (
               <Timeline
