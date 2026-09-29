@@ -109,7 +109,12 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 - Normal: normal de sombreado del original (más su normal map) al espacio
   tangente nuevo; se hornea siempre, así la malla liviana conserva el relieve
   de la original. Convención glTF: T hacia +u, B = w (N × T) hacia −v; la
-  exportación escribe esas mismas tangentes (`TANGENT`).
+  exportación escribe esas mismas tangentes (`TANGENT`). Las tangentes son
+  MikkTSpace (`bevy_mikktspace`, sobre los triángulos en abanico que se
+  exportan, signo invertido por la v de glTF), las que recalculan Blender,
+  Unity y Unreal: las propias de antes coincidían (mediana 0,01°) salvo
+  ~0,2 % de esquinas. Verificado importando en Blender 5.2 (Cycles): relieve
+  correcto, sin costuras. Comparar: `--example tangent_check`.
 - Sin UV de origen (escaneo en STL) se hornea igual desde la geometría
   (`material_surface`, UV en cero): el relieve de la malla densa como normal
   map, los factores por material y los colores de vértice (`COLOR_0`,

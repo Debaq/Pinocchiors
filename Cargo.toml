@@ -75,6 +75,7 @@ zip = { version = "4", default-features = false }
 
 # Paralelismo
 rayon = "1.10"
+bevy_mikktspace = "1"
 
 # Serialización
 serde = { version = "1.0", features = ["derive"] }

@@ -10,6 +10,7 @@ pinocchio-math = { workspace = true }
 pinocchio-spatial = { workspace = true }
 pinocchio-sparse = { workspace = true }
 rayon = { workspace = true }
+bevy_mikktspace = { workspace = true }
 converter-scene = { workspace = true }
 image = { workspace = true }
 

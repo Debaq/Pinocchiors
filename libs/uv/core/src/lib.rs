@@ -28,6 +28,6 @@ pub use skin::{
     checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions, Skin, SkinInfo,
 };
 pub use surface::{UvPart, UvSurface};
-pub use tangent::{corner_frames, CornerFrames};
+pub use tangent::{corner_frames, mikk_tangents, CornerFrames};
 pub use transfer::{transfer_uvs, UvTransfer};
 pub use unwrap::{unwrap, Unwrap, UnwrapOptions};
