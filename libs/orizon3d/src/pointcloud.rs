@@ -43,6 +43,11 @@ pub struct Point {
     pub y: f32,
     pub z: f32,
     pub rgb: [u8; 3],
+    /// Dirección unitaria del punto hacia la cámara que lo vio, en el mismo
+    /// sistema que la posición. Orienta las normales al mallar: con el escaneo
+    /// de 360° la cámara ya no está en el origen. `[0; 3]` = desconocida (se
+    /// asume la cámara en el origen)
+    pub view: [f32; 3],
 }
 
 #[derive(Default)]
@@ -114,12 +119,11 @@ impl PointCloud {
                     continue;
                 }
                 let x = (u as f32 - cx) * z / fx;
-                // `y_img` sigue la convención de imagen (v hacia abajo); el mundo
-                // usa Y hacia arriba, así que invertimos para que el objeto no
-                // salga «de cabeza». El color se muestrea con `y_img` (frame de
-                // cámara real).
-                let y_img = (v as f32 - cy) * z / fy;
-                let y = -y_img;
+                // Coordenadas de cámara con Y hacia abajo, como la imagen. Pasar a
+                // Y arriba aquí reflejaba la nube (una sola coordenada invertida
+                // cambia la quiralidad) y `scan_to_scene` volvía a girarla, así
+                // que el modelo salía espejado y de cabeza
+                let y = (v as f32 - cy) * z / fy;
 
                 // Caja delimitadora: descarta lo que quede fuera (también lados).
                 if let Some(r) = &p.roi {
@@ -137,7 +141,7 @@ impl PointCloud {
                 let color = if want_color {
                     sample_color(
                         x,
-                        y_img,
+                        y,
                         z,
                         rgb.unwrap(),
                         p.rgb_intr.as_ref().unwrap(),
@@ -148,7 +152,9 @@ impl PointCloud {
                     [200, 200, 200]
                 };
 
-                points.push(Point { x, y, z, rgb: color });
+                let len = (x * x + y * y + z * z).sqrt();
+                let view = [-x / len, -y / len, -z / len];
+                points.push(Point { x, y, z, rgb: color, view });
             }
         }
 
@@ -401,6 +407,32 @@ mod tests {
     }
 
     #[test]
+    fn top_of_image_is_negative_y_and_view_points_to_camera() {
+        // Cámara con Y hacia abajo: el píxel de la fila de arriba queda en Y
+        // negativa, sin reflejar la nube
+        let mut depth = vec![0u16; 9];
+        depth[1] = 100;
+        let frame = DepthFrame { width: 3, height: 3, depth, timestamp_ms: 0.0 };
+        let params = CloudParams {
+            depth_intr: intr(3, 3, 10.0, 10.0, 1.0, 1.0),
+            rgb_intr: None,
+            extrinsics: Extrinsics::default(),
+            depth_scale: 0.1,
+            clip_min_mm: 0.0,
+            clip_max_mm: 0.0,
+            roi: None,
+            edge_filter: false,
+        };
+        let p = PointCloud::generate(&frame, None, &params).points[0];
+        assert!(p.y < 0.0, "y={}", p.y);
+        // La vista es la dirección unitaria del punto hacia la cámara (origen)
+        let len = (p.x * p.x + p.y * p.y + p.z * p.z).sqrt();
+        for (v, c) in p.view.iter().zip([p.x, p.y, p.z]) {
+            assert!((v + c / len).abs() < 1e-5, "vista {:?}", p.view);
+        }
+    }
+
+    #[test]
     fn skips_zero_depth() {
         let frame = DepthFrame {
             width: 2,
@@ -462,8 +494,8 @@ mod tests {
     fn ply_export_has_valid_header() {
         let cloud = PointCloud {
             points: vec![
-                Point { x: 1.0, y: 2.0, z: 3.0, rgb: [10, 20, 30] },
-                Point { x: 4.0, y: 5.0, z: 6.0, rgb: [40, 50, 60] },
+                Point { x: 1.0, y: 2.0, z: 3.0, rgb: [10, 20, 30], view: [0.0; 3] },
+                Point { x: 4.0, y: 5.0, z: 6.0, rgb: [40, 50, 60], view: [0.0; 3] },
             ],
             has_color: true,
         };

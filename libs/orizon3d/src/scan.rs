@@ -833,6 +833,8 @@ fn confidence_weights(points: &[Point]) -> Vec<f32> {
 struct Accum {
     pos: [f64; 3],
     col: [f64; 3],
+    /// Suma de las direcciones hacia la cámara de cada observación
+    view: [f64; 3],
     w: f64,
     n: u32,
 }
@@ -874,6 +876,7 @@ impl FusionGrid {
                 .or_insert(Accum {
                     pos: [0.0; 3],
                     col: [0.0; 3],
+                    view: [0.0; 3],
                     w: 0.0,
                     n: 0,
                 });
@@ -883,6 +886,9 @@ impl FusionGrid {
             e.col[0] += w * p.rgb[0] as f64;
             e.col[1] += w * p.rgb[1] as f64;
             e.col[2] += w * p.rgb[2] as f64;
+            for d in 0..3 {
+                e.view[d] += p.view[d] as f64;
+            }
             e.w += w;
             e.n += 1;
         }
@@ -912,6 +918,7 @@ impl FusionGrid {
                     (a.col[1] / w) as u8,
                     (a.col[2] / w) as u8,
                 ],
+                view: normalized(a.view),
             });
         }
         PointCloud {
@@ -919,6 +926,15 @@ impl FusionGrid {
             has_color: self.has_color,
         }
     }
+}
+
+/// Vector unitario; cero si no hay dirección
+fn normalized(v: [f64; 3]) -> [f32; 3] {
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len < 1e-9 {
+        return [0.0; 3];
+    }
+    [(v[0] / len) as f32, (v[1] / len) as f32, (v[2] / len) as f32]
 }
 
 // ---------------------------------------------------------------------------
@@ -1051,6 +1067,7 @@ impl ScanSession {
                 y: g[1],
                 z: g[2],
                 rgb: p.rgb,
+                view: self.pose.apply_vec(p.view),
             });
         }
         self.fusion.integrate(&global, &weights, cloud.has_color);
@@ -1077,6 +1094,7 @@ mod tests {
                 y: c[1],
                 z: c[2],
                 rgb: [128, 128, 128],
+                view: [0.0; 3],
             })
             .collect()
     }
