@@ -113,6 +113,8 @@ interface MeshInfo {
   has_materials: boolean;
   bounding_box: { min: [number, number, number]; max: [number, number, number] };
   format: string;
+  /** Esqueleto con pesos y animaciones que trae el archivo (glTF con skin) */
+  rig: { num_bones: number; clips: Omit<AnimationClip, "id">[] } | null;
 }
 
 interface TauriSkeletonPreset {
@@ -746,6 +748,25 @@ export const App: Component = () => {
       clearQuadMesh();
       setLastExport(undefined);
       setCanUndoPrintScale(false);
+
+      // El archivo trae esqueleto y pesos: queda listo para animar sus clips
+      if (info.rig) {
+        clearSkeletonUi();
+        setSkeletonData(tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")));
+        setSkeletonLoaded(true);
+        const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+        setWeightsData(weights);
+        setBoneNames(weights.boneNames);
+        setAutorigComplete(true);
+        const imported = info.rig.clips.map((c) => ({ ...c, id: createClip(c.name, c.fps).id }));
+        setClips(imported);
+        setActiveClipId(imported[0]?.id);
+        pipeline.markCompleted("skeleton");
+        const animations = imported.length === 1 ? "1 animación" : `${imported.length} animaciones`;
+        setStatusMessage(
+          `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, esqueleto de ${info.rig.num_bones} huesos y ${animations} (${info.format})`
+        );
+      }
 
       // Modelo nuevo: el proyecto abierto ya no corresponde
       setProjectPath(undefined);

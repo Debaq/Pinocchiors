@@ -9,17 +9,17 @@
 
 use converter_scene::glam::{Quat, Vec3};
 use converter_scene::{Animation, Channel, Interpolation, KeyframeValues};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Interpolación desde una key hasta la siguiente
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum KeyInterpolation {
     Linear,
     Step,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Key<T> {
     pub frame: f32,
     pub value: T,

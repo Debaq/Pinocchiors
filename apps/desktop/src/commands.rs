@@ -41,6 +41,15 @@ pub struct MeshInfo {
     pub has_materials: bool,
     pub bounding_box: BoundingBox,
     pub format: String,
+    /// Esqueleto y animaciones que trae el archivo (glTF con skin)
+    pub rig: Option<ImportedRigInfo>,
+}
+
+/// Rig del archivo importado: el esqueleto y los pesos quedan en el estado
+#[derive(Debug, Clone, Serialize)]
+pub struct ImportedRigInfo {
+    pub num_bones: usize,
+    pub clips: Vec<crate::imported_rig::ClipDto>,
 }
 
 /// Bounding box serializable
@@ -494,11 +503,18 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
         has_materials: !scene.materials.is_empty(),
         bounding_box: bbox,
         format: ext.to_uppercase(),
+        rig: None,
     };
 
     // Convertir Scene a Mesh de pinocchio para autorig
     report(progress, "converting", 60, "Preparando malla...");
     let mesh = scene_to_pinocchio_mesh(&scene)?;
+    let rig = if scene.skeletons.is_empty() {
+        None
+    } else {
+        report(progress, "rig", 75, "Leyendo esqueleto y animaciones...");
+        crate::imported_rig::from_scene(&scene, mesh.num_vertices())
+    };
     report(progress, "done", 90, "Modelo importado");
 
     // Guardar en estado; la copia del original va al proyecto y permite revertir
@@ -515,6 +531,23 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
     drop(scene_lock);
     drop(mesh_lock);
     state.reset_derived();
+
+    // El rig del archivo reemplaza al esqueleto anterior; sin rig, el
+    // esqueleto elegido se conserva para ajustarlo al modelo nuevo
+    let info = match rig {
+        Some(rig) => {
+            let skeleton = SkeletonType::Custom(rig.skeleton);
+            *state.skeleton.lock().unwrap() = Some(skeleton.clone());
+            *state.original_skeleton.lock().unwrap() = Some(skeleton);
+            *state.skeleton_preset.lock().unwrap() = None;
+            *state.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+            state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+            let num_bones = rig.output.attachment.num_bones();
+            *state.result.lock().unwrap() = Some(rig.output);
+            MeshInfo { rig: Some(ImportedRigInfo { num_bones, clips: rig.clips }), ..info }
+        }
+        None => info,
+    };
 
     Ok(info)
 }
@@ -2351,6 +2384,7 @@ pub async fn repair_mesh(
         has_materials: !new_scene.materials.is_empty(),
         bounding_box: calculate_scene_bounds(&new_scene),
         format: "REPAIRED".to_string(),
+        rig: None,
     };
 
     *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
@@ -2393,6 +2427,7 @@ fn undo_repair_impl(state: &AppState) -> Result<MeshInfo, String> {
         has_materials: !backup_scene.materials.is_empty(),
         bounding_box: bbox,
         format: "RESTORED".to_string(),
+        rig: None,
     };
 
     let mut mesh_lock = state.mesh.lock().unwrap();
