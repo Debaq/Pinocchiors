@@ -47,7 +47,7 @@ export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
           <p class="text-xs text-text-muted leading-relaxed">
             El esqueleto, los pesos, el pincel y la pose de prueba trabajan sobre la malla que se
             exporta. Desmarcado, usan la malla original (los pesos se trasladan al exportar).
-            Cambiarlo descarta los pesos calculados.
+            Al cambiarlo, los pesos pasan a la otra malla.
           </p>
         </div>
       </Show>

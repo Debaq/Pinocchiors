@@ -6,7 +6,8 @@
 use crate::animation;
 use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
-use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, PinocchioConfig, SkeletonFit};
+use pinocchio_attachment::Attachment;
+use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, PinocchioConfig, PinocchioOutput, SkeletonFit};
 use pinocchio_mesh::Mesh;
 use pinocchio_math::Vector3;
 use pinocchio_skeleton::{
@@ -352,6 +353,8 @@ pub struct QuadMeshInfo {
     /// Caras que cruzan una costura del mapa UV original; `None` si el modelo
     /// no tenía UV
     pub uv_seam_faces: Option<usize>,
+    /// Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados)
+    pub rig_kept: bool,
 }
 
 /// Datos de la malla de quads para Three.js
@@ -945,6 +948,25 @@ fn weights_on_quad_mesh(
     }
     let targets: Vec<Vector3> = quad.vertices.iter().map(|v| Vector3::new(v.x, v.y, v.z)).collect();
     Ok(transfer_weights(mesh, source_weights, &targets))
+}
+
+/// Lleva el rig a otra malla de la misma forma (la retopología, o la otra
+/// malla activa): el esqueleto queda igual y cada vértice nuevo toma los pesos
+/// del punto más cercano de `source`, con las mismas influencias por vértice
+/// como máximo. `false` si el rig no era de `source`.
+fn move_rig(rig: &mut PinocchioOutput, source: &Mesh, target: &Mesh) -> bool {
+    let attachment = &rig.attachment;
+    if attachment.num_vertices() != source.num_vertices() {
+        return false;
+    }
+    let weights: Vec<Vec<f64>> = (0..attachment.num_vertices()).map(|v| attachment.get_weights(v).to_vec()).collect();
+    let max_influences = weights.iter().map(|w| w.iter().filter(|&&x| x > 0.0).count()).max().unwrap_or(1).max(1);
+    let targets: Vec<Vector3> = target.vertices.iter().map(|v| v.position).collect();
+    let mut moved = Attachment::new(target, transfer_weights(source, &weights, &targets), attachment.num_bones());
+    moved.compact_weights(max_influences);
+    rig.attachment = moved;
+    rig.stats.num_vertices = target.num_vertices();
+    true
 }
 
 /// Las `max_influences` influencias dominantes de cada vértice (renormalizadas),
@@ -1846,6 +1868,31 @@ pub async fn run_retopology(
     .map_err(|e| format!("La retopología terminó inesperadamente: {e}"))?
     .map_err(|e| format!("Error en retopología: {e}"))?;
 
+    // Las etapas siguientes pasan a usar la malla nueva. El rig la sigue: el
+    // esqueleto ya estaba ajustado a la forma y los pesos se trasladan desde
+    // la malla donde se calcularon (la original o la retopología anterior)
+    let rig = state.result.lock().unwrap().take();
+    let rig_source = if state.rig_on_quad.load(std::sync::atomic::Ordering::SeqCst) {
+        state.quad_mesh.lock().unwrap().as_ref().map(quad_as_mesh)
+    } else {
+        state.mesh.lock().unwrap().clone()
+    };
+    let rig = match (rig, rig_source) {
+        (Some(mut rig), Some(source)) => {
+            let _ = on_progress.send(Progress {
+                stage: "rig".to_string(),
+                percent: 100,
+                message: "Trasladando los pesos a la malla nueva...".to_string(),
+            });
+            let target = quad_as_mesh(&quad_mesh);
+            tauri::async_runtime::spawn_blocking(move || move_rig(&mut rig, &source, &target).then_some(rig))
+                .await
+                .ok()
+                .flatten()
+        }
+        _ => None,
+    };
+
     let info = QuadMeshInfo {
         num_vertices: quad_mesh.num_vertices(),
         num_quads: quad_mesh.num_faces(),
@@ -1855,6 +1902,7 @@ pub async fn run_retopology(
             uv_core::SkinInfo::Transferred { seam_faces } => Some(seam_faces),
             uv_core::SkinInfo::Unwrapped { .. } => None,
         }),
+        rig_kept: rig.is_some(),
     };
 
     let _ = on_progress.send(Progress {
@@ -1868,9 +1916,10 @@ pub async fn run_retopology(
 
     *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
     *state.quad_skin.lock().unwrap() = skin;
-    // Las etapas siguientes pasan a usar la malla nueva: el rig anterior no le corresponde
     state.use_retopology.store(true, std::sync::atomic::Ordering::SeqCst);
     state.active_mesh_changed();
+    state.rig_on_quad.store(rig.is_some(), std::sync::atomic::Ordering::SeqCst);
+    *state.result.lock().unwrap() = rig;
     Ok(info)
 }
 
@@ -2029,13 +2078,45 @@ fn weights_for(state: &AppState, source: Vec<Vec<f64>>, target: WeightTarget) ->
     }
 }
 
+/// Malla activa elegida y si el rig la siguió
+#[derive(Debug, Clone, Serialize)]
+pub struct ActiveMeshInfo {
+    /// Esqueleto y pesos usan la malla retopologizada
+    pub retopology: bool,
+    /// Había rig y sus pesos pasaron a la malla activa
+    pub rig_kept: bool,
+}
+
 /// Elige si esqueleto y pesos usan la malla retopologizada (`true`) o la
-/// original. Descarta el rig: era de la otra malla.
+/// original. El rig pasa a la malla elegida (pesos trasladados).
 #[tauri::command]
-pub fn set_active_mesh(retopology: bool, state: State<'_, AppState>) -> bool {
-    state.use_retopology.store(retopology, std::sync::atomic::Ordering::SeqCst);
-    state.active_mesh_changed();
-    state.active_is_quad()
+pub async fn set_active_mesh(app: AppHandle, retopology: bool) -> Result<ActiveMeshInfo, String> {
+    use std::sync::atomic::Ordering;
+    in_background(app, move |state| {
+        state.use_retopology.store(retopology, Ordering::SeqCst);
+        *state.joint_centering.lock().unwrap() = None;
+        let on_quad = state.active_is_quad();
+        let was_on_quad = state.rig_on_quad.load(Ordering::SeqCst);
+        let has_rig = state.result.lock().unwrap().is_some();
+        if has_rig && was_on_quad != on_quad {
+            let quad = state.quad_mesh.lock().unwrap().as_ref().map(quad_as_mesh);
+            let original = state.mesh.lock().unwrap().clone();
+            let (source, target) = if on_quad { (original, quad) } else { (quad, original) };
+            let mut result = state.result.lock().unwrap();
+            let moved = match (result.as_mut(), source, target) {
+                (Some(rig), Some(source), Some(target)) => move_rig(rig, &source, &target),
+                _ => false,
+            };
+            if moved {
+                state.rig_on_quad.store(on_quad, Ordering::SeqCst);
+            } else {
+                *result = None;
+            }
+        }
+        let rig_kept = state.result.lock().unwrap().is_some();
+        Ok(ActiveMeshInfo { retopology: on_quad, rig_kept })
+    })
+    .await
 }
 
 /// Esqueleto y pesos usan la malla retopologizada
@@ -2274,6 +2355,17 @@ pub struct RepairResultInfo {
     pub summary: pinocchio_repair::RepairSummary,
     pub new_mesh_info: MeshInfo,
     pub new_diagnostics: MeshDiagnosticsInfo,
+    /// Había rig y pasó a la malla reparada (mismo esqueleto, pesos trasladados)
+    pub rig_kept: bool,
+}
+
+/// Malla restaurada al deshacer la reparación
+#[derive(Debug, Clone, Serialize)]
+pub struct UndoRepairInfo {
+    #[serde(flatten)]
+    pub mesh_info: MeshInfo,
+    /// Había rig y pasó a la malla restaurada
+    pub rig_kept: bool,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2354,6 +2446,7 @@ pub async fn analyze_mesh(
 /// poder deshacer.
 #[tauri::command]
 pub async fn repair_mesh(
+    app: AppHandle,
     config: RepairConfigInput,
     on_progress: Channel<Progress>,
     state: State<'_, AppState>,
@@ -2404,26 +2497,32 @@ pub async fn repair_mesh(
         rig: None,
     };
 
-    *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
-    *state.scene_before_repair.lock().unwrap() = Some(original_scene);
+    report(&on_progress, "rig", 98, "Trasladando los pesos...");
     *state.mesh.lock().unwrap() = Some(mesh);
     *state.scene.lock().unwrap() = Some(new_scene);
-    // La topología cambió: el rig y la retopología ya no corresponden
-    state.geometry_changed();
+    // La topología cambió: la retopología se descarta y el rig pasa a la malla reparada
+    let (rig_kept, original_mesh) = tauri::async_runtime::spawn_blocking(move || {
+        let kept = mesh_replaced(&app.state::<AppState>(), &original_mesh);
+        (kept, original_mesh)
+    })
+    .await
+    .map_err(|e| format!("El traslado de los pesos terminó inesperadamente: {e}"))?;
+    *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
+    *state.scene_before_repair.lock().unwrap() = Some(original_scene);
 
     let new_diagnostics = diagnostics_to_info(&diagnostics);
     *state.diagnostics.lock().unwrap() = Some(diagnostics);
 
-    Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics })
+    Ok(RepairResultInfo { summary, new_mesh_info, new_diagnostics, rig_kept })
 }
 
 /// Deshace la reparación restaurando backups
 #[tauri::command]
-pub async fn undo_repair(app: AppHandle) -> Result<MeshInfo, String> {
+pub async fn undo_repair(app: AppHandle) -> Result<UndoRepairInfo, String> {
     in_background(app, undo_repair_impl).await
 }
 
-fn undo_repair_impl(state: &AppState) -> Result<MeshInfo, String> {
+fn undo_repair_impl(state: &AppState) -> Result<UndoRepairInfo, String> {
     let backup_mesh = {
         let mut backup = state.mesh_before_repair.lock().unwrap();
         backup.take().ok_or("No hay reparación que deshacer")?
@@ -2447,16 +2546,42 @@ fn undo_repair_impl(state: &AppState) -> Result<MeshInfo, String> {
         rig: None,
     };
 
-    let mut mesh_lock = state.mesh.lock().unwrap();
-    *mesh_lock = Some(backup_mesh);
-
-    let mut scene_lock = state.scene.lock().unwrap();
-    *scene_lock = Some(backup_scene);
-
+    let repaired = state.mesh.lock().unwrap().replace(backup_mesh);
+    *state.scene.lock().unwrap() = Some(backup_scene);
     *state.diagnostics.lock().unwrap() = None;
-    state.geometry_changed();
+    let rig_kept = match repaired {
+        Some(repaired) => mesh_replaced(state, &repaired),
+        None => {
+            state.geometry_changed();
+            false
+        }
+    };
 
-    Ok(info)
+    Ok(UndoRepairInfo { mesh_info: info, rig_kept })
+}
+
+/// La malla original se reemplazó por otra de la misma forma pero distinta
+/// topología (reparar o deshacerlo; `state.mesh` ya es la nueva): la
+/// retopología se descarta y el rig pasa a la malla nueva desde la malla donde
+/// se calculó (`previous` o los quads). Devuelve si el rig se conservó.
+fn mesh_replaced(state: &AppState, previous: &Mesh) -> bool {
+    use std::sync::atomic::Ordering;
+    let rig = state.result.lock().unwrap().take();
+    let source = if state.rig_on_quad.load(Ordering::SeqCst) {
+        state.quad_mesh.lock().unwrap().as_ref().map(quad_as_mesh)
+    } else {
+        Some(previous.clone())
+    };
+    state.geometry_changed();
+    state.rig_on_quad.store(false, Ordering::SeqCst);
+    let target = state.mesh.lock().unwrap().clone();
+    let rig = match (rig, source, target) {
+        (Some(mut rig), Some(source), Some(target)) => move_rig(&mut rig, &source, &target).then_some(rig),
+        _ => None,
+    };
+    let kept = rig.is_some();
+    *state.result.lock().unwrap() = rig;
+    kept
 }
 
 /// Obtiene los diagnósticos guardados
@@ -3479,6 +3604,93 @@ mod tests {
         assert!(state.active_is_quad());
         state.use_retopology.store(false, Ordering::SeqCst);
         assert!(!state.active_is_quad());
+    }
+
+    /// Retopologizar o cambiar la malla activa no descarta el rig: los pesos
+    /// pasan a la otra malla y el esqueleto queda igual
+    #[test]
+    fn rig_moves_to_another_mesh() {
+        let (quad, mesh) = strip();
+        // Izquierda hueso 0, derecha hueso 1, el medio mitad y mitad
+        let weights: Vec<Vec<f64>> =
+            mesh.vertices.iter().map(|v| v.position.x()).map(|x| vec![1.0 - x / 2.0, x / 2.0]).collect();
+        let mut rig = PinocchioOutput {
+            attachment: Attachment::new(&mesh, weights.clone(), 2),
+            embedding: pinocchio_embedding::EmbeddingResult {
+                bone_positions: vec![Vector3::zero(); 2],
+                sphere_bone_map: Vec::new(),
+                quality_score: 1.0,
+            },
+            bone_positions: vec![Vector3::zero(); 2],
+            bone_rest_transforms: Vec::new(),
+            stats: Default::default(),
+        };
+        let target = quad_as_mesh(&quad);
+        assert!(move_rig(&mut rig, &mesh, &target));
+        assert_eq!(rig.attachment.num_vertices(), target.num_vertices());
+        assert_eq!(rig.stats.num_vertices, target.num_vertices());
+        for (v, w) in weights.iter().enumerate() {
+            assert!(rig.get_weights(v).iter().zip(w).all(|(a, b)| (a - b).abs() < 1e-9));
+        }
+        // Pesos de otra malla: no se trasladan
+        let small = Mesh::from_triangles(&[Vector3::zero(), Vector3::unit_x(), Vector3::unit_y()], &[[0, 1, 2]]);
+        assert!(!move_rig(&mut rig, &small, &target));
+    }
+
+    /// Reparar (o deshacerlo) cambia la topología de la malla original: la
+    /// retopología se descarta y el rig pasa a la malla nueva
+    #[test]
+    fn rig_survives_mesh_replacement() {
+        use std::sync::atomic::Ordering;
+        let (quad, mesh) = strip();
+        let weights: Vec<Vec<f64>> =
+            mesh.vertices.iter().map(|v| v.position.x()).map(|x| vec![1.0 - x / 2.0, x / 2.0]).collect();
+        let rig = |source: &Mesh, weights: Vec<Vec<f64>>| PinocchioOutput {
+            attachment: Attachment::new(source, weights, 2),
+            embedding: pinocchio_embedding::EmbeddingResult {
+                bone_positions: vec![Vector3::zero(); 2],
+                sphere_bone_map: Vec::new(),
+                quality_score: 1.0,
+            },
+            bone_positions: vec![Vector3::zero(); 2],
+            bone_rest_transforms: Vec::new(),
+            stats: Default::default(),
+        };
+        // La misma tira con la otra diagonal y un vértice más en el medio de abajo
+        let positions: Vec<Vector3> = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [2.0, 0.0], [2.0, 1.0], [0.5, 0.0]]
+            .iter()
+            .map(|q| Vector3::new(q[0], q[1], 0.0))
+            .collect();
+        let repaired =
+            Mesh::from_triangles(&positions, &[[0, 6, 3], [6, 1, 3], [1, 2, 3], [1, 4, 2], [4, 5, 2]]);
+
+        // Rig sobre la original
+        let state = AppState::new();
+        *state.mesh.lock().unwrap() = Some(repaired.clone());
+        *state.quad_mesh.lock().unwrap() = Some(quad.clone());
+        *state.result.lock().unwrap() = Some(rig(&mesh, weights.clone()));
+        assert!(mesh_replaced(&state, &mesh));
+        assert!(state.quad_mesh.lock().unwrap().is_none(), "la retopología ya no corresponde");
+        {
+            let result = state.result.lock().unwrap();
+            let result = result.as_ref().unwrap();
+            assert_eq!(result.attachment.num_vertices(), repaired.num_vertices());
+            for (v, p) in positions.iter().enumerate() {
+                assert!((result.get_weights(v)[1] - p.x() / 2.0).abs() < 1e-9);
+            }
+        }
+
+        // Rig sobre los quads: pasa de los quads a la malla nueva
+        *state.quad_mesh.lock().unwrap() = Some(quad);
+        state.rig_on_quad.store(true, Ordering::SeqCst);
+        *state.result.lock().unwrap() = Some(rig(&mesh, weights));
+        assert!(mesh_replaced(&state, &mesh));
+        assert!(!state.rig_on_quad.load(Ordering::SeqCst));
+        assert_eq!(state.result.lock().unwrap().as_ref().unwrap().attachment.num_vertices(), repaired.num_vertices());
+
+        // Sin rig no hay nada que conservar
+        *state.result.lock().unwrap() = None;
+        assert!(!mesh_replaced(&state, &mesh));
     }
 
     #[test]

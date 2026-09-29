@@ -169,6 +169,8 @@ interface SupportedFormats {
 interface TauriRepairResult extends RepairResult {
   new_mesh_info: MeshInfo;
   new_diagnostics: MeshDiagnostics;
+  /** Había rig y pasó a la malla reparada */
+  rig_kept: boolean;
 }
 
 // Print3D types
@@ -202,6 +204,8 @@ interface TauriQuadMeshInfo {
   quality: QuadQuality;
   /** Caras que cruzan una costura del mapa UV original; null si no había UV */
   uv_seam_faces: number | null;
+  /** Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados) */
+  rig_kept: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -440,6 +444,12 @@ export const App: Component = () => {
     setWeightsData(undefined);
     setPaintMirrorLoaded(false);
     setViewSettings((prev) => ({ ...prev, showWeights: false }));
+  };
+
+  /** El backend trasladó el rig a la malla nueva: pesos listos otra vez */
+  const keepRig = async () => {
+    await reloadWeights();
+    setAutorigComplete(true);
   };
 
   /** Relee los pesos en el orden de vértices del visor (cambia al desplegar UV) */
@@ -1518,8 +1528,10 @@ export const App: Component = () => {
       setProgress({ value: 100, label: "Cargando en el visor..." });
       const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
       setQuadMeshData(quadData);
-      // Las etapas siguientes usan la malla nueva: el rig anterior se descartó
-      dropWeights();
+      // Las etapas siguientes usan la malla nueva; el rig la sigue con los
+      // pesos trasladados (el esqueleto y las animaciones no cambian)
+      if (info.rig_kept) await reloadWeights();
+      else dropWeights();
       setActiveQuad(true);
       await refreshSkin();
       setQuadMeshLoaded(true);
@@ -1533,8 +1545,9 @@ export const App: Component = () => {
         info.uv_seam_faces === null
           ? ""
           : ` · UV trasladadas (${info.uv_seam_faces.toLocaleString()} caras cruzan costuras)`;
+      const rigNote = info.rig_kept ? " · esqueleto y pesos trasladados" : "";
       setStatusMessage(
-        `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}`
+        `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}${rigNote}`
       );
 
       // Pipeline: mark retopology as completed
@@ -1601,9 +1614,8 @@ export const App: Component = () => {
       setRepairResult(result);
       setDiagnostics(result.new_diagnostics);
       setCanUndoRepair(true);
-      // El backend descarta el rig al cambiar la geometría
-      setAutorigComplete(false);
-      setWeightsData(undefined);
+      // La retopología se descarta; el rig pasa a la malla reparada
+      dropWeights();
       clearQuadMesh();
 
       // Refrescar meshData y meshInfo
@@ -1614,6 +1626,7 @@ export const App: Component = () => {
         faces: result.new_mesh_info.num_faces,
         format: meshInfo().format,
       });
+      if (result.rig_kept) await keepRig();
 
       setIsProcessing(false);
       setStatusMessage(
@@ -1632,7 +1645,9 @@ export const App: Component = () => {
   const handleUndoRepair = async () => {
     try {
       setStatusMessage("Deshaciendo reparación...");
-      const info = await busy("Deshaciendo reparación...", () => invoke<MeshInfo>("undo_repair"));
+      const info = await busy("Deshaciendo reparación...", () =>
+        invoke<MeshInfo & { rig_kept: boolean }>("undo_repair")
+      );
       history.milestone("Deshacer reparación");
 
       const data = await fetchMeshData();
@@ -1641,9 +1656,9 @@ export const App: Component = () => {
       setCanUndoRepair(false);
       setDiagnostics(undefined);
       setRepairResult(undefined);
-      setAutorigComplete(false);
-      setWeightsData(undefined);
+      dropWeights();
       clearQuadMesh();
+      if (info.rig_kept) await keepRig();
       setStatusMessage("Reparación deshecha");
     } catch (e) {
       console.error("Undo repair error:", e);
@@ -1972,13 +1987,18 @@ export const App: Component = () => {
     if (!(await applyPlacement(m, description))) viewerRef?.clearObjectPreview();
   };
 
-  /** Elige la malla de las etapas siguientes (quads u original): el rig se rehace */
+  /** Elige la malla de las etapas siguientes (quads u original): el rig la sigue */
   const handleActiveMesh = async (useRetopology: boolean) => {
     try {
-      const active = await invoke<boolean>("set_active_mesh", { retopology: useRetopology });
+      const { retopology: active, rig_kept } = await invoke<{ retopology: boolean; rig_kept: boolean }>(
+        "set_active_mesh",
+        { retopology: useRetopology }
+      );
       history.milestone(useRetopology ? "Usar la malla de quads" : "Usar la malla original");
       setActiveQuad(active);
-      dropWeights();
+      // El rig pasa a la malla elegida con los pesos trasladados
+      if (rig_kept) await reloadWeights();
+      else dropWeights();
       setStatusMessage(
         active
           ? "UV, esqueleto y pesos usan la malla retopologizada"
@@ -2680,6 +2700,8 @@ export const App: Component = () => {
             skeletonProps={{
               presets: skeletonPresets(),
               selectedPreset: selectedSkeleton(),
+              skeletonLoaded: skeletonLoaded(),
+              skeletonBones: skeletonData()?.bones.length,
               onPresetChange: handleSkeletonChange,
               autorigConfig: autorigConfig(),
               onAutorigConfigChange: setAutorigConfig,

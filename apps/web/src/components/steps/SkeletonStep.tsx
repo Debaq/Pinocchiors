@@ -18,6 +18,10 @@ export interface SkeletonStepProps {
   // Skeleton
   presets: SkeletonPreset[];
   selectedPreset?: string;
+  /** Hay esqueleto, aunque no venga de una plantilla (el del archivo importado) */
+  skeletonLoaded?: boolean;
+  /** Huesos del esqueleto actual */
+  skeletonBones?: number;
   onPresetChange?: (presetId: string) => void;
   /** Plan de la plantilla generada (variantes con apéndices) */
   bodyPlan?: BodyPlan;
@@ -74,7 +78,9 @@ const Stage: Component<{ n: number; title: string }> = (props) => (
 );
 
 export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
-  const hasSkeleton = () => Boolean(props.selectedPreset && props.skeletonTransform);
+  const hasSkeleton = () => Boolean(props.skeletonLoaded && props.skeletonTransform);
+  /** Esqueleto propio: ya colocado sobre el modelo, sin plantilla de origen */
+  const ownSkeleton = () => props.skeletonLoaded && !props.selectedPreset;
 
   return (
     <div class="space-y-5">
@@ -87,6 +93,20 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
       {/* 1. Plantilla */}
       <div class="space-y-3">
         <Stage n={1} title="Plantilla" />
+        <Show when={ownSkeleton()}>
+          <div class="p-2 rounded-md bg-accent/10 border border-accent/20 space-y-1">
+            <div class="flex items-center gap-2 text-xs text-text">
+              <Icons.Bone size={14} class="text-accent" />
+              Esqueleto del modelo
+              <Show when={props.skeletonBones}>
+                <span class="text-text-muted ml-auto font-mono">{props.skeletonBones} huesos</span>
+              </Show>
+            </div>
+            <p class="text-xs text-text-muted leading-relaxed">
+              Ya está colocado sobre el modelo y se usa tal cual. Elegir una plantilla lo reemplaza.
+            </p>
+          </div>
+        </Show>
         <SkeletonPanel
           presets={props.presets}
           selectedPreset={props.selectedPreset}
