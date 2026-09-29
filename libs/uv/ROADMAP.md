@@ -149,6 +149,15 @@ Pendiente de este flujo:
   map, los factores por material y los colores de vértice (`COLOR_0`,
   `UvPart::colors`, multiplicados al color base en espacio lineal). Cabeza
   escaneada de 126 k triángulos a 4000 quads: la oreja recupera sus pliegues.
+- BVH: un rayo con una componente ±0 (inversa ±inf) es paralelo a ese eje y
+  toca una caja solo si su origen está en la franja; antes, con −0 y el
+  origen en el borde, 0 · (−inf) = NaN descartaba la caja. Ya no hace falta
+  pasar −0 a +0 en `project`. Afectaba sobre todo a mallas alineadas a los
+  ejes: en el cilindro de prueba del rig, 230 de 242 vértices se quedaban
+  sin radio de tubo. Con los tubos funcionando apareció un empate exacto
+  entre dos huesos cuyo orden decidía el redondeo; `heat_diffusion` toma
+  ahora la menor distancia de los empatados y el test de invariancia de
+  escala pasa con su tolerancia de siempre.
 - Dilatación de `2 × padding` texels y el resto del fondo con el color medio.
 - Gonfoterio: sin astillas, arrugas de la trompa conservadas, gltf-validator
   0 errores / 0 avisos.
@@ -172,11 +181,6 @@ Pendiente de este flujo:
 
 ## Pendiente
 
-- `pinocchio-spatial`: un rayo con una componente −0 descarta cajas del BVH
-  que tocan su origen (0 · −inf = NaN cae del lado equivocado). `project` lo
-  esquiva pasando −0 a +0. Arreglarlo en el BVH cambia los pesos de
-  `heat_diffusion` en ~1e-5 (su test de invariancia de escala tiene
-  tolerancia 1e-5): coordinarlo con quien trabaje en el rig.
 - Importar PLY (hoy solo se exporta): es el formato típico de escaneos con
   color por vértice.
 - Costuras alineadas a las costuras viejas del original. (Esconderlas por

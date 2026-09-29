@@ -440,14 +440,20 @@ fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Re
             1 => (origin.y(), inv_dir.y(), bounds.min.y(), bounds.max.y()),
             _ => (origin.z(), inv_dir.z(), bounds.min.z(), bounds.max.z()),
         };
+        // Rayo paralelo a este eje (componente ±0, inversa ±inf): toca la caja
+        // solo si el origen está dentro de su franja. Sin este caso, un origen
+        // justo en el borde daba 0 · inf = NaN, y con −0 la caja se descartaba
+        if inv.is_infinite() {
+            if o < min || o > max {
+                return false;
+            }
+            continue;
+        }
         let mut t0 = (min - o) * inv;
         let mut t1 = (max - o) * inv;
         if t0 > t1 {
             std::mem::swap(&mut t0, &mut t1);
         }
-        // f64::max/min ignoran NaN (0 * inf), que así no restringe el intervalo.
-        // Ojo: con una componente −0 en la dirección, 0 · (−inf) cae del lado
-        // equivocado y se descartan cajas que tocan el origen.
         lo = lo.max(t0);
         hi = hi.min(t1);
         if lo > hi {
@@ -460,6 +466,25 @@ fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ray_with_negative_zero_sees_boxes_touching_its_origin() {
+        // Triángulo con una arista en x = 0: su caja empieza justo en el
+        // origen del rayo, que viaja paralelo a esa cara
+        let bvh = Bvh::build(vec![Triangle::new(
+            Vector3::new(0.0, -5.0, 1.0),
+            Vector3::new(5.0, 0.0, 1.0),
+            Vector3::new(0.0, 5.0, 1.0),
+        )]);
+        let origin = Vector3::new(0.0, 0.0, 0.0);
+        for dir in [Vector3::new(0.0, 0.0, 1.0), Vector3::new(-0.0, -0.0, 1.0)] {
+            let t = bvh.ray_distance(&origin, &dir, 0.0, 10.0);
+            assert!(t.is_some_and(|t| (t - 1.0).abs() < 1e-12), "{dir:?}: {t:?}");
+        }
+        // Paralelo pero fuera de la franja de la caja: no la toca
+        let outside = Vector3::new(-1.0, 0.0, 0.0);
+        assert!(bvh.ray_distance(&outside, &Vector3::new(-0.0, 0.0, 1.0), 0.0, 10.0).is_none());
+    }
 
     #[test]
     fn ray_distance_finds_the_first_hit() {

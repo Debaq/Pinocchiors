@@ -247,15 +247,13 @@ impl<'a> HeatDiffusion<'a> {
                 };
                 let scale = tube.unwrap_or(candidates[first].3);
                 let limit = candidates[first].0 + TIE_TOLERANCE * scale + Real::MIN_POSITIVE;
-                let mut bones = vec![candidates[first].1];
-                bones.extend(
-                    candidates[first + 1..]
-                        .iter()
-                        .take_while(|c| c.0 <= limit)
-                        .filter(|c| visible(c))
-                        .map(|c| c.1),
-                );
-                NearestBones { bones, distance: effective(candidates[first].3) }
+                let tied: Vec<&(Real, usize, Vector3, Real)> = std::iter::once(&candidates[first])
+                    .chain(candidates[first + 1..].iter().take_while(|c| c.0 <= limit).filter(|c| visible(c)))
+                    .collect();
+                // En un empate el orden lo decide el redondeo: la distancia es
+                // la del más cercano de los empatados, no la del primero
+                let distance = tied.iter().map(|c| c.3).fold(Real::INFINITY, Real::min);
+                NearestBones { bones: tied.iter().map(|c| c.1).collect(), distance: effective(distance) }
             })
             .collect()
     }

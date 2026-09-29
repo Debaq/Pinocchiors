@@ -199,9 +199,7 @@ impl UvSurface {
             let [a, b, c] = self.corners[t];
             (b - a).cross(&(c - a)).dot(n) > 0.0
         };
-        // + 0.0 pasa las componentes −0 a +0: el BVH descarta cajas con −0
-        let canonical = |d: Vector3| Vector3::new(d.x() + 0.0, d.y() + 0.0, d.z() + 0.0);
-        [canonical(*n), canonical(*n * -1.0)]
+        [*n, *n * -1.0]
             .into_iter()
             .filter_map(|dir| {
                 // Primer corte que mire hacia el mismo lado; los que miran al
