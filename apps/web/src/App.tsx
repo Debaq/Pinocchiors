@@ -607,7 +607,11 @@ export const App: Component = () => {
     (showQuadMesh() || (usesQuad() && ["uv", "skeleton", "animate"].includes(pipeline.activeStep()))) && !!quadMeshData();
 
   /** Los pesos ya no corresponden a la malla activa */
-  const dropWeights = () => {
+  /** Por qué se descartaron los pesos (para explicarlo en Animar) y el error del último cálculo */
+  const [weightsNotice, setWeightsNotice] = createSignal<string | undefined>();
+  const [autorigError, setAutorigError] = createSignal<string | undefined>();
+  const dropWeights = (reason?: string) => {
+    if (reason && autorigComplete()) setWeightsNotice(reason);
     setAutorigComplete(false);
     setWeightsData(undefined);
     setPaintMirrorLoaded(false);
@@ -1267,6 +1271,8 @@ export const App: Component = () => {
 
       setIsProcessing(false);
       setAutorigComplete(true);
+      setWeightsNotice(undefined);
+      setAutorigError(undefined);
       setPaintMirrorLoaded(false);
       setProgress(undefined);
       setStatusMessage(`Autorig completado - ${viewerWeights.numBones} huesos procesados`);
@@ -1278,6 +1284,14 @@ export const App: Component = () => {
       setStatusMessage(`Error: ${e}`);
       setIsProcessing(false);
       setProgress(undefined);
+      // Que no pase desapercibido: sin pesos no se puede animar ni pintar
+      const message = String(e).replace(/^Error:\s*/, "");
+      setAutorigError(message);
+      void confirmAction({
+        title: "No se pudieron calcular los pesos",
+        message: `${message}\n\nPrueba con calidad "rápida", revisa que el esqueleto quede dentro de la malla o repara la malla (Preparar → Reparar) y vuelve a calcularlos.`,
+        confirmLabel: "Entendido",
+      });
     }
   };
 
@@ -1342,6 +1356,19 @@ export const App: Component = () => {
     (!meshLoaded() ||
       (autorigComplete() && !!weightsData() && weightsData()!.numBones === skeletonData()!.bones.length));
   const animating = () => pipeline.activeStep() === "animate" && animationReady();
+  /** Qué falta para animar, dicho para el usuario (`undefined` si nada) */
+  const animationBlocker = createMemo(() => {
+    if (!skeletonData()) return "Falta el esqueleto: elige una plantilla en la sección Esqueleto.";
+    if (!meshLoaded()) return undefined;
+    const w = weightsData();
+    if (autorigComplete() && w && w.numBones !== skeletonData()!.bones.length) {
+      return `Los pesos son de otro esqueleto (${w.numBones} huesos; el esqueleto tiene ${skeletonData()!.bones.length}): vuelve a calcularlos en Esqueleto → Pesos.`;
+    }
+    if (autorigComplete() && w) return undefined;
+    if (autorigError()) return `El último cálculo de pesos falló: ${autorigError()}`;
+    if (weightsNotice()) return `${weightsNotice()} y los pesos se descartaron: vuelve a calcularlos en Esqueleto → Pesos.`;
+    return "Faltan los pesos: calcúlalos en Esqueleto → 4. Pesos (después se pueden pintar).";
+  });
 
   // Fuera del paso Animar, las animaciones del modelo se reproducen una tras
   // otra con la barra de reproducción (sin editar keys)
@@ -3740,6 +3767,8 @@ export const App: Component = () => {
       rotation: transform.rotation,
     });
     setSkeletonData(tauriSkeletonToViewer(data));
+    // El backend descartó los pesos (eran del esqueleto anterior): la interfaz también
+    if (autorigComplete()) dropWeights("Transformaste el esqueleto entero");
   };
 
   /** Texto del paso en el historial: qué cambió y a cuánto */
@@ -3803,7 +3832,7 @@ export const App: Component = () => {
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
       setFitInfo(undefined);
-      setAutorigComplete(false);
+      dropWeights("Cambiaste la forma del cuerpo");
       setStatusMessage(`Plantilla con ${data.bones.length} huesos: ajústala al modelo`);
     } catch (e) {
       console.error("Body plan error:", e);
@@ -3819,7 +3848,7 @@ export const App: Component = () => {
       history.milestone("Ajustar esqueleto al modelo");
       setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
       setSkeletonTransform({ ...defaultTransform });
-      setAutorigComplete(false);
+      dropWeights("Volviste a ajustar el esqueleto al modelo");
       setFitInfo({
         quality: fit.quality,
         extremities: fit.extremities,
@@ -3885,7 +3914,7 @@ export const App: Component = () => {
     from: [number, number, number],
     to: [number, number, number]
   ) => {
-    setAutorigComplete(false);
+    dropWeights("Moviste una articulación");
     // Ya está aplicado: el visor lo fue mandando durante el arrastre
     await history.execute("Mover articulación", { kind: "moveJoint", data: { index, from, to } }, { applied: true });
   };
@@ -3900,7 +3929,7 @@ export const App: Component = () => {
       history.milestone(onlySelected ? "Centrar articulación" : "Centrar articulaciones");
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
-      setAutorigComplete(false);
+      dropWeights("Centraste articulaciones");
       setStatusMessage(onlySelected ? "Articulación centrada en el miembro" : "Articulaciones centradas");
     } catch (e) {
       console.error("Center bones error:", e);
@@ -4863,6 +4892,16 @@ export const App: Component = () => {
             }}
             animateProps={{
               ready: animationReady(),
+              blocker: animationBlocker(),
+              hasWeights: meshLoaded() && autorigComplete(),
+              onGoSkeleton: () => pipeline.setActiveStep("skeleton"),
+              // Con malla y esqueleto, los pesos se calculan desde Animar mismo
+              onComputeWeights: meshLoaded() && skeletonLoaded() && !autorigComplete() ? () => void handleAutorig() : undefined,
+              computing: isProcessing(),
+              onPaintWeights: () => {
+                pipeline.setActiveStep("skeleton");
+                useTool("paint");
+              },
               clips: clips(),
               activeClipId: activeClipId(),
               onSelectClip: (id: string) => {

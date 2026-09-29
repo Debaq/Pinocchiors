@@ -59,7 +59,7 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
             <Icons.X size={14} />
           </button>
         </div>
-        <p class="p-4 text-xs text-text-muted leading-relaxed">{props.message}</p>
+        <p class="p-4 text-xs text-text-muted leading-relaxed whitespace-pre-line">{props.message}</p>
         <div class="flex justify-end gap-2 px-4 pb-4">
           <Button size="sm" variant="ghost" onClick={props.onCancel}>
             Cancelar

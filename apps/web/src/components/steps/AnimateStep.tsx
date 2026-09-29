@@ -8,6 +8,16 @@ import type { PresetAnimation, PresetAnimationId } from "../../lib/presetAnimati
 export interface AnimateStepProps {
   /** Hay esqueleto con pesos sobre la malla que se ve */
   ready: boolean;
+  /** Qué falta para animar (se muestra en vez de las herramientas) */
+  blocker?: string;
+  /** Hay pesos calculados sobre la malla (se pueden pintar) */
+  hasWeights?: boolean;
+  onGoSkeleton?: () => void;
+  /** Calcular los pesos desde acá (hay malla y esqueleto) */
+  onComputeWeights?: () => void;
+  computing?: boolean;
+  /** Ir a pintar los pesos (sección Esqueleto, pincel) */
+  onPaintWeights?: () => void;
   clips: AnimationClip[];
   activeClipId?: string;
   onSelectClip?: (id: string) => void;
@@ -51,9 +61,19 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
       <Show
         when={props.ready}
         fallback={
-          <p class="text-xs text-text-muted leading-relaxed">
-            Para animar hace falta el esqueleto con sus pesos: calcúlalos en el paso Esqueleto.
-          </p>
+          <div class="space-y-2">
+            <p class="text-xs text-text-muted leading-relaxed p-2 rounded-md bg-orange/10 border border-orange/30">
+              {props.blocker ?? "Para animar hace falta el esqueleto con sus pesos: calcúlalos en el paso Esqueleto."}
+            </p>
+            <Show when={props.onComputeWeights}>
+              <Button size="sm" fullWidth variant="primary" onClick={props.onComputeWeights} disabled={props.computing}>
+                {props.computing ? "Calculando pesos…" : "Calcular pesos ahora"}
+              </Button>
+            </Show>
+            <Button size="sm" fullWidth variant="ghost" onClick={props.onGoSkeleton}>
+              Ir a Esqueleto
+            </Button>
+          </div>
         }
       >
         <p class="text-xs text-text-muted leading-relaxed">
@@ -131,6 +151,12 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           <span class="text-text-muted">Articulación: </span>
           <span class="text-text">{props.selectedBoneName ?? "ninguna (clic en una esfera)"}</span>
         </div>
+
+        <Show when={props.hasWeights}>
+          <Button size="sm" fullWidth variant="ghost" onClick={props.onPaintWeights} title="Vuelve a Esqueleto con el pincel de pesos (B)">
+            <span class="flex items-center gap-1"><Icons.PaintBrush size={12} /> Pintar pesos</span>
+          </Button>
+        </Show>
 
         <div class="space-y-1">
           <Button size="sm" fullWidth variant={props.editorOpen ? "default" : "primary"} onClick={props.onToggleEditor}>
