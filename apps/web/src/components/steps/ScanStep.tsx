@@ -22,6 +22,14 @@ interface ScannerStatus {
   dropped: number;
   points: number;
   tracking_ok: boolean;
+  /** Cuadros guardados si hay una grabación en curso */
+  recorded: number | null;
+}
+
+/** Grabación de cuadros crudos (`RecordingDto`) */
+interface Recording {
+  path: string;
+  frames: number;
 }
 
 /** Volumen de escaneo y limpieza (`ScanSettingsDto`) */
@@ -105,6 +113,8 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
   const [realWidth, setRealWidth] = createPersisted("scan.calib.width", CARD_WIDTH_MM);
   const [measured, setMeasured] = createSignal<Measurement>();
   const [measureError, setMeasureError] = createSignal<string>();
+  const [lastRecording, setLastRecording] = createSignal<Recording>();
+  const [recordError, setRecordError] = createSignal<string>();
   let canvas: HTMLCanvasElement | undefined;
   let timer: number | undefined;
   let alive = true;
@@ -199,6 +209,17 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
     // Deja que llegue un cuadro con la focal nueva antes de volver a medir
     await new Promise((r) => setTimeout(r, 300));
     await measure();
+  };
+
+  const record = async (action: "start" | "stop") => {
+    try {
+      const rec = await invoke<Recording>("scanner_record", { action });
+      setLastRecording(action === "stop" ? rec : undefined);
+      setRecordError(undefined);
+    } catch (e) {
+      setRecordError(String(e));
+    }
+    setStatus(await invoke<ScannerStatus>("scanner_status"));
   };
 
   const resetCalibration = () => {
@@ -511,6 +532,36 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
                   <span class="text-text font-mono">{status()!.points.toLocaleString()}</span>
                 </div>
               </div>
+            </Show>
+          </div>
+        </Panel>
+
+        <Panel id="scan.record" title="Grabar para diagnóstico" icon={<Icons.Record size={14} />} defaultOpen={false}>
+          <div class="space-y-3 text-xs">
+            <p class="text-text-muted leading-relaxed">
+              Guarda los cuadros de profundidad tal como llegan del escáner, para reproducir el escaneo sin el escáner y
+              revisar dónde falla. Graba unos 10 a 20 segundos girando el objeto como lo harías al escanear.
+            </p>
+            <Show
+              when={status()?.recorded != null}
+              fallback={
+                <Button size="sm" fullWidth disabled={!streaming()} icon={<Icons.Record size={14} />} onClick={() => record("start")}>
+                  Grabar cuadros
+                </Button>
+              }
+            >
+              <Button size="sm" fullWidth icon={<Icons.Stop size={14} />} onClick={() => record("stop")}>
+                Detener ({status()!.recorded} cuadros)
+              </Button>
+            </Show>
+            <Show when={recordError()}>
+              <p class="text-error leading-relaxed">{recordError()}</p>
+            </Show>
+            <Show when={lastRecording()}>
+              <p class="text-text-muted leading-relaxed">
+                {lastRecording()!.frames} cuadros en{" "}
+                <span class="font-mono text-text break-all select-text">{lastRecording()!.path}</span>
+              </p>
             </Show>
           </div>
         </Panel>

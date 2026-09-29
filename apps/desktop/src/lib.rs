@@ -104,6 +104,7 @@ pub fn run() {
             scanner::scanner_preview,
             scanner::scanner_scan,
             scanner::scanner_measure,
+            scanner::scanner_record,
             scanner::scanner_create_model,
         ])
         .run(tauri::generate_context!())

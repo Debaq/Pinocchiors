@@ -3,6 +3,7 @@
 //! malla. Es lo que en Orizon3D hacía la ventana egui (`app.rs`), sin la GUI.
 
 use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -10,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crossbeam_channel::{Receiver, RecvTimeoutError};
 
-use crate::camera::{self, CameraDescription, DepthFrame, Frames, StreamInfo};
+use crate::camera::{self, CameraDescription, DepthFrame, Frames, RgbFrame, StreamInfo};
 use crate::capture::{Capture, DepthControls, Status};
 use crate::mesh::{self, Mesh};
 use crate::pointcloud::{self, CloudParams, PointCloud, Roi};
@@ -120,6 +121,15 @@ pub struct Preview {
     pub rgba: Vec<u8>,
 }
 
+/// Tope de la grabación: ~40 s a 15 FPS, ~300 MB
+const MAX_RECORDED_FRAMES: u32 = 600;
+
+struct Recorder {
+    dir: PathBuf,
+    frames: u32,
+    meta_written: bool,
+}
+
 struct Shared {
     status: Mutex<ScannerStatus>,
     params: Mutex<Option<CloudParams>>,
@@ -128,6 +138,7 @@ struct Shared {
     settings: Mutex<ScanSettings>,
     session: Mutex<Option<ScanSession>>,
     scanning: AtomicBool,
+    recording: Mutex<Option<Recorder>>,
 }
 
 /// Escáner conectado. Al soltarlo se detiene la captura.
@@ -161,6 +172,7 @@ impl Scanner {
             settings: Mutex::new(settings),
             session: Mutex::new(None),
             scanning: AtomicBool::new(false),
+            recording: Mutex::new(None),
         });
         let capture = Capture::start(|| {});
         let (frames, status) = (capture.frames.clone(), capture.status.clone());
@@ -236,6 +248,24 @@ impl Scanner {
         status.stats = ScanStats::default();
         status.points = 0;
         status.tracking_ok = true;
+    }
+
+    /// Empieza a guardar los cuadros de profundidad crudos en `dir` (ver
+    /// [`crate::recording`]), para reproducir el escaneo fuera del escáner
+    pub fn start_recording(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+        *self.shared.recording.lock().unwrap() = Some(Recorder { dir: dir.to_path_buf(), frames: 0, meta_written: false });
+        Ok(())
+    }
+
+    /// Termina la grabación; devuelve la carpeta y los cuadros guardados
+    pub fn stop_recording(&self) -> Option<(PathBuf, u32)> {
+        self.shared.recording.lock().unwrap().take().map(|r| (r.dir, r.frames))
+    }
+
+    /// Cuadros guardados en la grabación en curso
+    pub fn recorded_frames(&self) -> Option<u32> {
+        self.shared.recording.lock().unwrap().as_ref().map(|r| r.frames)
     }
 
     /// Nube limpia: la fusionada del escaneo si hay, o la del cuadro actual
@@ -326,6 +356,7 @@ fn worker_loop(shared: &Shared, frames: &Receiver<Frames>, status: &Receiver<Sta
             st.coverage = coverage;
         }
 
+        record(shared, &frame, &settings);
         if shared.scanning.load(Ordering::SeqCst) {
             integrate(shared, &frame, &settings);
         }
@@ -351,10 +382,10 @@ fn apply_status(shared: &Shared, status: Status) {
 
 /// Alinea el cuadro con lo escaneado y lo fusiona
 fn integrate(shared: &Shared, frames: &Frames, settings: &ScanSettings) {
-    let Some(params) = effective_params(shared, settings) else { return };
-    let smoothed = smoothed_depth(shared, &frames.depth, settings);
-    let cloud = PointCloud::generate(smoothed.as_ref().unwrap_or(&frames.depth), frames.rgb.as_ref(), &params);
-    let cloud = clean(cloud, settings);
+    let Some(base) = *shared.params.lock().unwrap() else { return };
+    // Sin mediana temporal: mientras se escanea la cámara se mueve y la mediana
+    // de cuadros de poses distintas embarra la superficie
+    let cloud = scan_frame_cloud(&frames.depth, frames.rgb.as_ref(), &base, settings);
     let mut session = shared.session.lock().unwrap();
     let Some(session) = session.as_mut() else { return };
     let ok = session.integrate_frame(&cloud);
@@ -364,9 +395,44 @@ fn integrate(shared: &Shared, frames: &Frames, settings: &ScanSettings) {
     st.points = session.point_count();
 }
 
+/// Nube limpia de un cuadro tal como entra al escaneo. La usan el escáner y la
+/// reproducción de grabaciones, así las dos procesan igual
+pub fn scan_frame_cloud(depth: &DepthFrame, rgb: Option<&RgbFrame>, base: &CloudParams, settings: &ScanSettings) -> PointCloud {
+    let params = calibrated_params(*base, settings);
+    clean(PointCloud::generate(depth, rgb, &params), settings)
+}
+
+fn record(shared: &Shared, frames: &Frames, settings: &ScanSettings) {
+    let mut recording = shared.recording.lock().unwrap();
+    let Some(rec) = recording.as_mut() else { return };
+    if rec.frames >= MAX_RECORDED_FRAMES {
+        return;
+    }
+    let result = (|| {
+        if !rec.meta_written {
+            let Some(params) = *shared.params.lock().unwrap() else { return Ok(()) };
+            crate::recording::write_meta(&rec.dir, &params, settings)?;
+            rec.meta_written = true;
+        }
+        crate::recording::write_depth(&rec.dir, rec.frames, &frames.depth)
+    })();
+    match result {
+        Ok(()) if rec.meta_written => rec.frames += 1,
+        Ok(()) => {}
+        Err(e) => {
+            log::warn!("No se pudo grabar el cuadro: {e}");
+            *recording = None;
+        }
+    }
+}
+
 /// Parámetros del stream con la calibración fina y el volumen como caja
 fn effective_params(shared: &Shared, settings: &ScanSettings) -> Option<CloudParams> {
-    let mut p = (*shared.params.lock().unwrap())?;
+    let base = (*shared.params.lock().unwrap())?;
+    Some(calibrated_params(base, settings))
+}
+
+fn calibrated_params(mut p: CloudParams, settings: &ScanSettings) -> CloudParams {
     let s = settings.fx_scale.max(0.05);
     p.depth_intr.fx *= s;
     p.depth_intr.fy *= s;
@@ -383,7 +449,7 @@ fn effective_params(shared: &Shared, settings: &ScanSettings) -> Option<CloudPar
         max: [half, half, settings.clip_max_mm.max(0.0)],
     });
     p.edge_filter = settings.edge_filter;
-    Some(p)
+    p
 }
 
 fn clean(cloud: PointCloud, settings: &ScanSettings) -> PointCloud {

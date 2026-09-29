@@ -83,6 +83,8 @@ pub struct ScannerStatusDto {
     pub dropped: u32,
     pub points: usize,
     pub tracking_ok: bool,
+    /// Cuadros guardados si hay una grabación en curso
+    pub recorded: Option<u32>,
 }
 
 impl ScannerStatusDto {
@@ -103,6 +105,7 @@ impl ScannerStatusDto {
             dropped: 0,
             points: 0,
             tracking_ok: true,
+            recorded: None,
         }
     }
 }
@@ -133,6 +136,7 @@ fn status_of(scanner: Option<&Scanner>) -> ScannerStatusDto {
         dropped: s.stats.dropped,
         points: s.points,
         tracking_ok: s.tracking_ok,
+        recorded: scanner.recorded_frames(),
     }
 }
 
@@ -202,6 +206,39 @@ pub fn scanner_scan(handle: State<'_, ScannerHandle>, action: String) -> Result<
         _ => return Err(format!("Acción desconocida: {action}")),
     }
     Ok(())
+}
+
+/// Empieza o termina la grabación de cuadros crudos ("start" / "stop"). Al
+/// empezar devuelve la carpeta, dentro de Documentos/Pinocchio/grabaciones; al
+/// terminar, la carpeta y cuántos cuadros quedaron
+#[tauri::command]
+pub fn scanner_record(app: AppHandle, handle: State<'_, ScannerHandle>, action: String) -> Result<RecordingDto, String> {
+    let scanner = handle.get().ok_or("El escáner no está conectado")?;
+    match action.as_str() {
+        "start" => {
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+            let dir = app
+                .path()
+                .document_dir()
+                .map_err(|e| e.to_string())?
+                .join("Pinocchio")
+                .join("grabaciones")
+                .join(format!("escaneo-{stamp}"));
+            scanner.start_recording(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+            Ok(RecordingDto { path: dir.display().to_string(), frames: 0 })
+        }
+        "stop" => {
+            let (dir, frames) = scanner.stop_recording().ok_or("No hay una grabación en curso")?;
+            Ok(RecordingDto { path: dir.display().to_string(), frames })
+        }
+        _ => Err(format!("Acción desconocida: {action}")),
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RecordingDto {
+    pub path: String,
+    pub frames: u32,
 }
 
 #[derive(Debug, Clone, Copy, Serialize)]

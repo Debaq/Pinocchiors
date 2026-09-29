@@ -1,15 +1,20 @@
 //! Registro (ICP) y fusión incremental de nubes para escaneo multi-frame.
 //!
-//! El flujo de escaneo es *frame-a-frame*: cada nube nueva (en coordenadas de
-//! cámara) se alinea contra la del frame anterior (ya en coordenadas globales)
-//! mediante ICP punto-a-punto. La transformación resultante es directamente la
-//! pose global del frame nuevo; con ella se acumulan los puntos en una rejilla
+//! Cada nube nueva (en coordenadas de cámara) se alinea contra el MODELO
+//! acumulado (en coordenadas globales, las del primer cuadro) con ICP
+//! punto-a-plano, partiendo de la pose anterior. La transformación resultante
+//! es la pose global del cuadro; con ella se acumulan los puntos en una rejilla
 //! de vóxeles que fusiona (promedia) las observaciones repetidas.
+//!
+//! El ICP solo mueve la pose en las direcciones que la geometría restringe: en
+//! un objeto con paredes verticales, un cilindro o un plano, alguna dirección
+//! queda libre y, sin ese cuidado, el ruido la desliza y el error se acumula
+//! hasta deformar el modelo (ver [`solve_constrained`]).
 //!
 //! Todo es Rust puro y sin dependencias externas:
 //! - vecino más cercano por *hash* espacial de vóxeles (celdas 3×3×3),
 //! - ajuste rígido óptimo por el método de cuaterniones de Horn, con la
-//!   eigen-descomposición de una matriz simétrica 4×4 vía rotaciones de Jacobi.
+//!   eigen-descomposición de una matriz simétrica vía rotaciones de Jacobi.
 
 use std::collections::{HashMap, HashSet};
 
@@ -39,6 +44,18 @@ impl Transform {
             r[3] * p[0] + r[4] * p[1] + r[5] * p[2] + self.t[1],
             r[6] * p[0] + r[7] * p[1] + r[8] * p[2] + self.t[2],
         ]
+    }
+
+    /// Transformación inversa (la rotación es ortonormal: su inversa es la traspuesta)
+    pub fn inverse(&self) -> Transform {
+        let r = &self.r;
+        let rt = [r[0], r[3], r[6], r[1], r[4], r[7], r[2], r[5], r[8]];
+        let t = [
+            -(rt[0] * self.t[0] + rt[1] * self.t[1] + rt[2] * self.t[2]),
+            -(rt[3] * self.t[0] + rt[4] * self.t[1] + rt[5] * self.t[2]),
+            -(rt[6] * self.t[0] + rt[7] * self.t[1] + rt[8] * self.t[2]),
+        ];
+        Transform { r: rt, t }
     }
 
     /// Aplica solo la rotación (para vectores/normales, sin traslación).
@@ -243,7 +260,7 @@ pub fn downsample_positions(points: &[Point], voxel: f32) -> Vec<[f32; 3]> {
 }
 
 // ---------------------------------------------------------------------------
-// Ajuste rígido óptimo (Horn) + eigen-descomposición Jacobi 4×4.
+// Ajuste rígido óptimo (Horn) + eigen-descomposición Jacobi.
 // ---------------------------------------------------------------------------
 
 /// Transformación rígida que mejor lleva `src[i]` sobre `dst[i]` (mínimos
@@ -300,7 +317,7 @@ fn best_fit_transform(src: &[[f32; 3]], dst: &[[f32; 3]]) -> Transform {
         [sxy - syx, szx + sxz, syz + szy, -sxx - syy + szz],
     ];
 
-    let (eig, vec) = jacobi_eigen4(nm);
+    let (eig, vec) = jacobi_eigen(nm);
     // Autovector (columna) del mayor autovalor.
     let mut jmax = 0;
     for j in 1..4 {
@@ -351,12 +368,11 @@ fn quat_to_rot(q: [f64; 4]) -> [f32; 9] {
     ]
 }
 
-/// Eigen-descomposición de una matriz simétrica 4×4 por rotaciones de Jacobi
+/// Eigen-descomposición de una matriz simétrica N×N por rotaciones de Jacobi
 /// cíclicas. Devuelve (autovalores, autovectores en columnas).
 #[allow(dead_code)]
-fn jacobi_eigen4(mut a: [[f64; 4]; 4]) -> ([f64; 4], [[f64; 4]; 4]) {
-    const N: usize = 4;
-    let mut v = [[0.0f64; 4]; 4];
+fn jacobi_eigen<const N: usize>(mut a: [[f64; N]; N]) -> ([f64; N], [[f64; N]; N]) {
+    let mut v = [[0.0f64; N]; N];
     for i in 0..N {
         v[i][i] = 1.0;
     }
@@ -412,7 +428,7 @@ fn jacobi_eigen4(mut a: [[f64; 4]; 4]) -> ([f64; 4], [[f64; 4]; 4]) {
         }
     }
 
-    ([a[0][0], a[1][1], a[2][2], a[3][3]], v)
+    (std::array::from_fn(|i| a[i][i]), v)
 }
 
 // ---------------------------------------------------------------------------
@@ -548,6 +564,13 @@ pub fn estimate_normals(points: &[[f32; 3]], radius: f32) -> Vec<[f32; 3]> {
     normals
 }
 
+/// Radio mínimo de búsqueda de parejas en las últimas iteraciones (mm)
+const MIN_PAIR_DIST: f32 = 3.0;
+
+/// Fracción del peso total por debajo de la cual un autovalor del sistema
+/// normalizado se considera sin restricción (ver [`solve_constrained`])
+const MIN_CONSTRAINT: f64 = 0.005;
+
 /// Alinea `src` contra `target` (con `normals` por punto del target) minimizando
 /// la distancia punto-a-plano (linealización de ángulo pequeño, sistema 6×6).
 pub fn icp_point_to_plane(
@@ -580,9 +603,13 @@ pub fn icp_point_to_plane(
     for it in 0..max_iter {
         iters = it + 1;
         pairs.clear();
+        // Radio de búsqueda de parejas que se achica en cada iteración (de
+        // `max_dist` a 3 mm): al principio atrapa movimientos grandes y, ya
+        // cerca, descarta parejas falsas que tiran la pose hacia un lado
+        let dist = (max_dist * 0.8f32.powi(it as i32)).max(MIN_PAIR_DIST.min(max_dist));
         for (i, &s) in src.iter().enumerate() {
             let p = t.apply(s);
-            if let Some((idx, d2)) = target.nearest(p, max_dist) {
+            if let Some((idx, d2)) = target.nearest(p, dist) {
                 let n = normals[idx];
                 // Normal del src rotada al frame global y comparada con la del target.
                 let ns = t.apply_vec(src_normals[i]);
@@ -608,12 +635,42 @@ pub fn icp_point_to_plane(
         let sigma = absb[absb.len() / 2];
         let delta = (1.345 * sigma).max(0.5); // mm
 
+        // Giro linealizado alrededor del centroide de las parejas, no del origen
+        // (la cámara): con el objeto a ~30 cm, un giro pequeño alrededor de la
+        // cámara mueve el objeto casi igual que una traslación, las columnas del
+        // sistema quedan casi paralelas y el ruido se convierte en saltos de
+        // varios mm (sobre todo en vertical, donde las paredes no restringen)
+        let mut center = [0.0f32; 3];
+        for &(p, ..) in &pairs[..keep] {
+            for d in 0..3 {
+                center[d] += p[d];
+            }
+        }
+        for c in &mut center {
+            *c /= keep as f32;
+        }
+
         // Sistema normal 6×6 ponderado: A^T W A x = A^T W b, con
-        // A_i = [p×n, n], b_i=(q-p)·n, y peso de Huber w_i.
+        // A_i = [(p−c)×n, n], b_i=(q-p)·n, y peso de Huber w_i.
+        // Las columnas de giro se escalan por el radio del objeto para que
+        // giro y traslación tengan unidades comparables al medir la degeneración
+        let radius = (pairs[..keep]
+            .iter()
+            .map(|&(p, ..)| (0..3).map(|d| (p[d] - center[d]).powi(2)).sum::<f32>())
+            .sum::<f32>()
+            / keep as f32)
+            .sqrt()
+            .max(1.0);
         let mut ata = [[0.0f64; 6]; 6];
         let mut atb = [0.0f64; 6];
+        let mut wsum = 0.0f64;
         let mut sum_d2 = 0.0f64;
         for &(p, _q, n, b, d2) in &pairs[..keep] {
+            let p = [
+                (p[0] - center[0]) / radius,
+                (p[1] - center[1]) / radius,
+                (p[2] - center[2]) / radius,
+            ];
             let c = [
                 p[1] * n[2] - p[2] * n[1],
                 p[2] * n[0] - p[0] * n[2],
@@ -637,16 +694,23 @@ pub fn icp_point_to_plane(
                 }
                 atb[r] += w * row[r] * b;
             }
+            wsum += w;
             sum_d2 += d2 as f64;
         }
         corr = keep;
         rmse = (sum_d2 / corr as f64).sqrt() as f32;
 
-        let Some(x) = solve6(ata, atb) else {
-            // Sistema degenerado (p. ej. superficie plana sin restricción): para.
+        let Some(x) = solve_constrained(ata, atb, MIN_CONSTRAINT * wsum) else {
+            // Ninguna dirección restringida (casi sin datos): para.
             break;
         };
-        let inc = transform_from_increment(&x);
+        let x = [x[0] / radius as f64, x[1] / radius as f64, x[2] / radius as f64, x[3], x[4], x[5]];
+        // Giro alrededor de `center`: x ↦ R(x−c) + c + t
+        let mut inc = transform_from_increment(&x);
+        let rc = inc.apply_vec(center);
+        for d in 0..3 {
+            inc.t[d] += center[d] - rc[d];
+        }
         t = compose(&inc, &t);
 
         // Convergencia: incremento pequeño (rad + mm).
@@ -663,6 +727,29 @@ pub fn icp_point_to_plane(
         correspondences: corr,
         iterations: iters,
     })
+}
+
+/// Resuelve `ata·x = atb` solo en las direcciones que los datos restringen:
+/// descompone `ata` en autovectores y descarta los de autovalor menor que
+/// `min_eig` (el movimiento en esas direcciones queda en cero, o sea, se
+/// conserva la pose anterior). Sin esto, en un objeto que no fija alguna
+/// dirección (paredes verticales, un cilindro, un plano) el ruido desliza la
+/// pose por ella y el error se acumula cuadro a cuadro
+fn solve_constrained(ata: [[f64; 6]; 6], atb: [f64; 6], min_eig: f64) -> Option<[f64; 6]> {
+    let (eig, vec) = jacobi_eigen(ata);
+    let mut x = [0.0f64; 6];
+    let mut any = false;
+    for k in 0..6 {
+        if eig[k] <= min_eig {
+            continue;
+        }
+        any = true;
+        let proj: f64 = (0..6).map(|i| vec[i][k] * atb[i]).sum::<f64>() / eig[k];
+        for i in 0..6 {
+            x[i] += proj * vec[i][k];
+        }
+    }
+    any.then_some(x)
 }
 
 /// Transformación incremental desde un vector [αx,αy,αz, tx,ty,tz] (Rodrigues).
@@ -711,40 +798,6 @@ fn compose(a: &Transform, b: &Transform) -> Transform {
         a.r[6] * b.t[0] + a.r[7] * b.t[1] + a.r[8] * b.t[2] + a.t[2],
     ];
     Transform { r, t }
-}
-
-/// Resuelve un sistema 6×6 `A x = b` por eliminación gaussiana con pivoteo.
-fn solve6(mut a: [[f64; 6]; 6], mut b: [f64; 6]) -> Option<[f64; 6]> {
-    for col in 0..6 {
-        // Pivote.
-        let mut piv = col;
-        for r in (col + 1)..6 {
-            if a[r][col].abs() > a[piv][col].abs() {
-                piv = r;
-            }
-        }
-        if a[piv][col].abs() < 1e-12 {
-            return None;
-        }
-        a.swap(col, piv);
-        b.swap(col, piv);
-        // Eliminar.
-        for r in 0..6 {
-            if r == col {
-                continue;
-            }
-            let f = a[r][col] / a[col][col];
-            for c in col..6 {
-                a[r][c] -= f * a[col][c];
-            }
-            b[r] -= f * b[col];
-        }
-    }
-    let mut x = [0.0f64; 6];
-    for i in 0..6 {
-        x[i] = b[i] / a[i][i];
-    }
-    Some(x)
 }
 
 /// Autovector del menor autovalor de una matriz simétrica 3×3 (Jacobi).
@@ -998,6 +1051,11 @@ impl ScanSession {
         self.model_normals = estimate_normals(&self.model, self.max_dist);
     }
 
+    /// Pose del último cuadro sumado (cámara → sistema del primer cuadro)
+    pub fn pose(&self) -> Transform {
+        self.pose
+    }
+
     pub fn point_count(&self) -> usize {
         self.fusion.len()
     }
@@ -1020,11 +1078,7 @@ impl ScanSession {
 
         if self.model.is_empty() {
             // Primer frame: define el sistema de coordenadas global.
-            self.pose = Transform::identity();
-            let weights = confidence_weights(&cloud.points);
-            self.fusion.integrate(&cloud.points, &weights, cloud.has_color);
-            self.rebuild_model();
-            self.stats.registered += 1;
+            self.fuse(cloud, Transform::identity());
             self.stats.last_corr = self.model.len();
             self.stats.last_rmse = 0.0;
             return true;
@@ -1032,10 +1086,7 @@ impl ScanSession {
 
         // Alinear el frame nuevo contra el MODELO acumulado (frame-a-modelo),
         // por ICP punto-a-plano (no resbala tangencialmente como punto-a-punto).
-        let target = VoxelIndex::build(self.model.clone(), self.max_dist);
-        let Some(res) =
-            icp_point_to_plane(&src, &target, &self.model_normals, self.pose, 40, self.max_dist, 20)
-        else {
+        let Some(res) = self.align(cloud, self.pose) else {
             // No se pudo alinear: descartamos el frame, mantenemos la pose.
             self.stats.dropped += 1;
             return false;
@@ -1053,32 +1104,40 @@ impl ScanSession {
             self.stats.last_corr = res.correspondences;
             return false; // mantiene la última pose buena y reintenta
         }
-        self.pose = res.transform;
-
-        // Transformar la nube completa a coords globales y fusionar. El peso de
-        // confianza se calcula con la profundidad en coords de CÁMARA (antes de
-        // transformar), alineado por índice con `global`.
-        let weights = confidence_weights(&cloud.points);
-        let mut global: Vec<Point> = Vec::with_capacity(cloud.points.len());
-        for p in &cloud.points {
-            let g = self.pose.apply([p.x, p.y, p.z]);
-            global.push(Point {
-                x: g[0],
-                y: g[1],
-                z: g[2],
-                rgb: p.rgb,
-                view: self.pose.apply_vec(p.view),
-            });
-        }
-        self.fusion.integrate(&global, &weights, cloud.has_color);
-
-        // Actualizar el modelo acumulado para el siguiente ICP.
-        self.rebuild_model();
-
-        self.stats.registered += 1;
+        self.fuse(cloud, res.transform);
         self.stats.last_rmse = res.rmse;
         self.stats.last_corr = res.correspondences;
         true
+    }
+
+    /// Alinea un cuadro (coordenadas de cámara) con el modelo acumulado,
+    /// partiendo de la pose `init`. `None` si no hay modelo o no hay parejas
+    pub fn align(&self, cloud: &PointCloud, init: Transform) -> Option<IcpResult> {
+        if self.model.is_empty() {
+            return None;
+        }
+        let src = downsample_positions(&cloud.points, self.icp_voxel);
+        let target = VoxelIndex::build(self.model.clone(), self.max_dist);
+        icp_point_to_plane(&src, &target, &self.model_normals, init, 40, self.max_dist, 20)
+    }
+
+    /// Suma un cuadro al modelo con la pose dada (cámara → global)
+    pub fn fuse(&mut self, cloud: &PointCloud, pose: Transform) {
+        self.pose = pose;
+        // El peso de confianza se calcula con la profundidad en coords de
+        // CÁMARA (antes de transformar), alineado por índice con `global`.
+        let weights = confidence_weights(&cloud.points);
+        let global: Vec<Point> = cloud
+            .points
+            .iter()
+            .map(|p| {
+                let g = pose.apply([p.x, p.y, p.z]);
+                Point { x: g[0], y: g[1], z: g[2], rgb: p.rgb, view: pose.apply_vec(p.view) }
+            })
+            .collect();
+        self.fusion.integrate(&global, &weights, cloud.has_color);
+        self.rebuild_model();
+        self.stats.registered += 1;
     }
 }
 
