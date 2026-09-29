@@ -335,7 +335,7 @@ export function observedLimits(clips: AnimationClip[], ctx: RigContext, joints: 
   for (const clip of clips) {
     if (!clip.tracks.some((t) => !t.kind)) continue;
     for (let f = Math.round(clip.start); f <= Math.round(clip.end); f++) {
-      const pose = samplePose(clip, f, ctx.boneIndex);
+      const pose = samplePose(clip, f, ctx.boneIndex, ctx.rotation);
       for (const j of joints) {
         if (!samples.has(j)) samples.set(j, []);
         samples.get(j)!.push(pose.rotations.get(j) ?? IDENTITY);

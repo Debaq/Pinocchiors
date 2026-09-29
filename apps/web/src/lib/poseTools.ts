@@ -123,8 +123,8 @@ export function breakdownPose(clip: AnimationClip, frame: number, joints: number
     const prev = frames.filter((k) => k < f).pop();
     const next = frames.find((k) => k > f);
     if (prev === undefined || next === undefined) continue;
-    const a = samplePose(clip, prev, ctx.boneIndex);
-    const b = samplePose(clip, next, ctx.boneIndex);
+    const a = samplePose(clip, prev, ctx.boneIndex, ctx.rotation);
+    const b = samplePose(clip, next, ctx.boneIndex, ctx.rotation);
     out.rotations.set(j, slerp(a.rotations.get(j) ?? IDENTITY, b.rotations.get(j) ?? IDENTITY, t));
     if (track.translation.length > 0) {
       out.translations.set(j, lerp3(a.translations.get(j) ?? ZERO, b.translations.get(j) ?? ZERO, t));

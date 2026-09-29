@@ -3,6 +3,31 @@ import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
+import type { OnionSettings, TimelineMode, TimelineTool } from "./components/layout/Timeline";
+import type { CurveChannelRow } from "./components/layout/CurveEditor";
+import { parseCurveKeyId } from "./components/layout/CurveEditor";
+import {
+  GROUP_CHANNELS,
+  allRefs,
+  closeCycle,
+  deleteKeyRefs,
+  dopeToRefs,
+  eulerFilter,
+  keyRefId,
+  noiseKeys,
+  parseKeyRef,
+  reduceSelectedKeys,
+  retime,
+  scaleKeys,
+  setEase,
+  setHandleMode,
+  setInterpolation,
+  smoothKeys,
+  withMarker,
+  withoutMarker,
+  type ChannelGroup,
+} from "./lib/curves";
+import { bakeMixer, emptyMixer, loadMixer, mixKeys, mixerRange, type AnimationLayer, type Mixer } from "./lib/layers";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import * as Icons from "./components/icons";
@@ -346,6 +371,10 @@ export const App: Component = () => {
       apply: (d: { after: RigSettings }) => void setRigSettings(d.after),
       revert: (d: { before: RigSettings }) => void setRigSettings(d.before),
     },
+    mixer: {
+      apply: (d: { after: Mixer }) => void setMixer(d.after),
+      revert: (d: { before: Mixer }) => void setMixer(d.before),
+    },
     poseLibrary: {
       apply: (d: { after: StoredPose[] }) => void setPoseLibrary(d.after),
       revert: (d: { before: StoredPose[] }) => void setPoseLibrary(d.before),
@@ -530,6 +559,21 @@ export const App: Component = () => {
   const [keySelection, setKeySelection] = createSignal<Set<string>>(new Set());
   const [autoKey, setAutoKey] = createSignal(true);
   const [keyInterpolation, setKeyInterpolation] = createSignal<KeyInterpolation>("linear");
+  // Línea de tiempo: vista, filtros, papel cebolla, trayectorias, curvas y mezclador
+  const [timelineMode, setTimelineMode] = createPersisted<TimelineMode>("timeline.mode", "keys");
+  const [onlySelection, setOnlySelection] = createPersisted("timeline.onlySelection", false);
+  const [collapsedGroups, setCollapsedGroups] = createSignal<Set<string>>(new Set());
+  const [onion, setOnion] = createPersisted<OnionSettings>("timeline.onion", { enabled: false, before: 2, after: 2, step: 2, mesh: false });
+  const [showPaths, setShowPaths] = createPersisted("timeline.paths", false);
+  const [curveSelection, setCurveSelection] = createSignal<Set<string>>(new Set());
+  /** Clip mientras se arrastra en el editor de curvas (sin pasar por el historial) */
+  const [clipPreview, setClipPreview] = createSignal<AnimationClip | undefined>();
+  const [mixer, setMixer] = createSignal<Mixer>(emptyMixer());
+  const [mixerPreview, setMixerPreview] = createSignal<Mixer | undefined>();
+  const [selectedLayer, setSelectedLayer] = createSignal<string | undefined>();
+  const displayMixer = () => mixerPreview() ?? mixer();
+  /** El visor muestra la mezcla de capas en vez del clip activo */
+  const mixing = () => displayMixer().enabled && displayMixer().layers.length > 0;
   /** Lo que el rig agrega al esqueleto (ver lib/rig.ts): se guarda en el proyecto */
   const [rigSettings, setRigSettings] = createSignal<RigSettings>(emptyRigSettings());
   /** Articulaciones elegidas en el visor (la activa es viewSettings().selectedBone) */
@@ -1126,6 +1170,7 @@ export const App: Component = () => {
       setClips([]);
       setActiveClipId(undefined);
       setRigSettings(emptyRigSettings());
+      setMixer(emptyMixer());
     }
     setFrame(0);
     clearQuadMesh();
@@ -1359,9 +1404,15 @@ export const App: Component = () => {
     const ctx = rigCtx();
     if (animating()) {
       // La pose de las keys (FK) queda a mano para rehacer el IK mientras se arrastra un control
-      const clip = activeClip();
-      lastFkPose = samplePose(clip, frame(), ctx.boneIndex);
-      v.setPose(runPoseStack(clonePose(lastFkPose), ctx, { clip, frame: frame() }));
+      if (mixing()) {
+        const { pose, top } = mixKeys(displayMixer(), clips(), frame(), ctx);
+        lastFkPose = pose;
+        v.setPose(runPoseStack(clonePose(pose), ctx, top ? { clip: top.clip, frame: top.frame } : {}));
+      } else {
+        const clip = clipPreview() ?? activeClip();
+        lastFkPose = samplePose(clip, frame(), ctx.boneIndex, ctx.rotation);
+        v.setPose(runPoseStack(clonePose(lastFkPose), ctx, { clip, frame: frame() }));
+      }
       setPoseTick((t) => t + 1);
       return;
     }
@@ -1419,7 +1470,9 @@ export const App: Component = () => {
       }
       let next = untrack(frame) + ((now - last) / 1000) * clip.fps;
       last = now;
-      if (next >= clip.end + 1 || next < clip.start) next = clip.start + Math.max(0, next - clip.end - 1);
+      // Con la mezcla, se recorren todas las capas
+      const [start, end] = untrack(mixing) ? untrack(mixerView) : [clip.start, clip.end];
+      if (next >= end + 1 || next < start) next = start + Math.max(0, next - end - 1);
       setFrame(next);
       handle = requestAnimationFrame(tick);
     });
@@ -1776,6 +1829,13 @@ export const App: Component = () => {
   );
 
   const handleDeleteKeys = () => {
+    if (timelineMode() === "curves") {
+      const refs = curveRefs();
+      if (refs.size === 0) return;
+      void editClip("Borrar keys", (c) => deleteKeyRefs(c, refs, rigCtx().rotation));
+      setCurveSelection(new Set<string>());
+      return;
+    }
     const selection = keySelection();
     if (selection.size === 0) return;
     void editClip("Borrar keys", (c) => deleteKeys(c, selection));
@@ -1793,8 +1853,316 @@ export const App: Component = () => {
 
   const handleKeyInterpolation = (interpolation: KeyInterpolation) => {
     setKeyInterpolation(interpolation);
+    if (timelineMode() === "curves") {
+      const refs = curveRefs();
+      if (refs.size > 0) void editClip("Interpolación", (c) => setInterpolation(c, refs, interpolation, rigCtx().rotation));
+      return;
+    }
     const selection = keySelection();
     if (selection.size > 0) void editClip("Interpolación", (c) => setKeysInterpolation(c, selection, interpolation));
+  };
+
+  // ─── Edición de animación (F5): curvas, herramientas, marcadores ──────────
+
+  /** Referencias (key de un grupo en un cuadro) de la selección del editor de curvas */
+  const curveRefs = () => new Set([...curveSelection()].map((id) => keyRefId(parseCurveKeyId(id).ref)));
+  /** Referencias de lo elegido en la vista activa */
+  const toolRefs = () => {
+    const clip = activeClip();
+    if (!clip) return new Set<string>();
+    return timelineMode() === "curves" ? curveRefs() : dopeToRefs(clip, keySelection());
+  };
+
+  /** Pistas que se ven en el editor de curvas: las elegidas o, sin selección, todas las que tienen keys */
+  const curveTracks = createMemo(() => {
+    const clip = clipPreview() ?? activeClip();
+    if (!clip) return [];
+    const names = new Set(jointSelection().map((j) => rigBones()[j]?.name).filter(Boolean));
+    const control = selectedControl();
+    const chain = selectedChain();
+    const picked = clip.tracks.filter((t) =>
+      t.kind === "control" ? t.bone === control : t.kind === "ik" ? t.bone === chain : names.has(t.bone)
+    );
+    // Sin selección, o si lo elegido no tiene keys, se ven todas las pistas
+    return picked.length > 0 ? picked : clip.tracks;
+  });
+
+  const CHANNEL_COLORS = ["var(--color-red)", "var(--color-green)", "var(--color-cyan)"];
+  const curveRows = createMemo<CurveChannelRow[]>(() => {
+    const s = rigSettings();
+    const rows: CurveChannelRow[] = [];
+    for (const t of curveTracks()) {
+      const owner =
+        t.kind === "control"
+          ? (s.controls.find((c) => c.id === t.bone)?.name ?? t.bone)
+          : t.kind === "ik"
+            ? (s.ikChains?.find((c) => c.id === t.bone)?.name ?? t.bone)
+            : t.bone;
+      for (const group of ["rotation", "translation", "blend", "pin", "roll"] as ChannelGroup[]) {
+        const keys = group === "rotation" ? t.rotation : group === "translation" ? t.translation : t[group];
+        if (!keys || keys.length === 0) continue;
+        GROUP_CHANNELS[group].forEach((label, channel) =>
+          rows.push({
+            id: `${t.kind ?? "b"}|${t.bone}|${group}|${channel}`,
+            track: { bone: t.bone, kind: t.kind },
+            group,
+            channel,
+            label,
+            owner,
+            color: group === "rotation" || group === "translation" ? CHANNEL_COLORS[channel] : "var(--color-yellow)",
+          })
+        );
+      }
+    }
+    return rows;
+  });
+
+  const handleCurveEdit = (next: AnimationClip, commit: boolean, description: string) => {
+    if (!commit) return void setClipPreview(next);
+    setClipPreview(undefined);
+    void editClip(description, () => next);
+  };
+
+  const handleTimelineTool = (tool: TimelineTool) => {
+    const clip = activeClip();
+    if (!clip) return;
+    const rot = rigCtx().rotation;
+    const refs = toolRefs();
+    /** Sin selección, los filtros van sobre todo lo que se ve */
+    const target = () => (refs.size > 0 ? refs : allRefs(clip, new Set(curveTracks().map((t) => `${t.kind ?? "b"}|${t.bone}`))));
+    const needs = () => {
+      if (refs.size > 0) return true;
+      setStatusMessage("Elige keys primero");
+      return false;
+    };
+    const clearSelections = () => {
+      setKeySelection(new Set<string>());
+      setCurveSelection(new Set<string>());
+    };
+    switch (tool.op) {
+      case "handles":
+        if (needs()) void editClip("Manijas", (c) => setHandleMode(c, refs, tool.value, rot));
+        break;
+      case "ease":
+        if (needs()) void editClip({ in: "Acelerar", out: "Frenar", both: "Acelerar y frenar", none: "Sin aceleración" }[tool.value], (c) => setEase(c, refs, tool.value, rot));
+        break;
+      case "scale":
+        if (needs()) {
+          void editClip("Escalar keys", (c) => scaleKeys(c, refs, Math.round(frame()), tool.factor));
+          clearSelections();
+        }
+        break;
+      case "retime": {
+        if (!needs()) break;
+        const frames = [...refs].map((id) => parseKeyRef(id).frame);
+        const [a, b] = [Math.min(...frames), Math.max(...frames)];
+        if (b <= a) {
+          setStatusMessage("Retiempo: elige keys de al menos dos cuadros");
+          break;
+        }
+        void editClip("Retiempo", (c) => retime(c, a, b, tool.factor));
+        clearSelections();
+        break;
+      }
+      case "closeCycle": {
+        const tracks = new Set(curveTracks().map((t) => `${t.kind ?? "b"}|${t.bone}`));
+        void editClip("Cerrar ciclo", (c) => closeCycle(c, jointSelection().length > 0 || selectedControl() ? tracks : null, rot));
+        break;
+      }
+      case "eulerFilter":
+        void editClip("Filtro Euler", (c) => eulerFilter(c, target(), rot));
+        break;
+      case "smooth":
+        void editClip("Suavizar", (c) => smoothKeys(c, target(), 0.6, rot));
+        break;
+      case "noise":
+        if (needs()) void editClip("Ruido", (c) => noiseKeys(c, refs, tool.amount, rot, Date.now() % 100000));
+        break;
+      case "reduce":
+        void editClip("Reducir keys", (c) => reduceSelectedKeys(c, target(), tool.tolerance, rot));
+        clearSelections();
+        break;
+      case "marker": {
+        const f = Math.round(frame());
+        void editClip("Marcador", (c) => withMarker(c, f, `M${(c.markers?.length ?? 0) + 1}`));
+        break;
+      }
+      case "interpolation":
+        handleKeyInterpolation(tool.value);
+        break;
+    }
+  };
+
+  const handleMarker = (change: { rename?: { frame: number; name: string }; move?: { from: number; to: number }; remove?: number }) => {
+    if (change.rename) void editClip("Renombrar marcador", (c) => withMarker(c, change.rename!.frame, change.rename!.name));
+    if (change.remove !== undefined) void editClip("Borrar marcador", (c) => withoutMarker(c, change.remove!));
+    if (change.move) {
+      const { from, to } = change.move;
+      void editClip("Mover marcador", (c) => {
+        const m = c.markers?.find((x) => x.frame === from);
+        return m ? withMarker(withoutMarker(c, from), to, m.name) : c;
+      });
+    }
+  };
+
+  /**
+   * Filas de la hoja de claves: por grupo (resumen plegable) o como el árbol,
+   * y con "solo elegidas" únicamente las articulaciones de la selección
+   */
+  const timelineDisplayRows = createMemo<TimelineRow[]>(() => {
+    const s = rigSettings();
+    const selected = new Set(jointSelection());
+    let rows = timelineRows().filter((r) => !onlySelection() || r.control || r.ik || selected.has(r.joint));
+    if (onlySelection()) {
+      rows = rows.filter((r) => (r.control ? r.bone === selectedControl() : r.ik ? r.bone === selectedChain() : true));
+    }
+    if (s.groups.length === 0) return rows;
+    const out: TimelineRow[] = [];
+    const used = new Set<TimelineRow>();
+    for (const g of s.groups) {
+      const members = rows.filter((r) => !r.control && !r.ik && s.bones[r.bone]?.group === g.id);
+      if (members.length === 0) continue;
+      const collapsed = collapsedGroups().has(g.id);
+      out.push({ joint: -1, bone: `grupo:${g.id}`, label: g.name, depth: 0, group: { id: g.id, color: g.color, collapsed, members: members.map((m) => m.bone) } });
+      members.forEach((m) => used.add(m));
+      if (!collapsed) out.push(...members.map((m) => ({ ...m, depth: 1 })));
+    }
+    out.push(...rows.filter((r) => !used.has(r)).map((r) => ({ ...r, depth: r.control || r.ik ? 0 : 1 })));
+    return out;
+  });
+
+  // ─── Mezclador ────────────────────────────────────────────────────────────
+
+  /** Cuadros que muestra la línea de tiempo con el mezclador */
+  const mixerView = createMemo<[number, number]>(() => {
+    const [lo, hi] = mixerRange(displayMixer(), clips());
+    const start = Math.min(0, lo);
+    return [start, Math.max(hi, start + 48)];
+  });
+
+  const changeMixer = (description: string, next: Mixer, commit: boolean) => {
+    if (!commit) return void setMixerPreview(next);
+    setMixerPreview(undefined);
+    void history.execute(description, { kind: "mixer", data: { before: mixer(), after: next } });
+  };
+
+  const handleAddLayer = (clipId: string) => {
+    const m = mixer();
+    const clip = clips().find((c) => c.id === clipId);
+    if (!clip) return;
+    const [, hi] = mixerRange(m, clips());
+    const layer: AnimationLayer = {
+      id: newRigId("layer"),
+      clipId,
+      mode: "replace",
+      weight: 1,
+      start: m.layers.length === 0 ? 0 : hi + 1,
+      repeat: 1,
+      blendIn: 0,
+      blendOut: 0,
+    };
+    changeMixer("Agregar capa", { enabled: true, layers: [...m.layers, layer] }, true);
+    setSelectedLayer(layer.id);
+  };
+
+  const handleBakeMixer = async () => {
+    const baked = bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24);
+    const before = clips();
+    await history.execute("Hornear la mezcla", { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
+    setMixer({ ...mixer(), enabled: false });
+    setTimelineMode("keys");
+    setStatusMessage("La mezcla quedó horneada en la animación «Mezcla»");
+  };
+
+  // ─── Papel cebolla y trayectorias ─────────────────────────────────────────
+
+  /** Pose final en el cuadro `f`: de la mezcla o del clip */
+  const poseAt = (f: number) => {
+    const ctx = rigCtx();
+    if (mixing()) {
+      const { pose, top } = mixKeys(displayMixer(), clips(), f, ctx);
+      return runPoseStack(clonePose(pose), ctx, top ? { clip: top.clip, frame: top.frame } : {});
+    }
+    return evaluatePose(clipPreview() ?? activeClip(), f, ctx);
+  };
+
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const o = onion();
+    const clip = clipPreview() ?? activeClip();
+    const f = Math.round(frame());
+    if (!animating() || !o.enabled || !clip || playing()) return v.setOnionSkin([], false);
+    const [start, end] = mixing() ? mixerView() : [clip.start, clip.end];
+    const ghosts: { pose: Pose; color: string; opacity: number }[] = [];
+    for (let k = 1; k <= o.before; k++) {
+      const g = f - k * o.step;
+      if (g >= start) ghosts.push({ pose: poseAt(g), color: "#ff6e6e", opacity: 0.6 * (1 - (k - 1) / (o.before + 1)) });
+    }
+    for (let k = 1; k <= o.after; k++) {
+      const g = f + k * o.step;
+      if (g <= end) ghosts.push({ pose: poseAt(g), color: "#69ff94", opacity: 0.6 * (1 - (k - 1) / (o.after + 1)) });
+    }
+    v.setOnionSkin(ghosts, o.mesh);
+  });
+
+  const PATH_COLORS = ["#ffb86c", "#8be9fd", "#ff79c6", "#50fa7b", "#bd93f9", "#f1fa8c"];
+
+  /** Trayectorias de las articulaciones elegidas (y del control): una posición por cuadro */
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const clip = clipPreview() ?? activeClip();
+    if (!animating() || !showPaths() || !clip) return v.setMotionPaths([]);
+    const ctx = rigCtx();
+    const joints = jointSelection().slice(0, 6);
+    const control = selectedControl();
+    const [start, end] = mixing() ? mixerView() : [Math.round(clip.start), Math.round(clip.end)];
+    const frames: number[] = [];
+    for (let f = start; f <= Math.min(end, start + 400); f++) frames.push(f);
+    const poses = frames.map((f) => poseAt(f));
+    const fks = poses.map((p) => new Fk(ctx.bones, p));
+    const keysOf = (names: string[], kind?: "control") =>
+      [...new Set(clip.tracks.filter((t) => t.kind === kind && names.includes(t.bone)).flatMap((t) => [...t.rotation, ...t.translation].map((k) => k.frame)))];
+    const paths = joints.map((j, i) => {
+      // Las keys de la articulación y de las que la mueven (hasta la ramificación)
+      const chain = [j];
+      for (let p = ctx.bones[j].parent; p !== null && ctx.children[p].length === 1; p = ctx.bones[p].parent) chain.push(p);
+      const parent = ctx.bones[chain[chain.length - 1]].parent;
+      if (parent !== null) chain.push(parent);
+      return {
+        id: `j:${j}`,
+        points: fks.map((fk) => fk.position(j)),
+        frames,
+        keys: keysOf(chain.map((c) => ctx.bones[c].name)),
+        color: PATH_COLORS[i % PATH_COLORS.length],
+      };
+    });
+    const c = control ? ctx.settings.controls.find((x) => x.id === control) : undefined;
+    if (c) {
+      paths.push({
+        id: `c:${c.id}`,
+        points: fks.map((fk, i) => controlWorld(c, ctx, fk, poses[i]).position),
+        frames,
+        keys: keysOf([c.id], "control"),
+        color: "#f8f8f2",
+      });
+    }
+    v.setMotionPaths(paths);
+  });
+
+  /** Clic en la key de una trayectoria: a ese cuadro, y a arrastrarla (IK automático o el control) */
+  const handlePathKey = (id: string, f: number) => {
+    const v = viewer();
+    if (!v) return;
+    setPlaying(false);
+    setFrame(f);
+    if (id.startsWith("c:")) {
+      setSelectedControl(id.slice(2));
+      v.startPathDrag({ control: id.slice(2) });
+    } else {
+      v.startPathDrag({ joint: Number(id.slice(2)) });
+    }
   };
 
   const handleClipRange = (range: { start?: number; end?: number; fps?: number }) => {
@@ -2343,7 +2711,7 @@ export const App: Component = () => {
     const name = activeName();
     if (!clip || !name) return;
     const ctx = rigCtx();
-    const q0 = samplePose(clip, keyFrame, ctx.boneIndex).rotations.get(j) ?? ([0, 0, 0, 1] as Quat);
+    const q0 = samplePose(clip, keyFrame, ctx.boneIndex, ctx.rotation).rotations.get(j) ?? ([0, 0, 0, 1] as Quat);
     const parts = jointParts(j, q0);
     const r =
       change.hinge !== undefined ? hingeRotation(change.hinge) : compose(change.swing ?? parts.swing, change.twist ?? parts.twist);
@@ -3698,6 +4066,7 @@ export const App: Component = () => {
     setFrame(0);
     setRigSettings(emptyRigSettings());
     setPoseLibrary([]);
+    setMixer(emptyMixer());
     setSelectedJoints([]);
     setSelectedControl(undefined);
     setViewSettings((prev) => ({ ...prev, selectedBone: -1 }));
@@ -3825,6 +4194,7 @@ export const App: Component = () => {
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
       rig: rigSettings(),
       poseLibrary: poseLibrary(),
+      mixer: mixer(),
       history: history.save(),
     });
   };
@@ -3880,6 +4250,7 @@ export const App: Component = () => {
     }
     setRigSettings(loadRigSettings(ui.rig));
     setPoseLibrary(loadPoseLibrary(ui.poseLibrary));
+    setMixer(loadMixer(ui.mixer));
     setSelectedJoints([]);
     setSelectedControl(undefined);
     setClips(ui.animation?.clips ?? []);
@@ -4208,6 +4579,7 @@ export const App: Component = () => {
               onControlSelected={(id) => setSelectedControl(id ?? undefined)}
               onControlPoseEdited={handleControlPoseEdited}
               onControlsDragged={handleControlsDragged}
+              onPathKeyPressed={handlePathKey}
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
@@ -4289,10 +4661,45 @@ export const App: Component = () => {
           <Show when={animating() && activeClip()}>
             {(clip) => (
               <Timeline
-                clip={clip()}
+                clip={clipPreview() ?? clip()}
                 frame={frame()}
                 playing={playing()}
-                rows={timelineRows()}
+                rows={timelineDisplayRows()}
+                mode={timelineMode()}
+                onMode={setTimelineMode}
+                onTool={handleTimelineTool}
+                onToggleGroup={(id) => {
+                  const next = new Set(collapsedGroups());
+                  if (next.has(id)) next.delete(id);
+                  else next.add(id);
+                  setCollapsedGroups(next);
+                }}
+                onlySelection={onlySelection()}
+                onOnlySelection={setOnlySelection}
+                onMarker={handleMarker}
+                onion={onion()}
+                onOnion={setOnion}
+                paths={showPaths()}
+                onPaths={setShowPaths}
+                curves={{
+                  rows: curveRows(),
+                  rotation: rigCtx().rotation,
+                  selection: curveSelection(),
+                  onSelection: setCurveSelection,
+                  onEdit: handleCurveEdit,
+                }}
+                mixer={{
+                  mixer: displayMixer(),
+                  clips: clips(),
+                  view: mixerView(),
+                  selectedLayer: selectedLayer(),
+                  onSelectLayer: setSelectedLayer,
+                  onChange: changeMixer,
+                  onAddLayer: handleAddLayer,
+                  onBake: () => void handleBakeMixer(),
+                  onEnabled: (enabled) => setMixer({ ...mixer(), enabled }),
+                }}
+
                 selectedJoint={viewSettings().selectedBone}
                 selection={keySelection()}
                 autoKey={autoKey()}

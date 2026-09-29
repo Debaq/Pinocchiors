@@ -292,6 +292,17 @@ Nadie quiere cargar 100 límites a mano.
 
 ## Fase 5: Edición de animación
 
+**Hecha (2026-09-29).** `lib/curves.ts` (Bézier por canal: giros como
+Euler en los ejes de cada articulación y desenrollados; manijas
+automáticas, vector, alineadas y libres; acelerar/frenar; filtro Euler,
+suavizar, ruido, reducir, escalar, retiempo, cerrar ciclo, marcadores),
+`lib/layers.ts` (capas que reemplazan o suman, repetir, recortar,
+transiciones, máscara por grupo y horneado) y la línea de tiempo con tres
+vistas: claves (resúmenes por grupo, solo elegidas, marcadores), curvas
+(`CurveEditor.tsx`) y mezclador (`MixerEditor.tsx`). El visor dibuja el
+papel cebolla (huesos y malla) y las trayectorias; sus keys se arrastran
+con IK automático.
+
 - **Curvas Bézier** por key: manijas, automático, vector, aceleración/freno
   preestablecidos. También la interpolación "constante" que ya existe.
 - **Editor de curvas** (graph editor) completo: por canal, normalizar, marco

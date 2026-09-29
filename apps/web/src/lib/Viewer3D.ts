@@ -218,6 +218,8 @@ export interface ViewerCallbacks {
   onControlPoseEdited?: (id: string) => void;
   /** Un control se está moviendo o girando (para rehacer el IK en vivo), como mucho una vez por cuadro */
   onControlsDragged?: () => void;
+  /** Clic en la key de una trayectoria (id de la trayectoria y su cuadro) */
+  onPathKeyPressed?: (id: string, frame: number) => void;
   /** Se soltó el gizmo del esqueleto entero: factor de escala o giro (x, y, z, w) alrededor del pivote */
   onSkeletonTransformed?: (change: { scale: number } | { rotation: [number, number, number, number] }) => void;
   /**
@@ -578,6 +580,8 @@ export class Viewer3D {
     control?: { id: string; rotation: THREE.Quaternion; translation: THREE.Vector3 };
     /** IK automático: la cadena de la base a la punta que se arrastra */
     ikChain?: number[];
+    /** Se confirma al soltar el botón (arrastre desde una trayectoria) */
+    release?: boolean;
   } | null = null;
   /** Lo que el rig agrega al esqueleto (colores, formas, bloqueos, ejes, controles) */
   private rigDisplay: RigDisplay | null = null;
@@ -815,6 +819,7 @@ export class Viewer3D {
     window.addEventListener("pointerup", () => {
       this.onLightUp();
       this.finishStroke();
+      if (this.modal?.release) this.confirmModal();
     });
 
     // Teclas mientras hay una operación modal (G, R, F…): antes que los atajos
@@ -961,6 +966,12 @@ export class Viewer3D {
     }
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
+    // Una key de una trayectoria: la app va a ese cuadro y empieza a arrastrarla
+    const pathKey = this.pickPathKey(e);
+    if (pathKey) {
+      this.callbacks.onPathKeyPressed?.(pathKey.id, pathKey.frame);
+      return;
+    }
     // Un control se elige por su contorno; adentro de él manda la articulación
     const picked = this.pickControl(e);
     const control = picked && (picked.onOutline || this.pickJoint(e) < 0) ? picked.id : null;
@@ -3180,7 +3191,9 @@ export class Viewer3D {
   private disposeRig(): void {
     const rig = this.rig;
     if (!rig) return;
+    this.clearOnionSkin();
     this.rig = null;
+
     this.meshGroup.remove(rig.root);
     if (rig.mesh && rig.wireframe) {
       this.meshGroup.remove(rig.mesh, rig.wireframe);
@@ -3509,6 +3522,164 @@ export class Viewer3D {
   }
 
   /** Mueve el control `delta` (en mundo) desde el desplazamiento `start` */
+  // ─── Papel cebolla ──────────────────────────────────────────────────────
+
+  private onion: { objects: THREE.Object3D[]; skeletons: THREE.Skeleton[] } = { objects: [], skeletons: [] };
+
+  private clearOnionSkin(): void {
+    for (const o of this.onion.objects) {
+      this.meshGroup.remove(o);
+      o.traverse((x) => {
+        if (x instanceof THREE.LineSegments) x.geometry.dispose();
+        if (x instanceof THREE.LineSegments || x instanceof THREE.SkinnedMesh) (x.material as THREE.Material).dispose();
+      });
+    }
+    this.onion.skeletons.forEach((s) => s.dispose());
+    this.onion = { objects: [], skeletons: [] };
+  }
+
+  /**
+   * Papel cebolla: la pose de cuadros vecinos como fantasmas (huesos y, con
+   * `mesh`, la malla) del color y la opacidad de cada uno
+   */
+  setOnionSkin(ghosts: { pose: Pose; color: string; opacity: number }[], mesh: boolean): void {
+    this.clearOnionSkin();
+    const rig = this.rig;
+    const skeleton = this.skeletonData;
+    if (!rig || !skeleton) return;
+    for (const ghost of ghosts) {
+      // Huesos propios del fantasma, con la misma cinemática que el rig
+      const root = new THREE.Group();
+      const bones = rig.rest.map((r, b) => {
+        const bone = new THREE.Bone();
+        bone.position.copy(r);
+        void b;
+        return bone;
+      });
+      bones.forEach((bone, b) => (rig.parents[b] === null ? root : bones[rig.parents[b]!]).add(bone));
+      const indices = (j: number) => (rig.parents[j] === null ? [j] : rig.children[j]);
+      for (const [j, q] of ghost.pose.rotations) for (const b of indices(j)) bones[b]?.quaternion.set(...q);
+      for (const [j, t] of ghost.pose.translations) for (const b of indices(j)) bones[b]?.position.copy(rig.rest[b]).add(new THREE.Vector3(...t));
+      this.meshGroup.add(root);
+      root.updateMatrixWorld(true);
+      const joint = (b: number) => {
+        const kids = rig.children[b];
+        const p = new THREE.Vector3();
+        if (kids.length > 0 && rig.parents[b] !== null) p.setFromMatrixPosition(bones[kids[0]].matrixWorld);
+        else p.copy(rig.tip[b]).applyMatrix4(bones[b].matrixWorld);
+        return root.parent!.worldToLocal(p);
+      };
+      const positions = skeleton.bones.map((_, b) => joint(b));
+      const points = skeleton.edges.flatMap(([a, b]) => [positions[a], positions[b]]);
+      const lines = new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({ color: ghost.color, transparent: true, opacity: ghost.opacity, depthTest: false })
+      );
+      lines.renderOrder = 2;
+      this.meshGroup.add(lines);
+      this.onion.objects.push(root, lines);
+      if (mesh && rig.mesh) {
+        const s = new THREE.Skeleton(bones);
+        const skinned = new THREE.SkinnedMesh(
+          rig.mesh.geometry,
+          new THREE.MeshBasicMaterial({ color: ghost.color, transparent: true, opacity: ghost.opacity * 0.5, depthWrite: false })
+        );
+        skinned.frustumCulled = false;
+        skinned.bind(s, rig.mesh.bindMatrix);
+        this.meshGroup.add(skinned);
+        this.onion.objects.push(skinned);
+        this.onion.skeletons.push(s);
+      }
+    }
+  }
+
+  // ─── Trayectorias ───────────────────────────────────────────────────────
+
+  private paths: { id: string; frames: number[]; keys: Set<number>; points: THREE.Vector3[]; object: THREE.Group }[] = [];
+
+  /**
+   * Trayectorias (espacio del modelo): la línea cuadro a cuadro, un punto
+   * por cuadro y uno grande por key; las keys se arrastran
+   */
+  setMotionPaths(paths: { id: string; points: Vec3[]; frames: number[]; keys: number[]; color: string }[]): void {
+    for (const p of this.paths) {
+      this.meshGroup.remove(p.object);
+      p.object.traverse((x) => {
+        if (x instanceof THREE.Line || x instanceof THREE.Points) {
+          x.geometry.dispose();
+          (x.material as THREE.Material).dispose();
+        }
+      });
+    }
+    this.paths = paths.map((p) => {
+      const points = p.points.map((v) => new THREE.Vector3(...v));
+      const group = new THREE.Group();
+      const line = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.LineBasicMaterial({ color: p.color, transparent: true, opacity: 0.8, depthTest: false })
+      );
+      line.renderOrder = 9;
+      const dots = new THREE.Points(
+        new THREE.BufferGeometry().setFromPoints(points),
+        new THREE.PointsMaterial({ color: p.color, size: 3, sizeAttenuation: false, depthTest: false })
+      );
+      dots.renderOrder = 9;
+      const keys = new Set(p.keys);
+      const keyPoints = points.filter((_, i) => keys.has(p.frames[i]));
+      const keyDots = new THREE.Points(
+        new THREE.BufferGeometry().setFromPoints(keyPoints),
+        new THREE.PointsMaterial({ color: 0xf8f8f2, size: 8, sizeAttenuation: false, depthTest: false })
+      );
+      keyDots.renderOrder = 10;
+      group.add(line, dots, keyDots);
+      this.meshGroup.add(group);
+      return { id: p.id, frames: p.frames, keys, points, object: group };
+    });
+  }
+
+  /** Key de una trayectoria bajo el cursor (a menos de 8 px) */
+  private pickPathKey(e: PointerEvent): { id: string; frame: number } | null {
+    if (this.paths.length === 0) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    let best: { id: string; frame: number } | null = null;
+    let bestD = 8;
+    const v = new THREE.Vector3();
+    for (const p of this.paths) {
+      p.points.forEach((pt, i) => {
+        if (!p.keys.has(p.frames[i])) return;
+        v.copy(pt).applyMatrix4(this.meshGroup.matrixWorld).project(this.camera);
+        if (v.z > 1) return;
+        const d = Math.hypot(((v.x + 1) / 2) * rect.width - mx, ((1 - v.y) / 2) * rect.height - my);
+        if (d < bestD) {
+          bestD = d;
+          best = { id: p.id, frame: p.frames[i] };
+        }
+      });
+    }
+    return best;
+  }
+
+  /**
+   * Empieza a arrastrar desde una trayectoria: la articulación con IK
+   * automático (su cadena la sigue) o el control; se confirma al soltar
+   */
+  startPathDrag(target: { joint: number } | { control: string }): void {
+    if (this.modal) return;
+    if ("control" in target) {
+      this.selectControl(target.control);
+      if (this.startModal("grab") && this.modal) (this.modal as { release?: boolean }).release = true;
+      return;
+    }
+    this.selectBone(target.joint);
+    const auto = this.autoIk;
+    this.autoIk = { ...auto, enabled: true };
+    const started = this.startModal("grab");
+    this.autoIk = auto;
+    if (started && this.modal) (this.modal as { release?: boolean }).release = true;
+  }
+
   /** Avisa que un control se mueve, como mucho una vez por cuadro */
   private scheduleControlsDragged(): void {
     if (this.dragFrame !== null) return;

@@ -40,6 +40,7 @@ import {
 } from "./animation";
 import { Fk, solveCcd, solveFabrik, solveLookAt, solveSpline, solveTwoBone } from "./ik";
 import { applyLimits, type JointLimits } from "./jointLimits";
+import { eulerCodec, type Codec, type RotationCodecs } from "./curves";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -442,6 +443,34 @@ export interface RigContext {
   mirror: (number | null)[];
   /** Normal del plano de simetría (el costado del cuerpo) y un punto del plano */
   symmetry: { normal: Vec3; point: Vec3 };
+  /** Cómo se interpolan los giros de cada pista en los tramos Bézier */
+  rotation: RotationCodecs;
+}
+
+/**
+ * Giros de cada pista como ángulos de Euler en los ejes de su articulación,
+ * con el orden de su modo de rotación (cuaternión: XYZ). Los controles, en
+ * los ejes del modelo
+ */
+export function rigRotationCodecs(bones: SkeletonBone[], settings: RigSettings, frames: JointFrame[]): RotationCodecs {
+  const byName = new Map(bones.map((b, i) => [b.name, i]));
+  const codecs = new Map<string, Codec<Quat>>();
+  const fallback = eulerCodec();
+  return (track) => {
+    if (track.kind) return fallback;
+    const j = byName.get(track.bone);
+    if (j === undefined) return fallback;
+    let codec = codecs.get(track.bone);
+    if (!codec) {
+      const mode = boneProps(settings, track.bone).rotationMode;
+      const order = mode === "quaternion" ? "XYZ" : mode;
+      const frame = frames[j];
+      const id = `j:${order}:${frame.q.map((x) => x.toFixed(6)).join(",")}`;
+      codec = eulerCodec(order, id, { toLocal: (q) => toJointSpace(q, frame), toModel: (q) => fromJointSpace(q, frame) });
+      codecs.set(track.bone, codec);
+    }
+    return codec;
+  };
 }
 
 export function createRigContext(bones: SkeletonBone[], settings: RigSettings): RigContext {
@@ -450,12 +479,14 @@ export function createRigContext(bones: SkeletonBone[], settings: RigSettings): 
   bones.forEach((b, i) => b.parent !== null && children[b.parent]?.push(i));
   const { right } = bodyAxes(body);
   const root = body?.root ?? bones.findIndex((b) => b.parent === null);
+  const frames = jointFrames(bones, settings, body);
   return {
     bones,
     boneIndex: new Map(bones.map((b, i) => [b.name, i])),
     settings,
     body,
-    frames: jointFrames(bones, settings, body),
+    frames,
+    rotation: rigRotationCodecs(bones, settings, frames),
     children,
     mirror: mirrorPairs(bones, right, root >= 0 ? bones[root].position : [0, 0, 0]),
     symmetry: { normal: right, point: root >= 0 ? bones[root].position : [0, 0, 0] },
@@ -765,7 +796,7 @@ export function runPoseStack(pose: Pose, ctx: RigContext, info: StageInfo = {}):
 
 /** Pose final del clip en `frame` */
 export function evaluatePose(clip: AnimationClip | undefined, frame: number, ctx: RigContext, options: { noPins?: boolean } = {}): Pose {
-  return runPoseStack(samplePose(clip, frame, ctx.boneIndex), ctx, { clip, frame, noPins: options.noPins });
+  return runPoseStack(samplePose(clip, frame, ctx.boneIndex, ctx.rotation), ctx, { clip, frame, noPins: options.noPins });
 
 }
 

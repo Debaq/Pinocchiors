@@ -10,7 +10,19 @@
  * con el índice de cada articulación (ver `apps/desktop/src/animation.rs`).
  */
 
-export type KeyInterpolation = "linear" | "step";
+import {
+  bezierSegment,
+  defaultRotationCodecs,
+  scalarCodec,
+  vec3Codec,
+  type Codec,
+  type Handle,
+  type HandleMode,
+  type Marker,
+  type RotationCodecs,
+} from "./curves";
+
+export type KeyInterpolation = "linear" | "step" | "bezier";
 export type Quat = [number, number, number, number];
 export type Vec3 = [number, number, number];
 
@@ -19,6 +31,13 @@ export interface Key<T> {
   value: T;
   /** Cómo se llega desde esta key a la siguiente */
   interpolation: KeyInterpolation;
+  /** Bézier: tipo de manija (por defecto automática) y las guardadas (alineada, libre) */
+  handleMode?: HandleMode;
+  handleIn?: Handle;
+  handleOut?: Handle;
+  /** Llega suave (manija de entrada plana) / sale suave (manija de salida plana) */
+  easeIn?: boolean;
+  easeOut?: boolean;
 }
 
 export interface BoneTrack {
@@ -46,6 +65,10 @@ export interface AnimationClip {
   start: number;
   end: number;
   tracks: BoneTrack[];
+  /** Marcadores con nombre en la línea de tiempo */
+  markers?: Marker[];
+  /** Se repite: el último cuadro empalma con el primero (manijas automáticas de las puntas) */
+  cyclic?: boolean;
 }
 
 /** Giro y desplazamiento de un control respecto de su reposo */
@@ -111,27 +134,45 @@ const lerp3 = (a: Vec3, b: Vec3, t: number): Vec3 => [
   a[2] + (b[2] - a[2]) * t,
 ];
 
-/** Valor de una pista en `frame` (las keys están ordenadas); fuera del rango, la key más cercana */
-function sample<T>(keys: Key<T>[], frame: number, mix: (a: T, b: T, t: number) => T): T | undefined {
+/**
+ * Valor de una pista en `frame` (las keys están ordenadas); fuera del rango,
+ * la key más cercana. Los tramos Bézier se interpolan por canales (`codec`)
+ */
+function sample<T>(keys: Key<T>[], frame: number, mix: (a: T, b: T, t: number) => T, codec?: Codec<T>, cycle?: number): T | undefined {
   if (keys.length === 0) return undefined;
   if (frame <= keys[0].frame) return keys[0].value;
   for (let i = 0; i < keys.length - 1; i++) {
     const a = keys[i];
     const b = keys[i + 1];
     if (frame < b.frame) {
-      return a.interpolation === "step" ? a.value : mix(a.value, b.value, (frame - a.frame) / (b.frame - a.frame));
+      if (a.interpolation === "step") return a.value;
+      if (a.interpolation === "bezier" && codec) return bezierSegment(keys, i, frame, codec, cycle);
+      return mix(a.value, b.value, (frame - a.frame) / (b.frame - a.frame));
     }
   }
   return keys[keys.length - 1].value;
 }
 
-export function samplePose(clip: AnimationClip | undefined, frame: number, boneIndex: Map<string, number>): Pose {
+/**
+ * Pose del clip en `frame`. `rotation` dice cómo se interpolan los giros en
+ * los tramos Bézier (ángulos de Euler en los ejes de cada articulación, ver
+ * `rig.ts`); sin él, en los ejes del modelo
+ */
+export function samplePose(
+  clip: AnimationClip | undefined,
+  frame: number,
+  boneIndex: Map<string, number>,
+  rotationCodecs: RotationCodecs = defaultRotationCodecs
+): Pose {
   const pose = emptyPose();
+  const cycle = clip?.cyclic ? clip.end - clip.start : undefined;
   for (const track of clip?.tracks ?? []) {
     if (track.kind === "ik") continue;
+    const rot = (keys: Key<Quat>[]): Quat | undefined => sample(keys, frame, slerp, rotationCodecs(track), cycle);
+    const pos = (keys: Key<Vec3>[]): Vec3 | undefined => sample(keys, frame, lerp3, vec3Codec, cycle);
     if (track.kind === "control") {
-      const rotation = sample(track.rotation, frame, slerp);
-      const translation = sample(track.translation, frame, lerp3);
+      const rotation = rot(track.rotation);
+      const translation = pos(track.translation);
       if (rotation || translation) {
         pose.controls.set(track.bone, { rotation: rotation ?? [0, 0, 0, 1], translation: translation ?? [0, 0, 0] });
       }
@@ -139,9 +180,9 @@ export function samplePose(clip: AnimationClip | undefined, frame: number, boneI
     }
     const joint = boneIndex.get(track.bone);
     if (joint === undefined) continue;
-    const rotation = sample(track.rotation, frame, slerp);
+    const rotation = rot(track.rotation);
     if (rotation) pose.rotations.set(joint, rotation);
-    const translation = sample(track.translation, frame, lerp3);
+    const translation = pos(track.translation);
     if (translation) pose.translations.set(joint, translation);
   }
   return pose;
@@ -157,7 +198,7 @@ export function sampleScalar(clip: AnimationClip | undefined, chain: string, cha
     for (const k of keys) if (k.frame <= frame) value = k.value;
     return value;
   }
-  return sample(keys, frame, (a, b, t) => a + (b - a) * t);
+  return sample(keys, frame, (a, b, t) => a + (b - a) * t, scalarCodec, clip?.cyclic ? clip.end - clip.start : undefined);
 }
 
 /**
@@ -202,8 +243,14 @@ export function parseKeyId(id: string): { bone: string; frame: number } {
   return { bone, frame: Number(frame) };
 }
 
+/** Pone `key` en su cuadro; si ya había una, conserva sus manijas y su aceleración */
 function withKey<T>(keys: Key<T>[], key: Key<T>): Key<T>[] {
-  return [...keys.filter((k) => k.frame !== key.frame), key].sort((a, b) => a.frame - b.frame);
+  const old = keys.find((k) => k.frame === key.frame);
+  const merged: Key<T> = old
+    ? { ...key, handleMode: old.handleMode, easeIn: old.easeIn, easeOut: old.easeOut, handleIn: old.handleIn, handleOut: old.handleOut }
+    : key;
+  for (const f of ["handleMode", "easeIn", "easeOut", "handleIn", "handleOut"] as const) if (merged[f] === undefined) delete merged[f];
+  return [...keys.filter((k) => k.frame !== key.frame), merged].sort((a, b) => a.frame - b.frame);
 }
 
 /**
