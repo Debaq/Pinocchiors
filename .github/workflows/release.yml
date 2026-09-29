@@ -8,6 +8,11 @@
 # La fecha es la del commit en UTC. Para crear el tag correcto:
 #   ./scripts/release.sh [commit]
 #
+# O a mano (Actions → Release → Run workflow, o
+# `gh workflow run Release -f plataformas=linux`): publica el commit de la rama
+# elegida con el mismo formato de tag, que crea la propia release. Con
+# `plataformas=linux` solo compila CLI y app de Linux (más WASM).
+#
 # Artefactos:
 #   - CLI `converter`       Linux x86_64, Windows x86_64, macOS arm64 + x86_64
 #   - App de escritorio     binario Linux + .AppImage, .msi/-setup.exe, .dmg (arm64)
@@ -19,6 +24,13 @@ on:
   push:
     tags:
       - "pre.*"
+  workflow_dispatch:
+    inputs:
+      plataformas:
+        description: "Plataformas a compilar"
+        type: choice
+        options: [linux, todas]
+        default: linux
 
 permissions:
   contents: write
@@ -33,22 +45,44 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.tag.outputs.tag }}
+      cli: ${{ steps.matrix.outputs.cli }}
+      desktop: ${{ steps.matrix.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
 
       - id: tag
         env:
           TAG: ${{ github.ref_name }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
         run: |
           date=$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)
           sha=$(git rev-parse --short=7 HEAD)
           expected="pre.${date}.${sha}"
-          if [[ "$TAG" != "$expected" ]]; then
+          # A mano no hay tag todavía: lo crea la release
+          if [[ "$MANUAL" == true ]]; then
+            TAG="$expected"
+          elif [[ "$TAG" != "$expected" ]]; then
             echo "::error::Tag '${TAG}' no coincide con el commit. Esperado: '${expected}' (usa scripts/release.sh)"
             exit 1
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Versión: ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+      - id: matrix
+        env:
+          SOLO_LINUX: ${{ github.event_name == 'workflow_dispatch' && inputs.plataformas == 'linux' }}
+        run: |
+          cli='[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu"}'
+          desktop='[{"os":"ubuntu-22.04","platform":"linux"}'
+          if [[ "$SOLO_LINUX" != true ]]; then
+            cli+=',{"os":"windows-latest","target":"x86_64-pc-windows-msvc"}'
+            cli+=',{"os":"macos-latest","target":"aarch64-apple-darwin"}'
+            cli+=',{"os":"macos-latest","target":"x86_64-apple-darwin"}'
+            desktop+=',{"os":"windows-latest","platform":"windows"}'
+            desktop+=',{"os":"macos-latest","platform":"macos"}'
+          fi
+          echo "cli=${cli}]" >> "$GITHUB_OUTPUT"
+          echo "desktop=${desktop}]" >> "$GITHUB_OUTPUT"
 
   # ───────────────────────────────────────────────────────────────────────────
   test:
@@ -75,11 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu }
-          - { os: windows-latest, target: x86_64-pc-windows-msvc }
-          - { os: macos-latest,   target: aarch64-apple-darwin }
-          - { os: macos-latest,   target: x86_64-apple-darwin }
+        include: ${{ fromJSON(needs.version.outputs.cli) }}
     defaults:
       run:
         shell: bash
@@ -124,10 +154,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: ubuntu-22.04,   platform: linux }
-          - { os: windows-latest, platform: windows }
-          - { os: macos-latest,   platform: macos }
+        include: ${{ fromJSON(needs.version.outputs.desktop) }}
     defaults:
       run:
         shell: bash
@@ -272,6 +299,13 @@ jobs:
         run: |
           if gh release view "$TAG" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
+          elif [[ "${{ github.event_name }}" == workflow_dispatch ]]; then
+            # El tag lo crea GitHub con el token del workflow: no relanza este workflow
+            gh release create "$TAG" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --latest \
+              --generate-notes
           else
             gh release create "$TAG" dist/* \
               --verify-tag \
