@@ -5,6 +5,7 @@
 //! ```
 //!
 //! `--tri`: despliega además la malla original de triángulos.
+//! `--no-smooth`: sin alisar los bordes de las cartas.
 
 use quadriflow_core::{remesh, RemeshConfig};
 use std::time::Instant;
@@ -32,8 +33,9 @@ fn main() {
         .and_then(|i| args.get(i + 1))
         .and_then(|s| s.parse().ok())
         .unwrap_or(2048);
-    let targets: Vec<usize> = args[2..].iter().filter_map(|a| a.parse().ok()).filter(|&t| t != size as usize).collect();
-    let options = UnwrapOptions { texture_size: size, ..Default::default() };
+    let targets: Vec<usize> = args[2..].iter().filter_map(|a| a.parse().ok()).filter(|&t| t != size as usize && t > 100).collect();
+    let mut options = UnwrapOptions { texture_size: size, ..Default::default() };
+    options.charts.smooth_seams = !args.iter().any(|a| a == "--no-smooth");
 
     let scene = converter_gltf_io::import_gltf(input).expect("importar");
     let mesh = pinocchio_mesh::scene_to_mesh(&scene).expect("malla");

@@ -52,6 +52,14 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 - Caras que nadie acepta siembran islas nuevas (la más grande primero).
 - Relajación (4 rondas): semilla = cara más interior (BFS desde el borde) y se
   vuelve a crecer.
+- Alisado final de bordes (`ChartOptions::smooth_seams`): una cara de borde
+  pasa a la carta vecina si acorta las costuras y la vecina la acepta
+  (ángulo, aristas vivas). Costuras ~7 % más cortas, cobertura del atlas
+  69,5 → 71,3 %, sin costo de tiempo apreciable.
+- Probado y descartado: esconder costuras por oclusión ambiental (48 rayos
+  por cara). Como costo extra del crecimiento casi no cambia el largo visible
+  (9,34 → 9,22) y agrega islas; como peso en el alisado mejora ~1 % sobre el
+  alisado por largo solo, y cuesta ~0,4 s.
 - Discos: χ = 1, un lazo de borde, conexa. Si no, se parte en dos con
   Dijkstra por centroides desde dos caras lejanas.
 
@@ -133,8 +141,8 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 - Desplegar también la malla original (sin retopología).
 - Importar PLY (hoy solo se exporta): es el formato típico de escaneos con
   color por vértice.
-- Costuras preferidas en zonas poco visibles (oclusión aproximada) y
-  alineadas a las costuras viejas.
+- Costuras alineadas a las costuras viejas del original. (Esconderlas por
+  oclusión no rindió, ver fase 1.)
 
 ## Verificación
 
