@@ -27,6 +27,8 @@ pub struct TexelContext {
     /// `[T, B, N]` de la malla destino en el texel, interpolado de sus
     /// [`CornerFrames`] como lo hace el visor.
     pub target_frame: [[f32; 3]; 3],
+    /// Color de vértice (lineal) de la referencia, si tiene.
+    pub color: Option<[f32; 4]>,
 }
 
 /// Imágenes horneadas, fila por fila (fila 0 = v cercana a 0, como glTF).
@@ -141,6 +143,7 @@ pub fn bake<const N: usize>(
             uv: uv.map(|c| c as f32),
             source_frame: source.map(to_f32),
             target_frame: [to_f32(t_axis), to_f32(b), to_f32(n)],
+            color: surface.color_at(triangle, &point),
         })
     };
 

@@ -34,6 +34,8 @@ pub struct WorldPrimitive {
     pub normals: Option<Vec<[f32; 3]>>,
     /// Coordenadas UV (set 0)
     pub uvs: Option<Vec<[f32; 2]>>,
+    /// Colores de vértice RGBA (lineales, como `COLOR_0` de glTF)
+    pub colors: Option<Vec<[f32; 4]>>,
     /// Triángulos con índices válidos; el orden se invierte si la
     /// transformación refleja (determinante negativo)
     pub triangles: Vec<[u32; 3]>,
@@ -141,11 +143,13 @@ impl Scene {
                 let mut positions = None;
                 let mut normals = None;
                 let mut uvs = None;
+                let mut colors = None;
                 for attr in &prim.attributes {
                     match attr {
                         VertexAttribute::Positions(p) => positions = Some(p),
                         VertexAttribute::Normals(n) => normals = Some(n),
                         VertexAttribute::TexCoords(0, uv) => uvs = Some(uv),
+                        VertexAttribute::Colors(c) => colors = Some(c),
                         _ => {}
                     }
                 }
@@ -170,6 +174,7 @@ impl Scene {
                     }
                 });
                 let uvs = uvs.filter(|uv| uv.len() == count).cloned();
+                let colors = colors.filter(|c| c.len() == count).cloned();
 
                 let indices: Vec<u32> = match &prim.indices {
                     Some(IndexData::U16(idx)) => idx.iter().map(|&i| i as u32).collect(),
@@ -190,6 +195,7 @@ impl Scene {
                     positions,
                     normals,
                     uvs,
+                    colors,
                     triangles,
                     material: prim.material,
                 });

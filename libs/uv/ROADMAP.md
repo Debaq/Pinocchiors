@@ -102,6 +102,11 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   tangente nuevo; se hornea siempre, así la malla liviana conserva el relieve
   de la original. Convención glTF: T hacia +u, B = w (N × T) hacia −v; la
   exportación escribe esas mismas tangentes (`TANGENT`).
+- Sin UV de origen (escaneo en STL) se hornea igual desde la geometría
+  (`material_surface`, UV en cero): el relieve de la malla densa como normal
+  map, los factores por material y los colores de vértice (`COLOR_0`,
+  `UvPart::colors`, multiplicados al color base en espacio lineal). Cabeza
+  escaneada de 126 k triángulos a 4000 quads: la oreja recupera sus pliegues.
 - Dilatación de `2 × padding` texels y el resto del fondo con el color medio.
 - Gonfoterio: sin astillas, arrugas de la trompa conservadas, gltf-validator
   0 errores / 0 avisos.
@@ -125,9 +130,9 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   esquiva pasando −0 a +0. Arreglarlo en el BVH cambia los pesos de
   `heat_diffusion` en ~1e-5 (su test de invariancia de escala tiene
   tolerancia 1e-5): coordinarlo con quien trabaje en el rig.
-- Normal map de alta a baja sin UV de origen: `UvSurface` exige UV; un STL
-  denso podría aportar su relieve igual.
 - Desplegar también la malla original (sin retopología).
+- Importar PLY (hoy solo se exporta): es el formato típico de escaneos con
+  color por vértice.
 - Costuras preferidas en zonas poco visibles (oclusión aproximada) y
   alineadas a las costuras viejas.
 

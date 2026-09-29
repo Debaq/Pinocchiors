@@ -962,6 +962,7 @@ fn bone_shapes(skeleton: &BasicSkeleton, positions: &[Vector3]) -> (Vec<converte
         positions: out_positions,
         normals: Some(normals),
         uvs: None,
+        colors: None,
         triangles,
         material: None,
     };

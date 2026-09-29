@@ -67,6 +67,7 @@ fn primitives_surface(prims: &[WorldPrimitive]) -> Option<UvSurface> {
         positions: &p.positions,
         uvs: p.uvs.as_deref().unwrap_or(zeros),
         normals: p.normals.as_deref(),
+        colors: p.colors.as_deref(),
         triangles: &p.triangles,
     }))
 }
@@ -104,11 +105,13 @@ impl Default for BakeOptions {
 }
 
 /// Despliega la malla y hornea sobre el mapa nuevo los materiales de la
-/// escena (si `surface` existe). Todas las caras quedan con un solo material.
+/// escena. Todas las caras quedan con un solo material.
 ///
-/// La normal se hornea siempre que haya superficie de referencia: la normal
-/// de sombreado del original (más su normal map, si tiene) en el espacio
-/// tangente de la malla nueva, así la malla liviana conserva el detalle.
+/// Sin `surface` (el original no tiene UV) se hornea igual desde su geometría
+/// ([`material_surface`]): factores por material, colores de vértice y la
+/// normal. La normal se hornea siempre: la normal de sombreado del original
+/// (más su normal map, si tiene) en el espacio tangente de la malla nueva, así
+/// la malla liviana conserva el relieve de la densa (un escaneo en STL).
 pub fn unwrapped_skin<const N: usize>(
     scene: &Scene,
     surface: Option<&UvSurface>,
@@ -120,7 +123,8 @@ pub fn unwrapped_skin<const N: usize>(
     let unwrap_options = UnwrapOptions { texture_size: size, ..options.unwrap };
     let layout = unwrap(positions, faces, &unwrap_options);
 
-    let (material, textures) = match surface {
+    let geometry = if surface.is_none() { material_surface(scene) } else { None };
+    let (material, textures) = match surface.or(geometry.as_ref()) {
         Some(surface) => {
             let frames = corner_frames(positions, faces, &layout.corners);
             let bake_input = BakeInput { surface, positions, faces, corners: &layout.corners, frames: &frames, size };
@@ -264,7 +268,8 @@ fn bake_materials<const N: usize>(scene: &Scene, input: &BakeInput<N>, padding: 
     let image_of = |m: &Material, channel: Channel| channel.texture(m).and_then(|r| images.get(&r.texture_index));
 
     // Canales necesarios: con textura en algún material, o con factores que
-    // difieren (una sola malla, un solo material). La normal siempre.
+    // difieren (una sola malla, un solo material). El color si hay colores de
+    // vértice. La normal siempre.
     let needed: Vec<Channel> = [Channel::BaseColor, Channel::MetallicRoughness, Channel::Occlusion, Channel::Emissive, Channel::Normal]
         .into_iter()
         .filter(|&channel| {
@@ -278,7 +283,8 @@ fn bake_materials<const N: usize>(scene: &Scene, input: &BakeInput<N>, padding: 
                     Channel::Emissive => w[0].emissive_factor != w[1].emissive_factor,
                     Channel::Occlusion | Channel::Normal => false,
                 });
-            channel == Channel::Normal || any_texture || factors_differ
+            let vertex_colors = channel == Channel::BaseColor && input.surface.has_colors();
+            channel == Channel::Normal || any_texture || factors_differ || vertex_colors
         })
         .collect();
 
@@ -288,9 +294,11 @@ fn bake_materials<const N: usize>(scene: &Scene, input: &BakeInput<N>, padding: 
         let t = tex.unwrap_or([1.0; 4]);
         match channel {
             Channel::BaseColor => {
+                // glTF: textura × factor × color de vértice, en espacio lineal
                 let f = m.base_color_factor;
-                let rgb = [0, 1, 2].map(|k| linear_to_srgb(srgb_to_linear(t[k]) * f[k]));
-                [to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), to_byte(t[3] * f[3])]
+                let v = ctx.color.unwrap_or([1.0; 4]);
+                let rgb = [0, 1, 2].map(|k| linear_to_srgb(srgb_to_linear(t[k]) * f[k] * v[k]));
+                [to_byte(rgb[0]), to_byte(rgb[1]), to_byte(rgb[2]), to_byte(t[3] * f[3] * v[3])]
             }
             Channel::MetallicRoughness => [0, to_byte(t[1] * m.roughness_factor), to_byte(t[2] * m.metallic_factor), 255],
             Channel::Occlusion => {

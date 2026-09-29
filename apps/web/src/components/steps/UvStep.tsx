@@ -66,7 +66,8 @@ export const UvStep: Component<UvStepProps> = (props) => {
         El mapa UV extiende la superficie en un plano para pintarla. Si el modelo traía UV,
         la retopología ya las trasladó; desplegar corta islas nuevas por las aristas de los
         quads y hornea encima las texturas originales (color, rugosidad y el relieve de la
-        malla original como normal map), sin costuras.
+        malla original como normal map), sin costuras. Sin UV de origen (un escaneo en STL)
+        se hornean igual el relieve y los colores de vértice.
       </p>
 
       <Show
@@ -104,7 +105,7 @@ export const UvStep: Component<UvStepProps> = (props) => {
                   <Row label="Uso del atlas" value={percent(info().coverage)} />
                   <Row
                     label="Texturas horneadas"
-                    value={info().texture_size > 0 ? `${info().texture_size} px` : "ninguna (sin UV de origen)"}
+                    value={info().texture_size > 0 ? `${info().texture_size} px` : "ninguna"}
                   />
                 </Show>
               </div>

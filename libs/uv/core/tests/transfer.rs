@@ -54,7 +54,7 @@ fn cylinder(n: usize, rings: usize) -> Parts {
 #[test]
 fn plane_uvs_follow_position() {
     let (pos, uv, tris) = grid(20, 2.0);
-    let surface = UvSurface::new([UvPart { group: 7, positions: &pos, uvs: &uv, normals: None, triangles: &tris }]).unwrap();
+    let surface = UvSurface::new([UvPart { group: 7, positions: &pos, uvs: &uv, normals: None, colors: None, triangles: &tris }]).unwrap();
     assert_eq!(surface.num_charts(), 1);
 
     // Quads más gruesos y desalineados respecto a la rejilla, algo sobre el plano
@@ -79,7 +79,7 @@ fn plane_uvs_follow_position() {
 #[test]
 fn faces_across_a_seam_stay_in_one_chart() {
     let (pos, uv, tris) = cylinder(64, 4);
-    let surface = UvSurface::new([UvPart { group: 0, positions: &pos, uvs: &uv, normals: None, triangles: &tris }]).unwrap();
+    let surface = UvSurface::new([UvPart { group: 0, positions: &pos, uvs: &uv, normals: None, colors: None, triangles: &tris }]).unwrap();
     assert_eq!(surface.num_charts(), 1, "la costura separa bordes de la misma isla, no islas");
 
     // Quads de 12 segmentos girados medio segmento: dos caras cruzan la costura
@@ -116,8 +116,8 @@ fn faces_take_the_group_of_their_part() {
     let (pos_a, uv_a, tris_a) = grid(4, 1.0);
     let pos_b: Vec<[f32; 3]> = pos_a.iter().map(|p| [p[0] + 1.0, p[1], p[2]]).collect();
     let surface = UvSurface::new([
-        UvPart { group: 0, positions: &pos_a, uvs: &uv_a, normals: None, triangles: &tris_a },
-        UvPart { group: 1, positions: &pos_b, uvs: &uv_a, normals: None, triangles: &tris_a },
+        UvPart { group: 0, positions: &pos_a, uvs: &uv_a, normals: None, colors: None, triangles: &tris_a },
+        UvPart { group: 1, positions: &pos_b, uvs: &uv_a, normals: None, colors: None, triangles: &tris_a },
     ])
     .unwrap();
     assert_eq!(surface.num_charts(), 2);
@@ -131,7 +131,7 @@ fn faces_take_the_group_of_their_part() {
 #[test]
 fn surface_without_uvs_is_none() {
     let (pos, _, tris) = grid(2, 1.0);
-    assert!(UvSurface::new([UvPart { group: 0, positions: &pos, uvs: &[], normals: None, triangles: &tris }]).is_none());
+    assert!(UvSurface::new([UvPart { group: 0, positions: &pos, uvs: &[], normals: None, colors: None, triangles: &tris }]).is_none());
 }
 
 /// Escena con dos piezas lado a lado: la izquierda con UV y textura, la
@@ -195,8 +195,8 @@ fn projection_follows_the_normal_not_the_nearest_piece() {
     let wall_uv = vec![[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]];
     let wall_tris = vec![[0, 1, 2], [0, 3, 1]];
     let surface = UvSurface::new([
-        UvPart { group: 0, positions: &floor_pos, uvs: &floor_uv, normals: None, triangles: &floor_tris },
-        UvPart { group: 1, positions: &wall_pos, uvs: &wall_uv, normals: None, triangles: &wall_tris },
+        UvPart { group: 0, positions: &floor_pos, uvs: &floor_uv, normals: None, colors: None, triangles: &floor_tris },
+        UvPart { group: 1, positions: &wall_pos, uvs: &wall_uv, normals: None, colors: None, triangles: &wall_tris },
     ])
     .unwrap();
 

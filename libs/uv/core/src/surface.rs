@@ -19,6 +19,8 @@ pub struct UvPart<'a> {
     /// Normales de sombreado, una por posición. Sin ellas se calculan normales
     /// suaves soldando posiciones.
     pub normals: Option<&'a [[f32; 3]]>,
+    /// Colores de vértice RGBA lineales, uno por posición.
+    pub colors: Option<&'a [[f32; 4]]>,
     pub triangles: &'a [[u32; 3]],
 }
 
@@ -34,6 +36,8 @@ pub struct UvSurface {
     uvs: Vec<[[f64; 2]; 3]>,
     /// Normal de sombreado por esquina.
     normals: Vec<[Vector3; 3]>,
+    /// Color por esquina, si alguna parte trae colores (las demás, blanco).
+    colors: Option<Vec<[[f32; 4]; 3]>>,
     groups: Vec<usize>,
     charts: Vec<usize>,
     num_charts: usize,
@@ -66,6 +70,8 @@ impl UvSurface {
         let mut corners = Vec::new();
         let mut uvs = Vec::new();
         let mut normals: Vec<Option<[Vector3; 3]>> = Vec::new();
+        let any_colors = parts.iter().any(|p| p.colors.is_some_and(|c| c.len() == p.positions.len()));
+        let mut colors: Vec<[[f32; 4]; 3]> = Vec::new();
         let mut position_keys: Vec<[[i64; 3]; 3]> = Vec::new();
         let mut groups = Vec::new();
         // Vértices soldados por (grupo, posición, UV)
@@ -105,6 +111,10 @@ impl UvSurface {
                     let next = keys.len() as u32;
                     *keys.entry(key).or_insert(next)
                 });
+                if any_colors {
+                    let c = part.colors.filter(|c| c.len() == count);
+                    colors.push(tri.map(|i| c.map_or([1.0; 4], |c| c[i as usize])));
+                }
                 corners.push(p);
                 uvs.push(uv);
                 normals.push(normal);
@@ -147,7 +157,8 @@ impl UvSurface {
             .collect();
 
         let bvh = Bvh::build(corners.iter().map(|c| Triangle::new(c[0], c[1], c[2])).collect());
-        Some(Self { corners, uvs, normals, groups, charts, num_charts: chart_of_root.len(), neighbors, bvh })
+        let colors = any_colors.then_some(colors);
+        Some(Self { corners, uvs, normals, colors, groups, charts, num_charts: chart_of_root.len(), neighbors, bvh })
     }
 
     /// Número de triángulos válidos.
@@ -230,6 +241,19 @@ impl UvSurface {
         let l = self.barycentric(t, p);
         let [ua, ub, uc] = self.uvs[t];
         [0, 1].map(|k| l[0] * ua[k] + l[1] * ub[k] + l[2] * uc[k])
+    }
+
+    /// ¿Trae colores de vértice?
+    pub fn has_colors(&self) -> bool {
+        self.colors.is_some()
+    }
+
+    /// Color de vértice interpolado en el punto `p` del triángulo `t`.
+    pub fn color_at(&self, t: usize, p: &Vector3) -> Option<[f32; 4]> {
+        let [a, b, c] = self.colors.as_ref()?[t];
+        let l = self.barycentric(t, p).map(|x| x.clamp(0.0, 1.0) as f32);
+        let sum = (l[0] + l[1] + l[2]).max(1e-6);
+        Some(std::array::from_fn(|k| (l[0] * a[k] + l[1] * b[k] + l[2] * c[k]) / sum))
     }
 
     /// Marco tangente `[T, B, N]` en el punto `p` del triángulo `t`, con la
