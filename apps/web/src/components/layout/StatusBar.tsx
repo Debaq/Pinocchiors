@@ -11,6 +11,8 @@ export interface StatusBarProps {
   };
   showMemory?: boolean;
   memory?: string;
+  /** Resumen a la derecha (articulación activa al posar) */
+  info?: string;
 }
 
 export const StatusBar: Component<StatusBarProps> = (props) => {
@@ -47,7 +49,10 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
       </div>
 
       {/* Right - Info */}
-      <div class="flex items-center gap-4">
+      <div class="flex items-center gap-4 min-w-0">
+        <Show when={props.info}>
+          <span class="text-xs font-mono text-text-muted truncate">{props.info}</span>
+        </Show>
         <Show when={props.showMemory && props.memory}>
           <span class="text-xs font-mono text-text-dim">
             {props.memory}

@@ -1179,13 +1179,13 @@ export class Viewer3D {
   private showModalHint(): void {
     const m = this.modal;
     if (!m) return;
-    const space = m.axisSpace === "local" ? " local" : "";
+    const space = m.axisSpace === "local" ? (this.transformSpace === "parent" ? " del padre" : " local") : " global";
     const axis = m.axis ? ` · eje ${m.axis.toUpperCase()}${space}` : "";
     const numeric = m.numeric ? ` · ${m.numeric}${m.kind === "rotate" ? "°" : ""}` : "";
     const texts = {
-      grab: "Mover: arrastra el mouse · X/Y/Z restringe al eje (dos veces: eje local) · teclea un valor",
+      grab: "Mover: arrastra el mouse · X/Y/Z restringe al eje (otra vez: global/local) · teclea un valor",
       rotate: this.rig
-        ? "Rotar: gira el mouse alrededor de la articulación · X/Y/Z eje (dos veces: local) · Ctrl pasos de 5° (Shift 15°) · teclea grados"
+        ? "Rotar: gira el mouse alrededor de la articulación · X/Y/Z eje (otra vez: global/local) · Ctrl pasos de 5° (Shift 15°) · teclea grados"
         : "Rotar (pose de prueba): gira el mouse alrededor de la articulación · X/Y/Z eje",
       radius: "Radio del pincel: mueve el mouse a los lados",
       strength: "Intensidad del pincel: mueve el mouse a los lados",
@@ -1246,8 +1246,9 @@ export class Viewer3D {
     if (m.control) {
       orientation = this.controlFollowQuaternion(m.control.id).multiply(m.control.rotation);
     } else {
+      // Local: los ejes de la articulación con su giro; del padre: sin él
       const start = m.joints?.find((s) => s.joint === m.bone);
-      orientation = this.jointAxesWorld(m.bone, start?.rotation ?? null);
+      orientation = this.jointAxesWorld(m.bone, this.transformSpace === "parent" ? null : (start?.rotation ?? null));
     }
     return local.applyQuaternion(orientation).normalize();
   }
@@ -3625,11 +3626,36 @@ export class Viewer3D {
     this.renderer.render(this.scene, this.camera);
     if (gizmo) gizmo.visible = gizmoVisible;
     const source = this.renderer.domElement;
-    const side = Math.min(source.width, source.height);
+    // Cuadrado alrededor de lo que se ve del modelo (articulaciones y malla), con margen
+    const points = this.boneSpheres.map((s) => s.getWorldPosition(new THREE.Vector3()));
+    const mesh = this.rig?.mesh ?? this.currentMesh;
+    if (mesh) {
+      const box = new THREE.Box3().setFromObject(mesh);
+      if (!box.isEmpty()) {
+        for (let i = 0; i < 8; i++) {
+          points.push(new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z));
+        }
+      }
+    }
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const p of points) {
+      const q = p.project(this.camera);
+      if (q.z > 1) continue;
+      const x = ((q.x + 1) / 2) * source.width;
+      const y = ((1 - q.y) / 2) * source.height;
+      [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)];
+    }
+    let side = Math.min(source.width, source.height);
+    let [cx, cy] = [source.width / 2, source.height / 2];
+    if (Number.isFinite(x0)) {
+      side = Math.min(side, Math.max(x1 - x0, y1 - y0, 16) * 1.15);
+      cx = THREE.MathUtils.clamp((x0 + x1) / 2, side / 2, source.width - side / 2);
+      cy = THREE.MathUtils.clamp((y0 + y1) / 2, side / 2, source.height - side / 2);
+    }
     const canvas = document.createElement("canvas");
     canvas.width = size;
     canvas.height = size;
-    canvas.getContext("2d")?.drawImage(source, (source.width - side) / 2, (source.height - side) / 2, side, side, 0, 0, size, size);
+    canvas.getContext("2d")?.drawImage(source, cx - side / 2, cy - side / 2, side, side, 0, 0, size, size);
     return canvas.toDataURL("image/jpeg", 0.8);
   }
 

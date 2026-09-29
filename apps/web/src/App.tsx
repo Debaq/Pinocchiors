@@ -27,6 +27,7 @@ import {
   type GridUnits,
   type PlacementMode,
   type PlacementPick,
+  type TransformSpace,
 } from "./lib/Viewer3D";
 import * as THREE from "three";
 import {
@@ -120,7 +121,30 @@ import {
   type RigSettings,
 } from "./lib/rig";
 import { RigPanel, type RollMode } from "./components/panels/RigPanel";
-import { analyzeBody, availableAnimations, generateAnimation, type PresetAnimationId } from "./lib/presetAnimations";
+import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
+import {
+  animatableJoints,
+  blendPose,
+  breakdownPose,
+  copyPose,
+  loadPoseLibrary,
+  mirrorEntries,
+  mirrorPose,
+  namesToPose,
+  poseToNames,
+  pushRelax,
+  readPoseClipboard,
+  resetPose,
+  type StoredPose,
+} from "./lib/poseTools";
+import {
+  analyzeBody,
+  availableAnimations,
+  availablePoses,
+  generateAnimation,
+  generatePose,
+  type PresetAnimationId,
+} from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
@@ -284,6 +308,10 @@ export const App: Component = () => {
     rig: {
       apply: (d: { after: RigSettings }) => void setRigSettings(d.after),
       revert: (d: { before: RigSettings }) => void setRigSettings(d.before),
+    },
+    poseLibrary: {
+      apply: (d: { after: StoredPose[] }) => void setPoseLibrary(d.after),
+      revert: (d: { before: StoredPose[] }) => void setPoseLibrary(d.before),
     },
     restPose: {
       apply: (d: { to: Vec3[] }) => sendRestPose(d.to),
@@ -472,6 +500,10 @@ export const App: Component = () => {
   const [selectedControl, setSelectedControl] = createSignal<string | undefined>();
   /** Cambia cada vez que el visor muestra otra pose (el panel del hueso la relee) */
   const [poseTick, setPoseTick] = createSignal(0);
+  /** Poses guardadas del proyecto */
+  const [poseLibrary, setPoseLibrary] = createSignal<StoredPose[]>([]);
+  const [transformSpace, setTransformSpace] = createPersisted<TransformSpace>("pose.space", "global");
+  const [canPaste, setCanPaste] = createSignal(readPoseClipboard() !== null);
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
 
@@ -895,7 +927,22 @@ export const App: Component = () => {
     { key: "3", ctrl: true, action: () => viewerRef?.setView("left"), description: "Vista izquierda" },
     { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
     { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
+    // Pose (Animar): selección, reiniciar, copiar y pegar
+    { key: "a", action: () => rigging() && handleSelectCommand("all"), description: "Seleccionar todo" },
+    { key: "a", alt: true, action: () => rigging() && handleSelectCommand("none"), description: "No seleccionar nada" },
+    { key: "[", action: () => rigging() && handleSelectCommand("parent"), description: "Seleccionar el padre" },
+    { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), description: "Sumar el padre" },
+    { key: "]", action: () => rigging() && handleSelectCommand("children"), description: "Seleccionar los hijos" },
+    { key: "}", shift: true, action: () => rigging() && handleSelectCommand("children", true), description: "Sumar los descendientes" },
+    { key: "m", ctrl: true, shift: true, action: () => rigging() && handleSelectCommand("mirror"), description: "Seleccionar el espejo" },
+    { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), description: "Seleccionar el grupo" },
+    { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), description: "Giro en reposo" },
+    { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), description: "Posición de reposo" },
+    { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), description: "Copiar pose" },
+    { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), description: "Pegar pose" },
+    { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), description: "Pegar pose espejada" },
   ];
+
 
   // Para la pestaña de atajos del panel derecho
   const keyName = (key: string) => (key === " " ? "Espacio" : key.length === 1 ? key.toUpperCase() : key);
@@ -1455,6 +1502,7 @@ export const App: Component = () => {
   };
 
   const handlePoseEdited = (joints: number[]) => {
+    liveEdit = null;
     setPoseTick((t) => t + 1);
     if (autoKey()) insertKeysFor(joints);
   };
@@ -1701,6 +1749,235 @@ export const App: Component = () => {
     setPlaying(false);
     setFrame((f) => Math.min(clip.end, Math.max(clip.start, Math.round(f) + delta)));
   };
+
+  // ─── Herramientas de pose (F1) ────────────────────────────────────────────
+
+  createEffect(() => viewer()?.setTransformSpace(transformSpace()));
+
+  /**
+   * Arrastre de un deslizador (intermedia, empujar, mezcla de la biblioteca):
+   * la pose de partida se toma al empezar y cada movimiento es una vista
+   * previa; al soltar queda en keys. Cualquier otra edición lo corta.
+   */
+  let liveEdit: { kind: string; base: Pose } | null = null;
+  createEffect(on([frame, activeClipId], () => (liveEdit = null), { defer: true }));
+
+  const liveBase = (kind: string): Pose | null => {
+    const v = viewer();
+    if (!v) return null;
+    if (!liveEdit || liveEdit.kind !== kind) liveEdit = { kind, base: v.getPose() };
+    return liveEdit.base;
+  };
+
+  const livePreview = (pose: Pose, commit: boolean, status?: string) => {
+    if (commit) {
+      liveEdit = null;
+      applyPoseEdit(pose, status);
+    } else {
+      viewer()?.applyPartialPose(pose);
+      setPoseTick((t) => t + 1);
+    }
+  };
+
+  /** Selección o, sin selección, todas las articulaciones animables */
+  const jointsOrAll = () => (jointSelection().length > 0 ? jointSelection() : animatableJoints(rigCtx()));
+
+  const handleSelectCommand = (command: SelectCommand, extend = false) => {
+    const ctx = rigCtx();
+    const s = ctx.settings;
+    const selectable = (j: number) => !isBoneHidden(s, ctx.bones[j].name) && !boneProps(s, ctx.bones[j].name).locked;
+    const current = jointSelection();
+    const active = viewSettings().selectedBone;
+    let next: number[] = [];
+    let nextActive = active;
+    switch (command) {
+      case "all":
+        next = ctx.bones.map((_, j) => j).filter(selectable);
+        nextActive = active >= 0 ? active : (next[0] ?? -1);
+        break;
+      case "none":
+        nextActive = -1;
+        break;
+      case "mirror":
+        next = current.map((j) => ctx.mirror[j] ?? j);
+        nextActive = active >= 0 ? (ctx.mirror[active] ?? active) : -1;
+        break;
+      case "parent":
+        next = current.flatMap((j) => (ctx.bones[j].parent === null ? [j] : [ctx.bones[j].parent!]));
+        nextActive = active >= 0 ? (ctx.bones[active].parent ?? active) : -1;
+        break;
+      case "children": {
+        const all = (j: number): number[] => ctx.children[j].flatMap((c) => [c, ...all(c)]);
+        next = current.flatMap((j) => (extend ? all(j) : ctx.children[j]));
+        nextActive = active >= 0 ? (ctx.children[active][0] ?? active) : -1;
+        break;
+      }
+      case "group": {
+        const groups = new Set(current.map((j) => s.bones[ctx.bones[j].name]?.group).filter(Boolean));
+        next = ctx.bones.flatMap((b, j) => (groups.has(s.bones[b.name]?.group) ? [j] : []));
+        break;
+      }
+    }
+    if (extend && command !== "none") next = [...current, ...next];
+    next = [...new Set(next)].filter(selectable);
+    if (nextActive >= 0 && !next.includes(nextActive)) nextActive = next[0] ?? -1;
+    selectJoints(next, nextActive);
+  };
+
+  const handleResetPose = (what: "rotation" | "translation" | "all") => {
+    const joints = jointsOrAll();
+    const control = selectedControl();
+    const controls = control ? [control] : jointSelection().length === 0 ? rigSettings().controls.map((c) => c.id) : [];
+    const labels = { rotation: "Giro en reposo", translation: "Posición de reposo", all: "Pose de reposo" };
+    applyPoseEdit(resetPose(control ? [] : joints, what, controls), labels[what]);
+  };
+
+  const handleMirrorPose = (mode: "flip" | "leftToRight" | "rightToLeft") => {
+    const v = viewer();
+    if (!v) return;
+    const selection = jointSelection();
+    const pose = mirrorPose(v.getPose(), rigCtx(), mode, selection.length > 0 ? selection : undefined);
+    if (pose.rotations.size === 0 && pose.controls.size === 0) {
+      setStatusMessage("Nada que reflejar: el esqueleto no tiene pares izquierda/derecha");
+      return;
+    }
+    const labels = { flip: "Pose volteada", leftToRight: "Izquierda copiada a la derecha", rightToLeft: "Derecha copiada a la izquierda" };
+    applyPoseEdit(pose, labels[mode]);
+  };
+
+  const handleCopyPose = () => {
+    const v = viewer();
+    if (!v || !animating()) return;
+    const entries = poseToNames(v.getPose(), rigCtx(), jointsOrAll());
+    copyPose(entries);
+    setCanPaste(true);
+    setStatusMessage(`Pose copiada (${Object.keys(entries).length} huesos)`);
+  };
+
+  const handlePastePose = (mirrored: boolean) => {
+    const entries = readPoseClipboard();
+    if (!entries || !animating()) return;
+    const ctx = rigCtx();
+    const pose = namesToPose(mirrored ? mirrorEntries(entries, ctx) : entries, ctx);
+    if (pose.rotations.size === 0) {
+      setStatusMessage("La pose copiada no tiene huesos con estos nombres");
+      return;
+    }
+    applyPoseEdit(pose, mirrored ? "Pose pegada del otro lado" : "Pose pegada");
+  };
+
+  const handleBreakdown = (t: number, commit: boolean) => {
+    const clip = activeClip();
+    if (!clip) return;
+    const pose = breakdownPose(clip, frame(), jointsOrAll(), rigCtx(), t);
+    if (pose.rotations.size === 0) {
+      if (commit) setStatusMessage("Intermedia: hace falta una key antes y otra después de este cuadro");
+      return;
+    }
+    livePreview(pose, commit, `Intermedia al ${Math.round(t * 100)} %`);
+  };
+
+  const handlePushRelax = (factor: number, commit: boolean) => {
+    const base = liveBase("push");
+    if (!base) return;
+    livePreview(pushRelax(base, jointsOrAll(), factor), commit, factor >= 1 ? "Pose empujada" : "Pose relajada");
+  };
+
+  /** Pose de la biblioteca o de fábrica, lista para aplicar */
+  const sourcePose = (source: PoseSource): Pose | null => {
+    const ctx = rigCtx();
+    if (source.kind === "stored") {
+      const stored = poseLibrary().find((p) => p.id === source.id);
+      return stored ? namesToPose(stored.bones, ctx) : null;
+    }
+    const b = body();
+    if (!b) return null;
+    const generated = generatePose(b, source.id);
+    const pose = emptyPose();
+    generated.rotations.forEach((q, j) => pose.rotations.set(j, q));
+    if (generated.offset) pose.translations.set(b.root, generated.offset);
+    return pose;
+  };
+
+  const handleApplyLibraryPose = (source: PoseSource, factor: number, commit: boolean) => {
+    const target = sourcePose(source);
+    const base = liveBase("library");
+    if (!target || !base) return;
+    livePreview(blendPose(base, target, factor), commit, "Pose de la biblioteca aplicada");
+  };
+
+  const handleSavePose = async (selectionOnly: boolean) => {
+    const v = viewer();
+    if (!v || !animating()) return;
+    const joints = selectionOnly ? jointSelection() : animatableJoints(rigCtx());
+    const pose: StoredPose = {
+      id: newRigId("pose"),
+      name: `Pose ${poseLibrary().length + 1}`,
+      thumbnail: v.snapshot(96),
+      bones: poseToNames(v.getPose(), rigCtx(), joints),
+    };
+    await history.execute("Guardar pose", { kind: "poseLibrary", data: { before: poseLibrary(), after: [...poseLibrary(), pose] } });
+    setStatusMessage(`${pose.name} guardada en la biblioteca`);
+  };
+
+  const changePoseLibrary = (description: string, after: StoredPose[]) =>
+    void history.execute(description, { kind: "poseLibrary", data: { before: poseLibrary(), after } });
+
+  /** Resumen de la articulación activa para la barra de estado */
+  const poseInfo = createMemo(() => {
+    const pose = activeJointPose();
+    const j = viewSettings().selectedBone;
+    const name = rigBones()[j]?.name;
+    if (!pose || !name) return undefined;
+    const p = boneProps(rigSettings(), name);
+    const locked = ["X", "Y", "Z"].filter((_, i) => p.lockRotation[i]);
+    const moved = Math.hypot(...pose.translation) > 1e-9;
+    const [x, y, z] = pose.rotation.map((a) => a.toFixed(1));
+    return [
+      name,
+      `X ${x}° Y ${y}° Z ${z}°`,
+      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
+      moved ? "desplazado" : "",
+      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+  });
+
+  const posePanel = (
+    <PosePanel
+      posing={animating()}
+      hasSelection={jointSelection().length > 0}
+      space={transformSpace()}
+      onSpace={setTransformSpace}
+      onSelect={(command) => handleSelectCommand(command)}
+      onReset={handleResetPose}
+      onMirror={handleMirrorPose}
+      onCopy={handleCopyPose}
+      onPaste={handlePastePose}
+      canPaste={canPaste()}
+      onBreakdown={handleBreakdown}
+      onPushRelax={handlePushRelax}
+      library={poseLibrary()}
+      factory={body() ? availablePoses(body()!) : []}
+      onSavePose={(selectionOnly) => void handleSavePose(selectionOnly)}
+      onDeletePose={(id) => changePoseLibrary("Borrar pose", poseLibrary().filter((p) => p.id !== id))}
+      onRenamePose={(id, name) => changePoseLibrary("Renombrar pose", poseLibrary().map((p) => (p.id === id ? { ...p, name } : p)))}
+      onApplyPose={handleApplyLibraryPose}
+    />
+  );
+
+  /** Lo que el paso Animar muestra debajo de las animaciones */
+  const animatePanels = (
+    <div class="space-y-3">
+      {posePanel}
+      {rigPanel}
+    </div>
+  );
+
+  /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
+  const rigging = () => !!skeletonData() && toolCtx() !== "object";
+
 
   const handleExport = async () => {
     try {
@@ -2564,6 +2841,7 @@ export const App: Component = () => {
     setActiveClipId(undefined);
     setFrame(0);
     setRigSettings(emptyRigSettings());
+    setPoseLibrary([]);
     setSelectedJoints([]);
     setSelectedControl(undefined);
     setViewSettings((prev) => ({ ...prev, selectedBone: -1 }));
@@ -2690,6 +2968,7 @@ export const App: Component = () => {
       export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
       rig: rigSettings(),
+      poseLibrary: poseLibrary(),
       history: history.save(),
     });
   };
@@ -2743,6 +3022,7 @@ export const App: Component = () => {
       if (ui.export.options) setExportOptions(ui.export.options);
     }
     setRigSettings(loadRigSettings(ui.rig));
+    setPoseLibrary(loadPoseLibrary(ui.poseLibrary));
     setSelectedJoints([]);
     setSelectedControl(undefined);
     setClips(ui.animation?.clips ?? []);
@@ -3318,7 +3598,7 @@ export const App: Component = () => {
               presets: presetAnimations(),
               onAddPreset: handleAddPresetClip,
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
-              rigPanel,
+              rigPanel: animatePanels,
             }}
             exportProps={{
 
@@ -3368,6 +3648,7 @@ export const App: Component = () => {
         <StatusBar
           message={statusMessage()}
           progress={progress()}
+          info={animating() ? poseInfo() : undefined}
         />
       </div>
 

@@ -791,3 +791,151 @@ export function generateAnimation(
       return bake(name, body, { frames: 36, step: 3, fps }, (p, t) => slither(body, p, t));
   }
 }
+
+// ─── Poses de fábrica ───────────────────────────────────────────────────────
+
+export type FactoryPoseId =
+  | "crouch"
+  | "sit"
+  | "armsDown"
+  | "armsUp"
+  | "wingsFolded"
+  | "wingsOpen"
+  | "headDown"
+  | "tailCurl"
+  | "fist"
+  | "handOpen";
+
+export interface FactoryPose {
+  id: FactoryPoseId;
+  name: string;
+  description: string;
+}
+
+const POSES: Record<FactoryPoseId, Omit<FactoryPose, "id">> = {
+  crouch: { name: "Agachado", description: "Rodillas dobladas, los pies en el suelo" },
+  sit: { name: "Sentado", description: "Bípedo en una silla; cuadrúpedo sobre las patas traseras" },
+  armsDown: { name: "Brazos abajo", description: "Los brazos cuelgan junto al cuerpo" },
+  armsUp: { name: "Brazos arriba", description: "Los brazos apuntan al cielo" },
+  wingsFolded: { name: "Alas plegadas", description: "Alas recogidas contra el cuerpo" },
+  wingsOpen: { name: "Alas abiertas", description: "Alas extendidas y un poco levantadas" },
+  headDown: { name: "Cabeza gacha", description: "Cuello y cabeza hacia abajo" },
+  tailCurl: { name: "Cola enroscada", description: "La cola se enrolla hacia arriba" },
+  fist: { name: "Mano cerrada", description: "Los dedos se doblan hacia la palma" },
+  handOpen: { name: "Mano abierta", description: "Los dedos rectos, como en reposo" },
+};
+
+const FINGER = /finger|thumb|index|middle|ring|pinky|digit|dedo|pulgar|meñique/i;
+
+/** Cadenas de dedos (por nombre): el análisis del cuerpo las toma como brazos u otras */
+const fingerChains = (body: Body) => body.chains.filter((c) => c.joints.some((j) => FINGER.test(body.bones[j].name)));
+const limbs = (body: Body, kind: ChainKind) => chainsOf(body, kind).filter((c) => !fingerChains(body).includes(c));
+
+/** Poses de fábrica que tienen sentido para este esqueleto */
+export function availablePoses(body: Body): FactoryPose[] {
+  const ids: FactoryPoseId[] = [];
+  const legs = limbs(body, "leg");
+  if (legs.some((l) => !l.sprawl && l.rotating.length >= 2)) ids.push("crouch");
+  if (legs.filter((l) => !l.sprawl).length >= 2) ids.push("sit");
+  if (limbs(body, "arm").length > 0) ids.push("armsDown", "armsUp");
+  if (chainsOf(body, "wing").length > 0) ids.push("wingsFolded", "wingsOpen");
+  if (headJoints(body).length > 0) ids.push("headDown");
+  if (chainsOf(body, "tail").length > 0) ids.push("tailCurl");
+  if (fingerChains(body).length > 0) ids.push("fist", "handOpen");
+  return ids.map((id) => ({ id, ...POSES[id] }));
+}
+
+/** Ángulo entre dos direcciones unitarias */
+const angleBetween = (a: Vec3, b: Vec3) => Math.acos(Math.max(-1, Math.min(1, dot(a, b))));
+
+/** Dobla una pata: cadera adelante, rodilla atrás y tobillo parejo */
+function bendLeg(body: Body, pose: PoseBuilder, leg: Chain, hip: number, knee: number): void {
+  pose.turn(leg.rotating[0], swingAxis(body, segment(body, leg, 0)), hip);
+  if (leg.rotating.length < 2) return;
+  const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+  pose.turn(leg.rotating[k], swingAxis(body, segment(body, leg, k)), -knee);
+  if (k + 1 < leg.rotating.length) pose.turn(leg.rotating[k + 1], swingAxis(body, segment(body, leg, k + 1)), knee - hip);
+}
+
+/**
+ * Pose de fábrica: giros locales por articulación y, si la pose baja o sube
+ * el cuerpo para dejar las patas en el suelo, el desplazamiento de la raíz
+ */
+export function generatePose(body: Body, id: FactoryPoseId): { rotations: Map<number, Quat>; offset: Vec3 | null } {
+  const pose = new PoseBuilder();
+  const legs = limbs(body, "leg").filter((l) => !l.sprawl);
+  let grounded = false;
+  switch (id) {
+    case "crouch":
+      for (const leg of legs) bendLeg(body, pose, leg, deg(55), deg(105));
+      for (const leg of limbs(body, "leg").filter((l) => l.sprawl)) pose.turn(leg.rotating[0], liftAxis(body, flat(leg.dir)), deg(15));
+      if (body.spine[0] !== undefined) pose.turn(body.spine[0], nodAxis(body), deg(12));
+      grounded = true;
+      break;
+    case "sit": {
+      if (legs.length === 2) {
+        for (const leg of legs) bendLeg(body, pose, leg, deg(85), deg(85));
+      } else {
+        // Cuadrúpedo: las traseras muy dobladas, el cuerpo se levanta adelante
+        const mid = legs.reduce((sum, l) => sum + l.along, 0) / Math.max(legs.length, 1);
+        for (const leg of legs.filter((l) => l.along <= mid)) bendLeg(body, pose, leg, deg(70), deg(120));
+        pose.turn(body.root, nodAxis(body), -deg(30));
+        for (const leg of legs.filter((l) => l.along > mid)) pose.turn(leg.rotating[0], swingAxis(body, segment(body, leg, 0)), -deg(30));
+      }
+      grounded = true;
+      break;
+    }
+    case "armsDown":
+    case "armsUp":
+      for (const arm of limbs(body, "arm")) {
+        const d = segment(body, arm, 0);
+        const target = id === "armsDown" ? scale(body.up, -1) : body.up;
+        // Casi hasta la vertical, sin meterse en el cuerpo
+        const angle = angleBetween(d, target) - deg(12);
+        if (angle > 0) pose.turn(arm.rotating[0], liftAxis(body, d), id === "armsUp" ? angle : -angle);
+      }
+      break;
+    case "wingsFolded":
+      for (const wing of chainsOf(body, "wing")) {
+        // Zigzag hacia atrás: brazo atrás, antebrazo adelante, mano atrás
+        const turns = [-deg(70), deg(150), -deg(150)];
+        wing.rotating.forEach((j, i) => pose.turn(j, swingAxis(body, segment(body, wing, i)), turns[Math.min(i, 2)]));
+        pose.turn(wing.rotating[0], liftAxis(body, segment(body, wing, 0)), -deg(15));
+      }
+      break;
+    case "wingsOpen":
+      for (const wing of chainsOf(body, "wing")) pose.turn(wing.rotating[0], liftAxis(body, segment(body, wing, 0)), deg(20));
+      break;
+    case "headDown": {
+      const head = headJoints(body);
+      head.forEach((j) => pose.turn(j, nodAxis(body), deg(35) / head.length));
+      break;
+    }
+    case "tailCurl":
+      for (const tail of chainsOf(body, "tail")) {
+        const n = tail.rotating.length;
+        tail.rotating.forEach((j, i) => pose.turn(j, liftAxis(body, segment(body, tail, i)), deg(Math.min(60, 240 / n))));
+      }
+      break;
+    case "fist":
+      for (const finger of fingerChains(body)) {
+        const thumb = finger.joints.some((j) => /thumb|pulgar/i.test(body.bones[j].name));
+        finger.rotating.forEach((j, i) =>
+          pose.turn(j, liftAxis(body, segment(body, finger, i)), -(thumb ? deg(30) : deg(75)))
+        );
+      }
+      break;
+    case "handOpen":
+      for (const finger of fingerChains(body)) for (const j of finger.rotating) pose.rotations.set(j, IDENTITY);
+      break;
+  }
+  if (grounded) {
+    const tips = legs.map((c) => c.joints[c.joints.length - 1]);
+    if (tips.length > 0) {
+      const positions = jointPositions(body.bones, pose.rotations, pose.offset);
+      const lowest = Math.min(...tips.map((j) => positions[j][1]));
+      pose.move([0, body.ground - lowest, 0]);
+    }
+  }
+  return { rotations: pose.rotations, offset: length(pose.offset) > 1e-9 * body.size ? pose.offset : null };
+}

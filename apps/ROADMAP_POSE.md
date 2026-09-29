@@ -84,6 +84,14 @@ horneados (una key por cuadro, reducida). Los datos del rig van en
 
 ## Fase 1: Herramientas de pose básicas
 
+**Hecha (2026-09-29).** `lib/poseTools.ts` (reiniciar, espejo, copiar/pegar
+con portapapeles entre proyectos, intermedia, empujar/relajar, biblioteca),
+poses de fábrica en `lib/presetAnimations.ts` (`availablePoses`,
+`generatePose`) y `components/panels/PosePanel.tsx`. Atajos: A / Alt+A,
+[ / ] (Shift suma), Ctrl+Shift+M, Shift+G, Alt+R / Alt+G, Ctrl+C / Ctrl+V
+(Shift: espejada). La barra de estado muestra la articulación activa, su
+giro en ejes locales y los ejes bloqueados (los límites llegan con F4).
+
 Todo esto funciona con FK. Da mucho valor con poco riesgo.
 
 - **Selección**
