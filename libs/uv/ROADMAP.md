@@ -103,6 +103,11 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   gonfoterio 44 % → 65 %. Tarda 0,1–0,8 s (antes < 0,1 s). Con 1024 celdas
   sube 1–2 puntos más pero tarda el triple. Ordenar por lado mayor en vez de
   área empeora (66,8 %).
+- Ángulos intermedios: con hasta 64 cartas se empaqueta además probando
+  22,5°, 45° y 67,5° sobre la caja mínima (cada uno en sus cuatro giros) y
+  gana el atlas más lleno; la colocación es codiciosa y más giros solos
+  pueden empeorar. Toro 60,2 → 65,5 %, esfera ondulada 61,7 → 62,4 %, esfera
+  igual; +0,3 s. Con 381 cartas no cambia nada y tarda 4× (por eso el tope).
 - Banco: `cargo run --release -p uv-core --example unwrap_bench -- modelo.glb 2000 8000`.
 
 ## Fase 3b — Distribución para pintar ✅ (paso 1 de 4)

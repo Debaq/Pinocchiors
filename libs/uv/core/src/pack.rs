@@ -3,8 +3,8 @@
 //! Por rasterizado, como xatlas: cada carta se escala a su área 3D (densidad
 //! de texel uniforme), se gira a su caja mínima y se dibuja en una grilla de
 //! celdas. Las cartas, de mayor a menor, van al primer hueco libre (de abajo
-//! a la izquierda) probando los cuatro giros de 90°; solo si no caben se
-//! agranda el cuadrado. Las cartas chicas llenan los huecos de las grandes,
+//! a la izquierda) probando los cuatro giros de 90° (y, con pocas cartas,
+//! también ángulos intermedios); solo si no caben se agranda el cuadrado. Las cartas chicas llenan los huecos de las grandes,
 //! cosa que las cajas de un skyline no pueden. El margen entre cartas se da
 //! en texels del tamaño de textura destino.
 
@@ -317,19 +317,40 @@ fn mul(a: [[f64; 2]; 2], b: [[f64; 2]; 2]) -> [[f64; 2]; 2] {
     [0, 1].map(|i| [0, 1].map(|j| a[i][0] * b[0][j] + a[i][1] * b[1][j]))
 }
 
+/// Giro de `angle` radianes.
+fn rotation(angle: f64) -> [[f64; 2]; 2] {
+    let (sin, cos) = angle.sin_cos();
+    [[cos, -sin], [sin, cos]]
+}
+
 /// Acomoda las cartas con `k` celdas por unidad 3D en una grilla de lado
-/// `capacity`. Devuelve el lado usado (en celdas, con margen) y la
-/// transformación de cada carta, o nada si no caben.
-fn place_all(charts: &[ChartShape], bases: &[[[f64; 2]; 2]], k: f64, pad: usize, capacity: usize) -> Option<(usize, Vec<Placement>)> {
+/// `capacity`, probando `angles` ángulos base repartidos en 90° (desde la
+/// caja mínima), cada uno en sus cuatro giros. Devuelve el lado usado (en
+/// celdas, con margen) y la transformación de cada carta, o nada si no caben.
+fn place_all(
+    charts: &[ChartShape],
+    bases: &[[[f64; 2]; 2]],
+    angles: usize,
+    k: f64,
+    pad: usize,
+    capacity: usize,
+) -> Option<(usize, Vec<Placement>)> {
     let margin = pad.div_ceil(2);
-    let oriented: Vec<[Oriented; 4]> = charts
+    // Orientación o: ángulo base o / 4, giro o % 4
+    let oriented: Vec<Vec<Oriented>> = charts
         .par_iter()
         .zip(bases)
         .map(|(chart, base)| {
             let scaled = base.map(|row| row.map(|v| v * k));
-            [0, 1, 2, 3].map(|o| Oriented::new(chart, mul(quarter_turn(o), scaled), pad))
+            (0..4 * angles)
+                .map(|o| {
+                    let angle = std::f64::consts::FRAC_PI_2 * (o / 4) as f64 / angles as f64;
+                    Oriented::new(chart, mul(quarter_turn(o), mul(rotation(angle), scaled)), pad)
+                })
+                .collect()
         })
         .collect();
+    let orientations = 4 * angles;
 
     // De mayor a menor
     let cells = |i: usize| oriented[i][0].mask.bits.iter().map(|w| w.count_ones() as usize).sum::<usize>();
@@ -343,13 +364,13 @@ fn place_all(charts: &[ChartShape], bases: &[[[f64; 2]; 2]], k: f64, pad: usize,
     for i in order {
         let need = |o: usize| margin + oriented[i][o].mask.w.max(oriented[i][o].mask.h);
         let start = |o: usize| extent.max(need(o));
-        let mut t = (0..4).map(start).min().expect("cuatro giros");
+        let mut t = (0..orientations).map(start).min().expect("al menos cuatro giros");
         let (o, y, x) = loop {
             if t + margin > capacity {
                 return None;
             }
             // Primera posición libre de cada giro; gana el borde superior más bajo
-            let found = (0..4usize)
+            let found = (0..orientations)
                 .into_par_iter()
                 .filter(|&o| need(o) <= t)
                 .filter_map(|o| atlas.find(&oriented[i][o].mask, margin, t, t == start(o)).map(|(y, x)| (y + oriented[i][o].mask.h, y, x, o)))
@@ -405,6 +426,38 @@ pub(crate) fn pack(charts: &[ChartShape], texture_size: u32, padding: u32) -> (V
         .collect();
     let total_3d: f64 = charts.iter().map(|c| c.area_3d).sum();
 
+    // Solo giros de 90° y, con pocas cartas, también ángulos intermedios. La
+    // colocación es codiciosa: más giros no siempre dan un atlas más lleno
+    // (el toro empeora), así que gana el mejor de los dos.
+    let mut best = pack_scaled(charts, &bases, 1, total_3d, resolution, pad);
+    if charts.len() <= MAX_CHARTS_ANGLED {
+        let angled = pack_scaled(charts, &bases, ANGLES, total_3d, resolution, pad);
+        if angled.1 > best.1 {
+            best = angled;
+        }
+    }
+    best
+}
+
+/// Ángulos base por carta cuando hay pocas: 0°, 22,5°, 45° y 67,5° sobre la
+/// caja mínima, cada uno en sus cuatro giros de 90°.
+const ANGLES: usize = 4;
+
+/// Hasta cuántas cartas se prueban los ángulos intermedios. Con muchas
+/// cartas las chicas ya llenan los huecos y no mejora el uso del atlas.
+const MAX_CHARTS_ANGLED: usize = 64;
+
+/// Busca la escala más grande con la que las cartas caben en `resolution`
+/// celdas por lado (ver [`place_all`]). Devuelve las transformaciones y la
+/// cobertura.
+fn pack_scaled(
+    charts: &[ChartShape],
+    bases: &[[[f64; 2]; 2]],
+    angles: usize,
+    total_3d: f64,
+    resolution: usize,
+    pad: usize,
+) -> (Vec<Placement>, f64) {
     // Espacio para que quepan aunque todas sean de una celda
     let capacity = (2 * resolution).max(2 * (charts.len() as f64).sqrt().ceil() as usize * (pad + 2));
     let mut k = if total_3d > 0.0 { (0.6 * (resolution * resolution) as f64 / total_3d).sqrt() } else { 1.0 };
@@ -413,7 +466,7 @@ pub(crate) fn pack(charts: &[ChartShape], texture_size: u32, padding: u32) -> (V
     let mut best: Option<(f64, Vec<Placement>)> = None;
     let mut fallback: Option<(usize, f64, Vec<Placement>)> = None;
     for _ in 0..12 {
-        match place_all(charts, &bases, k, pad, capacity) {
+        match place_all(charts, bases, angles, k, pad, capacity) {
             Some((side, placements)) if side <= resolution => {
                 let coverage = total_3d * k * k / (side * side) as f64;
                 if best.as_ref().is_none_or(|b| coverage > b.0) {
