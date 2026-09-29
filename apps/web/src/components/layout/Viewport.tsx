@@ -87,6 +87,8 @@ export const Viewport: Component<ViewportProps> = (props) => {
   let viewer: Viewer3D | undefined;
   /** Ayuda de la operación modal en curso (G, R, F…) */
   const [hint, setHint] = createSignal<string | null>(null);
+  /** Tamaño de celda de la grilla */
+  const [gridLabel, setGridLabel] = createSignal<string | null>(null);
   /** Menú del clic derecho abierto, con sus ítems */
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] } | null>(null);
 
@@ -123,6 +125,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onPoseEdited: (joint) => props.onPoseEdited?.(joint),
         onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
         onContextMenu: openMenu,
+        onGridChanged: setGridLabel,
       });
 
       props.onViewerReady?.(viewer);
@@ -249,6 +252,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
             <span class="text-xs text-text-muted">
               Caras: <span class="text-text font-mono">{props.faces?.toLocaleString() ?? "--"}</span>
             </span>
+            <Show when={props.meshData && gridLabel()}>
+              <span class="text-xs text-text-muted">{gridLabel()}</span>
+            </Show>
           </div>
         </Show>
       </div>

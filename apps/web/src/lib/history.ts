@@ -1,67 +1,186 @@
 import { createSignal } from "solid-js";
 
-export interface Command {
-  execute: () => Promise<void> | void;
-  undo: () => Promise<void> | void;
+/**
+ * Historial en árbol: deshacer y hacer otra cosa abre una rama nueva en vez
+ * de perder lo deshecho. Cada paso es un dato (`kind` + `data`), no una
+ * función, así el árbol entero se guarda en el proyecto y se puede recorrer
+ * al reabrirlo. Qué hace cada tipo de paso lo dicen los `StepHandlers`.
+ *
+ * Las operaciones que todavía no se pueden deshacer (importar, autorig,
+ * retopología…) quedan como hitos: aparecen en la línea de tiempo pero
+ * deshacer no los cruza. Cuando una pase a ser deshacible, basta con darle
+ * un handler.
+ */
+
+export interface Step {
+  kind: string;
+  data?: unknown;
+}
+
+export interface StepHandler {
+  /** Aplica el paso. `first` = la primera vez (puede que ya esté aplicado) */
+  apply: (data: never, first: boolean) => Promise<void> | void;
+  /** Lo deshace */
+  revert: (data: never) => Promise<void> | void;
+}
+
+export type StepHandlers = Record<string, StepHandler>;
+
+export interface HistoryNode {
+  id: number;
+  parent: number | null;
+  children: number[];
   description: string;
+  /** Milisegundos desde 1970 */
+  time: number;
+  /** `null` en la raíz */
+  step: Step | null;
+  /** Hito: queda registrado pero no se puede deshacer */
+  milestone?: boolean;
+  /** Hijo por el que sigue Rehacer (el último visitado) */
+  redoChild?: number;
+}
+
+export interface SavedHistory {
+  version: 1;
+  nodes: HistoryNode[];
+  current: number;
 }
 
 export interface HistoryStore {
-  execute: (command: Command) => Promise<void>;
+  /** Aplica un paso y lo agrega como hijo del actual. `applied`: ya estaba aplicado */
+  execute: (description: string, step: Step, options?: { applied?: boolean }) => Promise<void>;
+  /** Registra un hito (operación ya hecha que no se puede deshacer) */
+  milestone: (description: string) => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
+  /** Va a cualquier nodo del árbol: deshace hasta el ancestro común y rehace hasta él */
+  goTo: (id: number) => Promise<void>;
   canUndo: () => boolean;
   canRedo: () => boolean;
+  /** ¿Se puede llegar a `id` sin cruzar un hito hacia atrás? */
+  canReach: (id: number) => boolean;
+  nodes: () => readonly HistoryNode[];
+  current: () => number;
+  /** Solo la raíz (modelo nuevo) */
   clear: () => void;
+  save: () => SavedHistory;
+  load: (saved: SavedHistory | undefined) => void;
 }
 
-const MAX_HISTORY = 50;
+const root = (): HistoryNode => ({ id: 0, parent: null, children: [], description: "Inicio", time: Date.now(), step: null });
 
-export function createHistoryStore(): HistoryStore {
-  const [undoStack, setUndoStack] = createSignal<Command[]>([]);
-  const [redoStack, setRedoStack] = createSignal<Command[]>([]);
+export function createHistoryStore(handlers: StepHandlers): HistoryStore {
+  const [nodes, setNodes] = createSignal<HistoryNode[]>([root()], { equals: false });
+  const [current, setCurrent] = createSignal(0);
+  // Un paso a la vez: deshacer mientras otro se aplica cruzaría los estados
+  let busy: Promise<void> = Promise.resolve();
+  const serial = (task: () => Promise<void>) => (busy = busy.then(task, task));
 
-  const execute = async (command: Command) => {
-    await command.execute();
-    setUndoStack((prev) => {
-      const next = [...prev, command];
-      if (next.length > MAX_HISTORY) next.shift();
-      return next;
-    });
-    setRedoStack([]);
+  const handler = (step: Step) => {
+    const h = handlers[step.kind];
+    if (!h) throw new Error(`Paso de historial desconocido: ${step.kind}`);
+    return h as unknown as { apply: (d: unknown, first: boolean) => Promise<void> | void; revert: (d: unknown) => Promise<void> | void };
   };
 
-  const undo = async () => {
-    const stack = undoStack();
-    if (stack.length === 0) return;
-
-    const command = stack[stack.length - 1];
-    await command.undo();
-
-    setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, command]);
+  const add = (node: Omit<HistoryNode, "id" | "parent" | "children">) => {
+    const list = nodes();
+    const parent = list[current()];
+    const id = list.length;
+    list.push({ ...node, id, parent: parent.id, children: [] });
+    parent.children.push(id);
+    parent.redoChild = id;
+    setNodes(list);
+    setCurrent(id);
   };
 
-  const redo = async () => {
-    const stack = redoStack();
-    if (stack.length === 0) return;
+  const undoOne = async () => {
+    const node = nodes()[current()];
+    if (node.parent === null || node.milestone || !node.step) return false;
+    await handler(node.step).revert(node.step.data);
+    const parent = nodes()[node.parent];
+    parent.redoChild = node.id;
+    setCurrent(parent.id);
+    setNodes(nodes());
+    return true;
+  };
 
-    const command = stack[stack.length - 1];
-    await command.execute();
+  const redoTo = async (childId: number) => {
+    const child = nodes()[childId];
+    if (child.step && !child.milestone) await handler(child.step).apply(child.step.data, false);
+    setCurrent(childId);
+    setNodes(nodes());
+  };
 
-    setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, command]);
+  /** Camino de la raíz a `id` */
+  const path = (id: number) => {
+    const out: number[] = [];
+    for (let n: number | null = id; n !== null; n = nodes()[n].parent) out.push(n);
+    return out.reverse();
+  };
+
+  const canReach = (id: number) => {
+    const from = path(current());
+    const to = new Set(path(id));
+    // Los nodos que hay que deshacer (del actual hacia arriba, hasta el ancestro común)
+    for (let i = from.length - 1; i >= 0 && !to.has(from[i]); i--) {
+      if (nodes()[from[i]].milestone) return false;
+    }
+    return true;
+  };
+
+  const redoTarget = () => {
+    const node = nodes()[current()];
+    return node.redoChild ?? node.children[node.children.length - 1];
   };
 
   return {
-    execute,
-    undo,
-    redo,
-    canUndo: () => undoStack().length > 0,
-    canRedo: () => redoStack().length > 0,
+    execute: (description, step, options) =>
+      serial(async () => {
+        if (!options?.applied) await handler(step).apply(step.data, true);
+        add({ description, time: Date.now(), step });
+      }),
+    milestone: (description) => add({ description, time: Date.now(), step: null, milestone: true }),
+    undo: () => serial(async () => void (await undoOne())),
+    redo: () =>
+      serial(async () => {
+        const next = redoTarget();
+        if (next !== undefined) await redoTo(next);
+      }),
+    goTo: (id) =>
+      serial(async () => {
+        if (!nodes()[id] || !canReach(id)) return;
+        const target = path(id);
+        const onPath = new Set(target);
+        while (!onPath.has(current())) {
+          if (!(await undoOne())) return;
+        }
+        for (let i = target.indexOf(current()) + 1; i < target.length; i++) {
+          nodes()[target[i - 1]].redoChild = target[i];
+          await redoTo(target[i]);
+        }
+      }),
+    canUndo: () => {
+      const node = nodes()[current()];
+      return node.parent !== null && !node.milestone;
+    },
+    canRedo: () => redoTarget() !== undefined,
+    canReach,
+    nodes,
+    current,
     clear: () => {
-      setUndoStack([]);
-      setRedoStack([]);
+      setNodes([root()]);
+      setCurrent(0);
+    },
+    save: () => ({ version: 1, nodes: nodes(), current: current() }),
+    load: (saved) => {
+      if (!saved || saved.version !== 1 || !saved.nodes?.length || !saved.nodes[saved.current]) {
+        setNodes([root()]);
+        setCurrent(0);
+        return;
+      }
+      setNodes(saved.nodes.map((n) => ({ ...n, children: [...n.children] })));
+      setCurrent(saved.current);
     },
   };
 }

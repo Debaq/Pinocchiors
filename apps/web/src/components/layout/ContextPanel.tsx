@@ -10,6 +10,8 @@ import { ViewPanel } from "../panels/ViewPanel";
 import { LightsPanel } from "../panels/LightsPanel";
 import type { LightSettings } from "../../lib/Viewer3D";
 import { SceneOutliner } from "../panels/SceneOutliner";
+import { HistoryPanel } from "../panels/HistoryPanel";
+import type { HistoryStore } from "../../lib/history";
 import { ImportStep, type ImportStepProps } from "../steps/ImportStep";
 import { StructureStep, type StructureStepProps } from "../steps/StructureStep";
 import { RetopologyStep, type RetopologyStepProps } from "../steps/RetopologyStep";
@@ -68,6 +70,9 @@ export interface ContextPanelProps {
   stats?: SceneStats;
   shortcuts?: ShortcutHint[];
 
+  /** Historial en árbol (pestaña Historial) */
+  history?: HistoryStore;
+
   /** Oculta el panel entero (como N en Blender) */
   onHide?: () => void;
 }
@@ -86,7 +91,7 @@ export interface ShortcutHint {
   description: string;
 }
 
-type TabId = "tool" | "view" | "lights" | "info";
+type TabId = "tool" | "view" | "lights" | "history" | "info";
 
 /** Gestos del visor que no pasan por el gestor de atajos */
 const MOUSE_HINTS: ShortcutHint[] = [
@@ -123,6 +128,7 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
       { id: "tool", label: `Herramientas: ${step().label}`, icon: <StepIcon size={16} /> },
       { id: "view", label: "Visualización", icon: <Icons.Eye size={16} /> },
       { id: "lights", label: "Luces", icon: <Icons.Lightning size={16} /> },
+      { id: "history", label: "Historial", icon: <Icons.Clock size={16} /> },
       { id: "info", label: "Escena y atajos", icon: <Icons.Info size={16} /> },
     ];
   };
@@ -235,6 +241,16 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
               </Match>
               <Match when={tab() === "lights"}>
                 <LightsPanel lights={props.lights} onChange={props.onLightsChange} />
+              </Match>
+              <Match when={tab() === "history" && props.history}>
+                {(history) => (
+                  <HistoryPanel
+                    nodes={history().nodes()}
+                    current={history().current()}
+                    canReach={history().canReach}
+                    onGoTo={(id) => void history().goTo(id)}
+                  />
+                )}
               </Match>
               <Match when={tab() === "info"}>
                 <InfoTab stats={props.stats} shortcuts={props.shortcuts} />

@@ -1,5 +1,5 @@
 import { Component, Show, onCleanup, onMount } from "solid-js";
-import { Checkbox, Slider } from "../ui";
+import { Checkbox, Select, Slider } from "../ui";
 import * as Icons from "../icons";
 
 export interface AutosaveSettings {
@@ -8,9 +8,31 @@ export interface AutosaveSettings {
   minutes: number;
 }
 
+export type LengthUnit = "mm" | "cm" | "m" | "in";
+
+export interface GridSettings {
+  /** Unidad en que se mide la grilla ("auto" = la del archivo) */
+  unit: LengthUnit | "auto";
+  /** En qué está el modelo ("auto" = lo que dice el archivo; los STL no lo dicen) */
+  modelUnit: LengthUnit | "auto";
+}
+
+export const UNIT_METERS: Record<LengthUnit, number> = { mm: 0.001, cm: 0.01, m: 1, in: 0.0254 };
+const UNIT_NAMES: Record<LengthUnit, string> = { mm: "Milímetros", cm: "Centímetros", m: "Metros", in: "Pulgadas" };
+const unitOptions = (auto: string) => [
+  { value: "auto", label: auto },
+  ...(Object.keys(UNIT_NAMES) as LengthUnit[]).map((u) => ({ value: u, label: `${UNIT_NAMES[u]} (${u})` })),
+];
+const GRID_UNIT_OPTIONS = unitOptions("Automática (la del modelo)");
+const MODEL_UNIT_OPTIONS = unitOptions("Según el archivo");
+
 export interface SettingsDialogProps {
   autosave: AutosaveSettings;
   onAutosaveChange: (settings: AutosaveSettings) => void;
+  grid: GridSettings;
+  onGridChange: (settings: GridSettings) => void;
+  /** Metros por unidad que declara el archivo abierto */
+  fileMetersPerUnit?: number;
   /** Archivo del proyecto abierto (sin él, el automático va al de recuperación) */
   projectPath?: string;
   onClose: () => void;
@@ -84,6 +106,31 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
                 Si nada cambió, no se reescribe.
               </p>
             </Show>
+          </section>
+
+          <section class="space-y-3 pt-3 border-t border-border">
+            <h3 class="text-[11px] uppercase tracking-wide text-text-muted">Grilla y unidades</h3>
+            <Select
+              label="Medir la grilla en"
+              options={GRID_UNIT_OPTIONS}
+              value={props.grid.unit}
+              onChange={(unit) => props.onGridChange({ ...props.grid, unit: unit as GridSettings["unit"] })}
+            />
+            <Select
+              label="El modelo está en"
+              options={MODEL_UNIT_OPTIONS}
+              value={props.grid.modelUnit}
+              onChange={(modelUnit) =>
+                props.onGridChange({ ...props.grid, modelUnit: modelUnit as GridSettings["modelUnit"] })
+              }
+            />
+            <p class="text-xs text-text-muted leading-relaxed">
+              <Show when={props.fileMetersPerUnit !== undefined}>
+                El archivo dice 1 unidad = {props.fileMetersPerUnit} m.{" "}
+              </Show>
+              Los STL y OBJ no guardan unidades: si la grilla no calza con el tamaño real, elige acá en qué
+              está el modelo. Solo cambia cómo se mide, no el modelo.
+            </p>
           </section>
         </div>
       </div>

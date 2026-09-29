@@ -51,7 +51,13 @@ import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted } from "./lib/ui-state";
 import type { MenuEntry } from "./components/ui/ContextMenu";
-import { SettingsDialog, type AutosaveSettings } from "./components/layout/SettingsDialog";
+import {
+  SettingsDialog,
+  UNIT_METERS,
+  type AutosaveSettings,
+  type GridSettings,
+  type LengthUnit,
+} from "./components/layout/SettingsDialog";
 
 interface ProjectSaved {
   written: boolean;
@@ -216,7 +222,49 @@ export const App: Component = () => {
   const pipeline = createPipelineStore();
 
   // History (undo/redo)
-  const history = createHistoryStore();
+  // Pasos del historial como datos (se guardan en el proyecto); cada tipo
+  // sabe aplicarse y deshacerse. Las funciones se definen más abajo
+  type Vec3 = [number, number, number];
+  const sendWeights = (vertices: number[], rows: number[]) =>
+    invoke("set_vertex_weights", { vertices, influences: rows });
+  const history = createHistoryStore({
+    clip: {
+      apply: (d: { before: AnimationClip; after: AnimationClip }) => replaceClip(d.after),
+      revert: (d: { before: AnimationClip; after: AnimationClip }) => replaceClip(d.before),
+    },
+    clips: {
+      apply: (d: { after: AnimationClip[]; activeAfter?: string }) => {
+        setClips(d.after);
+        setActiveClipId(d.activeAfter);
+      },
+      revert: (d: { before: AnimationClip[]; activeBefore?: string }) => {
+        setClips(d.before);
+        setActiveClipId(d.activeBefore);
+      },
+    },
+    placement: {
+      apply: (d: { matrix: number[] }) => sendPlacement(new THREE.Matrix4().fromArray(d.matrix)),
+      revert: (d: { matrix: number[] }) => sendPlacement(new THREE.Matrix4().fromArray(d.matrix).invert()),
+    },
+    skeletonTransform: {
+      apply: (d: { before: SkeletonTransform; after: SkeletonTransform }) => applyTransform(d.after),
+      revert: (d: { before: SkeletonTransform; after: SkeletonTransform }) => applyTransform(d.before),
+    },
+    moveJoint: {
+      apply: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.to),
+      revert: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.from),
+    },
+    paintWeights: {
+      apply: async (d: { vertices: number[]; before: number[]; after: number[] }) => {
+        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.after));
+        await sendWeights(d.vertices, d.after);
+      },
+      revert: async (d: { vertices: number[]; before: number[]; after: number[] }) => {
+        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.before));
+        await sendWeights(d.vertices, d.before);
+      },
+    },
+  });
 
   // State
   const [fps, setFps] = createSignal(0);
@@ -657,6 +705,9 @@ export const App: Component = () => {
       const info = await busy(`Importando ${name}...`, () =>
         invoke<MeshInfo>("import_model", { path: filePath, onProgress: progressChannel() })
       );
+      // Modelo nuevo: historial nuevo
+      history.clear();
+      history.milestone(`Importar ${name}`);
 
       const data = await fetchMeshData();
       setMeshData(data);
@@ -700,6 +751,7 @@ export const App: Component = () => {
       setSelectedSkeleton(presetId);
 
       const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+      history.milestone(`Plantilla: ${skeletonPresets().find((p) => p.id === presetId)?.name ?? presetId}`);
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonLoaded(true);
       setFitInfo(undefined);
@@ -742,6 +794,7 @@ export const App: Component = () => {
         },
         onProgress,
       });
+      history.milestone("Calcular pesos");
 
       setProgress({ value: 100, label: "Cargando pesos en el visor..." });
       const viewerWeights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
@@ -845,7 +898,7 @@ export const App: Component = () => {
     if (!clip) return;
     const next = change(clip);
     if (next === clip) return;
-    await history.execute({ description, execute: () => replaceClip(next), undo: () => replaceClip(clip) });
+    await history.execute(description, { kind: "clip", data: { before: clip, after: next } });
   };
 
   const handleNewClip = () => {
@@ -869,16 +922,9 @@ export const App: Component = () => {
     const clip = activeClip();
     if (!clip) return;
     const after = before.filter((c) => c.id !== clip.id);
-    await history.execute({
-      description: "Borrar animación",
-      execute: () => {
-        setClips(after);
-        setActiveClipId(after[after.length - 1]?.id);
-      },
-      undo: () => {
-        setClips(before);
-        setActiveClipId(clip.id);
-      },
+    await history.execute("Borrar animación", {
+      kind: "clips",
+      data: { before, after, activeBefore: clip.id, activeAfter: after[after.length - 1]?.id },
     });
   };
 
@@ -1037,13 +1083,8 @@ export const App: Component = () => {
 
   const applyPlacement = async (matrix: THREE.Matrix4 | null, description: string) => {
     if (!matrix) return;
-    const inverse = matrix.clone().invert();
     try {
-      await history.execute({
-        description,
-        execute: () => sendPlacement(matrix),
-        undo: () => sendPlacement(inverse),
-      });
+      await history.execute(description, { kind: "placement", data: { matrix: matrix.toArray() } });
       setStatusMessage(description);
     } catch (e) {
       console.error("Placement error:", e);
@@ -1140,6 +1181,7 @@ export const App: Component = () => {
         config: { texture_size: config.textureSize, padding: config.padding, max_angle: config.maxAngle },
         onProgress,
       });
+      history.milestone("Desplegar UV");
       setProgress({ value: 100, label: "Cargando en el visor..." });
       await refreshSkin();
       setUvPreview("texture");
@@ -1163,6 +1205,7 @@ export const App: Component = () => {
     try {
       setIsProcessing(true);
       await invoke<UvInfo>("restore_transferred_uvs");
+      history.milestone("Volver a las UV trasladadas");
       await refreshSkin();
       setStatusMessage("UV trasladadas del modelo original");
     } catch (e) {
@@ -1199,6 +1242,7 @@ export const App: Component = () => {
         },
         onProgress,
       });
+      history.milestone("Retopología");
 
       setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
       setQuadQuality(info.quality);
@@ -1284,6 +1328,7 @@ export const App: Component = () => {
           refine_fill: opts.refineFill,
         },
       }));
+      history.milestone("Reparar malla");
 
       setRepairResult(result);
       setDiagnostics(result.new_diagnostics);
@@ -1320,6 +1365,7 @@ export const App: Component = () => {
     try {
       setStatusMessage("Deshaciendo reparación...");
       const info = await busy("Deshaciendo reparación...", () => invoke<MeshInfo>("undo_repair"));
+      history.milestone("Deshacer reparación");
 
       const data = await fetchMeshData();
       setMeshData(data);
@@ -1411,6 +1457,7 @@ export const App: Component = () => {
       setIsProcessing(true);
       setStatusMessage("Subdividiendo malla...");
       const result = await busy("Subdividiendo malla...", () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
+      history.milestone("Dividir en piezas");
       setSubdivideResult(result);
       setIsProcessing(false);
       setStatusMessage(`Subdivisión completada: ${result.piece_count} piezas`);
@@ -1458,13 +1505,22 @@ export const App: Component = () => {
     setSkeletonData(tauriSkeletonToViewer(data));
   };
 
+  /** Texto del paso en el historial: qué cambió y a cuánto */
+  const describeTransform = (before: SkeletonTransform, after: SkeletonTransform) => {
+    const same = (a: number[], b: number[]) => a.every((v, i) => v === b[i]);
+    const parts: string[] = [];
+    if (after.scale !== before.scale) parts.push(`escala ${after.scale.toFixed(2)}x`);
+    if (!same(after.translation, before.translation)) parts.push("posición");
+    if (!same(after.rotation, before.rotation)) parts.push(`giro ${after.rotation.map((r) => `${Math.round(r)}°`).join(" ")}`);
+    return parts.length > 0 ? `Esqueleto: ${parts.join(" · ")}` : "Transformar esqueleto";
+  };
+
   const handleTransformChange = async (transform: SkeletonTransform) => {
     const prevTransform = { ...skeletonTransform() };
     try {
-      await history.execute({
-        description: "Transformar esqueleto",
-        execute: () => applyTransform(transform),
-        undo: () => applyTransform(prevTransform),
+      await history.execute(describeTransform(prevTransform, transform), {
+        kind: "skeletonTransform",
+        data: { before: prevTransform, after: transform },
       });
     } catch (e) {
       console.error("Transform error:", e);
@@ -1506,6 +1562,7 @@ export const App: Component = () => {
     setBodyPlan(plan);
     try {
       const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
+      history.milestone("Esqueleto por forma de cuerpo");
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
       setFitInfo(undefined);
@@ -1522,6 +1579,7 @@ export const App: Component = () => {
       const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
         invoke<TauriAutoFitResult>("auto_fit_skeleton")
       );
+      history.milestone("Ajustar esqueleto al modelo");
       setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
       setSkeletonTransform({ ...defaultTransform });
       setAutorigComplete(false);
@@ -1544,6 +1602,7 @@ export const App: Component = () => {
     if (presetId) {
       try {
         const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+        history.milestone("Resetear esqueleto");
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonTransform({ ...defaultTransform });
         setStatusMessage("Esqueleto reseteado");
@@ -1590,16 +1649,8 @@ export const App: Component = () => {
     to: [number, number, number]
   ) => {
     setAutorigComplete(false);
-    let first = true;
-    await history.execute({
-      description: "Mover articulación",
-      execute: async () => {
-        // La primera vez ya está aplicado (el visor lo fue mandando)
-        if (!first) await handleBoneMoved(index, to);
-        first = false;
-      },
-      undo: () => handleBoneMoved(index, from),
-    });
+    // Ya está aplicado: el visor lo fue mandando durante el arrastre
+    await history.execute("Mover articulación", { kind: "moveJoint", data: { index, from, to } }, { applied: true });
   };
 
   /** Centra en el volumen la articulación seleccionada, o todas */
@@ -1609,6 +1660,7 @@ export const App: Component = () => {
       const data = await busy("Centrando articulaciones...", () =>
         invoke<TauriSkeletonData>("center_bones", { bones: onlySelected && selected >= 0 ? [selected] : null })
       );
+      history.milestone(onlySelected ? "Centrar articulación" : "Centrar articulaciones");
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
       setAutorigComplete(false);
@@ -1629,6 +1681,7 @@ export const App: Component = () => {
   const handleActiveMesh = async (useRetopology: boolean) => {
     try {
       const active = await invoke<boolean>("set_active_mesh", { retopology: useRetopology });
+      history.milestone(useRetopology ? "Usar la malla de quads" : "Usar la malla original");
       setActiveQuad(active);
       dropWeights();
       setStatusMessage(
@@ -1675,23 +1728,11 @@ export const App: Component = () => {
 
   /** Guarda un trazo del pincel (ya aplicado en el visor) con deshacer */
   const handleWeightsPainted = async (stroke: PaintStroke) => {
-    const send = (rows: Float32Array) =>
-      invoke("set_vertex_weights", { vertices: Array.from(stroke.vertices), influences: Array.from(rows) });
-    let first = true;
+    const data = { vertices: Array.from(stroke.vertices), before: Array.from(stroke.before), after: Array.from(stroke.after) };
     try {
-      await history.execute({
-        description: "Pintar pesos",
-        execute: async () => {
-          // La primera vez el visor ya lo tiene aplicado
-          if (!first) viewerRef?.applyWeightRows(stroke.vertices, stroke.after);
-          first = false;
-          await send(stroke.after);
-        },
-        undo: async () => {
-          viewerRef?.applyWeightRows(stroke.vertices, stroke.before);
-          await send(stroke.before);
-        },
-      });
+      // El visor ya lo tiene aplicado; falta mandarlo al backend
+      await sendWeights(data.vertices, data.after);
+      await history.execute("Pintar pesos", { kind: "paintWeights", data }, { applied: true });
     } catch (e) {
       console.error("Paint error:", e);
       setStatusMessage(`Error al guardar los pesos: ${e}`);
@@ -1750,7 +1791,7 @@ export const App: Component = () => {
 
   /**
    * Borra un objeto desde el Outliner (o el menú del visor). No se puede
-   * deshacer: el historial se vacía porque sus pasos apuntaban a lo borrado.
+   * deshacer: queda como hito en el historial.
    */
   const handleDeleteNode = async (nodeId: string) => {
     const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
@@ -1773,21 +1814,39 @@ export const App: Component = () => {
       clearQuadMesh();
       setStatusMessage("Retopología borrada");
     }
-    history.clear();
+    // Lo anterior apuntaba a lo borrado: deshacer no pasa de acá
+    history.milestone({ skeleton: "Borrar esqueleto", weights: "Borrar pesos", quadmesh: "Borrar retopología" }[kind]!);
   };
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PROYECTO (.pinocchio)
   // El backend guarda su estado (modelo original, malla, esqueleto, pesos,
   // quads, UV, respaldos para deshacer reparación y escala); acá se suma el de
-  // la interfaz como JSON. El historial de Ctrl+Z no se guarda: sus pasos son
-  // funciones que viven solo mientras la app está abierta
+  // la interfaz como JSON, con el árbol del historial (sus pasos son datos)
   // ═══════════════════════════════════════════════════════════════════════════
 
   const PROJECT_UI_VERSION = 1;
   const [projectPath, setProjectPath] = createSignal<string | undefined>();
   const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
+
+  // La grilla se mide en unidades reales: las del archivo, o las que elija el usuario
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const grid = gridSettings();
+    const metersPerUnit =
+      grid.modelUnit === "auto" ? (sceneStructure()?.meters_per_unit ?? 1) : UNIT_METERS[grid.modelUnit];
+    // Automática: la unidad conocida más cercana a la del modelo
+    const unit: LengthUnit =
+      grid.unit !== "auto"
+        ? grid.unit
+        : (Object.keys(UNIT_METERS) as LengthUnit[]).reduce((best, u) =>
+            Math.abs(Math.log(UNIT_METERS[u] / metersPerUnit)) < Math.abs(Math.log(UNIT_METERS[best] / metersPerUnit)) ? u : best
+          );
+    v.setGridUnits({ metersPerUnit, unitMeters: UNIT_METERS[unit], unitLabel: unit === "in" ? "pulg" : unit });
+  });
   const [recovery, setRecovery] = createSignal<RecoveryInfo | undefined>();
 
   const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
@@ -1827,6 +1886,7 @@ export const App: Component = () => {
       print3d: { analysis: meshAnalysis(), subdivide: subdivideResult(), canUndoScale: canUndoPrintScale() },
       export: { includeRig: exportIncludeRig(), useRetopology: exportUseRetopology(), options: exportOptions() },
       animation: { clips: clips(), activeClipId: activeClipId(), frame: frame(), autoKey: autoKey(), interpolation: keyInterpolation() },
+      history: history.save(),
     });
   };
 
@@ -1834,7 +1894,7 @@ export const App: Component = () => {
   const restoreProjectUi = async (json: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ui: any = JSON.parse(json || "{}");
-    history.clear();
+    history.load(ui.history);
     setPlacementMode(undefined);
     setBoneEditMode(false);
     setPlaying(false);
@@ -1989,7 +2049,7 @@ export const App: Component = () => {
       setSubdivideResult(undefined);
       setCanUndoPrintScale(false);
       setLastExport(undefined);
-      history.clear();
+      history.milestone("Volver al modelo original");
       setMeshData(await fetchMeshData());
       setStatusMessage("Modelo original restaurado");
     } catch (e) {
@@ -2350,6 +2410,7 @@ export const App: Component = () => {
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
             onDeleteNode={handleDeleteNode}
+            history={history}
             stats={{
               fileName: fileName(),
               format: meshInfo().format,
@@ -2375,6 +2436,9 @@ export const App: Component = () => {
         <SettingsDialog
           autosave={autosave()}
           onAutosaveChange={setAutosave}
+          grid={gridSettings()}
+          onGridChange={setGridSettings}
+          fileMetersPerUnit={sceneStructure()?.meters_per_unit}
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}
         />

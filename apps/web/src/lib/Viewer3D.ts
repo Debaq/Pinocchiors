@@ -113,6 +113,16 @@ export interface ViewerSettings {
   trackpadNavigation?: boolean;
 }
 
+/** Unidades de la grilla del piso */
+export interface GridUnits {
+  /** Metros por unidad de la escena (según el archivo, o la que elija el usuario) */
+  metersPerUnit: number;
+  /** Metros por unidad en que se mide la grilla */
+  unitMeters: number;
+  /** "mm", "cm", "m", "in" */
+  unitLabel: string;
+}
+
 /** Opciones del pincel de pesos */
 export interface PaintSettings {
   /** Hueso que se pinta */
@@ -157,6 +167,8 @@ export interface ViewerCallbacks {
   ) => void;
   /** Texto de ayuda de la operación en curso (null al terminar) */
   onHint?: (text: string | null) => void;
+  /** La grilla cambió de escala: texto con el tamaño de celda */
+  onGridChanged?: (label: string) => void;
   /** Clic derecho en el visor (sin operación que cancelar): posición en pantalla */
   onContextMenu?: (x: number, y: number) => void;
   /** Radio o intensidad del pincel cambiados con F / Shift+F */
@@ -364,7 +376,9 @@ export class Viewer3D {
   private pendingMove: { bone: number; position: [number, number, number] } | null = null;
   private moveFrame: number | null = null;
   private hintTimer: number | null = null;
-  private gridHelper: THREE.GridHelper | null = null;
+  /** Grilla del piso: líneas menores, mayores (cada 10) y ejes X/Z */
+  private grid = new THREE.Group();
+  private gridUnits: GridUnits = { metersPerUnit: 1, unitMeters: 1, unitLabel: "m" };
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -420,8 +434,8 @@ export class Viewer3D {
     this.scene.add(this.skeletonGroup);
 
     // Grid - Dracula style
-    this.gridHelper = new THREE.GridHelper(10, 20, 0x44475a, 0x383a4a);
-    this.scene.add(this.gridHelper);
+    this.scene.add(this.grid);
+    this.rebuildGrid();
 
     // Lights
     this.setupLights();
@@ -1286,6 +1300,7 @@ export class Viewer3D {
 
     // Fit camera to mesh
     this.fitCamera();
+    this.rebuildGrid();
     this.buildRig();
   }
 
@@ -1877,9 +1892,72 @@ export class Viewer3D {
   }
 
   setGridVisible(visible: boolean): void {
-    if (this.gridHelper) {
-      this.gridHelper.visible = visible;
+    this.grid.visible = visible;
+  }
+
+  /** Unidades de la grilla: en qué está el modelo y en qué se muestra */
+  setGridUnits(units: GridUnits): void {
+    this.gridUnits = units;
+    this.rebuildGrid();
+  }
+
+  /**
+   * Rehace la grilla a la medida del modelo: celdas de una potencia de 10 de
+   * la unidad elegida (10 a 100 celdas a lo ancho del modelo), líneas mayores
+   * cada 10 celdas y ejes X (rojo) y Z (celeste) por el origen.
+   */
+  private rebuildGrid(): void {
+    for (const child of [...this.grid.children]) {
+      this.grid.remove(child);
+      const line = child as THREE.LineSegments;
+      line.geometry.dispose();
+      (line.material as THREE.Material).dispose();
     }
+    const { metersPerUnit, unitMeters, unitLabel } = this.gridUnits;
+    // Escena → unidad elegida
+    const toUnit = metersPerUnit / unitMeters;
+    let extent = 5 / toUnit;
+    if (this.currentMesh) {
+      const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
+      extent = Math.max(size.x, size.y, size.z) || extent;
+    }
+    const extentUnits = extent * toUnit;
+    const step = Math.pow(10, Math.floor(Math.log10(extentUnits)) - 1);
+    const major = step * 10;
+    const half = Math.max(Math.ceil((extentUnits * 1.5) / major), 1) * major;
+    const toScene = 1 / toUnit;
+
+    const lines = (every: number, color: number, opacity: number, skipEvery?: number) => {
+      const points: number[] = [];
+      const n = Math.round(half / every);
+      for (let i = -n; i <= n; i++) {
+        if (i === 0 || (skipEvery && i % skipEvery === 0)) continue;
+        const c = i * every * toScene;
+        const h = half * toScene;
+        points.push(-h, 0, c, h, 0, c, c, 0, -h, c, 0, h);
+      }
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+      return new THREE.LineSegments(
+        geometry,
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false })
+      );
+    };
+    const axis = (from: THREE.Vector3, to: THREE.Vector3, color: number) =>
+      new THREE.LineSegments(
+        new THREE.BufferGeometry().setFromPoints([from, to]),
+        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false })
+      );
+    const h = half * toScene;
+    this.grid.add(
+      lines(step, 0x44475a, 0.35, 10),
+      lines(major, 0x6272a4, 0.45),
+      axis(new THREE.Vector3(-h, 0, 0), new THREE.Vector3(h, 0, 0), 0xff5555),
+      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), 0x8be9fd)
+    );
+
+    const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
+    this.callbacks.onGridChanged?.(`Grilla: ${format(step)} · líneas mayores ${format(major)}`);
   }
 
   setActiveTool(tool: string): void {
