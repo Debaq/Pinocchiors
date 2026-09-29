@@ -872,6 +872,8 @@ export const App: Component = () => {
   const [diagnostics, setDiagnostics] = createSignal<MeshDiagnostics | undefined>();
   const [repairResult, setRepairResult] = createSignal<RepairResult | undefined>();
   const [canUndoRepair, setCanUndoRepair] = createSignal(false);
+  /** Se desplegó la malla original (sin retopología) y se puede volver atrás */
+  const [canUndoUnwrap, setCanUndoUnwrap] = createSignal(false);
 
   // Print3D state
   const [meshAnalysis, setMeshAnalysis] = createSignal<MeshAnalysis | undefined>();
@@ -1117,6 +1119,7 @@ export const App: Component = () => {
     setDiagnostics(undefined);
     setRepairResult(undefined);
     setCanUndoRepair(false);
+    setCanUndoUnwrap(false);
     setMeshAnalysis(undefined);
     setSubdivideResult(undefined);
     if (!keepClips) {
@@ -2999,6 +3002,67 @@ export const App: Component = () => {
     }
   };
 
+  /** Despliega la malla original (sin retopología): la escena pasa a tener
+   *  UV nuevas y texturas horneadas; el rig la sigue, como al reparar */
+  const handleUvUnwrapOriginal = async () => {
+    try {
+      setIsProcessing(true);
+      setProgress({ value: 0, label: "Desplegando..." });
+      setStatusMessage("Desplegando UV de la malla original...");
+      const onProgress = new Channel<Progress>();
+      onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+      const config = uvConfig();
+      const result = await invoke<{ uv: UvInfo; mesh_info: MeshInfo; rig_kept: boolean }>("unwrap_original_mesh", {
+        config: { texture_size: config.textureSize, padding: config.padding, max_angle: config.maxAngle },
+        onProgress,
+      });
+      history.milestone("Desplegar UV del original");
+      setCanUndoUnwrap(true);
+      // Deshacer la reparación de antes descartaría el desplegado
+      setCanUndoRepair(false);
+      setDiagnostics(undefined);
+      setRepairResult(undefined);
+      dropWeights();
+      clearQuadMesh();
+      setProgress({ value: 100, label: "Cargando en el visor..." });
+      setMeshData(await fetchMeshData());
+      setMeshInfo({ vertices: result.mesh_info.num_vertices, faces: result.mesh_info.num_faces, format: meshInfo().format });
+      if (result.rig_kept) await keepRig();
+      pipeline.markCompleted("uv");
+      setStatusMessage(
+        `UV desplegadas: ${result.uv.num_charts ?? 0} islas, estiramiento ${result.uv.stretch?.toFixed(3) ?? "--"}` +
+          (result.uv.texture_size > 0 ? `, texturas de ${result.uv.texture_size} px` : "")
+      );
+    } catch (e) {
+      console.error("UV unwrap original error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+      setProgress(undefined);
+    }
+  };
+
+  const handleUvUndoOriginal = async () => {
+    try {
+      setIsProcessing(true);
+      const info = await busy("Volviendo a la malla anterior...", () =>
+        invoke<MeshInfo & { rig_kept: boolean }>("undo_unwrap_original")
+      );
+      history.milestone("Deshacer desplegado del original");
+      setCanUndoUnwrap(false);
+      dropWeights();
+      clearQuadMesh();
+      setMeshData(await fetchMeshData());
+      setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
+      if (info.rig_kept) await keepRig();
+      setStatusMessage("Desplegado deshecho");
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleUvRestore = async () => {
     try {
       setIsProcessing(true);
@@ -3134,6 +3198,8 @@ export const App: Component = () => {
       setRepairResult(result);
       setDiagnostics(result.new_diagnostics);
       setCanUndoRepair(true);
+      // Deshacer el desplegado de antes descartaría la reparación
+      setCanUndoUnwrap(false);
       // La retopología se descarta; el rig pasa a la malla reparada
       dropWeights();
       clearQuadMesh();
@@ -3746,7 +3812,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
-      uv: { config: uvConfig(), preview: uvPreview() },
+      uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
         options: repairOptions(),
@@ -3803,6 +3869,7 @@ export const App: Component = () => {
     setDiagnostics(ui.repair?.diagnostics);
     setRepairResult(ui.repair?.result);
     setCanUndoRepair(ui.repair?.canUndo === true);
+    setCanUndoUnwrap(ui.uv?.canUndoOriginal === true);
     setMeshAnalysis(ui.print3d?.analysis);
     setSubdivideResult(ui.print3d?.subdivide);
     setCanUndoPrintScale(ui.print3d?.canUndoScale === true);
@@ -3960,6 +4027,7 @@ export const App: Component = () => {
       setDiagnostics(undefined);
       setRepairResult(undefined);
       setCanUndoRepair(false);
+      setCanUndoUnwrap(false);
       setMeshAnalysis(undefined);
       setSubdivideResult(undefined);
       setCanUndoPrintScale(false);
@@ -4318,6 +4386,11 @@ export const App: Component = () => {
               isProcessing: isProcessing(),
               onUnwrap: handleUvUnwrap,
               onRestore: handleUvRestore,
+              hasModel: !!meshData(),
+              modelHasUvs: meshData()?.uvs !== undefined,
+              onUnwrapOriginal: handleUvUnwrapOriginal,
+              canUndoOriginal: canUndoUnwrap(),
+              onUndoOriginal: handleUvUndoOriginal,
               preview: uvPreview(),
               onPreviewChange: handleUvPreview,
               onOpenEditor: () =>

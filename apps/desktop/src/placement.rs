@@ -176,13 +176,13 @@ fn apply_placement_impl(state: &AppState, matrix: [f64; 16]) -> Result<Placement
         let current = mesh.as_ref().ok_or("No hay malla cargada")?;
         *mesh = Some(transform_mesh(current, &rigid)?);
     }
-    for slot in [&state.scene, &state.scene_before_repair, &state.scene_before_print_scale] {
+    for slot in [&state.scene, &state.scene_before_repair, &state.scene_before_unwrap, &state.scene_before_print_scale] {
         let mut scene = slot.lock().unwrap();
         if let Some(s) = scene.as_ref() {
             *scene = Some(wrap_scene(s, rigid.glam(), PLACEMENT_NODE));
         }
     }
-    for slot in [&state.mesh_before_repair, &state.mesh_before_print_scale] {
+    for slot in [&state.mesh_before_repair, &state.mesh_before_unwrap, &state.mesh_before_print_scale] {
         let mut mesh = slot.lock().unwrap();
         if let Some(m) = mesh.as_ref() {
             *mesh = Some(transform_mesh(m, &rigid)?);

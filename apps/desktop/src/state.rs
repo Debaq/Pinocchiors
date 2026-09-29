@@ -131,6 +131,12 @@ pub struct AppState {
     /// Backup de escena antes de reparación
     pub scene_before_repair: Mutex<Option<Scene>>,
 
+    // ── UV de la malla original ──
+    /// Backup de malla antes de desplegar la malla original
+    pub mesh_before_unwrap: Mutex<Option<Mesh>>,
+    /// Backup de escena antes de desplegar la malla original
+    pub scene_before_unwrap: Mutex<Option<Scene>>,
+
     // ── Print3D ──
     /// Piezas resultantes de subdivisión
     pub print3d_pieces: Mutex<Option<Vec<pinocchio_print3d::LabeledPiece>>>,
@@ -162,6 +168,8 @@ impl AppState {
             diagnostics: Mutex::new(None),
             mesh_before_repair: Mutex::new(None),
             scene_before_repair: Mutex::new(None),
+            mesh_before_unwrap: Mutex::new(None),
+            scene_before_unwrap: Mutex::new(None),
             print3d_pieces: Mutex::new(None),
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
@@ -223,6 +231,8 @@ impl AppState {
         *self.diagnostics.lock().unwrap() = None;
         *self.mesh_before_repair.lock().unwrap() = None;
         *self.scene_before_repair.lock().unwrap() = None;
+        *self.mesh_before_unwrap.lock().unwrap() = None;
+        *self.scene_before_unwrap.lock().unwrap() = None;
         *self.print3d_pieces.lock().unwrap() = None;
         *self.mesh_before_print_scale.lock().unwrap() = None;
         *self.scene_before_print_scale.lock().unwrap() = None;

@@ -128,6 +128,11 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 - Backend: `AppState::quad_skin`; comandos `get_uv_info`, `run_uv_unwrap`,
   `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout`;
   `get_quad_mesh_data` duplica vértices en las costuras e incluye UV.
+- Sin retopología, el paso ofrece desplegar la malla original
+  (`unwrap_original_mesh`): despliega sus triángulos, hornea sus propias
+  texturas (o colores de vértice) y reemplaza escena y malla, como reparar; el
+  rig la sigue (`mesh_replaced`). Se deshace con `undo_unwrap_original`
+  (respaldo propio; reparar y desplegar se anulan el deshacer mutuamente).
 - La exportación con retopología usa la piel (materiales, texturas,
   tangentes) y los pesos del rig siguen al vértice de quads de origen.
 
@@ -138,7 +143,6 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   esquiva pasando −0 a +0. Arreglarlo en el BVH cambia los pesos de
   `heat_diffusion` en ~1e-5 (su test de invariancia de escala tiene
   tolerancia 1e-5): coordinarlo con quien trabaje en el rig.
-- Desplegar también la malla original (sin retopología).
 - Importar PLY (hoy solo se exporta): es el formato típico de escaneos con
   color por vértice.
 - Costuras alineadas a las costuras viejas del original. (Esconderlas por

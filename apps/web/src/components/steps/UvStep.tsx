@@ -38,6 +38,15 @@ export interface UvStepProps {
   onPreviewChange?: (preview: UvPreview) => void;
   /** Abre la piel en el editor de texturas */
   onOpenEditor?: () => void;
+  /** Hay un modelo cargado (sin retopología se puede desplegar el original) */
+  hasModel?: boolean;
+  /** El modelo cargado ya trae UV */
+  modelHasUvs?: boolean;
+  /** Despliega la malla original, sin retopología */
+  onUnwrapOriginal?: () => void;
+  /** Se puede volver a la malla de antes del desplegado del original */
+  canUndoOriginal?: boolean;
+  onUndoOriginal?: () => void;
 }
 
 const SIZE_OPTIONS = [512, 1024, 2048, 4096].map((s) => ({ value: String(s), label: `${s} × ${s} px` }));
@@ -53,6 +62,39 @@ const Row: Component<{ label: string; value: string; warn?: boolean }> = (props)
     <span class="text-text-muted">{props.label}</span>
     <span class={props.warn ? "text-warning" : "text-text"}>{props.value}</span>
   </div>
+);
+
+/** Tamaño de textura, margen y curvatura: comunes a los dos desplegados */
+const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<UvConfig>) => void }> = (props) => (
+  <>
+    <Select
+      label="Tamaño de textura"
+      options={SIZE_OPTIONS}
+      value={String(props.config.textureSize)}
+      onChange={(v) => props.onChange({ textureSize: Number(v) })}
+    />
+    <Slider
+      label="Margen entre islas"
+      value={props.config.padding}
+      onChange={(v) => props.onChange({ padding: Math.round(v) })}
+      min={1}
+      max={16}
+      step={1}
+      formatValue={(v) => `${v} px`}
+    />
+    <Slider
+      label="Curvatura por isla"
+      value={props.config.maxAngle}
+      onChange={(v) => props.onChange({ maxAngle: v })}
+      min={25}
+      max={80}
+      step={5}
+      formatValue={(v) => `${v}°`}
+    />
+    <p class="text-xs text-text-muted leading-relaxed">
+      Menos grados: más islas con menos distorsión. Más grados: menos costuras.
+    </p>
+  </>
 );
 
 export const UvStep: Component<UvStepProps> = (props) => {
@@ -73,9 +115,37 @@ export const UvStep: Component<UvStepProps> = (props) => {
       <Show
         when={props.hasRetopology}
         fallback={
-          <p class="text-xs text-warning leading-relaxed">
-            Primero ejecuta la retopología: el mapa se hace sobre la malla de quads.
-          </p>
+          <Show
+            when={props.hasModel}
+            fallback={<p class="text-xs text-text-muted leading-relaxed">Importa un modelo para darle UV.</p>}
+          >
+            <Panel title="Desplegar la malla original" icon={<Icons.Checkerboard size={14} />} defaultOpen>
+              <div class="space-y-5 pt-1">
+                <p class="text-xs text-text-muted leading-relaxed">
+                  Sin retopología: despliega los triángulos del modelo tal cual. La forma no cambia; los vértices se
+                  parten en las costuras y el rig los sigue.{" "}
+                  {props.modelHasUvs
+                    ? "Reemplaza las UV que traía y hornea sus texturas sobre el mapa nuevo."
+                    : "Queda listo para pintarlo en el editor de texturas."}{" "}
+                  Para una malla liviana con quads, haz primero la retopología.
+                </p>
+                <UnwrapOptions config={props.config} onChange={update} />
+                <Button
+                  variant="primary"
+                  class="w-full"
+                  onClick={() => props.onUnwrapOriginal?.()}
+                  disabled={props.isProcessing}
+                >
+                  {props.isProcessing ? "Procesando..." : "Desplegar la malla original"}
+                </Button>
+                <Show when={props.canUndoOriginal}>
+                  <Button class="w-full" onClick={() => props.onUndoOriginal?.()} disabled={props.isProcessing}>
+                    Volver a la malla anterior
+                  </Button>
+                </Show>
+              </div>
+            </Panel>
+          </Show>
         }
       >
         <Show when={props.info}>
@@ -115,33 +185,7 @@ export const UvStep: Component<UvStepProps> = (props) => {
 
         <Panel title="Desplegar y hornear" icon={<Icons.Checkerboard size={14} />} defaultOpen>
           <div class="space-y-5 pt-1">
-            <Select
-              label="Tamaño de textura"
-              options={SIZE_OPTIONS}
-              value={String(props.config.textureSize)}
-              onChange={(v) => update({ textureSize: Number(v) })}
-            />
-            <Slider
-              label="Margen entre islas"
-              value={props.config.padding}
-              onChange={(v) => update({ padding: Math.round(v) })}
-              min={1}
-              max={16}
-              step={1}
-              formatValue={(v) => `${v} px`}
-            />
-            <Slider
-              label="Curvatura por isla"
-              value={props.config.maxAngle}
-              onChange={(v) => update({ maxAngle: v })}
-              min={25}
-              max={80}
-              step={5}
-              formatValue={(v) => `${v}°`}
-            />
-            <p class="text-xs text-text-muted leading-relaxed">
-              Menos grados: más islas con menos distorsión. Más grados: menos costuras.
-            </p>
+            <UnwrapOptions config={props.config} onChange={update} />
             <Button
               variant="primary"
               class="w-full"

@@ -62,6 +62,8 @@ struct ProjectState {
     quad_skin: Option<SkinDto>,
     mesh_before_repair: Option<MeshDto>,
     scene_before_repair: Option<Scene>,
+    mesh_before_unwrap: Option<MeshDto>,
+    scene_before_unwrap: Option<Scene>,
     print3d_pieces: Option<Vec<PieceDto>>,
     mesh_before_print_scale: Option<MeshDto>,
     scene_before_print_scale: Option<Scene>,
@@ -432,6 +434,8 @@ fn capture(state: &AppState) -> ProjectState {
         quad_skin: state.quad_skin.lock().unwrap().as_ref().map(SkinDto::from),
         mesh_before_repair: mesh(&state.mesh_before_repair),
         scene_before_repair: state.scene_before_repair.lock().unwrap().clone(),
+        mesh_before_unwrap: mesh(&state.mesh_before_unwrap),
+        scene_before_unwrap: state.scene_before_unwrap.lock().unwrap().clone(),
         print3d_pieces: state.print3d_pieces.lock().unwrap().as_ref().map(|pieces| {
             pieces.iter().map(|p| PieceDto { piece: p.clone(), mesh: MeshDto::from(&p.mesh) }).collect()
         }),
@@ -446,6 +450,7 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     let mesh = |m: Option<MeshDto>| m.map(MeshDto::into_mesh).transpose();
     let mesh_now = mesh(p.mesh)?;
     let before_repair = mesh(p.mesh_before_repair)?;
+    let before_unwrap = mesh(p.mesh_before_unwrap)?;
     let before_print = mesh(p.mesh_before_print_scale)?;
     let pieces = p
         .print3d_pieces
@@ -474,6 +479,8 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.diagnostics.lock().unwrap() = None;
     *state.mesh_before_repair.lock().unwrap() = before_repair;
     *state.scene_before_repair.lock().unwrap() = p.scene_before_repair;
+    *state.mesh_before_unwrap.lock().unwrap() = before_unwrap;
+    *state.scene_before_unwrap.lock().unwrap() = p.scene_before_unwrap;
     *state.print3d_pieces.lock().unwrap() = pieces;
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;

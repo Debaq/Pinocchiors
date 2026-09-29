@@ -78,6 +78,8 @@ pub fn run() {
             // UV / Piel
             commands::get_uv_info,
             commands::run_uv_unwrap,
+            commands::unwrap_original_mesh,
+            commands::undo_unwrap_original,
             commands::restore_transferred_uvs,
             commands::get_checker_texture,
             commands::get_skin_materials,

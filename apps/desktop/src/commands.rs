@@ -2388,7 +2388,7 @@ pub struct UvInfo {
     pub can_restore: bool,
 }
 
-fn uv_info(skin: &uv_core::Skin<4>, scene: Option<&Scene>) -> UvInfo {
+fn uv_info<const N: usize>(skin: &uv_core::Skin<N>, scene: Option<&Scene>) -> UvInfo {
     let can_restore = scene.is_some_and(|s| s.world_primitives().iter().any(|p| p.uvs.is_some()));
     let textured = |f: fn(&converter_scene::Material) -> bool| skin.materials.iter().any(f);
     let has_base_color = textured(|m| m.base_color_texture.is_some());
@@ -2486,6 +2486,120 @@ pub async fn restore_transferred_uvs(app: AppHandle) -> Result<UvInfo, String> {
         Ok(info)
     })
     .await
+}
+
+/// Resultado de desplegar la malla original
+#[derive(Debug, Clone, Serialize)]
+pub struct UnwrapOriginalInfo {
+    pub uv: UvInfo,
+    pub mesh_info: MeshInfo,
+    /// Había rig y pasó a la malla desplegada
+    pub rig_kept: bool,
+}
+
+/// Despliega la malla original (sin retopología) y hornea encima sus propias
+/// texturas, o desde su geometría si no tenía UV (colores de vértice). La
+/// escena y la malla pasan a la versión con UV nuevas: misma forma, vértices
+/// partidos en las costuras; el rig la sigue. Se puede deshacer con
+/// [`undo_unwrap_original`].
+#[tauri::command]
+pub async fn unwrap_original_mesh(
+    config: UvUnwrapConfig,
+    on_progress: Channel<Progress>,
+    app: AppHandle,
+) -> Result<UnwrapOriginalInfo, String> {
+    if !(64..=8192).contains(&config.texture_size) {
+        return Err(format!("Tamaño de textura fuera de rango: {}", config.texture_size));
+    }
+    let _ = on_progress.send(Progress {
+        stage: "unwrap".to_string(),
+        percent: 10,
+        message: "Cortando islas, desplegando y horneando texturas...".to_string(),
+    });
+    in_background(app, move |state| unwrap_original_impl(state, &config)).await
+}
+
+fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<UnwrapOriginalInfo, String> {
+    {
+        let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
+        let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena cargada")?;
+        let mesh = state.mesh.lock().unwrap().clone().ok_or("No hay malla cargada")?;
+
+        let positions: Vec<[f64; 3]> =
+            mesh.vertices.iter().map(|v| [v.position.x(), v.position.y(), v.position.z()]).collect();
+        let faces: Vec<[usize; 3]> = (0..mesh.num_faces()).map(|i| mesh.get_face_vertices(i)).collect();
+        let surface = uv_core::scene_surface(&scene);
+        let options = uv_core::BakeOptions {
+            texture_size: config.texture_size,
+            unwrap: uv_core::UnwrapOptions {
+                charts: uv_core::ChartOptions { max_angle: config.max_angle.clamp(15.0, 85.0), ..Default::default() },
+                padding: config.padding.clamp(1, 64),
+                ..Default::default()
+            },
+        };
+        let skin = uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options);
+        let (mut new_scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &scene);
+        for m in &mut new_scene.meshes {
+            m.name = "unwrapped".into();
+        }
+        for n in &mut new_scene.nodes {
+            n.name = "unwrapped".into();
+        }
+        let new_mesh = scene_to_pinocchio_mesh(&new_scene)?;
+
+        let uv = UvInfo { can_restore: false, ..uv_info(&skin, Some(&new_scene)) };
+        let mesh_info = scene_mesh_info(&new_scene, "UNWRAPPED");
+        *state.mesh.lock().unwrap() = Some(new_mesh);
+        *state.scene.lock().unwrap() = Some(new_scene);
+        let rig_kept = mesh_replaced(state, &mesh);
+        *state.mesh_before_unwrap.lock().unwrap() = Some(mesh);
+        *state.scene_before_unwrap.lock().unwrap() = Some(scene);
+        // Deshacer una reparación anterior ya no aplica: descartaría el desplegado
+        *state.mesh_before_repair.lock().unwrap() = None;
+        *state.scene_before_repair.lock().unwrap() = None;
+        *state.diagnostics.lock().unwrap() = None;
+        Ok(UnwrapOriginalInfo { uv, mesh_info, rig_kept })
+    }
+}
+
+/// Vuelve a la malla de antes de [`unwrap_original_mesh`]
+#[tauri::command]
+pub async fn undo_unwrap_original(app: AppHandle) -> Result<UndoRepairInfo, String> {
+    in_background(app, undo_unwrap_original_impl).await
+}
+
+fn undo_unwrap_original_impl(state: &AppState) -> Result<UndoRepairInfo, String> {
+    {
+        let mesh = state.mesh_before_unwrap.lock().unwrap().take().ok_or("No hay desplegado que deshacer")?;
+        let scene = state.scene_before_unwrap.lock().unwrap().take().ok_or("No hay escena de respaldo")?;
+        let mesh_info = scene_mesh_info(&scene, "RESTORED");
+        let unwrapped = state.mesh.lock().unwrap().replace(mesh);
+        *state.scene.lock().unwrap() = Some(scene);
+        let rig_kept = match unwrapped {
+            Some(unwrapped) => mesh_replaced(state, &unwrapped),
+            None => {
+                state.geometry_changed();
+                false
+            }
+        };
+        Ok(UndoRepairInfo { mesh_info, rig_kept })
+    }
+}
+
+/// Resumen de la geometría de una escena para el frontend
+fn scene_mesh_info(scene: &Scene, format: &str) -> MeshInfo {
+    let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(scene);
+    MeshInfo {
+        num_vertices,
+        num_faces,
+        num_meshes: scene.meshes.len(),
+        has_normals,
+        has_uvs,
+        has_materials: !scene.materials.is_empty(),
+        bounding_box: calculate_scene_bounds(scene),
+        format: format.to_string(),
+        rig: None,
+    }
 }
 
 /// Tablero de ajedrez (PNG) para ver la distorsión de las UV
@@ -2737,6 +2851,9 @@ pub async fn repair_mesh(
     .map_err(|e| format!("El traslado de los pesos terminó inesperadamente: {e}"))?;
     *state.mesh_before_repair.lock().unwrap() = Some(original_mesh);
     *state.scene_before_repair.lock().unwrap() = Some(original_scene);
+    // Deshacer un desplegado anterior ya no aplica: descartaría la reparación
+    *state.mesh_before_unwrap.lock().unwrap() = None;
+    *state.scene_before_unwrap.lock().unwrap() = None;
 
     let new_diagnostics = diagnostics_to_info(&diagnostics);
     *state.diagnostics.lock().unwrap() = Some(diagnostics);
@@ -3443,6 +3560,31 @@ mod tests {
         let bbox = calculate_scene_bounds(&scene);
         assert_eq!(bbox.min, [10.0, 0.0, 0.0]);
         assert_eq!(bbox.max, [12.0, 2.0, 2.0]);
+    }
+
+    #[test]
+    fn unwrapping_the_original_mesh_can_be_undone() {
+        let state = AppState::new();
+        let scene = transformed_cube_scene();
+        assert!(scene.world_primitives().iter().all(|p| p.uvs.is_none()));
+        *state.mesh.lock().unwrap() = Some(scene_to_pinocchio_mesh(&scene).unwrap());
+        *state.scene.lock().unwrap() = Some(scene.clone());
+        *state.mesh_before_repair.lock().unwrap() = Some(scene_to_pinocchio_mesh(&scene).unwrap());
+
+        let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0 };
+        let info = unwrap_original_impl(&state, &config).unwrap();
+        assert_eq!(info.uv.num_charts, Some(6), "una isla por cara del cubo");
+        assert!(info.mesh_info.has_uvs);
+        let unwrapped = state.scene.lock().unwrap().clone().unwrap();
+        assert!(unwrapped.world_primitives().iter().all(|p| p.uvs.is_some()));
+        assert_eq!(unwrapped.compute_bounding_box(), scene.compute_bounding_box(), "misma forma");
+        assert!(state.mesh_before_repair.lock().unwrap().is_none(), "ya no se deshace la reparación");
+
+        undo_unwrap_original_impl(&state).unwrap();
+        let restored = state.scene.lock().unwrap().clone().unwrap();
+        assert!(restored.world_primitives().iter().all(|p| p.uvs.is_none()));
+        assert!(state.mesh_before_unwrap.lock().unwrap().is_none());
+        assert!(undo_unwrap_original_impl(&state).is_err(), "no hay dos niveles");
     }
 
     #[test]
