@@ -73,6 +73,15 @@ fn into_disks(mesh: &PolyMesh, faces: Vec<usize>) -> Vec<Vec<usize>> {
     out
 }
 
+/// Triángulos que cubren el polígono aunque no sea convexo: los abanicos
+/// desde cada vértice (un quad queda cubierto por sus dos triangulaciones).
+fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 3]> {
+    let fans = if N == 3 { 1 } else { N };
+    (0..fans)
+        .flat_map(|a| (1..N - 1).map(move |k| [corners[a], corners[(a + k) % N], corners[(a + k + 1) % N]]))
+        .collect()
+}
+
 /// Despliega una malla de caras de `N` vértices en un atlas UV.
 pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], options: &UnwrapOptions) -> Unwrap<N> {
     let mesh = PolyMesh::new(positions, faces);
@@ -107,11 +116,13 @@ pub fn unwrap<const N: usize>(positions: &[[f64; 3]], faces: &[[usize; N]], opti
     // Orden estable: por la primera cara de cada carta
     accepted.sort_by_key(|(faces, _)| faces.iter().copied().min().unwrap_or(usize::MAX));
 
-    let points: Vec<Vec<[f64; 2]>> = accepted.iter().map(|(_, uv)| uv.vertex_uv.values().copied().collect()).collect();
     let shapes: Vec<ChartShape> = accepted
         .iter()
-        .zip(&points)
-        .map(|((_, uv), points)| ChartShape { points, area_3d: uv.area_3d, area_uv: uv.area_uv })
+        .map(|(chart_faces, uv)| ChartShape {
+            triangles: chart_faces.iter().flat_map(|&f| covering_triangles(faces[f].map(|v| uv.vertex_uv[&v]))).collect(),
+            area_3d: uv.area_3d,
+            area_uv: uv.area_uv,
+        })
         .collect();
     let (placements, coverage) = pack(&shapes, options.texture_size, options.padding);
 

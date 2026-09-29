@@ -91,6 +91,27 @@ fn overlapping_texels<const N: usize>(result: &Unwrap<N>, resolution: usize) -> 
     overlaps
 }
 
+/// Carta dueña de cada texel (por su centro).
+fn texel_charts<const N: usize>(result: &Unwrap<N>, resolution: usize) -> Vec<Option<usize>> {
+    let mut owner = vec![None; resolution * resolution];
+    for (face, uvs) in result.corners.iter().enumerate() {
+        for k in 1..N - 1 {
+            let t = [uvs[0], uvs[k], uvs[k + 1]].map(|p| [p[0] as f64 * resolution as f64, p[1] as f64 * resolution as f64]);
+            let area = (t[1][0] - t[0][0]) * (t[2][1] - t[0][1]) - (t[1][1] - t[0][1]) * (t[2][0] - t[0][0]);
+            for y in 0..resolution {
+                for x in 0..resolution {
+                    let p = [x as f64 + 0.5, y as f64 + 0.5];
+                    let edge = |a: [f64; 2], b: [f64; 2]| ((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) * area.signum();
+                    if edge(t[0], t[1]) >= 0.0 && edge(t[1], t[2]) >= 0.0 && edge(t[2], t[0]) >= 0.0 {
+                        owner[y * resolution + x] = Some(result.chart_of_face[face]);
+                    }
+                }
+            }
+        }
+    }
+    owner
+}
+
 fn check<const N: usize>(result: &Unwrap<N>, max_stretch: f64) {
     assert_eq!(result.flipped, 0, "triángulos invertidos");
     assert!(result.stretch <= max_stretch, "estiramiento {}", result.stretch);
@@ -140,4 +161,32 @@ fn torus_charts_are_disks() {
     });
     let result = unwrap(&points, &faces, &UnwrapOptions::default());
     check(&result, UnwrapOptions::default().max_stretch);
+}
+
+#[test]
+fn charts_keep_padding_and_fill_the_atlas() {
+    let (points, faces) = cube(12, true);
+    let options = UnwrapOptions { texture_size: 256, padding: 4, ..Default::default() };
+    let result = unwrap(&points, &faces, &options);
+    check(&result, options.max_stretch);
+    let full = unwrap(&points, &faces, &UnwrapOptions::default());
+    assert!(full.coverage > 0.5, "cobertura {}", full.coverage);
+
+    // Entre texels de cartas distintas hay al menos `padding` texels libres
+    let owner = texel_charts(&result, 256);
+    let pad = options.padding as isize;
+    for y in 0..256isize {
+        for x in 0..256isize {
+            let Some(chart) = owner[(y * 256 + x) as usize] else { continue };
+            for dy in -pad..=pad {
+                for dx in -pad..=pad {
+                    let (u, v) = (x + dx, y + dy);
+                    if (0..256).contains(&u) && (0..256).contains(&v) {
+                        let other = owner[(v * 256 + u) as usize];
+                        assert!(other.is_none_or(|o| o == chart), "cartas {chart} y {other:?} a menos de {pad} texels en ({x}, {y})");
+                    }
+                }
+            }
+        }
+    }
 }

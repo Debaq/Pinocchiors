@@ -68,10 +68,22 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 - Cada isla a su área 3D (densidad de texel uniforme), girada a la caja de
   menor área (aristas de la cápsula convexa).
-- Skyline de abajo a la izquierda, cajas de mayor a menor, probando 90°;
-  varios anchos de franja y se queda el cuadrado más chico. Margen en px del
-  tamaño de textura destino (se itera porque depende del lado final).
-- Gonfoterio: 74 islas, 44 % del atlas cubierto.
+- Por rasterizado, como xatlas: cada isla se dibuja en una grilla de 512
+  celdas por lado (rasterizado conservador; un quad aporta sus dos
+  triangulaciones para cubrirlo aunque no sea convexo) y se engorda el margen.
+  De mayor a menor área, cada isla va al primer hueco libre de abajo a la
+  izquierda probando los cuatro giros de 90° (gana el borde superior más
+  bajo); solo si no cabe se agranda el cuadrado. Las islas chicas llenan los
+  huecos de las grandes.
+- Filas del atlas con menos celdas libres que la fila de la isla se saltan, y
+  las filas candidatas se prueban en paralelo.
+- La escala se ajusta (hasta 12 intentos) para que el lado final no pase de
+  512 celdas: así el margen en celdas equivale al menos a `padding` texels.
+- Cobertura media (5 modelos × 2000/8000 quads): skyline 50 % → 69,5 %;
+  gonfoterio 44 % → 65 %. Tarda 0,1–0,8 s (antes < 0,1 s). Con 1024 celdas
+  sube 1–2 puntos más pero tarda el triple. Ordenar por lado mayor en vez de
+  área empeora (66,8 %).
+- Banco: `cargo run --release -p uv-core --example unwrap_bench -- modelo.glb 2000 8000`.
 
 ## Fase 4 — Horneado ✅
 
@@ -101,8 +113,6 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 ## Pendiente
 
-- Empaquetado por rasterizado (como xatlas) para pasar de ~45 % a ~70 % de
-  uso del atlas.
 - Horneado con rayos por la normal además del punto más cercano: en zonas
   finas o muy juntas (colmillo contra pata) el más cercano puede ser la otra
   pieza; se ve una rayita clara en el gonfoterio.
