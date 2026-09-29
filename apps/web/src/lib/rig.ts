@@ -39,6 +39,7 @@ import {
   type Vec3,
 } from "./animation";
 import { Fk, solveCcd, solveFabrik, solveLookAt, solveSpline, solveTwoBone } from "./ik";
+import { applyLimits, type JointLimits } from "./jointLimits";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -89,6 +90,8 @@ export interface BoneProps {
   shape?: BoneShape;
   /** Giro extra de los ejes alrededor del hueso, en radianes */
   roll?: number;
+  /** Rango de giro (bisagra o rótula), ver `jointLimits.ts` */
+  limits?: JointLimits;
 }
 
 export interface BoneGroup {
@@ -170,6 +173,8 @@ export interface RigSettings {
   groups: BoneGroup[];
   controls: RigControl[];
   ikChains: IkChain[];
+  /** Los límites de giro no se aplican (se ven igual en el panel) */
+  limitsOff?: boolean;
 }
 
 export const emptyRigSettings = (): RigSettings => ({ version: 1, bones: {}, groups: [], controls: [], ikChains: [] });
@@ -188,6 +193,7 @@ export function loadRigSettings(raw: unknown): RigSettings {
   if (Array.isArray(r.controls)) {
     settings.controls = r.controls.filter((c) => c && typeof c.id === "string" && Array.isArray(c.position));
   }
+  if (r.limitsOff === true) settings.limitsOff = true;
   if (Array.isArray(r.ikChains)) {
     settings.ikChains = r.ikChains.filter((c) => c && typeof c.id === "string" && Array.isArray(c.joints));
   }
@@ -195,7 +201,7 @@ export function loadRigSettings(raw: unknown): RigSettings {
 }
 
 /** Propiedades de un hueso con los valores por defecto */
-export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape">> & BoneProps {
+export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape" | "limits">> & BoneProps {
   const p = settings.bones[name] ?? {};
   return {
     ...p,
@@ -335,13 +341,15 @@ export function jointFrames(bones: SkeletonBone[], settings: RigSettings, body: 
   bones.forEach((b, i) => b.parent !== null && children[b.parent]?.push(i));
   return bones.map((bone, j) => {
     const y = boneDirection(bones, children, j, up);
-    // Bisagra: normal del plano padre–articulación–hija
+    // Bisagra: normal del plano padre–articulación–hija, si la articulación
+    // sigue la línea del padre con un doblez (rodilla, codo). Donde el padre
+    // llega de costado (cadera, hombro) ese plano no dice nada del doblez
     let x: Vec3 = [0, 0, 0];
     const parent = bone.parent;
     if (parent !== null && children[j].length === 1) {
       const a = unit(sub(bone.position, bones[parent].position), y);
       const n = cross(a, y);
-      if (length(n) > 0.05) x = unit(n, [0, 0, 0]);
+      if (length(n) > 0.05 && dot(a, y) > Math.cos((50 * Math.PI) / 180)) x = unit(n, [0, 0, 0]);
     }
     // Cadena recta (o sin padre): el costado del cuerpo, o adelante si el hueso va de costado
     if (length(x) === 0) {
@@ -471,10 +479,17 @@ export interface PoseStage {
   run: (pose: Pose, ctx: RigContext, info: StageInfo) => Pose;
 }
 
-/** Límites de los huesos como función para los solucionadores */
+/** Ejes bloqueados y rango de giro de un hueso aplicados a un giro local */
+export function constrainRotation(ctx: RigContext, j: number, q: Quat, props = boneProps(ctx.settings, ctx.bones[j].name)): Quat {
+  let out = applyRotationLocks(q, ctx.frames[j], props.lockRotation, props.rotationMode);
+  if (props.limits && !ctx.settings.limitsOff) out = applyLimits(out, ctx.frames[j], props.limits);
+  return out;
+}
+
+/** Límites de los huesos como función para los solucionadores y el visor */
 export function constrainer(ctx: RigContext): (j: number, q: Quat) => Quat {
   const props = ctx.bones.map((b) => boneProps(ctx.settings, b.name));
-  return (j, q) => (props[j] ? applyRotationLocks(q, ctx.frames[j], props[j].lockRotation, props[j].rotationMode) : q);
+  return (j, q) => (props[j] ? constrainRotation(ctx, j, q, props[j]) : q);
 }
 
 /** Posición y giro en mundo de un control con la pose (sigue al hueso de su articulación) */
@@ -723,16 +738,14 @@ export const ikStage: PoseStage = {
   },
 };
 
-/** Límites: ejes de giro y traslación bloqueados de cada hueso */
+/** Límites: ejes de giro bloqueados, rango de giro y traslación bloqueada de cada hueso */
 export const limitsStage: PoseStage = {
   name: "límites",
   run: (pose, ctx) => {
     const out = clonePose(pose);
     for (const [j, q] of pose.rotations) {
-      const bone = ctx.bones[j];
-      if (!bone) continue;
-      const p = boneProps(ctx.settings, bone.name);
-      out.rotations.set(j, applyRotationLocks(q, ctx.frames[j], p.lockRotation, p.rotationMode));
+      if (!ctx.bones[j]) continue;
+      out.rotations.set(j, constrainRotation(ctx, j, q));
     }
     for (const j of pose.translations.keys()) {
       const bone = ctx.bones[j];

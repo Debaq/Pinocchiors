@@ -36,6 +36,8 @@ export interface TimelineProps {
   /** Keys seleccionadas (ver `keyId`) */
   selection: Set<string>;
   autoKey: boolean;
+  /** Cuadros fuera del límite de giro, por hueso (marcas rojas) */
+  violations?: Map<string, number[]>;
   interpolation: KeyInterpolation;
   onFrame: (frame: number) => void;
   onTogglePlay: () => void;
@@ -293,6 +295,15 @@ export const Timeline: Component<TimelineProps> = (props) => {
                       selectRow(row);
                     }}
                   >
+                    <For each={row.control || row.ik ? [] : (props.violations?.get(row.bone) ?? [])}>
+                      {(f) => (
+                        <div
+                          class="absolute bottom-0 h-1 bg-red/80 pointer-events-none"
+                          style={{ left: `${x(f) - scale() / 2}px`, width: `${Math.max(1, scale())}px` }}
+                          title="Fuera del límite de giro"
+                        />
+                      )}
+                    </For>
                     <For each={keyFrames(track())}>
                       {(f) => <Diamond frame={f} ids={[keyId(row.bone, f)]} step={isStep(f)} />}
                     </For>

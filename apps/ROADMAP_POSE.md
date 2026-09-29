@@ -191,6 +191,17 @@ Pila ordenada por hueso, con influencia animable en cada una.
 
 ## Fase 4: Panel de articulación (la idea de la diseñadora)
 
+**Hecha (2026-09-29).** `lib/jointLimits.ts` (swing-twist, recorte con
+rigidez, límites anatómicos, por la malla, por la animación, espejo,
+recorrido de "probar rango") y `components/panels/JointPanel.tsx` en
+Animar: transportador de bisagra, disco de swing (elipse o polígono) con
+anillo de twist, trayectoria del clip, curvas por eje con keys
+arrastrables, perfil de la cadena con su alcance, discos de la selección
+con edición en lote, grafo de relaciones y piel compartida. Los límites
+van en `BoneProps.limits`, se aplican en la pila, en el IK y al girar, y
+el visor dibuja el cono o el abanico. Quedó como pestaña del paso Animar;
+falta probarlo con la diseñadora.
+
 **Sí tiene sentido, y bastante.** Es lo que usan los editores de ragdoll de
 los motores de juego y herramientas de animación como Cascadeur o KineFX,
 pero casi siempre como números sueltos. Un panel lateral visual que junte

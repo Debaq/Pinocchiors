@@ -13,6 +13,7 @@ import { boneHue, estimateInfluence, type Influence } from "./boneInfluence";
 import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
+import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
 import { ViewCube } from "./ViewCube";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -582,6 +583,8 @@ export class Viewer3D {
   private rigDisplay: RigDisplay | null = null;
   /** IK automático al arrastrar con G */
   private autoIk = { enabled: false, toRoot: false };
+  /** Rango de giro de una articulación dibujado en 3D: cono (rótula) o abanico (bisagra) */
+  private limitGizmo: { joint: number; group: THREE.Group } | null = null;
   private dragFrame: number | null = null;
   /** Articulaciones seleccionadas; la activa es `selectedBoneIndex` */
   private selectedSet = new Set<number>();
@@ -958,7 +961,9 @@ export class Viewer3D {
     }
     // Sobre el gizmo de las herramientas, lo maneja el gizmo
     if (this.transformControls?.dragging || this.transformControls?.axis) return;
-    const control = this.pickControl(e);
+    // Un control se elige por su contorno; adentro de él manda la articulación
+    const picked = this.pickControl(e);
+    const control = picked && (picked.onOutline || this.pickJoint(e) < 0) ? picked.id : null;
     if (control) {
       if (control !== this.selectedControl) {
         this.selectBone(-1);
@@ -1015,8 +1020,11 @@ export class Viewer3D {
     return this.rigDisplay?.hidden[joint] === true;
   }
 
-  /** Control bajo el cursor (a menos de 16 px de su centro o dentro de su dibujo) */
-  private pickControl(e: PointerEvent): string | null {
+  /**
+   * Control bajo el cursor: cerca de su contorno (a 8 px del radio dibujado)
+   * o, si no, dentro de su dibujo. `onOutline` dice cuál de las dos.
+   */
+  private pickControl(e: PointerEvent): { id: string; onOutline: boolean } | null {
     if (!this.settings.showSkeleton || this.controlObjects.length === 0) return null;
     const rect = this.canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -1025,18 +1033,23 @@ export class Viewer3D {
       const q = p.clone().project(this.camera);
       return q.z > 1 ? null : { x: ((q.x + 1) / 2) * rect.width, y: ((1 - q.y) / 2) * rect.height };
     };
-    let best: string | null = null;
-    let bestDistance = Infinity;
+    let best: { id: string; onOutline: boolean } | null = null;
+    let bestScore = Infinity;
     for (const { control, object } of this.controlObjects) {
       const center = object.getWorldPosition(new THREE.Vector3());
       const c = toScreen(center);
       if (!c) continue;
       const edge = toScreen(center.clone().add(this.camera.up.clone().multiplyScalar(control.size)));
-      const radius = Math.max(16, edge ? Math.hypot(edge.x - c.x, edge.y - c.y) : 0);
+      const radius = edge ? Math.hypot(edge.x - c.x, edge.y - c.y) : 0;
       const d = Math.hypot(c.x - mx, c.y - my);
-      if (d < radius && d < bestDistance) {
-        bestDistance = d;
-        best = control.id;
+      const fromOutline = Math.abs(d - radius);
+      const onOutline = fromOutline < 8;
+      if (!onOutline && d > Math.max(16, radius)) continue;
+      // El contorno cercano gana; si no, el centro más cercano
+      const score = onOutline ? fromOutline : 100 + d;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { id: control.id, onOutline };
       }
     }
     return best;
@@ -3657,8 +3670,85 @@ export class Viewer3D {
     this.scheduleControlsDragged();
   }
 
+  /**
+   * Dibuja el rango de giro de `joint`: el cono por el que puede apuntar su
+   * hueso (rótula) o el abanico de la bisagra, con huesos fantasma en los
+   * extremos. `length` es el largo del hueso; `null` lo quita.
+   */
+  setLimitGizmo(gizmo: { joint: number; limits: JointLimits; length: number } | null): void {
+    if (this.limitGizmo) {
+      this.scene.remove(this.limitGizmo.group);
+      this.limitGizmo.group.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      this.limitGizmo = null;
+    }
+    if (!gizmo) return;
+    const { limits } = gizmo;
+    // Direcciones del borde, en ejes de la articulación (el hueso en reposo es +Y)
+    let rim: THREE.Vector3[];
+    let ghosts: THREE.Vector3[];
+    if (limits.kind === "hinge") {
+      const lo = limits.min ?? -90;
+      const hi = limits.max ?? 90;
+      const steps = Math.max(2, Math.ceil((hi - lo) / 5));
+      rim = Array.from({ length: steps + 1 }, (_, i) => {
+        const a = THREE.MathUtils.degToRad(lo + ((hi - lo) * i) / steps);
+        return new THREE.Vector3(0, Math.cos(a), Math.sin(a));
+      });
+      ghosts = [rim[0], rim[rim.length - 1]];
+    } else {
+      const border = limits.swing ? boundaryPoints(limits.swing, 48) : [];
+      rim = border.map((p) => new THREE.Vector3(...diskDirection(p)));
+      if (rim.length > 0) rim.push(rim[0]);
+      ghosts = rim.filter((_, i) => i % Math.max(1, Math.floor(rim.length / 6)) === 0);
+    }
+    const group = new THREE.Group();
+    if (rim.length >= 2) {
+      const fan: number[] = [];
+      for (let i = 0; i < rim.length - 1; i++) fan.push(0, 0, 0, ...rim[i].toArray(), ...rim[i + 1].toArray());
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.Float32BufferAttribute(fan, 3));
+      const fill = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({ color: 0xbd93f9, transparent: true, opacity: 0.16, side: THREE.DoubleSide, depthTest: false, depthWrite: false })
+      );
+      fill.renderOrder = 3;
+      const border = new THREE.Line(new THREE.BufferGeometry().setFromPoints(rim), new THREE.LineBasicMaterial({ color: 0xbd93f9, depthTest: false }));
+      border.renderOrder = 4;
+      group.add(fill, border);
+    }
+    const ghostPoints = ghosts.flatMap((d) => [new THREE.Vector3(), d]);
+    const ghostLines = new THREE.LineSegments(
+      new THREE.BufferGeometry().setFromPoints(ghostPoints),
+      new THREE.LineBasicMaterial({ color: 0xf8f8f2, transparent: true, opacity: 0.55, depthTest: false })
+    );
+    ghostLines.renderOrder = 4;
+    group.add(ghostLines);
+    group.scale.setScalar(gizmo.length);
+    this.scene.add(group);
+    this.limitGizmo = { joint: gizmo.joint, group };
+    this.updateLimitGizmo();
+  }
+
+  /** El dibujo del rango sigue a la articulación (en el marco de su padre: el rango no gira con ella) */
+  private updateLimitGizmo(): void {
+    const g = this.limitGizmo;
+    if (!g) return;
+    const sphere = this.boneSpheres[g.joint];
+    g.group.visible = !!sphere && this.settings.showSkeleton && !this.isJointHidden(g.joint);
+    if (!sphere) return;
+    sphere.getWorldPosition(g.group.position);
+    g.group.quaternion.copy(this.jointAxesWorld(g.joint, null));
+  }
+
   /** Ejes X/Y/Z (rojo, verde, azul) de la articulación activa */
   private updateAxesHelper(): void {
+    this.updateLimitGizmo();
+
     const joint = this.selectedBoneIndex;
     const sphere = this.boneSpheres[joint];
     if (!this.rigDisplay || !sphere || this.isJointHidden(joint)) {

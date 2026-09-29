@@ -107,6 +107,7 @@ import {
 import {
   applyRotationLocks,
   bakeClip,
+  constrainer,
   bodyAxes,
   controlWorld,
   runPoseStack,
@@ -117,6 +118,9 @@ import {
   createRigContext,
   emptyRigSettings,
   eulerDegrees,
+  fromJointSpace,
+  toJointSpace,
+  axisAngle,
   evaluatePose,
   fromEulerDegrees,
   isBoneHidden,
@@ -134,6 +138,24 @@ import {
 import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
 import { IkPanel } from "./components/panels/IkPanel";
+import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
+import {
+  anatomicalLimits,
+  boundaryRadius,
+  compose,
+  decompose,
+  defaultLimits,
+  hingeAngle,
+  hingeRotation,
+  limitExcess,
+  meshLimits,
+  mirrorLimits,
+  observedLimits,
+  rangePath,
+  scaleLimits,
+  type DiskPoint,
+  type JointLimits,
+} from "./lib/jointLimits";
 import { autoRig } from "./lib/autoRig";
 import { Fk } from "./lib/ik";
 import {
@@ -1252,7 +1274,7 @@ export const App: Component = () => {
       lockTranslation: props.map((p) => p.lockTranslation),
       deform: props.map((p) => p.deform),
       frames: ctx.frames,
-      constrain: (j, q) => (props[j] ? applyRotationLocks(q, ctx.frames[j], props[j].lockRotation, props[j].rotationMode) : q),
+      constrain: constrainer(ctx),
       controls: s.controls,
     });
   });
@@ -2220,6 +2242,463 @@ export const App: Component = () => {
     setStatusMessage(`${chain.name}: en IK`);
   };
 
+  // ─── Panel de articulación (F4) ───────────────────────────────────────────
+
+  const activeJoint = () => viewSettings().selectedBone;
+  const activeName = () => rigBones()[activeJoint()]?.name;
+  const limitsOf = (j: number) => (rigBones()[j] ? boneProps(rigSettings(), rigBones()[j].name).limits : undefined);
+  /** Límite que se está arrastrando (se dibuja antes de guardarlo) */
+  const [limitsPreview, setLimitsPreview] = createSignal<JointLimits | undefined>();
+
+  /** Contexto sin límites: la trayectoria y las violaciones se miden antes de recortar */
+  const unlimitedCtx = createMemo(() => ({ ...rigCtx(), settings: { ...rigCtx().settings, limitsOff: true } }));
+
+  /** Giro de una articulación en sus ejes: swing, twist y ángulo de bisagra */
+  const jointParts = (j: number, q: Quat) => {
+    const r = toJointSpace(q, rigCtx().frames[j]);
+    return { ...decompose(r), hinge: hingeAngle(r) };
+  };
+
+  const activeCurrent = createMemo(() => {
+    poseTick();
+    const v = viewer();
+    const j = activeJoint();
+    if (!v || j < 0 || !animating()) return undefined;
+    const p = v.getJointPose(j);
+    return p ? jointParts(j, p.rotation) : undefined;
+  });
+
+  /** La animación de la articulación activa, cuadro a cuadro (antes de los límites) */
+  const trajectory = createMemo<TrajectorySample[]>(() => {
+    const clip = activeClip();
+    const j = activeJoint();
+    if (!clip || j < 0 || !animating() || !rigBones()[j]) return [];
+    const ctx = unlimitedCtx();
+    const limits = limitsOf(j);
+    const out: TrajectorySample[] = [];
+    const end = Math.min(Math.round(clip.end), Math.round(clip.start) + 600);
+    for (let f = Math.round(clip.start); f <= end; f++) {
+      const q = evaluatePose(clip, f, ctx).rotations.get(j) ?? ([0, 0, 0, 1] as Quat);
+      const parts = jointParts(j, q);
+      out.push({ frame: f, ...parts, excess: limits ? limitExcess(q, ctx.frames[j], limits) : 0 });
+    }
+    return out;
+  });
+
+  const activeKeyFrames = createMemo(() => {
+    const name = activeName();
+    const track = activeClip()?.tracks.find((t) => !t.kind && t.bone === name);
+    return track ? [...new Set(track.rotation.map((k) => k.frame))] : [];
+  });
+
+  /** Cuadros fuera del límite de cada hueso (marcas rojas en la línea de tiempo) */
+  const violations = createMemo(() => {
+    const clip = activeClip();
+    const out = new Map<string, number[]>();
+    if (!clip || !animating()) return out;
+    const ctx = unlimitedCtx();
+    const limited = rigBones().flatMap((b, j) => {
+      const l = boneProps(rigSettings(), b.name).limits;
+      return l ? [{ j, l, name: b.name }] : [];
+    });
+    if (limited.length === 0) return out;
+    const end = Math.min(Math.round(clip.end), Math.round(clip.start) + 600);
+    for (let f = Math.round(clip.start); f <= end; f++) {
+      const pose = evaluatePose(clip, f, ctx);
+      for (const { j, l, name } of limited) {
+        const q = pose.rotations.get(j);
+        if (q && limitExcess(q, ctx.frames[j], l) > 0.5) {
+          if (!out.has(name)) out.set(name, []);
+          out.get(name)!.push(f);
+        }
+      }
+    }
+    return out;
+  });
+
+  /** Guardar los límites de la articulación activa */
+  const setActiveLimits = (description: string, limits: JointLimits | undefined) => {
+    const name = activeName();
+    setLimitsPreview(undefined);
+    if (name) void changeRig(description, withBoneProps(rigSettings(), [name], { limits }));
+  };
+
+  const handleLimitKind = (kind: "none" | "hinge" | "ball") => {
+    const j = activeJoint();
+    if (j < 0) return;
+    if (kind === "none") return setActiveLimits("Sin límite", undefined);
+    const anatomical = anatomicalLimits(rigCtx()).get(j);
+    setActiveLimits(kind === "hinge" ? "Bisagra" : "Rótula", anatomical?.kind === kind ? anatomical : defaultLimits(kind));
+  };
+
+  /** Cambiar la key de `frame` de la activa por swing, twist o ángulo de bisagra */
+  const handleLimitKeyEdit = (keyFrame: number, change: { swing?: DiskPoint; twist?: number; hinge?: number }, commit: boolean) => {
+    const clip = activeClip();
+    const j = activeJoint();
+    const name = activeName();
+    if (!clip || !name) return;
+    const ctx = rigCtx();
+    const q0 = samplePose(clip, keyFrame, ctx.boneIndex).rotations.get(j) ?? ([0, 0, 0, 1] as Quat);
+    const parts = jointParts(j, q0);
+    const r =
+      change.hinge !== undefined ? hingeRotation(change.hinge) : compose(change.swing ?? parts.swing, change.twist ?? parts.twist);
+    const q = fromJointSpace(r, ctx.frames[j]);
+    const interpolation = clip.tracks.find((t) => t.bone === name)?.rotation.find((k) => k.frame === keyFrame)?.interpolation;
+    const next = insertKeys(clip, keyFrame, [{ bone: name, rotation: q }], interpolation ?? keyInterpolation());
+    if (commit) void editClip("Editar key", () => next);
+    else {
+      viewer()?.setPose(evaluatePose(next, frame(), ctx));
+      setPoseTick((t) => t + 1);
+    }
+  };
+
+  /** Recorre todo el rango de la activa en el visor y vuelve a la pose que había */
+  const handleProbe = () => {
+    const v = viewer();
+    const j = activeJoint();
+    const limits = limitsOf(j);
+    if (!v || !limits || !animating()) return;
+    const frameAxes = rigCtx().frames[j];
+    const path = rangePath(limits);
+    const saved = v.getPose();
+    let i = 0;
+    const step = () => {
+      if (i >= path.length) {
+        v.setPose(saved);
+        setPoseTick((t) => t + 1);
+        return;
+      }
+      const pose = emptyPose();
+      pose.rotations.set(j, fromJointSpace(path[i++], frameAxes));
+      v.applyPartialPose(pose);
+      requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+
+  /** Límites automáticos para la selección (o todo el esqueleto) */
+  const handleAutoLimits = (mode: LimitsAuto) => {
+    const ctx = rigCtx();
+    const joints = (jointSelection().length > 0 ? jointSelection() : ctx.bones.map((_, j) => j)).filter((j) => ctx.children[j].length > 0);
+    const anatomical = anatomicalLimits(ctx);
+    let next = rigSettings();
+    const set = (j: number, limits: JointLimits | undefined) => (next = withBoneProps(next, [ctx.bones[j].name], { limits }));
+    const kindOf = (j: number) => limitsOf(j)?.kind ?? anatomical.get(j)?.kind ?? "ball";
+    let count = 0;
+    if (mode === "clear") joints.forEach((j) => set(j, undefined));
+    if (mode === "anatomical") {
+      for (const j of joints) {
+        const l = anatomical.get(j);
+        if (l) {
+          set(j, l);
+          count++;
+        }
+      }
+    }
+    if (mode === "observed") {
+      const found = observedLimits(clips(), ctx, joints, new Map(joints.map((j) => [j, kindOf(j)])));
+      found.forEach((l, j) => (set(j, l), count++));
+      if (found.size === 0) return setStatusMessage("No hay animaciones con keys de donde sacar los límites");
+    }
+    if (mode === "mesh") {
+      const mesh = meshData();
+      const weights = weightsData();
+      if (!mesh || !weights || weights.numVertices * 3 !== mesh.positions.length) return;
+      const skin = { positions: mesh.positions, weights: weights.weights, maxInfluences: weights.maxInfluences };
+      for (const j of joints) {
+        const found = meshLimits(ctx, skin, j, kindOf(j));
+        if (!found) continue;
+        const current = limitsOf(j) ?? anatomical.get(j);
+        // La malla dice hasta dónde; el sentido de la bisagra y el twist se conservan
+        if (found.kind === "hinge" && current?.kind === "hinge") {
+          found.min = Math.max(found.min!, current.min ?? -180);
+          found.max = Math.min(found.max!, current.max ?? 180);
+          if (found.min > found.max) found.min = found.max = 0;
+        }
+        if (found.kind === "ball" && current?.kind === "ball" && current.twist) found.twist = current.twist;
+        set(j, found);
+        count++;
+      }
+    }
+    const labels = { anatomical: "Límites anatómicos", mesh: "Límites por la malla", observed: "Límites por la animación", clear: "Quitar límites" };
+    void changeRig(labels[mode], next);
+    if (mode !== "clear") setStatusMessage(`${labels[mode]}: ${count} articulaciones`);
+  };
+
+  /** La selección ordenada de la raíz hacia la punta, si forma una cadena */
+  const selectionPath = createMemo(() => {
+    const ctx = rigCtx();
+    const depth = (j: number) => {
+      let d = 0;
+      for (let p = ctx.bones[j]?.parent ?? null; p !== null; p = ctx.bones[p].parent) d++;
+      return d;
+    };
+    const joints = [...jointSelection()].sort((a, b) => depth(a) - depth(b));
+    const path = joints.length >= 2 && joints.every((j, i) => i === 0 || ctx.bones[j].parent === joints[i - 1]);
+    return path ? joints : null;
+  });
+
+  /** Plano de doblez de la cadena: normal de la primera bisagra, o el plano que forman sus puntos */
+  const chainPlane = (joints: number[]) => {
+    const ctx = rigCtx();
+    const pos = joints.map((j) => ctx.bones[j].position);
+    const hinge = joints.slice(0, -1).find((j) => limitsOf(j)?.kind === "hinge");
+    let n: Vec3 = hinge !== undefined ? ctx.frames[hinge].x : vec.cross(vec.sub(pos[1], pos[0]), vec.sub(pos[pos.length - 1], pos[0]));
+    if (vec.length(n) < 1e-6) n = bodyAxes(ctx.body).right;
+    n = vec.unit(n, [1, 0, 0]);
+    // Arriba en el dibujo = arriba en el mundo (si el plano no es horizontal)
+    const up = bodyAxes(ctx.body).up;
+    const e2 = vec.sub(up, vec.scale(n, vec.dot(up, n)));
+    if (vec.length(e2) > 0.3) {
+      const v = vec.unit(e2, [0, 1, 0]);
+      return { n, e1: vec.cross(v, n), e2: v };
+    }
+    let e1 = vec.sub(pos[pos.length - 1], pos[0]);
+    e1 = vec.unit(vec.sub(e1, vec.scale(n, vec.dot(e1, n))), [0, -1, 0]);
+    return { n, e1, e2: vec.cross(n, e1) };
+  };
+
+  const chainView = createMemo<ChainView | undefined>(() => {
+    poseTick();
+    const joints = selectionPath();
+    const v = viewer();
+    if (!joints || !v || !animating()) return undefined;
+    const ctx = rigCtx();
+    const { n, e1, e2 } = chainPlane(joints);
+    // Posada: el plano gira con el marco de la base de la cadena
+    const fk = new Fk(ctx.bones, v.getPose());
+    const base = fk.frame(joints[0]);
+    const turn = (d: Vec3) => {
+      const r = new THREE.Vector3(...d).applyQuaternion(base);
+      return [r.x, r.y, r.z] as Vec3;
+    };
+    const [pe1, pe2] = [turn(e1), turn(e2)];
+    const origin = ctx.bones[joints[0]].position;
+    const posedOrigin = fk.position(joints[0]);
+    const project = (p: Vec3, o: Vec3, a: Vec3, b: Vec3): [number, number] => [vec.dot(vec.sub(p, o), a), vec.dot(vec.sub(p, o), b)];
+    const posed = joints.map((j) => project(fk.position(j), posedOrigin, pe1, pe2));
+    const rest = joints.map((j) => project(ctx.bones[j].position, origin, e1, e2));
+    // Rango de cada articulación en el plano (bisagras alineadas, o el swing a lo largo del plano)
+    const ranges = joints.slice(0, -1).map((j) => {
+      const l = limitsOf(j);
+      const f = ctx.frames[j];
+      if (l?.kind === "hinge" && Math.abs(vec.dot(f.x, n)) > 0.8) {
+        const s = Math.sign(vec.dot(f.x, n));
+        const a = (l.min ?? -180) * s;
+        const b = (l.max ?? 180) * s;
+        return { lo: Math.min(a, b), hi: Math.max(a, b), hinge: true, s };
+      }
+      if (l?.kind === "ball" && l.swing) {
+        const w = vec.cross(n, f.y);
+        const u = vec.unit([vec.dot(w, f.x), vec.dot(w, f.z), 0], [1, 0, 0]);
+        return { lo: -boundaryRadius(l.swing, -u[0], -u[1]), hi: boundaryRadius(l.swing, u[0], u[1]), hinge: false, s: 1 };
+      }
+      return { lo: -120, hi: 120, hinge: false, s: 1 };
+    });
+    const arcs = joints.slice(0, -1).flatMap((j, k) => {
+      const r = ranges[k];
+      if (!r.hinge) return [];
+      const d = [posed[k + 1][0] - posed[k][0], posed[k + 1][1] - posed[k][1]];
+      const child = (Math.atan2(d[1], d[0]) * 180) / Math.PI;
+      const q = v.getJointPose(j)?.rotation ?? ([0, 0, 0, 1] as Quat);
+      const current = jointParts(j, q).hinge * r.s;
+      return [{ index: k, from: child - current + r.lo, to: child - current + r.hi }];
+    });
+    // Alcance: configuraciones al azar dentro de los rangos, sobre la cadena en reposo
+    const segments = rest.slice(1).map((p, k) => [p[0] - rest[k][0], p[1] - rest[k][1]]);
+    const reach: [number, number][] = [];
+    let seed = 1;
+    const random = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let s = 0; s < 500; s++) {
+      let angle = 0;
+      let x = 0;
+      let y = 0;
+      segments.forEach((seg, k) => {
+        angle += ((ranges[k].lo + (ranges[k].hi - ranges[k].lo) * random()) * Math.PI) / 180;
+        const [c, sn] = [Math.cos(angle), Math.sin(angle)];
+        x += seg[0] * c - seg[1] * sn;
+        y += seg[0] * sn + seg[1] * c;
+      });
+      reach.push([x, y]);
+    }
+    return { names: joints.map((j) => ctx.bones[j].name), posed, rest, arcs, reach };
+  });
+
+  /** Arrastre en la vista de cadena: gira la articulación `index` alrededor de la normal del plano */
+  const handleChainDrag = (index: number, delta: number, commit: boolean) => {
+    const joints = selectionPath();
+    const base = liveBase("chain");
+    if (!joints || !base) return;
+    const ctx = rigCtx();
+    const { n } = chainPlane(joints);
+    const fk = new Fk(ctx.bones, clonePose(base));
+    const q = fk.frame(joints[0]);
+    const axis = new THREE.Vector3(...n).applyQuaternion(q);
+    const j = joints[index];
+    fk.rotate(j, axisAngle([axis.x, axis.y, axis.z], (delta * Math.PI) / 180), constrainer(ctx));
+    const pose = emptyPose();
+    pose.rotations.set(j, fk.pose.rotations.get(j)!);
+    livePreview(pose, commit);
+  };
+
+  const disks = createMemo(() => {
+    poseTick();
+    const v = viewer();
+    return jointSelection()
+      .filter((j) => rigCtx().children[j]?.length > 0)
+      .map((j) => {
+        const q = v?.getJointPose(j)?.rotation ?? ([0, 0, 0, 1] as Quat);
+        const parts = jointParts(j, q);
+        return { name: rigBones()[j].name, limits: limitsOf(j), swing: parts.swing, hinge: parts.hinge };
+      });
+  });
+
+  const handleLimitsBatch = (op: "copyActive" | "mirror" | "scale", factor = 1) => {
+    const ctx = rigCtx();
+    const active = limitsOf(activeJoint());
+    const joints = jointSelection().length > 0 ? jointSelection() : activeJoint() >= 0 ? [activeJoint()] : [];
+    let next = rigSettings();
+    for (const j of joints) {
+      const l = limitsOf(j);
+      if (op === "copyActive" && active && j !== activeJoint()) next = withBoneProps(next, [ctx.bones[j].name], { limits: active });
+      if (op === "scale" && l) next = withBoneProps(next, [ctx.bones[j].name], { limits: scaleLimits(l, factor) });
+      const pair = ctx.mirror[j];
+      if (op === "mirror" && l && pair !== null) next = withBoneProps(next, [ctx.bones[pair].name], { limits: mirrorLimits(l) });
+    }
+    const labels = { copyActive: "Límites iguales a la activa", mirror: "Límites al lado espejo", scale: "Escalar límites" };
+    void changeRig(labels[op], next);
+  };
+
+  /** Vecindario de la activa: padre, hijos, controles que la siguen y cadenas de IK que la usan */
+  const relations = createMemo(() => {
+    const ctx = rigCtx();
+    const j = activeJoint();
+    const nodes: RelationNode[] = [];
+    const edges: RelationEdge[] = [];
+    const bone = ctx.bones[j];
+    if (!bone) return { nodes, edges };
+    const id = (k: number) => `b:${k}`;
+    nodes.push({ id: id(j), label: bone.name, kind: "bone", role: "active" });
+    if (bone.parent !== null) {
+      nodes.push({ id: id(bone.parent), label: ctx.bones[bone.parent].name, kind: "bone", role: "parent" });
+      edges.push({ from: id(bone.parent), to: id(j), kind: "hierarchy" });
+    }
+    for (const c of ctx.children[j].slice(0, 5)) {
+      nodes.push({ id: id(c), label: ctx.bones[c].name, kind: "bone", role: "child" });
+      edges.push({ from: id(j), to: id(c), kind: "hierarchy" });
+    }
+    const controls = new Map(ctx.settings.controls.map((c) => [c.id, c]));
+    const shown = new Set<string>();
+    const addControl = (cid: string) => {
+      const c = controls.get(cid);
+      if (!c || shown.has(cid)) return;
+      shown.add(cid);
+      nodes.push({ id: `c:${cid}`, label: c.name, kind: "control", role: "control" });
+    };
+    for (const c of ctx.settings.controls.filter((c) => c.parent === bone.name)) {
+      addControl(c.id);
+      edges.push({ from: `c:${c.id}`, to: id(j), kind: "follows" });
+    }
+    for (const chain of (ctx.settings.ikChains ?? []).filter((c) => c.joints.includes(bone.name)).slice(0, 3)) {
+      nodes.push({ id: `k:${chain.id}`, label: chain.name, kind: "chain", role: "chain" });
+      edges.push({ from: `k:${chain.id}`, to: id(j), kind: "ik" });
+      for (const cid of [chain.target, chain.pole, ...(chain.curve ?? [])].filter(Boolean) as string[]) {
+        if (shown.size >= 5) break;
+        addControl(cid);
+        edges.push({ from: `k:${chain.id}`, to: `c:${cid}`, kind: "ik" });
+      }
+    }
+    return { nodes, edges };
+  });
+
+  const handleRelationSelect = (node: RelationNode) => {
+    const [kind, rest] = [node.id.slice(0, 1), node.id.slice(2)];
+    if (kind === "b") selectJoints([Number(rest)], Number(rest));
+    else if (kind === "c") handleSelectControl(rest);
+    else setSelectedChain(rest);
+  };
+
+  const handleReparent = (controlNode: string, boneName: string | null) => {
+    const cid = controlNode.slice(2);
+    const s = rigSettings();
+    void changeRig(boneName ? `El control sigue a ${boneName}` : "Control suelto", {
+      ...s,
+      controls: s.controls.map((c) => (c.id === cid ? { ...c, parent: boneName } : c)),
+    });
+  };
+
+  /** Huesos que comparten piel con lo que mueve la activa, por cuánto peso */
+  const sharedSkin = createMemo(() => {
+    const weights = weightsData();
+    const ctx = rigCtx();
+    const j = activeJoint();
+    if (!weights || j < 0 || !ctx.bones[j]) return [];
+    const own = new Set(ctx.bones[j].parent === null ? [j] : ctx.children[j]);
+    const k = weights.maxInfluences;
+    const totals = new Map<number, number>();
+    let sum = 0;
+    for (let v = 0; v < weights.numVertices; v++) {
+      let mine = 0;
+      for (let s = 0; s < k; s++) if (own.has(weights.weights[(v * k + s) * 2])) mine += weights.weights[(v * k + s) * 2 + 1];
+      if (mine < 0.05) continue;
+      for (let s = 0; s < k; s++) {
+        const b = weights.weights[(v * k + s) * 2];
+        const w = weights.weights[(v * k + s) * 2 + 1];
+        if (own.has(b) || w <= 0) continue;
+        totals.set(b, (totals.get(b) ?? 0) + w * mine);
+        sum += w * mine;
+      }
+    }
+    return [...totals.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([b, w]) => ({ name: ctx.bones[b]?.name ?? `hueso ${b}`, fraction: sum > 0 ? w / sum : 0 }));
+  });
+
+  // El rango de la activa en 3D
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const j = activeJoint();
+    const limits = limitsPreview() ?? limitsOf(j);
+    const ctx = rigCtx();
+    const child = ctx.children[j]?.[0];
+    if (!limits || child === undefined || pipeline.activeStep() !== "animate") {
+      v.setLimitGizmo(null);
+      return;
+    }
+    v.setLimitGizmo({ joint: j, limits, length: vec.length(vec.sub(ctx.bones[child].position, ctx.bones[j].position)) });
+  });
+
+  const jointPanel = (
+    <JointPanel
+      boneName={activeName()}
+      limits={limitsPreview() ?? limitsOf(activeJoint())}
+      current={activeCurrent()}
+      trajectory={trajectory()}
+      keyFrames={activeKeyFrames()}
+      limitsOff={rigSettings().limitsOff === true}
+      posing={animating()}
+      canMesh={!!weightsData() && !!meshData()}
+      hasSelection={jointSelection().length > 0}
+      onLimitsOff={(off) => void changeRig(off ? "No aplicar límites" : "Aplicar límites", { ...rigSettings(), limitsOff: off || undefined })}
+      onLimits={setActiveLimits}
+      onLimitsPreview={setLimitsPreview}
+      onKind={handleLimitKind}
+      onKeyEdit={handleLimitKeyEdit}
+      onProbe={handleProbe}
+      onAuto={handleAutoLimits}
+      chain={chainView()}
+      onChainDrag={handleChainDrag}
+      disks={disks()}
+      onBatch={handleLimitsBatch}
+      relations={relations()}
+      onSelectNode={handleRelationSelect}
+      onReparent={handleReparent}
+      shared={sharedSkin()}
+    />
+  );
+
   const ikPanel = (
     <IkPanel
       chains={rigSettings().ikChains ?? []}
@@ -2272,6 +2751,7 @@ export const App: Component = () => {
   const animatePanels = (
     <div class="space-y-3">
       {posePanel}
+      {jointPanel}
       {ikPanel}
       {rigPanel}
     </div>
@@ -3734,6 +4214,8 @@ export const App: Component = () => {
                 selection={keySelection()}
                 autoKey={autoKey()}
                 interpolation={keyInterpolation()}
+                violations={violations()}
+
                 onFrame={(f) => {
                   setPlaying(false);
                   setFrame(f);
