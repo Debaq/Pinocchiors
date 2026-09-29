@@ -13,6 +13,7 @@ pub mod camera;
 pub mod capture;
 pub mod mesh;
 pub mod pointcloud;
+pub mod recording;
 pub mod scan;
 mod scanner;
 
@@ -21,4 +22,4 @@ pub use capture::DepthControls;
 pub use mesh::Mesh;
 pub use pointcloud::PointCloud;
 pub use scan::ScanStats;
-pub use scanner::{Measurement, MeshSettings, Preview, ScanSettings, Scanner, ScannerState, ScannerStatus};
+pub use scanner::{scan_frame_cloud, Measurement, MeshSettings, Preview, ScanSettings, Scanner, ScannerState, ScannerStatus};
