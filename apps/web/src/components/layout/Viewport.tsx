@@ -1,4 +1,4 @@
-import { Component, onMount, onCleanup, Show, createEffect, createSignal } from "solid-js";
+import { Component, JSX, onMount, onCleanup, Show, createEffect, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import {
   Viewer3D,
@@ -80,6 +80,8 @@ export interface ViewportProps {
 
   /** Ítems del menú del clic derecho que agrega la app (después de los de vista) */
   contextMenuItems?: () => MenuEntry[];
+  /** Barra encima del visor (sombreado, superposiciones) */
+  header?: JSX.Element;
 }
 
 const PLACEMENT_HINTS: Record<PlacementMode, string> = {
@@ -219,7 +221,9 @@ export const Viewport: Component<ViewportProps> = (props) => {
   });
 
   return (
-    <main class="relative w-full h-full bg-bg overflow-hidden">
+    <main class="flex flex-col w-full h-full bg-bg overflow-hidden">
+      {props.header}
+      <div class="relative flex-1 min-h-0">
       {/* Canvas */}
       <canvas
         ref={canvasRef}
@@ -278,6 +282,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
             </Show>
           </div>
         </Show>
+      </div>
       </div>
       <Show when={menu()}>
         {(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(null)} />}

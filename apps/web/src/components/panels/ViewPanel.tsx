@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { Panel, Checkbox, Select, SelectOption } from "../ui";
 import * as Icons from "../icons";
+import type { BoneDisplay } from "../../lib/Viewer3D";
 
 export interface ViewSettings {
   showMesh: boolean;
@@ -10,6 +11,11 @@ export interface ViewSettings {
   selectedBone: number;
   /** Materiales y texturas del archivo de origen */
   showTextures?: boolean;
+  /** Rayos X: modelo translúcido */
+  xray?: boolean;
+  /** Opacidad del modelo con rayos X (0–1) */
+  xrayAlpha?: number;
+  boneDisplay?: BoneDisplay;
   /** Notebook: el desplazamiento gira la cámara en vez de acercar */
   trackpadNavigation?: boolean;
 }
@@ -51,6 +57,12 @@ export const ViewPanel: Component<ViewPanelProps> = (props) => {
             label="Texturas del modelo"
             checked={props.settings.showTextures !== false}
             onChange={(checked) => updateSettings({ showTextures: checked })}
+          />
+
+          <Checkbox
+            label="Rayos X (Alt+Z)"
+            checked={props.settings.xray === true}
+            onChange={(checked) => updateSettings({ xray: checked })}
           />
 
           <Checkbox

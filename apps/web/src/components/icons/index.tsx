@@ -397,3 +397,54 @@ export const CornersIn = (props: IconProps) => (
     <path d="M152,96V48a8,8,0,0,1,16,0V88h40a8,8,0,0,1,0,16H160A8,8,0,0,1,152,96ZM96,152H48a8,8,0,0,0,0,16H88v40a8,8,0,0,0,16,0V160A8,8,0,0,0,96,152Zm64,0H152a8,8,0,0,0-8,8v48a8,8,0,0,0,16,0V168h40a8,8,0,0,0,0-16ZM96,96h48a8,8,0,0,0,0-16H104V48a8,8,0,0,0-16,0V88A8,8,0,0,0,96,96Z" />
   </Icon>
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SOMBREADO DEL VISOR
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Esfera de alambre */
+export const ShadingWireframe = (props: IconProps) => (
+  <Icon {...props}>
+    <g fill="none" stroke="currentColor" stroke-width="16">
+      <circle cx="128" cy="128" r="96" />
+      <ellipse cx="128" cy="128" rx="40" ry="96" />
+      <line x1="32" y1="128" x2="224" y2="128" />
+    </g>
+  </Icon>
+);
+
+/** Esfera sólida */
+export const ShadingSolid = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="128" cy="128" r="96" />
+  </Icon>
+);
+
+/** Esfera con material: mitad llena, mitad cuadriculada */
+export const ShadingMaterial = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="128" cy="128" r="88" fill="none" stroke="currentColor" stroke-width="16" />
+    <path d="M128,40a88,88,0,0,0,0,176Z" />
+    <rect x="128" y="80" width="40" height="40" />
+    <rect x="168" y="120" width="40" height="40" />
+    <rect x="128" y="160" width="40" height="40" />
+  </Icon>
+);
+
+/** Rayos X: dos cuadrados superpuestos, el de adelante translúcido */
+export const XRay = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="40" y="40" width="120" height="120" rx="8" />
+    <rect x="96" y="96" width="120" height="120" rx="8" fill-opacity="0.35" stroke="currentColor" stroke-width="16" />
+  </Icon>
+);
+
+/** Superposiciones: dos círculos cruzados */
+export const Overlays = (props: IconProps) => (
+  <Icon {...props}>
+    <g fill="none" stroke="currentColor" stroke-width="16">
+      <circle cx="100" cy="128" r="64" />
+      <circle cx="156" cy="128" r="64" />
+    </g>
+  </Icon>
+);

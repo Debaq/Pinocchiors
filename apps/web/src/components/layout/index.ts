@@ -13,6 +13,7 @@ export { ProgressOverlay } from "./ProgressOverlay";
 export type { ProgressOverlayProps } from "./ProgressOverlay";
 
 export { Viewport } from "./Viewport";
+export { ViewportHeader } from "./ViewportHeader";
 export type { ViewportProps } from "./Viewport";
 
 export { ContextPanel } from "./ContextPanel";

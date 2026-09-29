@@ -1,8 +1,8 @@
-import { Component, createEffect, createMemo, createSignal, onMount, onCleanup, Show, untrack } from "solid-js";
+import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
+import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
 import { ContextPanel } from "./components/layout/ContextPanel";
 import * as Icons from "./components/icons";
@@ -45,7 +45,7 @@ import {
   type PlacementInfo,
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
-import { createPipelineStore } from "./lib/pipeline";
+import { createPipelineStore, type PipelineStepId } from "./lib/pipeline";
 import { VIEW_AXES, fromView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree } from "./lib/scene-tree";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
@@ -675,7 +675,41 @@ export const App: Component = () => {
     showWeights: false,
     selectedBone: -1,
     showTextures: true,
+    xray: false,
+    xrayAlpha: 0.35,
+    boneDisplay: "octahedral",
   });
+
+  // Sombreado por sección, como cada espacio de trabajo con su propio visor:
+  // el esqueleto se ve dentro del modelo translúcido, sin piel y con pesos
+  type Shading = Pick<ViewSettings, "showMesh" | "showWireframe" | "showTextures" | "xray" | "showWeights">;
+  const DEFAULT_SHADING: Shading = { showMesh: true, showWireframe: false, showTextures: true, xray: false, showWeights: false };
+  const SECTION_SHADING: Partial<Record<PipelineStepId, Shading>> = {
+    skeleton: { ...DEFAULT_SHADING, showTextures: false, xray: true, showWeights: true },
+  };
+  const [shadingBySection, setShadingBySection] = createPersisted<Partial<Record<PipelineStepId, Shading>>>(
+    "view.shadingBySection",
+    {}
+  );
+  const shadingOf = (v: ViewSettings): Shading => ({
+    showMesh: v.showMesh,
+    showWireframe: v.showWireframe,
+    showTextures: v.showTextures,
+    xray: v.xray,
+    showWeights: v.showWeights,
+  });
+  createEffect(
+    on(
+      () => pipeline.activeStep(),
+      (step, prev) => {
+        untrack(() => {
+          if (prev !== undefined) setShadingBySection({ ...shadingBySection(), [prev]: shadingOf(viewSettings()) });
+          const next = shadingBySection()[step] ?? SECTION_SHADING[step] ?? DEFAULT_SHADING;
+          setViewSettings((v) => ({ ...v, ...next }));
+        });
+      }
+    )
+  );
 
   // Skeleton transform
   const defaultTransform: SkeletonTransform = { scale: 1, translation: [0, 0, 0], rotation: [0, 0, 0] };
@@ -795,6 +829,12 @@ export const App: Component = () => {
     },
     { key: "f", shift: true, action: () => viewerRef?.startModal("strength"), description: "Intensidad del pincel" },
     { key: "n", action: () => setShowContextPanel(!showContextPanel()), description: "Mostrar/ocultar panel" },
+    {
+      key: "z",
+      alt: true,
+      action: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })),
+      description: "Rayos X",
+    },
     { key: "1", action: () => viewerRef?.setView("front"), description: "Vista frontal" },
     { key: "3", action: () => viewerRef?.setView("right"), description: "Vista derecha" },
     { key: "7", action: () => viewerRef?.setView("top"), description: "Vista superior" },
@@ -2088,6 +2128,14 @@ export const App: Component = () => {
     setViewSettings((prev) => ({ ...prev, selectedBone: index }));
   };
 
+  const skeletonBoneNames = createMemo(() => skeletonData()?.bones.map((b) => b.name) ?? []);
+
+  /** Hueso cuyos pesos se ven (−1: todos), elegido desde la barra del visor */
+  const selectWeightsBone = (index: number) => {
+    setViewSettings((prev) => ({ ...prev, selectedBone: index }));
+    viewerRef?.selectBone(index);
+  };
+
   // ═══════════════════════════════════════════════════════════════════════════
   // OUTLINER HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -2469,7 +2517,10 @@ export const App: Component = () => {
       { label: "Grilla", checked: showGrid(), onSelect: () => handleToggleVisibility("grid") },
     ];
     if (skeletonLoaded()) items.push({ label: "Esqueleto", checked: view.showSkeleton, onSelect: () => toggle("showSkeleton") });
-    if (autorigComplete()) items.push({ label: "Heatmap de pesos", checked: view.showWeights, onSelect: () => toggle("showWeights") });
+    if (skeletonLoaded()) {
+      items.push({ label: autorigComplete() ? "Pesos" : "Influencia estimada", checked: view.showWeights, onSelect: () => toggle("showWeights") });
+    }
+    items.push({ label: "Rayos X", shortcut: "Alt+Z", checked: view.xray === true, onSelect: () => setViewSettings((prev) => ({ ...prev, xray: !prev.xray })) });
     const removable: MenuEntry[] = [];
     if (skeletonLoaded()) removable.push({ label: "Borrar esqueleto", danger: true, onSelect: () => handleDeleteNode("skeleton") });
     if (quadMeshLoaded()) removable.push({ label: "Borrar retopología", danger: true, onSelect: () => handleDeleteNode("quadmesh") });
@@ -2582,10 +2633,24 @@ export const App: Component = () => {
               toolHint={toolDisabledReason(activeTool()) ? undefined : tools().find((t) => t.id === activeTool())?.hint}
               onObjectTransformed={handleObjectGizmo}
               contextMenuItems={viewportMenuItems}
+              header={
+                <Show when={meshLoaded()}>
+                  <ViewportHeader
+                    settings={viewSettings()}
+                    onChange={(change) => setViewSettings((prev) => ({ ...prev, ...change }))}
+                    showGrid={showGrid()}
+                    onToggleGrid={() => handleToggleVisibility("grid")}
+                    hasSkeleton={skeletonLoaded()}
+                    hasWeights={autorigComplete()}
+                    boneNames={skeletonBoneNames()}
+                    onSelectBone={selectWeightsBone}
+                  />
+                </Show>
+              }
             />
 
             {/* Welcome Screen overlay */}
-            <Show when={!meshLoaded()}>
+            <Show when={!meshLoaded() && pipeline.activeStep() !== "scan"}>
               <WelcomeScreen
                 onImport={handleLoad}
                 onOpenProject={() => handleOpenProject()}
@@ -2819,8 +2884,8 @@ export const App: Component = () => {
               setViewSettings(settings);
               setTrackpadNavigation(settings.trackpadNavigation === true);
             }}
-            boneNames={boneNames()}
-            hasWeights={autorigComplete()}
+            boneNames={skeletonBoneNames()}
+            hasWeights={skeletonLoaded()}
             sceneTree={meshLoaded() ? sceneTree() : undefined}
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}

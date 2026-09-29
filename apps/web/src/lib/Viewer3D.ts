@@ -9,6 +9,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
+import { boneHue, estimateInfluence, type Influence } from "./boneInfluence";
 import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
 import { ViewCube } from "./ViewCube";
@@ -107,12 +108,20 @@ export interface ViewerSettings {
   selectedBone: number;
   /** Materiales y texturas del archivo de origen */
   showTextures?: boolean;
+  /** Rayos X: la malla translúcida, para ver el esqueleto y lo de atrás */
+  xray?: boolean;
+  /** Opacidad de la malla con rayos X (0–1) */
+  xrayAlpha?: number;
+  /** Forma de los huesos: octaedros o líneas */
+  boneDisplay?: BoneDisplay;
   /**
    * Notebook: el desplazamiento (dos dedos, o botón central + TrackPoint, que
    * el sistema convierte en rueda) gira la cámara; Shift desplaza, Ctrl acerca
    */
   trackpadNavigation?: boolean;
 }
+
+export type BoneDisplay = "octahedral" | "stick";
 
 /** Unidades de la grilla del piso */
 export interface GridUnits {
@@ -227,6 +236,75 @@ function getHeatmapColor(value: number): THREE.Color {
   return HEATMAP_COLORS[index].clone().lerp(HEATMAP_COLORS[index + 1], t);
 }
 
+/** Color propio de un hueso (el mismo en la malla y en su octaedro) */
+function boneColor(bone: number): THREE.Color {
+  return new THREE.Color().setHSL(boneHue(bone), 0.75, 0.55);
+}
+
+/** Zona sin influencia en la vista de todos los huesos */
+const NO_INFLUENCE = new THREE.Color(0x44475a);
+
+/**
+ * Color del vértice `v`: con un hueso elegido, el mapa de calor de su peso;
+ * con todos (−1), la mezcla de los colores de sus huesos según el peso.
+ */
+function weightColor(weights: Influence, v: number, bone: number, out: THREE.Color): THREE.Color {
+  const k = weights.maxInfluences;
+  const base = v * k * 2;
+  if (bone >= 0) {
+    let w = 0;
+    for (let i = 0; i < k; i++) {
+      if (weights.weights[base + i * 2] === bone) {
+        w = weights.weights[base + i * 2 + 1];
+        break;
+      }
+    }
+    return out.copy(getHeatmapColor(w));
+  }
+  out.setRGB(0, 0, 0);
+  let sum = 0;
+  const c = new THREE.Color();
+  for (let i = 0; i < k; i++) {
+    const w = weights.weights[base + i * 2 + 1];
+    if (w <= 0) continue;
+    sum += w;
+    c.copy(boneColor(weights.weights[base + i * 2]));
+    out.r += c.r * w;
+    out.g += c.g * w;
+    out.b += c.b * w;
+  }
+  const rest = Math.max(0, 1 - sum);
+  out.r += NO_INFLUENCE.r * rest;
+  out.g += NO_INFLUENCE.g * rest;
+  out.b += NO_INFLUENCE.b * rest;
+  return out;
+}
+
+/**
+ * Octaedro de un hueso de largo 1 sobre +Y, con la cintura al 10 % del largo
+ * (el hueso "octaédrico" clásico de los editores 3D)
+ */
+function octahedronGeometry(): THREE.BufferGeometry {
+  const w = 0.1;
+  const head = [0, 0, 0];
+  const tail = [0, 1, 0];
+  const ring = [
+    [w, w, 0],
+    [0, w, -w],
+    [-w, w, 0],
+    [0, w, w],
+  ];
+  const positions: number[] = [];
+  for (let i = 0; i < 4; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % 4];
+    positions.push(...head, ...b, ...a, ...tail, ...a, ...b);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  return geometry;
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // VIEWER CLASS
 // ═══════════════════════════════════════════════════════════════════════════
@@ -262,6 +340,12 @@ export class Viewer3D {
   private meshData: MeshData | null = null;
   private weightsData: WeightsData | null = null;
   private skeletonData: SkeletonData | null = null;
+  /** Influencia estimada mientras no hay pesos (se calcula al mostrarla) */
+  private estimatedInfluence: Influence | null = null;
+  /** Recalcular la estimación cuando el esqueleto deja de moverse */
+  private influenceTimer: number | null = null;
+  /** Octaedros de los huesos: relleno y aristas, por hueso (índice = articulación de la punta) */
+  private boneShapes: { bone: number; fill: THREE.Mesh; edges: THREE.LineSegments }[] = [];
 
   // Pincel de pesos
   private paintSettings: PaintSettings | null = null;
@@ -314,6 +398,9 @@ export class Viewer3D {
     showWeights: false,
     selectedBone: -1,
     showTextures: true,
+    xray: false,
+    xrayAlpha: 0.35,
+    boneDisplay: "octahedral",
   };
 
   // Materiales del archivo de origen y sus texturas (compartidas entre materiales)
@@ -1232,15 +1319,7 @@ export class Viewer3D {
   private recolorVertex(v: number): void {
     const colors = this.weightsMesh?.geometry.getAttribute("color") as THREE.BufferAttribute | undefined;
     if (!colors || !this.weightsData) return;
-    const bone = this.settings.selectedBone;
-    let weight = 0;
-    const k = this.weightsData.maxInfluences;
-    for (let i = 0; i < k; i++) {
-      const w = this.weightsData.weights[(v * k + i) * 2 + 1];
-      if (bone === -1) weight = Math.max(weight, w);
-      else if (this.weightsData.weights[(v * k + i) * 2] === bone) weight = w;
-    }
-    const color = getHeatmapColor(weight);
+    const color = weightColor(this.weightsData, v, this.settings.selectedBone, new THREE.Color());
     colors.setXYZ(v, color.r, color.g, color.b);
   }
 
@@ -1296,6 +1375,7 @@ export class Viewer3D {
     this.clearMeasure();
     this.meshData = data;
     this.paintNeighbors = null;
+    this.estimatedInfluence = null;
     this.clearMesh();
 
     // Create geometry
@@ -1339,6 +1419,7 @@ export class Viewer3D {
     else this.fitCamera();
     this.keepCamera = false;
     this.rebuildGrid();
+    this.applySettings();
     this.buildRig();
     this.attachGizmo();
   }
@@ -1366,6 +1447,34 @@ export class Viewer3D {
     this.disposeMaterial(mesh.material);
     mesh.material = this.buildMaterial(mesh.geometry);
     if (this.rig) this.rig.mesh.material = mesh.material;
+    this.applyXray();
+  }
+
+  /**
+   * Rayos X: la malla (y el mapa de pesos) translúcida y sin escribir
+   * profundidad, así se ven el esqueleto y las caras de atrás. Guarda la
+   * opacidad propia de cada material para volver a ella.
+   */
+  private applyXray(): void {
+    const xray = this.settings.xray === true;
+    const alpha = this.settings.xrayAlpha ?? 0.35;
+    for (const mesh of [this.currentMesh, this.weightsMesh]) {
+      if (!mesh) continue;
+      // Los colores de los pesos se leen mal muy translúcidos: algo más opacos
+      const opacity = mesh === this.weightsMesh ? 0.3 + 0.7 * alpha : alpha;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const base = (m.userData.opaque ??= { opacity: m.opacity, transparent: m.transparent, depthWrite: m.depthWrite }) as {
+          opacity: number;
+          transparent: boolean;
+          depthWrite: boolean;
+        };
+        const transparent = xray || base.transparent;
+        if (transparent !== m.transparent) m.needsUpdate = true;
+        m.transparent = transparent;
+        m.opacity = base.opacity * (xray ? opacity : 1);
+        m.depthWrite = xray ? false : base.depthWrite;
+      }
+    }
   }
 
   private disposeMaterial(material: THREE.Material | THREE.Material[]): void {
@@ -1494,12 +1603,14 @@ export class Viewer3D {
     if (sameStructure) {
       data.bones.forEach((bone, i) => this.boneSpheres[i].position.set(...bone.position));
       this.updateBoneLines();
+      this.refreshEstimatedWeights();
       this.buildRig();
       this.attachGizmo();
       return;
     }
     this.clearSkeleton();
     this.boneSpheres = [];
+    this.estimatedInfluence = null;
 
     const bonesGroup = new THREE.Group();
     bonesGroup.name = "bones";
@@ -1549,6 +1660,25 @@ export class Viewer3D {
       this.skeletonGroup.add(lines);
     }
 
+    // Octaedros, uno por hueso (segmento padre → articulación)
+    const shapes = new THREE.Group();
+    shapes.name = "boneShapes";
+    this.skeletonGroup.add(shapes);
+    const octahedron = octahedronGeometry();
+    const octahedronEdges = new THREE.EdgesGeometry(octahedron);
+    this.boneShapes = data.edges.map(([, child]) => {
+      const fill = new THREE.Mesh(
+        octahedron,
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.35, depthTest: false, depthWrite: false, side: THREE.DoubleSide })
+      );
+      fill.renderOrder = 4;
+      const edges = new THREE.LineSegments(octahedronEdges, new THREE.LineBasicMaterial({ depthTest: false }));
+      edges.renderOrder = 5;
+      shapes.add(fill, edges);
+      return { bone: child, fill, edges };
+    });
+    this.updateBoneLines();
+
     this.skeletonGroup.visible = this.settings.showSkeleton;
     // Las esferas son nuevas: volver a marcar (y enganchar) la seleccionada
     if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
@@ -1578,6 +1708,44 @@ export class Viewer3D {
     });
     attr.needsUpdate = true;
     lines.geometry.computeBoundingSphere();
+
+    const up = new THREE.Vector3(0, 1, 0);
+    const dir = new THREE.Vector3();
+    this.skeletonData.edges.forEach(([parent, child], k) => {
+      const shape = this.boneShapes[k];
+      if (!shape) return;
+      const a = this.boneSpheres[parent].position;
+      dir.subVectors(this.boneSpheres[child].position, a);
+      const length = dir.length();
+      for (const o of [shape.fill, shape.edges]) {
+        o.position.copy(a);
+        o.scale.setScalar(Math.max(length, 1e-9));
+        if (length > 0) o.quaternion.setFromUnitVectors(up, dir.divideScalar(length));
+      }
+    });
+  }
+
+  /**
+   * Colores de los octaedros: el propio de cada hueso con la vista de todos
+   * los pesos, violeta el elegido, naranja el resto
+   */
+  private recolorBoneShapes(): void {
+    const byBone = this.settings.showWeights && this.settings.selectedBone < 0 && this.displayWeights() !== null;
+    for (const { bone, fill, edges } of this.boneShapes) {
+      const color =
+        bone === this.selectedBoneIndex ? new THREE.Color(0xbd93f9) : byBone ? boneColor(bone) : new THREE.Color(0xffb86c);
+      (fill.material as THREE.MeshBasicMaterial).color.copy(color);
+      (edges.material as THREE.LineBasicMaterial).color.copy(color);
+    }
+  }
+
+  private applyBoneDisplay(): void {
+    const octahedral = this.settings.boneDisplay !== "stick";
+    const shapes = this.skeletonGroup.getObjectByName("boneShapes");
+    const lines = this.skeletonGroup.getObjectByName("boneLines");
+    if (shapes) shapes.visible = octahedral;
+    if (lines) lines.visible = !octahedral;
+    this.recolorBoneShapes();
   }
 
   /**
@@ -1687,7 +1855,9 @@ export class Viewer3D {
     this.clearSkeleton();
     this.boneSpheres = [];
     this.skeletonData = null;
+    this.estimatedInfluence = null;
     this.selectedBoneIndex = -1;
+    this.applySettings();
     this.attachGizmo();
   }
 
@@ -1710,7 +1880,7 @@ export class Viewer3D {
   loadWeights(data: WeightsData): void {
     this.resetPose();
     this.weightsData = data;
-    this.updateWeightsVisualization();
+    this.applySettings();
     this.buildRig();
     // Con pesos, Rotar pasa a probar poses por articulación
     this.attachGizmo();
@@ -1897,6 +2067,7 @@ export class Viewer3D {
       (sphere.material as THREE.MeshBasicMaterial).color.setHex(0xbd93f9); // Dracula purple
 
     }
+    this.recolorBoneShapes();
     this.attachGizmo();
   }
 
@@ -2308,6 +2479,7 @@ export class Viewer3D {
   }
 
   dispose(): void {
+    if (this.influenceTimer !== null) clearTimeout(this.influenceTimer);
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
     }
@@ -2329,11 +2501,6 @@ export class Viewer3D {
   // ═══════════════════════════════════════════════════════════════════════════
 
   private applySettings(): void {
-    // Mesh visibility
-    if (this.currentMesh) {
-      this.currentMesh.visible = this.settings.showMesh && !this.settings.showWeights;
-    }
-
     // Wireframe (triangle or quad)
     if (this.currentWireframe) {
       this.currentWireframe.visible = this.settings.showWireframe;
@@ -2345,29 +2512,45 @@ export class Viewer3D {
     // Skeleton
     this.skeletonGroup.visible = this.settings.showSkeleton;
 
-    // Weights
-    if (this.settings.showWeights && this.weightsData) {
-      this.updateWeightsVisualization();
-      if (this.weightsMesh) {
-        this.weightsMesh.visible = true;
-      }
-      if (this.currentMesh) {
-        this.currentMesh.visible = false;
-      }
-    } else {
-      if (this.weightsMesh) {
-        this.weightsMesh.visible = false;
-      }
-      if (this.currentMesh) {
-        this.currentMesh.visible = this.settings.showMesh;
-      }
-    }
+    // Pesos (calculados, o la influencia estimada si solo hay esqueleto)
+    const weights = this.settings.showWeights ? this.displayWeights() : null;
+    if (weights) this.updateWeightsVisualization(weights);
+    if (this.weightsMesh) this.weightsMesh.visible = weights !== null;
+    if (this.currentMesh) this.currentMesh.visible = this.settings.showMesh && weights === null;
 
+    this.applyXray();
+    this.applyBoneDisplay();
     this.syncRigVisibility();
   }
 
-  private updateWeightsVisualization(): void {
-    if (!this.meshData || !this.weightsData) return;
+  /** Pesos de la malla actual, o la influencia estimada del esqueleto */
+  private displayWeights(): Influence | null {
+    const mesh = this.meshData;
+    if (!mesh) return null;
+    const weights = this.weightsData;
+    if (weights && weights.numVertices * 3 === mesh.positions.length) return weights;
+    const skeleton = this.skeletonData;
+    if (!skeleton) return null;
+    this.estimatedInfluence ??= estimateInfluence(mesh.positions, skeleton.bones);
+    return this.estimatedInfluence;
+  }
+
+  /**
+   * Se movieron articulaciones: la estimación se rehace cuando el esqueleto
+   * se queda quieto (con mallas grandes tarda); mientras, sigue la anterior
+   */
+  private refreshEstimatedWeights(): void {
+    if (this.estimatedInfluence === null) return;
+    if (this.influenceTimer !== null) clearTimeout(this.influenceTimer);
+    this.influenceTimer = window.setTimeout(() => {
+      this.influenceTimer = null;
+      this.estimatedInfluence = null;
+      if (this.settings.showWeights) this.applySettings();
+    }, 250);
+  }
+
+  private updateWeightsVisualization(weights: Influence): void {
+    if (!this.meshData) return;
 
     // Remove existing weights mesh
     if (this.weightsMesh) {
@@ -2383,33 +2566,11 @@ export class Viewer3D {
     geometry.setAttribute("normal", new THREE.BufferAttribute(this.meshData.normals, 3));
     geometry.setIndex(new THREE.BufferAttribute(this.meshData.indices, 1));
 
-    // Compute vertex colors
-    const colors = new Float32Array(this.weightsData.numVertices * 3);
-    const maxInfluences = this.weightsData.maxInfluences;
-
-    for (let v = 0; v < this.weightsData.numVertices; v++) {
-      let weight = 0;
-      const baseIdx = v * maxInfluences * 2;
-
-      if (this.settings.selectedBone === -1) {
-        // Max weight for any bone
-        for (let i = 0; i < maxInfluences; i++) {
-          const w = this.weightsData.weights[baseIdx + i * 2 + 1];
-          weight = Math.max(weight, w);
-        }
-      } else {
-        // Weight for specific bone
-        for (let i = 0; i < maxInfluences; i++) {
-          const boneIdx = this.weightsData.weights[baseIdx + i * 2];
-          const w = this.weightsData.weights[baseIdx + i * 2 + 1];
-          if (boneIdx === this.settings.selectedBone) {
-            weight = w;
-            break;
-          }
-        }
-      }
-
-      const color = getHeatmapColor(weight);
+    // Colores por vértice: un hueso (mapa de calor) o todos (color de cada hueso)
+    const colors = new Float32Array(weights.numVertices * 3);
+    const color = new THREE.Color();
+    for (let v = 0; v < weights.numVertices; v++) {
+      weightColor(weights, v, this.settings.selectedBone, color);
       colors[v * 3] = color.r;
       colors[v * 3 + 1] = color.g;
       colors[v * 3 + 2] = color.b;
@@ -2673,15 +2834,18 @@ export class Viewer3D {
     while (this.skeletonGroup.children.length > 0) {
       const child = this.skeletonGroup.children[0];
       this.skeletonGroup.remove(child);
-      if (child instanceof THREE.Mesh || child instanceof THREE.LineSegments) {
-        child.geometry.dispose();
-        if (Array.isArray(child.material)) {
-          child.material.forEach((m) => m.dispose());
-        } else {
-          child.material.dispose();
+      child.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+          o.geometry.dispose();
+          if (Array.isArray(o.material)) {
+            o.material.forEach((m) => m.dispose());
+          } else {
+            o.material.dispose();
+          }
         }
-      }
+      });
     }
+    this.boneShapes = [];
   }
 
   private fitCamera(): void {
