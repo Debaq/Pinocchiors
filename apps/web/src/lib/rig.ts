@@ -25,7 +25,20 @@
  */
 
 import * as THREE from "three";
-import { clonePose, samplePose, slerp, type AnimationClip, type BoneTrack, type Key, type Pose, type Quat, type Vec3 } from "./animation";
+import {
+  clonePose,
+  pinStart,
+  samplePose,
+  sampleScalar,
+  slerp,
+  type AnimationClip,
+  type BoneTrack,
+  type Key,
+  type Pose,
+  type Quat,
+  type Vec3,
+} from "./animation";
+import { Fk, solveCcd, solveFabrik, solveLookAt, solveSpline, solveTwoBone } from "./ik";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
@@ -98,6 +111,57 @@ export interface RigControl {
   /** Radio del dibujo */
   size: number;
   color?: string;
+  /** Lo creó el rig automático (rehacerlo lo reemplaza) */
+  auto?: boolean;
+}
+
+export type IkSolver = "twoBone" | "fabrik" | "ccd" | "spline" | "lookAt" | "root";
+export const IK_SOLVERS: { value: IkSolver; label: string }[] = [
+  { value: "twoBone", label: "Dos huesos + pole" },
+  { value: "fabrik", label: "FABRIK" },
+  { value: "ccd", label: "CCD" },
+  { value: "spline", label: "Curva" },
+  { value: "lookAt", label: "Mirar a" },
+  { value: "root", label: "Centro de masa" },
+];
+
+/**
+ * Cadena de IK. `joints` va de la base al efector (por nombre); en las de
+ * dos huesos son cadera, rodilla y tobillo, y lo que sigue (planta, punta)
+ * es el pie. En "Mirar a", las articulaciones que reparten el giro; en
+ * "Centro de masa", la raíz.
+ */
+export interface IkChain {
+  id: string;
+  name: string;
+  solver: IkSolver;
+  joints: string[];
+  /** Control objetivo (id) */
+  target?: string;
+  /** Control hacia el que apunta la rodilla o el codo */
+  pole?: string;
+  /** Controles por los que pasa la curva */
+  curve?: string[];
+  /** Estirar los huesos si el objetivo queda lejos (en la curva: ajustar la cadena a su largo) */
+  stretch?: boolean;
+  /** Suavizado de la extensión total (0–0,5 del largo) */
+  softness?: number;
+  /** El efector no baja del suelo */
+  ground?: boolean;
+  /** Pie invertido: el objetivo lleva el pie, que rueda con el balanceo */
+  footRoll?: boolean;
+  /** El efector gira con el objetivo (mano o pie) */
+  alignEffector?: boolean;
+  /** Mezcla IK/FK sin keys (0 FK, 1 IK) */
+  blend?: number;
+  /** Balanceo del pie sin keys, en grados */
+  roll?: number;
+  /** Reparto del giro de "Mirar a", de la base a la punta */
+  weights?: number[];
+  iterations?: number;
+  disabled?: boolean;
+  /** Lo creó el rig automático (rehacerlo lo reemplaza) */
+  auto?: boolean;
 }
 
 export interface RigSettings {
@@ -105,9 +169,10 @@ export interface RigSettings {
   bones: Record<string, BoneProps>;
   groups: BoneGroup[];
   controls: RigControl[];
+  ikChains: IkChain[];
 }
 
-export const emptyRigSettings = (): RigSettings => ({ version: 1, bones: {}, groups: [], controls: [] });
+export const emptyRigSettings = (): RigSettings => ({ version: 1, bones: {}, groups: [], controls: [], ikChains: [] });
 
 /**
  * Lee lo guardado en el proyecto. Los proyectos anteriores no lo tienen:
@@ -122,6 +187,9 @@ export function loadRigSettings(raw: unknown): RigSettings {
   if (Array.isArray(r.groups)) settings.groups = r.groups.filter((g) => g && typeof g.id === "string");
   if (Array.isArray(r.controls)) {
     settings.controls = r.controls.filter((c) => c && typeof c.id === "string" && Array.isArray(c.position));
+  }
+  if (Array.isArray(r.ikChains)) {
+    settings.ikChains = r.ikChains.filter((c) => c && typeof c.id === "string" && Array.isArray(c.joints));
   }
   return settings;
 }
@@ -386,14 +454,274 @@ export function createRigContext(bones: SkeletonBone[], settings: RigSettings): 
   };
 }
 
+/** De dónde sale la pose: el clip y el cuadro (para los canales animados y el fijado) */
+export interface StageInfo {
+  clip?: AnimationClip;
+  frame?: number;
+  /** Sin fijado (al calcular dónde quedó el efector cuando se fijó) */
+  noPins?: boolean;
+}
+
 /**
  * Etapa de la pila de evaluación: recibe la pose de la etapa anterior y
- * devuelve la suya. Las restricciones (F3) y el IK (F2) se enchufan aquí.
+ * devuelve la suya. Las restricciones (F3) se enchufan aquí.
  */
 export interface PoseStage {
   name: string;
-  run: (pose: Pose, ctx: RigContext) => Pose;
+  run: (pose: Pose, ctx: RigContext, info: StageInfo) => Pose;
 }
+
+/** Límites de los huesos como función para los solucionadores */
+export function constrainer(ctx: RigContext): (j: number, q: Quat) => Quat {
+  const props = ctx.bones.map((b) => boneProps(ctx.settings, b.name));
+  return (j, q) => (props[j] ? applyRotationLocks(q, ctx.frames[j], props[j].lockRotation, props[j].rotationMode) : q);
+}
+
+/** Posición y giro en mundo de un control con la pose (sigue al hueso de su articulación) */
+export function controlWorld(control: RigControl, ctx: RigContext, fk: Fk, pose: Pose): { position: Vec3; rotation: Quat; follow: THREE.Matrix4 } {
+  const follow = new THREE.Matrix4();
+  const joint = control.parent === null ? undefined : ctx.boneIndex.get(control.parent);
+  if (joint !== undefined) {
+    const bone = ctx.bones[joint].parent === null ? joint : (ctx.children[joint][0] ?? joint);
+    const head = ctx.bones[ctx.bones[bone].parent ?? bone].position;
+    follow
+      .compose(fk.origin[bone], fk.rot[bone], new THREE.Vector3(1, 1, 1))
+      .multiply(new THREE.Matrix4().makeTranslation(-head[0], -head[1], -head[2]));
+  }
+  const c = pose.controls.get(control.id);
+  const local = new THREE.Matrix4().compose(
+    new THREE.Vector3(...control.position).add(new THREE.Vector3(...(c?.translation ?? [0, 0, 0]))),
+    new THREE.Quaternion(...(c?.rotation ?? IDENTITY)),
+    new THREE.Vector3(1, 1, 1)
+  );
+  const world = follow.clone().multiply(local);
+  const p = new THREE.Vector3();
+  const q = new THREE.Quaternion();
+  world.decompose(p, q, new THREE.Vector3());
+  return { position: [p.x, p.y, p.z], rotation: [q.x, q.y, q.z, q.w], follow };
+}
+
+/** Normal del plano de la pata en reposo (cadera, rodilla, tobillo), o la del plano con el pole */
+export function restLegNormal(ctx: RigContext, a: number, b: number, c: number, poleRest?: Vec3): Vec3 {
+  const A = ctx.bones[a].position;
+  const B = ctx.bones[b].position;
+  const C = ctx.bones[c].position;
+  const n = cross(sub(B, A), sub(C, B));
+  if (length(n) > 1e-4 * length(sub(C, A)) ** 2) return unit(n, [1, 0, 0]);
+  const toward = poleRest ? sub(poleRest, A) : bodyAxes(ctx.body).forward;
+  return unit(cross(toward, sub(B, A)), ctx.frames[b]?.x ?? [1, 0, 0]);
+}
+
+/** Altura mínima del efector: la del suelo más lo que sobresale de él hacia abajo en reposo */
+function groundHeight(ctx: RigContext, effector: number): number {
+  const floor = Math.min(...ctx.bones.map((b) => b.position[1]));
+  const below = [effector, ...descendants(ctx.children, effector)].map((j) => ctx.bones[j].position[1]);
+  return floor + (ctx.bones[effector].position[1] - Math.min(...below));
+}
+
+const toV3 = (v: THREE.Vector3): Vec3 => [v.x, v.y, v.z];
+
+/**
+ * Pie invertido: dónde va el tobillo y cómo giran el pie y los dedos según
+ * el objetivo y el balanceo (grados; positivo levanta el talón rodando
+ * sobre la planta y después la punta, negativo rueda sobre el talón)
+ */
+function reverseFoot(
+  ctx: RigContext,
+  ankle: number,
+  foot: number[],
+  target: { position: Vec3; rotation: Quat; follow: THREE.Matrix4 },
+  control: RigControl,
+  roll: number
+): { ankle: Vec3; footWorld: Quat; toeWorld?: Quat; ball?: number } {
+  const rest = (j: number) => new THREE.Vector3(...ctx.bones[j].position);
+  const A = rest(ankle);
+  const ball = foot.length >= 2 ? foot[0] : undefined;
+  const tip = foot[foot.length - 1];
+  const T = rest(tip);
+  const floor = Math.min(A.y, T.y, ...(ball !== undefined ? [rest(ball).y] : []));
+  const heel = new THREE.Vector3(A.x, floor, A.z);
+  const toward = T.clone().sub(A).setY(0);
+  if (toward.lengthSq() < 1e-12) toward.set(...bodyAxes(ctx.body).forward);
+  const lateral = new THREE.Vector3(0, 1, 0).cross(toward.normalize()).normalize();
+  const turn = (angle: number) => new THREE.Quaternion().setFromAxisAngle(lateral, THREE.MathUtils.degToRad(angle));
+  const about = (q: THREE.Quaternion, pivot: THREE.Vector3, p: THREE.Vector3) => p.clone().sub(pivot).applyQuaternion(q).add(pivot);
+  // Balanceo en el espacio de reposo del pie
+  let footQ = new THREE.Quaternion();
+  let toeQ = new THREE.Quaternion();
+  let a = A.clone();
+  if (roll < 0) {
+    footQ = turn(roll);
+    toeQ = footQ.clone();
+    a = about(footQ, heel, A);
+  } else if (roll > 0) {
+    const BREAK = 35;
+    const onBall = ball !== undefined ? Math.min(roll, BREAK) : 0;
+    const onTip = roll - onBall;
+    const qTip = turn(onTip);
+    const qBall = turn(onBall);
+    a = about(qTip, T, ball !== undefined ? about(qBall, rest(ball), A) : A);
+    footQ = qTip.clone().multiply(qBall);
+    toeQ = qTip;
+  }
+  // Y todo lo lleva el control: su reposo es su posición
+  const P = new THREE.Vector3(...control.position);
+  const move = new THREE.Matrix4().compose(new THREE.Vector3(...target.position), new THREE.Quaternion(...target.rotation), new THREE.Vector3(1, 1, 1));
+  move.multiply(new THREE.Matrix4().makeTranslation(-P.x, -P.y, -P.z));
+  const R = new THREE.Quaternion(...target.rotation);
+  const out = {
+    ankle: toV3(a.applyMatrix4(move)),
+    footWorld: [...R.clone().multiply(footQ).toArray()] as Quat,
+    toeWorld: ball !== undefined ? ([...R.clone().multiply(toeQ).toArray()] as Quat) : undefined,
+    ball,
+  };
+  return out;
+}
+
+/** Cuánto se mueve cada articulación (giros y desplazamientos) al pasar de `before` a `after` */
+function blendInto(out: Pose, before: Pose, after: Pose, joints: number[], t: number): void {
+  for (const j of joints) {
+    const b = before.rotations.get(j) ?? IDENTITY;
+    const a = after.rotations.get(j) ?? IDENTITY;
+    out.rotations.set(j, t >= 1 ? a : slerp(b, a, t));
+    const tb = before.translations.get(j);
+    const ta = after.translations.get(j);
+    if (tb || ta) {
+      const x = tb ?? [0, 0, 0];
+      const y = ta ?? [0, 0, 0];
+      out.translations.set(j, [x[0] + (y[0] - x[0]) * t, x[1] + (y[1] - x[1]) * t, x[2] + (y[2] - x[2]) * t]);
+    }
+  }
+}
+
+/**
+ * IK: cada cadena, en orden, resuelve sus articulaciones hacia su objetivo y
+ * se mezcla con la pose de las keys (FK) según su mezcla. Fijada, el
+ * efector queda donde estaba cuando empezó el fijado.
+ */
+export const ikStage: PoseStage = {
+  name: "IK",
+  run: (pose, ctx, info) => {
+    // De la raíz hacia afuera: el centro de masa antes que las patas que se apoyan
+    const depth = (name: string) => {
+      let d = 0;
+      for (let j = ctx.boneIndex.get(name) ?? null; j !== null && j !== undefined; j = ctx.bones[j].parent) d++;
+      return d;
+    };
+    const chains = (ctx.settings.ikChains ?? [])
+      .filter((c) => !c.disabled && c.joints.length > 0)
+      .map((c) => ({ c, d: depth(c.joints[0]) }))
+      .sort((a, b) => a.d - b.d)
+      .map(({ c }) => c);
+    if (chains.length === 0) return pose;
+    const out = clonePose(pose);
+    const fk = new Fk(ctx.bones, out);
+    const constrain = constrainer(ctx);
+    const controls = new Map(ctx.settings.controls.map((c) => [c.id, c]));
+    const world = (id?: string) => {
+      const c = id ? controls.get(id) : undefined;
+      return c ? controlWorld(c, ctx, fk, out) : undefined;
+    };
+    for (const chain of chains) {
+      const joints = chain.joints.map((n) => ctx.boneIndex.get(n));
+      if (joints.length === 0 || joints.some((j) => j === undefined)) continue;
+      const idx = joints as number[];
+      const frame = info.frame ?? 0;
+      const start = info.noPins ? undefined : pinStart(info.clip, chain.id, frame);
+      const blend = start !== undefined ? 1 : Math.max(0, Math.min(1, sampleScalar(info.clip, chain.id, "blend", frame) ?? chain.blend ?? 1));
+      if (blend <= 0) continue;
+      const before = clonePose(out);
+      const involved = [...idx];
+
+      if (chain.solver === "root") {
+        const target = world(chain.target);
+        const control = chain.target ? controls.get(chain.target) : undefined;
+        if (!target || !control) continue;
+        // La raíz se corre lo mismo que el control desde su reposo, y gira con él
+        out.translations.set(idx[0], sub(target.position, control.position));
+        out.rotations.set(idx[0], target.rotation);
+        fk.update();
+      } else if (chain.solver === "twoBone" && idx.length >= 3) {
+        const [a, b, c] = idx;
+        const foot = idx.slice(3);
+        const control = chain.target ? controls.get(chain.target) : undefined;
+        const target = world(chain.target);
+        const pole = world(chain.pole)?.position;
+        let goal = target?.position;
+        let footWorld: Quat | undefined;
+        let toeWorld: Quat | undefined;
+        let ball: number | undefined;
+        if (target && control && chain.footRoll && foot.length > 0) {
+          const roll = sampleScalar(info.clip, chain.id, "roll", frame) ?? chain.roll ?? 0;
+          const r = reverseFoot(ctx, c, foot, target, control, roll);
+          goal = r.ankle;
+          footWorld = r.footWorld;
+          toeWorld = r.toeWorld;
+          ball = r.ball;
+        } else if (target && chain.alignEffector) {
+          footWorld = target.rotation;
+        }
+        // Fijado: el tobillo y el pie donde estaban al empezar
+        if (start !== undefined) {
+          const pinned = evaluatePose(info.clip, start, ctx, { noPins: true });
+          const pinnedFk = new Fk(ctx.bones, pinned);
+          goal = pinnedFk.position(c);
+          footWorld = [...pinnedFk.world(c).toArray()] as Quat;
+          toeWorld = foot.length >= 2 ? ([...pinnedFk.world(foot[0]).toArray()] as Quat) : undefined;
+          ball = foot.length >= 2 ? foot[0] : undefined;
+        }
+        if (!goal) continue;
+        if (chain.ground) {
+          const h = groundHeight(ctx, c);
+          if (goal[1] < h) goal = [goal[0], h, goal[2]];
+        }
+        const poleRest = chain.pole ? controls.get(chain.pole)?.position : undefined;
+        solveTwoBone(fk, a, b, c, goal, {
+          pole,
+          restNormal: restLegNormal(ctx, a, b, c, poleRest),
+          stretch: chain.stretch,
+          softness: chain.softness,
+          constrain,
+        });
+        if (footWorld) fk.setWorld(c, footWorld, constrain);
+        if (toeWorld && ball !== undefined) fk.setWorld(ball, toeWorld, constrain);
+        involved.push(...foot);
+      } else if (chain.solver === "spline") {
+        const points = (chain.curve ?? []).flatMap((id) => {
+          const w = world(id);
+          return w ? [w.position] : [];
+        });
+        if (points.length === 0) continue;
+        solveSpline(fk, idx, points, { fit: chain.stretch, constrain });
+      } else if (chain.solver === "lookAt") {
+        const target = world(chain.target);
+        if (!target) continue;
+        solveLookAt(fk, idx, target.position, bodyAxes(ctx.body).forward, { weights: chain.weights, constrain });
+      } else if (chain.solver === "fabrik" || chain.solver === "ccd") {
+        const target = world(chain.target);
+        if (!target || idx.length < 2) continue;
+        let goal = target.position;
+        const effector = idx[idx.length - 1];
+        if (start !== undefined) {
+          goal = new Fk(ctx.bones, evaluatePose(info.clip, start, ctx, { noPins: true })).position(effector);
+        }
+        if (chain.ground) {
+          const h = groundHeight(ctx, effector);
+          if (goal[1] < h) goal = [goal[0], h, goal[2]];
+        }
+        const solve = chain.solver === "fabrik" ? solveFabrik : solveCcd;
+        solve(fk, idx, goal, { iterations: chain.iterations, constrain });
+        if (chain.alignEffector) fk.setWorld(effector, target.rotation, constrain);
+      }
+      if (blend < 1) {
+        const after = clonePose(out);
+        blendInto(out, before, after, [...new Set(involved)], blend);
+        fk.update();
+      }
+    }
+    return out;
+  },
+};
 
 /** Límites: ejes de giro y traslación bloqueados de cada hueso */
 export const limitsStage: PoseStage = {
@@ -415,20 +743,17 @@ export const limitsStage: PoseStage = {
 };
 
 /** Etapas después de las keys, en orden: restricciones → IK → límites */
-export const POSE_STACK: PoseStage[] = [
-  { name: "restricciones", run: (pose) => pose },
-  { name: "IK", run: (pose) => pose },
-  limitsStage,
-];
+export const POSE_STACK: PoseStage[] = [{ name: "restricciones", run: (pose) => pose }, ikStage, limitsStage];
 
 /** Pasa una pose (de keys o editada a mano) por la pila */
-export function runPoseStack(pose: Pose, ctx: RigContext): Pose {
-  return POSE_STACK.reduce((p, stage) => stage.run(p, ctx), pose);
+export function runPoseStack(pose: Pose, ctx: RigContext, info: StageInfo = {}): Pose {
+  return POSE_STACK.reduce((p, stage) => stage.run(p, ctx, info), pose);
 }
 
 /** Pose final del clip en `frame` */
-export function evaluatePose(clip: AnimationClip | undefined, frame: number, ctx: RigContext): Pose {
-  return runPoseStack(samplePose(clip, frame, ctx.boneIndex), ctx);
+export function evaluatePose(clip: AnimationClip | undefined, frame: number, ctx: RigContext, options: { noPins?: boolean } = {}): Pose {
+  return runPoseStack(samplePose(clip, frame, ctx.boneIndex), ctx, { clip, frame, noPins: options.noPins });
+
 }
 
 // ─── Horneado para exportar ─────────────────────────────────────────────────

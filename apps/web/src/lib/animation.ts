@@ -22,14 +22,21 @@ export interface Key<T> {
 }
 
 export interface BoneTrack {
-  /** Nombre del hueso, o id del control si `kind` es "control" */
+  /** Nombre del hueso, id del control (`kind` "control") o de la cadena IK (`kind` "ik") */
   bone: string;
-  kind?: "control";
+  kind?: "control" | "ik";
   /** Giro local (x, y, z, w) */
   rotation: Key<Quat>[];
   /** Desplazamiento respecto del reposo, en el marco del padre */
   translation: Key<Vec3>[];
+  /** Cadenas IK: mezcla IK/FK (0–1), fijado (0/1, escalonado) y balanceo del pie (grados) */
+  blend?: Key<number>[];
+  pin?: Key<number>[];
+  roll?: Key<number>[];
 }
+
+export type ScalarChannel = "blend" | "pin" | "roll";
+export const SCALAR_CHANNELS: ScalarChannel[] = ["blend", "pin", "roll"];
 
 export interface AnimationClip {
   id: string;
@@ -121,6 +128,7 @@ function sample<T>(keys: Key<T>[], frame: number, mix: (a: T, b: T, t: number) =
 export function samplePose(clip: AnimationClip | undefined, frame: number, boneIndex: Map<string, number>): Pose {
   const pose = emptyPose();
   for (const track of clip?.tracks ?? []) {
+    if (track.kind === "ik") continue;
     if (track.kind === "control") {
       const rotation = sample(track.rotation, frame, slerp);
       const translation = sample(track.translation, frame, lerp3);
@@ -137,6 +145,52 @@ export function samplePose(clip: AnimationClip | undefined, frame: number, boneI
     if (translation) pose.translations.set(joint, translation);
   }
   return pose;
+}
+
+/** Valor de un canal escalar de la cadena IK `chain` en `frame` (`undefined` sin keys) */
+export function sampleScalar(clip: AnimationClip | undefined, chain: string, channel: ScalarChannel, frame: number): number | undefined {
+  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain)?.[channel];
+  if (!keys || keys.length === 0) return undefined;
+  if (channel === "pin") {
+    // Fijar es sí o no: la key vale hasta la siguiente
+    let value = keys[0].value;
+    for (const k of keys) if (k.frame <= frame) value = k.value;
+    return value;
+  }
+  return sample(keys, frame, (a, b, t) => a + (b - a) * t);
+}
+
+/**
+ * Cuadro en que empezó el fijado que sigue activo en `frame`: la primera de
+ * las keys seguidas que fijan (`undefined` si en `frame` no está fijado)
+ */
+export function pinStart(clip: AnimationClip | undefined, chain: string, frame: number): number | undefined {
+  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain)?.pin ?? [];
+  let i = -1;
+  keys.forEach((k, n) => k.frame <= frame && (i = n));
+  if (i < 0 || keys[i].value < 0.5) return undefined;
+  while (i > 0 && keys[i - 1].value >= 0.5) i--;
+  return keys[i].frame;
+}
+
+/** Pone una key de un canal escalar de la cadena en `frame` */
+export function insertScalarKey(
+  clip: AnimationClip,
+  chain: string,
+  channel: ScalarChannel,
+  frame: number,
+  value: number,
+  interpolation: KeyInterpolation
+): AnimationClip {
+  const tracks = clip.tracks.map((t) => ({ ...t }));
+  let track = tracks.find((t) => t.kind === "ik" && t.bone === chain);
+  if (!track) {
+    track = { bone: chain, kind: "ik", rotation: [], translation: [] };
+    tracks.push(track);
+  }
+  const step = channel === "pin" ? "step" : interpolation;
+  track[channel] = withKey(track[channel] ?? [], { frame, value, interpolation: step });
+  return { ...clip, tracks };
 }
 
 // ─── Edición de keys ────────────────────────────────────────────────────────
@@ -187,9 +241,11 @@ function editKeys(
   const tracks = clip.tracks
     .map((track) => {
       const selected = <T,>(k: Key<T>) => selection.has(keyId(track.bone, k.frame));
-      return { ...track, rotation: edit(track.rotation, selected), translation: edit(track.translation, selected) };
+      const next: BoneTrack = { ...track, rotation: edit(track.rotation, selected), translation: edit(track.translation, selected) };
+      for (const c of SCALAR_CHANNELS) if (track[c]) next[c] = edit(track[c]!, selected);
+      return next;
     })
-    .filter((t) => t.rotation.length > 0 || t.translation.length > 0);
+    .filter((t) => trackKeys(t).length > 0);
   return { ...clip, tracks };
 }
 
@@ -218,10 +274,15 @@ export function setKeysInterpolation(
   );
 }
 
-/** Cuadros con keys de un hueso (rotación o desplazamiento), ordenados */
+/** Todas las keys de una pista (giro, desplazamiento y canales escalares) */
+function trackKeys(track: BoneTrack): Key<unknown>[] {
+  return [...track.rotation, ...track.translation, ...SCALAR_CHANNELS.flatMap((c) => track[c] ?? [])];
+}
+
+/** Cuadros con keys de una pista, ordenados */
 export function keyFrames(track: BoneTrack | undefined): number[] {
   if (!track) return [];
-  return [...new Set([...track.rotation, ...track.translation].map((k) => k.frame))].sort((a, b) => a - b);
+  return [...new Set(trackKeys(track).map((k) => k.frame))].sort((a, b) => a - b);
 }
 
 /** Keys seleccionadas de todos los huesos en esos cuadros (el resumen de la línea de tiempo) */
@@ -239,7 +300,7 @@ export function clipsForExport(clips: AnimationClip[], boneIndex: Map<string, nu
     start: clip.start,
     end: clip.end,
     tracks: clip.tracks.flatMap((t) => {
-      if (t.kind === "control") return [];
+      if (t.kind) return [];
       const joint = boneIndex.get(t.bone);
       return joint === undefined ? [] : [{ joint, rotation: t.rotation, translation: t.translation }];
     }),

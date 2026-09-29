@@ -88,8 +88,13 @@ import {
   createClip,
   deleteKeys,
   duplicateClip,
+  clonePose,
   emptyPose,
   insertKeys,
+  insertScalarKey,
+  samplePose,
+  sampleScalar,
+  type ScalarChannel,
   keyId,
   moveKeys,
   parseKeyId,
@@ -97,10 +102,16 @@ import {
   type AnimationClip,
   type KeyInterpolation,
   type Pose,
+  type Quat,
 } from "./lib/animation";
 import {
   applyRotationLocks,
   bakeClip,
+  bodyAxes,
+  controlWorld,
+  runPoseStack,
+  type IkChain,
+  type IkSolver,
   boneColor as rigBoneColor,
   boneProps,
   createRigContext,
@@ -122,6 +133,9 @@ import {
 } from "./lib/rig";
 import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
+import { IkPanel } from "./components/panels/IkPanel";
+import { autoRig } from "./lib/autoRig";
+import { Fk } from "./lib/ik";
 import {
   animatableJoints,
   blendPose,
@@ -504,6 +518,8 @@ export const App: Component = () => {
   const [poseLibrary, setPoseLibrary] = createSignal<StoredPose[]>([]);
   const [transformSpace, setTransformSpace] = createPersisted<TransformSpace>("pose.space", "global");
   const [canPaste, setCanPaste] = createSignal(readPoseClipboard() !== null);
+  const [selectedChain, setSelectedChain] = createSignal<string | undefined>();
+  const [autoIk, setAutoIk] = createPersisted("pose.autoIk", { enabled: false, toRoot: false });
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
 
@@ -1315,7 +1331,10 @@ export const App: Component = () => {
     weightsData();
     const ctx = rigCtx();
     if (animating()) {
-      v.setPose(evaluatePose(activeClip(), frame(), ctx));
+      // La pose de las keys (FK) queda a mano para rehacer el IK mientras se arrastra un control
+      const clip = activeClip();
+      lastFkPose = samplePose(clip, frame(), ctx.boneIndex);
+      v.setPose(runPoseStack(clonePose(lastFkPose), ctx, { clip, frame: frame() }));
       setPoseTick((t) => t + 1);
       return;
     }
@@ -1326,6 +1345,18 @@ export const App: Component = () => {
     const local = Math.min(t - segment.start, segment.duration);
     v.setPose(evaluatePose(segment.clip, segment.clip.start + local * segment.clip.fps, ctx));
   });
+
+  /** Pose de las keys en el cuadro actual, antes del IK */
+  let lastFkPose: Pose = emptyPose();
+
+  /** IK en vivo: un control se mueve y las cadenas que lo usan lo siguen */
+  const handleControlsDragged = () => {
+    const v = viewer();
+    if (!v || !animating() || (rigSettings().ikChains ?? []).length === 0) return;
+    const pose = clonePose(lastFkPose);
+    pose.controls = v.getPose().controls;
+    v.setJointsPose(runPoseStack(pose, rigCtx(), { clip: activeClip(), frame: frame() }));
+  };
 
   // Reproducción de la barra: al terminar vuelve a empezar (repetir) o se detiene
   createEffect(() => {
@@ -1387,6 +1418,7 @@ export const App: Component = () => {
     };
     bones.forEach((b, j) => b.parent === null && visit(j, 0));
     for (const c of s.controls) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, control: true });
+    for (const c of s.ikChains ?? []) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, ik: true });
     return rows;
   });
 
@@ -1448,7 +1480,11 @@ export const App: Component = () => {
     const names = new Set(kept.map((c) => c.name));
     let name = preset.name;
     for (let i = 2; names.has(name); i++) name = `${preset.name} ${i}`;
-    const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name);
+    // Son keys de FK: con cadenas de IK, el clip nuevo las deja en FK (mezcla 0)
+    const clip = (rigSettings().ikChains ?? []).reduce(
+      (c, chain) => insertScalarKey(c, chain.id, "blend", c.start, 0, "step"),
+      generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name)
+    );
     await history.execute(`Animación: ${name}`, {
       kind: "clips",
       data: { before, after: [...kept, clip], activeBefore: active?.id, activeAfter: clip.id },
@@ -1944,6 +1980,271 @@ export const App: Component = () => {
       .join(" · ");
   });
 
+  // ─── IK (F2) ──────────────────────────────────────────────────────────────
+
+  createEffect(() => viewer()?.setAutoIk(autoIk()));
+
+  const chainById = (id?: string) => (rigSettings().ikChains ?? []).find((c) => c.id === id);
+
+  /** Mezcla, fijado y balanceo de la cadena elegida en el cuadro actual */
+  const chainValues = createMemo(() => {
+    const chain = chainById(selectedChain());
+    const clip = activeClip();
+    const f = Math.round(frame());
+    const keyed = (channel: ScalarChannel) =>
+      !!clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain?.id)?.[channel]?.length;
+    return {
+      blend: chain ? (sampleScalar(clip, chain.id, "blend", f) ?? chain.blend ?? 1) : 1,
+      pinned: chain ? (sampleScalar(clip, chain.id, "pin", f) ?? 0) >= 0.5 : false,
+      roll: chain ? (sampleScalar(clip, chain.id, "roll", f) ?? chain.roll ?? 0) : 0,
+      keyed: { blend: keyed("blend"), pin: keyed("pin"), roll: keyed("roll") },
+    };
+  });
+
+  const changeChain = (description: string, chain: IkChain) =>
+    void changeRig(description, {
+      ...rigSettings(),
+      ikChains: (rigSettings().ikChains ?? []).map((c) => (c.id === chain.id ? chain : c)),
+    });
+
+  /**
+   * Cambio de mezcla, fijado o balanceo. Mientras se arrastra se ve con una
+   * key provisoria; al soltar queda como key (con auto-key, si ya tiene
+   * keys, o siempre en el fijado) o como valor fijo de la cadena.
+   */
+  const handleIkScalar = (channel: ScalarChannel, value: number, commit: boolean) => {
+    const chain = chainById(selectedChain());
+    const v = viewer();
+    if (!chain || !v) return;
+    const f = Math.round(frame());
+    const clip = activeClip();
+    const asKey = channel === "pin" || autoKey() || chainValues().keyed[channel];
+    if (!commit) {
+      const ctx = asKey
+        ? rigCtx()
+        : createRigContext(rigBones(), {
+            ...rigSettings(),
+            ikChains: (rigSettings().ikChains ?? []).map((c) => (c.id === chain.id ? { ...c, [channel]: value } : c)),
+          });
+      const preview = asKey && clip ? insertScalarKey(clip, chain.id, channel, f, value, keyInterpolation()) : clip;
+      v.setPose(evaluatePose(preview, frame(), ctx));
+      setPoseTick((t) => t + 1);
+      return;
+    }
+    const labels = { blend: "Mezcla IK/FK", pin: value >= 0.5 ? "Fijar" : "Soltar", roll: "Balanceo del pie" };
+    if (asKey) {
+      if (!activeClip()) handleNewClip();
+      void editClip(labels[channel], (c) => insertScalarKey(c, chain.id, channel, f, value, keyInterpolation()));
+    } else {
+      changeChain(labels[channel], { ...chain, [channel]: value });
+    }
+  };
+
+  /**
+   * Rig automático. En las animaciones que ya existen, las cadenas cuyas
+   * articulaciones tienen keys quedan en FK (mezcla 0 en su primer cuadro),
+   * así no cambian; las demás pasan a IK
+   */
+  const handleAutoRig = async () => {
+    const before = rigSettings();
+    const next = autoRig(rigCtx());
+    const added = (next.ikChains ?? []).filter((c) => !(before.ikChains ?? []).some((b) => b.id === c.id));
+    if (added.length === 0) {
+      setStatusMessage("No se reconoció el cuerpo: crea las cadenas a mano con la selección");
+      return;
+    }
+    await changeRig("Rig automático", next);
+    let kept = 0;
+    const after = clips().map((c) =>
+      added.reduce((clip, chain) => {
+        const animated = clip.tracks.some((t) => !t.kind && chain.joints.includes(t.bone) && (t.rotation.length > 0 || t.translation.length > 0));
+        if (!animated) return clip;
+        kept++;
+        return insertScalarKey(clip, chain.id, "blend", c.start, 0, "step");
+      }, c)
+    );
+    if (kept > 0) {
+      await history.execute("Animaciones previas en FK", { kind: "clips", data: { before: clips(), after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+    }
+    setSelectedChain(added[0]?.id);
+    setStatusMessage(
+      `Rig automático: ${added.length} cadenas de IK` + (kept > 0 ? " (lo que ya estaba animado sigue en FK: sube la mezcla de esas cadenas para usar IK)" : "")
+    );
+  };
+
+  /** Cadena nueva: la selección si es una cadena, o de la activa hacia arriba */
+  const handleNewChain = async (solver: IkSolver) => {
+    const ctx = rigCtx();
+    const s = rigSettings();
+    const active = viewSettings().selectedBone;
+    const depth = (j: number) => {
+      let d = 0;
+      for (let p = ctx.bones[j].parent; p !== null; p = ctx.bones[p].parent) d++;
+      return d;
+    };
+    let joints = [...jointSelection()].sort((a, b) => depth(a) - depth(b));
+    const isPath = joints.every((j, i) => i === 0 || ctx.bones[j].parent === joints[i - 1]);
+    if (!isPath || joints.length < 2) {
+      const want = solver === "twoBone" ? 3 : solver === "root" ? 1 : solver === "lookAt" ? 2 : 4;
+      joints = [];
+      for (let j: number | null = active; j !== null && joints.length < want; j = ctx.bones[j].parent) joints.unshift(j);
+    }
+    if (solver === "root") joints = [ctx.body?.root ?? ctx.bones.findIndex((b) => b.parent === null)];
+    if (solver === "twoBone" && joints.length < 3) {
+      setStatusMessage("Dos huesos: elige el tobillo o la muñeca (con dos articulaciones arriba)");
+      return;
+    }
+    const names = joints.map((j) => ctx.bones[j].name);
+    const effector = joints[joints.length - 1];
+    const size = (ctx.body?.size ?? 1) * 0.03;
+    const at = (j: number) => [...ctx.bones[j].position] as Vec3;
+    const newControl = (name: string, position: Vec3, shape: RigControl["shape"], parent: string | null = null): RigControl => ({
+      id: newRigId("ctl"),
+      name,
+      parent,
+      shape,
+      position,
+      size,
+    });
+    const controls: RigControl[] = [];
+    const chain: IkChain = { id: newRigId("ik"), name: `${names[names.length - 1]} ${solver === "twoBone" ? "IK" : solver}`, solver, joints: names };
+    if (solver === "spline") {
+      const count = Math.min(4, joints.length - 1);
+      const parent = ctx.bones[joints[0]].parent;
+      for (let i = 1; i <= count; i++) {
+        const j = joints[Math.round((i * (joints.length - 1)) / count)];
+        controls.push(newControl(`${ctx.bones[j].name}_curva`, at(j), "sphere", parent === null ? null : ctx.bones[parent].name));
+      }
+      chain.curve = controls.map((c) => c.id);
+    } else if (solver === "lookAt") {
+      const p = ctx.bones[effector].position;
+      const f = bodyAxes(ctx.body).forward;
+      const d = (ctx.body?.size ?? 1) * 0.5;
+      controls.push(newControl("mirar", [p[0] + f[0] * d, p[1] + f[1] * d, p[2] + f[2] * d], "circle"));
+      chain.target = controls[0].id;
+    } else {
+      controls.push(newControl(`${names[names.length - 1]}_ik`, at(effector), solver === "root" ? "circle" : "cube"));
+      chain.target = controls[0].id;
+      if (solver === "twoBone") {
+        const [a, b] = joints;
+        const f = bodyAxes(ctx.body).forward;
+        const mid = ctx.bones[b].position;
+        const len = vec.length(vec.sub(ctx.bones[b].position, ctx.bones[a].position));
+        controls.push(newControl(`${names[1]}_pole`, [mid[0] + f[0] * len, mid[1] + f[1] * len, mid[2] + f[2] * len], "sphere"));
+        chain.pole = controls[1].id;
+      }
+    }
+    await changeRig("Cadena de IK", { ...s, controls: [...s.controls, ...controls], ikChains: [...(s.ikChains ?? []), chain] });
+    setSelectedChain(chain.id);
+  };
+
+  /**
+   * Cambiar de modo sin salto. A FK: keys de las articulaciones de la cadena
+   * con la pose que se ve y mezcla 0. A IK: los controles van adonde la pose
+   * FK deja el efector (y el pole, la curva o la mirada) y mezcla 1.
+   */
+  const handleMatch = async (to: "fk" | "ik") => {
+    const chain = chainById(selectedChain());
+    const v = viewer();
+    if (!chain || !v || !animating()) return;
+    if (!activeClip()) handleNewClip();
+    const ctx = rigCtx();
+    const f = Math.round(frame());
+    const joints = chain.joints.flatMap((n) => ctx.boneIndex.get(n) ?? []);
+    if (to === "fk") {
+      const entries = joints.flatMap((j) => {
+        const p = v.getJointPose(j);
+        return p ? [{ bone: ctx.bones[j].name, rotation: p.rotation, translation: Math.hypot(...p.translation) > 1e-9 ? p.translation : undefined }] : [];
+      });
+      await editClip("IK → FK", (c) => insertScalarKey(insertKeys(c, f, entries, keyInterpolation()), chain.id, "blend", f, 0, keyInterpolation()));
+      setStatusMessage(`${chain.name}: en FK`);
+      return;
+    }
+    // La pose que se ve (en FK para esta cadena, con el resto de la pila)
+    const fkPose = v.getPose();
+    const fk = new Fk(ctx.bones, fkPose);
+    const controls = new Map(ctx.settings.controls.map((c) => [c.id, c]));
+    const entries: { bone: string; kind: "control"; rotation: Quat; translation: Vec3 }[] = [];
+    /** Pose del control para que quede en `position` (y con giro `rotation`) en el mundo */
+    const place = (id: string | undefined, position: Vec3, rotation?: Quat) => {
+      const control = id ? controls.get(id) : undefined;
+      if (!control) return;
+      const current = controlWorld(control, ctx, fk, fkPose);
+      const inverse = current.follow.clone().invert();
+      const local = new THREE.Vector3(...position).applyMatrix4(inverse);
+      const followRot = new THREE.Quaternion().setFromRotationMatrix(current.follow);
+      const r = rotation ? followRot.clone().invert().multiply(new THREE.Quaternion(...rotation)) : new THREE.Quaternion();
+      entries.push({
+        bone: control.id,
+        kind: "control",
+        rotation: [r.x, r.y, r.z, r.w],
+        translation: [local.x - control.position[0], local.y - control.position[1], local.z - control.position[2]],
+      });
+    };
+    const effector = joints[joints.length - 1];
+    if (chain.solver === "twoBone" && joints.length >= 3) {
+      const [a, b, c] = joints;
+      const q = fk.world(c);
+      place(chain.target, fk.position(c), chain.footRoll || chain.alignEffector ? [q.x, q.y, q.z, q.w] : undefined);
+      const A = fk.joint[a], B = fk.joint[b], C = fk.joint[c];
+      const axis = C.clone().sub(A).normalize();
+      const out = B.clone().sub(A.clone().add(C).multiplyScalar(0.5));
+      out.sub(axis.clone().multiplyScalar(out.dot(axis)));
+      if (out.lengthSq() > 1e-12) place(chain.pole, [B.x + out.normalize().x * A.distanceTo(B), B.y + out.y * A.distanceTo(B), B.z + out.z * A.distanceTo(B)]);
+    } else if (chain.solver === "spline") {
+      for (const id of chain.curve ?? []) {
+        const control = controls.get(id);
+        if (!control) continue;
+        // El control va a la articulación que tenía más cerca en reposo
+        const nearest = joints.reduce((best, j) =>
+          vec.length(vec.sub(ctx.bones[j].position, control.position)) < vec.length(vec.sub(ctx.bones[best].position, control.position)) ? j : best
+        );
+        place(id, fk.position(nearest));
+      }
+    } else if (chain.solver === "lookAt") {
+      const q = fk.world(effector);
+      const facing = new THREE.Vector3(...bodyAxes(ctx.body).forward).applyQuaternion(q);
+      const d = (ctx.body?.size ?? 1) * 0.5;
+      const p = fk.joint[effector];
+      place(chain.target, [p.x + facing.x * d, p.y + facing.y * d, p.z + facing.z * d]);
+    } else {
+      const q = fk.world(effector);
+      place(chain.target, fk.position(effector), [q.x, q.y, q.z, q.w]);
+    }
+    await editClip("FK → IK", (c) => {
+      let next = insertScalarKey(insertKeys(c, f, entries, keyInterpolation()), chain.id, "blend", f, 1, keyInterpolation());
+      // El control ya lleva el giro del pie: sin balanceo, el tobillo queda donde está
+      if (chain.footRoll) next = insertScalarKey(next, chain.id, "roll", f, 0, keyInterpolation());
+      return next;
+    });
+    setStatusMessage(`${chain.name}: en IK`);
+  };
+
+  const ikPanel = (
+    <IkPanel
+      chains={rigSettings().ikChains ?? []}
+      controls={rigSettings().controls}
+      selectedChain={selectedChain()}
+      posing={animating()}
+      hasSelection={jointSelection().length > 0}
+      blend={chainValues().blend}
+      pinned={chainValues().pinned}
+      roll={chainValues().roll}
+      keyed={chainValues().keyed}
+      autoIk={autoIk()}
+      onAutoIk={setAutoIk}
+      onAutoRig={() => void handleAutoRig()}
+      onNewChain={(solver) => void handleNewChain(solver)}
+      onSelectChain={setSelectedChain}
+      onChangeChain={changeChain}
+      onDeleteChain={(id) =>
+        void changeRig("Borrar cadena", { ...rigSettings(), ikChains: (rigSettings().ikChains ?? []).filter((c) => c.id !== id) })
+      }
+      onScalar={handleIkScalar}
+      onMatch={(to) => void handleMatch(to)}
+    />
+  );
+
   const posePanel = (
     <PosePanel
       posing={animating()}
@@ -1971,6 +2272,7 @@ export const App: Component = () => {
   const animatePanels = (
     <div class="space-y-3">
       {posePanel}
+      {ikPanel}
       {rigPanel}
     </div>
   );
@@ -3342,6 +3644,7 @@ export const App: Component = () => {
               }}
               onControlSelected={(id) => setSelectedControl(id ?? undefined)}
               onControlPoseEdited={handleControlPoseEdited}
+              onControlsDragged={handleControlsDragged}
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
@@ -3438,9 +3741,10 @@ export const App: Component = () => {
                 onTogglePlay={() => setPlaying(!playing())}
                 onRangeChange={handleClipRange}
                 onSelectJoint={(joint) => selectJoints([joint], joint)}
-                selectedControl={selectedControl()}
-                onSelectControl={handleSelectControl}
+                selectedControl={selectedControl() ?? selectedChain()}
+                onSelectControl={(id) => (chainById(id) ? setSelectedChain(id) : handleSelectControl(id))}
                 onSelection={setKeySelection}
+
                 onMoveKeys={handleMoveKeys}
                 onDeleteKeys={handleDeleteKeys}
                 onInsertKey={handleInsertKey}

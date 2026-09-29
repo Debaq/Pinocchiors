@@ -16,6 +16,7 @@
  */
 
 import { createClip, type AnimationClip, type BoneTrack, type Quat, type Vec3 } from "./animation";
+import { Fk, solveTwoBone } from "./ik";
 
 export interface SkeletonBone {
   name: string;
@@ -581,9 +582,12 @@ function gait(body: Body, g: Gait, pose: PoseBuilder, t: number): void {
     });
   }
 
+  const withIk = ikLegs(body);
   for (const [leg, phase] of phases) {
     const { swing, lift } = stride((((t + phase) % 1) + 1) % 1, g.duty);
     const [hip] = leg.rotating;
+    // Las patas con IK se resuelven al final, con el cuerpo ya puesto
+    if (withIk.includes(leg)) continue;
     if (leg.sprawl) {
       // Pata abierta: avanza girando hacia adelante y se levanta al avanzar
       const d = flat(leg.dir);
@@ -628,6 +632,65 @@ function gait(body: Body, g: Gait, pose: PoseBuilder, t: number): void {
   pose.turn(body.root, body.forward, deg(legs.length === 2 ? 3 : 1.5) * wave(t, 1, legOfSide(-1)));
   for (const j of headJoints(body)) pose.turn(j, nod, deg(3) * wave(t, 2) - g.lean / Math.max(headJoints(body).length, 1));
   appendages(body, pose, t, 1, 0.8);
+
+  // Pies: apoyados en el suelo corren hacia atrás a velocidad pareja, en el
+  // aire avanzan en arco; el IK de dos huesos pone la pierna
+  if (withIk.length > 0) {
+    const legs = withIk.map((leg) => {
+      const { swing, lift } = stride((((t + phases.get(leg)!) % 1) + 1) % 1, g.duty);
+      const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+      const [a, b, c] = [leg.joints[k - 1], leg.joints[k], leg.joints[k + 1]];
+      const size = legSize(body, leg);
+      const rest = body.bones[c].position;
+      const target = add(add(rest, scale(body.forward, stepReach(g, size) * swing)), scale(body.up, (g.lift / deg(20)) * 0.12 * size * lift));
+      return { leg, k, a, b, c, size, target, lift };
+    });
+    // Péndulo invertido: la cadera tan alta como dejen las patas apoyadas
+    // casi rectas (baja en el doble apoyo, sube a mitad del paso)
+    const drop = Math.max(
+      0,
+      ...legs
+        .filter((l) => l.lift === 0)
+        .map((l) => {
+          const hip = body.bones[l.a].position;
+          const d = sub(hip, l.target);
+          const height = dot(d, body.up);
+          const flatDist = length(sub(d, scale(body.up, height)));
+          return height - Math.sqrt(Math.max(0, (0.985 * l.size) ** 2 - flatDist * flatDist));
+        })
+    );
+    pose.move([0, -drop, 0]);
+    const ikPose = { rotations: pose.rotations, translations: new Map([[body.root, pose.offset]]), controls: new Map() };
+    const fk = new Fk(body.bones, ikPose);
+    const lateral = cross(body.up, body.forward);
+    for (const { leg, k, a, b, c, target, lift } of legs) {
+      solveTwoBone(fk, a, b, c, target, { restNormal: legNormal(body, a, b, c) });
+      // Pie plano en el suelo; en el aire, la punta un poco hacia abajo
+      if (leg.joints.length > k + 2) fk.setWorld(c, axisAngle(lateral, deg(15) * lift));
+    }
+  }
+}
+
+/** Medio paso (adelante o atrás de donde está el pie en reposo) */
+const stepReach = (g: Gait, legLength: number) => 0.75 * Math.sin(g.hip) * legLength;
+
+/** Patas que caminan con IK: bajo el cuerpo, con rodilla y algo más abajo */
+function ikLegs(body: Body): Chain[] {
+  return chainsOf(body, "leg").filter((l) => !l.sprawl && bendIndex(body, l, /knee|tibio|shin|calf/i) + 1 < l.joints.length);
+}
+
+/** Largo de la pata de la cadera al tobillo */
+function legSize(body: Body, leg: Chain): number {
+  const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+  const p = (i: number) => body.bones[leg.joints[i]].position;
+  return length(sub(p(k), p(k - 1))) + length(sub(p(k + 1), p(k)));
+}
+
+/** Normal del plano de la pata en reposo (hacia adelante si está recta) */
+function legNormal(body: Body, a: number, b: number, c: number): Vec3 {
+  const [A, B, C] = [a, b, c].map((j) => body.bones[j].position);
+  const n = cross(sub(B, A), sub(C, B));
+  return length(n) > 1e-4 * length(sub(C, A)) ** 2 ? unit(n, [1, 0, 0]) : unit(cross(body.forward, sub(B, A)), [1, 0, 0]);
 }
 
 function headJoints(body: Body): number[] {
@@ -756,6 +819,9 @@ function slither(body: Body, pose: PoseBuilder, t: number): void {
   appendages(body, pose, t, 1, 0.5);
 }
 
+/** Con patas a IK los pies ya pisan el suelo; si no, se baja el cuerpo hasta la pata más baja */
+const grounded = (body: Body) => ikLegs(body).length === 0;
+
 /** Crea el clip `id` para el esqueleto; `name` por defecto, el de la animación */
 export function generateAnimation(
   body: Body,
@@ -771,14 +837,14 @@ export function generateAnimation(
     case "walk": {
       const g = legs.length > 4 || legs.every((l) => l.sprawl) ? GAITS.crawl : GAITS.walk;
       const frames = legs.length >= 4 && g === GAITS.walk ? 28 : g.frames;
-      return bake(name, body, { frames, step: 2, grounded: true, fps }, (p, t) => gait(body, g, p, t));
+      return bake(name, body, { frames, step: 2, grounded: grounded(body), fps }, (p, t) => gait(body, g, p, t));
     }
     case "run":
-      return bake(name, body, { frames: GAITS.run.frames, step: 1, grounded: true, fps }, (p, t) =>
+      return bake(name, body, { frames: GAITS.run.frames, step: 1, grounded: grounded(body), fps }, (p, t) =>
         gait(body, GAITS.run, p, t)
       );
     case "trot":
-      return bake(name, body, { frames: GAITS.trot.frames, step: 1, grounded: true, fps }, (p, t) =>
+      return bake(name, body, { frames: GAITS.trot.frames, step: 1, grounded: grounded(body), fps }, (p, t) =>
         gait(body, GAITS.trot, p, t)
       );
     case "wave":

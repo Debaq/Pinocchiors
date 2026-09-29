@@ -22,6 +22,8 @@ export interface TimelineRow {
   /** Profundidad en el árbol (sangría) */
   depth: number;
   control?: boolean;
+  /** Canales de una cadena de IK (mezcla, fijado, balanceo) */
+  ik?: boolean;
 }
 
 export interface TimelineProps {
@@ -95,8 +97,9 @@ export const Timeline: Component<TimelineProps> = (props) => {
   });
 
   const tracks = createMemo(() => new Map<string, BoneTrack>(props.clip.tracks.map((t) => [t.bone, t])));
-  const isActive = (row: TimelineRow) => (row.control ? row.bone === props.selectedControl : row.joint === props.selectedJoint);
-  const selectRow = (row: TimelineRow) => (row.control ? props.onSelectControl?.(row.bone) : props.onSelectJoint(row.joint));
+  const isActive = (row: TimelineRow) =>
+    row.control || row.ik ? row.bone === props.selectedControl : row.joint === props.selectedJoint;
+  const selectRow = (row: TimelineRow) => (row.control || row.ik ? props.onSelectControl?.(row.bone) : props.onSelectJoint(row.joint));
 
   const summaryFrames = createMemo(() => [...new Set(props.clip.tracks.flatMap(keyFrames))].sort((a, b) => a - b));
 
@@ -263,6 +266,9 @@ export const Timeline: Component<TimelineProps> = (props) => {
                 >
                   <Show when={row.control}>
                     <span class="w-2 h-2 rounded-full border border-current shrink-0" />
+                  </Show>
+                  <Show when={row.ik}>
+                    <span class="text-[9px] font-mono shrink-0">IK</span>
                   </Show>
                   {row.label ?? row.bone}
                 </div>

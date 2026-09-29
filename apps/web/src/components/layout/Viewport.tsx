@@ -32,6 +32,7 @@ export interface ViewportProps {
   onSelectionChanged?: ViewerCallbacks["onSelectionChanged"];
   onControlSelected?: ViewerCallbacks["onControlSelected"];
   onControlPoseEdited?: ViewerCallbacks["onControlPoseEdited"];
+  onControlsDragged?: ViewerCallbacks["onControlsDragged"];
   /** Fin de un movimiento con G (para deshacer) */
   onBoneMoveCommitted?: (index: number, from: [number, number, number], to: [number, number, number]) => void;
   /** Se soltó el gizmo del modelo (herramientas Mover, Rotar y Escalar del modelo) */
@@ -140,6 +141,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
         onSelectionChanged: (joints, active) => props.onSelectionChanged?.(joints, active),
         onControlSelected: (id) => props.onControlSelected?.(id),
         onControlPoseEdited: (id) => props.onControlPoseEdited?.(id),
+        onControlsDragged: () => props.onControlsDragged?.(),
 
         onSkeletonTransformed: (change) => props.onSkeletonTransformed?.(change),
         onObjectTransformed: (matrix, mode) => props.onObjectTransformed?.(matrix, mode),

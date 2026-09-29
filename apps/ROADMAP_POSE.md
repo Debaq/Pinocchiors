@@ -129,6 +129,16 @@ Todo esto funciona con FK. Da mucho valor con poco riesgo.
 
 ## Fase 2: IK
 
+**Hecha (2026-09-29).** `lib/ik.ts` (cinemática del rig, dos huesos con
+pole/estirar/suavizado, CCD, FABRIK, curva, mirar a), cadenas en
+`RigSettings.ikChains` y etapa IK de la pila en `lib/rig.ts` (mezcla,
+fijado y balanceo como canales animables de la pista `kind: "ik"`),
+`lib/autoRig.ts`, `components/panels/IkPanel.tsx`, IK automático al
+arrastrar e IK en vivo al mover controles en el visor, y marchas con pies
+por IK (cadera como péndulo invertido) en `presetAnimations`. El pie
+invertido rueda con un balanceo (talón, planta y punta salen del pie); los
+ojos se animan con una cadena "mirar a" propia.
+
 - **IK analítico de 2 huesos + pole** (ley de cosenos, sin iteraciones).
   Patas, brazos y la mitad superior de las alas.
   - Estiramiento opcional (el hueso se alarga si el objetivo queda fuera de

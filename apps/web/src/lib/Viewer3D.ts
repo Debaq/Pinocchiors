@@ -215,6 +215,8 @@ export interface ViewerCallbacks {
   onControlSelected?: (id: string | null) => void;
   /** Modo animación: se confirmó un giro o desplazamiento del control */
   onControlPoseEdited?: (id: string) => void;
+  /** Un control se está moviendo o girando (para rehacer el IK en vivo), como mucho una vez por cuadro */
+  onControlsDragged?: () => void;
   /** Se soltó el gizmo del esqueleto entero: factor de escala o giro (x, y, z, w) alrededor del pivote */
   onSkeletonTransformed?: (change: { scale: number } | { rotation: [number, number, number, number] }) => void;
   /**
@@ -573,9 +575,14 @@ export class Viewer3D {
     joints?: JointStart[];
     /** Modo animación: el control que se transforma, como estaba al empezar */
     control?: { id: string; rotation: THREE.Quaternion; translation: THREE.Vector3 };
+    /** IK automático: la cadena de la base a la punta que se arrastra */
+    ikChain?: number[];
   } | null = null;
   /** Lo que el rig agrega al esqueleto (colores, formas, bloqueos, ejes, controles) */
   private rigDisplay: RigDisplay | null = null;
+  /** IK automático al arrastrar con G */
+  private autoIk = { enabled: false, toRoot: false };
+  private dragFrame: number | null = null;
   /** Articulaciones seleccionadas; la activa es `selectedBoneIndex` */
   private selectedSet = new Set<number>();
   /** Último clic en una articulación (doble clic toma la cadena) */
@@ -1123,6 +1130,24 @@ export class Viewer3D {
       this.flashHint("Selecciona una articulación (clic izquierdo cerca de ella)");
       return false;
     }
+    // IK automático: G arrastra la punta y la cadena la sigue
+    if (rig && kind === "grab" && this.autoIk.enabled && this.isSelectable(bone)) {
+      const chain = this.autoIkChain(bone);
+      if (chain.length >= 2) {
+        this.modal = {
+          ...base,
+          bone,
+          start: this.boneSpheres[bone].getWorldPosition(new THREE.Vector3()),
+          value: 0,
+          joints: chain.slice(0, -1).map((j) => this.jointStart(j)),
+          ikChain: chain,
+        };
+        this.controls.enabled = false;
+        this.transformControls?.detach();
+        this.showModalHint();
+        return true;
+      }
+    }
     if (kind === "rotate" && !this.canPose()) {
       this.flashHint("Calcula los pesos para probar poses con R");
       return false;
@@ -1183,7 +1208,10 @@ export class Viewer3D {
     const axis = m.axis ? ` · eje ${m.axis.toUpperCase()}${space}` : "";
     const numeric = m.numeric ? ` · ${m.numeric}${m.kind === "rotate" ? "°" : ""}` : "";
     const texts = {
-      grab: "Mover: arrastra el mouse · X/Y/Z restringe al eje (otra vez: global/local) · teclea un valor",
+      grab: m.ikChain
+        ? `Mover con IK automático (${m.ikChain.length - 1} articulaciones siguen) · X/Y/Z restringe al eje · teclea un valor`
+        : "Mover: arrastra el mouse · X/Y/Z restringe al eje (otra vez: global/local) · teclea un valor",
+
       rotate: this.rig
         ? "Rotar: gira el mouse alrededor de la articulación · X/Y/Z eje (otra vez: global/local) · Ctrl pasos de 5° (Shift 15°) · teclea grados"
         : "Rotar (pose de prueba): gira el mouse alrededor de la articulación · X/Y/Z eje",
@@ -1299,6 +1327,10 @@ export class Viewer3D {
       }
       if (m.control) {
         this.moveControlTo(m.control.id, m.control.translation, target.clone().sub(m.start));
+        return;
+      }
+      if (m.ikChain && m.joints) {
+        this.solveAutoIk(m.ikChain, m.joints, target);
         return;
       }
       if (this.rig && m.joints) {
@@ -3353,7 +3385,10 @@ export class Viewer3D {
     rig.bones.forEach((bone, b) => {
       const sphere = this.boneSpheres[b];
       if (!sphere?.parent) return;
-      p.copy(rig.tip[b]).applyMatrix4(bone.matrixWorld);
+      // La articulación está en la cabeza de sus hijos (así se ve si se desplaza); la punta, al final de su hueso
+      const kids = rig.children[b];
+      if (kids.length > 0 && rig.parents[b] !== null) p.setFromMatrixPosition(rig.bones[kids[0]].matrixWorld);
+      else p.copy(rig.tip[b]).applyMatrix4(bone.matrixWorld);
       sphere.position.copy(sphere.parent.worldToLocal(p));
     });
     this.updateBoneLines();
@@ -3461,6 +3496,75 @@ export class Viewer3D {
   }
 
   /** Mueve el control `delta` (en mundo) desde el desplazamiento `start` */
+  /** Avisa que un control se mueve, como mucho una vez por cuadro */
+  private scheduleControlsDragged(): void {
+    if (this.dragFrame !== null) return;
+    this.dragFrame = requestAnimationFrame(() => {
+      this.dragFrame = null;
+      this.callbacks.onControlsDragged?.();
+    });
+  }
+
+  /**
+   * Pone las articulaciones en `pose` sin tocar los controles, aunque haya
+   * una operación en curso (el IK en vivo mientras se arrastra un control)
+   */
+  setJointsPose(pose: Pose): void {
+    const rig = this.rig;
+    if (!rig) return;
+    rig.bones.forEach((bone, b) => {
+      bone.quaternion.identity();
+      bone.position.copy(rig.rest[b]);
+    });
+    this.writePose({ rotations: pose.rotations, translations: pose.translations, controls: new Map() });
+  }
+
+  /** IK automático al arrastrar con G (sin controles): hasta la raíz o hasta la primera ramificación */
+  setAutoIk(settings: { enabled: boolean; toRoot: boolean }): void {
+    this.autoIk = settings;
+  }
+
+  /**
+   * Cadena del IK automático: sube desde `effector` sin pasar por una
+   * articulación bloqueada, por una que se ramifica ni por la raíz (salvo
+   * "hasta la raíz")
+   */
+  private autoIkChain(effector: number): number[] {
+    const rig = this.rig!;
+    const chain = [effector];
+    let p = rig.parents[effector];
+    while (p !== null && this.rigDisplay?.locked[p] !== true) {
+      if (!this.autoIk.toRoot && (rig.children[p].length > 1 || rig.parents[p] === null)) break;
+      chain.unshift(p);
+      p = rig.parents[p];
+    }
+    return chain;
+  }
+
+  /** CCD sobre el rig: la punta de `chain` hacia `target` (en mundo), desde la pose de partida */
+  private solveAutoIk(chain: number[], starts: JointStart[], target: THREE.Vector3): void {
+    for (const s of starts) this.restoreJoint(s);
+    this.updatePosedSpheres();
+    const effector = this.boneSpheres[chain[chain.length - 1]];
+    const P = new THREE.Vector3();
+    const E = new THREE.Vector3();
+    for (let it = 0; it < 12; it++) {
+      for (let k = chain.length - 2; k >= 0; k--) {
+        const joint = chain[k];
+        const bone = this.jointBones(joint)[0];
+        if (!bone) continue;
+        this.boneSpheres[joint].getWorldPosition(P);
+        effector.getWorldPosition(E);
+        const from = E.clone().sub(P);
+        const to = target.clone().sub(P);
+        if (from.lengthSq() < 1e-16 || to.lengthSq() < 1e-16) continue;
+        const delta = new THREE.Quaternion().setFromUnitVectors(from.normalize(), to.normalize());
+        this.rotateJoint(joint, bone.quaternion.clone(), delta);
+      }
+      if (effector.getWorldPosition(E).distanceTo(target) < 1e-5 * this.jointRadius()) break;
+    }
+  }
+
   private moveControlTo(id: string, start: THREE.Vector3, delta: THREE.Vector3): void {
     const entry = this.controlObjects.find((c) => c.control.id === id);
     if (!entry) return;
@@ -3469,6 +3573,7 @@ export class Viewer3D {
     const local = delta.clone().applyQuaternion(toLocal);
     this.controlPose(id).translation.copy(start).add(local);
     this.updateControls();
+    this.scheduleControlsDragged();
   }
 
   private rotateControl(id: string, start: THREE.Quaternion, delta: THREE.Quaternion): void {
@@ -3476,6 +3581,7 @@ export class Viewer3D {
     const local = frame.clone().invert().multiply(delta).multiply(frame).multiply(start).normalize();
     this.controlPose(id).rotation.copy(local);
     this.updateControls();
+    this.scheduleControlsDragged();
   }
 
   /** Rehace los dibujos de los controles */
@@ -3548,6 +3654,7 @@ export class Viewer3D {
     pose.translation.copy(position.sub(new THREE.Vector3(...control.position)));
     pose.rotation.copy(rotation);
     object.scale.setScalar(Math.max(control.size, 1e-6));
+    this.scheduleControlsDragged();
   }
 
   /** Ejes X/Y/Z (rojo, verde, azul) de la articulación activa */
