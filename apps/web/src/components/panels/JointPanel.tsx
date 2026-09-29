@@ -182,7 +182,7 @@ const BallEditor: Component<{
       <svg
         ref={svg}
         viewBox={`0 0 ${DISK} ${DISK}`}
-        class="w-full max-w-[260px] mx-auto block select-none touch-none"
+        class="w-full max-w-[340px] mx-auto block select-none touch-none"
         onDblClick={(e) => {
           // Doble clic en un polígono: un punto nuevo en el lado más cercano
           const s = shape();
@@ -402,7 +402,7 @@ const HingeEditor: Component<{
   };
   return (
     <div class="space-y-1">
-      <svg ref={svg} viewBox={`0 0 ${DISK} ${DISK}`} class="w-full max-w-[260px] mx-auto block select-none touch-none">
+      <svg ref={svg} viewBox={`0 0 ${DISK} ${DISK}`} class="w-full max-w-[340px] mx-auto block select-none touch-none">
         <circle cx={C} cy={C} r={R} fill="none" stroke="currentColor" class="text-border" stroke-width="0.8" />
         <path d={arc()} fill="var(--color-accent)" fill-opacity="0.15" stroke="var(--color-accent)" stroke-width="1.5" />
         {/* Reposo */}
@@ -731,7 +731,8 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
   const change = (limits: JointLimits, commit: boolean) => (commit ? props.onLimits("Límite de giro", limits) : props.onLimitsPreview(limits));
 
   return (
-    <Panel title="Articulación" icon={<Icons.Bone size={14} />} defaultOpen>
+    <div class="space-y-3">
+    <Panel title="Límite de giro" icon={<Icons.Bone size={14} />} defaultOpen>
       <div class="space-y-3">
         <Show when={props.boneName} fallback={<p class="text-xs text-text-muted">Elige una articulación para ver y editar su rango de giro.</p>}>
           <div class="flex items-center justify-between">
@@ -805,7 +806,7 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
                     <NumberInput label="a" suffix="°" step={1} value={Math.round(l().twist?.[1] ?? 30)} onChange={(v) => props.onLimits("Twist", { ...l(), twist: [l().twist?.[0] ?? -30, Math.max(v, l().twist?.[0] ?? -180)] })} />
                   </div>
                   <NumberInput
-                    label="Rigidez del borde"
+                    label="Rigidez"
                     suffix="%"
                     min={0}
                     max={90}
@@ -821,8 +822,13 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
             )}
           </Show>
 
+        </Show>
+      </div>
+    </Panel>
+
           {/* Curvas por eje */}
-          <Show when={props.trajectory.length > 1 && props.limits}>
+          <Show when={props.boneName && props.trajectory.length > 1 && props.limits}>
+            <Panel title="En el tiempo" icon={<Icons.Clock size={14} />} defaultOpen>
             {(() => {
               const l = props.limits!;
               return (
@@ -852,10 +858,11 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
                 </div>
               );
             })()}
+            </Panel>
           </Show>
-        </Show>
 
         {/* Límites automáticos */}
+        <Panel title="Límites automáticos" icon={<Icons.MagicWand size={14} />} defaultOpen>
         <div class="space-y-1">
           <span class="text-xs text-text-muted">Límites automáticos {props.hasSelection ? "(la selección)" : "(todo el esqueleto)"}</span>
           <div class="grid grid-cols-2 gap-1">
@@ -873,11 +880,17 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
             </Button>
           </div>
         </div>
+        <Show when={props.disks.length === 1}>
+          <Button size="sm" fullWidth variant="ghost" onClick={() => props.onBatch("mirror")} title="Copia los límites al hueso del otro lado">
+            Copiar al lado espejo
+          </Button>
+        </Show>
+        </Panel>
 
         {/* Cadena o grupo */}
         <Show when={props.disks.length > 1}>
-          <div class="space-y-2 pt-2 border-t border-border/60">
-            <span class="text-xs text-text-muted">Selección ({props.disks.length})</span>
+          <Panel title={`Selección (${props.disks.length})`} icon={<Icons.TreeStructure size={14} />} defaultOpen>
+          <div class="space-y-2">
             <Show when={props.chain}>
               {(chain) => (
                 <>
@@ -906,23 +919,20 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
               </Button>
             </div>
           </div>
-        </Show>
-        <Show when={props.disks.length === 1}>
-          <Button size="sm" fullWidth variant="ghost" onClick={() => props.onBatch("mirror")} title="Copia los límites al hueso del otro lado">
-            Copiar al lado espejo
-          </Button>
+          </Panel>
         </Show>
 
         {/* Relaciones */}
-        <Show when={props.boneName && props.relations.nodes.length > 1}>
-          <div class="space-y-1 pt-2 border-t border-border/60">
-            <span class="text-xs text-text-muted">Relaciones</span>
+        <Show when={props.boneName && (props.relations.nodes.length > 1 || props.shared.length > 0)}>
+          <Panel title="Relaciones" icon={<Icons.TreeStructure size={14} />} defaultOpen>
+          <Show when={props.relations.nodes.length > 1}>
+          <div class="space-y-1">
             <RelationsGraph nodes={props.relations.nodes} edges={props.relations.edges} onSelect={props.onSelectNode} onReparent={props.onReparent} />
             <p class="text-[10px] text-text-dim leading-snug">
               Gris: jerarquía · violeta: IK · verde: sigue a · arrastra un control hasta un hueso para que lo siga (afuera: suelto)
             </p>
           </div>
-        </Show>
+          </Show>
         <Show when={props.shared.length > 0}>
           <div class="space-y-1">
             <span class="text-xs text-text-muted">Comparte piel con</span>
@@ -939,8 +949,9 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
             </For>
           </div>
         </Show>
-      </div>
-    </Panel>
+          </Panel>
+        </Show>
+    </div>
   );
 };
 

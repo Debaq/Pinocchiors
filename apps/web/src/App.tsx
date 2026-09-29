@@ -138,6 +138,7 @@ import {
 import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
 import { IkPanel } from "./components/panels/IkPanel";
+import { RigEditor, type RigEditorTab } from "./components/layout/RigEditor";
 import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
 import {
   anatomicalLimits,
@@ -976,6 +977,7 @@ export const App: Component = () => {
     { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), description: "Seleccionar el grupo" },
     { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), description: "Giro en reposo" },
     { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), description: "Posición de reposo" },
+    { key: "e", ctrl: true, action: () => animating() && toggleRigEditor(), description: "Editor de pose y rig" },
     { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), description: "Copiar pose" },
     { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), description: "Pegar pose" },
     { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), description: "Pegar pose espejada" },
@@ -2747,15 +2749,21 @@ export const App: Component = () => {
     />
   );
 
-  /** Lo que el paso Animar muestra debajo de las animaciones */
-  const animatePanels = (
-    <div class="space-y-3">
-      {posePanel}
-      {jointPanel}
-      {ikPanel}
-      {rigPanel}
-    </div>
-  );
+  // Editor de pose y rig al costado del visor (como el de texturas)
+  const [rigEditorOpen, setRigEditorOpen] = createPersisted("rigEditor.open", false);
+  const [rigEditorTab, setRigEditorTab] = createPersisted<RigEditorTab>("rigEditor.tab", "joint");
+  const [rigEditorFraction, setRigEditorFraction] = createPersisted("rigEditor.fraction", 0.45);
+  const rigEditorVisible = () => rigEditorOpen() && animating() && !textureEditor();
+  const toggleRigEditor = () => {
+    if (!rigEditorOpen()) setTextureEditor(undefined);
+    setRigEditorOpen(!rigEditorOpen());
+  };
+  const resizeRigEditor = (e: PointerEvent) => {
+    const start = rigEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setRigEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
+  };
+  const rigEditorPanels = { joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}</div>, rig: rigPanel };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
@@ -4081,6 +4089,13 @@ export const App: Component = () => {
           {/* Viewport y, al animar, la línea de tiempo debajo */}
           <div class="flex flex-col flex-1 min-w-0 min-h-0">
           <div ref={splitRef} class="flex flex-1 min-w-0 min-h-0">
+          {/* Editor de pose y rig a la izquierda del visor */}
+          <Show when={rigEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * rigEditorFraction()}%` }}>
+              <RigEditor tab={rigEditorTab()} onTab={setRigEditorTab} onClose={() => setRigEditorOpen(false)} panels={rigEditorPanels} />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRigEditor} />
+          </Show>
           {/* Editor de texturas a la izquierda del visor */}
           <Show when={textureEditor()}>
             {(selection) => (
@@ -4384,7 +4399,8 @@ export const App: Component = () => {
               presets: presetAnimations(),
               onAddPreset: handleAddPresetClip,
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
-              rigPanel: animatePanels,
+              editorOpen: rigEditorOpen(),
+              onToggleEditor: toggleRigEditor,
             }}
             exportProps={{
 

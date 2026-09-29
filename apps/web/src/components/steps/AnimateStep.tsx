@@ -1,4 +1,4 @@
-import { Component, For, Show, type JSX } from "solid-js";
+import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { Button } from "../ui";
 import * as Icons from "../icons";
@@ -19,8 +19,9 @@ export interface AnimateStepProps {
   presets?: PresetAnimation[];
   onAddPreset?: (id: PresetAnimationId) => void;
   selectedBoneName?: string;
-  /** Propiedades del rig (hueso activo, grupos, controles, reposo) */
-  rigPanel?: JSX.Element;
+  /** El editor de pose y rig (al costado del visor) está abierto */
+  editorOpen?: boolean;
+  onToggleEditor?: () => void;
 }
 
 const SHORTCUTS: [string, string][] = [
@@ -131,7 +132,15 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
           <span class="text-text">{props.selectedBoneName ?? "ninguna (clic en una esfera)"}</span>
         </div>
 
-        {props.rigPanel}
+        <div class="space-y-1">
+          <Button size="sm" fullWidth variant={props.editorOpen ? "default" : "primary"} onClick={props.onToggleEditor}>
+            {props.editorOpen ? "Cerrar el editor de pose y rig" : "Abrir el editor de pose y rig"}
+          </Button>
+          <p class="text-xs text-text-dim leading-relaxed">
+            Articulación y límites, herramientas de pose, IK y rig, al costado del visor (Ctrl+E). El borde se arrastra
+            para darle más ancho.
+          </p>
+        </div>
 
 
         <div class="space-y-1">
