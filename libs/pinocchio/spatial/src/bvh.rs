@@ -281,13 +281,28 @@ impl Bvh {
     /// Distancia al primer triángulo que corta el rayo `origin + t·dir`
     /// (`dir` unitario) con `t` en `(t_min, t_max)`.
     pub fn ray_distance(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<Real> {
-        let root = self.root.as_ref()?;
-        let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
-        let mut best = t_max;
-        self.first_hit_recursive(root, origin, dir, &inv_dir, t_min, &mut best);
-        (best < t_max).then_some(best)
+        self.ray_hit(origin, dir, t_min, t_max, |_| true).map(|(t, _)| t)
     }
 
+    /// Primer triángulo aceptado por `accept` que corta el rayo
+    /// `origin + t·dir` con `t` en `(t_min, t_max)`: devuelve `t` y el índice
+    /// del triángulo. Los rechazados no tapan a los que están detrás.
+    pub fn ray_hit(
+        &self,
+        origin: &Vector3,
+        dir: &Vector3,
+        t_min: Real,
+        t_max: Real,
+        accept: impl Fn(usize) -> bool,
+    ) -> Option<(Real, usize)> {
+        let root = self.root.as_ref()?;
+        let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
+        let mut best = (t_max, usize::MAX);
+        self.first_hit_recursive(root, origin, dir, &inv_dir, t_min, &accept, &mut best);
+        (best.1 != usize::MAX).then_some(best)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn first_hit_recursive(
         &self,
         node: &BvhNode,
@@ -295,23 +310,25 @@ impl Bvh {
         dir: &Vector3,
         inv_dir: &Vector3,
         t_min: Real,
-        best: &mut Real,
+        accept: &dyn Fn(usize) -> bool,
+        best: &mut (Real, usize),
     ) {
-        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, *best) {
+        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, best.0) {
             return;
         }
         match node {
             BvhNode::Leaf { triangle_idx, .. } => {
                 if let Some(t) = ray_triangle_t(origin, dir, &self.triangles[*triangle_idx])
                     && t > t_min
-                    && t < *best
+                    && t < best.0
+                    && accept(*triangle_idx)
                 {
-                    *best = t;
+                    *best = (t, *triangle_idx);
                 }
             }
             BvhNode::Internal { left, right, .. } => {
-                self.first_hit_recursive(left, origin, dir, inv_dir, t_min, best);
-                self.first_hit_recursive(right, origin, dir, inv_dir, t_min, best);
+                self.first_hit_recursive(left, origin, dir, inv_dir, t_min, accept, best);
+                self.first_hit_recursive(right, origin, dir, inv_dir, t_min, accept, best);
             }
         }
     }
@@ -467,6 +484,24 @@ mod tests {
         assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 1.0), &up, 1e-6, 1.5).is_none());
         let down = Vector3::new(0.0, 0.0, -1.0);
         assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 0.5), &down, 0.0, 10.0).is_none());
+    }
+
+    #[test]
+    fn ray_hit_skips_rejected_triangles() {
+        let plane = |z: Real| {
+            [
+                Triangle::new(Vector3::new(-5.0, -5.0, z), Vector3::new(5.0, -5.0, z), Vector3::new(5.0, 5.0, z)),
+                Triangle::new(Vector3::new(-5.0, -5.0, z), Vector3::new(5.0, 5.0, z), Vector3::new(-5.0, 5.0, z)),
+            ]
+        };
+        let bvh = Bvh::build(plane(1.0).into_iter().chain(plane(3.0)).collect());
+        let up = Vector3::new(0.0, 0.0, 1.0);
+        let (t, tri) = bvh.ray_hit(&Vector3::new(0.3, 0.2, 0.0), &up, 0.0, 10.0, |_| true).unwrap();
+        assert!((t - 1.0).abs() < 1e-12 && tri < 2);
+        // Rechazando el plano z = 1 aparece el de atrás
+        let (t, tri) = bvh.ray_hit(&Vector3::new(0.3, 0.2, 0.0), &up, 0.0, 10.0, |i| i >= 2).unwrap();
+        assert!((t - 3.0).abs() < 1e-12 && tri >= 2);
+        assert!(bvh.ray_hit(&Vector3::new(0.3, 0.2, 0.0), &up, 0.0, 10.0, |_| false).is_none());
     }
 
     #[test]

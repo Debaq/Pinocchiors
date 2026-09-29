@@ -65,3 +65,34 @@ fn baked_texels_match_the_source_texture() {
     // La dilatación llena todo el fondo
     assert!(baked.images[0].iter().all(|p| p[3] == 255));
 }
+
+#[test]
+fn bake_follows_the_normal_past_a_facing_piece() {
+    // Pieza A: plano z = 0 mirando a +z (grupo 0). Pieza B: plano z = 0,3
+    // mirando a −z (grupo 1), enfrentada a A como la pata frente al colmillo.
+    let (pos, uv, tris) = source();
+    let pos_b: Vec<[f32; 3]> = pos.iter().map(|p| [p[0], p[1], 0.3]).collect();
+    let tris_b: Vec<[u32; 3]> = tris.iter().map(|t| [t[0], t[2], t[1]]).collect();
+    let surface = UvSurface::new([
+        UvPart { group: 0, positions: &pos, uvs: &uv, normals: None, triangles: &tris },
+        UvPart { group: 1, positions: &pos_b, uvs: &uv, normals: None, triangles: &tris_b },
+    ])
+    .unwrap();
+
+    // Malla destino de A, corrida 0,2 hacia B: el punto más cercano es B
+    let n = 5;
+    let positions: Vec<[f64; 3]> =
+        (0..=n).flat_map(|j| (0..=n).map(move |i| [2.0 * i as f64 / n as f64, 2.0 * j as f64 / n as f64, 0.2])).collect();
+    let idx = |i: usize, j: usize| j * (n + 1) + i;
+    let faces: Vec<[usize; 4]> =
+        (0..n).flat_map(|j| (0..n).map(move |i| [idx(i, j), idx(i + 1, j), idx(i + 1, j + 1), idx(i, j + 1)])).collect();
+    let layout = unwrap(&positions, &faces, &UnwrapOptions::default());
+    let frames = corner_frames(&positions, &faces, &layout.corners);
+
+    let group = |ctx: &TexelContext| [ctx.group as u8 * 255, 0, 0, 255];
+    let channels: [BakeChannel; 1] = [&group];
+    let baked = bake(&surface, &positions, &faces, &layout.corners, &frames, 128, 128, 2, &channels);
+    assert!(baked.coverage > 0.3, "cobertura {}", baked.coverage);
+    let wrong = baked.images[0].iter().filter(|p| p[0] != 0).count();
+    assert_eq!(wrong, 0, "texels tomados de la pieza enfrentada");
+}

@@ -175,6 +175,23 @@ impl UvSurface {
         self.bvh.query_closest(p).expect("la superficie tiene triángulos")
     }
 
+    /// Punto de la superficie sobre la recta `p + s·n` (`n` unitaria) más
+    /// cercano a `p`, con `|s| < reach`, en un triángulo cuya cara mira hacia
+    /// el mismo lado que `n`. Salta las piezas vecinas que el punto más
+    /// cercano elegiría por error: una cara enfrentada (la pata frente al
+    /// colmillo) o el otro lado de una pieza fina. `distance` es `|s|`.
+    pub fn project_along(&self, p: &Vector3, n: &Vector3, reach: f64) -> Option<ClosestHit> {
+        let facing = |t: usize| {
+            let [a, b, c] = self.corners[t];
+            (b - a).cross(&(c - a)).dot(n) > 0.0
+        };
+        [*n, *n * -1.0]
+            .into_iter()
+            .filter_map(|dir| self.bvh.ray_hit(p, &dir, 0.0, reach, facing).map(|(s, t)| (s, t, dir)))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(s, triangle, dir)| ClosestHit { distance: s, point: *p + dir * s, triangle })
+    }
+
     /// Coordenadas baricéntricas de `p` proyectado al plano del triángulo `t`
     /// (fuera del triángulo alguna es negativa).
     pub fn barycentric(&self, t: usize, p: &Vector3) -> [f64; 3] {

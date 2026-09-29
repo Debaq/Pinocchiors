@@ -107,6 +107,23 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 - Gonfoterio: sin astillas, arrugas de la trompa conservadas, gltf-validator
   0 errores / 0 avisos.
 
+### Horneado por la normal ✅
+
+- El punto del original se busca primero sobre la normal del texel, hacia
+  afuera y hacia adentro, hasta una arista media de la cara destino; gana el
+  más cercano a lo largo de la recta. Solo cuentan caras orientadas como la
+  destino (`UvSurface::project_along`, `Bvh::ray_hit` con filtro): se saltan
+  la pieza enfrentada (colmillo contra pata) y el otro lado de una pieza
+  fina, que el punto más cercano elegía por error.
+- Sin impacto (concavidades, puntas) se vuelve al punto más cercano. Si el
+  original tiene las caras al revés respecto de la retopología, todo cae en
+  el más cercano: igual que antes.
+- Prueba: dos planos enfrentados a 0,3, la malla destino corrida 0,2 hacia el
+  otro; antes el 100 % de los texels leía la pieza equivocada, ahora 0 %.
+- Costo: esfera ondulada de 200 k triángulos, 2048 px, 4 hilos: 0,76 s →
+  1,2 s. Visitar primero el hijo más cercano del BVH lo empeoraba (1,9 s):
+  los rayos son cortos y ya poda `t_max`.
+
 ## Fase 5 — App ✅
 
 - Paso "UV / Piel" (`apps/web/src/components/steps/UvStep.tsx`): métricas del
@@ -123,9 +140,8 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 - Medir el empaquetado por rasterizado en el gonfoterio (44 % con skyline).
   Más uso del atlas: probar giros arbitrarios además de los de 90°.
-- Horneado con rayos por la normal además del punto más cercano: en zonas
-  finas o muy juntas (colmillo contra pata) el más cercano puede ser la otra
-  pieza; se ve una rayita clara en el gonfoterio.
+- Ver en el gonfoterio si el horneado por la normal borra la rayita clara
+  entre colmillo y pata.
 - Normal map de alta a baja sin UV de origen: `UvSurface` exige UV; un STL
   denso podría aportar su relieve igual.
 - Desplegar también la malla original (sin retopología).
