@@ -281,11 +281,18 @@ impl Bvh {
     /// Distancia al primer triángulo que corta el rayo `origin + t·dir`
     /// (`dir` unitario) con `t` en `(t_min, t_max)`.
     pub fn ray_distance(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<Real> {
+        self.ray_hit(origin, dir, t_min, t_max).map(|(t, _)| t)
+    }
+
+    /// Primer corte del rayo `origin + t·dir` con `t` en `(t_min, t_max)`:
+    /// su `t` y el índice del triángulo. Con `dir` unitario, `t` es la
+    /// distancia.
+    pub fn ray_hit(&self, origin: &Vector3, dir: &Vector3, t_min: Real, t_max: Real) -> Option<(Real, usize)> {
         let root = self.root.as_ref()?;
         let inv_dir = Vector3::new(1.0 / dir.x(), 1.0 / dir.y(), 1.0 / dir.z());
-        let mut best = t_max;
+        let mut best = (t_max, usize::MAX);
         self.first_hit_recursive(root, origin, dir, &inv_dir, t_min, &mut best);
-        (best < t_max).then_some(best)
+        (best.0 < t_max).then_some(best)
     }
 
     fn first_hit_recursive(
@@ -295,18 +302,18 @@ impl Bvh {
         dir: &Vector3,
         inv_dir: &Vector3,
         t_min: Real,
-        best: &mut Real,
+        best: &mut (Real, usize),
     ) {
-        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, *best) {
+        if !ray_hits_bounds(Self::get_bounds(node), origin, inv_dir, t_min, best.0) {
             return;
         }
         match node {
             BvhNode::Leaf { triangle_idx, .. } => {
                 if let Some(t) = ray_triangle_t(origin, dir, &self.triangles[*triangle_idx])
                     && t > t_min
-                    && t < *best
+                    && t < best.0
                 {
-                    *best = t;
+                    *best = (t, *triangle_idx);
                 }
             }
             BvhNode::Internal { left, right, .. } => {
@@ -407,13 +414,17 @@ fn ray_triangle_t(origin: &Vector3, dir: &Vector3, tri: &Triangle) -> Option<Rea
     }
     let inv = 1.0 / det;
     let s = *origin - tri.v0;
+    // Tolerancia en baricéntricas (no depende de la escala): un rayo que pasa
+    // justo por una arista o un vértice compartido le pega a algún triángulo
+    // aunque el redondeo lo deje apenas afuera de todos
+    const EDGE: Real = 1e-9;
     let u = inv * s.dot(&h);
-    if !(0.0..=1.0).contains(&u) {
+    if !(-EDGE..=1.0 + EDGE).contains(&u) {
         return None;
     }
     let q = s.cross(&e1);
     let v = inv * dir.dot(&q);
-    if v < 0.0 || u + v > 1.0 {
+    if v < -EDGE || u + v > 1.0 + EDGE {
         return None;
     }
     Some(inv * e2.dot(&q))
@@ -434,7 +445,9 @@ fn ray_hits_bounds(bounds: &Rect, origin: &Vector3, inv_dir: &Vector3, t_min: Re
         if t0 > t1 {
             std::mem::swap(&mut t0, &mut t1);
         }
-        // f64::max/min ignoran NaN (0 * inf), que así no restringe el intervalo
+        // f64::max/min ignoran NaN (0 * inf), que así no restringe el intervalo.
+        // Ojo: con una componente −0 en la dirección, 0 · (−inf) cae del lado
+        // equivocado y se descartan cajas que tocan el origen.
         lo = lo.max(t0);
         hi = hi.min(t1);
         if lo > hi {
@@ -465,6 +478,12 @@ mod tests {
         let t = bvh.ray_distance(&Vector3::new(0.3, 0.2, 1.0), &up, 1e-6, 10.0).unwrap();
         assert!((t - 2.0).abs() < 1e-12);
         assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 1.0), &up, 1e-6, 1.5).is_none());
+        // Justo por la arista compartida de los dos triángulos del plano
+        let t = bvh.ray_distance(&Vector3::new(0.0, 0.0, 0.0), &up, 0.0, 10.0).unwrap();
+        assert!((t - 1.0).abs() < 1e-12, "{t}");
+        // El triángulo del corte es uno del plano z = 1 (índices 2 y 3)
+        let (t, tri) = bvh.ray_hit(&Vector3::new(0.3, 0.2, 0.0), &up, 0.0, 10.0).unwrap();
+        assert!((t - 1.0).abs() < 1e-12 && (2..4).contains(&tri), "{t} {tri}");
         let down = Vector3::new(0.0, 0.0, -1.0);
         assert!(bvh.ray_distance(&Vector3::new(0.3, 0.2, 0.5), &down, 0.0, 10.0).is_none());
     }

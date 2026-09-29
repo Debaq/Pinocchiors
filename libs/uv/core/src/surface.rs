@@ -175,6 +175,39 @@ impl UvSurface {
         self.bvh.query_closest(p).expect("la superficie tiene triángulos")
     }
 
+    /// Punto de la superficie que ve `p` a lo largo de la normal `n`
+    /// (unitaria): el corte más cercano del rayo hacia `±n`, a menos de
+    /// `reach`, de un triángulo que mire hacia el mismo lado que `n`. `None`
+    /// si no hay ninguno.
+    ///
+    /// Es la proyección de un horneado con jaula: el punto más cercano puede
+    /// caer en otra pieza que pasa cerca (un colmillo junto a una pata); el
+    /// rayo por la normal se queda en la pieza que la malla recubre.
+    pub fn project(&self, p: &Vector3, n: &Vector3, reach: f64) -> Option<(usize, Vector3)> {
+        let facing = |t: usize| {
+            let [a, b, c] = self.corners[t];
+            (b - a).cross(&(c - a)).dot(n) > 0.0
+        };
+        // + 0.0 pasa las componentes −0 a +0: el BVH descarta cajas con −0
+        let canonical = |d: Vector3| Vector3::new(d.x() + 0.0, d.y() + 0.0, d.z() + 0.0);
+        [canonical(*n), canonical(*n * -1.0)]
+            .into_iter()
+            .filter_map(|dir| {
+                // Primer corte que mire hacia el mismo lado; los que miran al
+                // revés se saltan (la otra cara de una pieza fina)
+                let mut from = 0.0;
+                loop {
+                    let (t, tri) = self.bvh.ray_hit(p, &dir, from, reach)?;
+                    if facing(tri) {
+                        return Some((t, tri, *p + dir * t));
+                    }
+                    from = t;
+                }
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, tri, point)| (tri, point))
+    }
+
     /// Coordenadas baricéntricas de `p` proyectado al plano del triángulo `t`
     /// (fuera del triángulo alguna es negativa).
     pub fn barycentric(&self, t: usize, p: &Vector3) -> [f64; 3] {

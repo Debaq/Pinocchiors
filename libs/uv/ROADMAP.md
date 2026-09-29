@@ -87,8 +87,15 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 ## Fase 4 — Horneado ✅
 
-- Por texel: triángulo destino (rasterizado), punto 3D, punto más cercano
-  del original → grupo, UV originales y marco tangente de ambos lados.
+- Por texel: triángulo destino (rasterizado), punto 3D y proyección al
+  original → grupo, UV originales y marco tangente de ambos lados.
+- Proyección como un horneado con jaula (`UvSurface::project`): rayo por la
+  normal interpolada de la malla nueva hacia ambos lados, alcance = lado medio
+  de la cara destino; gana el corte más cercano de un triángulo que mire hacia
+  el mismo lado (los que miran al revés se atraviesan). Sin corte, el punto
+  más cercano. El más cercano solo caía en otra pieza que pasa cerca (pecho
+  entre las patas, base de los colmillos del gonfoterio) y dejaba cuñas de
+  textura ajena. Cuesta ~0,3 s más en el gonfoterio.
 - Color base y emisión se combinan con su factor en espacio lineal y se
   vuelven a sRGB. Metal/rugosidad y oclusión con sus factores.
 - Normal: normal de sombreado del original (más su normal map) al espacio
@@ -113,9 +120,11 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 
 ## Pendiente
 
-- Horneado con rayos por la normal además del punto más cercano: en zonas
-  finas o muy juntas (colmillo contra pata) el más cercano puede ser la otra
-  pieza; se ve una rayita clara en el gonfoterio.
+- `pinocchio-spatial`: un rayo con una componente −0 descarta cajas del BVH
+  que tocan su origen (0 · −inf = NaN cae del lado equivocado). `project` lo
+  esquiva pasando −0 a +0. Arreglarlo en el BVH cambia los pesos de
+  `heat_diffusion` en ~1e-5 (su test de invariancia de escala tiene
+  tolerancia 1e-5): coordinarlo con quien trabaje en el rig.
 - Normal map de alta a baja sin UV de origen: `UvSurface` exige UV; un STL
   denso podría aportar su relieve igual.
 - Desplegar también la malla original (sin retopología).

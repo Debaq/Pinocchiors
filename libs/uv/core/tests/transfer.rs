@@ -1,4 +1,5 @@
 use std::f64::consts::TAU;
+use pinocchio_math::Vector3;
 use uv_core::{transfer_uvs, UvPart, UvSurface};
 
 /// Posiciones, UV y triángulos.
@@ -182,4 +183,30 @@ fn material_surface_works_without_any_uv() {
     let surface = uv_core::material_surface(&scene).unwrap();
     let skin = uv_core::transferred_skin(&scene, &surface, &[[0.5, 0.5, 0.0], [1.5, 0.5, 0.0], [1.5, 0.7, 0.0]], &[[0, 1, 2]]);
     assert_eq!(skin.face_material, vec![Some(1)]);
+}
+
+#[test]
+fn projection_follows_the_normal_not_the_nearest_piece() {
+    // Piso z = 0 (mira a +z) y una pared x = 0,06 que mira a −x, más cerca
+    // del punto que el piso
+    let (floor_pos, floor_uv, floor_tris) = grid(4, 2.0);
+    let floor_pos: Vec<[f32; 3]> = floor_pos.iter().map(|p| [p[0] - 1.0, p[1] - 1.0, 0.0]).collect();
+    let wall_pos = vec![[0.06, -1.0, 0.0], [0.06, 1.0, 1.0], [0.06, 1.0, 0.0], [0.06, -1.0, 1.0]];
+    let wall_uv = vec![[0.0, 0.0], [1.0, 1.0], [1.0, 0.0], [0.0, 1.0]];
+    let wall_tris = vec![[0, 1, 2], [0, 3, 1]];
+    let surface = UvSurface::new([
+        UvPart { group: 0, positions: &floor_pos, uvs: &floor_uv, normals: None, triangles: &floor_tris },
+        UvPart { group: 1, positions: &wall_pos, uvs: &wall_uv, normals: None, triangles: &wall_tris },
+    ])
+    .unwrap();
+
+    let p = Vector3::new(0.0, 0.0, 0.1);
+    let up = Vector3::new(0.0, 0.0, 1.0);
+    assert_eq!(surface.group(surface.closest(&p).triangle), 1, "la pared es lo más cercano");
+    let (tri, point) = surface.project(&p, &up, 0.5).expect("el piso está a 0,1 por la normal");
+    assert_eq!(surface.group(tri), 0);
+    assert!(point.distance(&Vector3::new(0.0, 0.0, 0.0)) < 1e-9);
+    // Fuera de alcance, o si nada mira hacia el mismo lado, no hay proyección
+    assert!(surface.project(&p, &up, 0.05).is_none());
+    assert!(surface.project(&p, &(up * -1.0), 0.5).is_none());
 }

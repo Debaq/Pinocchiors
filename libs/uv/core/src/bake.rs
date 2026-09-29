@@ -2,8 +2,10 @@
 //! nuevo.
 //!
 //! Se rasteriza la malla destino en su espacio UV y, por cada texel, se busca
-//! el punto más cercano de la superficie de referencia: el texel recibe el
-//! grupo, las UV originales y los marcos tangentes de ambos lados. Como cada
+//! el punto de la superficie de referencia que ve por su normal (el corte más
+//! cercano de un rayo hacia ambos lados, ver [`UvSurface::project`]) o, si no
+//! hay, el punto más cercano: el texel recibe el grupo, las UV originales y
+//! los marcos tangentes de ambos lados. Como cada
 //! texel lee de un solo triángulo original, no hay extrapolación entre islas
 //! ni costuras visibles. Cada canal es una función del contexto del texel;
 //! al final los bordes de las islas se dilatan.
@@ -89,6 +91,15 @@ pub fn bake<const N: usize>(
         }
     }
 
+    // Alcance del rayo por la normal: el lado medio de la cara destino
+    let reach: Vec<f64> = faces
+        .iter()
+        .map(|face| {
+            let edges: f64 = (0..N).map(|k| from_f64(positions[face[k]]).distance(&from_f64(positions[face[(k + 1) % N]]))).sum();
+            edges / N as f64
+        })
+        .collect();
+
     let context = |x: usize, y: usize| -> Option<TexelContext> {
         let id = owner[y * w + x];
         if id == u32::MAX {
@@ -105,9 +116,6 @@ pub fn bake<const N: usize>(
             .iter()
             .zip(l)
             .fold(Vector3::zero(), |acc, (&i, li)| acc + from_f64(positions[faces[f][i]]) * li);
-        let hit = surface.closest(&p);
-        let uv = surface.uv_at(hit.triangle, &hit.point);
-        let source = surface.frame_at(hit.triangle, &hit.point);
 
         // Marco destino: interpolado y reortogonalizado, como en el sombreador
         let normal = ids.iter().zip(l).fold(Vector3::zero(), |acc, (&i, li)| acc + from_f32(frames.normals[f][i]) * li);
@@ -117,11 +125,19 @@ pub fn bake<const N: usize>(
         });
         let sign = ids.iter().zip(l).map(|(&i, li)| frames.tangents[f][i][3] as f64 * li).sum::<f64>();
         let n = normal.try_normalize().unwrap_or(Vector3::unit_z());
-        let t_axis = (tangent - n * n.dot(&tangent)).try_normalize().unwrap_or(source[0]);
+        let t_axis = (tangent - n * n.dot(&tangent)).try_normalize();
+
+        let (triangle, point) = surface.project(&p, &n, reach[f]).unwrap_or_else(|| {
+            let hit = surface.closest(&p);
+            (hit.triangle, hit.point)
+        });
+        let uv = surface.uv_at(triangle, &point);
+        let source = surface.frame_at(triangle, &point);
+        let t_axis = t_axis.unwrap_or(source[0]);
         let b = n.cross(&t_axis) * if sign >= 0.0 { 1.0 } else { -1.0 };
 
         Some(TexelContext {
-            group: surface.group(hit.triangle),
+            group: surface.group(triangle),
             uv: uv.map(|c| c as f32),
             source_frame: source.map(to_f32),
             target_frame: [to_f32(t_axis), to_f32(b), to_f32(n)],
