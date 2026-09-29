@@ -1,0 +1,92 @@
+# Release rápida: solo el binario suelto de la app de escritorio para Linux.
+#
+# Sin tests, CLI, WASM ni AppImage. Se lanza SOLO a mano:
+#   gh workflow run "Release binario Linux" --ref master
+#
+# El tag tiene el mismo formato que las releases completas
+# (pre.<YYYY>.<MM>.<DD>.<sha7>, fecha del commit en UTC) y lo crea la release.
+# El binario requiere webkit2gtk-4.1 instalado en el sistema.
+
+name: Release binario Linux
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-bin:
+    name: Binario Linux
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag
+        id: tag
+        run: |
+          date=$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)
+          sha=$(git rev-parse --short=7 HEAD)
+          echo "tag=pre.${date}.${sha}" >> "$GITHUB_OUTPUT"
+          echo "Versión: pre.${date}.${sha}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dependencias del sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-linux
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Instalar frontend
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build Tauri (sin paquetes)
+        working-directory: apps/desktop
+        run: node ../web/node_modules/@tauri-apps/cli/tauri.js build --no-bundle
+
+      - name: Preparar binario
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          mkdir -p dist
+          bin=""
+          for candidate in target/release/pinocchio-app target/release/Pinocchio; do
+            if [[ -f "$candidate" ]]; then bin="$candidate"; break; fi
+          done
+          if [[ -z "$bin" ]]; then
+            echo "::error::No se encontró el binario de la app en target/release"
+            exit 1
+          fi
+          cp "$bin" "dist/Pinocchio-${TAG}-linux-x86_64"
+          chmod +x "dist/Pinocchio-${TAG}-linux-x86_64"
+          (cd dist && sha256sum * > SHA256SUMS.txt)
+          ls -la dist
+
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            # El tag lo crea GitHub con el token del workflow: no lanza otros workflows
+            gh release create "$TAG" dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --latest \
+              --generate-notes
+          fi
