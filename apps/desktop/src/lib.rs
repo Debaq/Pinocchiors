@@ -7,6 +7,7 @@ pub mod placement;
 pub mod project;
 pub mod state;
 pub mod structure;
+pub mod textures;
 
 pub use commands::*;
 pub use state::{AppState, SkeletonType};
@@ -21,6 +22,7 @@ pub fn run() {
         .setup(|app| {
             // Inicializar estado
             app.manage(AppState::new());
+            app.manage(textures::TextureWatch::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -36,6 +38,11 @@ pub fn run() {
             structure::get_scene_structure,
             structure::get_scene_materials,
             structure::get_scene_texture,
+            // Editar texturas en otras aplicaciones
+            textures::export_texture,
+            textures::import_texture,
+            textures::edit_texture_externally,
+            textures::stop_texture_watch,
             // Esqueletos
             commands::list_skeleton_presets,
             commands::select_skeleton,

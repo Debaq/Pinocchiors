@@ -1,5 +1,6 @@
 import { Component, createEffect, createMemo, createSignal, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import { WelcomeScreen } from "./components/layout/WelcomeScreen";
@@ -52,7 +53,7 @@ import { createHistoryStore } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
-import { TextureEditor, type TextureSelection } from "./components/layout/TextureEditor";
+import { TextureEditor, TEXTURE_SLOTS, type TextureExportKind, type TextureSelection } from "./components/layout/TextureEditor";
 import { applyTheme, followSystemTheme, type ThemeSetting } from "./lib/theme";
 import type { MenuEntry } from "./components/ui/ContextMenu";
 import {
@@ -501,6 +502,116 @@ export const App: Component = () => {
     setShowQuadMesh(target === "quad");
     setTextureEditor(selection);
   };
+
+  // Editar la textura en otras aplicaciones (ver apps/desktop/src/textures.rs)
+  type TextureKey = TextureSelection & { target: "original" | "quad" };
+  const textureKey = (): TextureKey | undefined => {
+    const selection = textureEditor();
+    return selection && { target: displayQuad() ? "quad" : "original", ...selection };
+  };
+  const sameKey = (a?: TextureKey, b?: TextureKey) =>
+    !!a && !!b && a.target === b.target && a.material === b.material && a.slot === b.slot;
+  /** Textura abierta en GIMP y hora de la última recarga */
+  const [externalEdit, setExternalEdit] = createSignal<{ key: TextureKey; lastUpdate: string | null }>();
+  const stopExternalEdit = () => {
+    if (!externalEdit()) return;
+    setExternalEdit(undefined);
+    invoke("stop_texture_watch").catch(() => {});
+  };
+  // Otra textura, otra malla o editor cerrado: se deja de seguir el archivo
+  createEffect(() => {
+    const edit = externalEdit();
+    if (edit && !sameKey(edit.key, textureKey())) stopExternalEdit();
+  });
+
+  /** Relee las imágenes después de cambiar una textura (las dos pieles si comparten) */
+  const reloadTextures = async () => {
+    await loadSceneAppearance();
+    if (uvInfo()) await refreshSkin();
+  };
+
+  /** Nombre de archivo sugerido para una textura */
+  const textureFileName = (key: TextureKey, ext: string) => {
+    const materials = key.target === "quad" ? skinMaterials() : sceneMaterials();
+    const material = materials[key.material]?.name || `material${key.material + 1}`;
+    const slot = TEXTURE_SLOTS.find((s) => s.slot === key.slot)?.label ?? key.slot;
+    const base = (fileName() ?? "modelo").replace(/\.[^.]+$/, "");
+    return `${base} - ${material} - ${slot}${ext === "layout" ? " - malla UV" : ""}.${ext === "layout" ? "png" : ext}`
+      .replace(/[\\/:*?"<>|]/g, "_");
+  };
+
+  const handleTextureExport = async (kind: TextureExportKind) => {
+    const key = textureKey();
+    if (!key) return;
+    const ext = kind === "layout" ? "png" : kind;
+    const names: Record<TextureExportKind, string> = {
+      xcf: "GIMP",
+      psd: "Photoshop / Krita",
+      png: "Imagen PNG",
+      layout: "Malla UV (PNG)",
+    };
+    const path = await save({ defaultPath: textureFileName(key, kind), filters: [{ name: names[kind], extensions: [ext] }] });
+    if (!path) return;
+    try {
+      setIsProcessing(true);
+      setStatusMessage("Exportando textura...");
+      await invoke("export_texture", { key, path, layoutOnly: kind === "layout" });
+      setStatusMessage(`Textura exportada: ${path}`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTextureImport = async () => {
+    const key = textureKey();
+    if (!key) return;
+    const path = await open({
+      multiple: false,
+      filters: [{ name: "Imágenes y capas", extensions: ["xcf", "psd", "png", "jpg", "jpeg", "webp"] }],
+    });
+    if (!path || Array.isArray(path)) return;
+    try {
+      setIsProcessing(true);
+      setStatusMessage("Importando textura...");
+      await invoke("import_texture", { key, path });
+      history.milestone("Importar textura");
+      await reloadTextures();
+      setStatusMessage("Textura reemplazada (las capas de la malla UV se ignoran)");
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleTextureEditExternally = async () => {
+    const key = textureKey();
+    if (!key) return;
+    try {
+      setStatusMessage("Abriendo en GIMP...");
+      const path = await invoke<string>("edit_texture_externally", { key, format: "xcf" });
+      setExternalEdit({ key, lastUpdate: null });
+      setStatusMessage(`Editando ${path}: guarda en GIMP (Ctrl+S) y la textura se recarga sola`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  // Avisos del seguimiento del archivo editado afuera
+  const unlistenTexture = [
+    listen("texture-updated", async () => {
+      await reloadTextures();
+      const time = new Date().toLocaleTimeString();
+      setExternalEdit((prev) => prev && { ...prev, lastUpdate: time });
+      setStatusMessage(`Textura recargada desde GIMP (${time})`);
+    }),
+    listen<{ message: string }>("texture-update-failed", (e) => {
+      setStatusMessage(`No se pudo recargar la textura: ${e.payload.message}`);
+    }),
+  ];
+  onCleanup(() => unlistenTexture.forEach((p) => p.then((unlisten) => unlisten())));
 
   /** Materiales del visor: los de la piel sobre los quads (con la vista
    * "textura"), si no los del archivo de origen */
@@ -2303,6 +2414,11 @@ export const App: Component = () => {
                     target={quadMeshData() && !quadForced() ? (displayQuad() ? "quad" : "original") : undefined}
                     onTargetChange={(t) => setShowQuadMesh(t === "quad")}
                     onClose={() => setTextureEditor(undefined)}
+                    onExport={handleTextureExport}
+                    onImport={handleTextureImport}
+                    onEditExternally={handleTextureEditExternally}
+                    external={externalEdit()}
+                    onStopExternal={stopExternalEdit}
                   />
                 </div>
                 <div

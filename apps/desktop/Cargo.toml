@@ -37,8 +37,10 @@ pinocchio-print3d = { workspace = true }
 # QuadriFlow - Retopology
 quadriflow-core = { workspace = true }
 
-# UV
+# UV y texturas con capas (GIMP, Krita, Photoshop)
 uv-core = { workspace = true }
+converter-layers = { workspace = true }
+image = { workspace = true }
 
 # USDA/USDZ export
 converter-usda = { workspace = true }
@@ -63,3 +65,4 @@ rayon = { workspace = true }
 
 [dev-dependencies]
 nalgebra = { workspace = true }
+tempfile = "3"

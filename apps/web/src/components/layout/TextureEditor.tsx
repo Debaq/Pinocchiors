@@ -1,6 +1,7 @@
-import { Component, For, JSX, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import { clsx } from "clsx";
-import { IconButton, Select } from "../ui";
+import { Button, IconButton, Select } from "../ui";
+import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import * as Icons from "../icons";
 import type { MeshData, SceneMaterial } from "../../lib/Viewer3D";
 import { UvView, uvEdges, type ImageChannel, type UvEdgeMode } from "../../lib/UvView";
@@ -74,9 +75,18 @@ export interface TextureEditorProps {
   target?: "original" | "quad";
   onTargetChange?: (target: "original" | "quad") => void;
   onClose: () => void;
-  /** Botones extra de la barra (exportar, importar…) */
-  actions?: JSX.Element;
+  /** Exportar la textura: con capas (xcf/psd), la imagen sola o la malla sola */
+  onExport?: (kind: TextureExportKind) => void;
+  /** Reemplazar la textura por un archivo (con capas o imagen) */
+  onImport?: () => void;
+  /** Abrir en GIMP y recargar al guardar */
+  onEditExternally?: () => void;
+  /** Se está editando afuera: hora de la última recarga (o `null` si todavía no) */
+  external?: { lastUpdate: string | null };
+  onStopExternal?: () => void;
 }
+
+export type TextureExportKind = "xcf" | "psd" | "png" | "layout";
 
 /** Caras de un material: índices de quad (con `quadIndices`) o de triángulo */
 function materialFaces(mesh: MeshData, material: number, perFace: 3 | 4): number[] {
@@ -101,6 +111,15 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
   const [wireMode, setWireMode] = createPersisted<UvEdgeMode | "none">("textureEditor.wire", "all");
   const [wireOpacity, setWireOpacity] = createPersisted("textureEditor.wireOpacity", 0.8);
   const [cursor, setCursor] = createSignal<[number, number] | null>(null);
+  const [exportMenu, setExportMenu] = createSignal<{ x: number; y: number } | null>(null);
+  const exportItems = (): MenuEntry[] => [
+    { header: "Con capas (textura + malla UV)" },
+    { label: "GIMP (.xcf)", onSelect: () => props.onExport?.("xcf") },
+    { label: "Photoshop, Krita, Photopea (.psd)", onSelect: () => props.onExport?.("psd") },
+    { separator: true },
+    { label: "Solo la imagen (.png)", onSelect: () => props.onExport?.("png"), disabled: !image() },
+    { label: "Solo la malla UV (.png transparente)", onSelect: () => props.onExport?.("layout") },
+  ];
 
   const material = () => props.materials[props.selection.material];
   const image = () => material()?.maps[props.selection.slot];
@@ -214,7 +233,32 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
           />
         </Show>
         <div class="flex-1" />
-        {props.actions}
+        <Show when={props.onEditExternally}>
+          <Button
+            size="sm"
+            variant="primary"
+            title="Abre la textura con la malla en capas; al guardar en GIMP se recarga sola"
+            onClick={() => props.onEditExternally?.()}
+          >
+            Editar en GIMP
+          </Button>
+        </Show>
+        <Show when={props.onExport}>
+          <Button
+            size="sm"
+            onClick={(e: MouseEvent) => {
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              setExportMenu({ x: rect.left, y: rect.bottom + 4 });
+            }}
+          >
+            Exportar
+          </Button>
+        </Show>
+        <Show when={props.onImport}>
+          <Button size="sm" title="Reemplaza la textura por un archivo XCF, PSD o imagen" onClick={() => props.onImport?.()}>
+            Importar
+          </Button>
+        </Show>
         <IconButton variant="ghost" size="sm" title="Ver todo (doble clic)" aria-label="Ver todo" onClick={() => view?.fit()}>
           <Icons.FrameCorners size={14} />
         </IconButton>
@@ -236,6 +280,20 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
               {slotOptions().length > 0 ? "Sin imagen en este mapa" : "Este material no tiene texturas"}
             </div>
           </Show>
+          <Show when={props.external}>
+            {(ext) => (
+              <div class="absolute bottom-3 right-3 flex items-center gap-2 px-2.5 py-1.5 rounded-md bg-bg-darker/90 border border-accent/60 text-xs text-text pointer-events-auto">
+                <span class="w-2 h-2 rounded-full bg-success animate-pulse" />
+                <span>
+                  Editando afuera: se recarga al guardar
+                  {ext().lastUpdate ? ` · última ${ext().lastUpdate}` : ""}
+                </span>
+                <IconButton variant="ghost" size="sm" aria-label="Dejar de seguir" title="Dejar de seguir el archivo" onClick={() => props.onStopExternal?.()}>
+                  <Icons.X size={12} />
+                </IconButton>
+              </div>
+            )}
+          </Show>
           <div class="absolute bottom-3 left-3 flex gap-3 px-2.5 py-1.5 rounded-md bg-bg-darker/90 border border-border/50 text-xs text-text-muted font-mono">
             <Show when={image()} fallback={<span>sin imagen</span>}>
               <span class="text-text">
@@ -248,6 +306,9 @@ export const TextureEditor: Component<TextureEditorProps> = (props) => {
           </div>
         </div>
       </div>
+      <Show when={exportMenu()}>
+        {(m) => <ContextMenu x={m().x} y={m().y} items={exportItems()} onClose={() => setExportMenu(null)} />}
+      </Show>
     </section>
   );
 };
