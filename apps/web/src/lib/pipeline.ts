@@ -67,8 +67,8 @@ export const PIPELINE_STEPS: PipelineStep[] = [
   },
   {
     id: "print3d",
-    label: "Imprimir 3D",
-    icon: Icons.Printer,
+    label: "Fabricar",
+    icon: Icons.Hammer,
   },
   {
     id: "scan",
@@ -104,7 +104,7 @@ export const WORKSPACES: Workspace[] = [
   { id: "prepare", label: "Preparar", sections: ["structure", "repair", "retopology", "uv"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
   { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"], withoutModel: true },
-  { id: "print", label: "Imprimir 3D", sections: ["print3d"] },
+  { id: "print", label: "Fabricar", sections: ["print3d"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
 ];
 

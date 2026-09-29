@@ -2403,8 +2403,8 @@ export const App: Component = () => {
   const handleAnalyzePrint3d = async () => {
     try {
       setIsProcessing(true);
-      setStatusMessage("Analizando para impresión 3D...");
-      const result = await busy("Analizando para impresión 3D...", () => invoke<TauriPrint3dAnalysis>("analyze_print3d"));
+      setStatusMessage("Analizando el modelo para fabricar...");
+      const result = await busy("Analizando el modelo para fabricar...", () => invoke<TauriPrint3dAnalysis>("analyze_print3d"));
       setMeshAnalysis(result);
       setIsProcessing(false);
       setStatusMessage(

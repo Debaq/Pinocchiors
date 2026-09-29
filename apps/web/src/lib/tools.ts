@@ -4,7 +4,7 @@ export type ToolId = "select" | "move" | "rotate" | "scale" | "paint" | "measure
 
 /**
  * Sobre qué actúan las herramientas, como los modos de Blender: el modelo
- * entero (Preparar, Imprimir 3D, Exportar), el esqueleto o la pose animada.
+ * entero (Preparar, Fabricar, Exportar), el esqueleto o la pose animada.
  */
 export type ToolContext = "object" | "skeleton" | "animate";
 

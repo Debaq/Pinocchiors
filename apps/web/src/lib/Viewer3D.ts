@@ -2348,7 +2348,7 @@ export class Viewer3D {
     this.attachGizmo();
   }
 
-  /** Herramientas sobre el modelo entero (Preparar, Imprimir 3D) o sobre el esqueleto */
+  /** Herramientas sobre el modelo entero (Preparar, Fabricar) o sobre el esqueleto */
   setObjectTools(enabled: boolean): void {
     if (enabled === this.objectTools) return;
     this.objectTools = enabled;
