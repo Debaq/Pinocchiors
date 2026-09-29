@@ -21,6 +21,7 @@ import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
 import { RepairStep, type RepairStepProps } from "../steps/RepairStep";
 import { AnimateStep, type AnimateStepProps } from "../steps/AnimateStep";
 import { Print3DStep, type Print3DStepProps } from "../steps/Print3DStep";
+import { ScanStep, type ScanStepProps } from "../steps/ScanStep";
 
 export interface ContextPanelProps {
   activeStep: PipelineStepId;
@@ -47,6 +48,9 @@ export interface ContextPanelProps {
 
   // Print3D
   print3dProps: Print3DStepProps;
+
+  // Escáner 3D (Orizon3D)
+  scanProps: ScanStepProps;
 
   // Export
   exportProps: ExportStepProps;
@@ -339,6 +343,9 @@ const StepContent: Component<ContextPanelProps> = (props) => (
     </Match>
     <Match when={props.activeStep === "print3d"}>
       <Print3DStep {...props.print3dProps} />
+    </Match>
+    <Match when={props.activeStep === "scan"}>
+      <ScanStep {...props.scanProps} />
     </Match>
     <Match when={props.activeStep === "export"}>
       <ExportStep {...props.exportProps} />

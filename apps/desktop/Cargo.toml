@@ -42,6 +42,9 @@ uv-core = { workspace = true }
 converter-layers = { workspace = true }
 image = { workspace = true }
 
+# Escáneres 3D (Orizon3D)
+orizon3d-core = { workspace = true }
+
 # USDA/USDZ export
 converter-usda = { workspace = true }
 

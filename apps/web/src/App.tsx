@@ -101,6 +101,7 @@ import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from
 import { defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
+import type { ScanMeshSettings } from "./components/steps/ScanStep";
 import type { BodyPlan } from "./components/panels/BodyPlanPanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -878,64 +879,93 @@ export const App: Component = () => {
       const info = await busy(`Importando ${name}...`, () =>
         invoke<MeshInfo>("import_model", { path: filePath, onProgress: progressChannel() })
       );
-      // Modelo nuevo: historial nuevo
-      history.clear();
-      history.milestone(`Importar ${name}`);
-
-      const data = await fetchMeshData();
-      setMeshData(data);
-      setMeshLoaded(true);
-      setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: info.format });
-
-      setStatusMessage(
-        `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, ${info.num_faces.toLocaleString()} caras (${info.format})`
-      );
-
-      // Reset other states
-      setAutorigComplete(false);
-      setWeightsData(undefined);
-      setDiagnostics(undefined);
-      setRepairResult(undefined);
-      setCanUndoRepair(false);
-      setMeshAnalysis(undefined);
-      setSubdivideResult(undefined);
-      setClips([]);
-      setActiveClipId(undefined);
-      setFrame(0);
-      clearQuadMesh();
-      setLastExport(undefined);
-      setCanUndoPrintScale(false);
-
-      // El archivo trae esqueleto y pesos: queda listo para animar sus clips
-      if (info.rig) {
-        clearSkeletonUi();
-        setSkeletonData(tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")));
-        setSkeletonLoaded(true);
-        const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
-        setWeightsData(weights);
-        setBoneNames(weights.boneNames);
-        setAutorigComplete(true);
-        const imported = info.rig.clips.map((c) => ({ ...c, id: createClip(c.name, c.fps).id }));
-        setClips(imported);
-        setActiveClipId(imported[0]?.id);
-        pipeline.markCompleted("skeleton");
-        const animations = imported.length === 1 ? "1 animación" : `${imported.length} animaciones`;
-        setStatusMessage(
-          `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, esqueleto de ${info.rig.num_bones} huesos y ${animations} (${info.format})`
-        );
-      }
-
-      // Modelo nuevo: el proyecto abierto ya no corresponde
-      setProjectPath(undefined);
-
-      // Pipeline: importado; se muestra lo que trae el archivo
-      pipeline.markCompleted("import");
+      await showNewModel(info, `Importar ${name}`);
       pipeline.setActiveStep("structure");
     } catch (e) {
       console.error("Import error:", e);
       setStatusMessage(`Error: ${e}`);
       setProgress(undefined);
     }
+  };
+
+  /** Modelo del escáner (Orizon3D): reemplaza al abierto */
+  const handleScanModel = async (settings: ScanMeshSettings) => {
+    if (meshLoaded()) {
+      const ok = await ask("El modelo del escáner reemplaza al abierto. ¿Continuar?", {
+        title: "Crear modelo del escáner",
+        kind: "warning",
+      });
+      if (!ok) return;
+    }
+    setIsProcessing(true);
+    try {
+      const info = await busy("Creando el modelo del escáner...", () =>
+        invoke<MeshInfo>("scanner_create_model", { settings, onProgress: progressChannel() })
+      );
+      setFileName("Escaneo");
+      await showNewModel(info, "Escanear");
+    } catch (e) {
+      console.error("Scan model error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  /** Muestra el modelo recién cargado en el backend y limpia lo del anterior */
+  const showNewModel = async (info: MeshInfo, milestone: string) => {
+    // Modelo nuevo: historial nuevo
+    history.clear();
+    history.milestone(milestone);
+
+    const data = await fetchMeshData();
+    setMeshData(data);
+    setMeshLoaded(true);
+    setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: info.format });
+
+    setStatusMessage(
+      `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, ${info.num_faces.toLocaleString()} caras (${info.format})`
+    );
+
+    // Reset other states
+    setAutorigComplete(false);
+    setWeightsData(undefined);
+    setDiagnostics(undefined);
+    setRepairResult(undefined);
+    setCanUndoRepair(false);
+    setMeshAnalysis(undefined);
+    setSubdivideResult(undefined);
+    setClips([]);
+    setActiveClipId(undefined);
+    setFrame(0);
+    clearQuadMesh();
+    setLastExport(undefined);
+    setCanUndoPrintScale(false);
+
+    // El archivo trae esqueleto y pesos: queda listo para animar sus clips
+    if (info.rig) {
+      clearSkeletonUi();
+      setSkeletonData(tauriSkeletonToViewer(await invoke<TauriSkeletonData>("get_skeleton_data")));
+      setSkeletonLoaded(true);
+      const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+      setWeightsData(weights);
+      setBoneNames(weights.boneNames);
+      setAutorigComplete(true);
+      const imported = info.rig.clips.map((c) => ({ ...c, id: createClip(c.name, c.fps).id }));
+      setClips(imported);
+      setActiveClipId(imported[0]?.id);
+      pipeline.markCompleted("skeleton");
+      const animations = imported.length === 1 ? "1 animación" : `${imported.length} animaciones`;
+      setStatusMessage(
+        `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, esqueleto de ${info.rig.num_bones} huesos y ${animations} (${info.format})`
+      );
+    }
+
+    // Modelo nuevo: el proyecto abierto ya no corresponde
+    setProjectPath(undefined);
+
+    // Pipeline: importado; se muestra lo que trae el archivo
+    pipeline.markCompleted("import");
   };
 
   const handleSkeletonChange = async (presetId: string) => {
@@ -2737,6 +2767,10 @@ export const App: Component = () => {
               posing: boneEditMode() && activeTool() === "rotate",
               onPose: () => useTool("rotate"),
               onResetPose: () => viewerRef?.resetPose(),
+            }}
+            scanProps={{
+              onCreateModel: handleScanModel,
+              isProcessing: isProcessing(),
             }}
             print3dProps={{
               onAnalyze: handleAnalyzePrint3d,

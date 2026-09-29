@@ -14,6 +14,7 @@ export type PipelineStepId =
   | "skeleton"
   | "animate"
   | "print3d"
+  | "scan"
   | "export";
 
 export interface PipelineStep {
@@ -70,6 +71,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     icon: Icons.Printer,
   },
   {
+    id: "scan",
+    label: "Escáner 3D",
+    icon: Icons.Scan,
+  },
+  {
     id: "export",
     label: "Exportar",
     icon: Icons.Export,
@@ -84,18 +90,21 @@ export const PIPELINE_STEPS: PipelineStep[] = [
 // (menú Archivo); transformar el modelo está siempre en la pestaña Objeto.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type WorkspaceId = "prepare" | "rig" | "print";
+export type WorkspaceId = "prepare" | "rig" | "print" | "scan";
 
 export interface Workspace {
   id: WorkspaceId;
   label: string;
   sections: PipelineStepId[];
+  /** Se abre aunque no haya modelo (el escáner lo crea) */
+  withoutModel?: boolean;
 }
 
 export const WORKSPACES: Workspace[] = [
   { id: "prepare", label: "Preparar", sections: ["structure", "repair", "retopology", "uv"] },
   { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"] },
   { id: "print", label: "Imprimir 3D", sections: ["print3d"] },
+  { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
 ];
 
 export const stepInfo = (id: PipelineStepId) => PIPELINE_STEPS.find((s) => s.id === id) ?? PIPELINE_STEPS[0];

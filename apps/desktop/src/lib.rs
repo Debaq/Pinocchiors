@@ -5,6 +5,7 @@ pub mod imported_rig;
 pub mod commands;
 pub mod placement;
 pub mod project;
+pub mod scanner;
 pub mod state;
 pub mod structure;
 pub mod textures;
@@ -23,6 +24,7 @@ pub fn run() {
             // Inicializar estado
             app.manage(AppState::new());
             app.manage(textures::TextureWatch::default());
+            app.manage(scanner::ScannerHandle::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +90,15 @@ pub fn run() {
             commands::undo_print_scale,
             commands::subdivide_mesh,
             commands::export_print3d_piece,
+            // Escáneres 3D (Orizon3D)
+            scanner::scanner_connect,
+            scanner::scanner_disconnect,
+            scanner::scanner_status,
+            scanner::scanner_set_settings,
+            scanner::scanner_set_gain,
+            scanner::scanner_preview,
+            scanner::scanner_scan,
+            scanner::scanner_create_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

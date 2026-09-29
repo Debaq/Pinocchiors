@@ -106,7 +106,7 @@ export const Header: Component<HeaderProps> = (props) => {
                     ? "bg-accent/20 text-accent font-medium"
                     : "text-text-muted hover:text-text hover:bg-surface/40"
                 )}
-                disabled={!props.hasModel}
+                disabled={!props.hasModel && !ws.withoutModel}
                 onClick={() => props.onWorkspace?.(ws.id)}
               >
                 {ws.label}

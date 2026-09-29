@@ -1,0 +1,16 @@
+[package]
+name = "orizon3d-core"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "Captura de escáneres 3D Revopoint (POP 2 / POP 3) por V4L2, escaneo multi-frame y mallado (backend de Orizon3D)"
+
+[dependencies]
+crossbeam-channel = "0.5"
+log = "0.4"
+# Decodificador JPEG en Rust puro para el stream de color (MJPG)
+zune-jpeg = "0.4"
+
+# Captura V4L2 directa (el escáner es un dispositivo UVC), solo existe en Linux
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14"

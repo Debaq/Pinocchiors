@@ -18,3 +18,5 @@ export type { RepairStepProps } from "./RepairStep";
 export { AnimateStep } from "./AnimateStep";
 export { Print3DStep } from "./Print3DStep";
 export type { Print3DStepProps } from "./Print3DStep";
+export { ScanStep } from "./ScanStep";
+export type { ScanStepProps, ScanMeshSettings } from "./ScanStep";

@@ -17,6 +17,8 @@ members = [
     "libs/quadriflow/core",
     # UV - Coordenadas de textura
     "libs/uv/core",
+    # Orizon3D - Escáneres 3D
+    "libs/orizon3d",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
     "libs/converter/gltf-io",
@@ -110,6 +112,7 @@ quadriflow-core = { path = "libs/quadriflow/core" }
 
 # Crates internos - UV
 uv-core = { path = "libs/uv/core" }
+orizon3d-core = { path = "libs/orizon3d" }
 
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }

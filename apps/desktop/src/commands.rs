@@ -155,7 +155,7 @@ pub struct AutorigConfig {
 
 /// Envía un mensaje de progreso (los errores de envío se ignoran: la
 /// ventana puede haberse cerrado)
-fn report(channel: &Channel<Progress>, stage: &str, percent: u32, message: impl Into<String>) {
+pub(crate) fn report(channel: &Channel<Progress>, stage: &str, percent: u32, message: impl Into<String>) {
     let _ = channel.send(Progress { stage: stage.to_string(), percent, message: message.into() });
 }
 
@@ -501,6 +501,18 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
         _ => return Err(format!("Formato no soportado: .{}", ext)),
     };
 
+    let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    load_scene(scene, name, ext.to_uppercase(), progress, state)
+}
+
+/// Deja `scene` como el modelo de trabajo (desde un archivo o el escáner)
+pub(crate) fn load_scene(
+    scene: Scene,
+    name: String,
+    format: String,
+    progress: &Channel<Progress>,
+    state: &AppState,
+) -> Result<MeshInfo, String> {
     // Calcular estadísticas
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&scene);
     let bbox = calculate_scene_bounds(&scene);
@@ -513,7 +525,7 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
         has_uvs,
         has_materials: !scene.materials.is_empty(),
         bounding_box: bbox,
-        format: ext.to_uppercase(),
+        format: format.clone(),
         rig: None,
     };
 
@@ -529,8 +541,7 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
     report(progress, "done", 90, "Modelo importado");
 
     // Guardar en estado; la copia del original va al proyecto y permite revertir
-    let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    *state.original_model.lock().unwrap() = Some(crate::state::OriginalModel { name, format: ext.to_uppercase(), scene: scene.clone() });
+    *state.original_model.lock().unwrap() = Some(crate::state::OriginalModel { name, format, scene: scene.clone() });
     *state.last_saved_hash.lock().unwrap() = None;
     let mut scene_lock = state.scene.lock().unwrap();
     *scene_lock = Some(scene);
