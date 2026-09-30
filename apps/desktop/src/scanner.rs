@@ -17,7 +17,7 @@ use crate::commands::{in_background, load_scene, report, MeshInfo, Progress};
 pub struct ScannerHandle(Mutex<Option<Arc<Scanner>>>);
 
 impl ScannerHandle {
-    fn get(&self) -> Option<Arc<Scanner>> {
+    pub(crate) fn get(&self) -> Option<Arc<Scanner>> {
         self.0.lock().unwrap().clone()
     }
 }
@@ -283,7 +283,7 @@ pub async fn scanner_create_model(
 
 /// Malla del escáner (cámara: X derecha, Y abajo, Z adelante, mm) a escena
 /// con Y arriba, centrada y apoyada en el piso
-fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
+pub(crate) fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
     // Girar 180° sobre X: Y abajo → arriba y el objeto queda mirando a la
     // cámara del visor. Es una rotación, así que el sentido de las caras se conserva
     let mut positions: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| [v[0], -v[1], -v[2]]).collect();

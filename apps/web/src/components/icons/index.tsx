@@ -466,3 +466,30 @@ export const Overlays = (props: IconProps) => (
     </g>
   </Icon>
 );
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SELECCIÓN (nube de puntos)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Rectángulo de selección (borde punteado) */
+export const SelectionRect = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="40" y="56" width="176" height="144" rx="8" fill="none" stroke="currentColor" stroke-width="16" stroke-dasharray="28 20" />
+  </Icon>
+);
+
+/** Lazo: contorno libre con su cola */
+export const Lasso = (props: IconProps) => (
+  <Icon {...props}>
+    <ellipse cx="136" cy="104" rx="88" ry="60" fill="none" stroke="currentColor" stroke-width="16" stroke-dasharray="26 18" />
+    <path d="M72,148c-14,16-18,36-4,52s40,8,36,32" fill="none" stroke="currentColor" stroke-width="16" stroke-linecap="round" />
+  </Icon>
+);
+
+/** Pincel de selección: círculo con un punto al centro */
+export const SelectBrush = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="128" cy="128" r="88" fill="none" stroke="currentColor" stroke-width="16" stroke-dasharray="26 18" />
+    <circle cx="128" cy="128" r="16" />
+  </Icon>
+);

@@ -97,6 +97,18 @@ Pendiente:
   exportado). También se edita la transformación y se deshace (pila en el
   backend, `undo_scene_edit`); ocultar vale también para el alambre y la
   vista de pesos.
+- ✅ Orizon3D en un panel lateral junto al visor (como pieles y animación),
+  con pestañas Captura, Nube, Malla y Calibración. Edición de la nube antes
+  de mallar (`libs/orizon3d/src/edit.rs`, `apps/desktop/src/scan_cloud.rs`):
+  selección por rectángulo, lazo y pincel (Shift suma, Ctrl resta; Supr
+  borra, A / Alt+A / Ctrl+I), recortar a la selección, ruido estadístico,
+  puntos sueltos por radio, fragmentos sueltos, quitar la mesa (RANSAC),
+  simplificar, suavizar, abrir y guardar PLY, deshacer y rehacer (12 pasos).
+  "Ver" marca lo que cada filtro quitaría antes de aplicarlo.
+- ⬜ Nube: selección solo de lo visible (hoy atraviesa la nube), recortar
+  por caja o por plano con gizmo, alinear varios escaneos (ICP manual por
+  puntos), y malla por Poisson como alternativa.
+- 🧪 Panel de Orizon3D y herramientas de nube sin probar con el escáner real.
 - ⬜ Arrastrar y soltar para importar; archivos recientes; vista previa de la
   información antes de importar.
 - ⬜ Exportar USDA en texto; opciones USD en la interfaz (escala, eje arriba,

@@ -7,6 +7,7 @@ pub mod imported_rig;
 pub mod commands;
 pub mod placement;
 pub mod project;
+pub mod scan_cloud;
 pub mod scanner;
 pub mod state;
 pub mod structure;
@@ -27,6 +28,7 @@ pub fn run() {
             app.manage(AppState::new());
             app.manage(textures::TextureWatch::default());
             app.manage(scanner::ScannerHandle::default());
+            app.manage(scan_cloud::CloudEditor::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -114,6 +116,15 @@ pub fn run() {
             scanner::scanner_measure,
             scanner::scanner_record,
             scanner::scanner_create_model,
+            scan_cloud::scan_cloud_take,
+            scan_cloud::scan_cloud_import,
+            scan_cloud::scan_cloud_export,
+            scan_cloud::scan_cloud_info,
+            scan_cloud::scan_cloud_data,
+            scan_cloud::scan_cloud_edit,
+            scan_cloud::scan_cloud_history,
+            scan_cloud::scan_cloud_discard,
+            scan_cloud::scan_cloud_create_model,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
