@@ -1425,26 +1425,73 @@ pub fn remove_object(kind: String, state: State<'_, AppState>) -> Result<(), Str
 /// retopología ya no corresponden a la malla y se descartan.
 #[tauri::command]
 pub fn remove_scene_node(node: usize, state: State<'_, AppState>) -> Result<(), String> {
+    edit_scene(&state, node, |scene| {
+        let mut visited = vec![false; scene.nodes.len()];
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if n >= visited.len() || visited[n] {
+                continue;
+            }
+            visited[n] = true;
+            scene.nodes[n].mesh = None;
+            stack.extend(scene.nodes[n].children.iter().copied());
+        }
+    })
+    .map_err(|e| if e.contains("geometría") { "No se puede borrar: el modelo quedaría sin geometría".to_string() } else { e })
+}
+
+/// Cambia la transformación local de un nodo del archivo (desde la pestaña
+/// Objeto); la malla unida y lo exportado lo siguen. Como borrar, descarta
+/// rig y retopología.
+#[tauri::command]
+pub fn set_scene_node_transform(
+    node: usize,
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    scale: [f32; 3],
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if translation.iter().chain(&rotation).chain(&scale).any(|v| !v.is_finite()) {
+        return Err("Transformación inválida".into());
+    }
+    let rotation = converter_scene::glam::Quat::from_array(rotation).normalize();
+    edit_scene(&state, node, |scene| {
+        scene.nodes[node].transform = converter_scene::Transform::Trs {
+            translation: converter_scene::glam::Vec3::from_array(translation),
+            rotation,
+            scale: converter_scene::glam::Vec3::from_array(scale),
+        };
+    })
+}
+
+/// Deshace la última edición de nodos (borrar o transformar)
+#[tauri::command]
+pub fn undo_scene_edit(state: State<'_, AppState>) -> Result<(), String> {
+    let (scene, mesh) = state.scene_edits.lock().unwrap().pop().ok_or("No hay ediciones de nodos para deshacer")?;
+    *state.scene.lock().unwrap() = Some(scene);
+    *state.mesh.lock().unwrap() = Some(mesh);
+    state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.geometry_changed();
+    Ok(())
+}
+
+/// Aplica `change` a una copia de la escena, rehace la malla unida y guarda
+/// lo anterior para deshacer. El rig y la retopología ya no corresponden.
+fn edit_scene(state: &AppState, node: usize, change: impl FnOnce(&mut Scene)) -> Result<(), String> {
     let mut scene_lock = state.scene.lock().unwrap();
     let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
     if node >= scene.nodes.len() {
         return Err(format!("Nodo fuera de rango: {node}"));
     }
     let mut next = scene.clone();
-    let mut visited = vec![false; next.nodes.len()];
-    let mut stack = vec![node];
-    while let Some(n) = stack.pop() {
-        if n >= visited.len() || visited[n] {
-            continue;
-        }
-        visited[n] = true;
-        next.nodes[n].mesh = None;
-        stack.extend(next.nodes[n].children.iter().copied());
-    }
-    let mesh = scene_to_pinocchio_mesh(&next).map_err(|_| "No se puede borrar: el modelo quedaría sin geometría".to_string())?;
-    *scene_lock = Some(next);
+    change(&mut next);
+    let mesh = scene_to_pinocchio_mesh(&next)?;
+    let previous = scene_lock.replace(next);
     drop(scene_lock);
-    *state.mesh.lock().unwrap() = Some(mesh);
+    let old_mesh = state.mesh.lock().unwrap().replace(mesh);
+    if let (Some(scene), Some(mesh)) = (previous, old_mesh) {
+        state.scene_edits.lock().unwrap().push((scene, mesh));
+    }
     state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
     state.geometry_changed();
     Ok(())

@@ -150,6 +150,11 @@ pub struct AppState {
     pub mesh_before_print_scale: Mutex<Option<Mesh>>,
     /// Backup de escena antes de escalar para impresión
     pub scene_before_print_scale: Mutex<Option<Scene>>,
+
+    // ── Outliner ──
+    /// Escena y malla antes de cada edición de nodos (borrar, transformar),
+    /// la última al final: deshacer las saca de a una
+    pub scene_edits: Mutex<Vec<(Scene, Mesh)>>,
 }
 
 impl AppState {
@@ -181,6 +186,7 @@ impl AppState {
             print3d_pieces: Mutex::new(None),
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
+            scene_edits: Mutex::new(Vec::new()),
         }
     }
 }
@@ -247,6 +253,7 @@ impl AppState {
         *self.print3d_pieces.lock().unwrap() = None;
         *self.mesh_before_print_scale.lock().unwrap() = None;
         *self.scene_before_print_scale.lock().unwrap() = None;
+        self.scene_edits.lock().unwrap().clear();
     }
 }
 

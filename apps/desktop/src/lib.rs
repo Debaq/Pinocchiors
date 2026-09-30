@@ -55,6 +55,8 @@ pub fn run() {
             commands::write_text_file,
             commands::remove_object,
             commands::remove_scene_node,
+            commands::set_scene_node_transform,
+            commands::undo_scene_edit,
             project::save_project,
             project::new_project,
             project::open_project,

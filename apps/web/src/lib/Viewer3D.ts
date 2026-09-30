@@ -1827,6 +1827,7 @@ export class Viewer3D {
     this.applySettings();
     this.buildRig();
     this.attachGizmo();
+    this.applyHiddenToOverlays();
     this.updateNodeHighlight();
   }
 
@@ -3116,7 +3117,7 @@ export class Viewer3D {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(this.meshData.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(this.meshData.normals, 3));
-    geometry.setIndex(new THREE.BufferAttribute(this.meshData.indices, 1));
+    geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
 
     // Colores por vértice: un hueso (mapa de calor) o todos (color de cada hueso)
     const colors = new Float32Array(weights.numVertices * 3);
@@ -4149,6 +4150,7 @@ export class Viewer3D {
   }
 
   private clearMesh(): void {
+    const meshGeometry = this.currentMesh?.geometry;
     if (this.nodeHighlight) {
       this.meshGroup.remove(this.nodeHighlight);
       this.nodeHighlight.geometry.dispose();
@@ -4163,7 +4165,8 @@ export class Viewer3D {
     }
 
     if (this.currentWireframe) {
-      // La geometría es la de currentMesh: se libera con ella
+      // La geometría es la de currentMesh (se libera con ella), salvo con nodos ocultos
+      if (this.currentWireframe.geometry !== meshGeometry) this.currentWireframe.geometry.dispose();
       this.meshGroup.remove(this.currentWireframe);
       (this.currentWireframe.material as THREE.Material).dispose();
       this.currentWireframe = null;
@@ -4295,6 +4298,47 @@ export class Viewer3D {
     if (next.size === this.hiddenNodes.size && [...next].every((n) => this.hiddenNodes.has(n))) return;
     this.hiddenNodes = next;
     this.refreshMeshMaterial();
+    this.applyHiddenToOverlays();
+  }
+
+  /** Índices de la malla sin los triángulos de los nodos ocultos */
+  private visibleIndex(): Uint32Array {
+    const data = this.meshData!;
+    if (this.hiddenNodes.size === 0 || !data.groups || !data.groupNodes) return data.indices;
+    const keep: Uint32Array[] = [];
+    let total = 0;
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      if (this.hiddenNodes.has(data.groupNodes[g])) continue;
+      const part = data.indices.subarray(data.groups[g * 3], data.groups[g * 3] + data.groups[g * 3 + 1]);
+      keep.push(part);
+      total += part.length;
+    }
+    const out = new Uint32Array(total);
+    let at = 0;
+    for (const part of keep) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  }
+
+  /** El alambre y la vista de pesos tampoco dibujan los nodos ocultos */
+  private applyHiddenToOverlays(): void {
+    const mesh = this.currentMesh;
+    if (!mesh || !this.meshData) return;
+    const wire = this.currentWireframe;
+    if (wire) {
+      if (wire.geometry !== mesh.geometry) wire.geometry.dispose();
+      if (this.hiddenNodes.size === 0) wire.geometry = mesh.geometry;
+      else {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+        geometry.setAttribute("normal", mesh.geometry.getAttribute("normal"));
+        geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
+        wire.geometry = geometry;
+      }
+    }
+    this.weightsMesh?.geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
   }
 
   setHighlightedNodes(nodes: number[]): void {

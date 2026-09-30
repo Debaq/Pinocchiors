@@ -94,6 +94,12 @@ import {
 import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
 import { CaptureDialog } from "./components/layout/CaptureDialog";
 import type { CaptureMotion } from "./lib/capture";
+import type { NodeTransform } from "./components/panels/ObjectTab";
+
+/** Edición de un nodo del archivo desde el Outliner (el backend guarda lo anterior para deshacer) */
+type SceneEdit =
+  | { op: "remove"; node: number; name: string }
+  | { op: "transform"; node: number; name: string; before: NodeTransform; after: NodeTransform };
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
@@ -401,6 +407,10 @@ export const App: Component = () => {
     poseLibrary: {
       apply: (d: { after: StoredPose[] }) => void setPoseLibrary(d.after),
       revert: (d: { before: StoredPose[] }) => void setPoseLibrary(d.before),
+    },
+    sceneEdit: {
+      apply: (d: SceneEdit) => sendSceneEdit(d),
+      revert: (d: SceneEdit) => undoSceneEdit(d),
     },
     skeletonBones: {
       apply: (d: { before: EditBone[]; after: EditBone[] }) => sendSkeletonBones(d.after),
@@ -1050,24 +1060,56 @@ export const App: Component = () => {
   const toggleFileNode = (index: number) =>
     setHiddenFileNodes((list) => (list.includes(index) ? list.filter((n) => n !== index) : [...list, index]));
 
+  /** Relee la malla después de editar nodos: el rig y la retopología ya no le corresponden */
+  const afterSceneEdit = async (reason: string) => {
+    setMeshData(await fetchMeshData());
+    if (quadMeshLoaded()) clearQuadMesh();
+    dropWeights(reason);
+  };
+
+  const sendSceneEdit = async (d: SceneEdit) => {
+    if (d.op === "remove") {
+      await busy(`Borrando ${d.name}...`, () => invoke("remove_scene_node", { node: d.node }));
+    } else {
+      await busy(`Moviendo ${d.name}...`, () =>
+        invoke("set_scene_node_transform", { node: d.node, translation: d.after.translation, rotation: d.after.rotation, scale: d.after.scale })
+      );
+    }
+    await afterSceneEdit(d.op === "remove" ? `Borraste ${d.name} del modelo` : `Moviste ${d.name}`);
+  };
+
+  const undoSceneEdit = async (d: SceneEdit) => {
+    await busy("Deshaciendo...", () => invoke("undo_scene_edit"));
+    await afterSceneEdit(d.op === "remove" ? `Volvió ${d.name}` : `${d.name} volvió a su lugar`);
+  };
+
   /** Borra la geometría del nodo (y de sus hijos): sale de la malla y de lo exportado */
   const deleteFileNode = async (index: number) => {
     const name = sceneStructure()?.nodes[index]?.name || `nodo ${index}`;
     try {
-      await busy(`Borrando ${name}...`, () => invoke("remove_scene_node", { node: index }));
-      setMeshData(await fetchMeshData());
+      await history.execute(`Borrar ${name}`, { kind: "sceneEdit", data: { op: "remove", node: index, name } });
     } catch (e) {
       setStatusMessage(`Error: ${e}`);
       return;
     }
-    // La malla cambió: el rig y la retopología ya no le corresponden
-    if (quadMeshLoaded()) clearQuadMesh();
-    dropWeights(`Borraste ${name} del modelo`);
     const removed = new Set(nodeSubtree(index));
     setHiddenFileNodes((list) => list.filter((n) => !removed.has(n)));
     if (selectedFileNode() !== undefined && removed.has(selectedFileNode()!)) setSelectedFileNode(undefined);
-    setStatusMessage(`${name} borrado del modelo (también de lo que se exporte)`);
-    history.milestone(`Borrar ${name}`);
+    setStatusMessage(`${name} borrado del modelo (también de lo que se exporte). Ctrl+Z lo trae de vuelta`);
+  };
+
+  /** Transformación local de un nodo del archivo (pestaña Objeto) */
+  const transformFileNode = async (index: number, after: NodeTransform) => {
+    const node = sceneStructure()?.nodes[index];
+    if (!node) return;
+    const name = node.name || `nodo ${index}`;
+    const before: NodeTransform = { translation: node.translation, rotation: node.rotation, scale: node.scale };
+    try {
+      await history.execute(`Mover ${name}`, { kind: "sceneEdit", data: { op: "transform", node: index, name, before, after } });
+      setStatusMessage(`${name}: transformación cambiada (el rig y la retopología se descartan)`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
   };
 
   // Derived scene tree
@@ -5651,6 +5693,10 @@ export const App: Component = () => {
                 if (index !== undefined) toggleFileNode(index);
               },
               onDeselectNode: () => setSelectedFileNode(undefined),
+              onNodeTransform: (t) => {
+                const index = selectedFileNode();
+                if (index !== undefined) void transformFileNode(index, t);
+              },
               placement: {
                 mode: placementMode(),
                 onPickMode: handlePlacementMode,
