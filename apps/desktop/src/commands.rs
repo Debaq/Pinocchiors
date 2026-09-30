@@ -240,6 +240,8 @@ pub struct ExportConfig {
     pub bone_shapes: Option<bool>,
     /// Huesos que no deforman: su peso pasa al primer ancestro que sí
     pub non_deforming: Option<Vec<usize>>,
+    /// `extras` de glTF por nombre de nodo: límites de giro y datos del rig
+    pub node_extras: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Resultado de exportación
@@ -730,6 +732,7 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
                         ..defaults
                     }
                 }),
+                node_extras: config.node_extras.clone().unwrap_or_default(),
             };
             if config.format == "gltf" {
                 let bin = converter_gltf_io::export_gltf(scene, path, &glb_opts)

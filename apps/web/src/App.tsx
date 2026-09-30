@@ -3493,6 +3493,33 @@ export const App: Component = () => {
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
 
 
+  /**
+   * `extras` de glTF para otras herramientas: los límites de giro en los
+   * nodos que giran con cada articulación (sus hijos; la raíz, el suyo), con
+   * los ejes de la articulación para leerlos, y en la raíz los datos del rig
+   * (controles, cadenas IK, restricciones y grupos)
+   */
+  const rigExtras = (): Record<string, { pinocchio: Record<string, unknown> }> => {
+    const ctx = rigCtx();
+    const s = rigSettings();
+    const out: Record<string, { pinocchio: Record<string, unknown> }> = {};
+    const put = (name: string, key: string, value: unknown) => {
+      out[name] ??= { pinocchio: {} };
+      out[name].pinocchio[key] = value;
+    };
+    ctx.bones.forEach((b, j) => {
+      const limits = boneProps(s, b.name).limits;
+      if (!limits) return;
+      const nodes = b.parent === null ? [j] : ctx.children[j];
+      for (const c of nodes) put(ctx.bones[c].name, "limits", { joint: b.name, axes: ctx.frames[j].q, ...limits });
+    });
+    const root = ctx.bones.find((b) => b.parent === null);
+    if (root && (s.controls.length > 0 || (s.ikChains ?? []).length > 0 || (s.constraints ?? []).length > 0)) {
+      put(root.name, "rig", { controls: s.controls, ikChains: s.ikChains ?? [], constraints: s.constraints ?? [], groups: s.groups });
+    }
+    return out;
+  };
+
   const handleExport = async () => {
     try {
       const formats = supportedFormats();
@@ -3542,6 +3569,7 @@ export const App: Component = () => {
           non_deforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
           skeleton_only: skeletonOnly,
           bone_shapes: exportBoneShapes(),
+          node_extras: (includeRig || skeletonOnly) && (opts.format === "glb" || opts.format === "gltf") ? rigExtras() : null,
           fps: activeClip()?.fps ?? null,
         },
       }));

@@ -96,7 +96,27 @@ fn build_document(scene: &Scene, options: &GlbExportOptions) -> Result<(Value, V
     if options.export_animations {
         builder.write_animations(&scene);
     }
-    builder.build()
+    let (mut root, bin) = builder.build()?;
+    apply_node_extras(&mut root, &options.node_extras);
+    Ok((root, bin))
+}
+
+/// Pone los `extras` pedidos en los nodos con ese nombre
+fn apply_node_extras(root: &mut Value, extras: &std::collections::HashMap<String, Value>) {
+    if extras.is_empty() {
+        return;
+    }
+    let Some(nodes) = root.get_mut("nodes").and_then(Value::as_array_mut) else {
+        return;
+    };
+    for node in nodes.iter_mut() {
+        let Some(value) = node.get("name").and_then(Value::as_str).and_then(|name| extras.get(name)).cloned() else {
+            continue;
+        };
+        if let Some(object) = node.as_object_mut() {
+            object.insert("extras".to_string(), value);
+        }
+    }
 }
 
 /// Empaqueta JSON y buffer en un GLB (header + chunk JSON + chunk BIN).
@@ -1081,6 +1101,17 @@ mod tests {
         });
         scene.root_nodes.push(0);
         scene
+    }
+
+    #[test]
+    fn test_node_extras_by_name() {
+        let scene = triangle_scene();
+        let mut options = GlbExportOptions::default();
+        options.node_extras.insert("Triangle".to_string(), json!({ "limits": { "kind": "hinge" } }));
+        options.node_extras.insert("Missing".to_string(), json!(1));
+        let (root, _) = build_document(&scene, &options).unwrap();
+        assert_eq!(root["nodes"][0]["extras"]["limits"]["kind"], "hinge");
+        assert_eq!(root["nodes"].as_array().unwrap().len(), 1);
     }
 
     /// Esfera UV con normales y UVs: suficientes vértices para comprimir
