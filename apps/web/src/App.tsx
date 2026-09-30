@@ -171,6 +171,8 @@ import { PosePanel, type PoseSource, type SelectCommand } from "./components/pan
 import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
 import { ConstraintPanel } from "./components/panels/ConstraintPanel";
+import { SkeletonEditPanel } from "./components/panels/SkeletonEditPanel";
+import { addChildBone, removeBone, skeletonFromJson, skeletonToJson, type EditBone } from "./lib/skeletonEdit";
 import { SPRING_PRESETS } from "./lib/secondary";
 import {
   CONSTRAINT_PREFIX,
@@ -396,6 +398,10 @@ export const App: Component = () => {
     poseLibrary: {
       apply: (d: { after: StoredPose[] }) => void setPoseLibrary(d.after),
       revert: (d: { before: StoredPose[] }) => void setPoseLibrary(d.before),
+    },
+    skeletonBones: {
+      apply: (d: { before: EditBone[]; after: EditBone[] }) => sendSkeletonBones(d.after),
+      revert: (d: { before: EditBone[]; after: EditBone[] }) => sendSkeletonBones(d.before),
     },
     restPose: {
       apply: (d: { to: Vec3[] }) => sendRestPose(d.to),
@@ -1905,6 +1911,146 @@ export const App: Component = () => {
     await changeRig("Agregar control", { ...s, controls: [...s.controls, control] });
     handleSelectControl(control.id);
   };
+
+  // ─── Estructura del esqueleto ─────────────────────────────────────────────
+
+  /** Esqueletos guardados como plantilla propia (para otros modelos) */
+  const [customSkeletons, setCustomSkeletons] = createPersisted<{ id: string; name: string; bones: EditBone[] }[]>("skeleton.custom", []);
+
+  const editBones = (): EditBone[] =>
+    (skeletonData()?.bones ?? []).map((b) => ({ name: b.name, position: [...b.position] as Vec3, parent: b.parent }));
+
+  /** Manda la estructura nueva al backend; los pesos ya no sirven */
+  const sendSkeletonBones = async (bones: EditBone[]) => {
+    const data = await invoke<TauriSkeletonData>("set_skeleton_bones", { bones });
+    setSkeletonData(tauriSkeletonToViewer(data));
+    setSkeletonLoaded(true);
+    setSelectedSkeleton(undefined);
+    setBodyPlan(undefined);
+    setFitInfo(undefined);
+    dropWeights("Cambiaste la estructura del esqueleto");
+  };
+
+  const changeSkeletonBones = async (description: string, after: EditBone[], select?: number) => {
+    try {
+      await history.execute(description, { kind: "skeletonBones", data: { before: editBones(), after } });
+      if (select !== undefined) selectJoints([select], select);
+      setStatusMessage(`${description}: ${after.length} huesos`);
+      return true;
+    } catch (e) {
+      console.error("Skeleton edit error:", e);
+      setStatusMessage(`Error: ${e}`);
+      return false;
+    }
+  };
+
+  const handleAddChildBone = () => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    if (!bones[j]) return;
+    const { bones: after, index } = addChildBone(bones, j, bodyAxes(rigCtx().body).up);
+    void changeSkeletonBones(`Hueso nuevo en ${bones[j].name}`, after, index);
+  };
+
+  const handleDeleteBone = () => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    if (!bones[j]) return;
+    const after = removeBone(bones, j);
+    if (!after) {
+      setStatusMessage("El esqueleto necesita al menos un hueso");
+      return;
+    }
+    void changeSkeletonBones(`Borrar ${bones[j].name}`, after);
+  };
+
+  /** Renombra un hueso y lo que lo nombra: propiedades del rig, cadenas, restricciones, controles y pistas */
+  const handleRenameBone = async (name: string) => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    const from = bones[j]?.name;
+    if (!from || name === from) return;
+    if (bones.some((b) => b.name === name)) {
+      setStatusMessage(`Ya hay un hueso «${name}»`);
+      return;
+    }
+    const after = bones.map((b, i) => (i === j ? { ...b, name } : b));
+    if (!(await changeSkeletonBones(`Renombrar ${from} a ${name}`, after, j))) return;
+    const s = rigSettings();
+    const rename = (n: string) => (n === from ? name : n);
+    const renamedBones = { ...s.bones };
+    if (renamedBones[from]) {
+      renamedBones[name] = renamedBones[from];
+      delete renamedBones[from];
+    }
+    await changeRig("Renombrar en el rig", {
+      ...s,
+      bones: renamedBones,
+      controls: s.controls.map((c) => (c.parent === from ? { ...c, parent: name } : c)),
+      ikChains: (s.ikChains ?? []).map((c) => ({ ...c, joints: c.joints.map(rename) })),
+      constraints: s.constraints?.map((c) => ({
+        ...c,
+        owner: rename(c.owner),
+        target: c.target === from ? name : c.target,
+        joints: c.joints?.map(rename),
+      })),
+    });
+    const before = clips();
+    const renamed = before.map((c) => ({ ...c, tracks: c.tracks.map((t) => (!t.kind && t.bone === from ? { ...t, bone: name } : t)) }));
+    await history.execute("Renombrar en las animaciones", {
+      kind: "clips",
+      data: { before, after: renamed, activeBefore: activeClipId(), activeAfter: activeClipId() },
+    });
+  };
+
+  const handleExportSkeletonJson = async () => {
+    const bones = editBones();
+    if (bones.length === 0) return;
+    const stem = (fileName() ?? "esqueleto").replace(/\.[^.]+$/, "");
+    const path = await save({ title: "Exportar esqueleto", defaultPath: `${stem} - esqueleto.json`, filters: [{ name: "Esqueleto JSON", extensions: ["json"] }] });
+    if (!path) return;
+    try {
+      await invoke("write_text_file", { path, contents: skeletonToJson(stem, bones) });
+      setStatusMessage(`Esqueleto exportado: ${path}`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  const handleImportSkeletonJson = async () => {
+    const picked = await pickTextFile(".json");
+    if (!picked) return;
+    try {
+      const { bones } = skeletonFromJson(picked.text);
+      if (await changeSkeletonBones(`Esqueleto de ${picked.name}`, bones)) {
+        setStatusMessage(`Esqueleto de ${picked.name}: ${bones.length} huesos. Ajústalo al modelo o muévelo a mano`);
+      }
+    } catch (e) {
+      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const skeletonEditPanel = (
+    <SkeletonEditPanel
+      selectedName={skeletonData()?.bones[viewSettings().selectedBone]?.name}
+      disabled={isProcessing()}
+      onAddChild={handleAddChildBone}
+      onDelete={handleDeleteBone}
+      onRename={(name) => void handleRenameBone(name)}
+      onExportJson={() => void handleExportSkeletonJson()}
+      onImportJson={() => void handleImportSkeletonJson()}
+      custom={customSkeletons().map((s) => ({ id: s.id, name: s.name, bones: s.bones.length }))}
+      onSaveCustom={(name) => {
+        setCustomSkeletons([...customSkeletons(), { id: `skel-${Date.now().toString(36)}`, name, bones: editBones() }]);
+        setStatusMessage(`Esqueleto guardado: ${name}`);
+      }}
+      onApplyCustom={(id) => {
+        const s = customSkeletons().find((x) => x.id === id);
+        if (s) void changeSkeletonBones(`Esqueleto: ${s.name}`, s.bones.map((b) => ({ ...b, position: [...b.position] as Vec3 })));
+      }}
+      onDeleteCustom={(id) => setCustomSkeletons(customSkeletons().filter((x) => x.id !== id))}
+    />
+  );
 
   const sendRestPose = async (positions: Vec3[]) => {
     const data = await invoke<TauriSkeletonData>("apply_rest_pose", { positions });
@@ -5431,6 +5577,7 @@ export const App: Component = () => {
                 openTextureEditor("quad", { material: Math.max(0, skinMaterials().findIndex((m) => m.maps.base)), slot: "base" }),
             }}
             skeletonProps={{
+              structurePanel: skeletonEditPanel,
               presets: skeletonPresets(),
               selectedPreset: selectedSkeleton(),
               skeletonLoaded: skeletonLoaded(),

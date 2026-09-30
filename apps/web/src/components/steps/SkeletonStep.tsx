@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js";
+import { Component, Show, type JSX } from "solid-js";
 import { Button, Checkbox, Panel, Select, Slider } from "../ui";
 import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
@@ -43,6 +43,8 @@ export interface SkeletonStepProps {
   skeletonTransform?: SkeletonTransform;
   onTransformChange?: (transform: SkeletonTransform) => void;
   onResetTransform?: () => void;
+  /** Panel de estructura: huesos nuevos o borrados, JSON y esqueletos propios */
+  structurePanel?: JSX.Element;
   // Pesos
   autorigConfig: AutorigConfig;
   onAutorigConfigChange?: (config: AutorigConfig) => void;
@@ -205,6 +207,7 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
             onReset={props.onResetTransform}
             disabled={props.isProcessing}
           />
+          {props.structurePanel}
         </div>
 
         {/* 4. Pesos */}

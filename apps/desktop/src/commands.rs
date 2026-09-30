@@ -1668,6 +1668,82 @@ pub fn move_bone(
     Ok(data)
 }
 
+/// Escribe un archivo de texto en la ruta que eligió el diálogo de guardado
+/// (esqueletos JSON y otros datos que arma la interfaz)
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("No se pudo escribir {path}: {e}"))
+}
+
+/// Hueso de un esqueleto armado en la interfaz (editor o JSON importado)
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoneInput {
+    pub name: String,
+    /// Posición en coordenadas del esqueleto visible
+    pub position: [f64; 3],
+    pub parent: Option<usize>,
+}
+
+/// Reemplaza el esqueleto por uno armado en la interfaz: huesos agregados o
+/// borrados, o un esqueleto JSON. Pasa a ser también la plantilla del ajuste
+/// automático. Los pesos se descartan (cambió la cantidad de huesos).
+#[tauri::command]
+pub fn set_skeleton_bones(bones: Vec<BoneInput>, state: State<'_, AppState>) -> Result<SkeletonData, String> {
+    let n = bones.len();
+    if n == 0 {
+        return Err("El esqueleto no tiene huesos".into());
+    }
+    let mut names = std::collections::HashSet::new();
+    for (i, b) in bones.iter().enumerate() {
+        if b.name.trim().is_empty() || !names.insert(b.name.as_str()) {
+            return Err(format!("Nombre de hueso vacío o repetido: «{}»", b.name));
+        }
+        if b.position.iter().any(|v| !v.is_finite()) {
+            return Err(format!("Posición inválida en {}", b.name));
+        }
+        if b.parent.is_some_and(|p| p >= n || p == i) {
+            return Err(format!("Padre inválido en {}", b.name));
+        }
+    }
+    // Sin ciclos: subiendo por los padres se llega a una raíz en menos de n pasos
+    for i in 0..n {
+        let mut j = i;
+        for _ in 0..=n {
+            match bones[j].parent {
+                Some(p) => j = p,
+                None => break,
+            }
+        }
+        if bones[j].parent.is_some() {
+            return Err("Los padres de los huesos forman un ciclo".into());
+        }
+    }
+
+    let params = *state.skeleton_transform.lock().unwrap();
+    let has_children: Vec<bool> = (0..n).map(|i| bones.iter().any(|b| b.parent == Some(i))).collect();
+    let base = BasicSkeleton::from_bones(
+        bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| Bone {
+                name: b.name.clone(),
+                position: invert_gizmo(Vector3::new(b.position[0], b.position[1], b.position[2]), &params),
+                parent: b.parent,
+                is_leaf: !has_children[i],
+            })
+            .collect(),
+    );
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
+
+    *state.skeleton_preset.lock().unwrap() = Some(SkeletonType::Template(base.clone()));
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
+    Ok(data)
+}
+
 /// Pose como reposo: cada articulación pasa a estar donde la deja la pose
 /// (`positions`, en coordenadas del esqueleto visible). Los pesos se
 /// conservan: la piel queda ligada a los huesos en su lugar nuevo, así que la

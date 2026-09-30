@@ -51,6 +51,8 @@ pub fn run() {
             commands::list_skeleton_presets,
             commands::select_skeleton,
             commands::apply_rest_pose,
+            commands::set_skeleton_bones,
+            commands::write_text_file,
             commands::remove_object,
             project::save_project,
             project::new_project,
