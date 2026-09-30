@@ -1015,6 +1015,61 @@ export const App: Component = () => {
   // Grid visibility
   const [showGrid, setShowGrid] = createSignal(true);
 
+  // ─── Nodos del archivo (Outliner) ─────────────────────────────────────────
+
+  /** Nodos del archivo ocultos en el visor y el elegido (índices de `sceneStructure().nodes`) */
+  const [hiddenFileNodes, setHiddenFileNodes] = createSignal<number[]>([]);
+  const [selectedFileNode, setSelectedFileNode] = createSignal<number | undefined>();
+  /** El nodo y todo lo que cuelga de él */
+  const nodeSubtree = (index: number): number[] => {
+    const nodes = sceneStructure()?.nodes ?? [];
+    const out: number[] = [];
+    const stack = [index];
+    while (stack.length > 0) {
+      const n = stack.pop()!;
+      if (out.includes(n) || !nodes[n]) continue;
+      out.push(n);
+      stack.push(...nodes[n].children);
+    }
+    return out;
+  };
+  createEffect(() => viewer()?.setHiddenNodes(hiddenFileNodes().flatMap(nodeSubtree)));
+  // En Animar la malla se mueve con el rig y el resaltado quedaría quieto
+  createEffect(() => {
+    const node = selectedFileNode();
+    viewer()?.setHighlightedNodes(node === undefined || animating() ? [] : nodeSubtree(node));
+  });
+  // Otro archivo: los índices de nodo ya no son los mismos
+  createEffect(
+    on(fileName, () => {
+      setHiddenFileNodes([]);
+      setSelectedFileNode(undefined);
+    }, { defer: true })
+  );
+
+  const toggleFileNode = (index: number) =>
+    setHiddenFileNodes((list) => (list.includes(index) ? list.filter((n) => n !== index) : [...list, index]));
+
+  /** Borra la geometría del nodo (y de sus hijos): sale de la malla y de lo exportado */
+  const deleteFileNode = async (index: number) => {
+    const name = sceneStructure()?.nodes[index]?.name || `nodo ${index}`;
+    try {
+      await busy(`Borrando ${name}...`, () => invoke("remove_scene_node", { node: index }));
+      setMeshData(await fetchMeshData());
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+      return;
+    }
+    // La malla cambió: el rig y la retopología ya no le corresponden
+    if (quadMeshLoaded()) clearQuadMesh();
+    dropWeights(`Borraste ${name} del modelo`);
+    const removed = new Set(nodeSubtree(index));
+    setHiddenFileNodes((list) => list.filter((n) => !removed.has(n)));
+    if (selectedFileNode() !== undefined && removed.has(selectedFileNode()!)) setSelectedFileNode(undefined);
+    setStatusMessage(`${name} borrado del modelo (también de lo que se exporte)`);
+    history.milestone(`Borrar ${name}`);
+  };
+
   // Derived scene tree
   const sceneTree = () => buildSceneTree({
     hasMesh: meshLoaded(),
@@ -1031,6 +1086,8 @@ export const App: Component = () => {
     skeletonData: skeletonData(),
     selectedBone: viewSettings().selectedBone,
     structure: sceneStructure(),
+    hiddenNodes: new Set(hiddenFileNodes()),
+    selectedNode: selectedFileNode(),
   });
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
@@ -4593,6 +4650,10 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const handleToggleVisibility = (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      toggleFileNode(Number(nodeId.slice(5)));
+      return;
+    }
     switch (nodeId) {
       case "mesh":
         setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
@@ -4644,6 +4705,10 @@ export const App: Component = () => {
    * deshacer: queda como hito en el historial.
    */
   const handleDeleteNode = async (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      await deleteFileNode(Number(nodeId.slice(5)));
+      return;
+    }
     const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
     if (!["skeleton", "weights", "quadmesh"].includes(kind)) return;
     try {
@@ -5293,6 +5358,11 @@ export const App: Component = () => {
   };
 
   const handleSelectNode = (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      const index = Number(nodeId.slice(5));
+      setSelectedFileNode(selectedFileNode() === index ? undefined : index);
+      return;
+    }
     if (nodeId.startsWith("bone-")) {
       const index = parseInt(nodeId.replace("bone-", ""));
       setViewSettings((prev) => ({ ...prev, selectedBone: index }));
@@ -5380,6 +5450,10 @@ export const App: Component = () => {
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
               onPlacementPick={handlePlacementPick}
+              onNodePicked={(node) => {
+                setSelectedFileNode(node);
+                setStatusMessage(`Nodo del archivo: ${sceneStructure()?.nodes[node]?.name || `nodo ${node}`}`);
+              }}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               onBoneMoveCommitted={handleBoneMoveCommitted}
@@ -5558,6 +5632,25 @@ export const App: Component = () => {
             onSection={pipeline.setActiveStep}
             objectProps={{
               meshInfo: meshLoaded() ? meshInfo() : undefined,
+              node: (() => {
+                const index = selectedFileNode();
+                const node = index === undefined ? undefined : sceneStructure()?.nodes[index];
+                if (index === undefined || !node) return undefined;
+                const mesh = node.mesh !== null ? sceneStructure()?.meshes[node.mesh] : undefined;
+                return {
+                  name: node.name || `nodo ${index}`,
+                  hint: mesh ? `malla ${mesh.name || node.mesh}` : node.skin !== null ? "skin" : "nodo",
+                  translation: node.translation,
+                  rotation: node.rotation,
+                  scale: node.scale,
+                  hidden: hiddenFileNodes().includes(index),
+                };
+              })(),
+              onToggleNode: () => {
+                const index = selectedFileNode();
+                if (index !== undefined) toggleFileNode(index);
+              },
+              onDeselectNode: () => setSelectedFileNode(undefined),
               placement: {
                 mode: placementMode(),
                 onPickMode: handlePlacementMode,

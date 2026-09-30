@@ -26,12 +26,15 @@ export function decodeMesh(buffer: ArrayBuffer): MeshData {
   const quadIndices = quadCount > 0 ? uints(quadCount) : undefined;
   // Opcional al final: grupos por material, cantidad y [inicio, cantidad, material]
   let groups: Uint32Array | undefined;
+  let groupNodes: Uint32Array | undefined;
   if (offset + 4 <= buffer.byteLength) {
     const [count] = new Uint32Array(buffer, offset, 1);
     offset += 4;
     groups = uints(count * 3);
+    // Opcional después: el nodo del archivo de cada grupo
+    if (offset + count * 4 <= buffer.byteLength) groupNodes = uints(count);
   }
-  return { positions, normals, indices, uvs, quadIndices, groups };
+  return { positions, normals, indices, uvs, quadIndices, groups, groupNodes };
 }
 
 /** Pesos: cabecera u32 × 4 (vértices, huesos, influencias, bytes de nombres) */

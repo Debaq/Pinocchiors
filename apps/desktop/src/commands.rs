@@ -70,6 +70,9 @@ pub struct MeshData {
     /// Rangos de índices por material: `[inicio, cantidad, material]`
     /// (`u32::MAX` = sin material)
     pub groups: Vec<[u32; 3]>,
+    /// Nodo del archivo de cada grupo (`u32::MAX` = sin nodo), para el
+    /// Outliner: ocultar, resaltar y elegir por nodo
+    pub group_nodes: Vec<u32>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -98,10 +101,16 @@ fn pack_mesh(positions: &[f32], normals: &[f32], uvs: Option<&[f32]>, indices: &
 
 impl MeshData {
     /// [`pack_mesh`] y al final, si hay, los grupos por material: `u32`
-    /// cantidad y luego `[inicio, cantidad, material]` por grupo
+    /// cantidad y luego `[inicio, cantidad, material]` por grupo; después, si
+    /// hay, el nodo de cada grupo (`u32` por grupo)
     fn to_bytes(&self) -> Vec<u8> {
         let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
         append_groups(&mut out, &self.groups);
+        if !self.groups.is_empty() && self.group_nodes.len() == self.groups.len() {
+            for node in &self.group_nodes {
+                out.extend_from_slice(&node.to_le_bytes());
+            }
+        }
         out
     }
 }
@@ -624,10 +633,12 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut indices: Vec<u32> = Vec::new();
     let mut uvs: Vec<f32> = Vec::new();
     let mut groups: Vec<[u32; 3]> = Vec::new();
+    let mut group_nodes: Vec<u32> = Vec::new();
 
     for prim in &prims {
         let offset = (positions.len() / 3) as u32;
         groups.push([indices.len() as u32, (prim.triangles.len() * 3) as u32, prim.material.map_or(u32::MAX, |m| m as u32)]);
+        group_nodes.push(prim.node.map_or(u32::MAX, |n| n as u32));
         positions.extend(prim.positions.iter().flatten());
 
         match &prim.normals {
@@ -652,6 +663,7 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
         indices,
         uvs: if has_uvs { Some(uvs) } else { None },
         groups,
+        group_nodes,
     }
 }
 
@@ -1404,6 +1416,37 @@ pub fn remove_object(kind: String, state: State<'_, AppState>) -> Result<(), Str
         }
         other => return Err(format!("No se puede borrar: {other}")),
     }
+    Ok(())
+}
+
+/// Borra la geometría de un nodo del archivo y de lo que cuelga de él (desde
+/// el Outliner): sale de la malla unida y de la escena exportada. La
+/// jerarquía, los esqueletos y las animaciones quedan. El rig y la
+/// retopología ya no corresponden a la malla y se descartan.
+#[tauri::command]
+pub fn remove_scene_node(node: usize, state: State<'_, AppState>) -> Result<(), String> {
+    let mut scene_lock = state.scene.lock().unwrap();
+    let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+    if node >= scene.nodes.len() {
+        return Err(format!("Nodo fuera de rango: {node}"));
+    }
+    let mut next = scene.clone();
+    let mut visited = vec![false; next.nodes.len()];
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        if n >= visited.len() || visited[n] {
+            continue;
+        }
+        visited[n] = true;
+        next.nodes[n].mesh = None;
+        stack.extend(next.nodes[n].children.iter().copied());
+    }
+    let mesh = scene_to_pinocchio_mesh(&next).map_err(|_| "No se puede borrar: el modelo quedaría sin geometría".to_string())?;
+    *scene_lock = Some(next);
+    drop(scene_lock);
+    *state.mesh.lock().unwrap() = Some(mesh);
+    state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.geometry_changed();
     Ok(())
 }
 
@@ -4458,6 +4501,7 @@ mod tests {
             indices: vec![0, 1, 2],
             uvs: Some(vec![0.25; 6]),
             groups: vec![],
+            group_nodes: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);
@@ -4472,6 +4516,11 @@ mod tests {
         let grouped = MeshData { groups: vec![[0, 3, 2], [3, 0, u32::MAX]], ..data.clone() };
         let w = words(&grouped.to_bytes());
         assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX]);
+
+        // Y después el nodo de cada grupo
+        let with_nodes = MeshData { group_nodes: vec![5, u32::MAX], ..grouped.clone() };
+        let w = words(&with_nodes.to_bytes());
+        assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX]);
 
         let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
         let w = words(&quads);

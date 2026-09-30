@@ -32,6 +32,8 @@ export interface MeshData {
   quadIndices?: Uint32Array;
   /** Rangos de índices por material: [inicio, cantidad, material] (0xffffffff = sin material) */
   groups?: Uint32Array;
+  /** Nodo del archivo de cada grupo (0xffffffff = sin nodo) */
+  groupNodes?: Uint32Array;
 }
 
 /** Material del archivo de origen, con sus texturas ya decodificadas */
@@ -190,6 +192,8 @@ export type PlacementPick =
   | { kind: "surface"; point: [number, number, number]; normal: [number, number, number] };
 
 export interface ViewerCallbacks {
+  /** Doble clic sobre la malla: el nodo del archivo de ese triángulo */
+  onNodePicked?: (node: number) => void;
   onWeightsPainted?: (stroke: PaintStroke) => void;
   /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
@@ -795,6 +799,7 @@ export class Viewer3D {
     // Mouse events for ground selection
     this.canvas.addEventListener("click", (e) => this.onCanvasClick(e), { signal });
     this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e), { signal });
+    this.canvas.addEventListener("dblclick", (e) => this.onCanvasDoubleClick(e), { signal });
 
     // Navegación como Blender: antes que OrbitControls (fase de captura),
     // se decide qué hace cada botón según los modificadores
@@ -1822,14 +1827,18 @@ export class Viewer3D {
     this.applySettings();
     this.buildRig();
     this.attachGizmo();
+    this.updateNodeHighlight();
   }
 
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
   setTextures(textures: MeshTextures): void {
     this.textures = textures;
     // Con los materiales del archivo de origen la piel del paso UV no aplica
-    if (this.currentMesh && !Array.isArray(this.currentMesh.material)) {
-      this.applyTextures(this.currentMesh.material as THREE.MeshStandardMaterial, this.currentMesh.geometry);
+    // (sí con el neutro, aunque haya nodos ocultos)
+    const material = this.currentMesh?.material;
+    const neutral = Array.isArray(material) ? (material[0]?.userData.neutral ? material[0] : undefined) : material;
+    if (this.currentMesh && neutral) {
+      this.applyTextures(neutral as THREE.MeshStandardMaterial, this.currentMesh.geometry);
     }
   }
 
@@ -1899,18 +1908,30 @@ export class Viewer3D {
    */
   private buildMaterial(geometry: THREE.BufferGeometry): THREE.Material | THREE.Material[] {
     const groups = this.meshData?.groups;
+    const nodes = this.meshData?.groupNodes;
     geometry.clearGroups();
+    // Con nodos ocultos, sus grupos van a un material invisible (el último)
+    const hiding = !!groups && !!nodes && this.hiddenNodes.size > 0;
+    const hidden = (g: number) => hiding && this.hiddenNodes.has(nodes![g / 3]);
+    const invisible = () => {
+      const m = new THREE.MeshBasicMaterial();
+      m.visible = false;
+      return m;
+    };
     if (this.settings.showTextures !== false && groups && groups.length >= 3 && this.sceneMaterials.length > 0) {
       const fallback = this.sceneMaterials.length;
       for (let g = 0; g + 2 < groups.length; g += 3) {
-        geometry.addGroup(groups[g], groups[g + 1], groups[g + 2] < fallback ? groups[g + 2] : fallback);
+        geometry.addGroup(groups[g], groups[g + 1], hidden(g) ? fallback + 1 : groups[g + 2] < fallback ? groups[g + 2] : fallback);
       }
       const hasUv = geometry.getAttribute("uv") !== undefined;
-      return [...this.sceneMaterials.map((m) => this.threeMaterial(m, hasUv)), this.defaultMaterial()];
+      return [...this.sceneMaterials.map((m) => this.threeMaterial(m, hasUv)), this.defaultMaterial(), ...(hiding ? [invisible()] : [])];
     }
     const material = this.defaultMaterial();
     this.applyTextures(material, geometry);
-    return material;
+    if (!hiding) return material;
+    for (let g = 0; g + 2 < groups!.length; g += 3) geometry.addGroup(groups![g], groups![g + 1], hidden(g) ? 1 : 0);
+    material.userData.neutral = true;
+    return [material, invisible()];
   }
 
   /** Textura compartida de una imagen (convención glTF: sin voltear) */
@@ -4128,6 +4149,12 @@ export class Viewer3D {
   }
 
   private clearMesh(): void {
+    if (this.nodeHighlight) {
+      this.meshGroup.remove(this.nodeHighlight);
+      this.nodeHighlight.geometry.dispose();
+      (this.nodeHighlight.material as THREE.Material).dispose();
+      this.nodeHighlight = null;
+    }
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
       this.currentMesh.geometry.dispose();
@@ -4228,6 +4255,94 @@ export class Viewer3D {
       point: [hit.point.x, hit.point.y, hit.point.z],
       normal: [normal.x, normal.y, normal.z],
     });
+  }
+
+  /** Doble clic sobre la malla (no sobre una articulación): elige el nodo del archivo */
+  private onCanvasDoubleClick(event: MouseEvent): void {
+    const mesh = this.currentMesh;
+    if (!this.callbacks.onNodePicked || !mesh?.visible || !this.meshData?.groupNodes || this.placementMode) return;
+    this.mouse = this.getMousePosition(event);
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    if (this.boneSpheres.some((s) => s.visible) && this.raycaster.intersectObjects(this.boneSpheres.filter((s) => s.visible))[0]) return;
+    const hit = this.raycaster.intersectObject(mesh)[0];
+    if (hit?.faceIndex === undefined || hit.faceIndex === null) return;
+    const node = this.nodeOfFace(hit.faceIndex);
+    if (node !== null) this.callbacks.onNodePicked(node);
+  }
+
+  /** Nodo del archivo del triángulo `face` de la malla (o `null`) */
+  private nodeOfFace(face: number): number | null {
+    const groups = this.meshData?.groups;
+    const nodes = this.meshData?.groupNodes;
+    if (!groups || !nodes) return null;
+    const index = face * 3;
+    for (let g = 0; g * 3 + 2 < groups.length; g++) {
+      if (index >= groups[g * 3] && index < groups[g * 3] + groups[g * 3 + 1]) return nodes[g] === 0xffffffff ? null : nodes[g];
+    }
+    return null;
+  }
+
+  // ─── Nodos del archivo (Outliner) ─────────────────────────────────────────
+
+  /** Nodos ocultos: sus triángulos no se dibujan */
+  private hiddenNodes = new Set<number>();
+  /** Nodos resaltados (el elegido en el Outliner y lo que cuelga de él) */
+  private highlightedNodes = new Set<number>();
+  private nodeHighlight: THREE.Mesh | null = null;
+
+  setHiddenNodes(nodes: number[]): void {
+    const next = new Set(nodes);
+    if (next.size === this.hiddenNodes.size && [...next].every((n) => this.hiddenNodes.has(n))) return;
+    this.hiddenNodes = next;
+    this.refreshMeshMaterial();
+  }
+
+  setHighlightedNodes(nodes: number[]): void {
+    this.highlightedNodes = new Set(nodes);
+    this.updateNodeHighlight();
+  }
+
+  /** Capa translúcida sobre los triángulos de los nodos resaltados */
+  private updateNodeHighlight(): void {
+    if (this.nodeHighlight) {
+      this.meshGroup.remove(this.nodeHighlight);
+      this.nodeHighlight.geometry.dispose();
+      (this.nodeHighlight.material as THREE.Material).dispose();
+      this.nodeHighlight = null;
+    }
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    if (!data?.groups || !data.groupNodes || !mesh || this.highlightedNodes.size === 0) return;
+    const ranges: [number, number][] = [];
+    let total = 0;
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      if (!this.highlightedNodes.has(data.groupNodes[g]) || this.hiddenNodes.has(data.groupNodes[g])) continue;
+      ranges.push([data.groups[g * 3], data.groups[g * 3 + 1]]);
+      total += data.groups[g * 3 + 1];
+    }
+    if (total === 0) return;
+    const index = new Uint32Array(total);
+    let at = 0;
+    for (const [start, count] of ranges) {
+      index.set(data.indices.subarray(start, start + count), at);
+      at += count;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+    geometry.setIndex(new THREE.BufferAttribute(index, 1));
+    const material = new THREE.MeshBasicMaterial({
+      color: themeHex("accent"),
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    this.nodeHighlight = new THREE.Mesh(geometry, material);
+    this.nodeHighlight.renderOrder = 1;
+    this.meshGroup.add(this.nodeHighlight);
   }
 
   /** Resalta el plano candidato bajo el cursor */
