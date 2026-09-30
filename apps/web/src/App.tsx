@@ -94,6 +94,7 @@ import {
 import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
 import { CaptureDialog } from "./components/layout/CaptureDialog";
 import type { CaptureMotion } from "./lib/capture";
+import { ragdollClip } from "./lib/ragdoll";
 import type { NodeTransform } from "./components/panels/ObjectTab";
 
 /** Edición de un nodo del archivo desde el Outliner (el backend guarda lo anterior para deshacer) */
@@ -3686,6 +3687,21 @@ export const App: Component = () => {
     />
   );
 
+  /** Ragdoll desde la pose del cuadro actual: un clip nuevo con la caída */
+  const handleRagdoll = async (seconds: number) => {
+    const ctx = rigCtx();
+    if (ctx.bones.length < 2) return;
+    const clip = activeClip();
+    const f = Math.round(frame());
+    const pose = clip ? evaluatePose(clip, f, ctx) : (viewer()?.getPose() ?? evaluatePose(undefined, 0, ctx));
+    const previous = clip && f > clip.start ? evaluatePose(clip, f - 1, ctx) : null;
+    const baked = ragdollClip(ctx, pose, previous, { seconds, fps: clip?.fps ?? 24, name: `Ragdoll ${clips().length + 1}` });
+    const before = clips();
+    await history.execute("Ragdoll", { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
+    setFrame(baked.start);
+    setStatusMessage(`Caída horneada en «${baked.name}» (${seconds} s)`);
+  };
+
   const posePanel = (
     <PosePanel
       posing={animating()}
@@ -3700,6 +3716,7 @@ export const App: Component = () => {
       canPaste={canPaste()}
       onBreakdown={handleBreakdown}
       onPushRelax={handlePushRelax}
+      onRagdoll={(seconds) => void handleRagdoll(seconds)}
     />
   );
 
