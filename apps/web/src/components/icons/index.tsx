@@ -493,3 +493,15 @@ export const SelectBrush = (props: IconProps) => (
     <circle cx="128" cy="128" r="16" />
   </Icon>
 );
+
+/** Cuerda: polígono de tramos rectos con sus vértices */
+export const SelectionPolygon = (props: IconProps) => (
+  <Icon {...props}>
+    <polygon points="40,184 72,56 168,40 216,136 128,216" fill="none" stroke="currentColor" stroke-width="14" stroke-dasharray="24 16" stroke-linejoin="round" />
+    <circle cx="40" cy="184" r="16" />
+    <circle cx="72" cy="56" r="16" />
+    <circle cx="168" cy="40" r="16" />
+    <circle cx="216" cy="136" r="16" />
+    <circle cx="128" cy="216" r="16" />
+  </Icon>
+);

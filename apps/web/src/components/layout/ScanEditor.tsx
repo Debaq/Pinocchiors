@@ -138,6 +138,7 @@ const TABS: { id: ScanEditorTab; label: string; title: string }[] = [
 const SELECT_TOOLS: { id: CloudSelectTool; label: string; icon: Component<{ size?: number }> }[] = [
   { id: "rect", label: "Rectángulo", icon: Icons.SelectionRect },
   { id: "lasso", label: "Lazo", icon: Icons.Lasso },
+  { id: "polygon", label: "Cuerda", icon: Icons.SelectionPolygon },
   { id: "brush", label: "Pincel", icon: Icons.SelectBrush },
 ];
 
@@ -711,8 +712,11 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               />
             </Show>
             <Hint>
-              Arrastra con el botón izquierdo sobre el visor. Shift suma, Ctrl resta. La vista se gira con el botón central
-              o Alt + izquierdo. La selección atraviesa la nube: gira la vista para no tomar la cara de atrás.
+              {cloud().tool() === "polygon"
+                ? "Clic a clic marca los vértices de la cuerda; se cierra con clic en el primer punto, doble clic o Enter. Retroceso quita el último punto y Esc cancela. "
+                : "Arrastra con el botón izquierdo sobre el visor. "}
+              Shift suma, Ctrl resta. La vista se gira con el botón central o Alt + izquierdo. La selección atraviesa la
+              nube: gira la vista para no tomar la cara de atrás.
             </Hint>
             <Row label="Seleccionados">{cloud().selected().toLocaleString()}</Row>
             <div class="flex gap-1">

@@ -412,7 +412,8 @@ export interface PointCloudData {
 }
 
 /** Herramienta de selección sobre la nube */
-export type CloudSelectTool = "rect" | "lasso" | "brush";
+/** "polygon": cuerda, clic a clic con tramos rectos */
+export type CloudSelectTool = "rect" | "lasso" | "polygon" | "brush";
 
 export interface MeshTextures {
   base?: ImageBitmap;
@@ -594,6 +595,13 @@ export class Viewer3D {
     mode: "set" | "add" | "remove";
     path: [number, number][];
     screen: Float32Array;
+  } | null = null;
+  /** Cuerda en curso: vértices en px del lienzo, cursor y último clic */
+  private cloudPolygon: {
+    mode: "set" | "add" | "remove";
+    points: [number, number][];
+    cursor: [number, number] | null;
+    lastClick: number;
   } | null = null;
   private cloudOverlay: SVGSVGElement | null = null;
   private cloudListener: ((count: number) => void) | null = null;
@@ -872,6 +880,8 @@ export class Viewer3D {
       if (this.modal?.release) this.confirmModal();
     }, { signal });
 
+    // Cuerda en curso: Enter cierra, Esc cancela, Retroceso quita el último punto
+    window.addEventListener("keydown", (e) => this.onPolygonKey(e), { capture: true, signal });
     // Teclas mientras hay una operación modal (G, R, F…): antes que los atajos
     window.addEventListener("keydown", (e) => this.onModalKey(e), { capture: true, signal });
     window.addEventListener("keydown", (e) => {
@@ -3171,6 +3181,7 @@ export class Viewer3D {
     const had = this.cloudTool !== null;
     this.cloudTool = tool;
     this.cloudDrag = null;
+    this.cloudPolygon = null;
     this.drawCloudOverlay(null);
     if (tool) this.canvas.style.cursor = "crosshair";
     else if (had) this.canvas.style.cursor = "default";
@@ -3300,6 +3311,10 @@ export class Viewer3D {
 
   private onCloudDown(e: PointerEvent): void {
     const mode = e.ctrlKey || e.metaKey ? "remove" : e.shiftKey ? "add" : this.cloudTool === "brush" ? "add" : "set";
+    if (this.cloudTool === "polygon") {
+      this.onPolygonClick(this.canvasPoint(e), mode);
+      return;
+    }
     this.cloudDrag = { mode, path: [this.canvasPoint(e)], screen: this.projectCloud() };
     if (this.cloudTool === "brush") this.brushCloud(this.cloudDrag.path[0], this.cloudDrag.path[0]);
     this.drawCloudOverlay(this.cloudDrag.path);
@@ -3308,6 +3323,11 @@ export class Viewer3D {
   private onCloudMove(e: PointerEvent): void {
     if (!this.cloudTool || !this.cloud) return;
     const p = this.canvasPoint(e);
+    if (this.cloudPolygon) {
+      this.cloudPolygon.cursor = e.target === this.canvas ? p : null;
+      this.drawPolygonOverlay();
+      return;
+    }
     const drag = this.cloudDrag;
     if (!drag) {
       // Cursor del pincel
@@ -3325,22 +3345,98 @@ export class Viewer3D {
 
   private onCloudUp(): void {
     const drag = this.cloudDrag;
-    const cloud = this.cloud;
     if (!drag) return;
     this.cloudDrag = null;
-    if (cloud && this.cloudTool !== "brush") {
-      const inside = this.cloudTool === "rect" ? this.rectTest(drag.path) : this.lassoTest(drag.path);
-      const s = drag.screen;
-      for (let i = 0; i < cloud.count; i++) {
-        const hit = inside(s[i * 2], s[i * 2 + 1]);
-        if (drag.mode === "set") cloud.selected[i] = hit ? 1 : 0;
-        else if (hit) cloud.selected[i] = drag.mode === "add" ? 1 : 0;
-      }
-      this.recolorCloud();
+    if (this.cloudTool !== "brush") {
+      this.applyCloudRegion(drag.mode, this.cloudTool === "rect" ? this.rectTest(drag.path) : this.lassoTest(drag.path), drag.screen);
     }
     this.drawCloudOverlay(null);
     this.notifyCloudSelection();
     this.requestRender();
+  }
+
+  /** Aplica a la selección los puntos que caen dentro de una región de la pantalla */
+  private applyCloudRegion(mode: "set" | "add" | "remove", inside: (x: number, y: number) => boolean, screen: Float32Array): void {
+    const cloud = this.cloud;
+    if (!cloud) return;
+    for (let i = 0; i < cloud.count; i++) {
+      const hit = inside(screen[i * 2], screen[i * 2 + 1]);
+      if (mode === "set") cloud.selected[i] = hit ? 1 : 0;
+      else if (hit) cloud.selected[i] = mode === "add" ? 1 : 0;
+    }
+    this.recolorCloud();
+  }
+
+  /**
+   * Cuerda: cada clic agrega un vértice unido al anterior por un tramo recto.
+   * Se cierra con clic sobre el primer punto, doble clic o Enter. El modo
+   * (reemplazar, sumar con Shift, restar con Ctrl) lo fija el primer clic
+   */
+  private onPolygonClick(p: [number, number], mode: "set" | "add" | "remove"): void {
+    const now = performance.now();
+    const poly = this.cloudPolygon;
+    if (!poly) {
+      this.cloudPolygon = { mode, points: [p], cursor: p, lastClick: now };
+      this.drawPolygonOverlay();
+      return;
+    }
+    const first = poly.points[0];
+    const last = poly.points[poly.points.length - 1];
+    const closeToFirst = poly.points.length >= 3 && Math.hypot(p[0] - first[0], p[1] - first[1]) <= 8;
+    const doubleClick = now - poly.lastClick < 350 && Math.hypot(p[0] - last[0], p[1] - last[1]) <= 6;
+    if (closeToFirst || doubleClick) {
+      this.finishPolygon();
+      return;
+    }
+    poly.points.push(p);
+    poly.lastClick = now;
+    this.drawPolygonOverlay();
+  }
+
+  /** Cierra la cuerda y selecciona lo que queda adentro */
+  private finishPolygon(): void {
+    const poly = this.cloudPolygon;
+    this.cloudPolygon = null;
+    this.drawCloudOverlay(null);
+    if (!poly || poly.points.length < 3 || !this.cloud) return;
+    // Se proyecta al cerrar: la vista pudo girar mientras se marcaban los puntos
+    this.applyCloudRegion(poly.mode, this.lassoTest(poly.points), this.projectCloud());
+    this.notifyCloudSelection();
+  }
+
+  private onPolygonKey(e: KeyboardEvent): void {
+    const poly = this.cloudPolygon;
+    if (!poly) return;
+    if (e.key === "Enter") this.finishPolygon();
+    else if (e.key === "Escape") {
+      this.cloudPolygon = null;
+      this.drawCloudOverlay(null);
+    } else if (e.key === "Backspace") {
+      poly.points.pop();
+      if (poly.points.length === 0) this.cloudPolygon = null;
+      this.drawPolygonOverlay();
+    } else return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    this.requestRender();
+  }
+
+  /** Dibuja la cuerda: tramos fijos, tramo hacia el cursor y los vértices */
+  private drawPolygonOverlay(): void {
+    const poly = this.cloudPolygon;
+    if (!poly) {
+      this.drawCloudOverlay(null);
+      return;
+    }
+    const pts = poly.cursor ? [...poly.points, poly.cursor] : poly.points;
+    this.drawCloudOverlay(pts);
+    if (!this.cloudOverlay) return;
+    const first = poly.points[0];
+    const near = poly.cursor && poly.points.length >= 3 && Math.hypot(poly.cursor[0] - first[0], poly.cursor[1] - first[1]) <= 8;
+    const dots = poly.points
+      .map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="${i === 0 && near ? 6 : 3}" fill="${i === 0 ? "#ff5555" : "#fff"}" stroke="#ff5555" stroke-width="1.5" />`)
+      .join("");
+    this.cloudOverlay.innerHTML += dots;
   }
 
   private rectTest(path: [number, number][]): (x: number, y: number) => boolean {
@@ -3420,7 +3516,7 @@ export class Viewer3D {
     } else if (tool === "rect") {
       const [a, b] = [path[0], path[path.length - 1]];
       shape = `<rect x="${Math.min(a[0], b[0])}" y="${Math.min(a[1], b[1])}" width="${Math.abs(b[0] - a[0])}" height="${Math.abs(b[1] - a[1])}" ${style} />`;
-    } else if (tool === "lasso") {
+    } else if (tool === "lasso" || tool === "polygon") {
       shape = `<polygon points="${path.map(([x, y]) => `${x},${y}`).join(" ")}" ${style} />`;
     }
     this.cloudOverlay.innerHTML = shape;
