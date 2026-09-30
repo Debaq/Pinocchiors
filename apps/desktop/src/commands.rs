@@ -1410,7 +1410,7 @@ pub fn remove_object(kind: String, state: State<'_, AppState>) -> Result<(), Str
 /// Forma de cuerpo + apéndices (ver `pinocchio_skeleton::BodyPlan`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BodyPlanDto {
-    /// "biped", "digitigrade", "quadruped", "radial", "fish", "arthropod", "serpent"
+    /// "biped", "digitigrade", "quadruped", "radial", "fish", "arthropod", "serpent", "tree"
     pub shape: String,
     pub neck: usize,
     pub tail: usize,
@@ -1422,9 +1422,26 @@ pub struct BodyPlanDto {
     pub fins: bool,
     pub pincers: bool,
     pub antennae: usize,
+    // Los que siguen no estaban al principio: los proyectos viejos no los traen
+    #[serde(default)]
+    pub horns: usize,
+    #[serde(default)]
+    pub jaw: bool,
+    #[serde(default)]
+    pub tusks: usize,
+    #[serde(default)]
+    pub tentacles: usize,
+    #[serde(default)]
+    pub flukes: bool,
+    #[serde(default = "default_leg_length")]
+    pub leg_length: f64,
 }
 
-const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 7] = [
+fn default_leg_length() -> f64 {
+    1.0
+}
+
+const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 8] = [
     ("biped", pinocchio_skeleton::BodyShape::Biped),
     ("digitigrade", pinocchio_skeleton::BodyShape::DigitigradeBiped),
     ("quadruped", pinocchio_skeleton::BodyShape::Quadruped),
@@ -1432,6 +1449,7 @@ const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 7] = [
     ("fish", pinocchio_skeleton::BodyShape::Fish),
     ("arthropod", pinocchio_skeleton::BodyShape::Arthropod),
     ("serpent", pinocchio_skeleton::BodyShape::Serpent),
+    ("tree", pinocchio_skeleton::BodyShape::Tree),
 ];
 
 impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
@@ -1449,6 +1467,12 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             fins: p.fins,
             pincers: p.pincers,
             antennae: p.antennae,
+            horns: p.horns,
+            jaw: p.jaw,
+            tusks: p.tusks,
+            tentacles: p.tentacles,
+            flukes: p.flukes,
+            leg_length: p.leg_length,
         }
     }
 }
@@ -1474,6 +1498,12 @@ impl BodyPlanDto {
             fins: self.fins,
             pincers: self.pincers,
             antennae: clamp(self.antennae, 6),
+            horns: clamp(self.horns, 6),
+            jaw: self.jaw,
+            tusks: clamp(self.tusks, 6),
+            tentacles: clamp(self.tentacles, 3),
+            flukes: self.flukes,
+            leg_length: if self.leg_length.is_finite() { self.leg_length.clamp(0.5, 2.0) } else { 1.0 },
         })
     }
 }

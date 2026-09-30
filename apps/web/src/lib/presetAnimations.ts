@@ -147,8 +147,8 @@ function kindByName(name: string): ChainKind | undefined {
   if (/(^|[_.])ear/.test(n)) return "ear";
   if (/antenna/.test(n)) return "antenna";
   if (/pincer|pedipalp|claw/.test(n)) return "pincer";
-  if (/dorsal/.test(n)) return "other";
-  if (/pectoral|fin/.test(n)) return "fin";
+  if (/dorsal|horn|tusk|antler/.test(n)) return "other";
+  if (/pectoral|fin|fluke/.test(n)) return "fin";
   if (/tail|vertebra/.test(n)) return "tail";
   if (/head|neck|skull|sensor|jaw/.test(n)) return "head";
   if (/^arm\d|tentacle/.test(n)) return "tentacle";
