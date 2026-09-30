@@ -91,6 +91,9 @@ import {
   type GridSettings,
   type LengthUnit,
 } from "./components/layout/SettingsDialog";
+import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
+import { bvhMotion, parseBvh } from "./lib/bvh";
+import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 
 interface ProjectSaved {
@@ -4845,6 +4848,93 @@ export const App: Component = () => {
     }
   };
 
+  // ─── Importar animación (BVH) y retargeting ──────────────────────────────
+
+  /** Mapeos guardados por esqueleto de origen: nombre del modelo → nombre del origen */
+  const [retargetTemplates, setRetargetTemplates] = createPersisted<Record<string, Record<string, string>>>("retarget.templates", {});
+  const [retargeting, setRetargeting] = createSignal<(RetargetRequest & { motion: SourceMotion }) | undefined>();
+  const sourceSignature = (bones: { name: string }[]) => bones.map((b) => b.name).join("|");
+
+  /** Elige un archivo con el diálogo del webview y devuelve su texto */
+  const pickTextFile = (accept: string) =>
+    new Promise<{ name: string; text: string } | null>((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = accept;
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        resolve(file ? { name: file.name, text: await file.text() } : null);
+      };
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+
+  const handleImportBvh = async () => {
+    const bones = rigBones();
+    if (bones.length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones");
+      return;
+    }
+    const picked = await pickTextFile(".bvh");
+    if (!picked) return;
+    let motion: SourceMotion;
+    try {
+      motion = bvhMotion(parseBvh(picked.text));
+    } catch (e) {
+      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+      return;
+    }
+    // Una plantilla guardada para este mismo esqueleto de origen manda sobre el automático
+    const saved = retargetTemplates()[sourceSignature(motion.bones)];
+    let map: RetargetMap;
+    if (saved) {
+      const sourceIndex = new Map(motion.bones.map((b, i) => [b.name, i]));
+      map = new Map(
+        bones.flatMap((b, j) => {
+          const k = saved[b.name] === undefined ? undefined : sourceIndex.get(saved[b.name]);
+          return k === undefined ? [] : [[j, k] as [number, number]];
+        })
+      );
+    } else {
+      map = autoMap(bones, motion.bones);
+    }
+    setRetargeting({
+      sourceName: picked.name,
+      source: motion.bones,
+      target: bones,
+      map,
+      frames: motion.positions.length,
+      fps: motion.fps,
+      fromTemplate: !!saved,
+      motion,
+    });
+  };
+
+  const confirmRetarget = async (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean }) => {
+    const request = retargeting();
+    setRetargeting(undefined);
+    if (!request) return;
+    if (result.saveTemplate) {
+      const byName: Record<string, string> = {};
+      for (const [j, k] of result.map) byName[request.target[j].name] = request.source[k].name;
+      setRetargetTemplates({ ...retargetTemplates(), [sourceSignature(request.source)]: byName });
+    }
+    try {
+      const clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name });
+      const before = clips();
+      await history.execute(`Importar animación: ${clip.name}`, {
+        kind: "clips",
+        data: { before, after: [...before, clip], activeBefore: activeClipId(), activeAfter: clip.id },
+      });
+      setFrame(clip.start);
+      pipeline.setActiveStep("animate");
+      setStatusMessage(`Animación importada: ${clip.name} (${clip.end - clip.start + 1} cuadros, ${clip.tracks.length} articulaciones)`);
+    } catch (e) {
+      console.error("Retarget error:", e);
+      setStatusMessage(`No se pudo pasar la animación al esqueleto: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   const fileMenuItems = (): MenuEntry[] => [
     { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
@@ -4852,6 +4942,7 @@ export const App: Component = () => {
     { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
+    { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
     { label: "Exportar…", disabled: !hasWork(), onSelect: () => pipeline.setActiveStep("export") },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
@@ -5432,6 +5523,10 @@ export const App: Component = () => {
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}
         />
+      </Show>
+
+      <Show when={retargeting()}>
+        {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
       </Show>
 
       <Show when={confirmation()}>
