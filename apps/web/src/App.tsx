@@ -812,7 +812,13 @@ export const App: Component = () => {
   // Avisos del seguimiento del archivo editado afuera
   const unlistenTexture = [
     listen("texture-updated", async () => {
-      await reloadTextures();
+      try {
+        await reloadTextures();
+      } catch (e) {
+        console.error("Texture reload error:", e);
+        setStatusMessage(`No se pudo recargar la textura desde GIMP: ${e}`);
+        return;
+      }
       const time = new Date().toLocaleTimeString();
       setExternalEdit((prev) => prev && { ...prev, lastUpdate: time });
       setStatusMessage(`Textura recargada desde GIMP (${time})`);
@@ -837,7 +843,13 @@ export const App: Component = () => {
 
   const handleUvPreview = async (preview: UvPreview) => {
     if (preview === "checker" && !checkerTexture()) {
-      setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
+      try {
+        setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
+      } catch (e) {
+        console.error("Checker texture error:", e);
+        setStatusMessage(`No se pudo generar el tablero de UV: ${e}`);
+        return;
+      }
     }
     setUvPreview(preview);
     setShowQuadMesh(true);
@@ -3436,7 +3448,15 @@ export const App: Component = () => {
       return;
     }
     let com: THREE.Vector3 | undefined;
-    if (mode === "mass") com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
+    if (mode === "mass") {
+      try {
+        com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
+      } catch (e) {
+        console.error("Center of mass error:", e);
+        setStatusMessage(`No se pudo calcular el centro de masa: ${e}`);
+        return;
+      }
+    }
     await applyPlacement(originMatrix(data.positions, mode, com), `Origen en el ${ORIGIN_LABELS[mode]}`);
   };
 
