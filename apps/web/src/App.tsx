@@ -1,6 +1,7 @@
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { Header, StatusBar, Viewport, ViewportHeader, Toolbar, ProgressOverlay, Timeline, type TimelineRow } from "./components/layout";
 import type { OnionSettings, TimelineMode, TimelineTool } from "./components/layout/Timeline";
@@ -1107,6 +1108,7 @@ export const App: Component = () => {
       });
 
       if (!selected) return;
+      if (meshLoaded() && !(await confirmDiscard("Importar modelo", "El modelo nuevo reemplaza al abierto.", "Reemplazar"))) return;
 
       const filePath = typeof selected === "string" ? selected : selected[0];
       const name = filePath.split("/").pop() ?? filePath;
@@ -1127,15 +1129,7 @@ export const App: Component = () => {
 
   /** Modelo del escáner (Orizon3D): reemplaza al abierto */
   const handleScanModel = async (settings: ScanMeshSettings) => {
-    if (meshLoaded()) {
-      const ok = await confirmAction({
-        title: "Crear modelo del escáner",
-        message: "El modelo del escáner reemplaza al abierto.",
-        confirmLabel: "Reemplazar",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    if (meshLoaded() && !(await confirmDiscard("Crear modelo del escáner", "El modelo del escáner reemplaza al abierto.", "Reemplazar"))) return;
     setIsProcessing(true);
     try {
       const info = await busy("Creando el modelo del escáner...", () =>
@@ -4179,6 +4173,21 @@ export const App: Component = () => {
     setConfirmation(undefined);
     pending?.resolve(ok);
   };
+
+  /** Hay trabajo que se perdería: sin archivo propio, o con cambios desde que se guardó o abrió */
+  const hasUnsavedWork = async () => {
+    if (!hasWork()) return false;
+    if (!projectPath()) return true;
+    try {
+      return await invoke<boolean>("project_changed", { ui: projectUi() });
+    } catch {
+      return true;
+    }
+  };
+
+  /** Pregunta antes de descartar el trabajo actual, solo si hay algo sin guardar */
+  const confirmDiscard = async (title: string, message: string, confirmLabel: string) =>
+    !(await hasUnsavedWork()) || confirmAction({ title, message: `${message} Hay cambios sin guardar: se pierden.`, confirmLabel, danger: true });
   const [gridSettings, setGridSettings] = createPersisted<GridSettings>("settings.grid", { unit: "auto", modelUnit: "auto" });
   const [themeSetting, setThemeSetting] = createPersisted<ThemeSetting>("settings.theme", "dark");
   createEffect(() => applyTheme(themeSetting()));
@@ -4373,6 +4382,8 @@ export const App: Component = () => {
       );
       setProjectPath(path);
       setStatusMessage(`Proyecto guardado: ${baseName(path!)} (${(saved.bytes / 1e6).toFixed(1)} MB)`);
+      // Lo guardado ya está a salvo: la recuperación vieja no debe ofrecerse al abrir la app
+      invoke("clear_recovery").catch(() => {});
     } catch (e) {
       console.error("Save project error:", e);
       setStatusMessage(`Error al guardar: ${e}`);
@@ -4381,15 +4392,7 @@ export const App: Component = () => {
 
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
   const handleOpenProject = async (path?: string, recovered = false) => {
-    if (hasWork()) {
-      const ok = await confirmAction({
-        title: "Abrir proyecto",
-        message: "Lo que no esté guardado del trabajo actual se pierde.",
-        confirmLabel: "Abrir otro proyecto",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    if (!(await confirmDiscard("Abrir proyecto", "Se cierra el trabajo actual.", "Abrir otro proyecto"))) return;
     if (!path) {
       const chosen = await open({
         title: "Abrir proyecto",
@@ -4414,15 +4417,12 @@ export const App: Component = () => {
   /** Empieza de cero: sin modelo, esqueleto, animaciones ni historial */
   const handleNewProject = async () => {
     if (isProcessing()) return setStatusMessage("Hay un proceso en curso: espera a que termine");
-    if (hasWork()) {
-      const ok = await confirmAction({
-        title: "Proyecto nuevo",
-        message: "Se cierran el modelo, el esqueleto, las animaciones y el historial. Lo que no esté guardado se pierde.",
-        confirmLabel: "Empezar de cero",
-        danger: true,
-      });
-      if (!ok) return;
-    }
+    const discard = await confirmDiscard(
+      "Proyecto nuevo",
+      "Se cierran el modelo, el esqueleto, las animaciones y el historial.",
+      "Empezar de cero"
+    );
+    if (!discard) return;
     try {
       await invoke("new_project");
       clearSkeletonUi();
@@ -4482,21 +4482,26 @@ export const App: Component = () => {
     { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
   ];
 
-  // Guardado automático: al archivo del proyecto, o al de recuperación si aún no tiene
+  // Guardado automático: al archivo del proyecto, o al de recuperación si aún
+  // no tiene. Apagado, igual se deja una copia de recuperación cada 5 minutos
+  // por si la app se cierra mal (se borra al guardar o al cerrar sin cambios)
+  const RECOVERY_MINUTES = 5;
   let lastAutosave = Date.now();
   let autosaving = false;
   const autosaveTimer = setInterval(async () => {
     const settings = autosave();
-    if (!settings.enabled || autosaving || !hasWork() || isProcessing() || progress()) return;
-    if (Date.now() - lastAutosave < settings.minutes * 60_000) return;
+    if (autosaving || !hasWork() || isProcessing() || progress()) return;
+    const minutes = settings.enabled ? settings.minutes : RECOVERY_MINUTES;
+    if (Date.now() - lastAutosave < minutes * 60_000) return;
     autosaving = true;
     lastAutosave = Date.now();
     try {
-      const path = projectPath() ?? (await invoke<string>("recovery_project_path"));
+      const toProject = settings.enabled && projectPath();
+      const path = toProject ? projectPath()! : await invoke<string>("recovery_project_path");
       const saved = await invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: true });
-      if (saved.written) {
+      if (saved.written && settings.enabled) {
         const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        setStatusMessage(`Guardado automático ${projectPath() ? "" : "(recuperación) "}a las ${time}`);
+        setStatusMessage(`Guardado automático ${toProject ? "" : "(recuperación) "}a las ${time}`);
       }
     } catch (e) {
       console.error("Autosave error:", e);
@@ -4505,6 +4510,30 @@ export const App: Component = () => {
     }
   }, 15_000);
   onCleanup(() => clearInterval(autosaveTimer));
+
+  // Cerrar la ventana con cambios sin guardar pregunta antes. Sin nada
+  // pendiente, la recuperación ya no hace falta
+  let unlistenClose: (() => void) | undefined;
+  onCleanup(() => unlistenClose?.());
+  onMount(async () => {
+    try {
+      unlistenClose = await getCurrentWindow().onCloseRequested(async (event) => {
+        if (await hasUnsavedWork()) {
+          const ok = await confirmAction({
+            title: "Cerrar Pinocchio",
+            message: "Hay cambios sin guardar: se pierden (queda la última copia de recuperación).",
+            confirmLabel: "Cerrar sin guardar",
+            danger: true,
+          });
+          if (!ok) event.preventDefault();
+          return;
+        }
+        await invoke("clear_recovery").catch(() => {});
+      });
+    } catch {
+      // Sin backend (vista previa) no hay ventana de Tauri
+    }
+  });
 
   // Al abrir la app sin modelo: ofrecer la última recuperación
   onMount(async () => {

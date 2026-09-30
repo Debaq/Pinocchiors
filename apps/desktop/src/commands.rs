@@ -565,6 +565,7 @@ pub(crate) fn load_scene(
     // Guardar en estado; la copia del original va al proyecto y permite revertir
     *state.original_model.lock().unwrap() = Some(crate::state::OriginalModel { name, format, scene: scene.clone() });
     *state.last_saved_hash.lock().unwrap() = None;
+    *state.last_recovery_hash.lock().unwrap() = None;
     let mut scene_lock = state.scene.lock().unwrap();
     *scene_lock = Some(scene);
 

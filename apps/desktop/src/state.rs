@@ -77,6 +77,8 @@ pub struct AppState {
     pub original_model: Mutex<Option<OriginalModel>>,
     /// Huella del último guardado del proyecto (el automático no reescribe si no cambió)
     pub last_saved_hash: Mutex<Option<u64>>,
+    /// Huella de lo último que se dejó en el archivo de recuperación
+    pub last_recovery_hash: Mutex<Option<u64>>,
 
     /// Escena importada (formato pivote)
     pub scene: Mutex<Option<Scene>>,
@@ -156,6 +158,7 @@ impl AppState {
         Self {
             original_model: Mutex::new(None),
             last_saved_hash: Mutex::new(None),
+            last_recovery_hash: Mutex::new(None),
             scene: Mutex::new(None),
             mesh: Mutex::new(None),
             skeleton: Mutex::new(None),
@@ -187,6 +190,7 @@ impl AppState {
     pub fn clear_all(&self) {
         *self.original_model.lock().unwrap() = None;
         *self.last_saved_hash.lock().unwrap() = None;
+        *self.last_recovery_hash.lock().unwrap() = None;
         *self.scene.lock().unwrap() = None;
         *self.mesh.lock().unwrap() = None;
         *self.skeleton.lock().unwrap() = None;

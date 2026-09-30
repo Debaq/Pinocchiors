@@ -560,14 +560,19 @@ pub struct ProjectSaved {
 
 /// Guarda el proyecto en `path`. `ui` es el estado de la interfaz (JSON).
 /// Con `only_if_changed` (guardado automático) no escribe si nada cambió.
+///
+/// El archivo de recuperación lleva su propia huella: guardar ahí no cuenta
+/// como guardar el proyecto (ver `project_changed`).
 #[tauri::command]
 pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_changed: bool) -> Result<ProjectSaved, String> {
+    let is_recovery = recovery_path(&app).is_ok_and(|r| r == Path::new(&path));
     in_background(app, move |state| {
         let project = capture(state);
         let source_name = project.original.as_ref().map(|o| o.name.clone());
         let state_bytes = rmp_serde::to_vec_named(&project).map_err(|e| format!("No se pudo serializar: {e}"))?;
         let hash = content_hash(&state_bytes, &ui);
-        if only_if_changed && *state.last_saved_hash.lock().unwrap() == Some(hash) {
+        let saved_hash = if is_recovery { &state.last_recovery_hash } else { &state.last_saved_hash };
+        if only_if_changed && *saved_hash.lock().unwrap() == Some(hash) {
             return Ok(ProjectSaved { written: false, bytes: 0 });
         }
         let manifest = Manifest {
@@ -579,10 +584,33 @@ pub async fn save_project(app: AppHandle, path: String, ui: String, only_if_chan
         };
         let path = Path::new(&path);
         write_project(path, &manifest, &state_bytes, &ui)?;
-        *state.last_saved_hash.lock().unwrap() = Some(hash);
+        *saved_hash.lock().unwrap() = Some(hash);
         Ok(ProjectSaved { written: true, bytes: std::fs::metadata(path).map_or(0, |m| m.len()) })
     })
     .await
+}
+
+/// Hay cambios desde el último guardado o apertura del proyecto (`ui` es el
+/// estado de la interfaz, como en `save_project`)
+#[tauri::command]
+pub async fn project_changed(app: AppHandle, ui: String) -> Result<bool, String> {
+    in_background(app, move |state| {
+        let Some(saved) = *state.last_saved_hash.lock().unwrap() else { return Ok(true) };
+        let state_bytes = rmp_serde::to_vec_named(&capture(state)).map_err(|e| format!("No se pudo serializar: {e}"))?;
+        Ok(content_hash(&state_bytes, &ui) != saved)
+    })
+    .await
+}
+
+/// Borra el archivo de recuperación: el trabajo quedó guardado o se descartó a propósito
+#[tauri::command]
+pub fn clear_recovery(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    *state.last_recovery_hash.lock().unwrap() = None;
+    let path = recovery_path(&app)?;
+    match std::fs::remove_file(&path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("No se pudo borrar {}: {e}", path.display())),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Serialize)]
