@@ -9,7 +9,7 @@
 //!   mapa nuevo, sin costuras entre islas.
 //! - [`Skin`]: todo lo anterior en términos de una escena (UV + materiales).
 //!
-//! Plan completo en `libs/uv/ROADMAP.md`.
+//! Pendientes en `PENDIENTES.md` (raíz del repositorio).
 
 mod bake;
 mod charts;
