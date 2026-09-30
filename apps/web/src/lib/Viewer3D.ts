@@ -445,11 +445,10 @@ export class Viewer3D {
 
   /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
   private pose: {
-    joint: number;
     positions: Float32Array;
     normals: Float32Array;
-    /** Huesos que se mueven (descendientes de la articulación) */
-    moving: boolean[];
+    /** Giro de cada articulación girada, relativo a su padre (se encadenan) */
+    rotations: Map<number, THREE.Quaternion>;
   } | null = null;
 
   /**
@@ -585,6 +584,8 @@ export class Viewer3D {
     ikChain?: number[];
     /** Se confirma al soltar el botón (arrastre desde una trayectoria) */
     release?: boolean;
+    /** Pose de prueba: giro de la articulación al empezar (acumulado y propio) */
+    poseStart?: { world: THREE.Quaternion; local: THREE.Quaternion | null };
   } | null = null;
   /** Lo que el rig agrega al esqueleto (colores, formas, bloqueos, ejes, controles) */
   private rigDisplay: RigDisplay | null = null;
@@ -1393,7 +1394,12 @@ export class Viewer3D {
     // Al espacio de la malla (el grupo puede estar girado por "suelo")
     const groupRotation = this.meshGroup.getWorldQuaternion(new THREE.Quaternion());
     const axisLocal = axisWorld.applyQuaternion(groupRotation.clone().invert()).normalize();
-    this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle));
+    // Se suma al giro que ya tenía la articulación (y sus padres)
+    m.poseStart ??= {
+      world: this.boneSpheres[m.bone].quaternion.clone(),
+      local: this.pose?.rotations.get(m.bone)?.clone() ?? null,
+    };
+    this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle).multiply(m.poseStart.world));
   }
 
   /** Avisa el movimiento de una articulación, como mucho una vez por cuadro */
@@ -1455,7 +1461,13 @@ export class Viewer3D {
       this.updateBoneLines();
       this.scheduleBoneMoved(m.bone, sphere.position);
     } else if (m.kind === "rotate") {
-      this.resetPose();
+      // Solo se deshace el giro de esta operación; las demás articulaciones quedan
+      if (m.poseStart && this.pose) {
+        if (m.poseStart.local) this.pose.rotations.set(m.bone, m.poseStart.local);
+        else this.pose.rotations.delete(m.bone);
+        if (this.pose.rotations.size === 0) this.resetPose();
+        else this.updatePose();
+      }
     } else {
       const value = m.value;
       this.paintSettings = this.paintSettings ? { ...this.paintSettings, [m.kind]: value } : null;
@@ -2193,69 +2205,107 @@ export class Viewer3D {
   }
 
   /**
-   * Pose de prueba: gira la articulación `joint` y deforma la malla con los
-   * pesos (skinning lineal), para ver si los pesos doblan bien. El peso de un
-   * hueso es el de su segmento padre → hueso, así que se mueven los huesos
-   * descendientes de la articulación.
+   * Pose de prueba: gira la articulación `joint` hasta `rotation` (su giro
+   * acumulado, en el espacio de la malla, como el del gizmo) y deforma la
+   * malla con los pesos (skinning lineal), para ver si los pesos doblan bien.
+   * Los giros se encadenan: girar el hombro y después el codo suma los dos.
+   * El peso de un hueso es el de su segmento padre → hueso, así que cada
+   * vértice sigue a la articulación de la que cuelga su hueso.
    */
   private applyPose(joint: number, rotation: THREE.Quaternion): void {
     const mesh = this.meshData;
     const weights = this.weightsData;
     const skeleton = this.skeletonData;
     if (!mesh || !weights || !skeleton || weights.numVertices * 3 !== mesh.positions.length) return;
+    this.pose ??= { positions: mesh.positions.slice(), normals: mesh.normals.slice(), rotations: new Map() };
+    // Lo que ya gira el padre no es de esta articulación
+    const parent = skeleton.bones[joint].parent;
+    const parentWorld = parent !== null ? this.boneSpheres[parent].quaternion.clone() : new THREE.Quaternion();
+    this.pose.rotations.set(joint, parentWorld.invert().multiply(rotation).normalize());
+    this.updatePose();
+  }
 
-    if (!this.pose || this.pose.joint !== joint) {
-      this.resetPose();
-      const moving = skeleton.bones.map((_, b) => {
-        for (let p = skeleton.bones[b].parent; p !== null; p = skeleton.bones[p].parent) {
-          if (p === joint) return true;
-        }
-        return false;
-      });
-      this.pose = { joint, positions: mesh.positions.slice(), normals: mesh.normals.slice(), moving };
-    }
-    const { positions: rest, normals: restNormals, moving } = this.pose;
-    const center = this.boneSpheres[joint].position.clone();
+  /** Aplica los giros de la pose de prueba a la malla y a las articulaciones */
+  private updatePose(): void {
+    const mesh = this.meshData;
+    const weights = this.weightsData;
+    const skeleton = this.skeletonData;
+    const pose = this.pose;
+    if (!mesh || !weights || !skeleton || !pose || weights.numVertices * 3 !== mesh.positions.length) return;
+    const bones = skeleton.bones;
+
+    // Transformación de cada articulación (x → Q·x + t), de la raíz a las puntas
+    const rotations: (THREE.Quaternion | undefined)[] = new Array(bones.length);
+    const offsets: (THREE.Vector3 | undefined)[] = new Array(bones.length);
+    const solve = (b: number): void => {
+      if (rotations[b]) return;
+      const parent = bones[b].parent;
+      let q = new THREE.Quaternion();
+      let t = new THREE.Vector3();
+      if (parent !== null) {
+        solve(parent);
+        q = rotations[parent]!.clone();
+        t = offsets[parent]!.clone();
+      }
+      const local = pose.rotations.get(b);
+      if (local) {
+        // Girar alrededor de la articulación en reposo: x → q·(x − c) + c
+        const c = new THREE.Vector3(...bones[b].position);
+        const pivot = c.clone().sub(c.clone().applyQuaternion(local));
+        t.add(pivot.applyQuaternion(q));
+        q.multiply(local);
+      }
+      rotations[b] = q;
+      offsets[b] = t;
+    };
+    bones.forEach((_, b) => solve(b));
+    // El segmento de un hueso cuelga de su padre
+    const identity = new THREE.Quaternion();
+    const zero = new THREE.Vector3();
+    const segment = (b: number) => {
+      const parent = bones[b]?.parent ?? null;
+      return parent !== null ? { q: rotations[parent]!, t: offsets[parent]! } : { q: identity, t: zero };
+    };
+
+    const { positions: rest, normals: restNormals } = pose;
     const p = new THREE.Vector3();
     const n = new THREE.Vector3();
     const k = weights.maxInfluences;
     for (let v = 0; v < weights.numVertices; v++) {
-      let w = 0;
-      for (let i = 0; i < k; i++) {
-        const bone = weights.weights[(v * k + i) * 2];
-        if (moving[bone]) w += weights.weights[(v * k + i) * 2 + 1];
-      }
       const o = 3 * v;
-      if (w <= 0) {
-        mesh.positions[o] = rest[o];
-        mesh.positions[o + 1] = rest[o + 1];
-        mesh.positions[o + 2] = rest[o + 2];
-        mesh.normals[o] = restNormals[o];
-        mesh.normals[o + 1] = restNormals[o + 1];
-        mesh.normals[o + 2] = restNormals[o + 2];
-        continue;
+      let px = rest[o], py = rest[o + 1], pz = rest[o + 2];
+      let nx = restNormals[o], ny = restNormals[o + 1], nz = restNormals[o + 2];
+      for (let i = 0; i < k; i++) {
+        const w = weights.weights[(v * k + i) * 2 + 1];
+        if (w <= 0) continue;
+        const { q, t } = segment(weights.weights[(v * k + i) * 2]);
+        if (q === identity) continue;
+        p.set(rest[o], rest[o + 1], rest[o + 2]).applyQuaternion(q).add(t);
+        px += w * (p.x - rest[o]);
+        py += w * (p.y - rest[o + 1]);
+        pz += w * (p.z - rest[o + 2]);
+        n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(q);
+        nx += w * (n.x - restNormals[o]);
+        ny += w * (n.y - restNormals[o + 1]);
+        nz += w * (n.z - restNormals[o + 2]);
       }
-      p.set(rest[o], rest[o + 1], rest[o + 2]).sub(center).applyQuaternion(rotation).add(center);
-      mesh.positions[o] = rest[o] + w * (p.x - rest[o]);
-      mesh.positions[o + 1] = rest[o + 1] + w * (p.y - rest[o + 1]);
-      mesh.positions[o + 2] = rest[o + 2] + w * (p.z - rest[o + 2]);
-      n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(rotation);
-      n.set(
-        restNormals[o] + w * (n.x - restNormals[o]),
-        restNormals[o + 1] + w * (n.y - restNormals[o + 1]),
-        restNormals[o + 2] + w * (n.z - restNormals[o + 2])
-      ).normalize();
+      n.set(nx, ny, nz).normalize();
+      mesh.positions[o] = px;
+      mesh.positions[o + 1] = py;
+      mesh.positions[o + 2] = pz;
       mesh.normals[o] = n.x;
       mesh.normals[o + 1] = n.y;
       mesh.normals[o + 2] = n.z;
     }
     this.markMeshDirty();
 
-    // Articulaciones descendientes, giradas
-    skeleton.bones.forEach((bone, b) => {
-      if (!moving[b]) return;
-      p.set(...bone.position).sub(center).applyQuaternion(rotation).add(center);
-      this.boneSpheres[b].position.copy(p);
+    // Cada articulación se mueve con su padre y lleva su giro acumulado (el gizmo parte de ahí)
+    bones.forEach((bone, b) => {
+      const sphere = this.boneSpheres[b];
+      if (!sphere) return;
+      const { q, t } = segment(b);
+      sphere.position.set(...bone.position).applyQuaternion(q).add(t);
+      sphere.quaternion.copy(rotations[b]!);
     });
     this.updateBoneLines();
   }
@@ -2271,8 +2321,10 @@ export class Viewer3D {
       this.markMeshDirty();
     }
     if (this.skeletonData) {
-      this.skeletonData.bones.forEach((bone, b) => this.boneSpheres[b]?.position.set(...bone.position));
-      this.boneSpheres[pose.joint]?.quaternion.identity();
+      this.skeletonData.bones.forEach((bone, b) => {
+        this.boneSpheres[b]?.position.set(...bone.position);
+        this.boneSpheres[b]?.quaternion.identity();
+      });
       this.updateBoneLines();
     }
   }

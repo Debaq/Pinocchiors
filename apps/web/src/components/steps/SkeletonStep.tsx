@@ -306,7 +306,8 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
                 <div class="space-y-3 pt-1">
                   <p class="text-xs text-text-muted leading-relaxed">
                     Selecciona una articulación y pulsa <span class="text-text">R</span>: gira con el
-                    mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Si se estira o arrastra partes que no
+                    mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Los giros se suman: gira el hombro y
+                    después el codo para ver la cadena entera. Esc deshace solo el último giro. Si se estira o arrastra partes que no
                     corresponden, mueve esa articulación y vuelve a calcular.
                   </p>
                   <div class="flex gap-2">
