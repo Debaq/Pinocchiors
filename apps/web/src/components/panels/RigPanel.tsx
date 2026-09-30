@@ -359,7 +359,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
       >
         <div class="space-y-2">
           <p class="text-xs text-text-dim leading-relaxed">
-            Objetos que no deforman la malla, con keys propias. Más adelante manejan el IK y las restricciones.
+            Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.
           </p>
           <div class="rounded border border-border divide-y divide-border/60">
             <For each={props.settings.controls} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin controles.</p>}>

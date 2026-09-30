@@ -167,6 +167,16 @@ import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
 import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
+import { ConstraintPanel } from "./components/panels/ConstraintPanel";
+import {
+  CONSTRAINT_PREFIX,
+  CONSTRAINT_TYPES,
+  constraintInfluence,
+  driverValue,
+  isConstraintId,
+  type ConstraintType,
+  type RigConstraint,
+} from "./lib/constraints";
 import { RigEditor, type RigEditorTab } from "./components/layout/RigEditor";
 import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
 import {
@@ -620,6 +630,8 @@ export const App: Component = () => {
   const [transformSpace, setTransformSpace] = createPersisted<TransformSpace>("pose.space", "global");
   const [canPaste, setCanPaste] = createSignal(readPoseClipboard() !== null);
   const [selectedChain, setSelectedChain] = createSignal<string | undefined>();
+  /** Restricción elegida en el panel (o en su fila de la línea de tiempo) */
+  const [selectedConstraint, setSelectedConstraint] = createSignal<string | undefined>();
   const [autoIk, setAutoIk] = createPersisted("pose.autoIk", { enabled: false, toRoot: false });
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
@@ -1596,6 +1608,7 @@ export const App: Component = () => {
     bones.forEach((b, j) => b.parent === null && visit(j, 0));
     for (const c of s.controls) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, control: true });
     for (const c of s.ikChains ?? []) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, ik: true });
+    for (const c of s.constraints ?? []) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, ik: true, constraint: true });
     return rows;
   });
 
@@ -1975,7 +1988,7 @@ export const App: Component = () => {
     const control = selectedControl();
     const chain = selectedChain();
     const picked = clip.tracks.filter((t) =>
-      t.kind === "control" ? t.bone === control : t.kind === "ik" ? t.bone === chain : names.has(t.bone)
+      t.kind === "control" ? t.bone === control : t.kind === "ik" ? t.bone === chain || t.bone === selectedConstraint() : names.has(t.bone)
     );
     // Sin selección, o si lo elegido no tiene keys, se ven todas las pistas
     return picked.length > 0 ? picked : clip.tracks;
@@ -1990,7 +2003,7 @@ export const App: Component = () => {
         t.kind === "control"
           ? (s.controls.find((c) => c.id === t.bone)?.name ?? t.bone)
           : t.kind === "ik"
-            ? (s.ikChains?.find((c) => c.id === t.bone)?.name ?? t.bone)
+            ? (s.ikChains?.find((c) => c.id === t.bone)?.name ?? s.constraints?.find((c) => c.id === t.bone)?.name ?? t.bone)
             : t.bone;
       for (const group of ["rotation", "translation", "blend", "pin", "roll"] as ChannelGroup[]) {
         const keys = group === "rotation" ? t.rotation : group === "translation" ? t.translation : t[group];
@@ -2484,6 +2497,105 @@ export const App: Component = () => {
       ...rigSettings(),
       ikChains: (rigSettings().ikChains ?? []).map((c) => (c.id === chain.id ? chain : c)),
     });
+
+  // ─── Restricciones (F3) ───────────────────────────────────────────────────
+
+  const constraintById = (id?: string) => (rigSettings().constraints ?? []).find((c) => c.id === id);
+
+  /** Influencia y valor del driver de la restricción elegida en el cuadro actual */
+  const constraintValues = createMemo(() => {
+    const c = constraintById(selectedConstraint());
+    const clip = activeClip();
+    const f = Math.round(frame());
+    const track = c && clip?.tracks.find((t) => t.kind === "ik" && t.bone === c.id);
+    return {
+      influence: c ? constraintInfluence(c, clip, f) : 1,
+      value: c ? driverValue(c, clip, f) : 0,
+      keyed: { influence: !!track?.blend?.length, value: !!track?.roll?.length },
+    };
+  });
+
+  const setConstraints = (description: string, constraints: RigConstraint[]) =>
+    changeRig(description, { ...rigSettings(), constraints: constraints.length > 0 ? constraints : undefined });
+
+  const changeConstraint = (description: string, constraint: RigConstraint) =>
+    void setConstraints(description, (rigSettings().constraints ?? []).map((c) => (c.id === constraint.id ? constraint : c)));
+
+  /** Restricción nueva en la articulación activa; la otra elegida es el objetivo (o la cadena) */
+  const handleNewConstraint = async (type: ConstraintType) => {
+    const bones = rigBones();
+    const active = viewSettings().selectedBone;
+    if (!bones[active]) return;
+    const others = jointSelection().filter((j) => j !== active).map((j) => bones[j].name);
+    const label = CONSTRAINT_TYPES.find((t) => t.value === type)!.label;
+    const control = selectedControl();
+    const constraint: RigConstraint = {
+      id: newRigId(CONSTRAINT_PREFIX.slice(0, -1)),
+      name: `${label}: ${bones[active].name}`,
+      type,
+      owner: bones[active].name,
+      ...(type === "driver" || type === "distribute"
+        ? { joints: others }
+        : { target: control ? `control:${control}` : others[0] }),
+      ...(type === "driver" ? { axis: 0 as const, angle: 90, value: 0 } : {}),
+    };
+    await setConstraints(`Restricción: ${label}`, [...(rigSettings().constraints ?? []), constraint]);
+    setSelectedConstraint(constraint.id);
+    if (type !== "driver" && type !== "distribute" && !constraint.target) {
+      setStatusMessage("Elige el objetivo en el panel (o crea la restricción con el objetivo elegido con Mayús)");
+    }
+  };
+
+  const handleDeleteConstraint = async (id: string) => {
+    await setConstraints("Borrar restricción", (rigSettings().constraints ?? []).filter((c) => c.id !== id));
+    // Sus keys de influencia ya no sirven
+    const before = clips();
+    const after = tidyClips(before, rigSettings());
+    if (after.some((c, i) => c !== before[i])) {
+      await history.execute("Ordenar pistas del rig", { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+    }
+    setSelectedConstraint(undefined);
+  };
+
+  const handleMoveConstraint = (id: string, direction: -1 | 1) => {
+    const list = [...(rigSettings().constraints ?? [])];
+    const i = list.findIndex((c) => c.id === id);
+    const k = i + direction;
+    if (i < 0 || k < 0 || k >= list.length) return;
+    [list[i], list[k]] = [list[k], list[i]];
+    void setConstraints("Orden de las restricciones", list);
+  };
+
+  /** Influencia o valor del driver: provisorio al arrastrar, key (o valor fijo) al soltar */
+  const handleConstraintScalar = (channel: "blend" | "roll", value: number, commit: boolean) => {
+    const c = constraintById(selectedConstraint());
+    const v = viewer();
+    if (!c || !v) return;
+    const f = Math.round(frame());
+    const clip = activeClip();
+    const keyed = channel === "blend" ? constraintValues().keyed.influence : constraintValues().keyed.value;
+    const asKey = autoKey() || keyed;
+    const field = channel === "blend" ? "influence" : "value";
+    if (!commit) {
+      const ctx = asKey
+        ? rigCtx()
+        : createRigContext(rigBones(), {
+            ...rigSettings(),
+            constraints: (rigSettings().constraints ?? []).map((x) => (x.id === c.id ? { ...x, [field]: value } : x)),
+          });
+      const preview = asKey && clip ? insertScalarKey(clip, c.id, channel, f, value, keyInterpolation()) : clip;
+      v.setPose(evaluatePose(preview, frame(), ctx));
+      setPoseTick((t) => t + 1);
+      return;
+    }
+    const label = channel === "blend" ? "Influencia de la restricción" : "Valor del driver";
+    if (asKey) {
+      if (!activeClip()) handleNewClip();
+      void editClip(label, (x) => insertScalarKey(x, c.id, channel, f, value, keyInterpolation()));
+    } else {
+      changeConstraint(label, { ...c, [field]: value });
+    }
+  };
 
   /**
    * Cambio de mezcla, fijado o balanceo. Mientras se arrastra se ve con una
@@ -3107,6 +3219,32 @@ export const App: Component = () => {
         edges.push({ from: `k:${chain.id}`, to: `c:${cid}`, kind: "ik" });
       }
     }
+    // Restricciones que mueven la activa o que la usan de objetivo
+    const bonesShown = new Set(nodes.filter((n) => n.kind === "bone").map((n) => n.label));
+    const boneNode = (name: string) => {
+      const k = ctx.boneIndex.get(name);
+      if (k === undefined) return undefined;
+      if (!bonesShown.has(name)) {
+        bonesShown.add(name);
+        nodes.push({ id: id(k), label: name, kind: "bone", role: "control" });
+      }
+      return id(k);
+    };
+    const related = (ctx.settings.constraints ?? []).filter(
+      (c) => c.owner === bone.name || c.target === bone.name || (c.joints ?? []).includes(bone.name)
+    );
+    for (const c of related.slice(0, 3)) {
+      nodes.push({ id: `r:${c.id}`, label: c.name, kind: "constraint", role: "chain" });
+      const owner = boneNode(c.owner);
+      if (owner) edges.push({ from: `r:${c.id}`, to: owner, kind: "constraint" });
+      if (c.target?.startsWith("control:")) {
+        addControl(c.target.slice(8));
+        edges.push({ from: `c:${c.target.slice(8)}`, to: `r:${c.id}`, kind: "constraint" });
+      } else if (c.target) {
+        const target = boneNode(c.target);
+        if (target) edges.push({ from: target, to: `r:${c.id}`, kind: "constraint" });
+      }
+    }
     return { nodes, edges };
   });
 
@@ -3114,7 +3252,25 @@ export const App: Component = () => {
     const [kind, rest] = [node.id.slice(0, 1), node.id.slice(2)];
     if (kind === "b") selectJoints([Number(rest)], Number(rest));
     else if (kind === "c") handleSelectControl(rest);
-    else setSelectedChain(rest);
+    else if (kind === "r") {
+      setSelectedConstraint(rest);
+      setRigEditorTab("ik");
+    } else setSelectedChain(rest);
+  };
+
+  /** Conectar dos huesos en el grafo: el soltado copia el giro del arrastrado (se cambia en el panel) */
+  const handleConnectConstraint = async (target: string, owner: string) => {
+    const constraint: RigConstraint = {
+      id: newRigId(CONSTRAINT_PREFIX.slice(0, -1)),
+      name: `Copiar giro: ${owner}`,
+      type: "copyRotation",
+      owner,
+      target,
+      space: "local",
+    };
+    await setConstraints("Restricción: Copiar giro", [...(rigSettings().constraints ?? []), constraint]);
+    setSelectedConstraint(constraint.id);
+    setStatusMessage(`${owner} copia el giro de ${target}: cambia el tipo en Restricciones (pestaña IK)`);
   };
 
   const handleReparent = (controlNode: string, boneName: string | null) => {
@@ -3194,6 +3350,7 @@ export const App: Component = () => {
       relations={relations()}
       onSelectNode={handleRelationSelect}
       onReparent={handleReparent}
+      onConnect={(target, owner) => void handleConnectConstraint(target, owner)}
       shared={sharedSkin()}
     />
   );
@@ -3220,6 +3377,29 @@ export const App: Component = () => {
       }
       onScalar={handleIkScalar}
       onMatch={(to) => void handleMatch(to)}
+    />
+  );
+
+  const constraintPanel = (
+    <ConstraintPanel
+      constraints={rigSettings().constraints ?? []}
+      joints={rigBones().flatMap((b, j) => (b.parent === null || rigBones().some((c) => c.parent === j) ? [b.name] : []))}
+      controls={rigSettings().controls}
+      selected={selectedConstraint()}
+      posing={animating()}
+      activeJoint={rigBones()[viewSettings().selectedBone]?.name}
+      otherJoints={jointSelection()
+        .filter((j) => j !== viewSettings().selectedBone)
+        .map((j) => rigBones()[j].name)}
+      influence={constraintValues().influence}
+      value={constraintValues().value}
+      keyed={constraintValues().keyed}
+      onNew={(type) => void handleNewConstraint(type)}
+      onSelect={setSelectedConstraint}
+      onChange={changeConstraint}
+      onDelete={(id) => void handleDeleteConstraint(id)}
+      onMove={handleMoveConstraint}
+      onScalar={handleConstraintScalar}
     />
   );
 
@@ -3273,7 +3453,7 @@ export const App: Component = () => {
     setRigEditorTab("library");
     setRigEditorOpen(true);
   };
-  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}</div>, rig: rigPanel };
+  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}{constraintPanel}</div>, rig: rigPanel };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
@@ -5005,8 +5185,10 @@ export const App: Component = () => {
                 onTogglePlay={() => setPlaying(!playing())}
                 onRangeChange={handleClipRange}
                 onSelectJoint={(joint) => selectJoints([joint], joint)}
-                selectedControl={selectedControl() ?? selectedChain()}
-                onSelectControl={(id) => (chainById(id) ? setSelectedChain(id) : handleSelectControl(id))}
+                selectedControl={selectedControl() ?? selectedChain() ?? selectedConstraint()}
+                onSelectControl={(id) =>
+                  isConstraintId(id) ? setSelectedConstraint(id) : chainById(id) ? setSelectedChain(id) : handleSelectControl(id)
+                }
                 onSelection={setKeySelection}
 
                 onMoveKeys={handleMoveKeys}

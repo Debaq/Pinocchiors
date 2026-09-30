@@ -28,6 +28,8 @@ export interface TimelineRow {
   control?: boolean;
   /** Canales de una cadena de IK (mezcla, fijado, balanceo) */
   ik?: boolean;
+  /** Restricción del rig (sus canales van en una pista "ik" con su id) */
+  constraint?: boolean;
   /** Fila resumen de un grupo de huesos: sus miembros y si está plegado */
   group?: { id: string; color: string; collapsed: boolean; members: string[] };
 }
@@ -561,7 +563,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                       <span class="w-2 h-2 rounded-full border border-current shrink-0" />
                     </Show>
                     <Show when={row.ik}>
-                      <span class="text-[9px] font-mono shrink-0">IK</span>
+                      <span class="text-[9px] font-mono shrink-0">{row.constraint ? "R" : "IK"}</span>
                     </Show>
                     {row.label ?? row.bone}
                   </div>
