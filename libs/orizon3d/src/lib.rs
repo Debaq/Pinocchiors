@@ -10,6 +10,7 @@
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
 pub mod camera;
+pub mod edit;
 pub mod capture;
 pub mod mesh;
 pub mod pointcloud;

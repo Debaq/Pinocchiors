@@ -801,7 +801,7 @@ fn compose(a: &Transform, b: &Transform) -> Transform {
 }
 
 /// Autovector del menor autovalor de una matriz simétrica 3×3 (Jacobi).
-fn smallest_eigvec_sym3(mut a: [[f64; 3]; 3]) -> [f32; 3] {
+pub(crate) fn smallest_eigvec_sym3(mut a: [[f64; 3]; 3]) -> [f32; 3] {
     let mut v = [[0.0f64; 3]; 3];
     for i in 0..3 {
         v[i][i] = 1.0;

@@ -402,6 +402,18 @@ function controlShapeGeometry(shape: RigControl["shape"]): THREE.BufferGeometry 
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Texturas ya decodificadas para la vista previa de la piel */
+/** Nube de puntos del escáner: posiciones en mm (Y arriba) y color opcional */
+export interface PointCloudData {
+  count: number;
+  /** Cambia con cada edición: la selección solo se conserva en la misma versión */
+  version: number;
+  positions: Float32Array;
+  colors: Uint8Array | null;
+}
+
+/** Herramienta de selección sobre la nube */
+export type CloudSelectTool = "rect" | "lasso" | "brush";
+
 export interface MeshTextures {
   base?: ImageBitmap;
   normal?: ImageBitmap;
@@ -563,6 +575,29 @@ export class Viewer3D {
     pivotRotation: THREE.Quaternion;
   } | null = null;
 
+  /** Nube de puntos del escáner, su selección (1 = elegido) y colores de base */
+  private cloud: {
+    points: THREE.Points;
+    count: number;
+    version: number;
+    base: Uint8Array;
+    selected: Uint8Array;
+  } | null = null;
+  private cloudGroup = new THREE.Group();
+  /** Con la nube a la vista se ocultan el modelo y el esqueleto */
+  private cloudFocus = false;
+  private cloudPointSize = 2;
+  private cloudTool: CloudSelectTool | null = null;
+  private cloudBrushPx = 30;
+  /** Selección en curso: modo, trazo en px del lienzo y proyección de la nube */
+  private cloudDrag: {
+    mode: "set" | "add" | "remove";
+    path: [number, number][];
+    screen: Float32Array;
+  } | null = null;
+  private cloudOverlay: SVGSVGElement | null = null;
+  private cloudListener: ((count: number) => void) | null = null;
+
   /** Herramienta Medir: puntos elegidos (0 a 2) y su dibujo */
   private measurePoints: THREE.Vector3[] = [];
   private measureGroup = new THREE.Group();
@@ -680,6 +715,7 @@ export class Viewer3D {
     this.scene.add(this.placementGroup);
     this.scene.add(this.skeletonGroup);
     this.scene.add(this.measureGroup);
+    this.scene.add(this.cloudGroup);
 
     // Grid - Dracula style
     this.scene.add(this.grid);
@@ -830,6 +866,7 @@ export class Viewer3D {
     this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e), { signal });
     window.addEventListener("pointermove", (e) => this.onPointerMove(e), { signal });
     window.addEventListener("pointerup", () => {
+      this.onCloudUp();
       this.onLightUp();
       this.finishStroke();
       if (this.modal?.release) this.confirmModal();
@@ -968,6 +1005,10 @@ export class Viewer3D {
       this.onLightDown(e);
       return;
     }
+    if (this.cloudTool && this.cloud && this.cloudFocus) {
+      this.onCloudDown(e);
+      return;
+    }
     if (this.paintSettings) {
       this.onPaintDown(e);
       return;
@@ -1087,6 +1128,7 @@ export class Viewer3D {
       return;
     }
     this.onLightMove(e);
+    this.onCloudMove(e);
     if (e.target === this.canvas) this.onPaintMove(e);
   }
 
@@ -2103,7 +2145,7 @@ export class Viewer3D {
     });
     this.applyBoneDisplay();
 
-    this.skeletonGroup.visible = this.settings.showSkeleton;
+    this.skeletonGroup.visible = this.settings.showSkeleton && !this.cloudFocus;
     // Las esferas son nuevas: volver a marcar (y enganchar) la seleccionada
     if (this.selectedBoneIndex >= 0 && this.selectedBoneIndex < this.boneSpheres.length) {
       this.selectBone(this.selectedBoneIndex, false);
@@ -2923,6 +2965,7 @@ export class Viewer3D {
 
   setGridUnits(units: GridUnits): void {
     this.gridUnits = units;
+    this.cloudGroup.scale.setScalar(this.cloudScale());
     this.rebuildGrid();
     this.drawMeasure();
   }
@@ -2943,7 +2986,11 @@ export class Viewer3D {
     // Escena → unidad elegida
     const toUnit = metersPerUnit / unitMeters;
     let extent = 5 / toUnit;
-    if (this.currentMesh) {
+    const cloudBox = this.cloudBox();
+    if (cloudBox) {
+      const size = cloudBox.getSize(new THREE.Vector3());
+      extent = Math.max(size.x, size.y, size.z) || extent;
+    } else if (this.currentMesh) {
       const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
       extent = Math.max(size.x, size.y, size.z) || extent;
     }
@@ -3042,8 +3089,341 @@ export class Viewer3D {
     }
     this.clearMesh();
     this.clearSkeleton();
+    this.clearCloud();
+    this.cloudOverlay?.remove();
     this.viewCube.dispose();
     this.renderer.dispose();
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // NUBE DE PUNTOS (Orizon3D)
+  // Se ve sola (sin modelo ni esqueleto) y se selecciona con rectángulo, lazo
+  // o pincel: sin modificador reemplaza (el pincel suma), Shift suma y Ctrl
+  // resta. La selección atraviesa la nube, como en el software de escáner.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Muestra la nube (o la quita con `null`); `fit` encuadra la cámara */
+  setPointCloud(data: PointCloudData | null, fit = false): void {
+    const previous = this.cloud;
+    this.clearCloud();
+    if (data && data.count > 0) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(data.positions.subarray(0, data.count * 3), 3));
+      const base = new Uint8Array(data.count * 3);
+      if (data.colors) {
+        base.set(data.colors.subarray(0, data.count * 3));
+      } else {
+        // Sin color: gris según la altura, para leer la forma
+        let min = Infinity;
+        let max = -Infinity;
+        for (let i = 0; i < data.count; i++) {
+          const y = data.positions[i * 3 + 1];
+          if (y < min) min = y;
+          if (y > max) max = y;
+        }
+        const span = max - min || 1;
+        for (let i = 0; i < data.count; i++) {
+          const g = Math.round(110 + 120 * ((data.positions[i * 3 + 1] - min) / span));
+          base[i * 3] = g;
+          base[i * 3 + 1] = g;
+          base[i * 3 + 2] = Math.min(255, g + 15);
+        }
+      }
+      geometry.setAttribute("color", new THREE.Uint8BufferAttribute(new Uint8Array(base), 3, true));
+      geometry.computeBoundingBox();
+      geometry.computeBoundingSphere();
+      const material = new THREE.PointsMaterial({ size: this.cloudPointSize, sizeAttenuation: false, vertexColors: true });
+      const points = new THREE.Points(geometry, material);
+      // La misma versión (se volvió a pedir la nube) conserva la selección
+      const selected =
+        previous && previous.version === data.version && previous.count === data.count
+          ? previous.selected
+          : new Uint8Array(data.count);
+      this.cloud = { points, count: data.count, version: data.version, base, selected };
+      this.cloudGroup.add(points);
+      this.cloudGroup.scale.setScalar(this.cloudScale());
+      this.recolorCloud();
+    }
+    this.applyCloudFocus();
+    this.rebuildGrid();
+    if (fit && this.cloud) this.fitCamera();
+    this.notifyCloudSelection();
+  }
+
+  /** Muestra la nube (y oculta modelo y esqueleto) o vuelve a mostrar el modelo */
+  setCloudFocus(on: boolean): void {
+    if (on === this.cloudFocus) return;
+    this.cloudFocus = on;
+    this.applyCloudFocus();
+    this.rebuildGrid();
+    // La nube y el modelo no ocupan el mismo lugar: se encuadra lo que se ve
+    if (this.cloud) this.fitCamera();
+  }
+
+  setCloudPointSize(px: number): void {
+    this.cloudPointSize = px;
+    if (this.cloud) (this.cloud.points.material as THREE.PointsMaterial).size = px;
+  }
+
+  /** Herramienta de selección de la nube (`null`: el clic vuelve a lo de siempre) */
+  setCloudTool(tool: CloudSelectTool | null): void {
+    const had = this.cloudTool !== null;
+    this.cloudTool = tool;
+    this.cloudDrag = null;
+    this.drawCloudOverlay(null);
+    if (tool) this.canvas.style.cursor = "crosshair";
+    else if (had) this.canvas.style.cursor = "default";
+  }
+
+  setCloudBrushSize(px: number): void {
+    this.cloudBrushPx = Math.max(2, px);
+  }
+
+  setCloudListener(listener: ((count: number) => void) | null): void {
+    this.cloudListener = listener;
+  }
+
+  /** Índices de los puntos elegidos */
+  getCloudSelection(): Uint32Array {
+    const cloud = this.cloud;
+    if (!cloud) return new Uint32Array();
+    let n = 0;
+    for (let i = 0; i < cloud.count; i++) n += cloud.selected[i];
+    const out = new Uint32Array(n);
+    for (let i = 0, k = 0; i < cloud.count; i++) if (cloud.selected[i]) out[k++] = i;
+    return out;
+  }
+
+  /** Reemplaza la selección: todo, nada, invertir o una lista de índices */
+  setCloudSelection(selection: "all" | "none" | "invert" | Uint32Array | number[]): void {
+    const cloud = this.cloud;
+    if (!cloud) return;
+    if (selection === "all") cloud.selected.fill(1);
+    else if (selection === "none") cloud.selected.fill(0);
+    else if (selection === "invert") for (let i = 0; i < cloud.count; i++) cloud.selected[i] ^= 1;
+    else {
+      cloud.selected.fill(0);
+      for (const i of selection) if (i < cloud.count) cloud.selected[i] = 1;
+    }
+    this.recolorCloud();
+    this.notifyCloudSelection();
+  }
+
+  /** mm de la nube → unidades de la escena */
+  private cloudScale(): number {
+    return 0.001 / (this.gridUnits.metersPerUnit || 1);
+  }
+
+  private cloudBox(): THREE.Box3 | null {
+    const box = this.cloudFocus ? this.cloud?.points.geometry.boundingBox : null;
+    if (!box) return null;
+    const scale = this.cloudScale();
+    return new THREE.Box3(box.min.clone().multiplyScalar(scale), box.max.clone().multiplyScalar(scale));
+  }
+
+  private applyCloudFocus(): void {
+    const focus = this.cloudFocus && !!this.cloud;
+    this.cloudGroup.visible = focus;
+    this.meshGroup.visible = !focus;
+    this.skeletonGroup.visible = this.settings.showSkeleton && !focus;
+  }
+
+  private clearCloud(): void {
+    if (!this.cloud) return;
+    this.cloudGroup.remove(this.cloud.points);
+    this.cloud.points.geometry.dispose();
+    (this.cloud.points.material as THREE.Material).dispose();
+    this.cloud = null;
+  }
+
+  private recolorCloud(): void {
+    const cloud = this.cloud;
+    if (!cloud) return;
+    const attr = cloud.points.geometry.getAttribute("color") as THREE.BufferAttribute;
+    const colors = attr.array as Uint8Array;
+    for (let i = 0; i < cloud.count; i++) {
+      const j = i * 3;
+      if (cloud.selected[i]) {
+        colors[j] = 255;
+        colors[j + 1] = 85;
+        colors[j + 2] = 85;
+      } else {
+        colors[j] = cloud.base[j];
+        colors[j + 1] = cloud.base[j + 1];
+        colors[j + 2] = cloud.base[j + 2];
+      }
+    }
+    attr.needsUpdate = true;
+  }
+
+  private notifyCloudSelection(): void {
+    const cloud = this.cloud;
+    let n = 0;
+    if (cloud) for (let i = 0; i < cloud.count; i++) n += cloud.selected[i];
+    this.cloudListener?.(n);
+  }
+
+  /** Posición en pantalla (px del lienzo) de cada punto; NaN si queda detrás de la cámara */
+  private projectCloud(): Float32Array {
+    const cloud = this.cloud!;
+    const rect = this.canvas.getBoundingClientRect();
+    this.camera.updateMatrixWorld();
+    this.cloudGroup.updateMatrixWorld();
+    const m = new THREE.Matrix4()
+      .multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse)
+      .multiply(this.cloudGroup.matrixWorld).elements;
+    const pos = cloud.points.geometry.getAttribute("position").array as Float32Array;
+    const out = new Float32Array(cloud.count * 2);
+    const hw = rect.width / 2;
+    const hh = rect.height / 2;
+    for (let i = 0; i < cloud.count; i++) {
+      const x = pos[i * 3];
+      const y = pos[i * 3 + 1];
+      const z = pos[i * 3 + 2];
+      const w = m[3] * x + m[7] * y + m[11] * z + m[15];
+      if (w <= 1e-6) {
+        out[i * 2] = NaN;
+        out[i * 2 + 1] = NaN;
+        continue;
+      }
+      out[i * 2] = ((m[0] * x + m[4] * y + m[8] * z + m[12]) / w + 1) * hw;
+      out[i * 2 + 1] = (1 - (m[1] * x + m[5] * y + m[9] * z + m[13]) / w) * hh;
+    }
+    return out;
+  }
+
+  private canvasPoint(e: PointerEvent): [number, number] {
+    const rect = this.canvas.getBoundingClientRect();
+    return [e.clientX - rect.left, e.clientY - rect.top];
+  }
+
+  private onCloudDown(e: PointerEvent): void {
+    const mode = e.ctrlKey || e.metaKey ? "remove" : e.shiftKey ? "add" : this.cloudTool === "brush" ? "add" : "set";
+    this.cloudDrag = { mode, path: [this.canvasPoint(e)], screen: this.projectCloud() };
+    if (this.cloudTool === "brush") this.brushCloud(this.cloudDrag.path[0], this.cloudDrag.path[0]);
+    this.drawCloudOverlay(this.cloudDrag.path);
+  }
+
+  private onCloudMove(e: PointerEvent): void {
+    if (!this.cloudTool || !this.cloud) return;
+    const p = this.canvasPoint(e);
+    const drag = this.cloudDrag;
+    if (!drag) {
+      // Cursor del pincel
+      if (this.cloudTool === "brush") this.drawCloudOverlay(e.target === this.canvas ? [p] : null);
+      return;
+    }
+    const last = drag.path[drag.path.length - 1];
+    if (Math.hypot(p[0] - last[0], p[1] - last[1]) < 2) return;
+    if (this.cloudTool === "brush") this.brushCloud(last, p);
+    if (this.cloudTool === "rect") drag.path = [drag.path[0], p];
+    else drag.path.push(p);
+    this.drawCloudOverlay(drag.path);
+    this.requestRender();
+  }
+
+  private onCloudUp(): void {
+    const drag = this.cloudDrag;
+    const cloud = this.cloud;
+    if (!drag) return;
+    this.cloudDrag = null;
+    if (cloud && this.cloudTool !== "brush") {
+      const inside = this.cloudTool === "rect" ? this.rectTest(drag.path) : this.lassoTest(drag.path);
+      const s = drag.screen;
+      for (let i = 0; i < cloud.count; i++) {
+        const hit = inside(s[i * 2], s[i * 2 + 1]);
+        if (drag.mode === "set") cloud.selected[i] = hit ? 1 : 0;
+        else if (hit) cloud.selected[i] = drag.mode === "add" ? 1 : 0;
+      }
+      this.recolorCloud();
+    }
+    this.drawCloudOverlay(null);
+    this.notifyCloudSelection();
+    this.requestRender();
+  }
+
+  private rectTest(path: [number, number][]): (x: number, y: number) => boolean {
+    const [a, b] = [path[0], path[path.length - 1]];
+    const [x0, x1] = [Math.min(a[0], b[0]), Math.max(a[0], b[0])];
+    const [y0, y1] = [Math.min(a[1], b[1]), Math.max(a[1], b[1])];
+    return (x, y) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  }
+
+  /** Dentro del lazo (regla del cruce), con la caja del lazo como filtro rápido */
+  private lassoTest(path: [number, number][]): (x: number, y: number) => boolean {
+    if (path.length < 3) return () => false;
+    let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of path) {
+      x0 = Math.min(x0, x);
+      y0 = Math.min(y0, y);
+      x1 = Math.max(x1, x);
+      y1 = Math.max(y1, y);
+    }
+    return (x, y) => {
+      if (!(x >= x0 && x <= x1 && y >= y0 && y <= y1)) return false;
+      let inside = false;
+      for (let i = 0, j = path.length - 1; i < path.length; j = i++) {
+        const [xi, yi] = path[i];
+        const [xj, yj] = path[j];
+        if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+      }
+      return inside;
+    };
+  }
+
+  /** Pinta la selección a lo largo del segmento a → b */
+  private brushCloud(a: [number, number], b: [number, number]): void {
+    const drag = this.cloudDrag;
+    const cloud = this.cloud;
+    if (!drag || !cloud) return;
+    const r = this.cloudBrushPx;
+    const r2 = r * r;
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const len2 = dx * dx + dy * dy;
+    const value = drag.mode === "remove" ? 0 : 1;
+    const [x0, x1] = [Math.min(a[0], b[0]) - r, Math.max(a[0], b[0]) + r];
+    const [y0, y1] = [Math.min(a[1], b[1]) - r, Math.max(a[1], b[1]) + r];
+    const s = drag.screen;
+    for (let i = 0; i < cloud.count; i++) {
+      const x = s[i * 2];
+      const y = s[i * 2 + 1];
+      if (!(x >= x0 && x <= x1 && y >= y0 && y <= y1)) continue;
+      // Distancia al segmento
+      const t = len2 > 0 ? Math.max(0, Math.min(1, ((x - a[0]) * dx + (y - a[1]) * dy) / len2)) : 0;
+      const ex = x - (a[0] + t * dx);
+      const ey = y - (a[1] + t * dy);
+      if (ex * ex + ey * ey <= r2) cloud.selected[i] = value;
+    }
+    this.recolorCloud();
+  }
+
+  /** Dibuja el rectángulo, el lazo o el pincel sobre el lienzo */
+  private drawCloudOverlay(path: [number, number][] | null): void {
+    if (!path) {
+      if (this.cloudOverlay) this.cloudOverlay.innerHTML = "";
+      return;
+    }
+    if (!this.cloudOverlay) {
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("style", "position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:5");
+      this.canvas.parentElement?.appendChild(svg);
+      this.cloudOverlay = svg;
+    }
+    const style = 'fill="rgba(255,85,85,0.08)" stroke="#ff5555" stroke-width="1.5" stroke-dasharray="5 3"';
+    const tool = this.cloudTool;
+    let shape = "";
+    if (tool === "brush") {
+      const [x, y] = path[path.length - 1];
+      shape = `<circle cx="${x}" cy="${y}" r="${this.cloudBrushPx}" ${style} />`;
+    } else if (tool === "rect") {
+      const [a, b] = [path[0], path[path.length - 1]];
+      shape = `<rect x="${Math.min(a[0], b[0])}" y="${Math.min(a[1], b[1])}" width="${Math.abs(b[0] - a[0])}" height="${Math.abs(b[1] - a[1])}" ${style} />`;
+    } else if (tool === "lasso") {
+      shape = `<polygon points="${path.map(([x, y]) => `${x},${y}`).join(" ")}" ${style} />`;
+    }
+    this.cloudOverlay.innerHTML = shape;
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -3060,7 +3440,7 @@ export class Viewer3D {
     }
 
     // Skeleton
-    this.skeletonGroup.visible = this.settings.showSkeleton;
+    this.skeletonGroup.visible = this.settings.showSkeleton && !this.cloudFocus;
     this.controlsGroup.visible = this.settings.showSkeleton;
     this.updateAxesHelper();
 
@@ -4206,7 +4586,7 @@ export class Viewer3D {
   }
 
   private fitCamera(): void {
-    const box = this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox();
+    const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
     if (!box) return;
     this.viewTransition = null;
 

@@ -243,7 +243,8 @@ import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from
 import { SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
-import type { ScanMeshSettings } from "./components/steps/ScanStep";
+import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
+import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan } from "./components/panels/BodyPlanPanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -659,6 +660,8 @@ export const App: Component = () => {
   const [autoIk, setAutoIk] = createPersisted("pose.autoIk", { enabled: false, toRoot: false });
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
+  /** Nube de puntos del escáner en edición (Orizon3D) */
+  const scanCloud = createScanCloud(viewer, (text) => setStatusMessage(text));
 
   // UV / Piel de la malla retopologizada
   const [uvConfig, setUvConfig] = createSignal<UvConfig>(defaultUvConfig);
@@ -1134,8 +1137,10 @@ export const App: Component = () => {
   });
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
-  const undo = () => void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
-  const redo = () => void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
+  const undo = () =>
+    cloudEditing() ? void scanCloud.history(false) : void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
+  const redo = () =>
+    cloudEditing() ? void scanCloud.history(true) : void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
 
   // Shortcuts
   const shortcuts = createShortcutManager();
@@ -1172,8 +1177,17 @@ export const App: Component = () => {
       description: "Reproducir / ver todo",
     },
     { key: "i", action: () => animating() && handleInsertKey(), description: "Insertar key" },
-    { key: "x", action: () => animating() && handleDeleteKeys(), description: "Borrar keys" },
-    { key: "Delete", action: () => animating() && handleDeleteKeys(), description: "Borrar keys" },
+    {
+      key: "x",
+      action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
+      description: "Borrar keys / puntos seleccionados",
+    },
+    {
+      key: "Delete",
+      action: () => (cloudEditing() ? scanCloud.deleteSelection() : animating() && handleDeleteKeys()),
+      description: "Borrar keys / puntos seleccionados",
+    },
+    { key: "i", ctrl: true, action: () => cloudEditing() && scanCloud.select("invert"), description: "Invertir la selección de la nube" },
     { key: "ArrowLeft", action: () => animating() && stepFrame(-1), description: "Cuadro anterior" },
     { key: "ArrowRight", action: () => animating() && stepFrame(1), description: "Cuadro siguiente" },
     { key: "ArrowLeft", shift: true, action: () => animating() && stepFrame(-Infinity), description: "Al inicio" },
@@ -1200,8 +1214,17 @@ export const App: Component = () => {
     { key: "7", ctrl: true, action: () => viewerRef?.setView("bottom"), description: "Vista inferior" },
     { key: "b", action: () => useTool("paint"), description: "Pintar pesos" },
     // Pose (Animar): selección, reiniciar, copiar y pegar
-    { key: "a", action: () => rigging() && handleSelectCommand("all"), description: "Seleccionar todo" },
-    { key: "a", alt: true, action: () => rigging() && handleSelectCommand("none"), description: "No seleccionar nada" },
+    {
+      key: "a",
+      action: () => (cloudEditing() ? scanCloud.select("all") : rigging() && handleSelectCommand("all")),
+      description: "Seleccionar todo",
+    },
+    {
+      key: "a",
+      alt: true,
+      action: () => (cloudEditing() ? scanCloud.select("none") : rigging() && handleSelectCommand("none")),
+      description: "No seleccionar nada",
+    },
     { key: "[", action: () => rigging() && handleSelectCommand("parent"), description: "Seleccionar el padre" },
     { key: "{", shift: true, action: () => rigging() && handleSelectCommand("parent", true), description: "Sumar el padre" },
     { key: "]", action: () => rigging() && handleSelectCommand("children"), description: "Seleccionar los hijos" },
@@ -1260,6 +1283,7 @@ export const App: Component = () => {
   const handleViewerReady = (v: Viewer3D) => {
     viewerRef = v;
     setViewer(v);
+    void scanCloud.attach(v);
   };
 
   const handleLoad = async () => {
@@ -1309,17 +1333,19 @@ export const App: Component = () => {
     }
   };
 
-  /** Modelo del escáner (Orizon3D): reemplaza al abierto */
-  const handleScanModel = async (settings: ScanMeshSettings) => {
+  /** Modelo del escáner (Orizon3D), de la nube editada o del escáner: reemplaza al abierto */
+  const handleScanModel = async (settings: ScanMeshSettings, fromCloud: boolean) => {
     if (blockedByTask()) return;
     if (meshLoaded() && !(await confirmDiscard("Crear modelo del escáner", "El modelo del escáner reemplaza al abierto.", "Reemplazar"))) return;
     setIsProcessing(true);
     try {
       const info = await busy("Creando el modelo del escáner...", () =>
-        invoke<MeshInfo>("scanner_create_model", { settings, onProgress: progressChannel() })
+        invoke<MeshInfo>(fromCloud ? "scan_cloud_create_model" : "scanner_create_model", { settings, onProgress: progressChannel() })
       );
       setProjectPath(undefined);
       setFileName("Escaneo");
+      // Se ve el modelo nuevo; la nube sigue en edición por si hay que retocarla
+      scanCloud.setShown(false);
       await showNewModel(info, "Escanear");
     } catch (e) {
       console.error("Scan model error:", e);
@@ -3753,6 +3779,27 @@ export const App: Component = () => {
     setRigEditorTab("library");
     setRigEditorOpen(true);
   };
+  // Panel lateral de Orizon3D (como los editores de pieles y de rig)
+  const [scanEditorOpen, setScanEditorOpen] = createPersisted("scanEditor.open", true);
+  const [scanEditorTab, setScanEditorTab] = createPersisted<ScanEditorTab>("scanEditor.tab", "capture");
+  const [scanEditorFraction, setScanEditorFraction] = createPersisted("scanEditor.fraction", 0.4);
+  const inScanWorkspace = () => pipeline.workspace()?.id === "scan";
+  const scanEditorVisible = () => inScanWorkspace() && scanEditorOpen() && !textureEditor();
+  const resizeScanEditor = (e: PointerEvent) => {
+    const start = scanEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setScanEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
+  };
+  /** La nube se ve y se edita en el visor (en Orizon3D, con una nube abierta) */
+  const cloudEditing = () => inScanWorkspace() && !!scanCloud.info() && scanCloud.shown();
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const on = cloudEditing();
+    v.setCloudFocus(on);
+    v.setCloudTool(on ? scanCloud.tool() : null);
+  });
+
   const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}{constraintPanel}</div>, rig: rigPanel };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
@@ -5479,6 +5526,22 @@ export const App: Component = () => {
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRigEditor} />
           </Show>
+          {/* Orizon3D a la izquierda del visor */}
+          <Show when={scanEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * scanEditorFraction()}%` }}>
+              <ScanEditor
+                tab={scanEditorTab()}
+                onTab={setScanEditorTab}
+                onClose={() => setScanEditorOpen(false)}
+                cloud={scanCloud}
+                onCreateModel={handleScanModel}
+                onRepair={() => pipeline.setActiveStep("repair")}
+                hasModel={meshLoaded()}
+                isProcessing={isProcessing()}
+              />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeScanEditor} />
+          </Show>
           {/* Editor de texturas a la izquierda del visor */}
           <Show when={textureEditor()}>
             {(selection) => (
@@ -5821,8 +5884,12 @@ export const App: Component = () => {
               onResetPose: () => viewerRef?.resetPose(),
             }}
             scanProps={{
-              onCreateModel: handleScanModel,
-              isProcessing: isProcessing(),
+              editorOpen: scanEditorVisible(),
+              onOpenEditor: () => {
+                setTextureEditor(undefined);
+                setScanEditorOpen(true);
+              },
+              cloud: scanCloud.info(),
             }}
             print3dProps={{
               onAnalyze: handleAnalyzePrint3d,

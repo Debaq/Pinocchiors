@@ -113,17 +113,31 @@ pub(crate) fn rebuild(surface: &Surface, voxel: f64) -> Surface {
             own.into_iter().chain(outside_band)
         })
         .collect();
-    crossing.sort_unstable();
-    crossing.dedup();
-    let crossing: HashMap<u32, f64> = crossing
-        .par_iter()
-        .map(|&i| {
-            let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i))).max(1e-6 * h);
-            (i, if flags[i as usize] & INSIDE != 0 { -d } else { d })
+    // Lejos de la banda también puede haber cambios de signo: donde se tocan
+    // regiones inundadas con distinto número de vueltas (pasa con superficies
+    // abiertas y rotas, como las de un escáner). Un cambio en diagonal dentro
+    // de un cubo siempre deja un cambio sobre alguna arista del cubo, así que
+    // basta buscar vecinos por las caras y sumar los vecinos del otro lado
+    let far: Vec<u32> = (0..flags.len() as u32)
+        .into_par_iter()
+        .filter(|&i| flags[i as usize] & NEAR == 0)
+        .filter(|&i| grid.face_neighbors(i).any(|j| (flags[j as usize] ^ flags[i as usize]) & INSIDE != 0))
+        .flat_map_iter(|i| {
+            let other: Vec<u32> =
+                grid.neighbors(i).filter(|&j| (flags[j as usize] ^ flags[i as usize]) & INSIDE != 0).collect();
+            std::iter::once(i).chain(other)
         })
         .collect();
+    crossing.extend(far);
+    crossing.sort_unstable();
+    crossing.dedup();
+    let signed = |i: u32| {
+        let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i))).max(1e-6 * h);
+        if flags[i as usize] & INSIDE != 0 { -d } else { d }
+    };
+    let crossing: HashMap<u32, f64> = crossing.par_iter().map(|&i| (i, signed(i))).collect();
 
-    let mut out = marching_tetrahedra(&grid, &flags, &crossing);
+    let mut out = marching_tetrahedra(&grid, &flags, &crossing, &signed);
     collapse_short_edges(&mut out, SHORT_EDGE * h);
     out
 }
@@ -263,7 +277,10 @@ const KUHN: [[usize; 4]; 6] = [
     [0, 4, 6, 7],
 ];
 
-fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>) -> Surface {
+/// `signed` da la distancia con signo de un punto que no esté en `crossing`
+/// (no debería pasar, pero una esquina sin distancia no puede tumbar la
+/// reconstrucción)
+fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>, signed: &(dyn Fn(u32) -> f64 + Sync)) -> Surface {
     // Cubos con alguna esquina de cruce
     let [nx, ny, nz] = grid.dims;
     let mut cells: Vec<u32> = crossing
@@ -293,7 +310,8 @@ fn marching_tetrahedra(grid: &Grid, flags: &[u8], crossing: &HashMap<u32, f64>) 
             }
             let mut vertex = |a: u32, b: u32| -> u32 {
                 *edge_vertex.entry((a.min(b), a.max(b))).or_insert_with(|| {
-                    let (da, db) = (crossing[&a], crossing[&b]);
+                    let dist = |i: u32| crossing.get(&i).copied().unwrap_or_else(|| signed(i));
+                    let (da, db) = (dist(a), dist(b));
                     let t = da / (da - db);
                     surface.positions.push(grid.point(a) + (grid.point(b) - grid.point(a)) * t);
                     (surface.positions.len() - 1) as u32

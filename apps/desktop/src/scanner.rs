@@ -17,7 +17,7 @@ use crate::commands::{in_background, load_scene, report, MeshInfo, Progress};
 pub struct ScannerHandle(Mutex<Option<Arc<Scanner>>>);
 
 impl ScannerHandle {
-    fn get(&self) -> Option<Arc<Scanner>> {
+    pub(crate) fn get(&self) -> Option<Arc<Scanner>> {
         self.0.lock().unwrap().clone()
     }
 }
@@ -283,7 +283,7 @@ pub async fn scanner_create_model(
 
 /// Malla del escáner (cámara: X derecha, Y abajo, Z adelante, mm) a escena
 /// con Y arriba, centrada y apoyada en el piso
-fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
+pub(crate) fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
     // Girar 180° sobre X: Y abajo → arriba y el objeto queda mirando a la
     // cámara del visor. Es una rotación, así que el sentido de las caras se conserva
     let mut positions: Vec<[f32; 3]> = mesh.vertices.iter().map(|v| [v[0], -v[1], -v[2]]).collect();
@@ -326,6 +326,111 @@ fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Media esfera vista desde una cámara, como sale de un escaneo de un cuadro
+    fn scanned_half_sphere() -> orizon3d_core::Mesh {
+        use orizon3d_core::pointcloud::{Point, PointCloud};
+        let (r, c) = (40.0f32, [0.0f32, 0.0, 300.0]);
+        let mut points = Vec::new();
+        let n = 120;
+        for a in 0..n {
+            let th = std::f32::consts::PI * (a as f32 + 0.5) / n as f32;
+            let m = ((2.0 * n as f32 * th.sin()) as i32).max(1);
+            for b in 0..m {
+                let ph = 2.0 * std::f32::consts::PI * b as f32 / m as f32;
+                let nrm = [th.sin() * ph.cos(), th.cos(), th.sin() * ph.sin()];
+                if nrm[2] > 0.0 {
+                    continue;
+                }
+                points.push(Point { x: c[0] + r * nrm[0], y: c[1] + r * nrm[1], z: c[2] + r * nrm[2], rgb: [180, 120, 90], view: [0.0; 3] });
+            }
+        }
+        orizon3d_core::mesh::reconstruct(&PointCloud { points, has_color: true }, 2.0, 1, 2)
+    }
+
+    #[test]
+    fn scan_mesh_can_be_repaired() {
+        let mesh = scanned_half_sphere();
+        assert!(!mesh.is_empty());
+        let scene = scan_to_scene(&mesh, "Escaneo");
+        let mut m = crate::commands::scene_to_pinocchio_mesh(&scene).unwrap();
+        let _ = pinocchio_repair::analyze(&m, &pinocchio_repair::AnalysisConfig::default());
+        pinocchio_repair::repair_all(&mut m, &pinocchio_repair::RepairConfig::default()).unwrap();
+    }
+
+    /// Escaneo sucio: esfera, mesa, ruido y restos sueltos
+    fn scanned_messy() -> orizon3d_core::Mesh {
+        use orizon3d_core::pointcloud::{Point, PointCloud};
+        let mut seed = 12345u64;
+        let mut rnd = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % 1_000_000) as f32 / 1_000_000.0
+        };
+        let mut points = Vec::new();
+        let mut push = |x: f32, y: f32, z: f32| points.push(Point { x, y, z, rgb: [150, 140, 130], view: [0.0; 3] });
+        for _ in 0..40000 {
+            let u = rnd() * 2.0 - 1.0;
+            let t = rnd() * std::f32::consts::TAU;
+            let r = (1.0 - u * u).sqrt();
+            let n = [r * t.cos(), u, r * t.sin()];
+            if n[2] > 0.3 {
+                continue;
+            }
+            let e = (rnd() - 0.5) * 1.5;
+            push(n[0] * (40.0 + e), n[1] * (40.0 + e), 300.0 + n[2] * (40.0 + e));
+        }
+        for _ in 0..20000 {
+            push(rnd() * 200.0 - 100.0, 40.0 + (rnd() - 0.5), 200.0 + rnd() * 200.0);
+        }
+        for _ in 0..800 {
+            push(rnd() * 200.0 - 100.0, rnd() * 100.0 - 60.0, 200.0 + rnd() * 200.0);
+        }
+        orizon3d_core::mesh::reconstruct(&PointCloud { points, has_color: true }, 2.0, 1, 2)
+    }
+
+    #[test]
+    fn messy_scan_can_be_repaired_and_retopologized() {
+        let scene = scan_to_scene(&scanned_messy(), "Escaneo");
+        let mut m = crate::commands::scene_to_pinocchio_mesh(&scene).unwrap();
+        let config = pinocchio_repair::AnalysisConfig { check_self_intersections: true, ..Default::default() };
+        let _ = pinocchio_repair::analyze(&m, &config);
+        let q = quadriflow_core::RemeshConfig { target_faces: 3000, ..Default::default() };
+        quadriflow_core::remesh(&m, &q).unwrap();
+        let quads = quadriflow_core::remesh(&m, &q).unwrap();
+        let _ = quadriflow_core::quality::analyze(&quads, Some(&m));
+        pinocchio_repair::repair_all(&mut m, &app_repair_config()).unwrap();
+        let quads = quadriflow_core::remesh(&m, &q).unwrap();
+        let _ = quadriflow_core::quality::analyze(&quads, Some(&m));
+    }
+
+    /// La reparación como la pide el panel con sus valores de fábrica
+    fn app_repair_config() -> pinocchio_repair::RepairConfig {
+        pinocchio_repair::RepairConfig {
+            remove_small_components: true,
+            fill_holes: true,
+            hole_fill_config: pinocchio_repair::HoleFillConfig { max_hole_edges: 0, refine: true, fair: true },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn half_sphere_scan_with_app_repair() {
+        let scene = scan_to_scene(&scanned_half_sphere(), "Escaneo");
+        let mut m = crate::commands::scene_to_pinocchio_mesh(&scene).unwrap();
+        pinocchio_repair::repair_all(&mut m, &app_repair_config()).unwrap();
+    }
+
+    #[test]
+    fn scan_mesh_can_be_retopologized() {
+        let scene = scan_to_scene(&scanned_half_sphere(), "Escaneo");
+        let m = crate::commands::scene_to_pinocchio_mesh(&scene).unwrap();
+        for rebuild in [quadriflow_core::Rebuild::Auto, quadriflow_core::Rebuild::Always] {
+            let config = quadriflow_core::RemeshConfig { target_faces: 2000, rebuild, ..Default::default() };
+            quadriflow_core::remesh(&m, &config).unwrap();
+        }
+    }
 
     #[test]
     fn scan_mesh_becomes_y_up_scene_on_the_floor() {
