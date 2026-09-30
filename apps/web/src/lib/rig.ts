@@ -182,6 +182,8 @@ export interface RigSettings {
   constraints?: RigConstraint[];
   /** Los límites de giro no se aplican (se ven igual en el panel) */
   limitsOff?: boolean;
+  /** Piel con cuaterniones duales en el visor (la exportación sigue lineal: glTF no la tiene) */
+  dualQuaternion?: boolean;
 }
 
 export const emptyRigSettings = (): RigSettings => ({ version: 1, bones: {}, groups: [], controls: [], ikChains: [] });
@@ -201,6 +203,7 @@ export function loadRigSettings(raw: unknown): RigSettings {
     settings.controls = r.controls.filter((c) => c && typeof c.id === "string" && Array.isArray(c.position));
   }
   if (r.limitsOff === true) settings.limitsOff = true;
+  if (r.dualQuaternion === true) settings.dualQuaternion = true;
   if (Array.isArray(r.ikChains)) {
     settings.ikChains = r.ikChains.filter((c) => c && typeof c.id === "string" && Array.isArray(c.joints));
   }

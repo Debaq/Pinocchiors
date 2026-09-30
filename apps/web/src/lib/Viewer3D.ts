@@ -15,6 +15,9 @@ import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
 import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
 import { ViewCube } from "./ViewCube";
+import { installDqSkinning, setDqSkinning } from "./dqSkinning";
+
+installDqSkinning();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -3250,7 +3253,11 @@ export class Viewer3D {
       this.meshGroup.add(m);
       return m;
     };
-    return { mesh: skinned(mesh.material), wireframe: skinned(wireframeMaterial()) };
+    const result = { mesh: skinned(mesh.material), wireframe: skinned(wireframeMaterial()) };
+    for (const m of [result.mesh, result.wireframe]) {
+      (Array.isArray(m.material) ? m.material : [m.material]).forEach((x) => setDqSkinning(x, this.dualQuaternion));
+    }
+    return result;
   }
 
   private disposeRig(): void {
@@ -3650,6 +3657,7 @@ export class Viewer3D {
           new THREE.MeshBasicMaterial({ color: ghost.color, transparent: true, opacity: ghost.opacity * 0.5, depthWrite: false })
         );
         skinned.frustumCulled = false;
+        setDqSkinning(skinned.material as THREE.Material, this.dualQuaternion);
         skinned.bind(s, rig.mesh.bindMatrix);
         this.meshGroup.add(skinned);
         this.onion.objects.push(skinned);
@@ -3771,6 +3779,24 @@ export class Viewer3D {
   /** IK automático al arrastrar con G (sin controles): hasta la raíz o hasta la primera ramificación */
   setAutoIk(settings: { enabled: boolean; toRoot: boolean }): void {
     this.autoIk = settings;
+  }
+
+  /** Piel del rig con cuaterniones duales (no se estrangula al girar sobre el eje) */
+  private dualQuaternion = false;
+  setDualQuaternion(on: boolean): void {
+    this.dualQuaternion = on;
+    this.applyDualQuaternion();
+  }
+
+  private applyDualQuaternion(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    const meshes = [rig.mesh, rig.wireframe, ...this.onion.objects.filter((o): o is THREE.SkinnedMesh => o instanceof THREE.SkinnedMesh)];
+    for (const mesh of meshes) {
+      if (!mesh) continue;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      materials.forEach((m) => setDqSkinning(m, this.dualQuaternion));
+    }
   }
 
   /**

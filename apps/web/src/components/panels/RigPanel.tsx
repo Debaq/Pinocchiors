@@ -259,6 +259,17 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                 </Button>
               </div>
 
+              <Checkbox
+                label="Piel con cuaterniones duales (no se estrangula al girar)"
+                checked={!!props.settings.dualQuaternion}
+                onChange={(v) => props.onChange(v ? "Cuaterniones duales" : "Piel lineal", { ...props.settings, dualQuaternion: v || undefined })}
+              />
+              <Show when={props.settings.dualQuaternion}>
+                <p class="text-[11px] text-text-dim leading-relaxed">
+                  Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.
+                </p>
+              </Show>
+
               <div class="space-y-1">
                 <span class="text-xs text-text-muted">Ejes de giro bloqueados</span>
                 <div class="flex gap-1">

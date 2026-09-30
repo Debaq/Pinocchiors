@@ -166,6 +166,17 @@ const BallEditor: Component<{
     const pts = boundaryPoints(shape(), 48).map((p) => toSvg([p[0] * (1 - s), p[1] * (1 - s)]));
     return path(pts);
   });
+  /** Degradado de la zona blanda: bandas con la forma del límite, más oscuras hacia el borde */
+  const softBands = createMemo(() => {
+    const s = limits().stiffness ?? 0;
+    if (s <= 0) return [];
+    const ring = (k: number) => path(boundaryPoints(shape(), 48).map((p) => toSvg([p[0] * k, p[1] * k])));
+    const BANDS = 6;
+    return Array.from({ length: BANDS }, (_, i) => ({
+      d: `${ring(1 - s + (s * (i + 1)) / BANDS)} ${ring(1 - s + (s * i) / BANDS)}`,
+      opacity: (0.05 + 0.3 * ((i + 1) / BANDS) ** 2).toFixed(3),
+    }));
+  });
 
   /** Ángulo del anillo de twist: 0 arriba, positivo en sentido horario */
   const ringPoint = (t: number, r = R + 13): [number, number] => [C + r * Math.sin(rad(t)), C - r * Math.cos(rad(t))];
@@ -215,6 +226,7 @@ const BallEditor: Component<{
 
         {/* Límite y zona blanda */}
         <path d={path(boundaryPoints(shape(), 64).map(toSvg))} fill="var(--color-accent)" fill-opacity="0.12" stroke="var(--color-accent)" stroke-width="1.5" />
+        <For each={softBands()}>{(band) => <path d={band.d} fill="var(--color-accent)" fill-opacity={band.opacity} fill-rule="evenodd" />}</For>
         <Show when={soft()}>
           <path d={soft()} fill="none" stroke="var(--color-accent)" stroke-dasharray="3 3" stroke-width="1" />
         </Show>

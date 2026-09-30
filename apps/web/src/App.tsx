@@ -2653,6 +2653,7 @@ export const App: Component = () => {
   // ─── IK (F2) ──────────────────────────────────────────────────────────────
 
   createEffect(() => viewer()?.setAutoIk(autoIk()));
+  createEffect(() => viewer()?.setDualQuaternion(!!rigSettings().dualQuaternion));
 
   const chainById = (id?: string) => (rigSettings().ikChains ?? []).find((c) => c.id === id);
 
