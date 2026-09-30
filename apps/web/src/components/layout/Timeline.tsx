@@ -391,9 +391,9 @@ export const Timeline: Component<TimelineProps> = (props) => {
           <span class="w-px h-4 bg-border mx-1" />
         </Show>
         <Show when={props.mode === "keys"}>
-          <NumberInput class="w-20 shrink-0" label="×" step={0.1} value={scaleFactor()} onChange={setScaleFactor} />
+          <NumberInput class="w-20 shrink-0" label="×" step={0.1} min={0.01} value={scaleFactor()} onChange={setScaleFactor} />
           <ToolButton title="Escala las keys elegidas alrededor del cursor" onClick={() => props.onTool({ op: "scale", factor: scaleFactor() })}>Escalar</ToolButton>
-          <NumberInput class="w-20 shrink-0" label="×" step={0.1} value={retimeFactor()} onChange={setRetimeFactor} />
+          <NumberInput class="w-20 shrink-0" label="×" step={0.1} min={0.01} value={retimeFactor()} onChange={setRetimeFactor} />
           <ToolButton title="El tramo de las keys elegidas dura ese factor; lo de después se corre" onClick={() => props.onTool({ op: "retime", factor: retimeFactor() })}>Retiempo</ToolButton>
           <ToolButton title="El último cuadro igual al primero, con las tangentes continuas" onClick={() => props.onTool({ op: "closeCycle" })}>Cerrar ciclo</ToolButton>
           <span class="w-px h-4 bg-border mx-1" />

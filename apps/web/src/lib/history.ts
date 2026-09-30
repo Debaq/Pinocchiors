@@ -177,13 +177,19 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
     save: () => ({ version: 1, nodes: nodes(), current: current() }),
     load: (saved) =>
       batch(() => {
-        if (!saved || saved.version !== 1 || !saved.nodes?.length || !saved.nodes[saved.current]) {
+        const valid =
+          saved?.version === 1 &&
+          Array.isArray(saved.nodes) &&
+          saved.nodes.length > 0 &&
+          !!saved.nodes[saved.current] &&
+          saved.nodes.every((n) => n && Array.isArray(n.children));
+        if (!valid) {
           setNodes([root()]);
           setCurrent(0);
           return;
         }
-        setNodes(saved.nodes.map((n) => ({ ...n, children: [...n.children] })));
-        setCurrent(saved.current);
+        setNodes(saved!.nodes.map((n) => ({ ...n, children: [...n.children] })));
+        setCurrent(saved!.current);
       }),
   };
 }

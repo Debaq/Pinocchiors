@@ -420,9 +420,14 @@ export const App: Component = () => {
   /** Canal de progreso del backend que alimenta la barra */
   const progressChannel = () => {
     const channel = new Channel<Progress>();
-    channel.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+    const generation = progressGeneration;
+    // Un aviso que llega después de terminar la tarea no vuelve a mostrar la barra
+    channel.onmessage = (msg) => {
+      if (generation === progressGeneration) setProgress({ value: msg.percent, label: msg.message });
+    };
     return channel;
   };
+  let progressGeneration = 0;
 
   /** Muestra la barra mientras dura `task` (indeterminada salvo que un canal informe avance) */
   const busy = async <T,>(label: string, task: () => Promise<T>): Promise<T> => {
@@ -430,6 +435,7 @@ export const App: Component = () => {
     try {
       return await task();
     } finally {
+      progressGeneration++;
       setProgress(undefined);
     }
   };
@@ -512,7 +518,19 @@ export const App: Component = () => {
 
   // Autorig state
   const [autorigComplete, setAutorigComplete] = createSignal(false);
-  const [isProcessing, setIsProcessing] = createSignal(false);
+  // Tareas largas en curso: un contador, así la que termina primero no
+  // libera los botones mientras otra sigue corriendo
+  const [processingCount, setProcessingCount] = createSignal(0);
+  const isProcessing = () => processingCount() > 0;
+  const setIsProcessing = (on: boolean) => setProcessingCount((n) => Math.max(0, n + (on ? 1 : -1)));
+  /** Abriendo, importando o empezando de cero: el proyecto cambia debajo */
+  const [switching, setSwitching] = createSignal(false);
+  /** Avisa y devuelve `true` si otra tarea larga está en curso */
+  const blockedByTask = () => {
+    if (!isProcessing() && !progress() && !switching()) return false;
+    setStatusMessage("Hay un proceso en curso: espera a que termine");
+    return true;
+  };
   const [boneNames, setBoneNames] = createSignal<string[]>([]);
   const [weightsData, setWeightsData] = createSignal<WeightsData | undefined>();
 
@@ -971,8 +989,8 @@ export const App: Component = () => {
     { key: "n", ctrl: true, action: () => handleNewProject(), description: "Proyecto nuevo" },
     { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
     { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
-    { key: "z", ctrl: true, action: () => history.undo(), description: "Deshacer" },
-    { key: "z", ctrl: true, shift: true, action: () => history.redo(), description: "Rehacer" },
+    { key: "z", ctrl: true, action: () => void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`)), description: "Deshacer" },
+    { key: "z", ctrl: true, shift: true, action: () => void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`)), description: "Rehacer" },
     { key: "q", action: () => useTool("select"), description: "Seleccionar" },
     // Sobre el modelo, G/R/S eligen el gizmo. Sobre el esqueleto, como en
     // Blender, G y R son operaciones modales sobre la articulación
@@ -1088,6 +1106,7 @@ export const App: Component = () => {
   };
 
   const handleLoad = async () => {
+    if (blockedByTask()) return;
     try {
       const formats = supportedFormats();
       if (!formats) return;
@@ -1112,29 +1131,37 @@ export const App: Component = () => {
 
       const filePath = typeof selected === "string" ? selected : selected[0];
       const name = filePath.split("/").pop() ?? filePath;
-      setFileName(name);
       setStatusMessage(`Importando ${name}...`);
 
+      setSwitching(true);
       const info = await busy(`Importando ${name}...`, () =>
         invoke<MeshInfo>("import_model", { path: filePath, onProgress: progressChannel() })
       );
+      // El backend ya tiene el modelo nuevo: el archivo del proyecto anterior no le corresponde
+      setProjectPath(undefined);
       await showNewModel(info, `Importar ${name}`);
+      // El nombre cambia solo si la importación salió bien
+      setFileName(name);
       pipeline.setActiveStep("structure");
     } catch (e) {
       console.error("Import error:", e);
       setStatusMessage(`Error: ${e}`);
       setProgress(undefined);
+    } finally {
+      setSwitching(false);
     }
   };
 
   /** Modelo del escáner (Orizon3D): reemplaza al abierto */
   const handleScanModel = async (settings: ScanMeshSettings) => {
+    if (blockedByTask()) return;
     if (meshLoaded() && !(await confirmDiscard("Crear modelo del escáner", "El modelo del escáner reemplaza al abierto.", "Reemplazar"))) return;
     setIsProcessing(true);
     try {
       const info = await busy("Creando el modelo del escáner...", () =>
         invoke<MeshInfo>("scanner_create_model", { settings, onProgress: progressChannel() })
       );
+      setProjectPath(undefined);
       setFileName("Escaneo");
       await showNewModel(info, "Escanear");
     } catch (e) {
@@ -1212,17 +1239,24 @@ export const App: Component = () => {
     pipeline.markCompleted("import");
   };
 
+  /** Cuenta las elecciones de plantilla: una respuesta vieja no pisa a la última */
+  let skeletonRequest = 0;
   const handleSkeletonChange = async (presetId: string) => {
+    const request = ++skeletonRequest;
+    const previous = selectedSkeleton();
     try {
       setSelectedSkeleton(presetId);
 
       const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+      if (request !== skeletonRequest) return;
       history.milestone(`Plantilla: ${skeletonPresets().find((p) => p.id === presetId)?.name ?? presetId}`);
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonLoaded(true);
       setFitInfo(undefined);
       setAutorigComplete(false);
-      setBodyPlan((await invoke<BodyPlan | null>("get_body_plan", { presetId })) ?? undefined);
+      const plan = (await invoke<BodyPlan | null>("get_body_plan", { presetId })) ?? undefined;
+      if (request !== skeletonRequest) return;
+      setBodyPlan(plan);
 
       const preset = skeletonPresets().find((p) => p.id === presetId);
       if (preset) {
@@ -1236,6 +1270,8 @@ export const App: Component = () => {
     } catch (e) {
       console.error("Skeleton error:", e);
       setStatusMessage(`Error: ${e}`);
+      // La lista vuelve a mostrar la plantilla que sigue puesta
+      if (request === skeletonRequest) setSelectedSkeleton(previous);
     }
   };
 
@@ -1972,12 +2008,20 @@ export const App: Component = () => {
         if (needs()) void editClip({ in: "Acelerar", out: "Frenar", both: "Acelerar y frenar", none: "Sin aceleración" }[tool.value], (c) => setEase(c, refs, tool.value, rot));
         break;
       case "scale":
+        if (!(tool.factor > 0)) {
+          setStatusMessage("Escalar: el factor tiene que ser mayor que 0");
+          break;
+        }
         if (needs()) {
           void editClip("Escalar keys", (c) => scaleKeys(c, refs, Math.round(frame()), tool.factor));
           clearSelections();
         }
         break;
       case "retime": {
+        if (!(tool.factor > 0)) {
+          setStatusMessage("Retiempo: el factor tiene que ser mayor que 0");
+          break;
+        }
         if (!needs()) break;
         const frames = [...refs].map((id) => parseKeyRef(id).frame);
         const [a, b] = [Math.min(...frames), Math.max(...frames)];
@@ -2747,28 +2791,46 @@ export const App: Component = () => {
   };
 
   /** Recorre todo el rango de la activa en el visor y vuelve a la pose que había */
+  /** Barrido de "probar rango" en curso y la pose a la que vuelve */
+  let probe: { handle: number; saved: Pose; frame: number; clip?: string } | undefined;
+  const stopProbe = (restore: boolean) => {
+    if (!probe) return;
+    cancelAnimationFrame(probe.handle);
+    if (restore) viewer()?.setPose(probe.saved);
+    probe = undefined;
+    setPoseTick((t) => t + 1);
+  };
   const handleProbe = () => {
     const v = viewer();
     const j = activeJoint();
     const limits = limitsOf(j);
     if (!v || !limits || !animating()) return;
+    // Otro clic mientras barre: vuelve a la pose de antes y empieza de nuevo
+    stopProbe(true);
     const frameAxes = rigCtx().frames[j];
     const path = rangePath(limits);
-    const saved = v.getPose();
+    const current = { handle: 0, saved: v.getPose(), frame: frame(), clip: activeClipId() };
+    probe = current;
     let i = 0;
     const step = () => {
+      if (probe !== current) return;
+      // Cambió el cuadro, la animación o se salió de Animar: la pose de antes ya no vale
+      if (!animating() || frame() !== current.frame || activeClipId() !== current.clip) {
+        probe = undefined;
+        return;
+      }
       if (i >= path.length) {
-        v.setPose(saved);
-        setPoseTick((t) => t + 1);
+        stopProbe(true);
         return;
       }
       const pose = emptyPose();
       pose.rotations.set(j, fromJointSpace(path[i++], frameAxes));
       v.applyPartialPose(pose);
-      requestAnimationFrame(step);
+      current.handle = requestAnimationFrame(step);
     };
-    requestAnimationFrame(step);
+    current.handle = requestAnimationFrame(step);
   };
+  onCleanup(() => stopProbe(false));
 
   /** Límites automáticos para la selección (o todo el esqueleto) */
   const handleAutoLimits = (mode: LimitsAuto) => {
@@ -4167,7 +4229,11 @@ export const App: Component = () => {
   const [confirmation, setConfirmation] = createSignal<(ConfirmRequest & { resolve: (ok: boolean) => void }) | undefined>();
   /** Pregunta con el diálogo de la app; `true` si se confirma */
   const confirmAction = (request: ConfirmRequest) =>
-    new Promise<boolean>((resolve) => setConfirmation({ ...request, resolve }));
+    new Promise<boolean>((resolve) => {
+      // Una pregunta nueva reemplaza a la que estaba abierta: esa queda como "no"
+      confirmation()?.resolve(false);
+      setConfirmation({ ...request, resolve });
+    });
   const answerConfirmation = (ok: boolean) => {
     const pending = confirmation();
     setConfirmation(undefined);
@@ -4265,6 +4331,28 @@ export const App: Component = () => {
     });
   };
 
+  // Valores por defecto de las configuraciones (los del arranque): un proyecto
+  // viejo o editado a mano puede no traer todos los campos
+  const configDefaults = {
+    lights: lights(),
+    autorig: autorigConfig(),
+    paint: paintConfig(),
+    retopology: retopologyConfig(),
+    uv: uvConfig(),
+    repairAnalysis: repairAnalysisConfig(),
+    repair: repairOptions(),
+    export: exportOptions(),
+  };
+  /** Lo guardado encima de los valores por defecto (solo si es un objeto) */
+  const withDefaults = <T extends object>(defaults: T, saved: unknown): T =>
+    saved && typeof saved === "object" && !Array.isArray(saved) ? { ...defaults, ...saved } : defaults;
+  /** Clips con la forma esperada (los demás se descartan) */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const validClips = (raw: any): AnimationClip[] =>
+    Array.isArray(raw)
+      ? raw.filter((c) => c && typeof c.id === "string" && Array.isArray(c.tracks) && Number.isFinite(c.start) && Number.isFinite(c.end))
+      : [];
+
   /** Pone la interfaz como estaba y relee del backend lo que ve el visor */
   const restoreProjectUi = async (json: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -4281,7 +4369,7 @@ export const App: Component = () => {
 
     setFileName(ui.fileName);
     if (ui.meshInfo) setMeshInfo(ui.meshInfo);
-    if (ui.lights) setLights(ui.lights);
+    if (ui.lights) setLights(withDefaults(configDefaults.lights, ui.lights));
     setViewSettings((prev) => ({ ...prev, ...ui.view, trackpadNavigation: prev.trackpadNavigation }));
     if (typeof ui.showGrid === "boolean") {
       setShowGrid(ui.showGrid);
@@ -4293,15 +4381,15 @@ export const App: Component = () => {
     if (typeof ui.skeleton?.symmetricEdit === "boolean") setSymmetricEdit(ui.skeleton.symmetricEdit);
     setFitInfo(ui.skeleton?.fitInfo);
     setBodyPlan(ui.skeleton?.bodyPlan);
-    if (ui.autorig?.config) setAutorigConfig(ui.autorig.config);
-    if (ui.paintConfig) setPaintConfig(ui.paintConfig);
-    if (ui.retopology?.config) setRetopologyConfig(ui.retopology.config);
+    if (ui.autorig?.config) setAutorigConfig(withDefaults(configDefaults.autorig, ui.autorig.config));
+    if (ui.paintConfig) setPaintConfig(withDefaults(configDefaults.paint, ui.paintConfig));
+    if (ui.retopology?.config) setRetopologyConfig(withDefaults(configDefaults.retopology, ui.retopology.config));
     setQuadMeshInfo(ui.retopology?.info ?? { vertices: 0, quads: 0 });
     setQuadQuality(ui.retopology?.quality);
-    if (ui.uv?.config) setUvConfig(ui.uv.config);
+    if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
-    if (ui.repair?.analysisConfig) setRepairAnalysisConfig(ui.repair.analysisConfig);
-    if (ui.repair?.options) setRepairOptions(ui.repair.options);
+    if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
+    if (ui.repair?.options) setRepairOptions(withDefaults(configDefaults.repair, ui.repair.options));
     setDiagnostics(ui.repair?.diagnostics);
     setRepairResult(ui.repair?.result);
     setCanUndoRepair(ui.repair?.canUndo === true);
@@ -4312,7 +4400,7 @@ export const App: Component = () => {
     if (ui.export) {
       setExportIncludeRig(ui.export.includeRig !== false);
       setExportUseRetopology(ui.export.useRetopology === true);
-      if (ui.export.options) setExportOptions(ui.export.options);
+      if (ui.export.options) setExportOptions(withDefaults(configDefaults.export, ui.export.options));
     }
     const rig = loadRigSettings(ui.rig);
     setRigSettings(rig);
@@ -4320,7 +4408,7 @@ export const App: Component = () => {
     setMixer(loadMixer(ui.mixer));
     setSelectedJoints([]);
     setSelectedControl(undefined);
-    setClips(tidyClips(ui.animation?.clips ?? [], rig));
+    setClips(tidyClips(validClips(ui.animation?.clips), rig));
     setActiveClipId(ui.animation?.activeClipId);
     setFrame(ui.animation?.frame ?? 0);
     if (typeof ui.animation?.autoKey === "boolean") setAutoKey(ui.animation.autoKey);
@@ -4392,6 +4480,7 @@ export const App: Component = () => {
 
   /** Abre un proyecto (`path`) o pregunta cuál; `recovered` = viene del archivo de recuperación */
   const handleOpenProject = async (path?: string, recovered = false) => {
+    if (blockedByTask()) return;
     if (!(await confirmDiscard("Abrir proyecto", "Se cierra el trabajo actual.", "Abrir otro proyecto"))) return;
     if (!path) {
       const chosen = await open({
@@ -4401,8 +4490,10 @@ export const App: Component = () => {
       if (!chosen) return;
       path = typeof chosen === "string" ? chosen : chosen[0];
     }
+    let opened: ProjectOpened | undefined;
+    setSwitching(true);
     try {
-      const opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
+      opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
       await restoreProjectUi(opened.ui);
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
@@ -4410,19 +4501,29 @@ export const App: Component = () => {
       setStatusMessage(recovered ? "Sesión recuperada" : `Proyecto abierto: ${baseName(path)}`);
     } catch (e) {
       console.error("Open project error:", e);
-      setStatusMessage(`Error al abrir: ${e}`);
+      if (opened) {
+        // El backend ya tiene el proyecto nuevo pero la interfaz quedó a medias:
+        // que el próximo Guardar pregunte dónde, así no pisa el archivo anterior
+        setProjectPath(undefined);
+        setStatusMessage(`El proyecto se abrió con errores (guárdalo con otro nombre): ${e}`);
+      } else {
+        setStatusMessage(`Error al abrir: ${e}`);
+      }
+    } finally {
+      setSwitching(false);
     }
   };
 
   /** Empieza de cero: sin modelo, esqueleto, animaciones ni historial */
   const handleNewProject = async () => {
-    if (isProcessing()) return setStatusMessage("Hay un proceso en curso: espera a que termine");
+    if (blockedByTask()) return;
     const discard = await confirmDiscard(
       "Proyecto nuevo",
       "Se cierran el modelo, el esqueleto, las animaciones y el historial.",
       "Empezar de cero"
     );
     if (!discard) return;
+    setSwitching(true);
     try {
       await invoke("new_project");
       clearSkeletonUi();
@@ -4437,6 +4538,8 @@ export const App: Component = () => {
       setStatusMessage("Proyecto nuevo");
     } catch (e) {
       setStatusMessage(`Error: ${e}`);
+    } finally {
+      setSwitching(false);
     }
   };
 
@@ -4490,7 +4593,7 @@ export const App: Component = () => {
   let autosaving = false;
   const autosaveTimer = setInterval(async () => {
     const settings = autosave();
-    if (autosaving || !hasWork() || isProcessing() || progress()) return;
+    if (autosaving || !hasWork() || isProcessing() || progress() || switching()) return;
     const minutes = settings.enabled ? settings.minutes : RECOVERY_MINUTES;
     if (Date.now() - lastAutosave < minutes * 60_000) return;
     autosaving = true;
@@ -4534,6 +4637,14 @@ export const App: Component = () => {
       // Sin backend (vista previa) no hay ventana de Tauri
     }
   });
+
+  // Ningún error asíncrono queda mudo: si nadie lo atrapó, va a la barra de estado
+  const onUnhandled = (e: PromiseRejectionEvent) => {
+    console.error("Unhandled rejection:", e.reason);
+    setStatusMessage(`Error: ${e.reason instanceof Error ? e.reason.message : String(e.reason)}`);
+  };
+  window.addEventListener("unhandledrejection", onUnhandled);
+  onCleanup(() => window.removeEventListener("unhandledrejection", onUnhandled));
 
   // Al abrir la app sin modelo: ofrecer la última recuperación
   onMount(async () => {

@@ -318,5 +318,8 @@ export class UvView {
     this.imageMesh.geometry.dispose();
     this.imageMaterial.dispose();
     this.renderer.dispose();
+    // dispose() no suelta el contexto WebGL: abrir y cerrar el editor muchas
+    // veces agotaría el límite del navegador y se perdería el del visor
+    this.renderer.forceContextLoss();
   }
 }

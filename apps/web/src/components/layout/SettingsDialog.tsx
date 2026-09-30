@@ -48,7 +48,12 @@ export const SettingsDialog: Component<SettingsDialogProps> = (props) => {
       if (e.key === "Escape") {
         e.stopPropagation();
         props.onClose();
+        return;
       }
+      // Los atajos de la app no corren detrás del diálogo; los campos de
+      // texto reciben sus teclas (los atajos ya los ignoran) y Tab navega
+      const target = e.target as HTMLElement | null;
+      if (e.key !== "Tab" && !target?.closest("input, textarea, select, [contenteditable='true']")) e.stopPropagation();
     };
     window.addEventListener("keydown", onKey, true);
     onCleanup(() => window.removeEventListener("keydown", onKey, true));

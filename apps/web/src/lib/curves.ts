@@ -480,10 +480,11 @@ export function scaleKeys(clip: AnimationClip, selection: Set<string>, pivot: nu
  * después se corre lo mismo, así nada se superpone
  */
 export function retime(clip: AnimationClip, a: number, b: number, factor: number): AnimationClip {
+  if (!(factor > 0)) return clip;
   const shift = (b - a) * (factor - 1);
   const out = remapFrames(clip, (f) => (f < a ? f : f <= b ? a + (f - a) * factor : f + shift));
   const markers = clip.markers?.map((m) => ({ ...m, frame: Math.round(m.frame < a ? m.frame : m.frame <= b ? a + (m.frame - a) * factor : m.frame + shift) }));
-  return { ...out, end: Math.round(clip.end > b ? clip.end + shift : clip.end), markers };
+  return { ...out, end: Math.max(Math.round(clip.start), Math.round(clip.end > b ? clip.end + shift : clip.end)), markers };
 }
 
 /**
