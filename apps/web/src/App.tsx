@@ -136,6 +136,8 @@ import {
   bodyAxes,
   controlWorld,
   runPoseStack,
+  chainBlend,
+  tidyClips,
   type IkChain,
   type IkSolver,
   boneColor as rigBoneColor,
@@ -1591,11 +1593,8 @@ export const App: Component = () => {
     const names = new Set(kept.map((c) => c.name));
     let name = preset.name;
     for (let i = 2; names.has(name); i++) name = `${preset.name} ${i}`;
-    // Son keys de FK: con cadenas de IK, el clip nuevo las deja en FK (mezcla 0)
-    const clip = (rigSettings().ikChains ?? []).reduce(
-      (c, chain) => insertScalarKey(c, chain.id, "blend", c.start, 0, "step"),
-      generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name)
-    );
+    // Son keys FK: las cadenas de IK las siguen solas mientras no se muevan sus controles
+    const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name);
     await history.execute(`Animación: ${name}`, {
       kind: "clips",
       data: { before, after: [...kept, clip], activeBefore: active?.id, activeAfter: clip.id },
@@ -2416,11 +2415,12 @@ export const App: Component = () => {
   const chainValues = createMemo(() => {
     const chain = chainById(selectedChain());
     const clip = activeClip();
+    const ctx = rigCtx();
     const f = Math.round(frame());
     const keyed = (channel: ScalarChannel) =>
       !!clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain?.id)?.[channel]?.length;
     return {
-      blend: chain ? (sampleScalar(clip, chain.id, "blend", f) ?? chain.blend ?? 1) : 1,
+      blend: chain ? chainBlend(chain, clip, f, samplePose(clip, f, ctx.boneIndex, ctx.rotation), chain.joints.flatMap((n) => ctx.boneIndex.get(n) ?? [])) : 1,
       pinned: chain ? (sampleScalar(clip, chain.id, "pin", f) ?? 0) >= 0.5 : false,
       roll: chain ? (sampleScalar(clip, chain.id, "roll", f) ?? chain.roll ?? 0) : 0,
       keyed: { blend: keyed("blend"), pin: keyed("pin"), roll: keyed("roll") },
@@ -2444,7 +2444,9 @@ export const App: Component = () => {
     if (!chain || !v) return;
     const f = Math.round(frame());
     const clip = activeClip();
-    const asKey = channel === "pin" || autoKey() || chainValues().keyed[channel];
+    // La mezcla va siempre como key de esta animación: un valor fijo de la
+    // cadena valdría para todas y pisaría las que siguen sus keys FK
+    const asKey = channel === "pin" || channel === "blend" || autoKey() || chainValues().keyed[channel];
     if (!commit) {
       const ctx = asKey
         ? rigCtx()
@@ -2467,34 +2469,27 @@ export const App: Component = () => {
   };
 
   /**
-   * Rig automático. En las animaciones que ya existen, las cadenas cuyas
-   * articulaciones tienen keys quedan en FK (mezcla 0 en su primer cuadro),
-   * así no cambian; las demás pasan a IK
+   * Rig automático. No hace falta tocar las animaciones que ya existen: una
+   * cadena sin key de mezcla sigue las keys FK de sus articulaciones mientras
+   * la animación no mueva sus controles (ver `chainBlend`)
    */
   const handleAutoRig = async () => {
-    const before = rigSettings();
     const next = autoRig(rigCtx());
-    const added = (next.ikChains ?? []).filter((c) => !(before.ikChains ?? []).some((b) => b.id === c.id));
-    if (added.length === 0) {
+    const chains = (next.ikChains ?? []).filter((c) => c.auto);
+    if (chains.length === 0) {
       setStatusMessage("No se reconoció el cuerpo: crea las cadenas a mano con la selección");
       return;
     }
     await changeRig("Rig automático", next);
-    let kept = 0;
-    const after = clips().map((c) =>
-      added.reduce((clip, chain) => {
-        const animated = clip.tracks.some((t) => !t.kind && chain.joints.includes(t.bone) && (t.rotation.length > 0 || t.translation.length > 0));
-        if (!animated) return clip;
-        kept++;
-        return insertScalarKey(clip, chain.id, "blend", c.start, 0, "step");
-      }, c)
-    );
-    if (kept > 0) {
-      await history.execute("Animaciones previas en FK", { kind: "clips", data: { before: clips(), after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+    // Rehacer el rig puede dejar pistas de cadenas o controles que ya no existen
+    const before = clips();
+    const after = tidyClips(before, next);
+    if (after.some((c, i) => c !== before[i])) {
+      await history.execute("Ordenar pistas del rig", { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
     }
-    setSelectedChain(added[0]?.id);
+    setSelectedChain(chains[0].id);
     setStatusMessage(
-      `Rig automático: ${added.length} cadenas de IK` + (kept > 0 ? " (lo que ya estaba animado sigue en FK: sube la mezcla de esas cadenas para usar IK)" : "")
+      `Rig automático: ${chains.length} cadenas de IK. Lo animado con keys FK sigue igual; mueve un control o sube la mezcla para pasarlo a IK`
     );
   };
 
@@ -4296,12 +4291,13 @@ export const App: Component = () => {
       setExportUseRetopology(ui.export.useRetopology === true);
       if (ui.export.options) setExportOptions(ui.export.options);
     }
-    setRigSettings(loadRigSettings(ui.rig));
+    const rig = loadRigSettings(ui.rig);
+    setRigSettings(rig);
     setPoseLibrary(loadPoseLibrary(ui.poseLibrary));
     setMixer(loadMixer(ui.mixer));
     setSelectedJoints([]);
     setSelectedControl(undefined);
-    setClips(ui.animation?.clips ?? []);
+    setClips(tidyClips(ui.animation?.clips ?? [], rig));
     setActiveClipId(ui.animation?.activeClipId);
     setFrame(ui.animation?.frame ?? 0);
     if (typeof ui.animation?.autoKey === "boolean") setAutoKey(ui.animation.autoKey);

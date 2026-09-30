@@ -153,7 +153,12 @@ export const IkPanel: Component<IkPanelProps> = (props) => {
               <Show when={props.posing}>
                 <label class="block space-y-1">
                   <div class="flex justify-between text-xs">
-                    <span class="text-text-muted">Mezcla FK ↔ IK {props.keyed.blend ? "◆" : ""}</span>
+                    <span
+                      class="text-text-muted"
+                      title="Sin key de mezcla, la cadena sigue las keys FK de sus articulaciones mientras la animación no mueva sus controles"
+                    >
+                      Mezcla FK ↔ IK {props.keyed.blend ? "◆" : c().blend === undefined ? "(auto)" : ""}
+                    </span>
                     <span class="font-mono text-text">{Math.round(props.blend * 100)} %</span>
                   </div>
                   <input
