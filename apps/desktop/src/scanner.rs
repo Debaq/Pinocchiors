@@ -262,6 +262,98 @@ pub struct MeshSettingsDto {
     pub voxel_mm: f32,
     pub fill: u32,
     pub smooth: u32,
+    /// Tapa los agujeros de la malla (también los grandes, como la base que
+    /// el escáner no vio)
+    #[serde(default)]
+    pub close_holes: bool,
+    /// Perímetro máximo de un agujero a tapar (mm); 0 = todos
+    #[serde(default)]
+    pub max_hole_mm: f32,
+    /// Parche plano (una base, un corte) en vez de seguir la curvatura del borde
+    #[serde(default)]
+    pub flat_patch: bool,
+    /// Quita las piezas sueltas chicas antes de tapar
+    #[serde(default)]
+    pub remove_pieces: bool,
+}
+
+/// Tapa los agujeros de la malla del escaneo según `settings` (triangulación
+/// del borde, refinado a la densidad de la malla y, si no es plano, ajuste a
+/// la curvatura). Devuelve la malla y un resumen para el usuario
+pub(crate) fn close_holes(mesh: orizon3d_core::Mesh, settings: &MeshSettingsDto) -> Result<(orizon3d_core::Mesh, String), String> {
+    use orizon3d_core::scan::VoxelIndex;
+    use pinocchio_math::Vector3;
+
+    let positions = mesh.vertices.iter().map(|v| Vector3::new(v[0] as f64, v[1] as f64, v[2] as f64)).collect();
+    let triangles = mesh.tris.iter().map(|t| [t[0] as usize, t[1] as usize, t[2] as usize]).collect();
+    let mut tri = pinocchio_repair::TriMesh::new(positions, triangles);
+    // El perímetro se pasa a aristas con el largo típico de la malla (≈ el vóxel)
+    let edge = settings.voxel_mm.max(0.5);
+    let config = pinocchio_repair::RepairConfig {
+        remove_small_components: settings.remove_pieces,
+        small_component_ratio: 0.02,
+        fill_holes: true,
+        hole_fill_config: pinocchio_repair::HoleFillConfig {
+            max_hole_edges: if settings.max_hole_mm > 0.0 { (settings.max_hole_mm / edge).ceil().max(3.0) as usize } else { 0 },
+            refine: true,
+            fair: !settings.flat_patch,
+        },
+        ..Default::default()
+    };
+    let summary = pinocchio_repair::repair_trimesh(&mut tri, &config).map_err(|e| format!("No se pudieron tapar los agujeros: {e}"))?;
+
+    // Color de cada vértice: el del vértice original más cercano (los del
+    // parche toman el del borde); si no hay ninguno cerca, el promedio
+    let original: Vec<[f32; 3]> = mesh.vertices.clone();
+    let has_color = mesh.colors.len() == mesh.vertices.len() && !mesh.colors.is_empty();
+    let mean = if has_color {
+        let n = mesh.colors.len() as f64;
+        let s = mesh.colors.iter().fold([0.0f64; 3], |a, c| [a[0] + c[0] as f64, a[1] + c[1] as f64, a[2] + c[2] as f64]);
+        [(s[0] / n) as u8, (s[1] / n) as u8, (s[2] / n) as u8]
+    } else {
+        [200; 3]
+    };
+    let radii = [2.0 * edge, 8.0 * edge, 32.0 * edge];
+    let indices: Vec<VoxelIndex> = if has_color { radii.iter().map(|&r| VoxelIndex::build(original.clone(), r)).collect() } else { Vec::new() };
+    let vertices: Vec<[f32; 3]> = tri.positions.iter().map(|p| [p.x() as f32, p.y() as f32, p.z() as f32]).collect();
+    let colors = if has_color {
+        vertices
+            .iter()
+            .map(|&v| {
+                indices.iter().zip(radii).find_map(|(index, r)| index.nearest(v, r)).map_or(mean, |(i, _)| mesh.colors[i])
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let tris = tri.triangles.iter().map(|t| [t[0] as u32, t[1] as u32, t[2] as u32]).collect();
+    let mut note = match summary.holes_filled {
+        0 => "No había agujeros para tapar".to_string(),
+        1 => "1 agujero tapado".to_string(),
+        n => format!("{n} agujeros tapados"),
+    };
+    if summary.holes_skipped > 0 {
+        note += &format!(", {} sin tapar (más grandes que el límite o con borde irregular)", summary.holes_skipped);
+    }
+    if summary.components_removed > 0 {
+        note += &format!(", {} piezas sueltas quitadas", summary.components_removed);
+    }
+    Ok((orizon3d_core::Mesh { vertices, colors, tris }, note))
+}
+
+/// Malla de la nube con los ajustes del panel (reconstrucción y, si se
+/// pidió, agujeros tapados), avisando el avance
+pub(crate) fn finish_mesh(mesh: orizon3d_core::Mesh, settings: &MeshSettingsDto, on_progress: &Channel<Progress>) -> Result<orizon3d_core::Mesh, String> {
+    if mesh.is_empty() {
+        return Err("La malla salió vacía: la nube tiene muy pocos puntos o el detalle es muy fino".into());
+    }
+    if !settings.close_holes {
+        return Ok(mesh);
+    }
+    report(on_progress, "meshing", 40, "Tapando agujeros...");
+    let (mesh, note) = close_holes(mesh, settings)?;
+    report(on_progress, "meshing", 60, note);
+    Ok(mesh)
 }
 
 /// Malla del escaneo (o del cuadro actual) como modelo de trabajo
@@ -275,6 +367,7 @@ pub async fn scanner_create_model(
     in_background(app, move |state| {
         report(&on_progress, "meshing", 10, "Reconstruyendo la malla...");
         let mesh = scanner.build_mesh(&MeshSettings { voxel_mm: settings.voxel_mm, fill: settings.fill, smooth: settings.smooth })?;
+        let mesh = finish_mesh(mesh, &settings, &on_progress)?;
         let name = "Escaneo".to_string();
         load_scene(scan_to_scene(&mesh, &name), name, "Escáner".into(), &on_progress, state)
     })
@@ -413,6 +506,38 @@ mod tests {
             hole_fill_config: pinocchio_repair::HoleFillConfig { max_hole_edges: 0, refine: true, fair: true },
             ..Default::default()
         }
+    }
+
+    fn hole_settings(flat: bool) -> MeshSettingsDto {
+        MeshSettingsDto { voxel_mm: 2.0, fill: 1, smooth: 2, close_holes: true, max_hole_mm: 0.0, flat_patch: flat, remove_pieces: true }
+    }
+
+    /// Aristas de borde (usadas por una sola cara)
+    fn open_edges(mesh: &orizon3d_core::Mesh) -> usize {
+        let mut count = std::collections::HashMap::new();
+        for t in &mesh.tris {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *count.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+        count.values().filter(|&&c| c == 1).count()
+    }
+
+    #[test]
+    fn giant_hole_of_a_scan_gets_closed() {
+        let mesh = scanned_half_sphere();
+        assert!(open_edges(&mesh) > 20, "la media esfera debe venir abierta");
+        for flat in [false, true] {
+            let (closed, note) = close_holes(scanned_half_sphere(), &hole_settings(flat)).unwrap();
+            assert!(note.contains("tapado"), "{note}");
+            assert_eq!(open_edges(&closed), 0, "quedaron bordes abiertos ({note})");
+            assert_eq!(closed.colors.len(), closed.vertices.len());
+        }
+        // Con un límite chico, la base queda abierta
+        let small = MeshSettingsDto { max_hole_mm: 10.0, ..hole_settings(false) };
+        let (open, _) = close_holes(mesh, &small).unwrap();
+        assert!(open_edges(&open) > 0);
     }
 
     #[test]

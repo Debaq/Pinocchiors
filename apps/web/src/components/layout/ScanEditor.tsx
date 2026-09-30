@@ -2,9 +2,9 @@ import { Component, For, Match, Show, Switch, createEffect, createSignal, onClea
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
-import { Panel, Slider, Checkbox, Button, IconButton, NumberInput } from "../ui";
+import { Panel, Slider, Checkbox, Button, IconButton, NumberInput, Tooltip } from "../ui";
 import { createPersisted } from "../../lib/ui-state";
-import type { ScanCloud } from "../../lib/scanCloud";
+import type { AlignMode, CompareSettings, ScanCloud } from "../../lib/scanCloud";
 import type { CloudSelectTool } from "../../lib/Viewer3D";
 import * as Icons from "../icons";
 
@@ -63,6 +63,14 @@ export interface ScanMeshSettings {
   voxel_mm: number;
   fill: number;
   smooth: number;
+  /** Tapar los agujeros (también los grandes) al crear el modelo */
+  close_holes: boolean;
+  /** Perímetro máximo de un agujero a tapar (mm); 0 = todos */
+  max_hole_mm: number;
+  /** Parche plano en vez de seguir la curvatura del borde */
+  flat_patch: boolean;
+  /** Quitar las piezas sueltas chicas antes de tapar */
+  remove_pieces: boolean;
 }
 
 /** Parámetros de las herramientas de limpieza de la nube */
@@ -113,7 +121,23 @@ const DEFAULT_CLEAN: CleanSettings = {
 /** Ancho de una tarjeta bancaria o de identidad (ISO/IEC 7810 ID-1), en mm */
 const CARD_WIDTH_MM = 85.6;
 
-const DEFAULT_MESH: ScanMeshSettings = { voxel_mm: 2, fill: 1, smooth: 2 };
+const DEFAULT_MESH: ScanMeshSettings = {
+  voxel_mm: 2,
+  fill: 1,
+  smooth: 2,
+  close_holes: true,
+  max_hole_mm: 0,
+  flat_patch: false,
+  remove_pieces: true,
+};
+
+const DEFAULT_COMPARE: CompareSettings = { tolerance_mm: 0.5, scale_mm: 3, reach_mm: 10 };
+
+const ALIGN_MODES: { id: AlignMode; label: string; title: string }[] = [
+  { id: "auto", label: "Automática", title: "Busca sola cómo encaja, aunque el objeto se haya dado vuelta entre escaneos" },
+  { id: "fine", label: "Fina", title: "Solo ajusta: la nube nueva ya está casi en su lugar" },
+  { id: "none", label: "Sin alinear", title: "Tal cual: las nubes ya comparten el mismo sistema de coordenadas" },
+];
 
 const STATE_LABEL: Record<ScannerStatus["state"], string> = {
   off: "Desconectado",
@@ -167,6 +191,102 @@ const Hint = (props: { children: JSX.Element }) => (
   <p class="text-[11px] text-text-dim leading-relaxed">{props.children}</p>
 );
 
+/** Icono de ayuda: la explicación larga queda en el tooltip y no ocupa el panel */
+const Help = (props: { text: string }) => (
+  <Tooltip content={props.text} placement="left">
+    <span class="text-text-dim hover:text-text-muted cursor-help" aria-label={props.text}>
+      <Icons.Info size={13} />
+    </span>
+  </Tooltip>
+);
+
+/** Botón de barra de herramientas: solo icono, con su nombre en el tooltip */
+const ToolButton = (props: {
+  label: string;
+  icon: JSX.Element;
+  onClick: () => void;
+  active?: boolean;
+  disabled?: boolean;
+  danger?: boolean;
+}) => (
+  <Tooltip content={props.label} placement="bottom">
+    <button
+      type="button"
+      aria-label={props.label}
+      disabled={props.disabled}
+      class={clsx(
+        "w-7 h-7 flex items-center justify-center rounded transition-colors",
+        "disabled:opacity-40 disabled:pointer-events-none",
+        props.active
+          ? "bg-accent/20 text-accent"
+          : props.danger
+            ? "text-text-muted hover:text-red hover:bg-red/15"
+            : "text-text-muted hover:text-text hover:bg-surface/60"
+      )}
+      onClick={() => props.onClick()}
+    >
+      {props.icon}
+    </button>
+  </Tooltip>
+);
+
+/** Grupo de botones de herramienta enmarcado */
+const ToolGroup = (props: { children: JSX.Element }) => (
+  <div class="flex items-center gap-0.5 p-0.5 rounded-md bg-bg border border-border/60">{props.children}</div>
+);
+
+/**
+ * Una herramienta dentro de un panel: nombre, ayuda y acciones en una fila,
+ * y sus parámetros debajo en filas compactas
+ */
+const Tool = (props: { title: string; help?: string; actions?: JSX.Element; children?: JSX.Element; first?: boolean }) => (
+  <div class={clsx("space-y-1.5", !props.first && "pt-2.5 border-t border-border/40")}>
+    <div class="flex items-center gap-1.5 min-h-6">
+      <span class="text-xs font-medium text-text">{props.title}</span>
+      <Show when={props.help}>
+        <Help text={props.help!} />
+      </Show>
+      <div class="flex-1" />
+      {props.actions}
+    </div>
+    {props.children}
+  </div>
+);
+
+/** Dato con su nombre encima, para las fichas de resumen */
+const Stat = (props: { label: string; children: JSX.Element }) => (
+  <div class="min-w-0 px-2 py-1.5 rounded bg-bg border border-border/50">
+    <div class="text-[10px] uppercase tracking-wider text-text-dim truncate">{props.label}</div>
+    <div class="text-xs font-mono text-text truncate">{props.children}</div>
+  </div>
+);
+
+/** Selector de opciones en una barra (modo de alineación, forma del parche) */
+function Segmented<T extends string>(props: { value: T; options: { id: T; label: string; title?: string }[]; onChange: (v: T) => void }) {
+  return (
+    <div class="flex p-0.5 rounded-md bg-bg border border-border/60">
+      <For each={props.options}>
+        {(o) => (
+          <button
+            type="button"
+            title={o.title}
+            class={clsx(
+              "flex-1 h-6 px-2 rounded text-[11px] truncate transition-colors",
+              props.value === o.id ? "bg-accent/20 text-accent font-medium" : "text-text-muted hover:text-text hover:bg-surface/50"
+            )}
+            onClick={() => props.onChange(o.id)}
+          >
+            {o.label}
+          </button>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** Botón chico para las acciones de una herramienta */
+const MINI = "h-6 px-2 text-[11px] gap-1";
+
 /**
  * Orizon3D al costado del visor (como los editores de pieles y de rig): una
  * pestaña por etapa del escaneo, con sus secciones repartidas en columnas
@@ -181,7 +301,19 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
   const [storedClean, setClean] = createPersisted<CleanSettings>("scan.clean", DEFAULT_CLEAN);
   const clean = (): CleanSettings => ({ ...DEFAULT_CLEAN, ...storedClean() });
   const updateClean = (partial: Partial<CleanSettings>) => setClean({ ...clean(), ...partial });
-  const [mesh, setMesh] = createPersisted<ScanMeshSettings>("scan.mesh", DEFAULT_MESH);
+  const [storedMesh, setMesh] = createPersisted<ScanMeshSettings>("scan.mesh", DEFAULT_MESH);
+  // Los ajustes guardados antes del relleno de agujeros no traen sus campos
+  const mesh = (): ScanMeshSettings => ({ ...DEFAULT_MESH, ...storedMesh() });
+  const updateMesh = (partial: Partial<ScanMeshSettings>) => setMesh({ ...mesh(), ...partial });
+  const [mergeAlign, setMergeAlign] = createPersisted<AlignMode>("scan.merge.align", "auto");
+  const [mergeFuse, setMergeFuse] = createPersisted("scan.merge.fuse", true);
+  /** Al empezar otro escaneo, el anterior se suma a la nube en vez de perderse */
+  const [keepScans, setKeepScans] = createPersisted("scan.keep", true);
+  /** El escaneo del escáner ya pasó a la nube (no hace falta sumarlo de nuevo) */
+  const [scanKept, setScanKept] = createSignal(false);
+  const [storedCompare, setCompareSettings] = createPersisted<CompareSettings>("scan.compare", DEFAULT_COMPARE);
+  const compareSettings = (): CompareSettings => ({ ...DEFAULT_COMPARE, ...storedCompare() });
+  const updateCompare = (partial: Partial<CompareSettings>) => setCompareSettings({ ...compareSettings(), ...partial });
   const [gain, setGain] = createPersisted("scan.gain", 1);
   const [view, setView] = createPersisted<"depth" | "color">("scan.view", "depth");
   const [hasFrame, setHasFrame] = createSignal(false);
@@ -274,8 +406,25 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
   const scan = (action: "start" | "stop" | "reset") =>
     attempt(action === "start" ? "iniciar el escaneo" : action === "stop" ? "detener el escaneo" : "reiniciar el escaneo", async () => {
       await invoke("scanner_scan", { action });
+      if (action !== "stop") setScanKept(false);
       setStatus(await invoke<ScannerStatus>("scanner_status"));
     });
+
+  /** Escaneo sin pasar a la nube que se perdería al empezar otro */
+  const scanPending = () => !!status()?.points && !scanKept();
+
+  /** Suma el escaneo actual a la nube, alineado sobre lo que ya hay */
+  const mergeScan = async () => {
+    const ok = await cloud().merge("scan", mergeAlign(), mergeFuse());
+    if (ok) setScanKept(true);
+    return !!ok;
+  };
+
+  /** Empieza otro escaneo; si se conservan, el anterior pasa antes a la nube */
+  const startScan = async () => {
+    if (keepScans() && scanPending() && !(await mergeScan())) return;
+    await scan("start");
+  };
 
   const measure = async () => {
     try {
@@ -324,7 +473,22 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
   /** Toma la nube del escáner y pasa a limpiarla */
   const takeCloud = async () => {
     await cloud().take();
-    if (cloud().info()) props.onTab("cloud");
+    if (cloud().info()) {
+      setScanKept(true);
+      props.onTab("cloud");
+    }
+  };
+
+  const mergePly = async () => {
+    const path = await open({ title: "Sumar nube de puntos", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
+    if (!path || Array.isArray(path)) return;
+    await cloud().merge("ply", mergeAlign(), mergeFuse(), path);
+  };
+
+  const referencePly = async () => {
+    const path = await open({ title: "Nube de referencia", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
+    if (!path || Array.isArray(path)) return;
+    await cloud().setReference("ply", path);
   };
 
   const importCloud = async () => {
@@ -345,14 +509,36 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
 
   /** "Ver" marca en el visor lo que se quitaría; "Quitar" lo quita */
   const PreviewActions = (p: { label: string; op: () => Parameters<ScanCloud["edit"]>[0] }) => (
-    <div class="flex gap-2">
-      <Button size="sm" variant="ghost" class="flex-1" disabled={busy()} icon={<Icons.Eye size={14} />} onClick={() => cloud().edit(p.op(), p.label, true)}>
+    <div class="flex gap-1">
+      <Button
+        size="sm"
+        variant="ghost"
+        class={MINI}
+        disabled={busy()}
+        title="Marcar en el visor lo que se quitaría"
+        icon={<Icons.Eye size={12} />}
+        onClick={() => cloud().edit(p.op(), p.label, true)}
+      >
         Ver
       </Button>
-      <Button size="sm" class="flex-1" disabled={busy()} loading={cloud().busy() === p.label} icon={<Icons.Trash size={14} />} onClick={() => cloud().edit(p.op(), p.label)}>
+      <Button
+        size="sm"
+        class={MINI}
+        disabled={busy()}
+        loading={cloud().busy() === p.label}
+        icon={<Icons.Trash size={12} />}
+        onClick={() => cloud().edit(p.op(), p.label)}
+      >
         Quitar
       </Button>
     </div>
+  );
+
+  /** Acción única de una herramienta (simplificar, suavizar) */
+  const ApplyAction = (p: { label: string; run: () => void }) => (
+    <Button size="sm" class={MINI} disabled={busy()} loading={cloud().busy() === p.label} icon={<Icons.Check size={12} />} onClick={p.run}>
+      Aplicar
+    </Button>
   );
 
   // ═════════════════════════════════════════════════════════════════════════
@@ -361,68 +547,83 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
 
   const capturePanels = () => (
     <div>
-      <Panel id="scan.device" title="Escáner" icon={<Icons.Scan size={14} />} defaultOpen>
-        <div class="space-y-3 pb-3">
-          <div class="flex items-center gap-2 text-xs">
-            <span
-              class={clsx(
-                "w-2 h-2 rounded-full shrink-0",
-                streaming() ? "bg-success" : status()?.state === "error" ? "bg-error" : connected() ? "bg-warning" : "bg-text-dim"
-              )}
-            />
-            <span class="text-text">{STATE_LABEL[status()?.state ?? "off"]}</span>
-            <Show when={streaming()}>
-              <span class="ml-auto font-mono text-text-muted">{status()!.fps.toFixed(0)} FPS</span>
-            </Show>
-          </div>
-
-          <Show when={status()?.state === "error" && status()?.message}>
-            <p class="text-xs text-error leading-relaxed">{status()!.message}</p>
-            <p class="text-xs text-text-muted leading-relaxed">
-              Revisa el cable USB y que tu usuario pueda leer <span class="font-mono">/dev/video*</span> (grupo{" "}
-              <span class="font-mono">video</span> o reglas udev).
-            </p>
+      <Panel
+        id="scan.device"
+        dense
+        title="Escáner"
+        icon={<Icons.Scan size={14} />}
+        defaultOpen
+        headerActions={<Help text="Revopoint POP 2 / POP 3 por USB. Sin escáner, la pestaña Nube abre nubes PLY." />}
+      >
+        <div class="flex items-center gap-2 text-xs">
+          <span
+            class={clsx(
+              "w-2 h-2 rounded-full shrink-0",
+              streaming() ? "bg-success" : status()?.state === "error" ? "bg-error" : connected() ? "bg-warning" : "bg-text-dim"
+            )}
+          />
+          <span class="text-text truncate">{STATE_LABEL[status()?.state ?? "off"]}</span>
+          <Show when={streaming()}>
+            <span class="font-mono text-text-muted">{status()!.fps.toFixed(0)} FPS</span>
           </Show>
-
-          <Show when={deviceError()}>
-            <p class="text-xs text-error leading-relaxed">{deviceError()}</p>
-          </Show>
-
-          <Show when={status()?.device}>
-            <div class="space-y-1">
-              <Row label="Dispositivo">{status()!.device}</Row>
-              <Show when={status()!.depth_stream}>
-                <Row label="Profundidad">{status()!.depth_stream}</Row>
-              </Show>
-              <Row label="Color">{status()!.color_stream ?? "sin color"}</Row>
-            </div>
-          </Show>
-
+          <div class="flex-1" />
           <Show
             when={connected()}
             fallback={
-              <Button variant="primary" size="sm" fullWidth icon={<Icons.Lightning size={14} />} onClick={connect}>
+              <Button variant="primary" size="sm" class={MINI} icon={<Icons.Lightning size={12} />} onClick={connect}>
                 {status()?.state === "error" || status()?.state === "stopped" ? "Reintentar" : "Conectar"}
               </Button>
             }
           >
-            <Button size="sm" fullWidth icon={<Icons.X size={14} />} onClick={disconnect}>
+            <Button size="sm" class={MINI} icon={<Icons.X size={12} />} onClick={disconnect}>
               Desconectar
             </Button>
           </Show>
-          <Hint>Revopoint POP 2 / POP 3 por USB. Sin escáner, la pestaña Nube abre nubes PLY.</Hint>
         </div>
+
+        <Show when={status()?.state === "error" && status()?.message}>
+          <p class="text-xs text-error leading-relaxed">{status()!.message}</p>
+          <Hint>
+            Revisa el cable USB y que tu usuario pueda leer <span class="font-mono">/dev/video*</span> (grupo{" "}
+            <span class="font-mono">video</span> o reglas udev).
+          </Hint>
+        </Show>
+
+        <Show when={deviceError()}>
+          <p class="text-xs text-error leading-relaxed">{deviceError()}</p>
+        </Show>
+
+        <Show when={status()?.device}>
+          <div class="space-y-1">
+            <Row label="Dispositivo">{status()!.device}</Row>
+            <Show when={status()!.depth_stream}>
+              <Row label="Profundidad">{status()!.depth_stream}</Row>
+            </Show>
+            <Row label="Color">{status()!.color_stream ?? "sin color"}</Row>
+          </div>
+        </Show>
       </Panel>
 
       <Show when={connected()}>
-        <Panel id="scan.preview" title="Vista en vivo" icon={<Icons.Eye size={14} />} defaultOpen>
-          <div class="space-y-2 pb-3">
-            <div class="flex gap-1">
+        <Panel
+          id="scan.preview"
+          dense
+          title="Vista en vivo"
+          icon={<Icons.Eye size={14} />}
+          defaultOpen
+          headerActions={<Help text="Ganancia: hasta 3 es lo recomendado; más ganancia ilumina pero mete ruido." />}
+        >
+          <div class="relative rounded-md overflow-hidden bg-bg border border-border">
+            <canvas ref={canvas} class="block w-full h-auto" />
+            <Show when={!hasFrame()}>
+              <div class="absolute inset-0 flex items-center justify-center text-xs text-text-dim">Esperando cuadros…</div>
+            </Show>
+            <div class="absolute top-1.5 left-1.5 flex p-0.5 rounded bg-bg/80 backdrop-blur-sm border border-border/60">
               {(["depth", "color"] as const).map((k) => (
                 <button
                   class={clsx(
-                    "flex-1 h-7 rounded-md text-xs transition-colors",
-                    view() === k ? "bg-accent/20 text-accent font-medium" : "text-text-muted hover:text-text hover:bg-surface/40"
+                    "px-2 h-5 rounded-sm text-[11px] transition-colors",
+                    view() === k ? "bg-accent/25 text-accent font-medium" : "text-text-muted hover:text-text"
                   )}
                   onClick={() => setView(k)}
                 >
@@ -430,102 +631,141 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
                 </button>
               ))}
             </div>
-            <div class="relative rounded-md overflow-hidden bg-bg-darker border border-border">
-              <canvas ref={canvas} class="block w-full h-auto" />
-              <Show when={!hasFrame()}>
-                <div class="absolute inset-0 flex items-center justify-center text-xs text-text-dim">Esperando cuadros…</div>
-              </Show>
-            </div>
-            <Show when={streaming()}>
-              <div class="flex justify-between text-xs">
-                <span class="text-text-muted">
-                  Distancia{" "}
-                  <span class="text-text font-mono">
-                    {status()!.distance_cm > 0 ? `${status()!.distance_cm.toFixed(0)} cm` : "—"}
-                  </span>
-                </span>
-                <span class="text-text-muted">
-                  Cobertura <span class="text-text font-mono">{(status()!.coverage * 100).toFixed(0)} %</span>
-                </span>
-              </div>
-            </Show>
-            <Slider
-              label="Ganancia del sensor"
-              value={gain()}
-              min={1}
-              max={16}
-              step={1}
-              showValue
-              onChange={(v) => {
-                setGain(v);
-                attempt("cambiar la ganancia", () => invoke("scanner_set_gain", { gain: v }));
-              }}
-            />
-            <Hint>Hasta 3 es lo recomendado: más ganancia ilumina pero mete ruido.</Hint>
           </div>
+          <Show when={streaming()}>
+            <div class="grid grid-cols-2 gap-1.5">
+              <Stat label="Distancia">{status()!.distance_cm > 0 ? `${status()!.distance_cm.toFixed(0)} cm` : "—"}</Stat>
+              <Stat label="Cobertura">{(status()!.coverage * 100).toFixed(0)} %</Stat>
+            </div>
+          </Show>
+          <Slider
+            inline
+            label="Ganancia"
+            value={gain()}
+            min={1}
+            max={16}
+            step={1}
+            showValue
+            onChange={(v) => {
+              setGain(v);
+              attempt("cambiar la ganancia", () => invoke("scanner_set_gain", { gain: v }));
+            }}
+          />
         </Panel>
 
-        <Panel id="scan.scan" title="Escaneo" icon={<Icons.ArrowsClockwise size={14} />} defaultOpen>
-          <div class="space-y-3 pb-3">
-            <p class="text-xs text-text-muted leading-relaxed">
-              Gira el objeto (o el escáner) despacio: cada cuadro se alinea con lo escaneado y se suma. Sin escaneo, la
-              nube sale del cuadro actual.
-            </p>
-            <div class="flex gap-2">
-              <Show
-                when={status()?.scanning}
-                fallback={
-                  <Button size="sm" class="flex-1" disabled={!streaming()} icon={<Icons.Play size={14} />} onClick={() => scan("start")}>
-                    {status()?.points ? "Escanear de nuevo" : "Escanear"}
-                  </Button>
-                }
-              >
-                <Button size="sm" class="flex-1" icon={<Icons.Pause size={14} />} onClick={() => scan("stop")}>
-                  Pausar
+        <Panel
+          id="scan.scan"
+          dense
+          title="Escaneo"
+          icon={<Icons.ArrowsClockwise size={14} />}
+          defaultOpen
+          headerActions={
+            <Help text="Gira el objeto (o el escáner) despacio: cada cuadro se alinea con lo escaneado y se suma. Sin escaneo, la nube sale del cuadro actual." />
+          }
+        >
+          <div class="flex gap-1.5">
+            <Show
+              when={status()?.scanning}
+              fallback={
+                <Button
+                  size="sm"
+                  class="flex-1"
+                  disabled={!streaming() || busy()}
+                  icon={<Icons.Play size={14} />}
+                  title={
+                    keepScans() && scanPending()
+                      ? "El escaneo actual se suma a la nube y empieza otro"
+                      : status()?.points
+                        ? "Empieza otro escaneo (el actual se descarta)"
+                        : undefined
+                  }
+                  onClick={startScan}
+                >
+                  {!status()?.points ? "Escanear" : keepScans() ? "Escanear otro" : "Escanear de nuevo"}
                 </Button>
-              </Show>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={!status()?.points && !status()?.scanning}
-                icon={<Icons.Trash size={14} />}
-                onClick={() => scan("reset")}
-              >
-                Descartar
-              </Button>
-            </div>
-            <Show when={status()?.frames}>
-              <div class="space-y-1 text-xs">
-                <div class="flex justify-between">
-                  <span class="text-text-muted">Seguimiento</span>
-                  <span class={status()!.tracking_ok ? "text-success" : "text-warning"}>
-                    {status()!.tracking_ok ? "alineado" : "perdido: vuelve a una zona ya escaneada"}
-                  </span>
-                </div>
-                <Row label="Cuadros sumados / descartados">
-                  {status()!.registered} / {status()!.dropped}
-                </Row>
-                <Row label="Puntos">{status()!.points.toLocaleString()}</Row>
-              </div>
-            </Show>
-            <Button
-              variant="primary"
-              size="sm"
-              fullWidth
-              disabled={!streaming() || busy() || status()?.scanning}
-              loading={cloud().busy() === "Tomar la nube"}
-              icon={<Icons.MagicWand size={14} />}
-              onClick={takeCloud}
+              }
             >
-              {status()?.points ? "Limpiar la nube del escaneo" : "Limpiar la nube del cuadro actual"}
-            </Button>
-            <Hint>Pasa la nube a la pestaña Nube para quitar ruido, fragmentos y la mesa antes de crear el modelo.</Hint>
+              <Button size="sm" class="flex-1" icon={<Icons.Pause size={14} />} onClick={() => scan("stop")}>
+                Pausar
+              </Button>
+            </Show>
+            <ToolButton
+              label="Descartar el escaneo"
+              danger
+              disabled={!status()?.points && !status()?.scanning}
+              icon={<Icons.Trash size={14} />}
+              onClick={() => scan("reset")}
+            />
+          </div>
+          <Show when={status()?.frames}>
+            <div class="grid grid-cols-3 gap-1.5">
+              <Stat label="Seguimiento">
+                <span class={status()!.tracking_ok ? "text-success" : "text-warning"}>{status()!.tracking_ok ? "alineado" : "perdido"}</span>
+              </Stat>
+              <Stat label="Cuadros">
+                {status()!.registered} / {status()!.dropped}
+              </Stat>
+              <Stat label="Puntos">{status()!.points.toLocaleString()}</Stat>
+            </div>
+            <Show when={!status()!.tracking_ok}>
+              <Hint>Seguimiento perdido: vuelve a una zona ya escaneada.</Hint>
+            </Show>
+          </Show>
+          <Show
+            when={info()}
+            fallback={
+              <Button
+                variant="primary"
+                size="sm"
+                fullWidth
+                disabled={!streaming() || busy() || status()?.scanning}
+                loading={cloud().busy() === "Tomar la nube"}
+                icon={<Icons.MagicWand size={14} />}
+                title="Pasa la nube a la pestaña Nube para quitar ruido, fragmentos y la mesa antes de crear el modelo"
+                onClick={takeCloud}
+              >
+                {status()?.points ? "Limpiar la nube del escaneo" : "Limpiar la nube del cuadro actual"}
+              </Button>
+            }
+          >
+            <div class="flex gap-1.5">
+              <Button
+                variant="primary"
+                size="sm"
+                class="flex-1"
+                disabled={!streaming() || busy() || status()?.scanning || scanKept()}
+                loading={cloud().busy() === "Sumar el escaneo"}
+                icon={<Icons.Stack size={14} />}
+                title="Suma este escaneo a la nube en edición, alineado sobre lo que ya hay"
+                onClick={mergeScan}
+              >
+                {scanKept() ? "Ya está en la nube" : "Sumar a la nube"}
+              </Button>
+              <ToolButton
+                label="Reemplazar la nube con este escaneo"
+                disabled={!streaming() || busy() || status()?.scanning}
+                icon={<Icons.ArrowsClockwise size={14} />}
+                onClick={takeCloud}
+              />
+            </div>
+          </Show>
+          <div class="flex items-center gap-1.5">
+            <Checkbox small label="Conservar cada escaneo" checked={keepScans()} onChange={setKeepScans} />
+            <Help text="Al empezar otro escaneo, el anterior se suma solo a la nube (alineado) en vez de perderse. Sirve para escanear el objeto por partes: de pie, dado vuelta, de costado." />
           </div>
         </Panel>
 
-        <Panel id="scan.volume" title="Volumen de escaneo" icon={<Icons.Ruler size={14} />} defaultOpen={false}>
-          <div class="space-y-4 pb-3">
+        <Panel
+          id="scan.volume"
+          dense
+          title="Volumen de escaneo"
+          icon={<Icons.Ruler size={14} />}
+          defaultOpen={false}
+          headerActions={<Help text="Estos filtros actúan al capturar; los de la pestaña Nube, sobre la nube ya tomada." />}
+        >
+          <div class="space-y-1">
             <Slider
+              inline
               label="Cerca"
               value={settings().clip_min_mm}
               min={50}
@@ -536,6 +776,7 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               onChange={(v) => updateSettings({ clip_min_mm: v })}
             />
             <Slider
+              inline
               label="Lejos"
               value={settings().clip_max_mm}
               min={60}
@@ -546,17 +787,21 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               onChange={(v) => updateSettings({ clip_max_mm: v })}
             />
             <Slider
-              label="Ancho a los lados"
+              inline
+              label="Ancho"
+              title="Ancho a los lados"
               value={settings().box_mm}
               min={0}
               max={800}
               step={10}
               showValue
-              formatValue={(v) => (v === 0 ? "sin límite" : `${(v / 10).toFixed(0)} cm`)}
+              formatValue={(v) => (v === 0 ? "libre" : `${(v / 10).toFixed(0)} cm`)}
               onChange={(v) => updateSettings({ box_mm: v })}
             />
             <Slider
-              label="Suavizado temporal"
+              inline
+              label="Suavizado"
+              title="Suavizado temporal: promedia varios cuadros seguidos"
               value={settings().temporal_frames}
               min={1}
               max={6}
@@ -565,14 +810,16 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               formatValue={(v) => (v === 1 ? "no" : `${v} cuadros`)}
               onChange={(v) => updateSettings({ temporal_frames: v })}
             />
-            <Checkbox label="Quitar puntos sueltos" checked={settings().clean_noise} onChange={(v) => updateSettings({ clean_noise: v })} />
+          </div>
+          <div class="flex flex-col gap-1.5 pt-2 border-t border-border/40">
+            <Checkbox small label="Quitar puntos sueltos" checked={settings().clean_noise} onChange={(v) => updateSettings({ clean_noise: v })} />
             <Checkbox
+              small
               label="Aislar el objeto (grupo más grande)"
               checked={settings().isolate_object}
               onChange={(v) => updateSettings({ isolate_object: v })}
             />
-            <Checkbox label="Quitar bordes voladores" checked={settings().edge_filter} onChange={(v) => updateSettings({ edge_filter: v })} />
-            <Hint>Estos filtros actúan al capturar; los de la pestaña Nube, sobre la nube ya tomada.</Hint>
+            <Checkbox small label="Quitar bordes voladores" checked={settings().edge_filter} onChange={(v) => updateSettings({ edge_filter: v })} />
           </div>
         </Panel>
       </Show>
@@ -585,243 +832,241 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
 
   const cloudPanels = () => (
     <div>
-      <Panel id="scan.cloud.source" title="Nube de puntos" icon={<Icons.Cube size={14} />} defaultOpen>
-        <div class="space-y-3 pb-3">
-          <Show
-            when={info()}
-            fallback={
-              <>
-                <p class="text-xs text-text-muted leading-relaxed">
-                  Toma la nube del escaneo (o del cuadro actual) para limpiarla antes de crear el modelo, o abre una nube PLY.
-                </p>
+      <Panel id="scan.cloud.source" dense title="Nube de puntos" icon={<Icons.Cube size={14} />} defaultOpen>
+        <Show
+          when={info()}
+          fallback={
+            <>
+              <Hint>Toma la nube del escaneo (o del cuadro actual) para limpiarla antes de crear el modelo, o abre una nube PLY.</Hint>
+              <div class="flex gap-1.5">
                 <Button
                   variant="primary"
                   size="sm"
-                  fullWidth
+                  class="flex-1"
                   disabled={!streaming() || busy()}
                   loading={cloud().busy() === "Tomar la nube"}
                   icon={<Icons.Scan size={14} />}
                   onClick={takeCloud}
                 >
-                  Tomar la nube del escáner
+                  Tomar del escáner
                 </Button>
-              </>
-            }
-          >
-            {(current) => (
-              <>
-                <div class="space-y-1">
-                  <Row label="Origen">{current().source}</Row>
-                  <Row label="Puntos">{current().points.toLocaleString()}</Row>
-                  <Row label="Separación típica">{current().spacing_mm > 0 ? `${current().spacing_mm.toFixed(2)} mm` : "—"}</Row>
-                </div>
-                <div class="flex gap-2">
-                  <Button
-                    size="sm"
-                    class="flex-1"
+                <Button size="sm" disabled={busy()} icon={<Icons.FolderOpen size={14} />} onClick={importCloud}>
+                  Abrir PLY
+                </Button>
+              </div>
+            </>
+          }
+        >
+          {(current) => (
+            <>
+              <div class="flex items-center gap-1.5">
+                <ToolGroup>
+                  <ToolButton
+                    label={current().undo ? `Deshacer: ${current().undo} (Ctrl+Z)` : "Nada que deshacer"}
                     disabled={!current().undo || busy()}
-                    title={current().undo ? `Deshacer: ${current().undo} (Ctrl+Z)` : "Nada que deshacer"}
                     icon={<Icons.ArrowCounterClockwise size={14} />}
                     onClick={() => cloud().history(false)}
-                  >
-                    Deshacer
-                  </Button>
-                  <Button
-                    size="sm"
-                    class="flex-1"
+                  />
+                  <ToolButton
+                    label={current().redo ? `Rehacer: ${current().redo} (Ctrl+Shift+Z)` : "Nada que rehacer"}
                     disabled={!current().redo || busy()}
-                    title={current().redo ? `Rehacer: ${current().redo} (Ctrl+Shift+Z)` : "Nada que rehacer"}
                     icon={<Icons.ArrowClockwise size={14} />}
                     onClick={() => cloud().history(true)}
-                  >
-                    Rehacer
-                  </Button>
-                </div>
-                <Checkbox
-                  label="Ver la nube en lugar del modelo"
-                  checked={cloud().shown()}
-                  onChange={(v) => cloud().setShown(v)}
-                />
-                <Slider
-                  label="Tamaño de los puntos"
-                  value={clean().point_px}
-                  min={1}
-                  max={8}
-                  step={0.5}
-                  showValue
-                  formatValue={(v) => `${v} px`}
-                  onChange={(v) => updateClean({ point_px: v })}
-                />
-              </>
-            )}
-          </Show>
-          <div class="flex gap-2">
-            <Button size="sm" variant="ghost" class="flex-1" disabled={busy()} icon={<Icons.FolderOpen size={14} />} onClick={importCloud}>
-              Abrir PLY
-            </Button>
-            <Show when={info()}>
-              <Button size="sm" variant="ghost" class="flex-1" disabled={busy()} icon={<Icons.FloppyDisk size={14} />} onClick={exportCloud}>
-                Guardar PLY
-              </Button>
-            </Show>
-          </div>
-          <Show when={info()}>
-            <div class="flex gap-2">
-              <Show when={streaming()}>
-                <Button size="sm" variant="ghost" class="flex-1" disabled={busy()} icon={<Icons.Scan size={14} />} onClick={takeCloud}>
-                  Volver a tomar
-                </Button>
-              </Show>
-              <Button size="sm" variant="ghost" class="flex-1" disabled={busy()} icon={<Icons.X size={14} />} onClick={() => cloud().discard()}>
-                Cerrar la nube
-              </Button>
-            </div>
-          </Show>
-        </div>
+                  />
+                </ToolGroup>
+                <ToolGroup>
+                  <ToolButton label="Abrir nube PLY" disabled={busy()} icon={<Icons.FolderOpen size={14} />} onClick={importCloud} />
+                  <ToolButton label="Guardar nube PLY" disabled={busy()} icon={<Icons.FloppyDisk size={14} />} onClick={exportCloud} />
+                  <Show when={streaming()}>
+                    <ToolButton label="Volver a tomar del escáner" disabled={busy()} icon={<Icons.Scan size={14} />} onClick={takeCloud} />
+                  </Show>
+                </ToolGroup>
+                <div class="flex-1" />
+                <ToolGroup>
+                  <ToolButton
+                    label={cloud().shown() ? "Viendo la nube: clic para ver el modelo" : "Viendo el modelo: clic para ver la nube"}
+                    active={cloud().shown()}
+                    icon={cloud().shown() ? <Icons.Eye size={14} /> : <Icons.EyeSlash size={14} />}
+                    onClick={() => cloud().setShown(!cloud().shown())}
+                  />
+                  <ToolButton label="Cerrar la nube" danger disabled={busy()} icon={<Icons.X size={14} />} onClick={() => cloud().discard()} />
+                </ToolGroup>
+              </div>
+              <div class="grid grid-cols-3 gap-1.5">
+                <Stat label="Puntos">{current().points.toLocaleString()}</Stat>
+                <Stat label="Separación">{current().spacing_mm > 0 ? `${current().spacing_mm.toFixed(2)} mm` : "—"}</Stat>
+                <Stat label="Origen">
+                  <span title={current().source}>{current().source}</span>
+                </Stat>
+              </div>
+              <Slider
+                inline
+                label="Tamaño punto"
+                title="Tamaño de los puntos en el visor"
+                value={clean().point_px}
+                min={1}
+                max={8}
+                step={0.5}
+                showValue
+                formatValue={(v) => `${v} px`}
+                onChange={(v) => updateClean({ point_px: v })}
+              />
+            </>
+          )}
+        </Show>
       </Panel>
 
       <Show when={info()}>
-        <Panel id="scan.cloud.select" title="Selección" icon={<Icons.Cursor size={14} />} defaultOpen>
-          <div class="space-y-3 pb-3">
-            <div class="flex gap-1">
+        <Panel
+          id="scan.cloud.select"
+          dense
+          title="Selección"
+          icon={<Icons.Cursor size={14} />}
+          defaultOpen
+          headerActions={
+            <Help
+              text={
+                (cloud().tool() === "polygon"
+                  ? "Clic a clic marca los vértices de la cuerda; se cierra con clic en el primer punto, doble clic o Enter. Retroceso quita el último punto y Esc cancela. "
+                  : "Arrastra con el botón izquierdo sobre el visor. ") +
+                "Shift suma, Ctrl resta. La vista se gira con el botón central o Alt + izquierdo. La selección atraviesa la nube: gira la vista para no tomar la cara de atrás."
+              }
+            />
+          }
+        >
+          <div class="flex items-center gap-1.5">
+            <ToolGroup>
               <For each={SELECT_TOOLS}>
                 {(t) => (
-                  <button
-                    class={clsx(
-                      "flex-1 h-8 rounded-md text-xs flex items-center justify-center gap-1.5 transition-colors",
-                      cloud().tool() === t.id ? "bg-accent/20 text-accent font-medium" : "text-text-muted hover:text-text hover:bg-surface/40"
-                    )}
-                    onClick={() => cloud().setTool(t.id)}
-                  >
-                    <t.icon size={14} />
-                    {t.label}
-                  </button>
+                  <ToolButton label={t.label} active={cloud().tool() === t.id} icon={<t.icon size={15} />} onClick={() => cloud().setTool(t.id)} />
                 )}
               </For>
-            </div>
-            <Show when={cloud().tool() === "brush"}>
-              <Slider
-                label="Tamaño del pincel"
-                value={clean().brush_px}
-                min={5}
-                max={150}
-                step={1}
-                showValue
-                formatValue={(v) => `${v} px`}
-                onChange={(v) => updateClean({ brush_px: v })}
-              />
-            </Show>
-            <Hint>
-              {cloud().tool() === "polygon"
-                ? "Clic a clic marca los vértices de la cuerda; se cierra con clic en el primer punto, doble clic o Enter. Retroceso quita el último punto y Esc cancela. "
-                : "Arrastra con el botón izquierdo sobre el visor. "}
-              Shift suma, Ctrl resta. La vista se gira con el botón central o Alt + izquierdo. La selección atraviesa la
-              nube: gira la vista para no tomar la cara de atrás.
-            </Hint>
-            <Row label="Seleccionados">{cloud().selected().toLocaleString()}</Row>
-            <div class="flex gap-1">
-              <Button size="sm" variant="ghost" class="flex-1" title="Seleccionar todo (A)" onClick={() => cloud().select("all")}>
-                Todo
-              </Button>
-              <Button size="sm" variant="ghost" class="flex-1" title="No seleccionar nada (Alt+A)" onClick={() => cloud().select("none")}>
-                Nada
-              </Button>
-              <Button size="sm" variant="ghost" class="flex-1" title="Invertir la selección (Ctrl+I)" onClick={() => cloud().select("invert")}>
-                Invertir
-              </Button>
-            </div>
-            <div class="flex gap-2">
-              <Button
-                size="sm"
-                variant="danger"
-                class="flex-1"
-                disabled={cloud().selected() === 0 || busy()}
-                title="Borrar los puntos seleccionados (Supr)"
-                icon={<Icons.Trash size={14} />}
-                onClick={() => cloud().deleteSelection()}
-              >
-                Borrar
-              </Button>
-              <Button
-                size="sm"
-                class="flex-1"
-                disabled={cloud().selected() === 0 || busy()}
-                title="Conservar solo los puntos seleccionados"
-                icon={<Icons.Scissors size={14} />}
-                onClick={() => cloud().keepSelection()}
-              >
-                Recortar
-              </Button>
-            </div>
+            </ToolGroup>
+            <div class="flex-1" />
+            <ToolGroup>
+              <ToolButton label="Seleccionar todo (A)" icon={<Icons.CheckSquare size={14} />} onClick={() => cloud().select("all")} />
+              <ToolButton label="No seleccionar nada (Alt+A)" icon={<Icons.Square size={14} />} onClick={() => cloud().select("none")} />
+              <ToolButton label="Invertir la selección (Ctrl+I)" icon={<Icons.ArrowsLeftRight size={14} />} onClick={() => cloud().select("invert")} />
+            </ToolGroup>
+          </div>
+          <Show when={cloud().tool() === "brush"}>
+            <Slider
+              inline
+              label="Pincel"
+              title="Tamaño del pincel"
+              value={clean().brush_px}
+              min={5}
+              max={150}
+              step={1}
+              showValue
+              formatValue={(v) => `${v} px`}
+              onChange={(v) => updateClean({ brush_px: v })}
+            />
+          </Show>
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs text-text-muted">
+              <span class="font-mono text-text">{cloud().selected().toLocaleString()}</span> seleccionados
+            </span>
+            <div class="flex-1" />
+            <Button
+              size="sm"
+              variant="danger"
+              class={MINI}
+              disabled={cloud().selected() === 0 || busy()}
+              title="Borrar los puntos seleccionados (Supr)"
+              icon={<Icons.Trash size={12} />}
+              onClick={() => cloud().deleteSelection()}
+            >
+              Borrar
+            </Button>
+            <Button
+              size="sm"
+              class={MINI}
+              disabled={cloud().selected() === 0 || busy()}
+              title="Conservar solo los puntos seleccionados"
+              icon={<Icons.Scissors size={12} />}
+              onClick={() => cloud().keepSelection()}
+            >
+              Recortar
+            </Button>
           </div>
         </Panel>
 
-        <Panel id="scan.cloud.noise" title="Ruido" icon={<Icons.MagicWand size={14} />} defaultOpen>
-          <div class="space-y-4 pb-3">
-            <div class="space-y-2">
-              <p class="text-xs text-text font-medium">Estadístico</p>
-              <Hint>Quita la bruma alrededor de la superficie: los puntos más lejos de sus vecinos que el resto.</Hint>
-              <Slider
-                label="Vecinos"
-                value={clean().sor_neighbors}
-                min={4}
-                max={50}
-                step={1}
-                showValue
-                onChange={(v) => updateClean({ sor_neighbors: v })}
-              />
-              <Slider
-                label="Tolerancia"
-                value={clean().sor_ratio}
-                min={0.5}
-                max={4}
-                step={0.1}
-                showValue
-                formatValue={(v) => `${v.toFixed(1)} σ`}
-                onChange={(v) => updateClean({ sor_ratio: v })}
-              />
+        <Panel id="scan.cloud.noise" dense title="Limpieza" icon={<Icons.MagicWand size={14} />} defaultOpen>
+          <Tool
+            first
+            title="Ruido"
+            help="Estadístico: quita la bruma alrededor de la superficie, los puntos más lejos de sus vecinos que el resto."
+            actions={
               <PreviewActions
                 label="Quitar ruido"
                 op={() => ({ kind: "statistical", neighbors: clean().sor_neighbors, std_ratio: clean().sor_ratio })}
               />
-            </div>
-            <div class="space-y-2 pt-3 border-t border-border/50">
-              <p class="text-xs text-text font-medium">Puntos sueltos</p>
-              <Hint>Quita los puntos con pocos vecinos cerca: motas y restos aislados.</Hint>
-              <Slider
-                label="Radio"
-                value={clean().radius_mm}
-                min={0.5}
-                max={15}
-                step={0.5}
-                showValue
-                formatValue={(v) => `${v.toFixed(1)} mm`}
-                onChange={(v) => updateClean({ radius_mm: v })}
-              />
-              <Slider
-                label="Vecinos mínimos"
-                value={clean().radius_neighbors}
-                min={1}
-                max={40}
-                step={1}
-                showValue
-                onChange={(v) => updateClean({ radius_neighbors: v })}
-              />
+            }
+          >
+            <Slider inline label="Vecinos" value={clean().sor_neighbors} min={4} max={50} step={1} showValue onChange={(v) => updateClean({ sor_neighbors: v })} />
+            <Slider
+              inline
+              label="Tolerancia"
+              value={clean().sor_ratio}
+              min={0.5}
+              max={4}
+              step={0.1}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} σ`}
+              onChange={(v) => updateClean({ sor_ratio: v })}
+            />
+          </Tool>
+          <Tool
+            title="Puntos sueltos"
+            help="Quita los puntos con pocos vecinos cerca: motas y restos aislados."
+            actions={
               <PreviewActions
                 label="Quitar puntos sueltos"
                 op={() => ({ kind: "radius", radius_mm: clean().radius_mm, min_neighbors: clean().radius_neighbors })}
               />
-            </div>
-          </div>
-        </Panel>
-
-        <Panel id="scan.cloud.fragments" title="Fragmentos sueltos" icon={<Icons.Scissors size={14} />} defaultOpen>
-          <div class="space-y-2 pb-3">
-            <Hint>
-              Partes separadas del objeto (manos, soportes, restos del fondo). Dos puntos más lejos que la separación quedan
-              en fragmentos distintos.
-            </Hint>
+            }
+          >
             <Slider
+              inline
+              label="Radio"
+              value={clean().radius_mm}
+              min={0.5}
+              max={15}
+              step={0.5}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} mm`}
+              onChange={(v) => updateClean({ radius_mm: v })}
+            />
+            <Slider
+              inline
+              label="Vecinos mín."
+              title="Vecinos mínimos dentro del radio"
+              value={clean().radius_neighbors}
+              min={1}
+              max={40}
+              step={1}
+              showValue
+              onChange={(v) => updateClean({ radius_neighbors: v })}
+            />
+          </Tool>
+          <Tool
+            title="Fragmentos"
+            help="Partes separadas del objeto (manos, soportes, restos del fondo). Dos puntos más lejos que la separación quedan en fragmentos distintos."
+            actions={
+              <>
+                <ToolButton
+                  label="Quedarse con la pieza más grande"
+                  disabled={busy()}
+                  icon={<Icons.CubeFocus size={14} />}
+                  onClick={() => cloud().edit({ kind: "fragments", gap_mm: clean().gap_mm, min_percent: 100 }, "Quitar fragmentos")}
+                />
+                <PreviewActions label="Quitar fragmentos" op={() => ({ kind: "fragments", gap_mm: clean().gap_mm, min_percent: clean().min_percent })} />
+              </>
+            }
+          >
+            <Slider
+              inline
               label="Separación"
               value={clean().gap_mm}
               min={1}
@@ -832,34 +1077,27 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               onChange={(v) => updateClean({ gap_mm: v })}
             />
             <Slider
-              label="Tamaño mínimo"
+              inline
+              label="Tamaño mín."
+              title="Tamaño mínimo, en % del fragmento más grande (100 % deja solo el más grande)"
               value={clean().min_percent}
               min={1}
               max={100}
               step={1}
               showValue
-              formatValue={(v) => (v >= 100 ? "solo el más grande" : `${v} % del más grande`)}
+              formatValue={(v) => (v >= 100 ? "solo mayor" : `${v} %`)}
               onChange={(v) => updateClean({ min_percent: v })}
             />
-            <PreviewActions label="Quitar fragmentos" op={() => ({ kind: "fragments", gap_mm: clean().gap_mm, min_percent: clean().min_percent })} />
-            <Button
-              size="sm"
-              variant="ghost"
-              fullWidth
-              disabled={busy()}
-              icon={<Icons.CubeFocus size={14} />}
-              onClick={() => cloud().edit({ kind: "fragments", gap_mm: clean().gap_mm, min_percent: 100 }, "Quitar fragmentos")}
-            >
-              Quedarse con la pieza más grande
-            </Button>
-          </div>
-        </Panel>
-
-        <Panel id="scan.cloud.plane" title="Mesa o base" icon={<Icons.Square size={14} />} defaultOpen={false}>
-          <div class="space-y-2 pb-3">
-            <Hint>Busca el plano más grande (la mesa, el plato giratorio) y lo quita.</Hint>
+          </Tool>
+          <Tool
+            title="Mesa o base"
+            help="Busca el plano más grande (la mesa, el plato giratorio) y lo quita."
+            actions={<PreviewActions label="Quitar la mesa" op={() => ({ kind: "plane", threshold_mm: clean().plane_mm, below: clean().plane_below })} />}
+          >
             <Slider
-              label="Grosor del plano"
+              inline
+              label="Grosor"
+              title="Grosor del plano"
               value={clean().plane_mm}
               min={0.5}
               max={10}
@@ -868,72 +1106,240 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
               formatValue={(v) => `${v.toFixed(1)} mm`}
               onChange={(v) => updateClean({ plane_mm: v })}
             />
-            <Checkbox
-              label="También lo que queda debajo"
-              checked={clean().plane_below}
-              onChange={(v) => updateClean({ plane_below: v })}
-            />
-            <PreviewActions label="Quitar la mesa" op={() => ({ kind: "plane", threshold_mm: clean().plane_mm, below: clean().plane_below })} />
+            <Checkbox small label="También lo que queda debajo" checked={clean().plane_below} onChange={(v) => updateClean({ plane_below: v })} />
+          </Tool>
+        </Panel>
+
+        <Panel
+          id="scan.cloud.merge"
+          dense
+          title="Fusionar nubes"
+          icon={<Icons.Stack size={14} />}
+          defaultOpen
+          headerActions={
+            <Help text="Suma otro escaneo o una nube PLY a la nube en edición sin borrar lo anterior. La automática encaja la nube nueva aunque el objeto se haya dado vuelta; cada suma se deshace con Ctrl+Z." />
+          }
+        >
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-text-muted shrink-0">Alineación</span>
+            <div class="flex-1 min-w-0">
+              <Segmented value={mergeAlign()} options={ALIGN_MODES} onChange={setMergeAlign} />
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <Checkbox small label="Promediar el solape" checked={mergeFuse()} onChange={setMergeFuse} />
+            <Help text="Donde las nubes se cubren, deja un punto por celda (el promedio) en vez de dos capas que ensucian la malla." />
+            <div class="flex-1" />
+            <span class="text-xs text-text-muted">
+              <span class="font-mono text-text">{info()!.parts}</span> {info()!.parts === 1 ? "parte" : "partes"}
+            </span>
+          </div>
+          <div class="flex gap-1.5">
+            <Button
+              size="sm"
+              class="flex-1"
+              disabled={!streaming() || busy() || status()?.scanning || scanKept()}
+              loading={cloud().busy() === "Sumar el escaneo"}
+              icon={<Icons.Scan size={14} />}
+              title={scanKept() ? "El escaneo actual ya está en la nube: escanea otro en la pestaña Captura" : "Suma el escaneo actual del escáner"}
+              onClick={mergeScan}
+            >
+              Sumar escaneo
+            </Button>
+            <Button
+              size="sm"
+              class="flex-1"
+              disabled={busy()}
+              loading={cloud().busy() === "Sumar la nube"}
+              icon={<Icons.FolderOpen size={14} />}
+              onClick={mergePly}
+            >
+              Sumar PLY
+            </Button>
           </div>
         </Panel>
 
-        <Panel id="scan.cloud.simplify" title="Simplificar y suavizar" icon={<Icons.GridFour size={14} />} defaultOpen={false}>
-          <div class="space-y-4 pb-3">
-            <div class="space-y-2">
-              <Hint>Deja un punto por celda: menos puntos, operaciones y malla más rápidas.</Hint>
-              <Slider
-                label="Celda"
-                value={clean().voxel_mm}
-                min={0.5}
-                max={10}
-                step={0.5}
-                showValue
-                formatValue={(v) => `${v.toFixed(1)} mm`}
-                onChange={(v) => updateClean({ voxel_mm: v })}
+        <Panel id="scan.cloud.simplify" dense title="Simplificar y suavizar" icon={<Icons.GridFour size={14} />} defaultOpen={false}>
+          <Tool
+            first
+            title="Simplificar"
+            help="Deja un punto por celda: menos puntos, operaciones y malla más rápidas."
+            actions={<ApplyAction label="Simplificar" run={() => cloud().edit({ kind: "downsample", voxel_mm: clean().voxel_mm }, "Simplificar")} />}
+          >
+            <Slider
+              inline
+              label="Celda"
+              value={clean().voxel_mm}
+              min={0.5}
+              max={10}
+              step={0.5}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} mm`}
+              onChange={(v) => updateClean({ voxel_mm: v })}
+            />
+          </Tool>
+          <Tool
+            title="Suavizar"
+            help="Lleva cada punto hacia la superficie que forman sus vecinos, sin encoger la forma."
+            actions={
+              <ApplyAction
+                label="Suavizar"
+                run={() => cloud().edit({ kind: "smooth", radius_mm: clean().smooth_mm, strength: clean().smooth_strength }, "Suavizar")}
               />
-              <Button
-                size="sm"
-                fullWidth
+            }
+          >
+            <Slider
+              inline
+              label="Radio"
+              value={clean().smooth_mm}
+              min={0.5}
+              max={10}
+              step={0.5}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} mm`}
+              onChange={(v) => updateClean({ smooth_mm: v })}
+            />
+            <Slider
+              inline
+              label="Intensidad"
+              value={clean().smooth_strength}
+              min={0.1}
+              max={1}
+              step={0.05}
+              showValue
+              formatValue={(v) => `${Math.round(v * 100)} %`}
+              onChange={(v) => updateClean({ smooth_strength: v })}
+            />
+          </Tool>
+        </Panel>
+
+        <Panel
+          id="scan.cloud.compare"
+          dense
+          title="Comparar"
+          icon={<Icons.Compare size={14} />}
+          defaultOpen={false}
+          headerActions={
+            <Help text="Mide cuánto se aparta cada punto de una nube de referencia (una copia antes de editar, otro escaneo o un modelo en PLY) y lo pinta: azul calza, rojo se aparta; gris no tiene pareja cerca." />
+          }
+        >
+          <div class="flex items-center gap-1.5 min-h-7">
+            <Show
+              when={info()!.reference}
+              fallback={<span class="text-xs text-text-dim flex-1">Sin referencia</span>}
+            >
+              {(ref) => (
+                <span class="text-xs text-text truncate flex-1" title={ref().name}>
+                  {ref().name} <span class="text-text-dim font-mono">· {ref().points.toLocaleString()}</span>
+                </span>
+              )}
+            </Show>
+            <ToolGroup>
+              <ToolButton
+                label="Usar la nube actual como referencia (una copia)"
                 disabled={busy()}
-                loading={cloud().busy() === "Simplificar"}
-                onClick={() => cloud().edit({ kind: "downsample", voxel_mm: clean().voxel_mm }, "Simplificar")}
-              >
-                Simplificar
-              </Button>
-            </div>
-            <div class="space-y-2 pt-3 border-t border-border/50">
-              <Hint>Lleva cada punto hacia la superficie que forman sus vecinos, sin encoger la forma.</Hint>
-              <Slider
-                label="Radio"
-                value={clean().smooth_mm}
-                min={0.5}
-                max={10}
-                step={0.5}
-                showValue
-                formatValue={(v) => `${v.toFixed(1)} mm`}
-                onChange={(v) => updateClean({ smooth_mm: v })}
+                icon={<Icons.Copy size={14} />}
+                onClick={() => cloud().setReference("current")}
               />
-              <Slider
-                label="Intensidad"
-                value={clean().smooth_strength}
-                min={0.1}
-                max={1}
-                step={0.05}
-                showValue
-                formatValue={(v) => `${Math.round(v * 100)} %`}
-                onChange={(v) => updateClean({ smooth_strength: v })}
+              <ToolButton label="Abrir una referencia PLY" disabled={busy()} icon={<Icons.FolderOpen size={14} />} onClick={referencePly} />
+              <ToolButton
+                label="Alinear la nube a la referencia"
+                disabled={busy() || !info()!.reference}
+                icon={<Icons.CornersIn size={14} />}
+                onClick={() => cloud().alignToReference(mergeAlign() === "none" ? "fine" : mergeAlign())}
               />
-              <Button
-                size="sm"
-                fullWidth
-                disabled={busy()}
-                loading={cloud().busy() === "Suavizar"}
-                onClick={() => cloud().edit({ kind: "smooth", radius_mm: clean().smooth_mm, strength: clean().smooth_strength }, "Suavizar")}
-              >
-                Suavizar
-              </Button>
-            </div>
+              <ToolButton
+                label="Quitar la referencia"
+                danger
+                disabled={busy() || !info()!.reference}
+                icon={<Icons.X size={14} />}
+                onClick={() => cloud().setReference("clear")}
+              />
+            </ToolGroup>
           </div>
+          <div class="space-y-1">
+            <Slider
+              inline
+              label="Tolerancia"
+              title="Distancia que se considera que calza"
+              value={compareSettings().tolerance_mm}
+              min={0.1}
+              max={5}
+              step={0.1}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} mm`}
+              onChange={(v) => updateCompare({ tolerance_mm: v })}
+            />
+            <Slider
+              inline
+              label="Escala de color"
+              title="Distancia que se pinta de rojo"
+              value={compareSettings().scale_mm}
+              min={0.5}
+              max={20}
+              step={0.5}
+              showValue
+              formatValue={(v) => `${v.toFixed(1)} mm`}
+              onChange={(v) => updateCompare({ scale_mm: v })}
+            />
+            <Slider
+              inline
+              label="Alcance"
+              title="Más lejos que esto, el punto no tiene pareja (gris)"
+              value={compareSettings().reach_mm}
+              min={1}
+              max={50}
+              step={1}
+              showValue
+              formatValue={(v) => `${v} mm`}
+              onChange={(v) => updateCompare({ reach_mm: v })}
+            />
+          </div>
+          <div class="flex gap-1.5">
+            <Button
+              size="sm"
+              variant={info()!.comparing ? "default" : "primary"}
+              class="flex-1"
+              disabled={busy() || !info()!.reference}
+              loading={cloud().busy() === "Comparar"}
+              icon={<Icons.Compare size={14} />}
+              onClick={() => cloud().compare(compareSettings())}
+            >
+              {info()!.comparing ? "Volver a comparar" : "Comparar"}
+            </Button>
+            <Show when={info()!.comparing}>
+              <Button size="sm" disabled={busy()} icon={<Icons.EyeSlash size={14} />} onClick={() => cloud().compare(compareSettings(), false)}>
+                Colores reales
+              </Button>
+            </Show>
+          </div>
+          <Show when={cloud().comparison()}>
+            {(c) => (
+              <>
+                <div class="space-y-1">
+                  <div
+                    class="h-2 rounded-full"
+                    style={{ background: "linear-gradient(90deg, rgb(40,90,220), rgb(30,190,210), rgb(60,200,80), rgb(240,210,40), rgb(225,50,40))" }}
+                  />
+                  <div class="flex justify-between text-[10px] font-mono text-text-dim">
+                    <span>0</span>
+                    <span>{(compareSettings().scale_mm / 2).toFixed(1)}</span>
+                    <span>≥ {compareSettings().scale_mm.toFixed(1)} mm</span>
+                  </div>
+                </div>
+                <div class="grid grid-cols-3 gap-1.5">
+                  <Stat label="Media">{c().mean_mm.toFixed(2)} mm</Stat>
+                  <Stat label="RMS">{c().rms_mm.toFixed(2)} mm</Stat>
+                  <Stat label="P95">{c().p95_mm.toFixed(2)} mm</Stat>
+                  <Stat label="Máxima">{c().max_mm.toFixed(2)} mm</Stat>
+                  <Stat label="En tolerancia">{c().within_percent.toFixed(1)} %</Stat>
+                  <Stat label="Sin pareja">
+                    {c().compared + c().unmatched > 0 ? ((100 * c().unmatched) / (c().compared + c().unmatched)).toFixed(1) : "0"} %
+                  </Stat>
+                </div>
+              </>
+            )}
+          </Show>
         </Panel>
       </Show>
     </div>
@@ -945,21 +1351,29 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
 
   const meshPanels = () => (
     <div>
-      <Panel id="scan.mesh" title="Crear modelo" icon={<Icons.Cube size={14} />} defaultOpen>
-        <div class="space-y-4 pb-3">
-          <p class="text-xs text-text-muted leading-relaxed">
-            <Show
-              when={info()}
-              fallback={
-                status()?.points
-                  ? "Desde el escaneo tal como está. Para limpiarlo antes, tómalo en la pestaña Nube."
-                  : "Desde el cuadro actual del escáner."
-              }
-            >
-              {(current) => `Desde la nube en edición (${current().points.toLocaleString()} puntos, ${current().source}).`}
-            </Show>
-          </p>
+      <Panel
+        id="scan.mesh"
+        dense
+        title="Crear modelo"
+        icon={<Icons.Cube size={14} />}
+        defaultOpen
+        headerActions={<Help text="Reemplaza el modelo abierto. Queda en milímetros, apoyado en el piso." />}
+      >
+        <Hint>
+          <Show
+            when={info()}
+            fallback={
+              status()?.points
+                ? "Desde el escaneo tal como está. Para limpiarlo antes, tómalo en la pestaña Nube."
+                : "Desde el cuadro actual del escáner."
+            }
+          >
+            {(current) => `Desde la nube en edición (${current().points.toLocaleString()} puntos, ${current().source}).`}
+          </Show>
+        </Hint>
+        <div class="space-y-1">
           <Slider
+            inline
             label="Detalle"
             value={mesh().voxel_mm}
             min={1}
@@ -967,36 +1381,87 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
             step={0.5}
             showValue
             formatValue={(v) => `${v.toFixed(1)} mm`}
-            onChange={(v) => setMesh({ ...mesh(), voxel_mm: v })}
+            onChange={(v) => updateMesh({ voxel_mm: v })}
           />
-          <Slider label="Suavizado" value={mesh().smooth} min={0} max={4} step={1} showValue onChange={(v) => setMesh({ ...mesh(), smooth: v })} />
-          <Slider label="Rellenar huecos" value={mesh().fill} min={0} max={4} step={1} showValue onChange={(v) => setMesh({ ...mesh(), fill: v })} />
-          <Button
-            variant="primary"
-            size="sm"
-            fullWidth
-            disabled={(!fromCloud() && !streaming()) || busy() || props.isProcessing}
-            loading={props.isProcessing}
-            icon={<Icons.Cube size={14} />}
-            onClick={() => props.onCreateModel?.(mesh(), fromCloud())}
-          >
-            {fromCloud() ? "Crear modelo de la nube" : status()?.points ? "Crear modelo del escaneo" : "Crear modelo del cuadro actual"}
-          </Button>
-          <Hint>Reemplaza el modelo abierto. Queda en milímetros, apoyado en el piso.</Hint>
+          <Slider inline label="Suavizado" value={mesh().smooth} min={0} max={4} step={1} showValue onChange={(v) => updateMesh({ smooth: v })} />
+          <Slider
+            inline
+            label="Cerrar huecos"
+            title="Engrosa la superficie para cerrar los huecos chicos entre puntos (más = más liso)"
+            value={mesh().fill}
+            min={0}
+            max={4}
+            step={1}
+            showValue
+            onChange={(v) => updateMesh({ fill: v })}
+          />
         </div>
+        <Tool
+          title="Tapar agujeros"
+          help="Después de mallar, tapa los agujeros que quedan: también los grandes, como la base que el escáner no vio. El parche curvo sigue la forma del borde; el plano sirve para bases y cortes."
+          actions={
+            <Checkbox small label="Activo" checked={mesh().close_holes} onChange={(v) => updateMesh({ close_holes: v })} />
+          }
+        >
+          <Show when={mesh().close_holes}>
+            <Segmented
+              value={mesh().flat_patch ? "flat" : "curved"}
+              options={[
+                { id: "curved", label: "Parche curvo", title: "Continúa la curvatura del borde (cabezas, figuras)" },
+                { id: "flat", label: "Parche plano", title: "Tapa plana (la base, un corte recto)" },
+              ]}
+              onChange={(v) => updateMesh({ flat_patch: v === "flat" })}
+            />
+            <Slider
+              inline
+              label="Tamaño máx."
+              title="Perímetro máximo del agujero a tapar; los más grandes quedan abiertos"
+              value={mesh().max_hole_mm}
+              min={0}
+              max={1000}
+              step={10}
+              showValue
+              formatValue={(v) => (v === 0 ? "todos" : `${v} mm`)}
+              onChange={(v) => updateMesh({ max_hole_mm: v })}
+            />
+            <Checkbox small label="Quitar piezas sueltas antes" checked={mesh().remove_pieces} onChange={(v) => updateMesh({ remove_pieces: v })} />
+          </Show>
+        </Tool>
+        <Button
+          variant="primary"
+          size="sm"
+          fullWidth
+          disabled={(!fromCloud() && !streaming()) || busy() || props.isProcessing}
+          loading={props.isProcessing}
+          icon={<Icons.Cube size={14} />}
+          onClick={() => props.onCreateModel?.(mesh(), fromCloud())}
+        >
+          {fromCloud() ? "Crear modelo de la nube" : status()?.points ? "Crear modelo del escaneo" : "Crear modelo del cuadro actual"}
+        </Button>
       </Panel>
 
       <Show when={props.hasModel}>
-        <Panel id="scan.mesh.after" title="Después" icon={<Icons.Wrench size={14} />} defaultOpen>
-          <div class="space-y-2 pb-3">
-            <Hint>
-              La malla puede traer agujeros, piezas sueltas o caras sueltas. Reparar (en Preparar) los detecta y corrige.
-            </Hint>
-            <Button size="sm" fullWidth icon={<Icons.Wrench size={14} />} onClick={() => props.onRepair?.()}>
+        <Panel
+          id="scan.mesh.after"
+          dense
+          title="Después"
+          icon={<Icons.Wrench size={14} />}
+          defaultOpen
+          headerActions={<Help text="La malla puede traer agujeros, piezas sueltas o caras sueltas. Reparar (en Preparar) los detecta y corrige." />}
+        >
+          <div class="flex items-center gap-1.5">
+            <Button size="sm" class="flex-1" icon={<Icons.Wrench size={14} />} onClick={() => props.onRepair?.()}>
               Reparar la malla
             </Button>
             <Show when={info()}>
-              <Checkbox label="Ver la nube en lugar del modelo" checked={cloud().shown()} onChange={(v) => cloud().setShown(v)} />
+              <ToolGroup>
+                <ToolButton
+                  label={cloud().shown() ? "Viendo la nube: clic para ver el modelo" : "Viendo el modelo: clic para ver la nube"}
+                  active={cloud().shown()}
+                  icon={cloud().shown() ? <Icons.Eye size={14} /> : <Icons.EyeSlash size={14} />}
+                  onClick={() => cloud().setShown(!cloud().shown())}
+                />
+              </ToolGroup>
             </Show>
           </div>
         </Panel>

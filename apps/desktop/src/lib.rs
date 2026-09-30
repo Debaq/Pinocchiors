@@ -125,6 +125,10 @@ pub fn run() {
             scan_cloud::scan_cloud_history,
             scan_cloud::scan_cloud_discard,
             scan_cloud::scan_cloud_create_model,
+            scan_cloud::scan_cloud_merge,
+            scan_cloud::scan_cloud_reference,
+            scan_cloud::scan_cloud_align_reference,
+            scan_cloud::scan_cloud_compare,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

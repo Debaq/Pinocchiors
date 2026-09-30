@@ -11,6 +11,41 @@ export interface CloudInfo {
   source: string;
   undo: string | null;
   redo: string | null;
+  /** Escaneos o nubes sumados */
+  parts: number;
+  /** Nube de referencia para comparar */
+  reference: { name: string; points: number } | null;
+  /** Se muestra el mapa de desviaciones en lugar de los colores */
+  comparing: boolean;
+}
+
+/** Cómo se alinea una nube que se suma (`scan_cloud_merge`) */
+export type AlignMode = "auto" | "fine" | "none";
+
+/** Resultado de sumar o alinear una nube (`AlignResult`) */
+interface AlignResult {
+  added: number;
+  overlap: number;
+  rmse: number;
+  info: CloudInfo;
+}
+
+/** Comparación con la referencia (`CompareResult`), en mm */
+export interface CompareResult {
+  compared: number;
+  unmatched: number;
+  mean_mm: number;
+  rms_mm: number;
+  max_mm: number;
+  p95_mm: number;
+  within_percent: number;
+}
+
+/** Parámetros de la comparación (mm) */
+export interface CompareSettings {
+  tolerance_mm: number;
+  scale_mm: number;
+  reach_mm: number;
 }
 
 /** Una edición de la nube (`CloudOp`) */
@@ -50,6 +85,8 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   const [tool, setToolSignal] = createSignal<CloudSelectTool>("rect");
   /** La nube se ve en el visor en lugar del modelo */
   const [shown, setShown] = createSignal(true);
+  /** Última comparación con la referencia, mientras el mapa está a la vista */
+  const [comparison, setComparison] = createSignal<CompareResult>();
 
   /** Corre una tarea con aviso de ocupado y el error a la vista */
   const run = async <T>(what: string, task: () => Promise<T>): Promise<T | undefined> => {
@@ -74,6 +111,8 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     // Una nube nueva se muestra en lugar del modelo
     if (fit) setShown(true);
     setInfo(next);
+    // Cualquier cambio de la nube apaga el mapa de desviaciones
+    if (!next?.comparing) setComparison(undefined);
     await refresh(fit);
   };
 
@@ -129,6 +168,48 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       await adopt(await invoke<CloudInfo>("scan_cloud_history", { redo }));
     });
 
+  /** Suma otra nube (del escáner o un PLY) alineada sobre la actual */
+  const merge = (from: "scan" | "ply", align: AlignMode, fuse: boolean, path?: string) =>
+    run(from === "scan" ? "Sumar el escaneo" : "Sumar la nube", async () => {
+      const first = !info();
+      const result = await invoke<AlignResult>("scan_cloud_merge", { from, path: path ?? null, align, fuse });
+      await adopt(result.info, true);
+      if (first) {
+        onMessage(`Nube lista para editar: ${result.info.points.toLocaleString()} puntos`);
+        return true;
+      }
+      const fit = align === "none" ? "" : ` · calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)`;
+      const warn = align !== "none" && result.overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar (se deshace con Ctrl+Z)" : "";
+      onMessage(`Nube sumada: +${result.added.toLocaleString()} puntos, ${result.info.parts} en total${fit}${warn}`);
+      return true;
+    });
+
+  /** Fija la referencia: la nube actual, un PLY o ninguna */
+  const setReference = (action: "current" | "ply" | "clear", path?: string) =>
+    run("Referencia", async () => {
+      await adopt(await invoke<CloudInfo>("scan_cloud_reference", { action, path: path ?? null }));
+      if (action !== "clear") onMessage(`Referencia fijada: ${info()!.reference!.name}`);
+    });
+
+  /** Mueve la nube para que calce sobre la referencia */
+  const alignToReference = (align: AlignMode) =>
+    run("Alinear a la referencia", async () => {
+      const result = await invoke<AlignResult>("scan_cloud_align_reference", { align });
+      await adopt(result.info);
+      onMessage(`Alineada a la referencia: calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)`);
+    });
+
+  /** Compara con la referencia y pinta el mapa; `show = false` lo apaga */
+  const compare = (settings: CompareSettings, show = true) =>
+    run("Comparar", async () => {
+      const result = await invoke<(CompareResult & { info: CloudInfo }) | null>("scan_cloud_compare", { ...settings, show });
+      const current = result?.info ?? (await invoke<CloudInfo | null>("scan_cloud_info")) ?? undefined;
+      setInfo(current);
+      setComparison(result ?? undefined);
+      if (result) setShown(true);
+      await refresh();
+    });
+
   const discard = async () => {
     await invoke("scan_cloud_discard");
     await adopt(undefined);
@@ -175,6 +256,11 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     keepSelection,
     history,
     discard,
+    merge,
+    setReference,
+    alignToReference,
+    compare,
+    comparison,
     select,
   };
 }

@@ -15,6 +15,7 @@ pub mod capture;
 pub mod mesh;
 pub mod pointcloud;
 pub mod recording;
+pub mod register;
 pub mod scan;
 mod scanner;
 

@@ -24,7 +24,7 @@ export const Tooltip: ParentComponent<TooltipProps> = (props) => {
           class={clsx(
             "px-2 py-1 rounded",
             "bg-fg text-bg",
-            "text-xs font-medium",
+            "text-xs font-medium leading-snug max-w-64",
             "shadow-md",
             "animate-fade-in",
             "z-50"
