@@ -3517,7 +3517,9 @@ export const App: Component = () => {
       // Sin modelo va el esqueleto solo; BVH lleva el esqueleto y la animación activa
       const skeletonOnly = !meshLoaded();
       const bvh = opts.format === "bvh";
-      const exported = bvh ? clips().filter((c) => c.id === activeClipId()) : clips();
+      // La mezcla de capas activa va horneada como una animación más (en BVH, en lugar de la activa)
+      const mix = mixer().enabled && mixer().layers.length > 0 ? bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24) : undefined;
+      const exported = bvh ? (mix ? [mix] : clips().filter((c) => c.id === activeClipId())) : mix ? [...clips(), mix] : clips();
       const withAnimations = bvh || skeletonOnly || includeRig;
       const result = await busy(`Exportando a ${name}...`, () => invoke<ExportResult>("export_model", {
         config: {
@@ -3536,7 +3538,7 @@ export const App: Component = () => {
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
           // La pila de evaluación horneada a giros por cuadro: lo único que entienden glTF, USD y BVH
-          animations: withAnimations ? clipsForExport(exported.map((c) => bakeClip(c, rigCtx())), boneIndex()) : null,
+          animations: withAnimations ? clipsForExport(exported.map((c) => (c.baked ? c : bakeClip(c, rigCtx()))), boneIndex()) : null,
           non_deforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
           skeleton_only: skeletonOnly,
           bone_shapes: exportBoneShapes(),

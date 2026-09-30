@@ -69,6 +69,11 @@ export interface AnimationClip {
   markers?: Marker[];
   /** Se repite: el último cuadro empalma con el primero (manijas automáticas de las puntas) */
   cyclic?: boolean;
+  /**
+   * FK puro con el rig ya aplicado (mezcla horneada): la pila no le vuelve a
+   * aplicar restricciones, IK ni resortes, solo los límites
+   */
+  baked?: boolean;
 }
 
 /** Giro y desplazamiento de un control respecto de su reposo */

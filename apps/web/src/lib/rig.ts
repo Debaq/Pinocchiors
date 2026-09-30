@@ -887,7 +887,8 @@ export const POSE_STACK: PoseStage[] = [constraintStage, ikStage, secondaryStage
 
 /** Pasa una pose (de keys o editada a mano) por la pila */
 export function runPoseStack(pose: Pose, ctx: RigContext, info: StageInfo = {}): Pose {
-  return POSE_STACK.reduce((p, stage) => stage.run(p, ctx, info), pose);
+  const stages = info.clip?.baked ? [limitsStage] : POSE_STACK;
+  return stages.reduce((p, stage) => stage.run(p, ctx, info), pose);
 }
 
 /** Pose final del clip en `frame` */
