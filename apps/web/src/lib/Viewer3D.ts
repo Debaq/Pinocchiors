@@ -1711,6 +1711,8 @@ export class Viewer3D {
 
     const width = parent.clientWidth;
     const height = parent.clientHeight;
+    // Ventana minimizada o panel plegado: 0/0 dejaría la cámara con NaN
+    if (!width || !height) return;
 
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();

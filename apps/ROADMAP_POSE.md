@@ -139,6 +139,15 @@ por IK (cadera como péndulo invertido) en `presetAnimations`. El pie
 invertido rueda con un balanceo (talón, planta y punta salen del pie); los
 ojos se animan con una cadena "mirar a" propia.
 
+**Convivencia FK/IK (2026-09-30).** Sin key de mezcla ni valor fijo, una
+cadena decide sola (`chainBlend` en `lib/rig.ts`): si la animación anima sus
+articulaciones y no sus controles, sigue las keys FK; si no, IK. Así las
+animaciones básicas, las poses de fábrica, las herramientas de pose y lo
+animado antes de crear el IK ya no quedan pisados por controles quietos en
+reposo. Rehacer el rig automático conserva los ids (las keys siguen
+valiendo) y `tidyClips` quita pistas de cadenas o controles que ya no
+existen y la mezcla 0 que se ponía antes a mano.
+
 - **IK analítico de 2 huesos + pole** (ley de cosenos, sin iteraciones).
   Patas, brazos y la mitad superior de las alas.
   - Estiramiento opcional (el hueso se alarga si el objetivo queda fuera de

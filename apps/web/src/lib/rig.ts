@@ -640,6 +640,67 @@ function blendInto(out: Pose, before: Pose, after: Pose, joints: number[], t: nu
   }
 }
 
+/** Controles que mueven la cadena: objetivo, pole y los de la curva */
+export function chainControls(chain: IkChain): string[] {
+  return [chain.target, chain.pole, ...(chain.curve ?? [])].filter((id): id is string => !!id);
+}
+
+/**
+ * Mezcla IK/FK de la cadena en `frame`, con `pose` la pose de las keys
+ * (antes del IK). Manda la key de mezcla; si no hay, el valor fijo de la
+ * cadena; y si tampoco, la animación decide: si anima las articulaciones
+ * de la cadena y no sus controles, sigue las keys FK (así las animaciones
+ * básicas, las poses y lo animado antes de crear el IK no quedan pisados
+ * por controles quietos en reposo); si no, IK.
+ */
+export function chainBlend(chain: IkChain, clip: AnimationClip | undefined, frame: number, pose: Pose, joints: number[]): number {
+  const clamp = (x: number) => Math.max(0, Math.min(1, x));
+  const keyed = sampleScalar(clip, chain.id, "blend", frame);
+  if (keyed !== undefined) return clamp(keyed);
+  if (chain.blend !== undefined) return clamp(chain.blend);
+  if (chainControls(chain).some((id) => pose.controls.has(id))) return 1;
+  return joints.some((j) => pose.rotations.has(j) || pose.translations.has(j)) ? 0 : 1;
+}
+
+/**
+ * Ordena las pistas de los clips después de cambiar el rig: quita las de
+ * cadenas y controles que ya no existen, y la mezcla 0 que se ponía antes
+ * al principio de las animaciones previas al IK (hoy la regla de
+ * `chainBlend` da lo mismo sin esa key)
+ */
+export function tidyClips(clips: AnimationClip[], settings: RigSettings): AnimationClip[] {
+  const chains = new Map((settings.ikChains ?? []).map((c) => [c.id, c]));
+  const controls = new Set(settings.controls.map((c) => c.id));
+  return clips.map((clip) => {
+    const animated = (t: BoneTrack) => t.rotation.length > 0 || t.translation.length > 0;
+    let changed = false;
+    const tracks = clip.tracks.flatMap((t): BoneTrack[] => {
+      if (t.kind === "control" && !controls.has(t.bone)) {
+        changed = true;
+        return [];
+      }
+      if (t.kind !== "ik") return [t];
+      const chain = chains.get(t.bone);
+      if (!chain) {
+        changed = true;
+        return [];
+      }
+      const blend = t.blend ?? [];
+      const fk =
+        blend.length === 1 &&
+        blend[0].value === 0 &&
+        chain.blend === undefined &&
+        !clip.tracks.some((o) => o.kind === "control" && chainControls(chain).includes(o.bone) && animated(o)) &&
+        clip.tracks.some((o) => !o.kind && chain.joints.includes(o.bone) && animated(o));
+      if (!fk) return [t];
+      changed = true;
+      const rest: BoneTrack = { ...t, blend: undefined };
+      return rest.pin?.length || rest.roll?.length ? [rest] : [];
+    });
+    return changed ? { ...clip, tracks } : clip;
+  });
+}
+
 /**
  * IK: cada cadena, en orden, resuelve sus articulaciones hacia su objetivo y
  * se mezcla con la pose de las keys (FK) según su mezcla. Fijada, el
@@ -674,7 +735,7 @@ export const ikStage: PoseStage = {
       const idx = joints as number[];
       const frame = info.frame ?? 0;
       const start = info.noPins ? undefined : pinStart(info.clip, chain.id, frame);
-      const blend = start !== undefined ? 1 : Math.max(0, Math.min(1, sampleScalar(info.clip, chain.id, "blend", frame) ?? chain.blend ?? 1));
+      const blend = start !== undefined ? 1 : chainBlend(chain, info.clip, frame, pose, idx);
       if (blend <= 0) continue;
       const before = clonePose(out);
       const involved = [...idx];

@@ -58,6 +58,8 @@ pub fn run() {
             project::revert_to_original,
             project::recovery_project_path,
             project::recovery_info,
+            project::project_changed,
+            project::clear_recovery,
             commands::get_body_plan,
             commands::select_body_plan,
             commands::get_skeleton_data,

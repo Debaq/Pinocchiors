@@ -51,10 +51,20 @@ export function autoRig(ctx: RigContext): RigSettings {
   const controls: RigControl[] = settings.controls.filter((c) => !c.auto);
   const chains: IkChain[] = (settings.ikChains ?? []).filter((c) => !c.auto);
   if (!body) return { ...settings, controls, ikChains: chains };
+  // Rehacer conserva los ids de lo que se vuelve a generar igual (por nombre),
+  // así las keys de controles y cadenas siguen valiendo
+  const oldControls = new Map(settings.controls.filter((c) => c.auto).map((c) => [c.name, c.id]));
+  const oldChains = new Map((settings.ikChains ?? []).filter((c) => c.auto).map((c) => [`${c.solver}:${c.name}`, c.id]));
+  const reuse = (ids: Map<string, string>, key: string) => {
+    const id = ids.get(key);
+    ids.delete(key);
+    return id;
+  };
+  const chainId = (solver: IkChain["solver"], label: string) => reuse(oldChains, `${solver}:${label}`) ?? newRigId("ik");
   const { forward, up } = bodyAxes(body);
   const size = body.size;
   const control = (label: string, position: Vec3, shape: RigControl["shape"], scale: number, parent: string | null = null): RigControl => {
-    const c: RigControl = { id: newRigId("ctl"), name: label, parent, shape, position: [...position], size: size * scale, auto: true };
+    const c: RigControl = { id: reuse(oldControls, label) ?? newRigId("ctl"), name: label, parent, shape, position: [...position], size: size * scale, auto: true };
     controls.push(c);
     return c;
   };
@@ -74,7 +84,7 @@ export function autoRig(ctx: RigContext): RigSettings {
     const target = control(`${label}_ik`, ctx.bones[c].position, "cube", 0.035);
     const pole = control(`${name(ctx, b)}_pole`, polePosition(ctx, a, b, c, fallback), "sphere", 0.015);
     chains.push({
-      id: newRigId("ik"),
+      id: chainId("twoBone", `${label} IK`),
       name: `${label} IK`,
       solver: "twoBone",
       joints: [a, b, c, ...(leg ? foot : [])].map((j) => name(ctx, j)),
@@ -98,7 +108,7 @@ export function autoRig(ctx: RigContext): RigSettings {
       return control(`${name(ctx, j)}_curva`, ctx.bones[j].position, "sphere", 0.02, parent);
     });
     chains.push({
-      id: newRigId("ik"),
+      id: chainId("spline", `${name(ctx, chain.joints[chain.joints.length - 1])} curva`),
       name: `${name(ctx, chain.joints[chain.joints.length - 1])} curva`,
       solver: "spline",
       joints: chain.joints.map((j) => name(ctx, j)),
@@ -116,7 +126,7 @@ export function autoRig(ctx: RigContext): RigSettings {
     const p = ctx.bones[last].position;
     const target = control("mirar", [p[0] + forward[0] * size * 0.5, p[1] + forward[1] * size * 0.5, p[2] + forward[2] * size * 0.5], "circle", 0.03);
     chains.push({
-      id: newRigId("ik"),
+      id: chainId("lookAt", "Mirar a"),
       name: "Mirar a",
       solver: "lookAt",
       joints: head.map((j) => name(ctx, j)),
@@ -129,7 +139,7 @@ export function autoRig(ctx: RigContext): RigSettings {
   // Raíz: control de centro de masa
   const root = ctx.bones[body.root];
   const com = control("centro de masa", root.position, "circle", 0.12);
-  chains.push({ id: newRigId("ik"), name: "Centro de masa", solver: "root", joints: [root.name], target: com.id, auto: true });
+  chains.push({ id: chainId("root", "Centro de masa"), name: "Centro de masa", solver: "root", joints: [root.name], target: com.id, auto: true });
 
   return { ...settings, controls, ikChains: chains };
 }
