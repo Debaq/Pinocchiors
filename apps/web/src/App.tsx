@@ -4301,6 +4301,32 @@ export const App: Component = () => {
     }
   };
 
+  // Indicador de "cambios sin guardar" en la cabecera. La comparación
+  // serializa todo el proyecto, así que no corre en cada cambio: después de
+  // cada paso del historial (con un respiro), al guardar o abrir, y cada
+  // minuto por los ajustes que no pasan por el historial
+  const [unsaved, setUnsaved] = createSignal(false);
+  let unsavedTimer: number | undefined;
+  let unsavedRequest = 0;
+  const checkUnsaved = async () => {
+    unsavedTimer = undefined;
+    // Con una tarea larga el estado está a medias: se vuelve a mirar al terminar
+    if (isProcessing() || switching()) return scheduleUnsavedCheck(2000);
+    const request = ++unsavedRequest;
+    const result = await hasUnsavedWork();
+    if (request === unsavedRequest) setUnsaved(result);
+  };
+  const scheduleUnsavedCheck = (delay = 800) => {
+    if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
+    unsavedTimer = window.setTimeout(checkUnsaved, delay);
+  };
+  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing], () => scheduleUnsavedCheck()));
+  const unsavedInterval = setInterval(() => unsavedTimer === undefined && checkUnsaved(), 60_000);
+  onCleanup(() => {
+    clearInterval(unsavedInterval);
+    if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
+  });
+
   /** Pregunta antes de descartar el trabajo actual, solo si hay algo sin guardar */
   const confirmDiscard = async (title: string, message: string, confirmLabel: string) =>
     !(await hasUnsavedWork()) || confirmAction({ title, message: `${message} Hay cambios sin guardar: se pierden.`, confirmLabel, danger: true });
@@ -4336,6 +4362,12 @@ export const App: Component = () => {
   const [recovery, setRecovery] = createSignal<RecoveryInfo | undefined>();
 
   const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  // Título de la ventana: archivo y un punto si hay cambios sin guardar
+  const baseTitle = document.title;
+  createEffect(() => {
+    const name = projectPath() ? baseName(projectPath()!) : fileName();
+    document.title = name ? `${unsaved() ? "• " : ""}${name} — Pinocchio` : baseTitle;
+  });
 
   /** Estado de la interfaz que va al proyecto */
   const projectUi = (): string => {
@@ -4519,6 +4551,7 @@ export const App: Component = () => {
         invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
       );
       setProjectPath(path);
+      scheduleUnsavedCheck(0);
       setStatusMessage(`Proyecto guardado: ${baseName(path!)} (${(saved.bytes / 1e6).toFixed(1)} MB)`);
       // Lo guardado ya está a salvo: la recuperación vieja no debe ofrecerse al abrir la app
       invoke("clear_recovery").catch(() => {});
@@ -4748,6 +4781,7 @@ export const App: Component = () => {
           title="Pinocchio"
           fps={fps()}
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
+          unsaved={unsaved()}
           fileMenu={fileMenuItems}
           onOpenSettings={() => setSettingsOpen(true)}
           workspace={pipeline.workspace()?.id}
