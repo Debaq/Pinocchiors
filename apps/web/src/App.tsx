@@ -171,6 +171,7 @@ import { PosePanel, type PoseSource, type SelectCommand } from "./components/pan
 import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
 import { ConstraintPanel } from "./components/panels/ConstraintPanel";
+import { SPRING_PRESETS } from "./lib/secondary";
 import {
   CONSTRAINT_PREFIX,
   CONSTRAINT_TYPES,
@@ -1764,6 +1765,35 @@ export const App: Component = () => {
     return [...set].filter((j) => j < rigBones().length);
   };
 
+  /** Resortes (F8) en los apéndices que cuelgan: orejas, colas, antenas, trompas y tentáculos sin IK */
+  const handleAutoSprings = () => {
+    const ctx = rigCtx();
+    const body = ctx.body;
+    if (!body) {
+      setStatusMessage("No se reconoció el cuerpo: pon los resortes a mano en cada hueso");
+      return;
+    }
+    const withIk = new Set((ctx.settings.ikChains ?? []).filter((c) => !c.disabled).flatMap((c) => c.joints));
+    const presets = { ear: "jiggle", antenna: "jiggle", tail: "follow", trunk: "follow", tentacle: "follow" } as const;
+    let settings = rigSettings();
+    let count = 0;
+    for (const chain of body.chains) {
+      const preset = presets[chain.kind as keyof typeof presets];
+      if (!preset) continue;
+      const names = chain.rotating.map((j) => ctx.bones[j].name).filter((n) => !withIk.has(n));
+      if (names.length === 0) continue;
+      const spring = SPRING_PRESETS.find((x) => x.id === preset)!.settings;
+      settings = withBoneProps(settings, names, { spring: { ...spring } });
+      count += names.length;
+    }
+    if (count === 0) {
+      setStatusMessage("No hay orejas, colas, antenas ni trompas sin IK para poner resortes");
+      return;
+    }
+    void changeRig("Resortes automáticos", settings);
+    setStatusMessage(`Resortes en ${count} articulaciones: se ven al reproducir (se hornean al exportar)`);
+  };
+
   const changeBoneProps = (description: string, change: Partial<BoneProps>) => {
     const names = jointSelection().map((j) => rigBones()[j].name);
     if (names.length > 0) void changeRig(description, withBoneProps(rigSettings(), names, change));
@@ -1934,6 +1964,7 @@ export const App: Component = () => {
       onAddControl={() => void handleAddControl()}
       onSelectControl={handleSelectControl}
       onApplyRest={() => void handleApplyRest()}
+      onAutoSprings={handleAutoSprings}
       onClearPose={handleClearPose}
     />
   );

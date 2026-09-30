@@ -43,6 +43,7 @@ import { applyLimits, type JointLimits } from "./jointLimits";
 import { eulerCodec, type Codec, type RotationCodecs } from "./curves";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
 import { applyConstraints, isConstraintId, loadConstraints, type RigConstraint } from "./constraints";
+import { applySecondary, type SpringSettings } from "./secondary";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -94,6 +95,8 @@ export interface BoneProps {
   roll?: number;
   /** Rango de giro (bisagra o rótula), ver `jointLimits.ts` */
   limits?: JointLimits;
+  /** Resorte (F8): el hueso sigue a una punta con masa en vez de a sus keys */
+  spring?: SpringSettings;
 }
 
 export interface BoneGroup {
@@ -207,7 +210,7 @@ export function loadRigSettings(raw: unknown): RigSettings {
 }
 
 /** Propiedades de un hueso con los valores por defecto */
-export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape" | "limits">> & BoneProps {
+export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape" | "limits" | "spring">> & BoneProps {
   const p = settings.bones[name] ?? {};
   return {
     ...p,
@@ -865,8 +868,22 @@ export const constraintStage: PoseStage = {
   run: (pose, ctx, info) => applyConstraints(pose, ctx, info, { controlWorld }),
 };
 
-/** Etapas después de las keys, en orden: restricciones → IK → límites */
-export const POSE_STACK: PoseStage[] = [constraintStage, ikStage, limitsStage];
+/** Resortes y seguimiento (F8): simulados con el clip hasta el cuadro anterior */
+export const secondaryStage: PoseStage = {
+  name: "resortes",
+  run: (pose, ctx, info) =>
+    applySecondary(pose, ctx, info, {
+      before: (clip, frame) =>
+        [constraintStage, ikStage].reduce(
+          (p, stage) => stage.run(p, ctx, { clip, frame }),
+          samplePose(clip, frame, ctx.boneIndex, ctx.rotation)
+        ),
+      ground: (j) => groundHeight(ctx, j),
+    }),
+};
+
+/** Etapas después de las keys, en orden: restricciones → IK → resortes → límites */
+export const POSE_STACK: PoseStage[] = [constraintStage, ikStage, secondaryStage, limitsStage];
 
 /** Pasa una pose (de keys o editada a mano) por la pila */
 export function runPoseStack(pose: Pose, ctx: RigContext, info: StageInfo = {}): Pose {
