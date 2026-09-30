@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use converter_layers::{LayeredFormat, LayeredImage, Layer, draw_lines, fill_triangles};
+use converter_layers::{LayeredFormat, LayeredImage, Layer, draw_lines, draw_text, fill_triangles};
 use converter_scene::{Material, Scene, Texture, TextureFormat, TextureRef};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -19,7 +19,8 @@ use crate::state::AppState;
 const WIRE_LAYER: &str = "Malla UV";
 const BORDER_LAYER: &str = "Bordes de islas";
 const ISLAND_LAYER: &str = "Islas";
-const GUIDE_LAYERS: [&str; 3] = [WIRE_LAYER, BORDER_LAYER, ISLAND_LAYER];
+const NAMES_LAYER: &str = "Nombres de partes";
+const GUIDE_LAYERS: [&str; 4] = [WIRE_LAYER, BORDER_LAYER, ISLAND_LAYER, NAMES_LAYER];
 
 /// Lado de una textura nueva cuando el material no tiene ninguna
 const NEW_TEXTURE_SIZE: u32 = 2048;
@@ -165,8 +166,12 @@ fn current_image(state: &AppState, key: TextureKey) -> Result<(u32, u32, Vec<u8>
     })
 }
 
-/// Polígonos UV (triángulos o quads) de las caras del material
-fn material_polygons(state: &AppState, key: TextureKey) -> Result<Vec<Vec<[f32; 2]>>, String> {
+/// Polígonos UV (triángulos o quads) con el índice de su cara (el de las
+/// partes del cuerpo)
+type UvPolygons = Vec<(usize, Vec<[f32; 2]>)>;
+
+/// Polígonos UV de las caras del material
+fn material_polygons(state: &AppState, key: TextureKey) -> Result<UvPolygons, String> {
     match key.target {
         TextureTarget::Original => {
             let scene = state.scene.lock().unwrap();
@@ -180,34 +185,78 @@ fn material_polygons(state: &AppState, key: TextureKey) -> Result<Vec<Vec<[f32; 
                 .corners
                 .iter()
                 .zip(&skin.face_material)
-                .filter(|(_, m)| **m == Some(key.material))
-                .map(|(c, _)| c.to_vec())
+                .enumerate()
+                .filter(|(_, (_, m))| **m == Some(key.material))
+                .map(|(f, (c, _))| (f, c.to_vec()))
                 .collect())
         }
     }
 }
 
-fn scene_polygons(scene: &Scene, material: usize) -> Vec<Vec<[f32; 2]>> {
+/// Triángulos del material en el orden de las primitivas (el índice cuenta
+/// los de todas, como las caras del desplegado del original)
+fn scene_polygons(scene: &Scene, material: usize) -> UvPolygons {
     let mut out = Vec::new();
+    let mut index = 0;
     for prim in scene.world_primitives() {
+        let first = index;
+        index += prim.triangles.len();
         if prim.material != Some(material) {
             continue;
         }
         let Some(uvs) = &prim.uvs else { continue };
-        out.extend(prim.triangles.iter().map(|t| t.iter().map(|&i| uvs[i as usize]).collect()));
+        out.extend(prim.triangles.iter().enumerate().map(|(k, t)| (first + k, t.iter().map(|&i| uvs[i as usize]).collect())));
     }
     out
 }
 
+/// Partes del cuerpo del mapa, si se desplegó por partes
+fn body_parts(state: &AppState, target: TextureTarget) -> Option<uv_core::SkinParts> {
+    match target {
+        TextureTarget::Original => state.original_parts.lock().unwrap().clone(),
+        TextureTarget::Quad => state.quad_skin.lock().unwrap().as_ref().and_then(|s| s.parts.clone()),
+    }
+}
+
+/// Capa con el nombre de cada parte sobre su isla: en la cara más cercana al
+/// centro (ponderado por área) de las caras de la parte
+fn names_layer(polygons: &[(usize, Vec<[f32; 2]>)], parts: &uv_core::SkinParts, w: u32, h: u32) -> Layer {
+    let mut layer = Layer::new(NAMES_LAYER, w, h);
+    let centroid = |p: &[[f32; 2]]| [0, 1].map(|k| p.iter().map(|c| c[k]).sum::<f32>() / p.len().max(1) as f32);
+    let area = |p: &[[f32; 2]]| {
+        (1..p.len().saturating_sub(1))
+            .map(|k| {
+                let (a, b, c) = (p[0], p[k], p[k + 1]);
+                0.5 * ((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])).abs()
+            })
+            .sum::<f32>()
+    };
+    let scale = (w.max(h) as f32 / 400.0).round().max(2.0) as u32;
+    for (part, name) in parts.names.iter().enumerate() {
+        let faces: Vec<&Vec<[f32; 2]>> =
+            polygons.iter().filter(|(f, _)| parts.face_part.get(*f) == Some(&part)).map(|(_, p)| p).collect();
+        let total: f32 = faces.iter().map(|p| area(p)).sum();
+        if faces.is_empty() || total <= 0.0 {
+            continue;
+        }
+        let mean = [0, 1].map(|k| faces.iter().map(|p| centroid(p)[k] * area(p)).sum::<f32>() / total);
+        let distance = |c: [f32; 2]| (c[0] - mean[0]).powi(2) + (c[1] - mean[1]).powi(2);
+        let spot = faces.iter().map(|p| centroid(p)).min_by(|a, b| distance(*a).total_cmp(&distance(*b))).expect("hay caras");
+        draw_text(&mut layer, name, [spot[0] * w as f32, spot[1] * h as f32], scale, [255, 255, 255], [30, 30, 30]);
+    }
+    layer
+}
+
 /// Capas de guía sobre un lienzo de `w × h`: malla, bordes de islas e islas
-fn guide_layers(polygons: &[Vec<[f32; 2]>], w: u32, h: u32) -> [Layer; 3] {
+fn guide_layers(polygons: &[(usize, Vec<[f32; 2]>)], w: u32, h: u32) -> [Layer; 3] {
+    let polygons: Vec<&Vec<[f32; 2]>> = polygons.iter().map(|(_, p)| p).collect();
     let px = |uv: [f32; 2]| [uv[0] * w as f32, uv[1] * h as f32];
     let width = (w.max(h) as f32 / 2048.0).max(1.0);
 
     // Aristas por UV cuantizada: las de una sola cara son el borde de la isla
     let key = |uv: [f32; 2]| ((uv[0] * 1048576.0).round() as i64, (uv[1] * 1048576.0).round() as i64);
     let mut edges: HashMap<((i64, i64), (i64, i64)), ([[f32; 2]; 2], u32)> = HashMap::new();
-    for poly in polygons {
+    for poly in &polygons {
         for k in 0..poly.len() {
             let (a, b) = (poly[k], poly[(k + 1) % poly.len()]);
             let (ka, kb) = (key(a), key(b));
@@ -238,7 +287,10 @@ fn editing_image(state: &AppState, key: TextureKey) -> Result<LayeredImage, Stri
     let (w, h, pixels, _) = current_image(state, key)?;
     let polygons = material_polygons(state, key)?;
     let [wire, borders, islands] = guide_layers(&polygons, w, h);
-    Ok(LayeredImage { width: w, height: h, layers: vec![Layer::from_rgba("Textura", w, h, pixels), islands, wire, borders] })
+    let mut layers = vec![Layer::from_rgba("Textura", w, h, pixels), islands, wire, borders];
+    // Mapa por partes: el nombre de cada una sobre su isla, arriba de todo
+    layers.extend(body_parts(state, key.target).map(|parts| names_layer(&polygons, &parts, w, h)));
+    Ok(LayeredImage { width: w, height: h, layers })
 }
 
 fn encode_png(w: u32, h: u32, pixels: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -261,7 +313,9 @@ fn export_to(state: &AppState, key: TextureKey, path: &Path, layout_only: bool) 
         let (w, h, _, _) = current_image(state, key)?;
         let polygons = material_polygons(state, key)?;
         let [wire, borders, _] = guide_layers(&polygons, w, h);
-        let image = LayeredImage { width: w, height: h, layers: vec![wire, borders] };
+        let mut layers = vec![wire, borders];
+        layers.extend(body_parts(state, key.target).map(|parts| names_layer(&polygons, &parts, w, h)));
+        let image = LayeredImage { width: w, height: h, layers };
         encode_png(w, h, image.composite(|_| true))?
     } else if let Some(format) = LayeredFormat::from_extension(&extension(path)) {
         editing_image(state, key)?.write(format)
@@ -488,6 +542,26 @@ mod tests {
             let decode = |t: &Texture| image::load_from_memory(&t.data).unwrap().to_rgba8().into_raw();
             assert_eq!(decode(&before), decode(&after), "sin las guías vuelve la misma imagen ({ext})");
         }
+    }
+
+    #[test]
+    fn parts_get_their_names_in_a_guide_layer() {
+        let state = textured_state();
+        // Dos triángulos: uno por parte
+        *state.original_parts.lock().unwrap() =
+            Some(uv_core::SkinParts { names: vec!["Cabeza".into(), "Cola".into()], face_part: vec![0, 1] });
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("partes.psd");
+        export_to(&state, key(TextureSlot::Base), &path, false).unwrap();
+        let layered = LayeredImage::read(&std::fs::read(&path).unwrap()).unwrap();
+        let names = layered.layers.iter().find(|l| l.name == NAMES_LAYER).expect("capa de nombres");
+        assert!(names.pixels.chunks(4).any(|p| p == [255, 255, 255, 255]), "texto blanco");
+        // Es guía: reimportar devuelve la textura sin los nombres
+        let before = state.scene.lock().unwrap().as_ref().unwrap().textures[0].clone();
+        import_from(&state, key(TextureSlot::Base), &path).unwrap();
+        let after = state.scene.lock().unwrap().as_ref().unwrap().textures[0].clone();
+        let decode = |t: &Texture| image::load_from_memory(&t.data).unwrap().to_rgba8().into_raw();
+        assert_eq!(decode(&before), decode(&after));
     }
 
     #[test]

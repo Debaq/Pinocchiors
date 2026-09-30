@@ -13,7 +13,7 @@ mod psd;
 mod raster;
 mod xcf;
 
-pub use raster::{draw_lines, fill_triangles};
+pub use raster::{draw_lines, draw_text, fill_triangles};
 
 use thiserror::Error;
 

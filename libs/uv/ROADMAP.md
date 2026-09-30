@@ -27,6 +27,8 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
 | `unwrap` | Orquesta: islas → parametrización (en paralelo) → partir las malas → empaquetar. |
 | `tangent` | `corner_frames`: normales y tangentes por esquina, las mismas al hornear y al exportar. |
 | `bake` | `bake`: rasteriza el mapa nuevo, busca el punto del original por texel y evalúa canales; dilata los bordes. |
+| `compact` | `compact_skin`, `compacted_scene`: mismas cartas reempaquetadas en `Compact` y texturas re-horneadas. |
+| `parts` | `unwrap_by_parts`, `clean_parts`: una carta por parte del cuerpo, abierta por su lado escondido. |
 | `skin` | Nivel escena: `scene_surface`, `transferred_skin`, `unwrapped_skin` (hornea color, metal/rugosidad, oclusión, emisión y normal), `skin_scene` (malla + piel → `Scene`), `checker_texture`. |
 
 ## Fase 0 — Traspaso de UV en la retopología ✅
@@ -110,7 +112,7 @@ Importar → Reparar → Retopología (+ traspaso UV) → UV / Piel → Esquelet
   igual; +0,3 s. Con 381 cartas no cambia nada y tarda 4× (por eso el tope).
 - Banco: `cargo run --release -p uv-core --example unwrap_bench -- modelo.glb 2000 8000`.
 
-## Fase 3b — Distribución para pintar ✅ (paso 1 de 4)
+## Fase 3b — Distribución para pintar ✅
 
 Pedido del usuario (2026-09-29): el atlas compacto es ilegible para los
 dibujantes. Flujo acordado: pintar sobre un mapa legible y compactar recién
@@ -162,8 +164,14 @@ superficie).
     por parte (7 y 6), estiramiento 1,01, sin invertidos; atlas 37 → 45 % y
     30 → 45 % (el desplegado normal da 21 y 25 cartas).
 
-Pendiente de este flujo:
-4. Nombres de cada parte en la capa guía del PSD/XCF.
+- Nombres de las partes ✅ (paso 4): al exportar la textura a PSD/XCF (o
+  la malla UV en PNG), la capa guía "Nombres de partes" lleva el nombre de
+  cada parte sobre su isla (en la cara más cercana al centro de sus caras),
+  en blanco con borde oscuro, con una fuente propia de 5 × 7 en mayúsculas
+  (`converter_layers::draw_text`, sin tildes; parte en dos líneas los
+  nombres largos). Como las demás guías, se ignora al reimportar. Las
+  partes quedan en la piel (`Skin::parts`) o, para la malla original, en el
+  estado (`original_parts`), y se guardan en el proyecto.
 
 ## Fase 4 — Horneado ✅
 
@@ -227,6 +235,13 @@ Pendiente de este flujo:
 
 ## Pendiente
 
+- Todo lo de la fase 3b se midió en personajes sintéticos (elefante y
+  humano de cápsulas, retopologizados): falta probarlo en el gonfoterio y en
+  modelos reales.
+- Lado escondido sin frente conocido: una parte justo arriba del centro del
+  cuerpo (la cabeza de un humano) se abre por abajo, no por la nuca. Con el
+  frente del modelo (el esqueleto lo sabe) se podría abrir por atrás.
+- Los nombres de las guías salen sin tildes (la fuente propia no las tiene).
 
 ## Verificación
 
