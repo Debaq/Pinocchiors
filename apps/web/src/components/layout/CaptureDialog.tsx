@@ -2,6 +2,13 @@ import { Component, Show, createSignal, onCleanup, onMount } from "solid-js";
 import { Button, Checkbox, Slider } from "../ui";
 import * as Icons from "../icons";
 import { captureMotion, type CaptureMotion } from "../../lib/capture";
+import type { LiveCapture } from "../../lib/captureRunner";
+
+/** Uniones que se dibujan sobre la vista previa (índices de MediaPipe Pose) */
+const BONES: [number, number][] = [
+  [11, 12], [11, 13], [13, 15], [12, 14], [14, 16], [11, 23], [12, 24], [23, 24],
+  [23, 25], [25, 27], [27, 31], [24, 26], [26, 28], [28, 32], [0, 11], [0, 12],
+];
 
 export interface CaptureDialogProps {
   /** Movimiento listo: la app abre el mapeo del retargeting */
@@ -31,7 +38,92 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
   const [smoothing, setSmoothing] = createSignal(0.5);
   const [progress, setProgress] = createSignal<{ done: number; total: number } | null>(null);
   const [error, setError] = createSignal<string>();
+  const [source, setSource] = createSignal<"file" | "camera">("file");
+  const [live, setLive] = createSignal<LiveCapture | null>(null);
+  const [liveState, setLiveState] = createSignal<"idle" | "opening" | "countdown" | "recording">("idle");
+  const [countdown, setCountdown] = createSignal(0);
   let abort: AbortController | null = null;
+  let preview: HTMLDivElement | undefined;
+  let overlay: HTMLCanvasElement | undefined;
+  let drawFrame = 0;
+
+  const closeLive = () => {
+    cancelAnimationFrame(drawFrame);
+    live()?.close();
+    setLive(null);
+    setLiveState("idle");
+  };
+
+  /** Abre la cámara y dibuja los puntos detectados encima */
+  const openCamera = async () => {
+    setError(undefined);
+    setLiveState("opening");
+    try {
+      const { startLive } = await import("../../lib/captureRunner");
+      const local = useLocalModel() ? model() : null;
+      const capture = await startLive(local ? new Uint8Array(await local.arrayBuffer()) : undefined);
+      setLive(capture);
+      setLiveState("idle");
+      capture.video.className = "w-full rounded -scale-x-100";
+      preview?.prepend(capture.video);
+      const draw = () => {
+        drawFrame = requestAnimationFrame(draw);
+        const c = overlay;
+        if (!c) return;
+        c.width = capture.video.clientWidth;
+        c.height = capture.video.clientHeight;
+        const g = c.getContext("2d");
+        const f = capture.last();
+        if (!g) return;
+        g.clearRect(0, 0, c.width, c.height);
+        if (!f) return;
+        g.strokeStyle = liveState() === "recording" ? "#ff5555" : "#50fa7b";
+        g.lineWidth = 3;
+        // Espejado como la vista previa
+        const at = (k: number) => [(1 - f.image[k].x) * c.width, f.image[k].y * c.height] as const;
+        for (const [a, b] of BONES) {
+          g.beginPath();
+          g.moveTo(...at(a));
+          g.lineTo(...at(b));
+          g.stroke();
+        }
+      };
+      draw();
+    } catch (e) {
+      setLiveState("idle");
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const record = async () => {
+    const capture = live();
+    if (!capture) return;
+    setLiveState("countdown");
+    for (let s = 3; s > 0; s--) {
+      setCountdown(s);
+      await new Promise((r) => setTimeout(r, 1000));
+      if (live() !== capture) return;
+    }
+    capture.startRecording();
+    setLiveState("recording");
+  };
+
+  const stopRecording = () => {
+    const capture = live();
+    if (!capture) return;
+    const { frames, fps: rate } = capture.stopRecording();
+    closeLive();
+    if (frames.filter(Boolean).length < 2) {
+      setError("No se vio a nadie durante la grabación (el cuerpo entero tiene que estar en cuadro)");
+      return;
+    }
+    const motion = captureMotion(frames, rate, { smoothing: smoothing() });
+    if (!motion) {
+      setError("Faltan partes del cuerpo en toda la grabación (caderas, hombros o piernas)");
+      return;
+    }
+    props.onMotion(motion, `Cámara ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`);
+  };
 
   const run = async () => {
     const file = video();
@@ -65,7 +157,12 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
 
   const cancel = () => {
     if (abort) abort.abort();
-    else props.onCancel();
+    else if (liveState() === "recording" || liveState() === "countdown") {
+      closeLive();
+    } else {
+      closeLive();
+      props.onCancel();
+    }
   };
 
   onMount(() => {
@@ -82,6 +179,7 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
     onCleanup(() => {
       window.removeEventListener("keydown", onKey, true);
       abort?.abort();
+      closeLive();
     });
   });
 
@@ -91,7 +189,7 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
         <div class="flex items-center justify-between px-4 h-11 border-b border-border">
           <h2 class="flex items-center gap-2 text-sm font-semibold text-text">
             <Icons.Record size={16} class="text-accent" />
-            Capturar movimiento de un video
+            Capturar movimiento
           </h2>
           <button class="w-7 h-7 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/40" aria-label="Cancelar" onClick={cancel}>
             <Icons.X size={14} />
@@ -102,14 +200,57 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
             Una persona, de cuerpo entero, con buena luz y ropa que no tape las articulaciones. La profundidad sale de una
             sola cámara: el giro del antebrazo y lo que queda tapado son poco fiables. Empezar quieto, de frente, ayuda.
           </p>
-          <div class="flex items-center gap-2">
-            <Button size="sm" onClick={async () => setVideo(await pickFile("video/*"))} disabled={!!progress()}>
-              <Icons.FolderOpen size={12} /> Video…
+          <div class="grid grid-cols-2 gap-1">
+            <Button size="sm" variant={source() === "file" ? "primary" : "default"} disabled={!!progress() || !!live()} onClick={() => setSource("file")}>
+              Archivo de video
             </Button>
-            <span class="text-xs font-mono text-text-muted truncate">{video()?.name ?? "ninguno"}</span>
+            <Button size="sm" variant={source() === "camera" ? "primary" : "default"} disabled={!!progress()} onClick={() => setSource("camera")}>
+              Cámara en vivo
+            </Button>
           </div>
+          <Show when={source() === "file"}>
+            <div class="flex items-center gap-2">
+              <Button size="sm" onClick={async () => setVideo(await pickFile("video/*"))} disabled={!!progress()}>
+                <Icons.FolderOpen size={12} /> Video…
+              </Button>
+              <span class="text-xs font-mono text-text-muted truncate">{video()?.name ?? "ninguno"}</span>
+            </div>
+          </Show>
+          <Show when={source() === "camera"}>
+            <div ref={preview} class="relative rounded bg-bg-darker min-h-12">
+              <canvas ref={overlay} class="absolute inset-0 w-full h-full pointer-events-none" />
+              <Show when={liveState() === "countdown"}>
+                <div class="absolute inset-0 flex items-center justify-center text-5xl font-bold text-white drop-shadow">{countdown()}</div>
+              </Show>
+            </div>
+            <div class="flex gap-1">
+              <Show
+                when={live()}
+                fallback={
+                  <Button size="sm" fullWidth disabled={liveState() === "opening" || (useLocalModel() && !model())} onClick={() => void openCamera()}>
+                    {liveState() === "opening" ? "Abriendo…" : "Abrir cámara"}
+                  </Button>
+                }
+              >
+                <Show
+                  when={liveState() === "recording"}
+                  fallback={
+                    <Button size="sm" variant="primary" fullWidth disabled={liveState() === "countdown"} onClick={() => void record()}>
+                      <Icons.Record size={12} /> Grabar (cuenta de 3)
+                    </Button>
+                  }
+                >
+                  <Button size="sm" variant="danger" fullWidth onClick={stopRecording}>
+                    <Icons.Stop size={12} /> Detener y usar
+                  </Button>
+                </Show>
+              </Show>
+            </div>
+          </Show>
           <div class="grid grid-cols-2 gap-3">
-            <Slider label="Cuadros por segundo" value={fps()} onChange={(v) => setFps(Math.round(v))} min={12} max={60} step={1} disabled={!!progress()} />
+            <Show when={source() === "file"} fallback={<div />}>
+              <Slider label="Cuadros por segundo" value={fps()} onChange={(v) => setFps(Math.round(v))} min={12} max={60} step={1} disabled={!!progress()} />
+            </Show>
             <Slider
               label="Suavizado"
               value={smoothing()}
@@ -157,9 +298,11 @@ export const CaptureDialog: Component<CaptureDialogProps> = (props) => {
           <Button size="sm" variant="ghost" onClick={cancel}>
             {progress() ? "Detener" : "Cancelar"}
           </Button>
-          <Button size="sm" variant="primary" onClick={() => void run()} disabled={!video() || !!progress() || (useLocalModel() && !model())}>
-            Detectar
-          </Button>
+          <Show when={source() === "file"}>
+            <Button size="sm" variant="primary" onClick={() => void run()} disabled={!video() || !!progress() || (useLocalModel() && !model())}>
+              Detectar
+            </Button>
+          </Show>
         </div>
       </div>
     </div>

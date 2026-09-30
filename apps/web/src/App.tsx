@@ -5246,7 +5246,7 @@ export const App: Component = () => {
    * Contactos de la captura → keys de fijado de las cadenas IK de las patas:
    * mientras el pie está apoyado queda quieto en el mundo (sin patinar)
    */
-  const withContactPins = (clip: AnimationClip, motion: CaptureMotion, map: RetargetMap, target: SkeletonBone[]) => {
+  const withContactPins = (clip: AnimationClip, motion: CaptureMotion, map: RetargetMap, target: SkeletonBone[], offset = 0) => {
     const chains = (rigSettings().ikChains ?? []).filter((c) => !c.disabled && ["twoBone", "fabrik", "ccd"].includes(c.solver));
     let out = clip;
     let pinned = 0;
@@ -5255,8 +5255,10 @@ export const App: Component = () => {
       const chain = joint === undefined ? undefined : chains.find((c) => c.joints.includes(target[joint].name));
       if (!chain) continue;
       pinned++;
-      flags.forEach((on, f) => {
-        if (f === 0 || on !== flags[f - 1]) out = insertScalarKey(out, chain.id, "pin", f, on ? 1 : 0, "step");
+      // Solo el tramo usado, desde el cuadro 0 del clip
+      const used = flags.slice(offset, offset + clip.end - clip.start + 1);
+      used.forEach((on, f) => {
+        if (f === 0 || on !== used[f - 1]) out = insertScalarKey(out, chain.id, "pin", f, on ? 1 : 0, "step");
       });
     }
     return { clip: out, pinned };
@@ -5277,7 +5279,7 @@ export const App: Component = () => {
     }
   };
 
-  const confirmRetarget = async (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean }) => {
+  const confirmRetarget = async (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean; range: [number, number] }) => {
     const request = retargeting();
     setRetargeting(undefined);
     if (!request) return;
@@ -5287,10 +5289,10 @@ export const App: Component = () => {
       setRetargetTemplates({ ...retargetTemplates(), [sourceSignature(request.source)]: byName });
     }
     try {
-      let clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name });
+      let clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name, range: result.range });
       let note = "";
       if ("contacts" in request.motion) {
-        const pins = withContactPins(clip, request.motion as CaptureMotion, result.map, request.target);
+        const pins = withContactPins(clip, request.motion as CaptureMotion, result.map, request.target, result.range[0]);
         clip = pins.clip;
         note = pins.pinned > 0 ? `, pies fijados en ${pins.pinned} patas` : ". Crea el rig automático (IK) para que los pies no patinen";
       }

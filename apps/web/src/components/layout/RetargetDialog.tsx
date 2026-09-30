@@ -1,5 +1,5 @@
 import { Component, For, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { Button, Checkbox } from "../ui";
+import { Button, Checkbox, NumberInput } from "../ui";
 import * as Icons from "../icons";
 import type { SkeletonBone } from "../../lib/presetAnimations";
 import type { RetargetMap } from "../../lib/retarget";
@@ -19,7 +19,7 @@ export interface RetargetRequest {
 }
 
 export interface RetargetDialogProps extends RetargetRequest {
-  onConfirm: (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean }) => void;
+  onConfirm: (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean; range: [number, number] }) => void;
   onCancel: () => void;
 }
 
@@ -32,13 +32,23 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
   const [rootMotion, setRootMotion] = createSignal(true);
   const [saveTemplate, setSaveTemplate] = createSignal(!props.fromTemplate);
   const [name, setName] = createSignal(props.sourceName.replace(/\.[^.]+$/, ""));
+  // Tramo útil del origen (en cuadros, inclusive)
+  const [first, setFirst] = createSignal(0);
+  const [last, setLast] = createSignal(Math.max(0, props.frames - 1));
   // Solo las articulaciones que giran algo (las puntas siguen a su padre)
   const rows = createMemo(() =>
     props.target.flatMap((b, j) => (b.parent === null || props.target.some((c) => c.parent === j) ? [j] : []))
   );
   const mapped = () => rows().filter((j) => map().has(j)).length;
 
-  const confirm = () => props.onConfirm({ map: map(), rootMotion: rootMotion(), name: name().trim() || "Animación importada", saveTemplate: saveTemplate() });
+  const confirm = () =>
+    props.onConfirm({
+      map: map(),
+      rootMotion: rootMotion(),
+      name: name().trim() || "Animación importada",
+      saveTemplate: saveTemplate(),
+      range: [Math.min(first(), last()), Math.max(first(), last())],
+    });
 
   onMount(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -82,6 +92,24 @@ export const RetargetDialog: Component<RetargetDialogProps> = (props) => {
               onInput={(e) => setName(e.currentTarget.value)}
             />
           </label>
+          <div class="grid grid-cols-2 gap-2">
+            <NumberInput
+              label="Desde el cuadro"
+              value={first()}
+              min={0}
+              max={Math.max(0, props.frames - 1)}
+              step={1}
+              onChange={(v) => setFirst(Math.max(0, Math.min(props.frames - 1, Math.round(v))))}
+            />
+            <NumberInput
+              label="Hasta el cuadro"
+              value={last()}
+              min={0}
+              max={Math.max(0, props.frames - 1)}
+              step={1}
+              onChange={(v) => setLast(Math.max(0, Math.min(props.frames - 1, Math.round(v))))}
+            />
+          </div>
           <div class="flex items-center justify-between text-xs">
             <span class="text-text-muted">
               Mapeo: {mapped()} de {rows().length} articulaciones {props.fromTemplate ? "(plantilla guardada)" : "(automático)"}
