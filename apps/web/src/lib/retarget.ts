@@ -90,42 +90,124 @@ export function canonicalNames(bones: SkeletonBone[]): NameInfo[] {
   });
 }
 
+// ─── Orientación por la geometría ───────────────────────────────────────────
+
+/**
+ * Ejes del cuerpo por su forma: adelante es hacia donde apuntan los dedos de
+ * las patas (o la cabeza, si está adelante del cuerpo) y la derecha es la
+ * anatómica. `chirality` compara con los nombres: +1 si "left" está a la
+ * izquierda anatómica, −1 si está espejado (las plantillas propias ponen
+ * `_l` en −X mirando a +Z; Mixamo, BVH y MediaPipe, en +X), 0 si no se sabe.
+ * Un espejo no se corrige girando: con quiralidades distintas se cruzan los
+ * lados del mapeo.
+ */
+export interface BodyFrame {
+  up: Vec3;
+  forward: Vec3;
+  right: Vec3;
+  chirality: -1 | 0 | 1;
+}
+
+export function bodyFrame(bones: SkeletonBone[], body: Body | null = analyzeBody(bones)): BodyFrame | null {
+  if (!body) return null;
+  const up = body.up;
+  const flat = (v: Vec3): Vec3 => {
+    const d = v[0] * up[0] + v[1] * up[1] + v[2] * up[2];
+    return [v[0] - d * up[0], v[1] - d * up[1], v[2] - d * up[2]];
+  };
+  const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  let toes: Vec3 = [0, 0, 0];
+  for (const c of body.chains) {
+    if (c.kind !== "leg" || c.joints.length < 2) continue;
+    const tip = bones[c.joints[c.joints.length - 1]].position;
+    const before = bones[c.joints[c.joints.length - 2]].position;
+    toes = add(toes, flat([tip[0] - before[0], tip[1] - before[1], tip[2] - before[2]]));
+  }
+  let geometric: Vec3 | null = Math.hypot(...toes) > 0.02 * body.size ? toes : null;
+  if (!geometric) {
+    const head = bones.findIndex((b) => /head|skull/i.test(b.name));
+    if (head >= 0) {
+      const d = flat([bones[head].position[0] - bones[body.root].position[0], 0, bones[head].position[2] - bones[body.root].position[2]]);
+      if (Math.hypot(...d) > 0.15 * body.size) geometric = d;
+    }
+  }
+  const unit = (v: Vec3): Vec3 => {
+    const l = Math.hypot(...v) || 1;
+    return [v[0] / l, v[1] / l, v[2] / l];
+  };
+  const forward = geometric ? unit(geometric) : body.forward;
+  const cross = (a: Vec3, b: Vec3): Vec3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // Derecha anatómica: mirando hacia `forward` con `up` arriba
+  const right = unit(cross(forward, up));
+  // Lado que dicen los nombres: de los "left" a sus pares "right"
+  const names = canonicalNames(bones);
+  let lateral: Vec3 = [0, 0, 0];
+  names.forEach((n, i) => {
+    if (n.side !== -1) return;
+    const k = names.findIndex((m) => m.side === 1 && m.key === n.key);
+    if (k >= 0) lateral = add(lateral, [bones[k].position[0] - bones[i].position[0], bones[k].position[1] - bones[i].position[1], bones[k].position[2] - bones[i].position[2]]);
+  });
+  const agree = lateral[0] * right[0] + lateral[1] * right[1] + lateral[2] * right[2];
+  const chirality = !geometric || Math.hypot(...lateral) < 1e-9 ? 0 : agree > 0 ? 1 : -1;
+  return { up, forward, right, chirality };
+}
+
 /** Mapeo automático: por nombre y, lo que falte, por cadenas del cuerpo */
 export function autoMap(target: SkeletonBone[], source: SkeletonBone[]): RetargetMap {
   const map: RetargetMap = new Map();
   const t = canonicalNames(target);
   const s = canonicalNames(source);
+  const tb = analyzeBody(target);
+  const sb = analyzeBody(source);
+  const tf = bodyFrame(target, tb);
+  const sf = bodyFrame(source, sb);
+  // Esqueletos espejados entre sí: el "left" de uno es el "right" del otro
+  const flip = tf && sf && tf.chirality !== 0 && sf.chirality !== 0 && tf.chirality !== sf.chirality ? -1 : 1;
   const used = new Set<number>();
   t.forEach((info, j) => {
-    const k = s.findIndex((x, i) => !used.has(i) && x.key === info.key && x.side === info.side);
+    const k = s.findIndex((x, i) => !used.has(i) && x.key === info.key && x.side === info.side * flip);
     if (k >= 0) {
       map.set(j, k);
       used.add(k);
     }
   });
-  const tb = analyzeBody(target);
-  const sb = analyzeBody(source);
-  if (tb && sb) {
+  if (tb && sb && tf && sf) {
     if (!map.has(tb.root)) map.set(tb.root, sb.root);
-    mapChains(map, tb, sb);
+    mapChains(map, { body: tb, frame: tf }, { body: sb, frame: sf });
   }
   return map;
 }
 
-/** Cadenas del mismo tipo y lado, en orden de adelante hacia atrás, articulación a articulación */
-function mapChains(map: RetargetMap, tb: Body, sb: Body): void {
+/**
+ * Cadenas del mismo tipo y lado, en orden de adelante hacia atrás,
+ * articulación a articulación. Lado y orden salen de la geometría (no de los
+ * nombres), así sirven también entre esqueletos espejados.
+ */
+function mapChains(map: RetargetMap, target: { body: Body; frame: BodyFrame }, source: { body: Body; frame: BodyFrame }): void {
+  const tb = target.body;
+  const sb = source.body;
   const pairs: [number[], number[]][] = [[tb.spine, sb.spine], [tb.neck, sb.neck]];
-  const groups = (b: Body) => {
+  const groups = ({ body: b, frame }: { body: Body; frame: BodyFrame }) => {
     const out = new Map<string, number[][]>();
-    for (const c of [...b.chains].sort((x, y) => y.along - x.along)) {
-      const key = `${c.kind}:${Math.sign(c.side)}`;
+    const root = b.bones[b.root].position;
+    const along = (j: number) => {
+      const p = b.bones[j].position;
+      return (p[0] - root[0]) * frame.forward[0] + (p[1] - root[1]) * frame.forward[1] + (p[2] - root[2]) * frame.forward[2];
+    };
+    const side = (joints: number[]) => {
+      const p = b.bones[joints[joints.length - 1]].position;
+      const d = (p[0] - root[0]) * frame.right[0] + (p[1] - root[1]) * frame.right[1] + (p[2] - root[2]) * frame.right[2];
+      return Math.abs(d) < 0.02 * b.size ? 0 : Math.sign(d);
+    };
+    for (const c of [...b.chains].sort((x, y) => along(y.joints[0]) - along(x.joints[0]))) {
+      const key = `${c.kind}:${side(c.joints)}`;
       if (!out.has(key)) out.set(key, []);
       out.get(key)!.push(c.joints);
     }
     return out;
   };
-  const tg = groups(tb);
-  const sg = groups(sb);
+  const tg = groups(target);
+  const sg = groups(source);
   for (const [key, chains] of tg) {
     const other = sg.get(key) ?? [];
     chains.forEach((c, i) => other[i] && pairs.push([c, other[i]]));
@@ -161,11 +243,11 @@ export interface RetargetOptions {
 export function retargetClip(target: SkeletonBone[], motion: SourceMotion, map: RetargetMap, options: RetargetOptions = {}): AnimationClip {
   const tb = analyzeBody(target);
   const sb = analyzeBody(motion.bones);
-  // De los ejes del origen a los del modelo (arriba y adelante)
+  const tf = bodyFrame(target, tb);
+  const sf = bodyFrame(motion.bones, sb);
+  // De los ejes del origen a los del modelo (arriba y adelante, por la geometría)
   const align =
-    tb && sb
-      ? new THREE.Quaternion(...rotationBetweenFrames(sb.up, sb.forward, tb.up, tb.forward))
-      : new THREE.Quaternion();
+    tf && sf ? new THREE.Quaternion(...rotationBetweenFrames(sf.up, sf.forward, tf.up, tf.forward)) : new THREE.Quaternion();
   const scale = tb && sb && sb.height > 1e-9 ? tb.height / sb.height : 1;
   const tRoot = tb?.root ?? target.findIndex((b) => b.parent === null);
   const sRoot = map.get(tRoot) ?? sb?.root ?? motion.bones.findIndex((b) => b.parent === null);

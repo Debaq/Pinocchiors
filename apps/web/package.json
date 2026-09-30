@@ -13,6 +13,7 @@
     "@corvu/drawer": "^0.2.2",
     "@corvu/tooltip": "^0.2.1",
     "@kobalte/core": "^0.13.7",
+    "@mediapipe/tasks-vision": "^1.0.1",
     "@phosphor-icons/core": "^2.1.1",
     "@tauri-apps/api": "^2.0.0",
     "@tauri-apps/plugin-dialog": "^2.0.0",

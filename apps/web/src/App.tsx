@@ -92,6 +92,8 @@ import {
   type LengthUnit,
 } from "./components/layout/SettingsDialog";
 import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
+import { CaptureDialog } from "./components/layout/CaptureDialog";
+import type { CaptureMotion } from "./lib/capture";
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
@@ -226,6 +228,7 @@ import {
   generateAnimation,
   generatePose,
   type PresetAnimationId,
+  type SkeletonBone,
 } from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
@@ -5077,21 +5080,9 @@ export const App: Component = () => {
       input.click();
     });
 
-  const handleImportBvh = async () => {
+  /** Abre el mapeo del retargeting para un movimiento de origen (BVH o captura) */
+  const openRetarget = (motion: SourceMotion, sourceName: string) => {
     const bones = rigBones();
-    if (bones.length === 0) {
-      setStatusMessage("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones");
-      return;
-    }
-    const picked = await pickTextFile(".bvh");
-    if (!picked) return;
-    let motion: SourceMotion;
-    try {
-      motion = bvhMotion(parseBvh(picked.text));
-    } catch (e) {
-      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
-      return;
-    }
     // Una plantilla guardada para este mismo esqueleto de origen manda sobre el automático
     const saved = retargetTemplates()[sourceSignature(motion.bones)];
     let map: RetargetMap;
@@ -5107,7 +5098,7 @@ export const App: Component = () => {
       map = autoMap(bones, motion.bones);
     }
     setRetargeting({
-      sourceName: picked.name,
+      sourceName,
       source: motion.bones,
       target: bones,
       map,
@@ -5116,6 +5107,50 @@ export const App: Component = () => {
       fromTemplate: !!saved,
       motion,
     });
+  };
+
+  const [capturing, setCapturing] = createSignal(false);
+  const handleCapture = () => {
+    if (rigBones().length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la captura se pasa a sus articulaciones");
+      return;
+    }
+    setCapturing(true);
+  };
+
+  /**
+   * Contactos de la captura → keys de fijado de las cadenas IK de las patas:
+   * mientras el pie está apoyado queda quieto en el mundo (sin patinar)
+   */
+  const withContactPins = (clip: AnimationClip, motion: CaptureMotion, map: RetargetMap, target: SkeletonBone[]) => {
+    const chains = (rigSettings().ikChains ?? []).filter((c) => !c.disabled && ["twoBone", "fabrik", "ccd"].includes(c.solver));
+    let out = clip;
+    let pinned = 0;
+    for (const [source, flags] of motion.contacts) {
+      const joint = [...map].find(([, s]) => s === source)?.[0];
+      const chain = joint === undefined ? undefined : chains.find((c) => c.joints.includes(target[joint].name));
+      if (!chain) continue;
+      pinned++;
+      flags.forEach((on, f) => {
+        if (f === 0 || on !== flags[f - 1]) out = insertScalarKey(out, chain.id, "pin", f, on ? 1 : 0, "step");
+      });
+    }
+    return { clip: out, pinned };
+  };
+
+  const handleImportBvh = async () => {
+    const bones = rigBones();
+    if (bones.length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones");
+      return;
+    }
+    const picked = await pickTextFile(".bvh");
+    if (!picked) return;
+    try {
+      openRetarget(bvhMotion(parseBvh(picked.text)), picked.name);
+    } catch (e) {
+      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+    }
   };
 
   const confirmRetarget = async (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean }) => {
@@ -5128,7 +5163,13 @@ export const App: Component = () => {
       setRetargetTemplates({ ...retargetTemplates(), [sourceSignature(request.source)]: byName });
     }
     try {
-      const clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name });
+      let clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name });
+      let note = "";
+      if ("contacts" in request.motion) {
+        const pins = withContactPins(clip, request.motion as CaptureMotion, result.map, request.target);
+        clip = pins.clip;
+        note = pins.pinned > 0 ? `, pies fijados en ${pins.pinned} patas` : ". Crea el rig automático (IK) para que los pies no patinen";
+      }
       const before = clips();
       await history.execute(`Importar animación: ${clip.name}`, {
         kind: "clips",
@@ -5136,7 +5177,7 @@ export const App: Component = () => {
       });
       setFrame(clip.start);
       pipeline.setActiveStep("animate");
-      setStatusMessage(`Animación importada: ${clip.name} (${clip.end - clip.start + 1} cuadros, ${clip.tracks.length} articulaciones)`);
+      setStatusMessage(`Animación importada: ${clip.name} (${clip.end - clip.start + 1} cuadros, ${clip.tracks.length} articulaciones)${note}`);
     } catch (e) {
       console.error("Retarget error:", e);
       setStatusMessage(`No se pudo pasar la animación al esqueleto: ${e instanceof Error ? e.message : e}`);
@@ -5151,6 +5192,7 @@ export const App: Component = () => {
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
     { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
+    { label: "Capturar movimiento de un video…", disabled: !skeletonData(), onSelect: handleCapture },
     { label: "Exportar…", disabled: !hasWork(), onSelect: () => pipeline.setActiveStep("export") },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
@@ -5731,6 +5773,16 @@ export const App: Component = () => {
           fileMetersPerUnit={sceneStructure()?.meters_per_unit}
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}
+        />
+      </Show>
+
+      <Show when={capturing()}>
+        <CaptureDialog
+          onMotion={(motion, name) => {
+            setCapturing(false);
+            openRetarget(motion, name);
+          }}
+          onCancel={() => setCapturing(false)}
         />
       </Show>
 
