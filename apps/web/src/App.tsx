@@ -164,6 +164,7 @@ import {
 } from "./lib/rig";
 import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
+import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
 import { RigEditor, type RigEditorTab } from "./components/layout/RigEditor";
 import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
@@ -3137,8 +3138,16 @@ export const App: Component = () => {
       canPaste={canPaste()}
       onBreakdown={handleBreakdown}
       onPushRelax={handlePushRelax}
-      library={poseLibrary()}
+    />
+  );
+
+  const libraryPanel = (
+    <LibraryPanel
+      hasSelection={jointSelection().length > 0}
+      animations={presetAnimations()}
+      onAddAnimation={(id) => void handleAddPresetClip(id)}
       factory={body() ? availablePoses(body()!) : []}
+      library={poseLibrary()}
       onSavePose={(selectionOnly) => void handleSavePose(selectionOnly)}
       onDeletePose={(id) => changePoseLibrary("Borrar pose", poseLibrary().filter((p) => p.id !== id))}
       onRenamePose={(id, name) => changePoseLibrary("Renombrar pose", poseLibrary().map((p) => (p.id === id ? { ...p, name } : p)))}
@@ -3160,7 +3169,12 @@ export const App: Component = () => {
     const width = splitRef?.clientWidth ?? 1;
     startDrag(e, "col-resize", (dx) => setRigEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
   };
-  const rigEditorPanels = { joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}</div>, rig: rigPanel };
+  const openLibrary = () => {
+    setTextureEditor(undefined);
+    setRigEditorTab("library");
+    setRigEditorOpen(true);
+  };
+  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}</div>, rig: rigPanel };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
@@ -4931,8 +4945,7 @@ export const App: Component = () => {
                 const clip = activeClip();
                 if (clip) replaceClip({ ...clip, name });
               },
-              presets: presetAnimations(),
-              onAddPreset: handleAddPresetClip,
+              onOpenLibrary: openLibrary,
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
               editorOpen: rigEditorOpen(),
               onToggleEditor: toggleRigEditor,

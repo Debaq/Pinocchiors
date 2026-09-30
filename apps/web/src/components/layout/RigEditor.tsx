@@ -3,11 +3,12 @@ import { clsx } from "clsx";
 import { IconButton } from "../ui";
 import * as Icons from "../icons";
 
-export type RigEditorTab = "joint" | "pose" | "ik" | "rig";
+export type RigEditorTab = "library" | "joint" | "pose" | "ik" | "rig";
 
 const TABS: { id: RigEditorTab; label: string; title: string }[] = [
+  { id: "library", label: "Biblioteca", title: "Animaciones básicas, poses de fábrica y poses guardadas" },
   { id: "joint", label: "Articulación", title: "Límites de giro, trayectoria, cadena y relaciones" },
-  { id: "pose", label: "Pose", title: "Selección, espejo, copiar y pegar, biblioteca" },
+  { id: "pose", label: "Pose", title: "Selección, espejo, reiniciar, copiar y pegar, intermedias" },
   { id: "ik", label: "IK", title: "Cadenas de IK, mezcla, fijar, rig automático" },
   { id: "rig", label: "Rig", title: "Hueso activo, grupos, controles y reposo" },
 ];
@@ -50,6 +51,7 @@ export const RigEditor: Component<RigEditorProps> = (props) => (
       {/* Las tarjetas de cada panel fluyen en columnas de ~300 px sin partirse */}
       <div class="[column-width:300px] [column-gap:1rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-3">
         <Switch>
+          <Match when={props.tab === "library"}>{props.panels.library}</Match>
           <Match when={props.tab === "joint"}>{props.panels.joint}</Match>
           <Match when={props.tab === "pose"}>{props.panels.pose}</Match>
           <Match when={props.tab === "ik"}>{props.panels.ik}</Match>
