@@ -2301,6 +2301,26 @@ enum WeightTarget {
     Retopology,
 }
 
+/// Partes del cuerpo de las caras de la malla `target` según el rig: hueso
+/// dominante agrupado en cadenas (ver [`crate::body_parts`])
+fn body_parts(state: &AppState, target: WeightTarget, faces: &[Vec<usize>]) -> Result<uv_core::SkinParts, String> {
+    let source: Vec<Vec<f64>> = {
+        let result = state.result.lock().unwrap();
+        let result = result.as_ref().ok_or("Cortar por partes usa el rig: calcula primero los pesos")?;
+        (0..result.attachment.num_vertices()).map(|v| result.get_weights(v).to_vec()).collect()
+    };
+    let weights = weights_for(state, source, target)?;
+    let skeleton = {
+        let lock = state.skeleton.lock().unwrap();
+        to_basic_skeleton(lock.as_ref().ok_or("No hay esqueleto")?)
+    };
+    let names: Vec<String> = skeleton.bones().iter().map(|b| b.name.clone()).collect();
+    let parents: Vec<Option<usize>> = skeleton.bones().iter().map(|b| b.parent).collect();
+    let (bone_part, part_names) = crate::body_parts::bone_parts(&names, &parents);
+    crate::body_parts::face_parts(faces, &weights, &bone_part, &part_names)
+        .ok_or_else(|| "El rig no tiene pesos en esta malla".to_string())
+}
+
 /// Pesos del rig (por vértice de la malla donde se calcularon) llevados a la
 /// malla que se exporta: se trasladan sólo si son mallas distintas.
 fn weights_for(state: &AppState, source: Vec<Vec<f64>>, target: WeightTarget) -> Result<Vec<Vec<f64>>, String> {
@@ -2401,9 +2421,17 @@ pub struct UvUnwrapConfig {
     /// "paintable" (legible para pintar) o "compact" (máximo aprovechamiento)
     #[serde(default)]
     pub layout: Option<String>,
+    /// Con el mapa para pintar, una isla por parte del cuerpo según el rig
+    #[serde(default)]
+    pub by_parts: Option<bool>,
 }
 
 impl UvUnwrapConfig {
+    /// Cortar por partes del cuerpo: solo tiene sentido en el mapa para pintar
+    fn wants_parts(&self) -> bool {
+        self.by_parts == Some(true) && self.layout.as_deref() != Some("compact")
+    }
+
     fn unwrap_options(&self) -> uv_core::UnwrapOptions {
         uv_core::UnwrapOptions {
             charts: uv_core::ChartOptions { max_angle: self.max_angle.clamp(15.0, 85.0), ..Default::default() },
@@ -2492,6 +2520,13 @@ pub async fn run_uv_unwrap(
         return Err(format!("Tamaño de textura fuera de rango: {}", config.texture_size));
     }
 
+    let parts = if config.wants_parts() {
+        let faces: Vec<Vec<usize>> = quad.faces.iter().map(|f| f.v.to_vec()).collect();
+        Some(body_parts(&state, WeightTarget::Retopology, &faces)?)
+    } else {
+        None
+    };
+
     let _ = on_progress.send(Progress {
         stage: "unwrap".to_string(),
         percent: 10,
@@ -2504,7 +2539,7 @@ pub async fn run_uv_unwrap(
             texture_size: config.texture_size,
             unwrap: config.unwrap_options(),
         };
-        uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options)
+        uv_core::unwrapped_skin_by_parts(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options)
     })
     .await
     .map_err(|e| format!("El desplegado terminó inesperadamente: {e}"))?;
@@ -2570,12 +2605,18 @@ fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<Unw
         let positions: Vec<[f64; 3]> =
             mesh.vertices.iter().map(|v| [v.position.x(), v.position.y(), v.position.z()]).collect();
         let faces: Vec<[usize; 3]> = (0..mesh.num_faces()).map(|i| mesh.get_face_vertices(i)).collect();
+        let parts = if config.wants_parts() {
+            let lists: Vec<Vec<usize>> = faces.iter().map(|f| f.to_vec()).collect();
+            Some(body_parts(state, WeightTarget::Original, &lists)?)
+        } else {
+            None
+        };
         let surface = uv_core::scene_surface(&scene);
         let options = uv_core::BakeOptions {
             texture_size: config.texture_size,
             unwrap: config.unwrap_options(),
         };
-        let skin = uv_core::unwrapped_skin(&scene, surface.as_ref(), &positions, &faces, &options);
+        let skin = uv_core::unwrapped_skin_by_parts(&scene, surface.as_ref(), &positions, &faces, parts.as_ref(), &options);
         let (mut new_scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &scene);
         for m in &mut new_scene.meshes {
             m.name = "unwrapped".into();
@@ -2590,6 +2631,8 @@ fn unwrap_original_impl(state: &AppState, config: &UvUnwrapConfig) -> Result<Unw
         *state.mesh.lock().unwrap() = Some(new_mesh);
         *state.scene.lock().unwrap() = Some(new_scene);
         let rig_kept = mesh_replaced(state, &mesh);
+        // Las caras de la escena nueva siguen el orden de las del desplegado
+        *state.original_parts.lock().unwrap() = skin.parts;
         *state.mesh_before_unwrap.lock().unwrap() = Some(mesh);
         *state.scene_before_unwrap.lock().unwrap() = Some(scene);
         // Deshacer una reparación anterior ya no aplica: descartaría el desplegado
@@ -3609,7 +3652,7 @@ mod tests {
         *state.scene.lock().unwrap() = Some(scene.clone());
         *state.mesh_before_repair.lock().unwrap() = Some(scene_to_pinocchio_mesh(&scene).unwrap());
 
-        let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0, layout: None };
+        let config = UvUnwrapConfig { texture_size: 256, padding: 4, max_angle: 55.0, layout: None, by_parts: None };
         let info = unwrap_original_impl(&state, &config).unwrap();
         assert_eq!(info.uv.num_charts, Some(6), "una isla por cara del cubo");
         assert!(info.mesh_info.has_uvs);
@@ -4151,6 +4194,7 @@ mod tests {
             materials: vec![converter_scene::Material::default()],
             textures: vec![],
             info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
+            parts: None,
         };
         let (data, source) = quad_view(&quad, Some(&skin));
         assert_eq!(source, vec![0, 1, 2, 3, 1, 4, 5, 2], "la arista de la costura se duplica");
@@ -4169,6 +4213,7 @@ mod tests {
             materials: vec![converter_scene::Material::default(); 2],
             textures: vec![],
             info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
+            parts: None,
         };
         let (data, source) = quad_view(&quad, Some(&skin));
         assert_eq!(data.groups, vec![[0, 6, 0], [6, 6, 1]]);
@@ -4270,6 +4315,7 @@ mod tests {
             materials: vec![converter_scene::Material::default()],
             textures: vec![],
             info: uv_core::SkinInfo::Transferred { seam_faces: 0 },
+            parts: None,
         };
         let base = Scene::default();
         let (scene, source) = quad_mesh_to_scene(&quad, Some(&uvs), &base);

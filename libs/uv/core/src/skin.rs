@@ -2,7 +2,7 @@
 //! esquina de cara más los materiales y texturas que usan.
 
 use crate::{
-    bake, corner_frames, original_regions, transfer_uvs, unwrap_with_regions, BakeChannel, CornerFrames, TexelContext,
+    bake, corner_frames, original_regions, transfer_uvs, unwrap_by_parts, unwrap_with_regions, BakeChannel, CornerFrames, TexelContext,
     UnwrapOptions, UvPart, UvSurface,
 };
 use converter_scene::{AlphaMode, Material, Scene, Texture, TextureFormat, TextureRef, WorldPrimitive};
@@ -20,6 +20,17 @@ pub struct Skin<const N: usize> {
     pub materials: Vec<Material>,
     pub textures: Vec<Texture>,
     pub info: SkinInfo,
+    /// Partes del cuerpo con las que se cortó el mapa, si se cortó por partes.
+    pub parts: Option<SkinParts>,
+}
+
+/// Partes del cuerpo de una malla (cabeza, torso, cada pata, cola).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SkinParts {
+    /// Nombre de cada parte, para las guías del mapa.
+    pub names: Vec<String>,
+    /// Parte de cada cara (índice en `names`).
+    pub face_part: Vec<usize>,
 }
 
 /// Cómo se obtuvo la piel.
@@ -87,6 +98,7 @@ pub fn transferred_skin<const N: usize>(
         materials: scene.materials.clone(),
         textures: scene.textures.clone(),
         info: SkinInfo::Transferred { seam_faces: transfer.seam_faces },
+        parts: None,
     }
 }
 
@@ -120,11 +132,33 @@ pub fn unwrapped_skin<const N: usize>(
     faces: &[[usize; N]],
     options: &BakeOptions,
 ) -> Skin<N> {
+    unwrapped_skin_by_parts(scene, surface, positions, faces, None, options)
+}
+
+/// Como [`unwrapped_skin`], con una carta por parte del cuerpo si `parts`
+/// corresponde a las caras (ver [`crate::unwrap_by_parts`]).
+pub fn unwrapped_skin_by_parts<const N: usize>(
+    scene: &Scene,
+    surface: Option<&UvSurface>,
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: Option<&SkinParts>,
+    options: &BakeOptions,
+) -> Skin<N> {
     let size = options.texture_size.max(1);
     let unwrap_options = UnwrapOptions { texture_size: size, ..options.unwrap };
     // Con UV de origen, las cartas nuevas prefieren cortar por sus costuras
     let regions = surface.map(|s| original_regions(s, positions, faces));
-    let layout = unwrap_with_regions(positions, faces, regions.as_deref(), &unwrap_options);
+    // Partes sin trozos sueltos: las mismas con que se corta, para que los
+    // nombres de las guías caigan en su isla
+    let parts = parts.filter(|p| p.face_part.len() == faces.len()).map(|p| SkinParts {
+        names: p.names.clone(),
+        face_part: crate::clean_parts(positions, faces, &p.face_part),
+    });
+    let layout = match &parts {
+        Some(parts) => unwrap_by_parts(positions, faces, &parts.face_part, regions.as_deref(), &unwrap_options),
+        None => unwrap_with_regions(positions, faces, regions.as_deref(), &unwrap_options),
+    };
 
     let geometry = if surface.is_none() { material_surface(scene) } else { None };
     let (material, textures) = match surface.or(geometry.as_ref()) {
@@ -148,6 +182,7 @@ pub fn unwrapped_skin<const N: usize>(
             coverage: layout.coverage,
             texture_size: if baked { size } else { 0 },
         },
+        parts,
     }
 }
 

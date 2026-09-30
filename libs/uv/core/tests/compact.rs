@@ -81,6 +81,7 @@ fn compacting_keeps_colors_and_normals_on_the_surface() {
         }],
         textures: vec![color, normal],
         info: SkinInfo::Unwrapped { num_charts: paintable.num_charts, stretch: paintable.stretch, coverage: paintable.coverage, texture_size: size },
+        parts: None,
     };
 
     let compact = compact_skin(&skin, &positions, &faces, size, 4);
@@ -126,6 +127,7 @@ fn compacted_scene_keeps_the_vertices() {
         }],
         textures: vec![png(256, |x, y| [x as u8, y as u8, 0, 255])],
         info: SkinInfo::Unwrapped { num_charts: paintable.num_charts, stretch: paintable.stretch, coverage: paintable.coverage, texture_size: 256 },
+        parts: None,
     };
     // Escena como la deja desplegar la malla original: vértices partidos en las costuras
     let (scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &converter_scene::Scene::new());

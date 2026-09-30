@@ -140,10 +140,29 @@ superficie).
   Exportar: "Compactar el mapa UV", marcado por omisión si el mapa es para
   pintar. Esfera: 49 → 56 % del atlas.
 
+- Partes del cuerpo ✅ (paso 3): "Una isla por parte del cuerpo" en el paso
+  UV (con el mapa para pintar y el rig). La app (`body_parts.rs`) da a cada
+  cara su hueso dominante y agrupa los huesos en cadenas: las que terminan en
+  punta son una parte cada una (Cabeza, Cola, Pata delantera izquierda,
+  Brazo derecho…, por los nombres de los huesos) y las que unen dos
+  bifurcaciones forman el Torso. `unwrap_by_parts` (módulo `parts`):
+  - Trozos sueltos de una parte menores al 30 % de su trozo principal pasan
+    a la vecina (`clean_parts`; manchas de pesos, la mano sobre el muslo).
+  - Lado escondido: hacia el cuerpo en horizontal y algo abajo; el torso,
+    abajo (panza). Cortar por el lado visible cuesta 7×.
+  - Varios bordes (torso) se unen con caminos por ese lado; con curvatura
+    interior (suma de defectos angulares) mayor a 0,75π, hasta dos cierres
+    desde lo abierto hasta el punto más lejano (patas, cola, cabeza). El
+    largo del borde no sirve de criterio: los bordes sacados de los pesos
+    son dentados.
+  - Los cortes duplican vértices; las caras son las mismas y en el mismo
+    orden. Si una parte igual se estira de más, se parte como cualquier
+    carta.
+  - Elefante y humano sintéticos retopologizados a ~4000 quads: una carta
+    por parte (7 y 6), estiramiento 1,01, sin invertidos; atlas 37 → 45 % y
+    30 → 45 % (el desplegado normal da 21 y 25 cartas).
+
 Pendiente de este flujo:
-3. Partes del cuerpo por el esqueleto (cabeza, torso, cada pata, cola) como
-   cartas, con cortes escondidos para abrir los cilindros (cara interna de
-   las patas, panza).
 4. Nombres de cada parte en la capa guía del PSD/XCF.
 
 ## Fase 4 — Horneado ✅

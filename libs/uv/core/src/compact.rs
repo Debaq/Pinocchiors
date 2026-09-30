@@ -104,6 +104,7 @@ pub fn compact_skin<const N: usize>(
         materials: vec![material],
         info: SkinInfo::Unwrapped { num_charts, stretch, coverage, texture_size: if textures.is_empty() { 0 } else { size } },
         textures,
+        parts: skin.parts.clone(),
     }
 }
 
@@ -147,6 +148,7 @@ pub fn compacted_scene(scene: &Scene, texture_size: u32, padding: u32) -> Option
         materials: scene.materials.clone(),
         textures: scene.textures.clone(),
         info: SkinInfo::Transferred { seam_faces: 0 },
+        parts: None,
     };
     let compact = compact_skin(&skin, &positions, &faces, texture_size, padding);
 

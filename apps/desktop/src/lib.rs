@@ -1,6 +1,7 @@
 //! Pinocchio App - Aplicación Tauri para auto-rigging
 
 pub mod animation;
+pub mod body_parts;
 pub mod bvh;
 pub mod imported_rig;
 pub mod commands;

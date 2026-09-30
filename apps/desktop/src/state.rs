@@ -120,6 +120,10 @@ pub struct AppState {
     /// desplegado nuevo con texturas horneadas (paso UV)
     pub quad_skin: Mutex<Option<uv_core::Skin<4>>>,
 
+    /// Partes del cuerpo del mapa de la malla original, si se desplegó por
+    /// partes (una por triángulo de la escena, en orden)
+    pub original_parts: Mutex<Option<uv_core::SkinParts>>,
+
     /// Indica si hay un proceso en curso
     pub processing: AtomicBool,
 
@@ -164,6 +168,7 @@ impl AppState {
             use_retopology: AtomicBool::new(true),
             quad_mesh: Mutex::new(None),
             quad_skin: Mutex::new(None),
+            original_parts: Mutex::new(None),
             processing: AtomicBool::new(false),
             diagnostics: Mutex::new(None),
             mesh_before_repair: Mutex::new(None),
@@ -218,6 +223,7 @@ impl AppState {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
         *self.quad_skin.lock().unwrap() = None;
+        *self.original_parts.lock().unwrap() = None;
         *self.joint_centering.lock().unwrap() = None;
     }
 
@@ -227,6 +233,7 @@ impl AppState {
         *self.result.lock().unwrap() = None;
         *self.quad_mesh.lock().unwrap() = None;
         *self.quad_skin.lock().unwrap() = None;
+        *self.original_parts.lock().unwrap() = None;
         *self.joint_centering.lock().unwrap() = None;
         *self.diagnostics.lock().unwrap() = None;
         *self.mesh_before_repair.lock().unwrap() = None;

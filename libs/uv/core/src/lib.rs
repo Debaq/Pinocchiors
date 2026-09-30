@@ -17,6 +17,7 @@ mod compact;
 mod geometry;
 mod pack;
 mod param;
+mod parts;
 mod skin;
 mod surface;
 mod tangent;
@@ -27,9 +28,11 @@ pub use bake::{bake, BakeChannel, Baked, TexelContext};
 pub use charts::ChartOptions;
 pub use compact::{compact_skin, compacted_scene};
 pub use skin::{
-    checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions, Skin, SkinInfo,
+    checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, unwrapped_skin_by_parts,
+    BakeOptions, Skin, SkinInfo, SkinParts,
 };
+pub use parts::clean_parts;
 pub use surface::{UvPart, UvSurface};
 pub use tangent::{corner_frames, mikk_tangents, CornerFrames};
 pub use transfer::{original_regions, transfer_uvs, UvTransfer};
-pub use unwrap::{unwrap, unwrap_with_regions, Layout, Unwrap, UnwrapOptions};
+pub use unwrap::{unwrap, unwrap_by_parts, unwrap_with_regions, Layout, Unwrap, UnwrapOptions};

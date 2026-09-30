@@ -4,6 +4,7 @@ use crate::charts::{chart_faces, is_disk, segment, split, ChartOptions};
 use crate::geometry::PolyMesh;
 use crate::pack::{pack, pack_paintable, ChartShape, Paint};
 use crate::param::{parametrize, ChartUv};
+use crate::parts::cut_by_parts;
 use crate::surface::uv_derivatives;
 use pinocchio_math::Vector3;
 use rayon::prelude::*;
@@ -159,6 +160,38 @@ pub fn unwrap_with_regions<const N: usize>(
     regions: Option<&[usize]>,
     options: &UnwrapOptions,
 ) -> Unwrap<N> {
+    unwrap_impl(positions, faces, regions, None, options)
+}
+
+/// Como [`unwrap_with_regions`], con una carta por parte del cuerpo
+/// (`parts[f]`: la parte de la cara `f`, p. ej. su hueso dominante agrupado
+/// en cabeza, torso, patas y cola). Cada parte se abre por su lado escondido
+/// (ver el módulo `parts`); si igual se estira de más, se parte como
+/// cualquier carta.
+pub fn unwrap_by_parts<const N: usize>(
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    parts: &[usize],
+    regions: Option<&[usize]>,
+    options: &UnwrapOptions,
+) -> Unwrap<N> {
+    unwrap_impl(positions, faces, regions, Some(parts), options)
+}
+
+fn unwrap_impl<const N: usize>(
+    positions: &[[f64; 3]],
+    faces: &[[usize; N]],
+    regions: Option<&[usize]>,
+    parts: Option<&[usize]>,
+    options: &UnwrapOptions,
+) -> Unwrap<N> {
+    // Con partes, la malla se corta por ellas: mismas caras, vértices
+    // duplicados en los cortes
+    let cut = parts.map(|parts| cut_by_parts(positions, faces, parts));
+    let (positions, faces) = match &cut {
+        Some(cut) => (&cut.positions[..], &cut.faces[..]),
+        None => (positions, faces),
+    };
     let mesh = PolyMesh::new(positions, faces);
     let mesh = match regions {
         Some(regions) => mesh.with_regions(regions),
@@ -172,7 +205,10 @@ pub fn unwrap_with_regions<const N: usize>(
         options.max_stretch = options.max_stretch.max(2.0);
     }
     let options = &options;
-    let initial = chart_faces(&segment(&mesh, &options.charts));
+    let initial = match &cut {
+        Some(cut) => cut.charts.iter().flat_map(|faces| into_disks(&mesh, faces.clone(), options.charts.old_seam_weight)).collect(),
+        None => chart_faces(&segment(&mesh, &options.charts)),
+    };
 
     let mut accepted: Vec<(Vec<usize>, ChartUv)> = Vec::new();
     let mut pending = initial;

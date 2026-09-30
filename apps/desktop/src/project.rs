@@ -60,6 +60,8 @@ struct ProjectState {
     use_retopology: bool,
     quad_mesh: Option<QuadMeshDto>,
     quad_skin: Option<SkinDto>,
+    /// Partes del mapa por partes de la malla original
+    original_parts: Option<SkinPartsDto>,
     mesh_before_repair: Option<MeshDto>,
     scene_before_repair: Option<Scene>,
     mesh_before_unwrap: Option<MeshDto>,
@@ -169,6 +171,15 @@ struct SkinDto {
     materials: Vec<Material>,
     textures: Vec<Texture>,
     info: SkinInfoDto,
+    /// Partes del cuerpo del mapa por partes (proyectos viejos no las tienen)
+    #[serde(default)]
+    parts: Option<SkinPartsDto>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SkinPartsDto {
+    names: Vec<String>,
+    face_part: Vec<usize>,
 }
 
 /// La pieza sin su malla (así la serializa la librería) más la malla aparte
@@ -387,6 +398,7 @@ impl From<&Skin<4>> for SkinDto {
                     SkinInfoDto::Unwrapped { num_charts, stretch, coverage, texture_size }
                 }
             },
+            parts: s.parts.as_ref().map(|p| SkinPartsDto { names: p.names.clone(), face_part: p.face_part.clone() }),
         }
     }
 }
@@ -404,6 +416,7 @@ impl From<SkinDto> for Skin<4> {
                     SkinInfo::Unwrapped { num_charts, stretch, coverage, texture_size }
                 }
             },
+            parts: dto.parts.map(|p| uv_core::SkinParts { names: p.names, face_part: p.face_part }),
         }
     }
 }
@@ -432,6 +445,12 @@ fn capture(state: &AppState) -> ProjectState {
         use_retopology: state.use_retopology.load(Ordering::SeqCst),
         quad_mesh: state.quad_mesh.lock().unwrap().as_ref().map(QuadMeshDto::from),
         quad_skin: state.quad_skin.lock().unwrap().as_ref().map(SkinDto::from),
+        original_parts: state
+            .original_parts
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|p| SkinPartsDto { names: p.names.clone(), face_part: p.face_part.clone() }),
         mesh_before_repair: mesh(&state.mesh_before_repair),
         scene_before_repair: state.scene_before_repair.lock().unwrap().clone(),
         mesh_before_unwrap: mesh(&state.mesh_before_unwrap),
@@ -476,6 +495,8 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     state.use_retopology.store(p.use_retopology, Ordering::SeqCst);
     *state.quad_mesh.lock().unwrap() = p.quad_mesh.map(Into::into);
     *state.quad_skin.lock().unwrap() = p.quad_skin.map(Into::into);
+    *state.original_parts.lock().unwrap() =
+        p.original_parts.map(|p| uv_core::SkinParts { names: p.names, face_part: p.face_part });
     *state.diagnostics.lock().unwrap() = None;
     *state.mesh_before_repair.lock().unwrap() = before_repair;
     *state.scene_before_repair.lock().unwrap() = p.scene_before_repair;

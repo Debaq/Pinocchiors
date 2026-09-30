@@ -3385,6 +3385,7 @@ export const App: Component = () => {
           max_angle: config.maxAngle,
           // Proyectos viejos no guardaban la distribución
           layout: config.layout ?? "paintable",
+          by_parts: config.byParts === true && autorigComplete(),
         },
         onProgress,
       });
@@ -3425,6 +3426,7 @@ export const App: Component = () => {
           max_angle: config.maxAngle,
           // Proyectos viejos no guardaban la distribución
           layout: config.layout ?? "paintable",
+          by_parts: config.byParts === true && autorigComplete(),
         },
         onProgress,
       });
@@ -4844,6 +4846,7 @@ export const App: Component = () => {
               onUnwrapOriginal: handleUvUnwrapOriginal,
               canUndoOriginal: canUndoUnwrap(),
               onUndoOriginal: handleUvUndoOriginal,
+              hasRig: autorigComplete(),
               preview: uvPreview(),
               onPreviewChange: handleUvPreview,
               onOpenEditor: () =>

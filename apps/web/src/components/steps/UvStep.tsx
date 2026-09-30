@@ -1,5 +1,5 @@
 import { Component, Show } from "solid-js";
-import { Panel, Slider, Button, Select } from "../ui";
+import { Panel, Slider, Button, Select, Checkbox } from "../ui";
 import * as Icons from "../icons";
 
 /** Opciones del desplegado (ver `UvUnwrapConfig` en apps/desktop) */
@@ -9,6 +9,8 @@ export interface UvConfig {
   maxAngle: number;
   /** Legible para pintar a mano o lo más apretado posible */
   layout: "paintable" | "compact";
+  /** Para pintar: una isla por parte del cuerpo según el rig */
+  byParts?: boolean;
 }
 
 export const defaultUvConfig: UvConfig = { textureSize: 2048, padding: 4, maxAngle: 55, layout: "paintable" };
@@ -54,6 +56,8 @@ export interface UvStepProps {
   /** Se puede volver a la malla de antes del desplegado del original */
   canUndoOriginal?: boolean;
   onUndoOriginal?: () => void;
+  /** Hay pesos del rig: se puede cortar por partes del cuerpo */
+  hasRig?: boolean;
 }
 
 const SIZE_OPTIONS = [512, 1024, 2048, 4096].map((s) => ({ value: String(s), label: `${s} × ${s} px` }));
@@ -72,7 +76,9 @@ const Row: Component<{ label: string; value: string; warn?: boolean }> = (props)
 );
 
 /** Tamaño de textura, margen y curvatura: comunes a los dos desplegados */
-const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<UvConfig>) => void }> = (props) => (
+const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<UvConfig>) => void; hasRig?: boolean }> = (
+  props
+) => (
   <>
     <Select
       label="Distribución"
@@ -85,6 +91,19 @@ const UnwrapOptions: Component<{ config: UvConfig; onChange: (partial: Partial<U
         ? "Islas grandes y derechas, ubicadas como en el modelo: un lado arriba y el otro abajo, como una hoja de vistas."
         : "Islas acomodadas para aprovechar al máximo la textura. Difícil de pintar a mano."}
     </p>
+    <Show when={(props.config.layout ?? "paintable") === "paintable"}>
+      <Checkbox
+        label="Una isla por parte del cuerpo"
+        checked={props.config.byParts === true && props.hasRig === true}
+        disabled={!props.hasRig}
+        onChange={(v) => props.onChange({ byParts: v })}
+      />
+      <p class="text-xs text-text-muted leading-relaxed">
+        {props.hasRig
+          ? "Cabeza, torso, cada pata y la cola según el rig, abiertas por el lado que no se ve (cara interna, panza). Los nombres van en la guía al exportar la textura."
+          : "Calcula los pesos del rig para cortar el mapa por partes del cuerpo."}
+      </p>
+    </Show>
     <Select
       label="Tamaño de textura"
       options={SIZE_OPTIONS}
@@ -147,7 +166,7 @@ export const UvStep: Component<UvStepProps> = (props) => {
                     : "Queda listo para pintarlo en el editor de texturas."}{" "}
                   Para una malla liviana con quads, haz primero la retopología.
                 </p>
-                <UnwrapOptions config={props.config} onChange={update} />
+                <UnwrapOptions config={props.config} onChange={update} hasRig={props.hasRig} />
                 <Button
                   variant="primary"
                   class="w-full"
@@ -203,7 +222,7 @@ export const UvStep: Component<UvStepProps> = (props) => {
 
         <Panel title="Desplegar y hornear" icon={<Icons.Checkerboard size={14} />} defaultOpen>
           <div class="space-y-5 pt-1">
-            <UnwrapOptions config={props.config} onChange={update} />
+            <UnwrapOptions config={props.config} onChange={update} hasRig={props.hasRig} />
             <Button
               variant="primary"
               class="w-full"
