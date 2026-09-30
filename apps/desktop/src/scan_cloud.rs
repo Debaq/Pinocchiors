@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
 
-use crate::commands::{in_background, load_scene, report, MeshInfo, Progress};
-use crate::scanner::{scan_to_scene, MeshSettingsDto, ScannerHandle};
+use crate::commands::{in_background, report, MeshInfo, Progress};
+use crate::scanner::{load_scan, MeshSettingsDto, ScannerHandle};
 
 /// Pasos que se pueden deshacer (cada uno guarda la nube entera)
 const MAX_UNDO: usize = 12;
@@ -351,8 +351,7 @@ pub async fn scan_cloud_create_model(
         if mesh.is_empty() {
             return Err("La malla salió vacía: la nube tiene muy pocos puntos o el detalle es muy fino".into());
         }
-        let name = "Escaneo".to_string();
-        load_scene(scan_to_scene(&mesh, &name), name, "Escáner".into(), &on_progress, state)
+        load_scan(&mesh, &on_progress, state)
     })
     .await
 }
