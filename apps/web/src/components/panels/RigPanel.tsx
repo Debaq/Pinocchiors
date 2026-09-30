@@ -251,6 +251,12 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                         value={Math.round(spring().gravity * 100)}
                         onChange={(v) => props.onBoneProps("Gravedad del resorte", { spring: { ...spring(), gravity: Math.max(0, Math.min(1, v / 100)) } })}
                       />
+                      <Checkbox
+                        class="col-span-3"
+                        label="No atraviesa el cuerpo"
+                        checked={spring().collide !== false}
+                        onChange={(v) => props.onBoneProps("Choque del resorte", { spring: { ...spring(), collide: v ? undefined : false } })}
+                      />
                     </div>
                   )}
                 </Show>

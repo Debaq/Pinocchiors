@@ -27,6 +27,8 @@ export interface SpringSettings {
   damping: number;
   /** 0–1: cuánto lo tira hacia abajo */
   gravity: number;
+  /** No atraviesa el resto del cuerpo (por defecto sí) */
+  collide?: boolean;
 }
 
 export const SPRING_PRESETS: { id: string; label: string; settings: SpringSettings }[] = [
@@ -69,6 +71,7 @@ function springJoints(ctx: RigContext): { j: number; tip: number; s: SpringSetti
 function step(pose: Pose, ctx: RigContext, prev: SpringState | null, dt: number, deps: SecondaryDeps): SpringState {
   const joints = springJoints(ctx);
   const fk = new Fk(ctx.bones, pose);
+  const radius = COLLISION_RADIUS * (ctx.body?.size ?? 1);
   const next: SpringState = new Map();
   const size = ctx.body?.size ?? 1;
   const up = new THREE.Vector3(...(ctx.body?.up ?? [0, 1, 0]));
@@ -95,6 +98,20 @@ function step(pose: Pose, ctx: RigContext, prev: SpringState | null, dt: number,
       if (dir.lengthSq() < 1e-18) dir.copy(target).sub(root);
       particle.p.copy(root).addScaledVector(dir.normalize(), length);
     }
+    // El resto del cuerpo: cápsulas en los huesos que no son de la cadena
+    if (s.collide !== false) {
+      for (const [a, b] of colliders(ctx, j)) {
+        const A = new THREE.Vector3(...fk.position(a));
+        const B = new THREE.Vector3(...fk.position(b));
+        const closest = closestOnSegment(particle.p, A, B);
+        const away = particle.p.clone().sub(closest);
+        const d = away.length();
+        if (d >= radius) continue;
+        particle.p.copy(closest).addScaledVector(d > 1e-9 ? away.divideScalar(d) : new THREE.Vector3(...(ctx.body?.up ?? [0, 1, 0])), radius);
+        const dir = particle.p.clone().sub(root);
+        particle.p.copy(root).addScaledVector(dir.normalize(), length);
+      }
+    }
     // Suelo
     const floor = deps.ground(tip);
     if (particle.p.y < floor) {
@@ -110,6 +127,50 @@ function step(pose: Pose, ctx: RigContext, prev: SpringState | null, dt: number,
     fk.rotate(j, rotationBetween([have.x, have.y, have.z], [want.x, want.y, want.z]));
   }
   return next;
+}
+
+/** Radio de las cápsulas del cuerpo, relativo al tamaño del esqueleto */
+const COLLISION_RADIUS = 0.045;
+
+const colliderCache = new WeakMap<RigContext, Map<number, [number, number][]>>();
+
+/**
+ * Segmentos del cuerpo con los que choca el resorte de `j`: todos menos los
+ * de su propia cadena (sus descendientes) y los de sus dos antecesores, que
+ * nacen pegados a él
+ */
+function colliders(ctx: RigContext, j: number): [number, number][] {
+  let byJoint = colliderCache.get(ctx);
+  if (!byJoint) {
+    byJoint = new Map();
+    colliderCache.set(ctx, byJoint);
+  }
+  const cached = byJoint.get(j);
+  if (cached) return cached;
+  const skip = new Set<number>([j]);
+  const stack = [...ctx.children[j]];
+  while (stack.length > 0) {
+    const c = stack.pop()!;
+    skip.add(c);
+    stack.push(...ctx.children[c]);
+  }
+  for (let p = ctx.bones[j].parent, k = 0; p !== null && k < 2; p = ctx.bones[p].parent, k++) skip.add(p);
+  const out: [number, number][] = [];
+  ctx.bones.forEach((b, i) => {
+    if (b.parent === null || skip.has(i) || skip.has(b.parent)) return;
+    // Otros resortes se mueven solos: no son cuerpo
+    if (ctx.settings.bones[ctx.bones[b.parent].name]?.spring) return;
+    out.push([b.parent, i]);
+  });
+  byJoint.set(j, out);
+  return out;
+}
+
+function closestOnSegment(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3): THREE.Vector3 {
+  const ab = b.clone().sub(a);
+  const len = ab.lengthSq();
+  const t = len > 1e-18 ? Math.max(0, Math.min(1, p.clone().sub(a).dot(ab) / len)) : 0;
+  return a.clone().addScaledVector(ab, t);
 }
 
 interface ClipCache {
