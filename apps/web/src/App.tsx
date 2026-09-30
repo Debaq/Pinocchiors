@@ -481,7 +481,9 @@ export const App: Component = () => {
   };
 
   /** Estructura, materiales y texturas de la escena (miniaturas e imágenes para el visor) */
+  let appearanceRequest = 0;
   const loadSceneAppearance = async () => {
+    const request = ++appearanceRequest;
     try {
       const [structure, materials] = await Promise.all([
         invoke<SceneStructure>("get_scene_structure"),
@@ -493,6 +495,11 @@ export const App: Component = () => {
       const mime = (format: string) => (format === "JPEG" ? "image/jpeg" : format === "WebP" ? "image/webp" : "image/png");
       const blobs = buffers.map((b, i) => new Blob([b], { type: mime(structure.textures[i].format) }));
       const images = await Promise.all(blobs.map((b) => createImageBitmap(b).catch(() => undefined)));
+      // Otra recarga empezó después: la suya es la que vale
+      if (request !== appearanceRequest) {
+        images.forEach((image) => image?.close());
+        return;
+      }
       textureUrls().forEach((url) => URL.revokeObjectURL(url));
       setTextureUrls(blobs.map((b) => URL.createObjectURL(b)));
       setSceneMaterials(toSceneMaterials(materials, images));
@@ -662,8 +669,11 @@ export const App: Component = () => {
     buffer.byteLength > 0 ? createImageBitmap(new Blob([buffer])) : undefined;
 
   /** Lee del backend la piel actual: estado, atlas, texturas y la malla con UV */
+  let skinRequest = 0;
   const refreshSkin = async () => {
+    const request = ++skinRequest;
     const info = await invoke<UvInfo | null>("get_uv_info");
+    if (request !== skinRequest) return;
     setUvInfo(info ?? undefined);
     if (!info) {
       setSkinMaterials([]);
@@ -689,6 +699,11 @@ export const App: Component = () => {
         used.has(index) ? invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage) : undefined
       )
     );
+    // Otra lectura empezó después: la suya es la que vale
+    if (request !== skinRequest) {
+      images.forEach((image) => image?.close());
+      return;
+    }
     setSkinMaterials(toSceneMaterials(materials, images));
     setQuadMeshData(decodeMesh(mesh));
     if (autorigComplete() && usesQuad()) await reloadWeights();
@@ -1256,7 +1271,8 @@ export const App: Component = () => {
     pipeline.markCompleted("import");
   };
 
-  /** Cuenta las elecciones de plantilla: una respuesta vieja no pisa a la última */
+  /** Cuenta las elecciones de plantilla y de forma de cuerpo: una respuesta
+   * vieja no pisa a la última */
   let skeletonRequest = 0;
   const handleSkeletonChange = async (presetId: string) => {
     const request = ++skeletonRequest;
@@ -3868,13 +3884,17 @@ export const App: Component = () => {
   // SKELETON TRANSFORM HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /** Cuenta las transformaciones: la respuesta de una vieja no pisa a la última */
+  let transformRequest = 0;
   const applyTransform = async (transform: SkeletonTransform) => {
+    const request = ++transformRequest;
     setSkeletonTransform(transform);
     const data = await invoke<TauriSkeletonData>("transform_skeleton", {
       scale: transform.scale,
       translation: transform.translation,
       rotation: transform.rotation,
     });
+    if (request !== transformRequest) return;
     setSkeletonData(tauriSkeletonToViewer(data));
     // El backend descartó los pesos (eran del esqueleto anterior): la interfaz también
     if (autorigComplete()) dropWeights("Transformaste el esqueleto entero");
@@ -3934,9 +3954,12 @@ export const App: Component = () => {
 
   /** Cambió un apéndice: se rehace la plantilla */
   const handleBodyPlanChange = async (plan: BodyPlan) => {
+    const request = ++skeletonRequest;
+    const previous = bodyPlan();
     setBodyPlan(plan);
     try {
       const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
+      if (request !== skeletonRequest) return;
       history.milestone("Esqueleto por forma de cuerpo");
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
@@ -3946,6 +3969,8 @@ export const App: Component = () => {
     } catch (e) {
       console.error("Body plan error:", e);
       setStatusMessage(`Error: ${e}`);
+      // El panel vuelve a mostrar la forma que sigue puesta
+      if (request === skeletonRequest) setBodyPlan(previous);
     }
   };
 
