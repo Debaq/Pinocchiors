@@ -13,6 +13,7 @@
 
 mod bake;
 mod charts;
+mod compact;
 mod geometry;
 mod pack;
 mod param;
@@ -24,6 +25,7 @@ mod unwrap;
 
 pub use bake::{bake, BakeChannel, Baked, TexelContext};
 pub use charts::ChartOptions;
+pub use compact::{compact_skin, compacted_scene};
 pub use skin::{
     checker_texture, material_surface, scene_surface, skin_scene, transferred_skin, unwrapped_skin, BakeOptions, Skin, SkinInfo,
 };

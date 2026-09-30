@@ -540,6 +540,10 @@ export const App: Component = () => {
   /** Hay algo con qué trabajar: un modelo o, sin modelo, un esqueleto */
   const hasWork = () => meshLoaded() || !!skeletonData();
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
+  /** Compactar el mapa UV al exportar; sin elegir, sí cuando el mapa es para pintar */
+  const [exportCompactUv, setExportCompactUv] = createSignal<boolean | undefined>();
+  const compactUv = () =>
+    exportCompactUv() ?? ((uvInfo()?.mode === "unwrapped" || canUndoUnwrap()) && (uvConfig().layout ?? "paintable") === "paintable");
   const [exportOptions, setExportOptions] = createSignal<ExportOptions>(defaultExportOptions);
   // Sin modelo solo sirven los formatos que llevan el esqueleto solo
   createEffect(() => {
@@ -3200,6 +3204,7 @@ export const App: Component = () => {
           include_skeleton: includeRig,
           include_weights: includeRig,
           use_retopology: exportUseRetopology() && quadMeshLoaded(),
+          compact_uv: compactUv(),
           draco: opts.draco,
           draco_level: opts.dracoLevel,
           draco_position_bits: opts.highPrecision ? 16 : 14,
@@ -4947,6 +4952,8 @@ export const App: Component = () => {
               onIncludeRigChange: setExportIncludeRig,
               useRetopology: exportUseRetopology(),
               onUseRetopologyChange: setExportUseRetopology,
+              compactUv: compactUv(),
+              onCompactUvChange: setExportCompactUv,
               options: exportOptions(),
               onOptionsChange: setExportOptions,
               lastExport: lastExport(),

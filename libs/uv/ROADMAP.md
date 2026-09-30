@@ -131,9 +131,16 @@ superficie).
   invertido sobre el modelo.
 - App: selector "Distribución" en el paso UV, "Para pintar" por omisión.
 
+- Compactar al exportar ✅ (paso 2): `compact_skin` toma las cartas del
+  mapa (caras que comparten vértice y UV), las reempaqueta en `Compact` y
+  re-hornea todos los canales desde el mapa anterior (misma superficie: el
+  color sale exacto salvo el bilineal; el normal map pasa al marco tangente
+  nuevo, mediana 0,4°). `compacted_scene` hace lo mismo sobre la escena sin
+  cambiar vértices ni su orden (la malla original desplegada y su rig).
+  Exportar: "Compactar el mapa UV", marcado por omisión si el mapa es para
+  pintar. Esfera: 49 → 56 % del atlas.
+
 Pendiente de este flujo:
-2. Compactar al exportar: reempaquetar las mismas cartas (`Compact`) y
-   re-hornear todos los canales desde el mapa para pintar.
 3. Partes del cuerpo por el esqueleto (cabeza, torso, cada pata, cola) como
    cartas, con cortes escondidos para abrir los cilindros (cara interna de
    las patas, panza).

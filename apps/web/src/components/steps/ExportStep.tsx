@@ -117,6 +117,9 @@ export interface ExportStepProps {
   onIncludeRigChange?: (value: boolean) => void;
   useRetopology?: boolean;
   onUseRetopologyChange?: (value: boolean) => void;
+  /** Reempaquetar el mapa UV apretado y re-hornear sus texturas */
+  compactUv?: boolean;
+  onCompactUvChange?: (value: boolean) => void;
   options: ExportOptions;
   onOptionsChange?: (options: ExportOptions) => void;
   /** Tamaño y archivos de la última exportación */
@@ -203,6 +206,15 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
             disabled={!props.hasQuadMesh}
             onChange={props.onUseRetopologyChange}
           />
+          <Checkbox
+            label="Compactar el mapa UV"
+            checked={props.compactUv === true}
+            onChange={props.onCompactUvChange}
+          />
+          <p class="text-[10px] text-text-dim leading-relaxed">
+            Reacomoda las islas lo más juntas posible y vuelve a hornear las texturas (lo pintado
+            incluido): se pinta sobre el mapa legible y se exporta el que aprovecha la textura.
+          </p>
           <p class="text-[10px] text-text-dim leading-relaxed">
             {props.autorigComplete ? "" : "Ejecuta el autorig para exportar el rig. "}
             {props.hasQuadMesh ? "" : "Ejecuta la retopología para exportar la malla de quads."}

@@ -230,19 +230,19 @@ impl Channel {
 }
 
 /// Malla destino y superficie de referencia para hornear.
-struct BakeInput<'a, const N: usize> {
-    surface: &'a UvSurface,
-    positions: &'a [[f64; 3]],
-    faces: &'a [[usize; N]],
-    corners: &'a [[[f32; 2]; N]],
-    frames: &'a CornerFrames<N>,
-    size: u32,
+pub(crate) struct BakeInput<'a, const N: usize> {
+    pub(crate) surface: &'a UvSurface,
+    pub(crate) positions: &'a [[f64; 3]],
+    pub(crate) faces: &'a [[usize; N]],
+    pub(crate) corners: &'a [[[f32; 2]; N]],
+    pub(crate) frames: &'a CornerFrames<N>,
+    pub(crate) size: u32,
 }
 
 type BoxedChannel<'a> = Box<dyn Fn(&TexelContext) -> [u8; 4] + Sync + 'a>;
 
 /// Hornea los canales de los materiales de la escena en un material nuevo.
-fn bake_materials<const N: usize>(scene: &Scene, input: &BakeInput<N>, padding: u32) -> (Material, Vec<Texture>) {
+pub(crate) fn bake_materials<const N: usize>(scene: &Scene, input: &BakeInput<N>, padding: u32) -> (Material, Vec<Texture>) {
     // Materiales por grupo (grupo 0 = sin material)
     let default = Material::default();
     let material = |group: usize| group.checked_sub(1).and_then(|m| scene.materials.get(m)).unwrap_or(&default);

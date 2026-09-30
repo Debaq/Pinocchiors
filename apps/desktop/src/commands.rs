@@ -208,6 +208,9 @@ pub struct ExportConfig {
     pub include_weights: Option<bool>,
     /// Exportar la malla retopologizada en vez de la original
     pub use_retopology: Option<bool>,
+    /// Reempaquetar el mapa UV lo más apretado posible y re-hornear sus
+    /// texturas (se pinta sobre el mapa legible y se exporta el compacto)
+    pub compact_uv: Option<bool>,
     pub texture_quality: Option<u8>,
     pub max_texture_size: Option<u32>,
     pub optimize_geometry: Option<bool>,
@@ -791,6 +794,19 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
     })
 }
 
+/// Margen entre islas del mapa compactado al exportar (px)
+const COMPACT_PADDING: u32 = 4;
+
+/// Lado de las texturas del mapa compactado: el de las que ya tiene
+fn skin_texture_size(textures: &[converter_scene::Texture]) -> u32 {
+    textures
+        .iter()
+        .filter_map(|t| image::load_from_memory(&t.data).ok().map(|i| i.width().max(i.height())))
+        .max()
+        .unwrap_or(2048)
+        .clamp(64, 8192)
+}
+
 fn total_size(files: &[String]) -> u64 {
     files.iter().filter_map(|f| std::fs::metadata(f).ok()).map(|m| m.len()).sum()
 }
@@ -801,13 +817,22 @@ fn build_export_scene(config: &ExportConfig, state: &AppState) -> Result<Scene, 
     let scene = state.scene.lock().unwrap().clone().ok_or("No hay escena para exportar")?;
     let use_retopology = config.use_retopology.unwrap_or(false);
 
+    let compact = config.compact_uv.unwrap_or(false);
     // Con retopología, el vértice de la malla de quads de cada vértice exportado
     let (geometry, quad_vertex_of) = if use_retopology {
         let quad = state.quad_mesh.lock().unwrap();
+        let quad = quad.as_ref().ok_or("No hay malla retopologizada")?;
         let skin = state.quad_skin.lock().unwrap();
-        let (geometry, source) =
-            quad_mesh_to_scene(quad.as_ref().ok_or("No hay malla retopologizada")?, skin.as_ref(), &scene);
+        let compacted = skin.as_ref().filter(|_| compact).map(|skin| {
+            let (positions, faces) = quad_arrays(quad);
+            uv_core::compact_skin(skin, &positions, &faces, skin_texture_size(&skin.textures), COMPACT_PADDING)
+        });
+        let (geometry, source) = quad_mesh_to_scene(quad, compacted.as_ref().or(skin.as_ref()), &scene);
         (geometry, Some(source))
+    } else if compact {
+        // Mismos vértices en el mismo orden: el rig no cambia
+        let size = skin_texture_size(&scene.textures);
+        (uv_core::compacted_scene(&scene, size, COMPACT_PADDING).unwrap_or(scene), None)
     } else {
         (scene, None)
     };

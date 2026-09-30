@@ -137,7 +137,7 @@ fn paint_info(mesh: &PolyMesh, chart_faces: &[usize], uv: &ChartUv) -> Paint {
 
 /// Triángulos que cubren el polígono aunque no sea convexo: los abanicos
 /// desde cada vértice (un quad queda cubierto por sus dos triangulaciones).
-fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 3]> {
+pub(crate) fn covering_triangles<const N: usize>(corners: [[f64; 2]; N]) -> Vec<[[f64; 2]; 3]> {
     let fans = if N == 3 { 1 } else { N };
     (0..fans)
         .flat_map(|a| (1..N - 1).map(move |k| [corners[a], corners[(a + k) % N], corners[(a + k + 1) % N]]))
