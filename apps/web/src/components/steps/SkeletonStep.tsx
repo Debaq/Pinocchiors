@@ -1,4 +1,4 @@
-import { Component, Show } from "solid-js";
+import { Component, Show, type JSX } from "solid-js";
 import { Button, Checkbox, Panel, Select, Slider } from "../ui";
 import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
@@ -43,6 +43,8 @@ export interface SkeletonStepProps {
   skeletonTransform?: SkeletonTransform;
   onTransformChange?: (transform: SkeletonTransform) => void;
   onResetTransform?: () => void;
+  /** Panel de estructura: huesos nuevos o borrados, JSON y esqueletos propios */
+  structurePanel?: JSX.Element;
   // Pesos
   autorigConfig: AutorigConfig;
   onAutorigConfigChange?: (config: AutorigConfig) => void;
@@ -205,6 +207,7 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
             onReset={props.onResetTransform}
             disabled={props.isProcessing}
           />
+          {props.structurePanel}
         </div>
 
         {/* 4. Pesos */}
@@ -306,7 +309,8 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
                 <div class="space-y-3 pt-1">
                   <p class="text-xs text-text-muted leading-relaxed">
                     Selecciona una articulación y pulsa <span class="text-text">R</span>: gira con el
-                    mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Si se estira o arrastra partes que no
+                    mouse (X/Y/Z para un eje) y la malla se dobla con los pesos. Los giros se suman: gira el hombro y
+                    después el codo para ver la cadena entera. Esc deshace solo el último giro. Si se estira o arrastra partes que no
                     corresponden, mueve esa articulación y vuelve a calcular.
                   </p>
                   <div class="flex gap-2">

@@ -42,6 +42,8 @@ import { Fk, solveCcd, solveFabrik, solveLookAt, solveSpline, solveTwoBone } fro
 import { applyLimits, type JointLimits } from "./jointLimits";
 import { eulerCodec, type Codec, type RotationCodecs } from "./curves";
 import { analyzeBody, type Body, type ChainKind, type SkeletonBone } from "./presetAnimations";
+import { applyConstraints, isConstraintId, loadConstraints, type RigConstraint } from "./constraints";
+import { applySecondary, type SpringSettings } from "./secondary";
 
 // ─── Tipos ──────────────────────────────────────────────────────────────────
 
@@ -93,6 +95,8 @@ export interface BoneProps {
   roll?: number;
   /** Rango de giro (bisagra o rótula), ver `jointLimits.ts` */
   limits?: JointLimits;
+  /** Resorte (F8): el hueso sigue a una punta con masa en vez de a sus keys */
+  spring?: SpringSettings;
 }
 
 export interface BoneGroup {
@@ -174,8 +178,12 @@ export interface RigSettings {
   groups: BoneGroup[];
   controls: RigControl[];
   ikChains: IkChain[];
+  /** Restricciones (F3), en orden de evaluación */
+  constraints?: RigConstraint[];
   /** Los límites de giro no se aplican (se ven igual en el panel) */
   limitsOff?: boolean;
+  /** Piel con cuaterniones duales en el visor (la exportación sigue lineal: glTF no la tiene) */
+  dualQuaternion?: boolean;
 }
 
 export const emptyRigSettings = (): RigSettings => ({ version: 1, bones: {}, groups: [], controls: [], ikChains: [] });
@@ -195,14 +203,17 @@ export function loadRigSettings(raw: unknown): RigSettings {
     settings.controls = r.controls.filter((c) => c && typeof c.id === "string" && Array.isArray(c.position));
   }
   if (r.limitsOff === true) settings.limitsOff = true;
+  if (r.dualQuaternion === true) settings.dualQuaternion = true;
   if (Array.isArray(r.ikChains)) {
     settings.ikChains = r.ikChains.filter((c) => c && typeof c.id === "string" && Array.isArray(c.joints));
   }
+  const constraints = loadConstraints(r.constraints);
+  if (constraints.length > 0) settings.constraints = constraints;
   return settings;
 }
 
 /** Propiedades de un hueso con los valores por defecto */
-export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape" | "limits">> & BoneProps {
+export function boneProps(settings: RigSettings, name: string): Required<Omit<BoneProps, "group" | "color" | "shape" | "limits" | "spring">> & BoneProps {
   const p = settings.bones[name] ?? {};
   return {
     ...p,
@@ -671,6 +682,7 @@ export function chainBlend(chain: IkChain, clip: AnimationClip | undefined, fram
 export function tidyClips(clips: AnimationClip[], settings: RigSettings): AnimationClip[] {
   const chains = new Map((settings.ikChains ?? []).map((c) => [c.id, c]));
   const controls = new Set(settings.controls.map((c) => c.id));
+  const constraints = new Set((settings.constraints ?? []).map((c) => c.id));
   return clips.map((clip) => {
     const animated = (t: BoneTrack) => t.rotation.length > 0 || t.translation.length > 0;
     let changed = false;
@@ -680,6 +692,12 @@ export function tidyClips(clips: AnimationClip[], settings: RigSettings): Animat
         return [];
       }
       if (t.kind !== "ik") return [t];
+      // Influencia y valor de las restricciones van en pistas "ik" con su id
+      if (isConstraintId(t.bone)) {
+        if (constraints.has(t.bone)) return [t];
+        changed = true;
+        return [];
+      }
       const chain = chains.get(t.bone);
       if (!chain) {
         changed = true;
@@ -847,12 +865,33 @@ export const limitsStage: PoseStage = {
   },
 };
 
-/** Etapas después de las keys, en orden: restricciones → IK → límites */
-export const POSE_STACK: PoseStage[] = [{ name: "restricciones", run: (pose) => pose }, ikStage, limitsStage];
+/** Restricciones (F3): copiar, hijo de, seguir, estirar, mapeo, drivers y reparto */
+export const constraintStage: PoseStage = {
+  name: "restricciones",
+  run: (pose, ctx, info) => applyConstraints(pose, ctx, info, { controlWorld }),
+};
+
+/** Resortes y seguimiento (F8): simulados con el clip hasta el cuadro anterior */
+export const secondaryStage: PoseStage = {
+  name: "resortes",
+  run: (pose, ctx, info) =>
+    applySecondary(pose, ctx, info, {
+      before: (clip, frame) =>
+        [constraintStage, ikStage].reduce(
+          (p, stage) => stage.run(p, ctx, { clip, frame }),
+          samplePose(clip, frame, ctx.boneIndex, ctx.rotation)
+        ),
+      ground: (j) => groundHeight(ctx, j),
+    }),
+};
+
+/** Etapas después de las keys, en orden: restricciones → IK → resortes → límites */
+export const POSE_STACK: PoseStage[] = [constraintStage, ikStage, secondaryStage, limitsStage];
 
 /** Pasa una pose (de keys o editada a mano) por la pila */
 export function runPoseStack(pose: Pose, ctx: RigContext, info: StageInfo = {}): Pose {
-  return POSE_STACK.reduce((p, stage) => stage.run(p, ctx, info), pose);
+  const stages = info.clip?.baked ? [limitsStage] : POSE_STACK;
+  return stages.reduce((p, stage) => stage.run(p, ctx, info), pose);
 }
 
 /** Pose final del clip en `frame` */

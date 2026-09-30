@@ -79,6 +79,7 @@ impl ConvertOptions {
             strip_unused: self.strip_unused,
             simplify: self.simplify,
             draco: self.draco,
+            node_extras: std::collections::HashMap::new(),
         }
     }
 }

@@ -15,6 +15,9 @@ import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
 import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
 import { ViewCube } from "./ViewCube";
+import { installDqSkinning, setDqSkinning } from "./dqSkinning";
+
+installDqSkinning();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -29,6 +32,8 @@ export interface MeshData {
   quadIndices?: Uint32Array;
   /** Rangos de índices por material: [inicio, cantidad, material] (0xffffffff = sin material) */
   groups?: Uint32Array;
+  /** Nodo del archivo de cada grupo (0xffffffff = sin nodo) */
+  groupNodes?: Uint32Array;
 }
 
 /** Material del archivo de origen, con sus texturas ya decodificadas */
@@ -187,6 +192,8 @@ export type PlacementPick =
   | { kind: "surface"; point: [number, number, number]; normal: [number, number, number] };
 
 export interface ViewerCallbacks {
+  /** Doble clic sobre la malla: el nodo del archivo de ese triángulo */
+  onNodePicked?: (node: number) => void;
   onWeightsPainted?: (stroke: PaintStroke) => void;
   /** La luz principal se movió arrastrando con L */
   onLightsChanged?: (lights: LightSettings) => void;
@@ -445,11 +452,10 @@ export class Viewer3D {
 
   /** Pose de prueba en curso: posiciones y normales de reposo para restaurar */
   private pose: {
-    joint: number;
     positions: Float32Array;
     normals: Float32Array;
-    /** Huesos que se mueven (descendientes de la articulación) */
-    moving: boolean[];
+    /** Giro de cada articulación girada, relativo a su padre (se encadenan) */
+    rotations: Map<number, THREE.Quaternion>;
   } | null = null;
 
   /**
@@ -508,6 +514,9 @@ export class Viewer3D {
   private frameCount = 0;
   private fpsTimer: number | null = null;
   private animationId: number | null = null;
+  /** Suelta de una vez los listeners globales en `dispose` */
+  private readonly listeners = new AbortController();
+  private resizeObserver: ResizeObserver | null = null;
   /** Cubo de orientación de la esquina */
   private viewCube = new ViewCube();
   /** El último clic derecho canceló una operación modal */
@@ -582,6 +591,8 @@ export class Viewer3D {
     ikChain?: number[];
     /** Se confirma al soltar el botón (arrastre desde una trayectoria) */
     release?: boolean;
+    /** Pose de prueba: giro de la articulación al empezar (acumulado y propio) */
+    poseStart?: { world: THREE.Quaternion; local: THREE.Quaternion | null };
   } | null = null;
   /** Lo que el rig agrega al esqueleto (colores, formas, bloqueos, ejes, controles) */
   private rigDisplay: RigDisplay | null = null;
@@ -635,7 +646,7 @@ export class Viewer3D {
     // Fondo y grilla salen del tema (styles/app.css)
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(themeHex("viewport"));
-    window.addEventListener(THEME_EVENT, () => this.applyTheme());
+    window.addEventListener(THEME_EVENT, () => this.applyTheme(), { signal: this.listeners.signal });
 
     // Camera
     const aspect = canvas.clientWidth / canvas.clientHeight;
@@ -781,12 +792,14 @@ export class Viewer3D {
 
   private setupEventListeners(): void {
     // Resize
-    const resizeObserver = new ResizeObserver(() => this.onResize());
-    resizeObserver.observe(this.canvas.parentElement!);
+    this.resizeObserver = new ResizeObserver(() => this.onResize());
+    this.resizeObserver.observe(this.canvas.parentElement!);
+    const signal = this.listeners.signal;
 
     // Mouse events for ground selection
-    this.canvas.addEventListener("click", (e) => this.onCanvasClick(e));
-    this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e));
+    this.canvas.addEventListener("click", (e) => this.onCanvasClick(e), { signal });
+    this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e), { signal });
+    this.canvas.addEventListener("dblclick", (e) => this.onCanvasDoubleClick(e), { signal });
 
     // Navegación como Blender: antes que OrbitControls (fase de captura),
     // se decide qué hace cada botón según los modificadores
@@ -799,7 +812,7 @@ export class Viewer3D {
         return;
       }
       this.configureNavigation(e);
-    }, true);
+    }, { capture: true, signal });
     this.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       // El clic derecho que canceló G/R/F no abre el menú
@@ -808,34 +821,34 @@ export class Viewer3D {
         return;
       }
       this.callbacks.onContextMenu?.(e.clientX, e.clientY);
-    });
+    }, { signal });
     window.addEventListener("wheel", (e) => {
       if (e.target === this.canvas) this.onTrackpadWheel(e);
-    }, { capture: true, passive: false });
+    }, { capture: true, passive: false, signal });
 
     // Clic: modal, luz, pincel, gizmo o selección (en ese orden)
-    this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
-    window.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e), { signal });
+    window.addEventListener("pointermove", (e) => this.onPointerMove(e), { signal });
     window.addEventListener("pointerup", () => {
       this.onLightUp();
       this.finishStroke();
       if (this.modal?.release) this.confirmModal();
-    });
+    }, { signal });
 
     // Teclas mientras hay una operación modal (G, R, F…): antes que los atajos
-    window.addEventListener("keydown", (e) => this.onModalKey(e), true);
+    window.addEventListener("keydown", (e) => this.onModalKey(e), { capture: true, signal });
     window.addEventListener("keydown", (e) => {
       this.keysDown.add(e.key.toLowerCase());
       this.updateGizmoSnap();
-    });
+    }, { signal });
     window.addEventListener("keyup", (e) => {
       this.keysDown.delete(e.key.toLowerCase());
       this.updateGizmoSnap();
-    });
+    }, { signal });
     window.addEventListener("blur", () => {
       this.keysDown.clear();
       this.updateGizmoSnap();
-    });
+    }, { signal });
   }
 
   /** Con Ctrl el gizmo gira de a 5° (Ctrl+Shift, 15°) */
@@ -1389,7 +1402,12 @@ export class Viewer3D {
     // Al espacio de la malla (el grupo puede estar girado por "suelo")
     const groupRotation = this.meshGroup.getWorldQuaternion(new THREE.Quaternion());
     const axisLocal = axisWorld.applyQuaternion(groupRotation.clone().invert()).normalize();
-    this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle));
+    // Se suma al giro que ya tenía la articulación (y sus padres)
+    m.poseStart ??= {
+      world: this.boneSpheres[m.bone].quaternion.clone(),
+      local: this.pose?.rotations.get(m.bone)?.clone() ?? null,
+    };
+    this.applyPose(m.bone, new THREE.Quaternion().setFromAxisAngle(axisLocal, angle).multiply(m.poseStart.world));
   }
 
   /** Avisa el movimiento de una articulación, como mucho una vez por cuadro */
@@ -1451,7 +1469,13 @@ export class Viewer3D {
       this.updateBoneLines();
       this.scheduleBoneMoved(m.bone, sphere.position);
     } else if (m.kind === "rotate") {
-      this.resetPose();
+      // Solo se deshace el giro de esta operación; las demás articulaciones quedan
+      if (m.poseStart && this.pose) {
+        if (m.poseStart.local) this.pose.rotations.set(m.bone, m.poseStart.local);
+        else this.pose.rotations.delete(m.bone);
+        if (this.pose.rotations.size === 0) this.resetPose();
+        else this.updatePose();
+      }
     } else {
       const value = m.value;
       this.paintSettings = this.paintSettings ? { ...this.paintSettings, [m.kind]: value } : null;
@@ -1721,6 +1745,8 @@ export class Viewer3D {
 
   /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
   requestRender(): void {
+    // Ya liberado: una llamada tardía no vuelve a dibujar
+    if (this.listeners.signal.aborted) return;
     if (this.animationId === null) {
       this.animationId = requestAnimationFrame(this.animate);
     }
@@ -1801,14 +1827,19 @@ export class Viewer3D {
     this.applySettings();
     this.buildRig();
     this.attachGizmo();
+    this.applyHiddenToOverlays();
+    this.updateNodeHighlight();
   }
 
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */
   setTextures(textures: MeshTextures): void {
     this.textures = textures;
     // Con los materiales del archivo de origen la piel del paso UV no aplica
-    if (this.currentMesh && !Array.isArray(this.currentMesh.material)) {
-      this.applyTextures(this.currentMesh.material as THREE.MeshStandardMaterial, this.currentMesh.geometry);
+    // (sí con el neutro, aunque haya nodos ocultos)
+    const material = this.currentMesh?.material;
+    const neutral = Array.isArray(material) ? (material[0]?.userData.neutral ? material[0] : undefined) : material;
+    if (this.currentMesh && neutral) {
+      this.applyTextures(neutral as THREE.MeshStandardMaterial, this.currentMesh.geometry);
     }
   }
 
@@ -1878,18 +1909,30 @@ export class Viewer3D {
    */
   private buildMaterial(geometry: THREE.BufferGeometry): THREE.Material | THREE.Material[] {
     const groups = this.meshData?.groups;
+    const nodes = this.meshData?.groupNodes;
     geometry.clearGroups();
+    // Con nodos ocultos, sus grupos van a un material invisible (el último)
+    const hiding = !!groups && !!nodes && this.hiddenNodes.size > 0;
+    const hidden = (g: number) => hiding && this.hiddenNodes.has(nodes![g / 3]);
+    const invisible = () => {
+      const m = new THREE.MeshBasicMaterial();
+      m.visible = false;
+      return m;
+    };
     if (this.settings.showTextures !== false && groups && groups.length >= 3 && this.sceneMaterials.length > 0) {
       const fallback = this.sceneMaterials.length;
       for (let g = 0; g + 2 < groups.length; g += 3) {
-        geometry.addGroup(groups[g], groups[g + 1], groups[g + 2] < fallback ? groups[g + 2] : fallback);
+        geometry.addGroup(groups[g], groups[g + 1], hidden(g) ? fallback + 1 : groups[g + 2] < fallback ? groups[g + 2] : fallback);
       }
       const hasUv = geometry.getAttribute("uv") !== undefined;
-      return [...this.sceneMaterials.map((m) => this.threeMaterial(m, hasUv)), this.defaultMaterial()];
+      return [...this.sceneMaterials.map((m) => this.threeMaterial(m, hasUv)), this.defaultMaterial(), ...(hiding ? [invisible()] : [])];
     }
     const material = this.defaultMaterial();
     this.applyTextures(material, geometry);
-    return material;
+    if (!hiding) return material;
+    for (let g = 0; g + 2 < groups!.length; g += 3) geometry.addGroup(groups![g], groups![g + 1], hidden(g) ? 1 : 0);
+    material.userData.neutral = true;
+    return [material, invisible()];
   }
 
   /** Textura compartida de una imagen (convención glTF: sin voltear) */
@@ -2187,69 +2230,107 @@ export class Viewer3D {
   }
 
   /**
-   * Pose de prueba: gira la articulación `joint` y deforma la malla con los
-   * pesos (skinning lineal), para ver si los pesos doblan bien. El peso de un
-   * hueso es el de su segmento padre → hueso, así que se mueven los huesos
-   * descendientes de la articulación.
+   * Pose de prueba: gira la articulación `joint` hasta `rotation` (su giro
+   * acumulado, en el espacio de la malla, como el del gizmo) y deforma la
+   * malla con los pesos (skinning lineal), para ver si los pesos doblan bien.
+   * Los giros se encadenan: girar el hombro y después el codo suma los dos.
+   * El peso de un hueso es el de su segmento padre → hueso, así que cada
+   * vértice sigue a la articulación de la que cuelga su hueso.
    */
   private applyPose(joint: number, rotation: THREE.Quaternion): void {
     const mesh = this.meshData;
     const weights = this.weightsData;
     const skeleton = this.skeletonData;
     if (!mesh || !weights || !skeleton || weights.numVertices * 3 !== mesh.positions.length) return;
+    this.pose ??= { positions: mesh.positions.slice(), normals: mesh.normals.slice(), rotations: new Map() };
+    // Lo que ya gira el padre no es de esta articulación
+    const parent = skeleton.bones[joint].parent;
+    const parentWorld = parent !== null ? this.boneSpheres[parent].quaternion.clone() : new THREE.Quaternion();
+    this.pose.rotations.set(joint, parentWorld.invert().multiply(rotation).normalize());
+    this.updatePose();
+  }
 
-    if (!this.pose || this.pose.joint !== joint) {
-      this.resetPose();
-      const moving = skeleton.bones.map((_, b) => {
-        for (let p = skeleton.bones[b].parent; p !== null; p = skeleton.bones[p].parent) {
-          if (p === joint) return true;
-        }
-        return false;
-      });
-      this.pose = { joint, positions: mesh.positions.slice(), normals: mesh.normals.slice(), moving };
-    }
-    const { positions: rest, normals: restNormals, moving } = this.pose;
-    const center = this.boneSpheres[joint].position.clone();
+  /** Aplica los giros de la pose de prueba a la malla y a las articulaciones */
+  private updatePose(): void {
+    const mesh = this.meshData;
+    const weights = this.weightsData;
+    const skeleton = this.skeletonData;
+    const pose = this.pose;
+    if (!mesh || !weights || !skeleton || !pose || weights.numVertices * 3 !== mesh.positions.length) return;
+    const bones = skeleton.bones;
+
+    // Transformación de cada articulación (x → Q·x + t), de la raíz a las puntas
+    const rotations: (THREE.Quaternion | undefined)[] = new Array(bones.length);
+    const offsets: (THREE.Vector3 | undefined)[] = new Array(bones.length);
+    const solve = (b: number): void => {
+      if (rotations[b]) return;
+      const parent = bones[b].parent;
+      let q = new THREE.Quaternion();
+      let t = new THREE.Vector3();
+      if (parent !== null) {
+        solve(parent);
+        q = rotations[parent]!.clone();
+        t = offsets[parent]!.clone();
+      }
+      const local = pose.rotations.get(b);
+      if (local) {
+        // Girar alrededor de la articulación en reposo: x → q·(x − c) + c
+        const c = new THREE.Vector3(...bones[b].position);
+        const pivot = c.clone().sub(c.clone().applyQuaternion(local));
+        t.add(pivot.applyQuaternion(q));
+        q.multiply(local);
+      }
+      rotations[b] = q;
+      offsets[b] = t;
+    };
+    bones.forEach((_, b) => solve(b));
+    // El segmento de un hueso cuelga de su padre
+    const identity = new THREE.Quaternion();
+    const zero = new THREE.Vector3();
+    const segment = (b: number) => {
+      const parent = bones[b]?.parent ?? null;
+      return parent !== null ? { q: rotations[parent]!, t: offsets[parent]! } : { q: identity, t: zero };
+    };
+
+    const { positions: rest, normals: restNormals } = pose;
     const p = new THREE.Vector3();
     const n = new THREE.Vector3();
     const k = weights.maxInfluences;
     for (let v = 0; v < weights.numVertices; v++) {
-      let w = 0;
-      for (let i = 0; i < k; i++) {
-        const bone = weights.weights[(v * k + i) * 2];
-        if (moving[bone]) w += weights.weights[(v * k + i) * 2 + 1];
-      }
       const o = 3 * v;
-      if (w <= 0) {
-        mesh.positions[o] = rest[o];
-        mesh.positions[o + 1] = rest[o + 1];
-        mesh.positions[o + 2] = rest[o + 2];
-        mesh.normals[o] = restNormals[o];
-        mesh.normals[o + 1] = restNormals[o + 1];
-        mesh.normals[o + 2] = restNormals[o + 2];
-        continue;
+      let px = rest[o], py = rest[o + 1], pz = rest[o + 2];
+      let nx = restNormals[o], ny = restNormals[o + 1], nz = restNormals[o + 2];
+      for (let i = 0; i < k; i++) {
+        const w = weights.weights[(v * k + i) * 2 + 1];
+        if (w <= 0) continue;
+        const { q, t } = segment(weights.weights[(v * k + i) * 2]);
+        if (q === identity) continue;
+        p.set(rest[o], rest[o + 1], rest[o + 2]).applyQuaternion(q).add(t);
+        px += w * (p.x - rest[o]);
+        py += w * (p.y - rest[o + 1]);
+        pz += w * (p.z - rest[o + 2]);
+        n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(q);
+        nx += w * (n.x - restNormals[o]);
+        ny += w * (n.y - restNormals[o + 1]);
+        nz += w * (n.z - restNormals[o + 2]);
       }
-      p.set(rest[o], rest[o + 1], rest[o + 2]).sub(center).applyQuaternion(rotation).add(center);
-      mesh.positions[o] = rest[o] + w * (p.x - rest[o]);
-      mesh.positions[o + 1] = rest[o + 1] + w * (p.y - rest[o + 1]);
-      mesh.positions[o + 2] = rest[o + 2] + w * (p.z - rest[o + 2]);
-      n.set(restNormals[o], restNormals[o + 1], restNormals[o + 2]).applyQuaternion(rotation);
-      n.set(
-        restNormals[o] + w * (n.x - restNormals[o]),
-        restNormals[o + 1] + w * (n.y - restNormals[o + 1]),
-        restNormals[o + 2] + w * (n.z - restNormals[o + 2])
-      ).normalize();
+      n.set(nx, ny, nz).normalize();
+      mesh.positions[o] = px;
+      mesh.positions[o + 1] = py;
+      mesh.positions[o + 2] = pz;
       mesh.normals[o] = n.x;
       mesh.normals[o + 1] = n.y;
       mesh.normals[o + 2] = n.z;
     }
     this.markMeshDirty();
 
-    // Articulaciones descendientes, giradas
-    skeleton.bones.forEach((bone, b) => {
-      if (!moving[b]) return;
-      p.set(...bone.position).sub(center).applyQuaternion(rotation).add(center);
-      this.boneSpheres[b].position.copy(p);
+    // Cada articulación se mueve con su padre y lleva su giro acumulado (el gizmo parte de ahí)
+    bones.forEach((bone, b) => {
+      const sphere = this.boneSpheres[b];
+      if (!sphere) return;
+      const { q, t } = segment(b);
+      sphere.position.set(...bone.position).applyQuaternion(q).add(t);
+      sphere.quaternion.copy(rotations[b]!);
     });
     this.updateBoneLines();
   }
@@ -2265,8 +2346,10 @@ export class Viewer3D {
       this.markMeshDirty();
     }
     if (this.skeletonData) {
-      this.skeletonData.bones.forEach((bone, b) => this.boneSpheres[b]?.position.set(...bone.position));
-      this.boneSpheres[pose.joint]?.quaternion.identity();
+      this.skeletonData.bones.forEach((bone, b) => {
+        this.boneSpheres[b]?.position.set(...bone.position);
+        this.boneSpheres[b]?.quaternion.identity();
+      });
       this.updateBoneLines();
     }
   }
@@ -2941,6 +3024,11 @@ export class Viewer3D {
   }
 
   dispose(): void {
+    this.listeners.abort();
+    this.resizeObserver?.disconnect();
+    this.controls.dispose();
+    if (this.moveFrame !== null) cancelAnimationFrame(this.moveFrame);
+    if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame);
     if (this.influenceTimer !== null) clearTimeout(this.influenceTimer);
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
@@ -3029,7 +3117,7 @@ export class Viewer3D {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(this.meshData.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(this.meshData.normals, 3));
-    geometry.setIndex(new THREE.BufferAttribute(this.meshData.indices, 1));
+    geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
 
     // Colores por vértice: un hueso (mapa de calor) o todos (color de cada hueso)
     const colors = new Float32Array(weights.numVertices * 3);
@@ -3187,7 +3275,11 @@ export class Viewer3D {
       this.meshGroup.add(m);
       return m;
     };
-    return { mesh: skinned(mesh.material), wireframe: skinned(wireframeMaterial()) };
+    const result = { mesh: skinned(mesh.material), wireframe: skinned(wireframeMaterial()) };
+    for (const m of [result.mesh, result.wireframe]) {
+      (Array.isArray(m.material) ? m.material : [m.material]).forEach((x) => setDqSkinning(x, this.dualQuaternion));
+    }
+    return result;
   }
 
   private disposeRig(): void {
@@ -3587,6 +3679,7 @@ export class Viewer3D {
           new THREE.MeshBasicMaterial({ color: ghost.color, transparent: true, opacity: ghost.opacity * 0.5, depthWrite: false })
         );
         skinned.frustumCulled = false;
+        setDqSkinning(skinned.material as THREE.Material, this.dualQuaternion);
         skinned.bind(s, rig.mesh.bindMatrix);
         this.meshGroup.add(skinned);
         this.onion.objects.push(skinned);
@@ -3708,6 +3801,24 @@ export class Viewer3D {
   /** IK automático al arrastrar con G (sin controles): hasta la raíz o hasta la primera ramificación */
   setAutoIk(settings: { enabled: boolean; toRoot: boolean }): void {
     this.autoIk = settings;
+  }
+
+  /** Piel del rig con cuaterniones duales (no se estrangula al girar sobre el eje) */
+  private dualQuaternion = false;
+  setDualQuaternion(on: boolean): void {
+    this.dualQuaternion = on;
+    this.applyDualQuaternion();
+  }
+
+  private applyDualQuaternion(): void {
+    const rig = this.rig;
+    if (!rig) return;
+    const meshes = [rig.mesh, rig.wireframe, ...this.onion.objects.filter((o): o is THREE.SkinnedMesh => o instanceof THREE.SkinnedMesh)];
+    for (const mesh of meshes) {
+      if (!mesh) continue;
+      const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+      materials.forEach((m) => setDqSkinning(m, this.dualQuaternion));
+    }
   }
 
   /**
@@ -4039,6 +4150,13 @@ export class Viewer3D {
   }
 
   private clearMesh(): void {
+    const meshGeometry = this.currentMesh?.geometry;
+    if (this.nodeHighlight) {
+      this.meshGroup.remove(this.nodeHighlight);
+      this.nodeHighlight.geometry.dispose();
+      (this.nodeHighlight.material as THREE.Material).dispose();
+      this.nodeHighlight = null;
+    }
     if (this.currentMesh) {
       this.meshGroup.remove(this.currentMesh);
       this.currentMesh.geometry.dispose();
@@ -4047,7 +4165,8 @@ export class Viewer3D {
     }
 
     if (this.currentWireframe) {
-      // La geometría es la de currentMesh: se libera con ella
+      // La geometría es la de currentMesh (se libera con ella), salvo con nodos ocultos
+      if (this.currentWireframe.geometry !== meshGeometry) this.currentWireframe.geometry.dispose();
       this.meshGroup.remove(this.currentWireframe);
       (this.currentWireframe.material as THREE.Material).dispose();
       this.currentWireframe = null;
@@ -4139,6 +4258,135 @@ export class Viewer3D {
       point: [hit.point.x, hit.point.y, hit.point.z],
       normal: [normal.x, normal.y, normal.z],
     });
+  }
+
+  /** Doble clic sobre la malla (no sobre una articulación): elige el nodo del archivo */
+  private onCanvasDoubleClick(event: MouseEvent): void {
+    const mesh = this.currentMesh;
+    if (!this.callbacks.onNodePicked || !mesh?.visible || !this.meshData?.groupNodes || this.placementMode) return;
+    this.mouse = this.getMousePosition(event);
+    this.raycaster.setFromCamera(this.mouse, this.camera);
+    if (this.boneSpheres.some((s) => s.visible) && this.raycaster.intersectObjects(this.boneSpheres.filter((s) => s.visible))[0]) return;
+    const hit = this.raycaster.intersectObject(mesh)[0];
+    if (hit?.faceIndex === undefined || hit.faceIndex === null) return;
+    const node = this.nodeOfFace(hit.faceIndex);
+    if (node !== null) this.callbacks.onNodePicked(node);
+  }
+
+  /** Nodo del archivo del triángulo `face` de la malla (o `null`) */
+  private nodeOfFace(face: number): number | null {
+    const groups = this.meshData?.groups;
+    const nodes = this.meshData?.groupNodes;
+    if (!groups || !nodes) return null;
+    const index = face * 3;
+    for (let g = 0; g * 3 + 2 < groups.length; g++) {
+      if (index >= groups[g * 3] && index < groups[g * 3] + groups[g * 3 + 1]) return nodes[g] === 0xffffffff ? null : nodes[g];
+    }
+    return null;
+  }
+
+  // ─── Nodos del archivo (Outliner) ─────────────────────────────────────────
+
+  /** Nodos ocultos: sus triángulos no se dibujan */
+  private hiddenNodes = new Set<number>();
+  /** Nodos resaltados (el elegido en el Outliner y lo que cuelga de él) */
+  private highlightedNodes = new Set<number>();
+  private nodeHighlight: THREE.Mesh | null = null;
+
+  setHiddenNodes(nodes: number[]): void {
+    const next = new Set(nodes);
+    if (next.size === this.hiddenNodes.size && [...next].every((n) => this.hiddenNodes.has(n))) return;
+    this.hiddenNodes = next;
+    this.refreshMeshMaterial();
+    this.applyHiddenToOverlays();
+  }
+
+  /** Índices de la malla sin los triángulos de los nodos ocultos */
+  private visibleIndex(): Uint32Array {
+    const data = this.meshData!;
+    if (this.hiddenNodes.size === 0 || !data.groups || !data.groupNodes) return data.indices;
+    const keep: Uint32Array[] = [];
+    let total = 0;
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      if (this.hiddenNodes.has(data.groupNodes[g])) continue;
+      const part = data.indices.subarray(data.groups[g * 3], data.groups[g * 3] + data.groups[g * 3 + 1]);
+      keep.push(part);
+      total += part.length;
+    }
+    const out = new Uint32Array(total);
+    let at = 0;
+    for (const part of keep) {
+      out.set(part, at);
+      at += part.length;
+    }
+    return out;
+  }
+
+  /** El alambre y la vista de pesos tampoco dibujan los nodos ocultos */
+  private applyHiddenToOverlays(): void {
+    const mesh = this.currentMesh;
+    if (!mesh || !this.meshData) return;
+    const wire = this.currentWireframe;
+    if (wire) {
+      if (wire.geometry !== mesh.geometry) wire.geometry.dispose();
+      if (this.hiddenNodes.size === 0) wire.geometry = mesh.geometry;
+      else {
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+        geometry.setAttribute("normal", mesh.geometry.getAttribute("normal"));
+        geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
+        wire.geometry = geometry;
+      }
+    }
+    this.weightsMesh?.geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
+  }
+
+  setHighlightedNodes(nodes: number[]): void {
+    this.highlightedNodes = new Set(nodes);
+    this.updateNodeHighlight();
+  }
+
+  /** Capa translúcida sobre los triángulos de los nodos resaltados */
+  private updateNodeHighlight(): void {
+    if (this.nodeHighlight) {
+      this.meshGroup.remove(this.nodeHighlight);
+      this.nodeHighlight.geometry.dispose();
+      (this.nodeHighlight.material as THREE.Material).dispose();
+      this.nodeHighlight = null;
+    }
+    const data = this.meshData;
+    const mesh = this.currentMesh;
+    if (!data?.groups || !data.groupNodes || !mesh || this.highlightedNodes.size === 0) return;
+    const ranges: [number, number][] = [];
+    let total = 0;
+    for (let g = 0; g * 3 + 2 < data.groups.length; g++) {
+      if (!this.highlightedNodes.has(data.groupNodes[g]) || this.hiddenNodes.has(data.groupNodes[g])) continue;
+      ranges.push([data.groups[g * 3], data.groups[g * 3 + 1]]);
+      total += data.groups[g * 3 + 1];
+    }
+    if (total === 0) return;
+    const index = new Uint32Array(total);
+    let at = 0;
+    for (const [start, count] of ranges) {
+      index.set(data.indices.subarray(start, start + count), at);
+      at += count;
+    }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", mesh.geometry.getAttribute("position"));
+    geometry.setIndex(new THREE.BufferAttribute(index, 1));
+    const material = new THREE.MeshBasicMaterial({
+      color: themeHex("accent"),
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1,
+    });
+    this.nodeHighlight = new THREE.Mesh(geometry, material);
+    this.nodeHighlight.renderOrder = 1;
+    this.meshGroup.add(this.nodeHighlight);
   }
 
   /** Resalta el plano candidato bajo el cursor */

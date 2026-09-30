@@ -25,6 +25,9 @@ pub struct GlbExportOptions {
     pub simplify: Option<Simplification>,
     /// Comprimir la geometría con `KHR_draco_mesh_compression`. `None` = sin comprimir.
     pub draco: Option<DracoOptions>,
+    /// `extras` de los nodos, por nombre (por ejemplo, los límites de giro de
+    /// las articulaciones del rig). Vacío = ningún `extras`.
+    pub node_extras: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// Reducción de triángulos (meshoptimizer). Respeta costuras de UV y bordes
@@ -87,6 +90,7 @@ impl Default for GlbExportOptions {
             strip_unused: false,
             simplify: None,
             draco: None,
+            node_extras: std::collections::HashMap::new(),
         }
     }
 }

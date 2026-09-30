@@ -30,6 +30,8 @@ pub enum BodyShape {
     Arthropod,
     /// Cadena sin extremidades: serpiente, gusano, anguila.
     Serpent,
+    /// Árbol libre, sin anatomía: tallo con ramas (plantas, cuerdas, props).
+    Tree,
 }
 
 /// Forma base y apéndices. Los campos que no aplican a la forma se ignoran;
@@ -57,6 +59,19 @@ pub struct BodyPlan {
     pub pincers: bool,
     /// Segmentos de cada antena.
     pub antennae: usize,
+    /// Segmentos de cada cuerno (par fijo arriba de la cabeza).
+    pub horns: usize,
+    /// Mandíbula: un hueso que abre la boca.
+    pub jaw: bool,
+    /// Segmentos de cada colmillo (hacia adelante y abajo desde la cabeza).
+    pub tusks: usize,
+    /// Pares de tentáculos largos del cuerpo radial (calamar: 1).
+    pub tentacles: usize,
+    /// Aleta caudal horizontal al final de la cola (delfín, ballena).
+    pub flukes: bool,
+    /// Largo de las patas respecto del cuerpo (1 = el de la plantilla;
+    /// elefante menos, jirafa más). Solo bípedos y cuadrúpedos.
+    pub leg_length: Real,
 }
 
 impl BodyPlan {
@@ -70,6 +85,7 @@ impl BodyPlan {
             BodyShape::Fish => (4, 0, 0),
             BodyShape::Arthropod => (0, 4, 3),
             BodyShape::Serpent => (16, 0, 0),
+            BodyShape::Tree => (4, 3, 3),
         };
         Self {
             shape,
@@ -83,26 +99,34 @@ impl BodyPlan {
             fins: shape == BodyShape::Fish,
             pincers: false,
             antennae: 0,
+            horns: 0,
+            jaw: false,
+            tusks: 0,
+            tentacles: 0,
+            flukes: false,
+            leg_length: 1.0,
         }
     }
 
     /// Variantes con nombre: `(id, nombre, descripción)`.
     pub fn variants() -> &'static [(&'static str, &'static str, &'static str)] {
         &[
-            ("elephant", "Elefante", "Cuadrúpedo con trompa, orejas y cola"),
+            ("elephant", "Elefante", "Cuadrúpedo de patas cortas con trompa, colmillos, orejas y cola"),
+            ("bull", "Toro / cabra", "Cuadrúpedo con cuernos y mandíbula"),
             ("giraffe", "Jirafa", "Cuadrúpedo de cuello largo"),
             ("dog", "Perro / felino", "Cuadrúpedo con cola larga y orejas"),
             ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
             ("octopus", "Pulpo", "Cuerpo radial con 8 tentáculos"),
-            ("squid", "Calamar", "Cuerpo radial con 10 brazos"),
+            ("squid", "Calamar", "Cuerpo radial con 8 brazos, 2 tentáculos largos y aletas"),
             ("fish", "Pez", "Eje horizontal con aletas y cola"),
-            ("dolphin", "Delfín / ballena", "Pez grande con cola larga"),
+            ("dolphin", "Delfín / ballena", "Cola larga con aleta caudal horizontal"),
             ("crab", "Cangrejo", "Artrópodo de 8 patas con pinzas"),
             ("insect", "Insecto", "Artrópodo de 6 patas con antenas y alas"),
             ("scorpion", "Escorpión", "Artrópodo con pinzas y cola"),
             ("trex", "Dinosaurio bípedo", "Bípedo digitígrado con cola larga y brazos cortos"),
             ("bird_walker", "Ave", "Bípedo digitígrado con alas"),
             ("snake", "Serpiente", "Cadena de 16 segmentos"),
+            ("tree", "Árbol / planta", "Tallo con ramas, sin anatomía"),
         ]
     }
 
@@ -119,10 +143,20 @@ impl BodyPlan {
                 p.trunk = 8;
                 p.ears = 1;
                 p.tail = 3;
+                p.tusks = 2;
+                p.leg_length = 0.8;
+            }),
+            "bull" => with(Quadruped, |p| {
+                p.horns = 2;
+                p.jaw = true;
+                p.ears = 1;
+                p.tail = 3;
             }),
             "giraffe" => with(Quadruped, |p| {
                 p.neck = 6;
                 p.tail = 3;
+                p.horns = 1;
+                p.leg_length = 1.3;
             }),
             "dog" => with(Quadruped, |p| {
                 p.tail = 4;
@@ -138,11 +172,16 @@ impl BodyPlan {
                 p.limb_segments = 6;
             }),
             "squid" => with(Radial, |p| {
-                p.limbs = 10;
+                p.limbs = 8;
                 p.limb_segments = 5;
+                p.tentacles = 1;
+                p.fins = true;
             }),
             "fish" => with(Fish, |p| p.tail = 4),
-            "dolphin" => with(Fish, |p| p.tail = 6),
+            "dolphin" => with(Fish, |p| {
+                p.tail = 6;
+                p.flukes = true;
+            }),
             "crab" => with(Arthropod, |p| {
                 p.limbs = 4;
                 p.pincers = true;
@@ -160,12 +199,18 @@ impl BodyPlan {
             "trex" => with(DigitigradeBiped, |p| {
                 p.tail = 6;
                 p.neck = 2;
+                p.jaw = true;
             }),
             "bird_walker" => with(DigitigradeBiped, |p| {
                 p.tail = 2;
                 p.wings = 3;
             }),
             "snake" => with(Serpent, |p| p.tail = 16),
+            "tree" => with(Tree, |p| {
+                p.tail = 4;
+                p.limbs = 4;
+                p.limb_segments = 3;
+            }),
             _ => None,
         }
     }
@@ -181,6 +226,24 @@ impl BodyPlan {
             BodyShape::Fish => self.fish(&mut b),
             BodyShape::Arthropod => self.arthropod(&mut b),
             BodyShape::Serpent => self.serpent(&mut b),
+            BodyShape::Tree => self.tree(&mut b),
+        }
+        // Largo de las patas: lo que está debajo de la línea del cuerpo se
+        // estira o se acorta, lo de arriba sube o baja lo mismo
+        let body_line = match self.shape {
+            BodyShape::Biped | BodyShape::Quadruped => Some(0.45),
+            BodyShape::DigitigradeBiped => Some(0.55),
+            _ => None,
+        };
+        if let Some(line) = body_line {
+            let k = self.leg_length.clamp(0.3, 3.0);
+            if (k - 1.0).abs() > 1e-9 {
+                for bone in &mut b.bones {
+                    let p = bone.position;
+                    let y = if p.y() <= line { p.y() * k } else { p.y() + line * (k - 1.0) };
+                    bone.position = Vector3::new(p.x(), y, p.z());
+                }
+            }
         }
         BasicSkeleton::from_bones(b.bones)
     }
@@ -211,6 +274,33 @@ impl BodyPlan {
             }
         } else {
             b.mark_leaf(head_bone);
+        }
+        if self.horns > 0 {
+            // Fijos arriba de la cabeza, hacia afuera y atrás
+            for (s, side) in SIDES {
+                let root = head + Vector3::new(0.3 * s * size, 0.4 * size, -0.1 * size);
+                let end = root + Vector3::new(0.5 * s * size, 0.9 * size, -0.4 * size);
+                let points = curve(root, end, root + Vector3::new(0.1 * s * size, 0.6 * size, 0.1 * size), self.horns);
+                b.chain_sided("horn", head_bone, &points, side);
+            }
+        }
+        if self.tusks > 0 {
+            // Desde la base de la cabeza, hacia adelante y abajo
+            for (s, side) in SIDES {
+                let root = head + Vector3::new(0.25 * s * size, -0.35 * size, 0.0);
+                let end = root + forward * (0.9 * size) + Vector3::new(0.1 * s * size, -0.5 * size, 0.0);
+                let control = root + forward * (0.6 * size) + Vector3::new(0.05 * s * size, -0.35 * size, 0.0);
+                let points = curve(root, end, control, self.tusks);
+                b.chain_sided("tusk", head_bone, &points, side);
+            }
+        }
+        if self.jaw {
+            // Bisagra en la base de la cabeza (gira con el cuello) y punta bajo el hocico
+            let hinge = tip + Vector3::new(0.0, -0.2 * size, 0.0) + forward * (0.1 * size);
+            let jaw = b.bone("jaw", hinge, neck);
+            let end = head + Vector3::new(0.0, -0.4 * size, 0.0) + forward * (0.1 * size);
+            let jaw_tip = b.bone("jaw_tip", end, jaw);
+            b.mark_leaf(jaw_tip);
         }
         if self.ears > 0 {
             // Colgando de la base de la cabeza, a los lados
@@ -335,6 +425,23 @@ impl BodyPlan {
         if n % 2 == 1 {
             b.chain("arm0", body, &arm(0.0), true);
         }
+        // Tentáculos largos, hacia adelante, entre los brazos del frente
+        for i in 0..self.tentacles {
+            let angle = 0.2 + 0.25 * i as Real;
+            for (s, side) in SIDES {
+                let dir = v((s * angle).sin(), 0.0, (s * angle).cos());
+                let points = curve(v(0.0, 0.3, 0.0) + dir * 0.1, dir * 1.6 + v(0.0, 0.02, 0.0), dir * 0.8 + v(0.0, 0.05, 0.0), segments + 2);
+                b.chain_sided(&format!("tentacle{}", i + 1), body, &points, side);
+            }
+        }
+        // Aletas del manto, arriba a los costados
+        if self.fins {
+            for (s, side) in SIDES {
+                let root = b.bone_sided("fin", v(0.08 * s, 0.9, 0.0), head, side);
+                let tip = b.bone_sided("fin_tip", v(0.3 * s, 0.95, -0.05), root, side);
+                b.mark_leaf(tip);
+            }
+        }
     }
 
     fn fish(&self, b: &mut Builder) {
@@ -343,6 +450,16 @@ impl BodyPlan {
         b.mark_leaf(head);
         let length = 0.35 + 0.05 * self.tail as Real;
         self.add_tail(b, body, v(0.0, 0.5, 0.05 - length), v(0.0, 0.5, 0.05 - 0.5 * length));
+        if self.flukes {
+            // Aleta caudal horizontal al final de la cola (o del cuerpo, sin cola)
+            let end = b.bones.len() - 1;
+            let from = if self.tail > 0 { end } else { body };
+            let at = b.position(from);
+            for (s, side) in SIDES {
+                let tip = b.bone_sided("fluke", at + v(0.18 * s, 0.0, -0.08), from, side);
+                b.mark_leaf(tip);
+            }
+        }
         if self.fins {
             for (s, side) in SIDES {
                 let root = b.bone_sided("pectoral", v(0.1 * s, 0.44, 0.25), body, side);
@@ -394,6 +511,30 @@ impl BodyPlan {
             b.mark_leaf(abdomen);
         }
         self.add_wings(b, thorax, v(0.06, 0.36, 0.05), 0.5);
+    }
+
+    fn tree(&self, b: &mut Builder) {
+        let base = b.root("base", v(0.0, 0.0, 0.0));
+        let n = self.tail.max(2);
+        // Tallo recto hacia arriba
+        let mut stem = Vec::with_capacity(n);
+        let mut last = base;
+        for i in 1..=n {
+            let name = if i == n { "stem_tip".to_string() } else { format!("stem_{i}") };
+            last = b.bone(name, v(0.0, i as Real / n as Real, 0.0), last);
+            stem.push(last);
+        }
+        b.mark_leaf(last);
+        // Ramas repartidas a lo largo del tallo, girando alrededor (ángulo áureo)
+        let segments = self.limb_segments.max(1);
+        for i in 0..self.limbs {
+            let from = stem[((i + 1) * (n - 1) / (self.limbs + 1)).min(n - 1)];
+            let start = b.position(from);
+            let angle = 2.399_963 * i as Real;
+            let dir = v(angle.sin(), 0.0, angle.cos());
+            let points = curve(start, start + dir * 0.45 + v(0.0, 0.25, 0.0), start + dir * 0.3 + v(0.0, 0.02, 0.0), segments);
+            b.chain(&format!("branch{}", i + 1), from, &points, true);
+        }
     }
 
     fn serpent(&self, b: &mut Builder) {
@@ -520,7 +661,7 @@ mod tests {
 
     #[test]
     fn sides_are_mirrored() {
-        for id in ["elephant", "octopus", "crab", "dragon", "fish"] {
+        for id in ["elephant", "octopus", "crab", "dragon", "fish", "squid", "dolphin", "bull"] {
             let skeleton = BodyPlan::variant(id).unwrap().build();
             let pairs = mirror_pairs(&skeleton);
             for (i, pair) in pairs.iter().enumerate() {
@@ -530,6 +671,37 @@ mod tests {
             }
             assert!(pairs.iter().filter(|p| p.is_some()).count() >= 4, "{id}: tiene pares");
         }
+    }
+
+    #[test]
+    fn new_appendages() {
+        let bull = names(&BodyPlan::variant("bull").unwrap().build()).join(" ");
+        assert!(bull.contains("horn_tip_l") && bull.contains("horn_tip_r") && bull.contains("jaw_tip"), "{bull}");
+        let elephant = names(&BodyPlan::variant("elephant").unwrap().build()).join(" ");
+        assert!(elephant.contains("tusk_tip_l") && elephant.contains("tusk_tip_r"), "{elephant}");
+        let squid = BodyPlan::variant("squid").unwrap().build();
+        let tentacle_tips: Vec<_> = squid.bones().iter().filter(|b| b.name.starts_with("tentacle") && b.name.contains("_tip")).collect();
+        assert_eq!(tentacle_tips.len(), 2);
+        assert!(squid.bones().iter().any(|b| b.name == "fin_tip_l"));
+        let dolphin = names(&BodyPlan::variant("dolphin").unwrap().build()).join(" ");
+        assert!(dolphin.contains("fluke_l") && dolphin.contains("fluke_r"), "{dolphin}");
+        let tree = BodyPlan::variant("tree").unwrap().build();
+        assert_eq!(tree.bones().iter().filter(|b| b.name.starts_with("branch") && b.name.ends_with("_tip")).count(), 4);
+    }
+
+    #[test]
+    fn leg_length_moves_the_body() {
+        let height = |k: Real| {
+            let mut plan = BodyPlan::new(BodyShape::Quadruped);
+            plan.leg_length = k;
+            let skeleton = plan.build();
+            let find = |name: &str| skeleton.bones().iter().find(|b| b.name == name).unwrap().position.y();
+            (find("hip"), find("knee_l"), find("paw_bl"))
+        };
+        let (hip, knee, paw) = height(1.0);
+        let (short_hip, short_knee, short_paw) = height(0.8);
+        assert!(short_hip < hip && short_knee < knee, "patas cortas: el cuerpo baja");
+        assert!((paw - short_paw).abs() < 1e-9, "las patas siguen en el suelo");
     }
 
     #[test]

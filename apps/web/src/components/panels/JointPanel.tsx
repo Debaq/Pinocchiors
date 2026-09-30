@@ -35,14 +35,14 @@ export interface DiskSummary {
 export interface RelationNode {
   id: string;
   label: string;
-  kind: "bone" | "control" | "chain";
+  kind: "bone" | "control" | "chain" | "constraint";
   role: "parent" | "active" | "child" | "control" | "chain";
 }
 
 export interface RelationEdge {
   from: string;
   to: string;
-  kind: "hierarchy" | "ik" | "follows";
+  kind: "hierarchy" | "ik" | "follows" | "constraint";
 }
 
 export type LimitsAuto = "anatomical" | "mesh" | "observed" | "clear";
@@ -74,6 +74,8 @@ export interface JointPanelProps {
   relations: { nodes: RelationNode[]; edges: RelationEdge[] };
   onSelectNode: (node: RelationNode) => void;
   onReparent: (controlId: string, boneName: string | null) => void;
+  /** Se soltó un hueso sobre otro: restricción nueva (el soltado sigue al arrastrado) */
+  onConnect: (target: string, owner: string) => void;
   shared: { name: string; fraction: number }[];
 }
 
@@ -164,6 +166,17 @@ const BallEditor: Component<{
     const pts = boundaryPoints(shape(), 48).map((p) => toSvg([p[0] * (1 - s), p[1] * (1 - s)]));
     return path(pts);
   });
+  /** Degradado de la zona blanda: bandas con la forma del límite, más oscuras hacia el borde */
+  const softBands = createMemo(() => {
+    const s = limits().stiffness ?? 0;
+    if (s <= 0) return [];
+    const ring = (k: number) => path(boundaryPoints(shape(), 48).map((p) => toSvg([p[0] * k, p[1] * k])));
+    const BANDS = 6;
+    return Array.from({ length: BANDS }, (_, i) => ({
+      d: `${ring(1 - s + (s * (i + 1)) / BANDS)} ${ring(1 - s + (s * i) / BANDS)}`,
+      opacity: (0.05 + 0.3 * ((i + 1) / BANDS) ** 2).toFixed(3),
+    }));
+  });
 
   /** Ángulo del anillo de twist: 0 arriba, positivo en sentido horario */
   const ringPoint = (t: number, r = R + 13): [number, number] => [C + r * Math.sin(rad(t)), C - r * Math.cos(rad(t))];
@@ -213,6 +226,7 @@ const BallEditor: Component<{
 
         {/* Límite y zona blanda */}
         <path d={path(boundaryPoints(shape(), 64).map(toSvg))} fill="var(--color-accent)" fill-opacity="0.12" stroke="var(--color-accent)" stroke-width="1.5" />
+        <For each={softBands()}>{(band) => <path d={band.d} fill="var(--color-accent)" fill-opacity={band.opacity} fill-rule="evenodd" />}</For>
         <Show when={soft()}>
           <path d={soft()} fill="none" stroke="var(--color-accent)" stroke-dasharray="3 3" stroke-width="1" />
         </Show>
@@ -629,13 +643,14 @@ const SmallDisk: Component<{ disk: DiskSummary }> = (props) => {
 
 const GRAPH_W = 260;
 const GRAPH_H = 170;
-const EDGE_COLORS = { hierarchy: "var(--color-text-dim)", ik: "var(--color-accent)", follows: "var(--color-green)" };
+const EDGE_COLORS = { hierarchy: "var(--color-text-dim)", ik: "var(--color-accent)", follows: "var(--color-green)", constraint: "var(--color-warning)" };
 
 const RelationsGraph: Component<{
   nodes: RelationNode[];
   edges: RelationEdge[];
   onSelect: (node: RelationNode) => void;
   onReparent: (controlId: string, boneName: string | null) => void;
+  onConnect: (target: string, owner: string) => void;
 }> = (props) => {
   let svg: SVGSVGElement | undefined;
   const [dragging, setDragging] = createSignal<{ id: string; x: number; y: number } | null>(null);
@@ -662,7 +677,7 @@ const RelationsGraph: Component<{
     <svg ref={svg} viewBox={`0 0 ${GRAPH_W} ${GRAPH_H}`} class="w-full block rounded bg-bg-darker/60 select-none touch-none">
       <For each={props.edges}>
         {(e) => (
-          <line x1={at(e.from)[0]} y1={at(e.from)[1]} x2={at(e.to)[0]} y2={at(e.to)[1]} stroke={EDGE_COLORS[e.kind]} stroke-width="1.3" stroke-dasharray={e.kind === "follows" ? "3 2" : undefined} />
+          <line x1={at(e.from)[0]} y1={at(e.from)[1]} x2={at(e.to)[0]} y2={at(e.to)[1]} stroke={EDGE_COLORS[e.kind]} stroke-width="1.3" stroke-dasharray={e.kind === "follows" ? "3 2" : e.kind === "constraint" ? "5 2" : undefined} />
         )}
       </For>
       <Show when={dragging()}>
@@ -676,8 +691,9 @@ const RelationsGraph: Component<{
             <g
               class="cursor-pointer"
               onPointerDown={(e) => {
-                if (n.kind !== "control") return props.onSelect(n);
-                // Un control se arrastra hasta un hueso para que lo siga (o afuera: suelto)
+                if (n.kind !== "control" && n.kind !== "bone") return props.onSelect(n);
+                // Un control se arrastra hasta un hueso para que lo siga (o afuera: suelto);
+                // un hueso, hasta otro para crear una restricción
                 let moved = false;
                 drag(
                   e,
@@ -691,6 +707,10 @@ const RelationsGraph: Component<{
                     setDragging(null);
                     if (!moved || !d) return props.onSelect(n);
                     const target = nodeAt(d.x, d.y);
+                    if (n.kind === "bone") {
+                      if (target && target.id !== n.id) props.onConnect(n.label, target.label);
+                      return;
+                    }
                     props.onReparent(n.id, target ? target.label : null);
                   }
                 );
@@ -704,7 +724,15 @@ const RelationsGraph: Component<{
                 rx={n.kind === "bone" ? 4 : 9}
                 fill={n.role === "active" ? "var(--color-accent)" : "var(--color-bg-lighter)"}
                 fill-opacity={n.role === "active" ? 0.3 : 1}
-                stroke={n.kind === "chain" ? "var(--color-accent)" : n.kind === "control" ? "var(--color-green)" : "var(--color-border)"}
+                stroke={
+                  n.kind === "chain"
+                    ? "var(--color-accent)"
+                    : n.kind === "control"
+                      ? "var(--color-green)"
+                      : n.kind === "constraint"
+                        ? "var(--color-warning)"
+                        : "var(--color-border)"
+                }
               />
               <text x={x} y={y + 3} text-anchor="middle" font-size="8.5" class="fill-text">
                 {n.label.length > 16 ? `${n.label.slice(0, 15)}…` : n.label}
@@ -927,7 +955,13 @@ export const JointPanel: Component<JointPanelProps> = (props) => {
           <Panel title="Relaciones" icon={<Icons.TreeStructure size={14} />} defaultOpen>
           <Show when={props.relations.nodes.length > 1}>
           <div class="space-y-1">
-            <RelationsGraph nodes={props.relations.nodes} edges={props.relations.edges} onSelect={props.onSelectNode} onReparent={props.onReparent} />
+            <RelationsGraph
+              nodes={props.relations.nodes}
+              edges={props.relations.edges}
+              onSelect={props.onSelectNode}
+              onReparent={props.onReparent}
+              onConnect={props.onConnect}
+            />
             <p class="text-[10px] text-text-dim leading-snug">
               Gris: jerarquía · violeta: IK · verde: sigue a · arrastra un control hasta un hueso para que lo siga (afuera: suelto)
             </p>

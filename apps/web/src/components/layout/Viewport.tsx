@@ -24,6 +24,8 @@ export interface ViewportProps {
   onFpsUpdate?: (fps: number) => void;
   /** Clic al orientar (plano candidato o punto de la superficie) */
   onPlacementPick?: (pick: PlacementPick) => void;
+  /** Doble clic sobre la malla: su nodo del archivo */
+  onNodePicked?: (node: number) => void;
   onBoneSelected?: (index: number) => void;
   onBoneMoved?: (index: number, position: [number, number, number]) => void;
   /** Modo animación: se confirmó un giro o desplazamiento de estas articulaciones */
@@ -131,6 +133,7 @@ export const Viewport: Component<ViewportProps> = (props) => {
       viewer.setCallbacks({
         onFpsUpdate: props.onFpsUpdate,
         onPlacementPick: (pick) => props.onPlacementPick?.(pick),
+        onNodePicked: (node) => props.onNodePicked?.(node),
         onBoneSelected: props.onBoneSelected,
         onBoneMoved: props.onBoneMoved,
         onBoneMoveCommitted: (index, from, to) => props.onBoneMoveCommitted?.(index, from, to),

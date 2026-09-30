@@ -115,6 +115,8 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
   const [measureError, setMeasureError] = createSignal<string>();
   const [lastRecording, setLastRecording] = createSignal<Recording>();
   const [recordError, setRecordError] = createSignal<string>();
+  /** Último fallo de un comando del escáner (conectar, escanear, ajustes) */
+  const [deviceError, setDeviceError] = createSignal<string>();
   let canvas: HTMLCanvasElement | undefined;
   let timer: number | undefined;
   let alive = true;
@@ -156,30 +158,44 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
     if (timer !== undefined) window.clearTimeout(timer);
   });
 
-  const connect = async () => {
-    setHasFrame(false);
-    setStatus(await invoke<ScannerStatus>("scanner_connect", { settings: settings() }));
-    await invoke("scanner_set_gain", { gain: gain() });
-    if (timer === undefined) poll();
+  /** Corre un comando del escáner y deja el error a la vista en vez de perderlo */
+  const attempt = async (what: string, run: () => Promise<unknown>) => {
+    try {
+      await run();
+      setDeviceError(undefined);
+    } catch (e) {
+      console.error(`Escáner (${what}):`, e);
+      setDeviceError(`No se pudo ${what}: ${e}`);
+    }
   };
 
-  const disconnect = async () => {
-    await invoke("scanner_disconnect");
-    setHasFrame(false);
-    await poll();
-  };
+  const connect = () =>
+    attempt("conectar", async () => {
+      setHasFrame(false);
+      setStatus(await invoke<ScannerStatus>("scanner_connect", { settings: settings() }));
+      await invoke("scanner_set_gain", { gain: gain() });
+      if (timer === undefined) poll();
+    });
+
+  const disconnect = () =>
+    attempt("desconectar", async () => {
+      await invoke("scanner_disconnect");
+      setHasFrame(false);
+      await poll();
+    });
 
   const updateSettings = (partial: Partial<ScanSettings>) => {
     const next = { ...settings(), ...partial };
     if (next.clip_max_mm < next.clip_min_mm + 10) next.clip_max_mm = next.clip_min_mm + 10;
     setSettings(next);
-    invoke("scanner_set_settings", { settings: next });
+    attempt("aplicar los ajustes", () => invoke("scanner_set_settings", { settings: next }));
   };
 
-  const scan = async (action: "start" | "stop" | "reset") => {
-    await invoke("scanner_scan", { action });
-    setStatus(await invoke<ScannerStatus>("scanner_status"));
-  };
+  const scan = (action: "start" | "stop" | "reset") =>
+    attempt(action === "start" ? "iniciar el escaneo" : action === "stop" ? "detener el escaneo" : "reiniciar el escaneo", async () => {
+      await invoke("scanner_scan", { action });
+      setStatus(await invoke<ScannerStatus>("scanner_status"));
+    });
 
   const streaming = () => status()?.state === "streaming";
 
@@ -219,7 +235,7 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
     } catch (e) {
       setRecordError(String(e));
     }
-    setStatus(await invoke<ScannerStatus>("scanner_status"));
+    await attempt("leer el estado", async () => setStatus(await invoke<ScannerStatus>("scanner_status")));
   };
 
   const resetCalibration = () => {
@@ -256,6 +272,10 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
               Revisa el cable USB y que tu usuario pueda leer <span class="font-mono">/dev/video*</span> (grupo{" "}
               <span class="font-mono">video</span> o reglas udev).
             </p>
+          </Show>
+
+          <Show when={deviceError()}>
+            <p class="text-xs text-error leading-relaxed">{deviceError()}</p>
           </Show>
 
           <Show when={status()?.device}>
@@ -336,7 +356,7 @@ export const ScanStep: Component<ScanStepProps> = (props) => {
               showValue
               onChange={(v) => {
                 setGain(v);
-                invoke("scanner_set_gain", { gain: v });
+                attempt("cambiar la ganancia", () => invoke("scanner_set_gain", { gain: v }));
               }}
             />
             <p class="text-[11px] text-text-dim leading-relaxed">

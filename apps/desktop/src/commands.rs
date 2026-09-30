@@ -70,6 +70,9 @@ pub struct MeshData {
     /// Rangos de índices por material: `[inicio, cantidad, material]`
     /// (`u32::MAX` = sin material)
     pub groups: Vec<[u32; 3]>,
+    /// Nodo del archivo de cada grupo (`u32::MAX` = sin nodo), para el
+    /// Outliner: ocultar, resaltar y elegir por nodo
+    pub group_nodes: Vec<u32>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -98,10 +101,16 @@ fn pack_mesh(positions: &[f32], normals: &[f32], uvs: Option<&[f32]>, indices: &
 
 impl MeshData {
     /// [`pack_mesh`] y al final, si hay, los grupos por material: `u32`
-    /// cantidad y luego `[inicio, cantidad, material]` por grupo
+    /// cantidad y luego `[inicio, cantidad, material]` por grupo; después, si
+    /// hay, el nodo de cada grupo (`u32` por grupo)
     fn to_bytes(&self) -> Vec<u8> {
         let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
         append_groups(&mut out, &self.groups);
+        if !self.groups.is_empty() && self.group_nodes.len() == self.groups.len() {
+            for node in &self.group_nodes {
+                out.extend_from_slice(&node.to_le_bytes());
+            }
+        }
         out
     }
 }
@@ -240,6 +249,8 @@ pub struct ExportConfig {
     pub bone_shapes: Option<bool>,
     /// Huesos que no deforman: su peso pasa al primer ancestro que sí
     pub non_deforming: Option<Vec<usize>>,
+    /// `extras` de glTF por nombre de nodo: límites de giro y datos del rig
+    pub node_extras: Option<HashMap<String, serde_json::Value>>,
 }
 
 /// Resultado de exportación
@@ -622,10 +633,12 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut indices: Vec<u32> = Vec::new();
     let mut uvs: Vec<f32> = Vec::new();
     let mut groups: Vec<[u32; 3]> = Vec::new();
+    let mut group_nodes: Vec<u32> = Vec::new();
 
     for prim in &prims {
         let offset = (positions.len() / 3) as u32;
         groups.push([indices.len() as u32, (prim.triangles.len() * 3) as u32, prim.material.map_or(u32::MAX, |m| m as u32)]);
+        group_nodes.push(prim.node.map_or(u32::MAX, |n| n as u32));
         positions.extend(prim.positions.iter().flatten());
 
         match &prim.normals {
@@ -650,6 +663,7 @@ fn scene_mesh_data(scene: &Scene) -> MeshData {
         indices,
         uvs: if has_uvs { Some(uvs) } else { None },
         groups,
+        group_nodes,
     }
 }
 
@@ -730,6 +744,7 @@ fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportRes
                         ..defaults
                     }
                 }),
+                node_extras: config.node_extras.clone().unwrap_or_default(),
             };
             if config.format == "gltf" {
                 let bin = converter_gltf_io::export_gltf(scene, path, &glb_opts)
@@ -1404,10 +1419,88 @@ pub fn remove_object(kind: String, state: State<'_, AppState>) -> Result<(), Str
     Ok(())
 }
 
+/// Borra la geometría de un nodo del archivo y de lo que cuelga de él (desde
+/// el Outliner): sale de la malla unida y de la escena exportada. La
+/// jerarquía, los esqueletos y las animaciones quedan. El rig y la
+/// retopología ya no corresponden a la malla y se descartan.
+#[tauri::command]
+pub fn remove_scene_node(node: usize, state: State<'_, AppState>) -> Result<(), String> {
+    edit_scene(&state, node, |scene| {
+        let mut visited = vec![false; scene.nodes.len()];
+        let mut stack = vec![node];
+        while let Some(n) = stack.pop() {
+            if n >= visited.len() || visited[n] {
+                continue;
+            }
+            visited[n] = true;
+            scene.nodes[n].mesh = None;
+            stack.extend(scene.nodes[n].children.iter().copied());
+        }
+    })
+    .map_err(|e| if e.contains("geometría") { "No se puede borrar: el modelo quedaría sin geometría".to_string() } else { e })
+}
+
+/// Cambia la transformación local de un nodo del archivo (desde la pestaña
+/// Objeto); la malla unida y lo exportado lo siguen. Como borrar, descarta
+/// rig y retopología.
+#[tauri::command]
+pub fn set_scene_node_transform(
+    node: usize,
+    translation: [f32; 3],
+    rotation: [f32; 4],
+    scale: [f32; 3],
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    if translation.iter().chain(&rotation).chain(&scale).any(|v| !v.is_finite()) {
+        return Err("Transformación inválida".into());
+    }
+    let rotation = converter_scene::glam::Quat::from_array(rotation).normalize();
+    edit_scene(&state, node, |scene| {
+        scene.nodes[node].transform = converter_scene::Transform::Trs {
+            translation: converter_scene::glam::Vec3::from_array(translation),
+            rotation,
+            scale: converter_scene::glam::Vec3::from_array(scale),
+        };
+    })
+}
+
+/// Deshace la última edición de nodos (borrar o transformar)
+#[tauri::command]
+pub fn undo_scene_edit(state: State<'_, AppState>) -> Result<(), String> {
+    let (scene, mesh) = state.scene_edits.lock().unwrap().pop().ok_or("No hay ediciones de nodos para deshacer")?;
+    *state.scene.lock().unwrap() = Some(scene);
+    *state.mesh.lock().unwrap() = Some(mesh);
+    state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.geometry_changed();
+    Ok(())
+}
+
+/// Aplica `change` a una copia de la escena, rehace la malla unida y guarda
+/// lo anterior para deshacer. El rig y la retopología ya no corresponden.
+fn edit_scene(state: &AppState, node: usize, change: impl FnOnce(&mut Scene)) -> Result<(), String> {
+    let mut scene_lock = state.scene.lock().unwrap();
+    let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
+    if node >= scene.nodes.len() {
+        return Err(format!("Nodo fuera de rango: {node}"));
+    }
+    let mut next = scene.clone();
+    change(&mut next);
+    let mesh = scene_to_pinocchio_mesh(&next)?;
+    let previous = scene_lock.replace(next);
+    drop(scene_lock);
+    let old_mesh = state.mesh.lock().unwrap().replace(mesh);
+    if let (Some(scene), Some(mesh)) = (previous, old_mesh) {
+        state.scene_edits.lock().unwrap().push((scene, mesh));
+    }
+    state.rig_on_quad.store(false, std::sync::atomic::Ordering::SeqCst);
+    state.geometry_changed();
+    Ok(())
+}
+
 /// Forma de cuerpo + apéndices (ver `pinocchio_skeleton::BodyPlan`)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BodyPlanDto {
-    /// "biped", "digitigrade", "quadruped", "radial", "fish", "arthropod", "serpent"
+    /// "biped", "digitigrade", "quadruped", "radial", "fish", "arthropod", "serpent", "tree"
     pub shape: String,
     pub neck: usize,
     pub tail: usize,
@@ -1419,9 +1512,26 @@ pub struct BodyPlanDto {
     pub fins: bool,
     pub pincers: bool,
     pub antennae: usize,
+    // Los que siguen no estaban al principio: los proyectos viejos no los traen
+    #[serde(default)]
+    pub horns: usize,
+    #[serde(default)]
+    pub jaw: bool,
+    #[serde(default)]
+    pub tusks: usize,
+    #[serde(default)]
+    pub tentacles: usize,
+    #[serde(default)]
+    pub flukes: bool,
+    #[serde(default = "default_leg_length")]
+    pub leg_length: f64,
 }
 
-const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 7] = [
+fn default_leg_length() -> f64 {
+    1.0
+}
+
+const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 8] = [
     ("biped", pinocchio_skeleton::BodyShape::Biped),
     ("digitigrade", pinocchio_skeleton::BodyShape::DigitigradeBiped),
     ("quadruped", pinocchio_skeleton::BodyShape::Quadruped),
@@ -1429,6 +1539,7 @@ const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 7] = [
     ("fish", pinocchio_skeleton::BodyShape::Fish),
     ("arthropod", pinocchio_skeleton::BodyShape::Arthropod),
     ("serpent", pinocchio_skeleton::BodyShape::Serpent),
+    ("tree", pinocchio_skeleton::BodyShape::Tree),
 ];
 
 impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
@@ -1446,6 +1557,12 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             fins: p.fins,
             pincers: p.pincers,
             antennae: p.antennae,
+            horns: p.horns,
+            jaw: p.jaw,
+            tusks: p.tusks,
+            tentacles: p.tentacles,
+            flukes: p.flukes,
+            leg_length: p.leg_length,
         }
     }
 }
@@ -1471,6 +1588,12 @@ impl BodyPlanDto {
             fins: self.fins,
             pincers: self.pincers,
             antennae: clamp(self.antennae, 6),
+            horns: clamp(self.horns, 6),
+            jaw: self.jaw,
+            tusks: clamp(self.tusks, 6),
+            tentacles: clamp(self.tentacles, 3),
+            flukes: self.flukes,
+            leg_length: if self.leg_length.is_finite() { self.leg_length.clamp(0.5, 2.0) } else { 1.0 },
         })
     }
 }
@@ -1662,6 +1785,82 @@ pub fn move_bone(
     *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
     *state.result.lock().unwrap() = None;
 
+    Ok(data)
+}
+
+/// Escribe un archivo de texto en la ruta que eligió el diálogo de guardado
+/// (esqueletos JSON y otros datos que arma la interfaz)
+#[tauri::command]
+pub fn write_text_file(path: String, contents: String) -> Result<(), String> {
+    std::fs::write(&path, contents).map_err(|e| format!("No se pudo escribir {path}: {e}"))
+}
+
+/// Hueso de un esqueleto armado en la interfaz (editor o JSON importado)
+#[derive(Debug, Clone, Deserialize)]
+pub struct BoneInput {
+    pub name: String,
+    /// Posición en coordenadas del esqueleto visible
+    pub position: [f64; 3],
+    pub parent: Option<usize>,
+}
+
+/// Reemplaza el esqueleto por uno armado en la interfaz: huesos agregados o
+/// borrados, o un esqueleto JSON. Pasa a ser también la plantilla del ajuste
+/// automático. Los pesos se descartan (cambió la cantidad de huesos).
+#[tauri::command]
+pub fn set_skeleton_bones(bones: Vec<BoneInput>, state: State<'_, AppState>) -> Result<SkeletonData, String> {
+    let n = bones.len();
+    if n == 0 {
+        return Err("El esqueleto no tiene huesos".into());
+    }
+    let mut names = std::collections::HashSet::new();
+    for (i, b) in bones.iter().enumerate() {
+        if b.name.trim().is_empty() || !names.insert(b.name.as_str()) {
+            return Err(format!("Nombre de hueso vacío o repetido: «{}»", b.name));
+        }
+        if b.position.iter().any(|v| !v.is_finite()) {
+            return Err(format!("Posición inválida en {}", b.name));
+        }
+        if b.parent.is_some_and(|p| p >= n || p == i) {
+            return Err(format!("Padre inválido en {}", b.name));
+        }
+    }
+    // Sin ciclos: subiendo por los padres se llega a una raíz en menos de n pasos
+    for i in 0..n {
+        let mut j = i;
+        for _ in 0..=n {
+            match bones[j].parent {
+                Some(p) => j = p,
+                None => break,
+            }
+        }
+        if bones[j].parent.is_some() {
+            return Err("Los padres de los huesos forman un ciclo".into());
+        }
+    }
+
+    let params = *state.skeleton_transform.lock().unwrap();
+    let has_children: Vec<bool> = (0..n).map(|i| bones.iter().any(|b| b.parent == Some(i))).collect();
+    let base = BasicSkeleton::from_bones(
+        bones
+            .iter()
+            .enumerate()
+            .map(|(i, b)| Bone {
+                name: b.name.clone(),
+                position: invert_gizmo(Vector3::new(b.position[0], b.position[1], b.position[2]), &params),
+                parent: b.parent,
+                is_leaf: !has_children[i],
+            })
+            .collect(),
+    );
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
+
+    *state.skeleton_preset.lock().unwrap() = Some(SkeletonType::Template(base.clone()));
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
     Ok(data)
 }
 
@@ -4349,6 +4548,7 @@ mod tests {
             indices: vec![0, 1, 2],
             uvs: Some(vec![0.25; 6]),
             groups: vec![],
+            group_nodes: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);
@@ -4363,6 +4563,11 @@ mod tests {
         let grouped = MeshData { groups: vec![[0, 3, 2], [3, 0, u32::MAX]], ..data.clone() };
         let w = words(&grouped.to_bytes());
         assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX]);
+
+        // Y después el nodo de cada grupo
+        let with_nodes = MeshData { group_nodes: vec![5, u32::MAX], ..grouped.clone() };
+        let w = words(&with_nodes.to_bytes());
+        assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX]);
 
         let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
         let w = words(&quads);

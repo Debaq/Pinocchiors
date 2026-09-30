@@ -184,6 +184,7 @@ export function bakeMixer(mixer: Mixer, clips: AnimationClip[], ctx: RigContext,
   const clip = createClip(name, fps);
   return {
     ...clip,
+    baked: true,
     start: 0,
     end: end - start,
     tracks: joints.map((j) => ({

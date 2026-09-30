@@ -34,12 +34,25 @@ export interface SceneTreeState {
   selectedBone: number;
   /** Jerarquía de nodos del archivo importado */
   structure?: SceneStructure;
+  /** Nodos del archivo ocultos en el visor */
+  hiddenNodes?: Set<number>;
+  /** Nodo del archivo elegido */
+  selectedNode?: number;
 }
 
-/** Nodos del archivo como hijos de la malla (solo lectura) */
-function fileNodes(structure: SceneStructure): SceneNode[] {
+/** Hay geometría en el nodo o debajo de él (se puede ocultar o borrar) */
+function hasGeometry(structure: SceneStructure, index: number, seen = new Set<number>()): boolean {
+  if (seen.has(index)) return false;
+  seen.add(index);
+  const node = structure.nodes[index];
+  return !!node && (node.mesh !== null || node.children.some((c) => hasGeometry(structure, c, seen)));
+}
+
+/** Nodos del archivo como hijos de la malla: se ocultan, se eligen y se borran */
+function fileNodes(structure: SceneStructure, hidden: Set<number>, selected?: number): SceneNode[] {
   const build = (index: number): SceneNode => {
     const node = structure.nodes[index];
+    const geometry = hasGeometry(structure, index);
     const parts = [
       node.mesh !== null ? `malla ${structure.meshes[node.mesh]?.name || node.mesh}` : undefined,
       node.skin !== null ? `skin ${structure.skeletons[node.skin]?.name || node.skin}` : undefined,
@@ -48,10 +61,11 @@ function fileNodes(structure: SceneStructure): SceneNode[] {
       id: `node-${index}`,
       type: node.mesh !== null ? "mesh" : node.skin !== null ? "skeleton" : "node",
       label: node.name || `nodo ${index}`,
-      visible: true,
+      visible: !hidden.has(index),
       expanded: false,
-      selected: false,
-      readonly: true,
+      selected: selected === index,
+      readonly: !geometry,
+      deletable: geometry,
       hint: parts.length > 0 ? parts.join(" · ") : "nodo vacío",
       children: node.children.map(build),
     };
@@ -90,7 +104,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       visible: state.showMesh,
       expanded: false,
       selected: false,
-      children: state.structure ? fileNodes(state.structure) : [],
+      children: state.structure ? fileNodes(state.structure, state.hiddenNodes ?? new Set(), state.selectedNode) : [],
     });
   }
 

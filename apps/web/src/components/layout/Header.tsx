@@ -10,6 +10,8 @@ export interface HeaderProps {
   fps?: number;
   title?: string;
   fileName?: string;
+  /** Hay cambios sin guardar en el proyecto */
+  unsaved?: boolean;
   /** Ítems del menú Archivo (se arman al abrirlo) */
   fileMenu?: () => MenuEntry[];
   onOpenSettings?: () => void;
@@ -124,6 +126,11 @@ export const Header: Component<HeaderProps> = (props) => {
           <div class="flex items-center gap-1.5 max-w-56">
             <Icons.Cube size={13} class="text-text-muted shrink-0" />
             <span class="text-xs text-text-muted font-mono truncate">{props.fileName}</span>
+            <Show when={props.unsaved}>
+              <Tooltip content="Cambios sin guardar">
+                <span class="w-1.5 h-1.5 rounded-full bg-warning shrink-0" aria-label="Cambios sin guardar" />
+              </Tooltip>
+            </Show>
           </div>
         </Show>
 

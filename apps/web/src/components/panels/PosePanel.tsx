@@ -1,4 +1,4 @@
-import { Component, Show, createSignal } from "solid-js";
+import { Component, For, Show, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import { Button, Panel, Select } from "../ui";
 import * as Icons from "../icons";
@@ -23,6 +23,8 @@ export interface PosePanelProps {
   /** Deslizadores: `commit` al soltar (queda en keys), si no es vista previa */
   onBreakdown: (t: number, commit: boolean) => void;
   onPushRelax: (factor: number, commit: boolean) => void;
+  /** Caída como muñeco desde la pose actual, horneada a un clip nuevo */
+  onRagdoll: (seconds: number) => void;
 }
 
 const SPACES = [
@@ -182,6 +184,24 @@ export const PosePanel: Component<PosePanelProps> = (props) => {
               onCommit={(v) => props.onPushRelax(v / 100, true)}
             />
           </Show>
+        </div>
+      </Panel>
+
+      <Panel title="Ragdoll" icon={<Icons.Person size={14} />}>
+        <div class="space-y-2">
+          <p class="text-xs text-text-muted leading-relaxed">
+            El cuerpo cae como un muñeco desde la pose del cuadro actual, con el impulso que traía la animación. Queda en
+            una animación nueva; los límites de giro recortan lo imposible.
+          </p>
+          <div class="grid grid-cols-3 gap-1">
+            <For each={[1, 2, 3]}>
+              {(seconds) => (
+                <Button size="sm" disabled={!props.posing} onClick={() => props.onRagdoll(seconds)}>
+                  {seconds} s
+                </Button>
+              )}
+            </For>
+          </div>
         </div>
       </Panel>
 

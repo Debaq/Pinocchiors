@@ -15,6 +15,7 @@ import {
   type RotationMode,
 } from "../../lib/rig";
 import type { Vec3 } from "../../lib/animation";
+import { SPRING_PRESETS } from "../../lib/secondary";
 
 export type RollMode = "auto" | "view" | "normal" | "mirror";
 
@@ -48,6 +49,8 @@ export interface RigPanelProps {
   onSelectControl: (id: string) => void;
   onApplyRest: () => void;
   onClearPose: () => void;
+  /** Resortes en orejas, colas, antenas, trompas y tentáculos sin IK */
+  onAutoSprings: () => void;
 }
 
 const inputClass =
@@ -200,6 +203,78 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
                   onChange={(v) => props.onBoneProps(v ? "Bloquear desplazamiento" : "Permitir desplazamiento", { lockTranslation: v || undefined })}
                 />
               </div>
+
+              {/* Resorte (F8) */}
+              <div class="space-y-1">
+                <div class="flex items-center gap-1">
+                  <div class="flex-1">
+                    <Select
+                      label="Movimiento secundario"
+                      options={[
+                        { value: "", label: "Sin resorte (sigue sus keys)" },
+                        ...SPRING_PRESETS.map((x) => ({ value: x.id, label: x.label })),
+                        ...(p().spring && !SPRING_PRESETS.some((x) => JSON.stringify(x.settings) === JSON.stringify(p().spring)) ? [{ value: "custom", label: "Personalizado" }] : []),
+                      ]}
+                      value={p().spring ? (SPRING_PRESETS.find((x) => JSON.stringify(x.settings) === JSON.stringify(p().spring))?.id ?? "custom") : ""}
+                      onChange={(v) => {
+                        if (v === "custom") return;
+                        const preset = SPRING_PRESETS.find((x) => x.id === v);
+                        props.onBoneProps(preset ? `Resorte: ${preset.label}` : "Quitar resorte", { spring: preset ? { ...preset.settings } : undefined });
+                      }}
+                    />
+                  </div>
+                </div>
+                <Show when={p().spring}>
+                  {(spring) => (
+                    <div class="grid grid-cols-3 gap-1">
+                      <NumberInput
+                        label="Rigidez"
+                        suffix="%"
+                        min={0}
+                        max={100}
+                        value={Math.round(spring().stiffness * 100)}
+                        onChange={(v) => props.onBoneProps("Rigidez del resorte", { spring: { ...spring(), stiffness: Math.max(0, Math.min(1, v / 100)) } })}
+                      />
+                      <NumberInput
+                        label="Freno"
+                        suffix="%"
+                        min={0}
+                        max={100}
+                        value={Math.round(spring().damping * 100)}
+                        onChange={(v) => props.onBoneProps("Freno del resorte", { spring: { ...spring(), damping: Math.max(0, Math.min(1, v / 100)) } })}
+                      />
+                      <NumberInput
+                        label="Gravedad"
+                        suffix="%"
+                        min={0}
+                        max={100}
+                        value={Math.round(spring().gravity * 100)}
+                        onChange={(v) => props.onBoneProps("Gravedad del resorte", { spring: { ...spring(), gravity: Math.max(0, Math.min(1, v / 100)) } })}
+                      />
+                      <Checkbox
+                        class="col-span-3"
+                        label="No atraviesa el cuerpo"
+                        checked={spring().collide !== false}
+                        onChange={(v) => props.onBoneProps("Choque del resorte", { spring: { ...spring(), collide: v ? undefined : false } })}
+                      />
+                    </div>
+                  )}
+                </Show>
+                <Button size="sm" variant="ghost" fullWidth onClick={props.onAutoSprings} title="Orejas, colas, antenas, trompas y tentáculos que no tengan IK">
+                  Resortes automáticos
+                </Button>
+              </div>
+
+              <Checkbox
+                label="Piel con cuaterniones duales (no se estrangula al girar)"
+                checked={!!props.settings.dualQuaternion}
+                onChange={(v) => props.onChange(v ? "Cuaterniones duales" : "Piel lineal", { ...props.settings, dualQuaternion: v || undefined })}
+              />
+              <Show when={props.settings.dualQuaternion}>
+                <p class="text-[11px] text-text-dim leading-relaxed">
+                  Solo en el visor: glTF no guarda este tipo de piel, así que lo exportado se ve con piel lineal en otras herramientas.
+                </p>
+              </Show>
 
               <div class="space-y-1">
                 <span class="text-xs text-text-muted">Ejes de giro bloqueados</span>
@@ -359,7 +434,7 @@ export const RigPanel: Component<RigPanelProps> = (props) => {
       >
         <div class="space-y-2">
           <p class="text-xs text-text-dim leading-relaxed">
-            Objetos que no deforman la malla, con keys propias. Más adelante manejan el IK y las restricciones.
+            Objetos que no deforman la malla, con keys propias. Mueven las cadenas de IK y sirven de objetivo a las restricciones.
           </p>
           <div class="rounded border border-border divide-y divide-border/60">
             <For each={props.settings.controls} fallback={<p class="px-2 py-2 text-xs text-text-dim">Sin controles.</p>}>

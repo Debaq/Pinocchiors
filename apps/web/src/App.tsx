@@ -91,6 +91,18 @@ import {
   type GridSettings,
   type LengthUnit,
 } from "./components/layout/SettingsDialog";
+import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
+import { CaptureDialog } from "./components/layout/CaptureDialog";
+import type { CaptureMotion } from "./lib/capture";
+import { ragdollClip } from "./lib/ragdoll";
+import type { NodeTransform } from "./components/panels/ObjectTab";
+
+/** Edición de un nodo del archivo desde el Outliner (el backend guarda lo anterior para deshacer) */
+type SceneEdit =
+  | { op: "remove"; node: number; name: string }
+  | { op: "transform"; node: number; name: string; before: NodeTransform; after: NodeTransform };
+import { bvhMotion, parseBvh } from "./lib/bvh";
+import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 
 interface ProjectSaved {
@@ -167,6 +179,19 @@ import { RigPanel, type RollMode } from "./components/panels/RigPanel";
 import { PosePanel, type PoseSource, type SelectCommand } from "./components/panels/PosePanel";
 import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
+import { ConstraintPanel } from "./components/panels/ConstraintPanel";
+import { SkeletonEditPanel } from "./components/panels/SkeletonEditPanel";
+import { addChildBone, removeBone, skeletonFromJson, skeletonToJson, type EditBone } from "./lib/skeletonEdit";
+import { SPRING_PRESETS } from "./lib/secondary";
+import {
+  CONSTRAINT_PREFIX,
+  CONSTRAINT_TYPES,
+  constraintInfluence,
+  driverValue,
+  isConstraintId,
+  type ConstraintType,
+  type RigConstraint,
+} from "./lib/constraints";
 import { RigEditor, type RigEditorTab } from "./components/layout/RigEditor";
 import { JointPanel, type ChainView, type LimitsAuto, type RelationEdge, type RelationNode, type TrajectorySample } from "./components/panels/JointPanel";
 import {
@@ -210,6 +235,7 @@ import {
   generateAnimation,
   generatePose,
   type PresetAnimationId,
+  type SkeletonBone,
 } from "./lib/presetAnimations";
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
@@ -383,6 +409,14 @@ export const App: Component = () => {
       apply: (d: { after: StoredPose[] }) => void setPoseLibrary(d.after),
       revert: (d: { before: StoredPose[] }) => void setPoseLibrary(d.before),
     },
+    sceneEdit: {
+      apply: (d: SceneEdit) => sendSceneEdit(d),
+      revert: (d: SceneEdit) => undoSceneEdit(d),
+    },
+    skeletonBones: {
+      apply: (d: { before: EditBone[]; after: EditBone[] }) => sendSkeletonBones(d.after),
+      revert: (d: { before: EditBone[]; after: EditBone[] }) => sendSkeletonBones(d.before),
+    },
     restPose: {
       apply: (d: { to: Vec3[] }) => sendRestPose(d.to),
       revert: (d: { from: Vec3[] }) => sendRestPose(d.from),
@@ -481,7 +515,9 @@ export const App: Component = () => {
   };
 
   /** Estructura, materiales y texturas de la escena (miniaturas e imágenes para el visor) */
+  let appearanceRequest = 0;
   const loadSceneAppearance = async () => {
+    const request = ++appearanceRequest;
     try {
       const [structure, materials] = await Promise.all([
         invoke<SceneStructure>("get_scene_structure"),
@@ -493,6 +529,11 @@ export const App: Component = () => {
       const mime = (format: string) => (format === "JPEG" ? "image/jpeg" : format === "WebP" ? "image/webp" : "image/png");
       const blobs = buffers.map((b, i) => new Blob([b], { type: mime(structure.textures[i].format) }));
       const images = await Promise.all(blobs.map((b) => createImageBitmap(b).catch(() => undefined)));
+      // Otra recarga empezó después: la suya es la que vale
+      if (request !== appearanceRequest) {
+        images.forEach((image) => image?.close());
+        return;
+      }
       textureUrls().forEach((url) => URL.revokeObjectURL(url));
       setTextureUrls(blobs.map((b) => URL.createObjectURL(b)));
       setSceneMaterials(toSceneMaterials(materials, images));
@@ -613,6 +654,8 @@ export const App: Component = () => {
   const [transformSpace, setTransformSpace] = createPersisted<TransformSpace>("pose.space", "global");
   const [canPaste, setCanPaste] = createSignal(readPoseClipboard() !== null);
   const [selectedChain, setSelectedChain] = createSignal<string | undefined>();
+  /** Restricción elegida en el panel (o en su fila de la línea de tiempo) */
+  const [selectedConstraint, setSelectedConstraint] = createSignal<string | undefined>();
   const [autoIk, setAutoIk] = createPersisted("pose.autoIk", { enabled: false, toRoot: false });
   /** El visor, como señal: los efectos de animación lo necesitan listo */
   const [viewer, setViewer] = createSignal<Viewer3D | undefined>();
@@ -662,8 +705,11 @@ export const App: Component = () => {
     buffer.byteLength > 0 ? createImageBitmap(new Blob([buffer])) : undefined;
 
   /** Lee del backend la piel actual: estado, atlas, texturas y la malla con UV */
+  let skinRequest = 0;
   const refreshSkin = async () => {
+    const request = ++skinRequest;
     const info = await invoke<UvInfo | null>("get_uv_info");
+    if (request !== skinRequest) return;
     setUvInfo(info ?? undefined);
     if (!info) {
       setSkinMaterials([]);
@@ -689,6 +735,11 @@ export const App: Component = () => {
         used.has(index) ? invoke<ArrayBuffer>("get_skin_texture", { index }).then(decodeImage) : undefined
       )
     );
+    // Otra lectura empezó después: la suya es la que vale
+    if (request !== skinRequest) {
+      images.forEach((image) => image?.close());
+      return;
+    }
     setSkinMaterials(toSceneMaterials(materials, images));
     setQuadMeshData(decodeMesh(mesh));
     if (autorigComplete() && usesQuad()) await reloadWeights();
@@ -812,7 +863,13 @@ export const App: Component = () => {
   // Avisos del seguimiento del archivo editado afuera
   const unlistenTexture = [
     listen("texture-updated", async () => {
-      await reloadTextures();
+      try {
+        await reloadTextures();
+      } catch (e) {
+        console.error("Texture reload error:", e);
+        setStatusMessage(`No se pudo recargar la textura desde GIMP: ${e}`);
+        return;
+      }
       const time = new Date().toLocaleTimeString();
       setExternalEdit((prev) => prev && { ...prev, lastUpdate: time });
       setStatusMessage(`Textura recargada desde GIMP (${time})`);
@@ -837,7 +894,13 @@ export const App: Component = () => {
 
   const handleUvPreview = async (preview: UvPreview) => {
     if (preview === "checker" && !checkerTexture()) {
-      setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
+      try {
+        setCheckerTexture(await decodeImage(await invoke<ArrayBuffer>("get_checker_texture")));
+      } catch (e) {
+        console.error("Checker texture error:", e);
+        setStatusMessage(`No se pudo generar el tablero de UV: ${e}`);
+        return;
+      }
     }
     setUvPreview(preview);
     setShowQuadMesh(true);
@@ -963,6 +1026,93 @@ export const App: Component = () => {
   // Grid visibility
   const [showGrid, setShowGrid] = createSignal(true);
 
+  // ─── Nodos del archivo (Outliner) ─────────────────────────────────────────
+
+  /** Nodos del archivo ocultos en el visor y el elegido (índices de `sceneStructure().nodes`) */
+  const [hiddenFileNodes, setHiddenFileNodes] = createSignal<number[]>([]);
+  const [selectedFileNode, setSelectedFileNode] = createSignal<number | undefined>();
+  /** El nodo y todo lo que cuelga de él */
+  const nodeSubtree = (index: number): number[] => {
+    const nodes = sceneStructure()?.nodes ?? [];
+    const out: number[] = [];
+    const stack = [index];
+    while (stack.length > 0) {
+      const n = stack.pop()!;
+      if (out.includes(n) || !nodes[n]) continue;
+      out.push(n);
+      stack.push(...nodes[n].children);
+    }
+    return out;
+  };
+  createEffect(() => viewer()?.setHiddenNodes(hiddenFileNodes().flatMap(nodeSubtree)));
+  // En Animar la malla se mueve con el rig y el resaltado quedaría quieto
+  createEffect(() => {
+    const node = selectedFileNode();
+    viewer()?.setHighlightedNodes(node === undefined || animating() ? [] : nodeSubtree(node));
+  });
+  // Otro archivo: los índices de nodo ya no son los mismos
+  createEffect(
+    on(fileName, () => {
+      setHiddenFileNodes([]);
+      setSelectedFileNode(undefined);
+    }, { defer: true })
+  );
+
+  const toggleFileNode = (index: number) =>
+    setHiddenFileNodes((list) => (list.includes(index) ? list.filter((n) => n !== index) : [...list, index]));
+
+  /** Relee la malla después de editar nodos: el rig y la retopología ya no le corresponden */
+  const afterSceneEdit = async (reason: string) => {
+    setMeshData(await fetchMeshData());
+    if (quadMeshLoaded()) clearQuadMesh();
+    dropWeights(reason);
+  };
+
+  const sendSceneEdit = async (d: SceneEdit) => {
+    if (d.op === "remove") {
+      await busy(`Borrando ${d.name}...`, () => invoke("remove_scene_node", { node: d.node }));
+    } else {
+      await busy(`Moviendo ${d.name}...`, () =>
+        invoke("set_scene_node_transform", { node: d.node, translation: d.after.translation, rotation: d.after.rotation, scale: d.after.scale })
+      );
+    }
+    await afterSceneEdit(d.op === "remove" ? `Borraste ${d.name} del modelo` : `Moviste ${d.name}`);
+  };
+
+  const undoSceneEdit = async (d: SceneEdit) => {
+    await busy("Deshaciendo...", () => invoke("undo_scene_edit"));
+    await afterSceneEdit(d.op === "remove" ? `Volvió ${d.name}` : `${d.name} volvió a su lugar`);
+  };
+
+  /** Borra la geometría del nodo (y de sus hijos): sale de la malla y de lo exportado */
+  const deleteFileNode = async (index: number) => {
+    const name = sceneStructure()?.nodes[index]?.name || `nodo ${index}`;
+    try {
+      await history.execute(`Borrar ${name}`, { kind: "sceneEdit", data: { op: "remove", node: index, name } });
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+      return;
+    }
+    const removed = new Set(nodeSubtree(index));
+    setHiddenFileNodes((list) => list.filter((n) => !removed.has(n)));
+    if (selectedFileNode() !== undefined && removed.has(selectedFileNode()!)) setSelectedFileNode(undefined);
+    setStatusMessage(`${name} borrado del modelo (también de lo que se exporte). Ctrl+Z lo trae de vuelta`);
+  };
+
+  /** Transformación local de un nodo del archivo (pestaña Objeto) */
+  const transformFileNode = async (index: number, after: NodeTransform) => {
+    const node = sceneStructure()?.nodes[index];
+    if (!node) return;
+    const name = node.name || `nodo ${index}`;
+    const before: NodeTransform = { translation: node.translation, rotation: node.rotation, scale: node.scale };
+    try {
+      await history.execute(`Mover ${name}`, { kind: "sceneEdit", data: { op: "transform", node: index, name, before, after } });
+      setStatusMessage(`${name}: transformación cambiada (el rig y la retopología se descartan)`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
   // Derived scene tree
   const sceneTree = () => buildSceneTree({
     hasMesh: meshLoaded(),
@@ -979,6 +1129,8 @@ export const App: Component = () => {
     skeletonData: skeletonData(),
     selectedBone: viewSettings().selectedBone,
     structure: sceneStructure(),
+    hiddenNodes: new Set(hiddenFileNodes()),
+    selectedNode: selectedFileNode(),
   });
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
@@ -1244,7 +1396,8 @@ export const App: Component = () => {
     pipeline.markCompleted("import");
   };
 
-  /** Cuenta las elecciones de plantilla: una respuesta vieja no pisa a la última */
+  /** Cuenta las elecciones de plantilla y de forma de cuerpo: una respuesta
+   * vieja no pisa a la última */
   let skeletonRequest = 0;
   const handleSkeletonChange = async (presetId: string) => {
     const request = ++skeletonRequest;
@@ -1568,6 +1721,7 @@ export const App: Component = () => {
     bones.forEach((b, j) => b.parent === null && visit(j, 0));
     for (const c of s.controls) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, control: true });
     for (const c of s.ikChains ?? []) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, ik: true });
+    for (const c of s.constraints ?? []) rows.push({ joint: -1, bone: c.id, label: c.name, depth: 0, ik: true, constraint: true });
     return rows;
   });
 
@@ -1720,6 +1874,35 @@ export const App: Component = () => {
     return [...set].filter((j) => j < rigBones().length);
   };
 
+  /** Resortes (F8) en los apéndices que cuelgan: orejas, colas, antenas, trompas y tentáculos sin IK */
+  const handleAutoSprings = () => {
+    const ctx = rigCtx();
+    const body = ctx.body;
+    if (!body) {
+      setStatusMessage("No se reconoció el cuerpo: pon los resortes a mano en cada hueso");
+      return;
+    }
+    const withIk = new Set((ctx.settings.ikChains ?? []).filter((c) => !c.disabled).flatMap((c) => c.joints));
+    const presets = { ear: "jiggle", antenna: "jiggle", tail: "follow", trunk: "follow", tentacle: "follow" } as const;
+    let settings = rigSettings();
+    let count = 0;
+    for (const chain of body.chains) {
+      const preset = presets[chain.kind as keyof typeof presets];
+      if (!preset) continue;
+      const names = chain.rotating.map((j) => ctx.bones[j].name).filter((n) => !withIk.has(n));
+      if (names.length === 0) continue;
+      const spring = SPRING_PRESETS.find((x) => x.id === preset)!.settings;
+      settings = withBoneProps(settings, names, { spring: { ...spring } });
+      count += names.length;
+    }
+    if (count === 0) {
+      setStatusMessage("No hay orejas, colas, antenas ni trompas sin IK para poner resortes");
+      return;
+    }
+    void changeRig("Resortes automáticos", settings);
+    setStatusMessage(`Resortes en ${count} articulaciones: se ven al reproducir (se hornean al exportar)`);
+  };
+
   const changeBoneProps = (description: string, change: Partial<BoneProps>) => {
     const names = jointSelection().map((j) => rigBones()[j].name);
     if (names.length > 0) void changeRig(description, withBoneProps(rigSettings(), names, change));
@@ -1832,6 +2015,146 @@ export const App: Component = () => {
     handleSelectControl(control.id);
   };
 
+  // ─── Estructura del esqueleto ─────────────────────────────────────────────
+
+  /** Esqueletos guardados como plantilla propia (para otros modelos) */
+  const [customSkeletons, setCustomSkeletons] = createPersisted<{ id: string; name: string; bones: EditBone[] }[]>("skeleton.custom", []);
+
+  const editBones = (): EditBone[] =>
+    (skeletonData()?.bones ?? []).map((b) => ({ name: b.name, position: [...b.position] as Vec3, parent: b.parent }));
+
+  /** Manda la estructura nueva al backend; los pesos ya no sirven */
+  const sendSkeletonBones = async (bones: EditBone[]) => {
+    const data = await invoke<TauriSkeletonData>("set_skeleton_bones", { bones });
+    setSkeletonData(tauriSkeletonToViewer(data));
+    setSkeletonLoaded(true);
+    setSelectedSkeleton(undefined);
+    setBodyPlan(undefined);
+    setFitInfo(undefined);
+    dropWeights("Cambiaste la estructura del esqueleto");
+  };
+
+  const changeSkeletonBones = async (description: string, after: EditBone[], select?: number) => {
+    try {
+      await history.execute(description, { kind: "skeletonBones", data: { before: editBones(), after } });
+      if (select !== undefined) selectJoints([select], select);
+      setStatusMessage(`${description}: ${after.length} huesos`);
+      return true;
+    } catch (e) {
+      console.error("Skeleton edit error:", e);
+      setStatusMessage(`Error: ${e}`);
+      return false;
+    }
+  };
+
+  const handleAddChildBone = () => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    if (!bones[j]) return;
+    const { bones: after, index } = addChildBone(bones, j, bodyAxes(rigCtx().body).up);
+    void changeSkeletonBones(`Hueso nuevo en ${bones[j].name}`, after, index);
+  };
+
+  const handleDeleteBone = () => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    if (!bones[j]) return;
+    const after = removeBone(bones, j);
+    if (!after) {
+      setStatusMessage("El esqueleto necesita al menos un hueso");
+      return;
+    }
+    void changeSkeletonBones(`Borrar ${bones[j].name}`, after);
+  };
+
+  /** Renombra un hueso y lo que lo nombra: propiedades del rig, cadenas, restricciones, controles y pistas */
+  const handleRenameBone = async (name: string) => {
+    const j = viewSettings().selectedBone;
+    const bones = editBones();
+    const from = bones[j]?.name;
+    if (!from || name === from) return;
+    if (bones.some((b) => b.name === name)) {
+      setStatusMessage(`Ya hay un hueso «${name}»`);
+      return;
+    }
+    const after = bones.map((b, i) => (i === j ? { ...b, name } : b));
+    if (!(await changeSkeletonBones(`Renombrar ${from} a ${name}`, after, j))) return;
+    const s = rigSettings();
+    const rename = (n: string) => (n === from ? name : n);
+    const renamedBones = { ...s.bones };
+    if (renamedBones[from]) {
+      renamedBones[name] = renamedBones[from];
+      delete renamedBones[from];
+    }
+    await changeRig("Renombrar en el rig", {
+      ...s,
+      bones: renamedBones,
+      controls: s.controls.map((c) => (c.parent === from ? { ...c, parent: name } : c)),
+      ikChains: (s.ikChains ?? []).map((c) => ({ ...c, joints: c.joints.map(rename) })),
+      constraints: s.constraints?.map((c) => ({
+        ...c,
+        owner: rename(c.owner),
+        target: c.target === from ? name : c.target,
+        joints: c.joints?.map(rename),
+      })),
+    });
+    const before = clips();
+    const renamed = before.map((c) => ({ ...c, tracks: c.tracks.map((t) => (!t.kind && t.bone === from ? { ...t, bone: name } : t)) }));
+    await history.execute("Renombrar en las animaciones", {
+      kind: "clips",
+      data: { before, after: renamed, activeBefore: activeClipId(), activeAfter: activeClipId() },
+    });
+  };
+
+  const handleExportSkeletonJson = async () => {
+    const bones = editBones();
+    if (bones.length === 0) return;
+    const stem = (fileName() ?? "esqueleto").replace(/\.[^.]+$/, "");
+    const path = await save({ title: "Exportar esqueleto", defaultPath: `${stem} - esqueleto.json`, filters: [{ name: "Esqueleto JSON", extensions: ["json"] }] });
+    if (!path) return;
+    try {
+      await invoke("write_text_file", { path, contents: skeletonToJson(stem, bones) });
+      setStatusMessage(`Esqueleto exportado: ${path}`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
+  const handleImportSkeletonJson = async () => {
+    const picked = await pickTextFile(".json");
+    if (!picked) return;
+    try {
+      const { bones } = skeletonFromJson(picked.text);
+      if (await changeSkeletonBones(`Esqueleto de ${picked.name}`, bones)) {
+        setStatusMessage(`Esqueleto de ${picked.name}: ${bones.length} huesos. Ajústalo al modelo o muévelo a mano`);
+      }
+    } catch (e) {
+      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const skeletonEditPanel = (
+    <SkeletonEditPanel
+      selectedName={skeletonData()?.bones[viewSettings().selectedBone]?.name}
+      disabled={isProcessing()}
+      onAddChild={handleAddChildBone}
+      onDelete={handleDeleteBone}
+      onRename={(name) => void handleRenameBone(name)}
+      onExportJson={() => void handleExportSkeletonJson()}
+      onImportJson={() => void handleImportSkeletonJson()}
+      custom={customSkeletons().map((s) => ({ id: s.id, name: s.name, bones: s.bones.length }))}
+      onSaveCustom={(name) => {
+        setCustomSkeletons([...customSkeletons(), { id: `skel-${Date.now().toString(36)}`, name, bones: editBones() }]);
+        setStatusMessage(`Esqueleto guardado: ${name}`);
+      }}
+      onApplyCustom={(id) => {
+        const s = customSkeletons().find((x) => x.id === id);
+        if (s) void changeSkeletonBones(`Esqueleto: ${s.name}`, s.bones.map((b) => ({ ...b, position: [...b.position] as Vec3 })));
+      }}
+      onDeleteCustom={(id) => setCustomSkeletons(customSkeletons().filter((x) => x.id !== id))}
+    />
+  );
+
   const sendRestPose = async (positions: Vec3[]) => {
     const data = await invoke<TauriSkeletonData>("apply_rest_pose", { positions });
     setSkeletonData(tauriSkeletonToViewer(data));
@@ -1890,6 +2213,7 @@ export const App: Component = () => {
       onAddControl={() => void handleAddControl()}
       onSelectControl={handleSelectControl}
       onApplyRest={() => void handleApplyRest()}
+      onAutoSprings={handleAutoSprings}
       onClearPose={handleClearPose}
     />
   );
@@ -1947,7 +2271,7 @@ export const App: Component = () => {
     const control = selectedControl();
     const chain = selectedChain();
     const picked = clip.tracks.filter((t) =>
-      t.kind === "control" ? t.bone === control : t.kind === "ik" ? t.bone === chain : names.has(t.bone)
+      t.kind === "control" ? t.bone === control : t.kind === "ik" ? t.bone === chain || t.bone === selectedConstraint() : names.has(t.bone)
     );
     // Sin selección, o si lo elegido no tiene keys, se ven todas las pistas
     return picked.length > 0 ? picked : clip.tracks;
@@ -1962,7 +2286,7 @@ export const App: Component = () => {
         t.kind === "control"
           ? (s.controls.find((c) => c.id === t.bone)?.name ?? t.bone)
           : t.kind === "ik"
-            ? (s.ikChains?.find((c) => c.id === t.bone)?.name ?? t.bone)
+            ? (s.ikChains?.find((c) => c.id === t.bone)?.name ?? s.constraints?.find((c) => c.id === t.bone)?.name ?? t.bone)
             : t.bone;
       for (const group of ["rotation", "translation", "blend", "pin", "roll"] as ChannelGroup[]) {
         const keys = group === "rotation" ? t.rotation : group === "translation" ? t.translation : t[group];
@@ -2429,29 +2753,10 @@ export const App: Component = () => {
     void history.execute(description, { kind: "poseLibrary", data: { before: poseLibrary(), after } });
 
   /** Resumen de la articulación activa para la barra de estado */
-  const poseInfo = createMemo(() => {
-    const pose = activeJointPose();
-    const j = viewSettings().selectedBone;
-    const name = rigBones()[j]?.name;
-    if (!pose || !name) return undefined;
-    const p = boneProps(rigSettings(), name);
-    const locked = ["X", "Y", "Z"].filter((_, i) => p.lockRotation[i]);
-    const moved = Math.hypot(...pose.translation) > 1e-9;
-    const [x, y, z] = pose.rotation.map((a) => a.toFixed(1));
-    return [
-      name,
-      `X ${x}° Y ${y}° Z ${z}°`,
-      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
-      moved ? "desplazado" : "",
-      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  });
-
   // ─── IK (F2) ──────────────────────────────────────────────────────────────
 
   createEffect(() => viewer()?.setAutoIk(autoIk()));
+  createEffect(() => viewer()?.setDualQuaternion(!!rigSettings().dualQuaternion));
 
   const chainById = (id?: string) => (rigSettings().ikChains ?? []).find((c) => c.id === id);
 
@@ -2476,6 +2781,105 @@ export const App: Component = () => {
       ...rigSettings(),
       ikChains: (rigSettings().ikChains ?? []).map((c) => (c.id === chain.id ? chain : c)),
     });
+
+  // ─── Restricciones (F3) ───────────────────────────────────────────────────
+
+  const constraintById = (id?: string) => (rigSettings().constraints ?? []).find((c) => c.id === id);
+
+  /** Influencia y valor del driver de la restricción elegida en el cuadro actual */
+  const constraintValues = createMemo(() => {
+    const c = constraintById(selectedConstraint());
+    const clip = activeClip();
+    const f = Math.round(frame());
+    const track = c && clip?.tracks.find((t) => t.kind === "ik" && t.bone === c.id);
+    return {
+      influence: c ? constraintInfluence(c, clip, f) : 1,
+      value: c ? driverValue(c, clip, f) : 0,
+      keyed: { influence: !!track?.blend?.length, value: !!track?.roll?.length },
+    };
+  });
+
+  const setConstraints = (description: string, constraints: RigConstraint[]) =>
+    changeRig(description, { ...rigSettings(), constraints: constraints.length > 0 ? constraints : undefined });
+
+  const changeConstraint = (description: string, constraint: RigConstraint) =>
+    void setConstraints(description, (rigSettings().constraints ?? []).map((c) => (c.id === constraint.id ? constraint : c)));
+
+  /** Restricción nueva en la articulación activa; la otra elegida es el objetivo (o la cadena) */
+  const handleNewConstraint = async (type: ConstraintType) => {
+    const bones = rigBones();
+    const active = viewSettings().selectedBone;
+    if (!bones[active]) return;
+    const others = jointSelection().filter((j) => j !== active).map((j) => bones[j].name);
+    const label = CONSTRAINT_TYPES.find((t) => t.value === type)!.label;
+    const control = selectedControl();
+    const constraint: RigConstraint = {
+      id: newRigId(CONSTRAINT_PREFIX.slice(0, -1)),
+      name: `${label}: ${bones[active].name}`,
+      type,
+      owner: bones[active].name,
+      ...(type === "driver" || type === "distribute"
+        ? { joints: others }
+        : { target: control ? `control:${control}` : others[0] }),
+      ...(type === "driver" ? { axis: 0 as const, angle: 90, value: 0 } : {}),
+    };
+    await setConstraints(`Restricción: ${label}`, [...(rigSettings().constraints ?? []), constraint]);
+    setSelectedConstraint(constraint.id);
+    if (type !== "driver" && type !== "distribute" && !constraint.target) {
+      setStatusMessage("Elige el objetivo en el panel (o crea la restricción con el objetivo elegido con Mayús)");
+    }
+  };
+
+  const handleDeleteConstraint = async (id: string) => {
+    await setConstraints("Borrar restricción", (rigSettings().constraints ?? []).filter((c) => c.id !== id));
+    // Sus keys de influencia ya no sirven
+    const before = clips();
+    const after = tidyClips(before, rigSettings());
+    if (after.some((c, i) => c !== before[i])) {
+      await history.execute("Ordenar pistas del rig", { kind: "clips", data: { before, after, activeBefore: activeClipId(), activeAfter: activeClipId() } });
+    }
+    setSelectedConstraint(undefined);
+  };
+
+  const handleMoveConstraint = (id: string, direction: -1 | 1) => {
+    const list = [...(rigSettings().constraints ?? [])];
+    const i = list.findIndex((c) => c.id === id);
+    const k = i + direction;
+    if (i < 0 || k < 0 || k >= list.length) return;
+    [list[i], list[k]] = [list[k], list[i]];
+    void setConstraints("Orden de las restricciones", list);
+  };
+
+  /** Influencia o valor del driver: provisorio al arrastrar, key (o valor fijo) al soltar */
+  const handleConstraintScalar = (channel: "blend" | "roll", value: number, commit: boolean) => {
+    const c = constraintById(selectedConstraint());
+    const v = viewer();
+    if (!c || !v) return;
+    const f = Math.round(frame());
+    const clip = activeClip();
+    const keyed = channel === "blend" ? constraintValues().keyed.influence : constraintValues().keyed.value;
+    const asKey = autoKey() || keyed;
+    const field = channel === "blend" ? "influence" : "value";
+    if (!commit) {
+      const ctx = asKey
+        ? rigCtx()
+        : createRigContext(rigBones(), {
+            ...rigSettings(),
+            constraints: (rigSettings().constraints ?? []).map((x) => (x.id === c.id ? { ...x, [field]: value } : x)),
+          });
+      const preview = asKey && clip ? insertScalarKey(clip, c.id, channel, f, value, keyInterpolation()) : clip;
+      v.setPose(evaluatePose(preview, frame(), ctx));
+      setPoseTick((t) => t + 1);
+      return;
+    }
+    const label = channel === "blend" ? "Influencia de la restricción" : "Valor del driver";
+    if (asKey) {
+      if (!activeClip()) handleNewClip();
+      void editClip(label, (x) => insertScalarKey(x, c.id, channel, f, value, keyInterpolation()));
+    } else {
+      changeConstraint(label, { ...c, [field]: value });
+    }
+  };
 
   /**
    * Cambio de mezcla, fijado o balanceo. Mientras se arrastra se ve con una
@@ -2757,6 +3161,36 @@ export const App: Component = () => {
       }
     }
     return out;
+  });
+
+  /** Articulación activa en la barra de estado: nombre, giro, bloqueos y límite */
+  const poseInfo = createMemo(() => {
+    const pose = activeJointPose();
+    const j = viewSettings().selectedBone;
+    const name = rigBones()[j]?.name;
+    if (!pose || !name) return undefined;
+    const p = boneProps(rigSettings(), name);
+    const locked = ["X", "Y", "Z"].filter((_, i) => p.lockRotation[i]);
+    const moved = Math.hypot(...pose.translation) > 1e-9;
+    const [x, y, z] = pose.rotation.map((a) => a.toFixed(1));
+    // El visor muestra la pose ya recortada: se mide la animación antes de los límites
+    let excess = 0;
+    const clip = activeClip();
+    if (p.limits && clip) {
+      const ctx = unlimitedCtx();
+      const q = evaluatePose(clip, frame(), ctx).rotations.get(j);
+      if (q) excess = limitExcess(q, ctx.frames[j], p.limits);
+    }
+    return [
+      name,
+      `X ${x}° Y ${y}° Z ${z}°`,
+      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
+      moved ? "desplazado" : "",
+      excess > 0.5 ? `fuera del límite ${excess.toFixed(0)}° (se recorta)` : "",
+      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
   });
 
   /** Guardar los límites de la articulación activa */
@@ -3069,6 +3503,32 @@ export const App: Component = () => {
         edges.push({ from: `k:${chain.id}`, to: `c:${cid}`, kind: "ik" });
       }
     }
+    // Restricciones que mueven la activa o que la usan de objetivo
+    const bonesShown = new Set(nodes.filter((n) => n.kind === "bone").map((n) => n.label));
+    const boneNode = (name: string) => {
+      const k = ctx.boneIndex.get(name);
+      if (k === undefined) return undefined;
+      if (!bonesShown.has(name)) {
+        bonesShown.add(name);
+        nodes.push({ id: id(k), label: name, kind: "bone", role: "control" });
+      }
+      return id(k);
+    };
+    const related = (ctx.settings.constraints ?? []).filter(
+      (c) => c.owner === bone.name || c.target === bone.name || (c.joints ?? []).includes(bone.name)
+    );
+    for (const c of related.slice(0, 3)) {
+      nodes.push({ id: `r:${c.id}`, label: c.name, kind: "constraint", role: "chain" });
+      const owner = boneNode(c.owner);
+      if (owner) edges.push({ from: `r:${c.id}`, to: owner, kind: "constraint" });
+      if (c.target?.startsWith("control:")) {
+        addControl(c.target.slice(8));
+        edges.push({ from: `c:${c.target.slice(8)}`, to: `r:${c.id}`, kind: "constraint" });
+      } else if (c.target) {
+        const target = boneNode(c.target);
+        if (target) edges.push({ from: target, to: `r:${c.id}`, kind: "constraint" });
+      }
+    }
     return { nodes, edges };
   });
 
@@ -3076,7 +3536,25 @@ export const App: Component = () => {
     const [kind, rest] = [node.id.slice(0, 1), node.id.slice(2)];
     if (kind === "b") selectJoints([Number(rest)], Number(rest));
     else if (kind === "c") handleSelectControl(rest);
-    else setSelectedChain(rest);
+    else if (kind === "r") {
+      setSelectedConstraint(rest);
+      setRigEditorTab("ik");
+    } else setSelectedChain(rest);
+  };
+
+  /** Conectar dos huesos en el grafo: el soltado copia el giro del arrastrado (se cambia en el panel) */
+  const handleConnectConstraint = async (target: string, owner: string) => {
+    const constraint: RigConstraint = {
+      id: newRigId(CONSTRAINT_PREFIX.slice(0, -1)),
+      name: `Copiar giro: ${owner}`,
+      type: "copyRotation",
+      owner,
+      target,
+      space: "local",
+    };
+    await setConstraints("Restricción: Copiar giro", [...(rigSettings().constraints ?? []), constraint]);
+    setSelectedConstraint(constraint.id);
+    setStatusMessage(`${owner} copia el giro de ${target}: cambia el tipo en Restricciones (pestaña IK)`);
   };
 
   const handleReparent = (controlNode: string, boneName: string | null) => {
@@ -3156,6 +3634,7 @@ export const App: Component = () => {
       relations={relations()}
       onSelectNode={handleRelationSelect}
       onReparent={handleReparent}
+      onConnect={(target, owner) => void handleConnectConstraint(target, owner)}
       shared={sharedSkin()}
     />
   );
@@ -3185,6 +3664,44 @@ export const App: Component = () => {
     />
   );
 
+  const constraintPanel = (
+    <ConstraintPanel
+      constraints={rigSettings().constraints ?? []}
+      joints={rigBones().flatMap((b, j) => (b.parent === null || rigBones().some((c) => c.parent === j) ? [b.name] : []))}
+      controls={rigSettings().controls}
+      selected={selectedConstraint()}
+      posing={animating()}
+      activeJoint={rigBones()[viewSettings().selectedBone]?.name}
+      otherJoints={jointSelection()
+        .filter((j) => j !== viewSettings().selectedBone)
+        .map((j) => rigBones()[j].name)}
+      influence={constraintValues().influence}
+      value={constraintValues().value}
+      keyed={constraintValues().keyed}
+      onNew={(type) => void handleNewConstraint(type)}
+      onSelect={setSelectedConstraint}
+      onChange={changeConstraint}
+      onDelete={(id) => void handleDeleteConstraint(id)}
+      onMove={handleMoveConstraint}
+      onScalar={handleConstraintScalar}
+    />
+  );
+
+  /** Ragdoll desde la pose del cuadro actual: un clip nuevo con la caída */
+  const handleRagdoll = async (seconds: number) => {
+    const ctx = rigCtx();
+    if (ctx.bones.length < 2) return;
+    const clip = activeClip();
+    const f = Math.round(frame());
+    const pose = clip ? evaluatePose(clip, f, ctx) : (viewer()?.getPose() ?? evaluatePose(undefined, 0, ctx));
+    const previous = clip && f > clip.start ? evaluatePose(clip, f - 1, ctx) : null;
+    const baked = ragdollClip(ctx, pose, previous, { seconds, fps: clip?.fps ?? 24, name: `Ragdoll ${clips().length + 1}` });
+    const before = clips();
+    await history.execute("Ragdoll", { kind: "clips", data: { before, after: [...before, baked], activeBefore: activeClipId(), activeAfter: baked.id } });
+    setFrame(baked.start);
+    setStatusMessage(`Caída horneada en «${baked.name}» (${seconds} s)`);
+  };
+
   const posePanel = (
     <PosePanel
       posing={animating()}
@@ -3199,6 +3716,7 @@ export const App: Component = () => {
       canPaste={canPaste()}
       onBreakdown={handleBreakdown}
       onPushRelax={handlePushRelax}
+      onRagdoll={(seconds) => void handleRagdoll(seconds)}
     />
   );
 
@@ -3235,11 +3753,38 @@ export const App: Component = () => {
     setRigEditorTab("library");
     setRigEditorOpen(true);
   };
-  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}</div>, rig: rigPanel };
+  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}{constraintPanel}</div>, rig: rigPanel };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
 
+
+  /**
+   * `extras` de glTF para otras herramientas: los límites de giro en los
+   * nodos que giran con cada articulación (sus hijos; la raíz, el suyo), con
+   * los ejes de la articulación para leerlos, y en la raíz los datos del rig
+   * (controles, cadenas IK, restricciones y grupos)
+   */
+  const rigExtras = (): Record<string, { pinocchio: Record<string, unknown> }> => {
+    const ctx = rigCtx();
+    const s = rigSettings();
+    const out: Record<string, { pinocchio: Record<string, unknown> }> = {};
+    const put = (name: string, key: string, value: unknown) => {
+      out[name] ??= { pinocchio: {} };
+      out[name].pinocchio[key] = value;
+    };
+    ctx.bones.forEach((b, j) => {
+      const limits = boneProps(s, b.name).limits;
+      if (!limits) return;
+      const nodes = b.parent === null ? [j] : ctx.children[j];
+      for (const c of nodes) put(ctx.bones[c].name, "limits", { joint: b.name, axes: ctx.frames[j].q, ...limits });
+    });
+    const root = ctx.bones.find((b) => b.parent === null);
+    if (root && (s.controls.length > 0 || (s.ikChains ?? []).length > 0 || (s.constraints ?? []).length > 0)) {
+      put(root.name, "rig", { controls: s.controls, ikChains: s.ikChains ?? [], constraints: s.constraints ?? [], groups: s.groups });
+    }
+    return out;
+  };
 
   const handleExport = async () => {
     try {
@@ -3265,7 +3810,9 @@ export const App: Component = () => {
       // Sin modelo va el esqueleto solo; BVH lleva el esqueleto y la animación activa
       const skeletonOnly = !meshLoaded();
       const bvh = opts.format === "bvh";
-      const exported = bvh ? clips().filter((c) => c.id === activeClipId()) : clips();
+      // La mezcla de capas activa va horneada como una animación más (en BVH, en lugar de la activa)
+      const mix = mixer().enabled && mixer().layers.length > 0 ? bakeMixer(mixer(), clips(), rigCtx(), "Mezcla", activeClip()?.fps ?? 24) : undefined;
+      const exported = bvh ? (mix ? [mix] : clips().filter((c) => c.id === activeClipId())) : mix ? [...clips(), mix] : clips();
       const withAnimations = bvh || skeletonOnly || includeRig;
       const result = await busy(`Exportando a ${name}...`, () => invoke<ExportResult>("export_model", {
         config: {
@@ -3284,10 +3831,11 @@ export const App: Component = () => {
           optimize_geometry: opts.cleanGeometry,
           strip_unused: opts.cleanGeometry,
           // La pila de evaluación horneada a giros por cuadro: lo único que entienden glTF, USD y BVH
-          animations: withAnimations ? clipsForExport(exported.map((c) => bakeClip(c, rigCtx())), boneIndex()) : null,
+          animations: withAnimations ? clipsForExport(exported.map((c) => (c.baked ? c : bakeClip(c, rigCtx()))), boneIndex()) : null,
           non_deforming: rigBones().flatMap((b, i) => (boneProps(rigSettings(), b.name).deform ? [] : [i])),
           skeleton_only: skeletonOnly,
           bone_shapes: exportBoneShapes(),
+          node_extras: (includeRig || skeletonOnly) && (opts.format === "glb" || opts.format === "gltf") ? rigExtras() : null,
           fps: activeClip()?.fps ?? null,
         },
       }));
@@ -3436,7 +3984,15 @@ export const App: Component = () => {
       return;
     }
     let com: THREE.Vector3 | undefined;
-    if (mode === "mass") com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
+    if (mode === "mass") {
+      try {
+        com = centerOfMass() ?? new THREE.Vector3(...(await loadPlacementInfo()).center_of_mass);
+      } catch (e) {
+        console.error("Center of mass error:", e);
+        setStatusMessage(`No se pudo calcular el centro de masa: ${e}`);
+        return;
+      }
+    }
     await applyPlacement(originMatrix(data.positions, mode, com), `Origen en el ${ORIGIN_LABELS[mode]}`);
   };
 
@@ -3848,13 +4404,17 @@ export const App: Component = () => {
   // SKELETON TRANSFORM HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
+  /** Cuenta las transformaciones: la respuesta de una vieja no pisa a la última */
+  let transformRequest = 0;
   const applyTransform = async (transform: SkeletonTransform) => {
+    const request = ++transformRequest;
     setSkeletonTransform(transform);
     const data = await invoke<TauriSkeletonData>("transform_skeleton", {
       scale: transform.scale,
       translation: transform.translation,
       rotation: transform.rotation,
     });
+    if (request !== transformRequest) return;
     setSkeletonData(tauriSkeletonToViewer(data));
     // El backend descartó los pesos (eran del esqueleto anterior): la interfaz también
     if (autorigComplete()) dropWeights("Transformaste el esqueleto entero");
@@ -3914,9 +4474,12 @@ export const App: Component = () => {
 
   /** Cambió un apéndice: se rehace la plantilla */
   const handleBodyPlanChange = async (plan: BodyPlan) => {
+    const request = ++skeletonRequest;
+    const previous = bodyPlan();
     setBodyPlan(plan);
     try {
       const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
+      if (request !== skeletonRequest) return;
       history.milestone("Esqueleto por forma de cuerpo");
       setSkeletonData(tauriSkeletonToViewer(data));
       setSkeletonTransform({ ...defaultTransform });
@@ -3926,6 +4489,8 @@ export const App: Component = () => {
     } catch (e) {
       console.error("Body plan error:", e);
       setStatusMessage(`Error: ${e}`);
+      // El panel vuelve a mostrar la forma que sigue puesta
+      if (request === skeletonRequest) setBodyPlan(previous);
     }
   };
 
@@ -4144,6 +4709,10 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const handleToggleVisibility = (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      toggleFileNode(Number(nodeId.slice(5)));
+      return;
+    }
     switch (nodeId) {
       case "mesh":
         setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
@@ -4195,6 +4764,10 @@ export const App: Component = () => {
    * deshacer: queda como hito en el historial.
    */
   const handleDeleteNode = async (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      await deleteFileNode(Number(nodeId.slice(5)));
+      return;
+    }
     const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
     if (!["skeleton", "weights", "quadmesh"].includes(kind)) return;
     try {
@@ -4256,6 +4829,32 @@ export const App: Component = () => {
     }
   };
 
+  // Indicador de "cambios sin guardar" en la cabecera. La comparación
+  // serializa todo el proyecto, así que no corre en cada cambio: después de
+  // cada paso del historial (con un respiro), al guardar o abrir, y cada
+  // minuto por los ajustes que no pasan por el historial
+  const [unsaved, setUnsaved] = createSignal(false);
+  let unsavedTimer: number | undefined;
+  let unsavedRequest = 0;
+  const checkUnsaved = async () => {
+    unsavedTimer = undefined;
+    // Con una tarea larga el estado está a medias: se vuelve a mirar al terminar
+    if (isProcessing() || switching()) return scheduleUnsavedCheck(2000);
+    const request = ++unsavedRequest;
+    const result = await hasUnsavedWork();
+    if (request === unsavedRequest) setUnsaved(result);
+  };
+  const scheduleUnsavedCheck = (delay = 800) => {
+    if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
+    unsavedTimer = window.setTimeout(checkUnsaved, delay);
+  };
+  createEffect(on([history.current, history.nodes, projectPath, hasWork, isProcessing], () => scheduleUnsavedCheck()));
+  const unsavedInterval = setInterval(() => unsavedTimer === undefined && checkUnsaved(), 60_000);
+  onCleanup(() => {
+    clearInterval(unsavedInterval);
+    if (unsavedTimer !== undefined) clearTimeout(unsavedTimer);
+  });
+
   /** Pregunta antes de descartar el trabajo actual, solo si hay algo sin guardar */
   const confirmDiscard = async (title: string, message: string, confirmLabel: string) =>
     !(await hasUnsavedWork()) || confirmAction({ title, message: `${message} Hay cambios sin guardar: se pierden.`, confirmLabel, danger: true });
@@ -4291,6 +4890,12 @@ export const App: Component = () => {
   const [recovery, setRecovery] = createSignal<RecoveryInfo | undefined>();
 
   const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
+  // Título de la ventana: archivo y un punto si hay cambios sin guardar
+  const baseTitle = document.title;
+  createEffect(() => {
+    const name = projectPath() ? baseName(projectPath()!) : fileName();
+    document.title = name ? `${unsaved() ? "• " : ""}${name} — Pinocchio` : baseTitle;
+  });
 
   /** Estado de la interfaz que va al proyecto */
   const projectUi = (): string => {
@@ -4474,6 +5079,7 @@ export const App: Component = () => {
         invoke<ProjectSaved>("save_project", { path, ui: projectUi(), onlyIfChanged: false })
       );
       setProjectPath(path);
+      scheduleUnsavedCheck(0);
       setStatusMessage(`Proyecto guardado: ${baseName(path!)} (${(saved.bytes / 1e6).toFixed(1)} MB)`);
       // Lo guardado ya está a salvo: la recuperación vieja no debe ofrecerse al abrir la app
       invoke("clear_recovery").catch(() => {});
@@ -4577,6 +5183,133 @@ export const App: Component = () => {
     }
   };
 
+  // ─── Importar animación (BVH) y retargeting ──────────────────────────────
+
+  /** Mapeos guardados por esqueleto de origen: nombre del modelo → nombre del origen */
+  const [retargetTemplates, setRetargetTemplates] = createPersisted<Record<string, Record<string, string>>>("retarget.templates", {});
+  const [retargeting, setRetargeting] = createSignal<(RetargetRequest & { motion: SourceMotion }) | undefined>();
+  const sourceSignature = (bones: { name: string }[]) => bones.map((b) => b.name).join("|");
+
+  /** Elige un archivo con el diálogo del webview y devuelve su texto */
+  const pickTextFile = (accept: string) =>
+    new Promise<{ name: string; text: string } | null>((resolve) => {
+      const input = document.createElement("input");
+      input.type = "file";
+      input.accept = accept;
+      input.onchange = async () => {
+        const file = input.files?.[0];
+        resolve(file ? { name: file.name, text: await file.text() } : null);
+      };
+      input.oncancel = () => resolve(null);
+      input.click();
+    });
+
+  /** Abre el mapeo del retargeting para un movimiento de origen (BVH o captura) */
+  const openRetarget = (motion: SourceMotion, sourceName: string) => {
+    const bones = rigBones();
+    // Una plantilla guardada para este mismo esqueleto de origen manda sobre el automático
+    const saved = retargetTemplates()[sourceSignature(motion.bones)];
+    let map: RetargetMap;
+    if (saved) {
+      const sourceIndex = new Map(motion.bones.map((b, i) => [b.name, i]));
+      map = new Map(
+        bones.flatMap((b, j) => {
+          const k = saved[b.name] === undefined ? undefined : sourceIndex.get(saved[b.name]);
+          return k === undefined ? [] : [[j, k] as [number, number]];
+        })
+      );
+    } else {
+      map = autoMap(bones, motion.bones);
+    }
+    setRetargeting({
+      sourceName,
+      source: motion.bones,
+      target: bones,
+      map,
+      frames: motion.positions.length,
+      fps: motion.fps,
+      fromTemplate: !!saved,
+      motion,
+    });
+  };
+
+  const [capturing, setCapturing] = createSignal(false);
+  const handleCapture = () => {
+    if (rigBones().length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la captura se pasa a sus articulaciones");
+      return;
+    }
+    setCapturing(true);
+  };
+
+  /**
+   * Contactos de la captura → keys de fijado de las cadenas IK de las patas:
+   * mientras el pie está apoyado queda quieto en el mundo (sin patinar)
+   */
+  const withContactPins = (clip: AnimationClip, motion: CaptureMotion, map: RetargetMap, target: SkeletonBone[], offset = 0) => {
+    const chains = (rigSettings().ikChains ?? []).filter((c) => !c.disabled && ["twoBone", "fabrik", "ccd"].includes(c.solver));
+    let out = clip;
+    let pinned = 0;
+    for (const [source, flags] of motion.contacts) {
+      const joint = [...map].find(([, s]) => s === source)?.[0];
+      const chain = joint === undefined ? undefined : chains.find((c) => c.joints.includes(target[joint].name));
+      if (!chain) continue;
+      pinned++;
+      // Solo el tramo usado, desde el cuadro 0 del clip
+      const used = flags.slice(offset, offset + clip.end - clip.start + 1);
+      used.forEach((on, f) => {
+        if (f === 0 || on !== used[f - 1]) out = insertScalarKey(out, chain.id, "pin", f, on ? 1 : 0, "step");
+      });
+    }
+    return { clip: out, pinned };
+  };
+
+  const handleImportBvh = async () => {
+    const bones = rigBones();
+    if (bones.length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la animación se pasa a sus articulaciones");
+      return;
+    }
+    const picked = await pickTextFile(".bvh");
+    if (!picked) return;
+    try {
+      openRetarget(bvhMotion(parseBvh(picked.text)), picked.name);
+    } catch (e) {
+      setStatusMessage(`No se pudo leer ${picked.name}: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
+  const confirmRetarget = async (result: { map: RetargetMap; rootMotion: boolean; name: string; saveTemplate: boolean; range: [number, number] }) => {
+    const request = retargeting();
+    setRetargeting(undefined);
+    if (!request) return;
+    if (result.saveTemplate) {
+      const byName: Record<string, string> = {};
+      for (const [j, k] of result.map) byName[request.target[j].name] = request.source[k].name;
+      setRetargetTemplates({ ...retargetTemplates(), [sourceSignature(request.source)]: byName });
+    }
+    try {
+      let clip = retargetClip(request.target, request.motion, result.map, { rootMotion: result.rootMotion, name: result.name, range: result.range });
+      let note = "";
+      if ("contacts" in request.motion) {
+        const pins = withContactPins(clip, request.motion as CaptureMotion, result.map, request.target, result.range[0]);
+        clip = pins.clip;
+        note = pins.pinned > 0 ? `, pies fijados en ${pins.pinned} patas` : ". Crea el rig automático (IK) para que los pies no patinen";
+      }
+      const before = clips();
+      await history.execute(`Importar animación: ${clip.name}`, {
+        kind: "clips",
+        data: { before, after: [...before, clip], activeBefore: activeClipId(), activeAfter: clip.id },
+      });
+      setFrame(clip.start);
+      pipeline.setActiveStep("animate");
+      setStatusMessage(`Animación importada: ${clip.name} (${clip.end - clip.start + 1} cuadros, ${clip.tracks.length} articulaciones)${note}`);
+    } catch (e) {
+      console.error("Retarget error:", e);
+      setStatusMessage(`No se pudo pasar la animación al esqueleto: ${e instanceof Error ? e.message : e}`);
+    }
+  };
+
   const fileMenuItems = (): MenuEntry[] => [
     { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
@@ -4584,6 +5317,8 @@ export const App: Component = () => {
     { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
+    { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
+    { label: "Capturar movimiento de un video…", disabled: !skeletonData(), onSelect: handleCapture },
     { label: "Exportar…", disabled: !hasWork(), onSelect: () => pipeline.setActiveStep("export") },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
@@ -4684,6 +5419,11 @@ export const App: Component = () => {
   };
 
   const handleSelectNode = (nodeId: string) => {
+    if (nodeId.startsWith("node-")) {
+      const index = Number(nodeId.slice(5));
+      setSelectedFileNode(selectedFileNode() === index ? undefined : index);
+      return;
+    }
     if (nodeId.startsWith("bone-")) {
       const index = parseInt(nodeId.replace("bone-", ""));
       setViewSettings((prev) => ({ ...prev, selectedBone: index }));
@@ -4703,6 +5443,7 @@ export const App: Component = () => {
           title="Pinocchio"
           fps={fps()}
           fileName={projectPath() ? baseName(projectPath()!) : fileName()}
+          unsaved={unsaved()}
           fileMenu={fileMenuItems}
           onOpenSettings={() => setSettingsOpen(true)}
           workspace={pipeline.workspace()?.id}
@@ -4770,6 +5511,10 @@ export const App: Component = () => {
               onViewerReady={handleViewerReady}
               onFpsUpdate={setFps}
               onPlacementPick={handlePlacementPick}
+              onNodePicked={(node) => {
+                setSelectedFileNode(node);
+                setStatusMessage(`Nodo del archivo: ${sceneStructure()?.nodes[node]?.name || `nodo ${node}`}`);
+              }}
               onBoneSelected={handleBoneSelected}
               onBoneMoved={handleBoneMoved}
               onBoneMoveCommitted={handleBoneMoveCommitted}
@@ -4916,8 +5661,10 @@ export const App: Component = () => {
                 onTogglePlay={() => setPlaying(!playing())}
                 onRangeChange={handleClipRange}
                 onSelectJoint={(joint) => selectJoints([joint], joint)}
-                selectedControl={selectedControl() ?? selectedChain()}
-                onSelectControl={(id) => (chainById(id) ? setSelectedChain(id) : handleSelectControl(id))}
+                selectedControl={selectedControl() ?? selectedChain() ?? selectedConstraint()}
+                onSelectControl={(id) =>
+                  isConstraintId(id) ? setSelectedConstraint(id) : chainById(id) ? setSelectedChain(id) : handleSelectControl(id)
+                }
                 onSelection={setKeySelection}
 
                 onMoveKeys={handleMoveKeys}
@@ -4946,6 +5693,29 @@ export const App: Component = () => {
             onSection={pipeline.setActiveStep}
             objectProps={{
               meshInfo: meshLoaded() ? meshInfo() : undefined,
+              node: (() => {
+                const index = selectedFileNode();
+                const node = index === undefined ? undefined : sceneStructure()?.nodes[index];
+                if (index === undefined || !node) return undefined;
+                const mesh = node.mesh !== null ? sceneStructure()?.meshes[node.mesh] : undefined;
+                return {
+                  name: node.name || `nodo ${index}`,
+                  hint: mesh ? `malla ${mesh.name || node.mesh}` : node.skin !== null ? "skin" : "nodo",
+                  translation: node.translation,
+                  rotation: node.rotation,
+                  scale: node.scale,
+                  hidden: hiddenFileNodes().includes(index),
+                };
+              })(),
+              onToggleNode: () => {
+                const index = selectedFileNode();
+                if (index !== undefined) toggleFileNode(index);
+              },
+              onDeselectNode: () => setSelectedFileNode(undefined),
+              onNodeTransform: (t) => {
+                const index = selectedFileNode();
+                if (index !== undefined) void transformFileNode(index, t);
+              },
               placement: {
                 mode: placementMode(),
                 onPickMode: handlePlacementMode,
@@ -5008,6 +5778,7 @@ export const App: Component = () => {
                 openTextureEditor("quad", { material: Math.max(0, skinMaterials().findIndex((m) => m.maps.base)), slot: "base" }),
             }}
             skeletonProps={{
+              structurePanel: skeletonEditPanel,
               presets: skeletonPresets(),
               selectedPreset: selectedSkeleton(),
               skeletonLoaded: skeletonLoaded(),
@@ -5161,6 +5932,20 @@ export const App: Component = () => {
           projectPath={projectPath()}
           onClose={() => setSettingsOpen(false)}
         />
+      </Show>
+
+      <Show when={capturing()}>
+        <CaptureDialog
+          onMotion={(motion, name) => {
+            setCapturing(false);
+            openRetarget(motion, name);
+          }}
+          onCancel={() => setCapturing(false)}
+        />
+      </Show>
+
+      <Show when={retargeting()}>
+        {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
       </Show>
 
       <Show when={confirmation()}>

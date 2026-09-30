@@ -32,7 +32,7 @@ Import → Reparación → Retopología → UV / Piel → Rigging → Pesos → 
 ### Pinocchio: auto-rigging
 Implementación en Rust del algoritmo de [Pinocchio](https://people.csail.mit.edu/ibaran/papers/2007-SIGGRAPH-Pinocchio.pdf) (Baran & Popović, SIGGRAPH 2007).
 
-- Ajusta automáticamente un esqueleto dentro de una malla: detecta las extremidades en el eje medial (patas, cabeza, cola…), busca la orientación de la plantilla (Y o Z arriba, girada) y asigna cada extremo a una extremidad; las articulaciones siguen el eje medial con las proporciones de la plantilla. Detalle en [`libs/pinocchio/ROADMAP.md`](libs/pinocchio/ROADMAP.md) (fase 8).
+- Ajusta automáticamente un esqueleto dentro de una malla: detecta las extremidades en el eje medial (patas, cabeza, cola…), busca la orientación de la plantilla (Y o Z arriba, girada) y asigna cada extremo a una extremidad; las articulaciones siguen el eje medial con las proporciones de la plantilla.
 - Edición manual: articulaciones en espejo (`_l`/`_r`, `.L`/`.R`, `Left`/`Right`), centrado en la sección del miembro, y un esqueleto editado se usa tal cual (`SkeletonFit::Exact`).
 - Calcula los pesos de skinning con **bone heat** (Baran & Popović) y difusión con el Laplaciano cotangente. Cada vértice va con el hueso que pasa por el centro de su tubo (no el más cercano), así en un tronco gordo la panza queda con la columna y no con las patas. Las piezas sueltas sin huesos (colmillos, ojos) se mueven rígidas con la parte del cuerpo donde se apoyan.
 - Pincel de pesos en la app (sumar, restar, suavizar, espejo) y pose de prueba para revisarlos.
@@ -55,7 +55,6 @@ La "piel" de la malla: coordenadas UV, materiales y texturas.
 - Traspaso de UV del modelo original a la malla retopologizada, sin saltar entre islas en las costuras. Con "Seguir las costuras de UV" (activada por defecto si el modelo tiene UV) los quads siguen las costuras del atlas y cada uno cae dentro de una sola isla.
 - Desplegado propio: islas que crecen a la vez (desviación de normal acotada, nunca cruzan aristas vivas) y siempre son discos, LSCM + ARAP, empaquetado con densidad de texel uniforme.
 - Horneado de las texturas originales sobre el mapa nuevo (color, metal/rugosidad, oclusión, emisión) y de la normal: la malla liviana conserva el relieve de la original como normal map, con tangentes glTF exportadas.
-- Plan y detalles en [`libs/uv/ROADMAP.md`](libs/uv/ROADMAP.md).
 
 ### Reparación de mallas (`pinocchio-repair`)
 - Diagnóstico: bordes abiertos, vértices duplicados, caras degeneradas, aristas non-manifold y autointersecciones (con BVH y el test de Möller).
@@ -138,7 +137,7 @@ Pinocchiors/
 
 ## Requisitos
 
-- **Rust** ≥ 1.85 (edition 2024)
+- **Rust** ≥ 1.88 (edition 2024)
 - Para la app de escritorio:
   - **Node.js** ≥ 18 y npm
   - [Dependencias del sistema para Tauri 2](https://v2.tauri.app/start/prerequisites/) (en Linux: `webkit2gtk-4.1`, `libappindicator`, etc.)
@@ -205,7 +204,7 @@ npx tauri build --config ../desktop/tauri.conf.json
 | Esqueletos | `list_skeleton_presets`, `select_skeleton`, `get_body_plan`, `select_body_plan`, `get_skeleton_data`, `transform_skeleton`, `move_bone` (con espejo), `auto_fit_skeleton`, `center_bones` |
 | Auto-rig | `run_autorig`, `get_weights_data`, `set_vertex_weights` (pincel), `get_weight_mirror` |
 | Retopología | `run_retopology`, `get_quad_mesh_data` |
-| UV / Piel | `get_uv_info`, `run_uv_unwrap`, `restore_transferred_uvs`, `get_uv_texture`, `get_uv_layout` |
+| UV / Piel | `get_uv_info`, `run_uv_unwrap`, `restore_transferred_uvs`, `get_checker_texture`, `get_skin_materials`, `get_skin_texture`, `unwrap_original_mesh`, `undo_unwrap_original` |
 | Reparación | `analyze_mesh`, `repair_mesh`, `undo_repair`, `get_repair_diagnostics` |
 | Impresión 3D | `analyze_print3d`, `scale_mesh_for_print`, `subdivide_mesh`, `export_print3d_piece` |
 
@@ -404,18 +403,9 @@ cargo test -p pinocchio-app
 
 ---
 
-## Roadmaps
+## Pendientes
 
-- [`libs/pinocchio/ROADMAP.md`](libs/pinocchio/ROADMAP.md): auto-rigging
-- [`libs/pinocchio/print3d/ROADMAP.md`](libs/pinocchio/print3d/ROADMAP.md): impresión 3D
-- [`libs/quadriflow/ROADMAP.md`](libs/quadriflow/ROADMAP.md): retopología
-- [`libs/converter/ROADMAP.md`](libs/converter/ROADMAP.md): conversor
-- [`apps/PLAN_GUI.md`](apps/PLAN_GUI.md): plan de la GUI
-
-### Pendiente
-- Uniones entre piezas en `print3d` (`apply_joints_between_pieces`), que requieren CSG.
-- Importación de STL desde bytes en WASM.
-- Poses y animación en la GUI.
+Lo que falta, verificado contra el código, está en [`PENDIENTES.md`](PENDIENTES.md).
 
 ---
 
