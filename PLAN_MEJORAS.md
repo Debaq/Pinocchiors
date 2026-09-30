@@ -67,16 +67,31 @@ Auditoría de `App.tsx`, `Viewer3D.ts` y componentes (18 hallazgos). Corregidos:
 - **No probado en la app de escritorio real** (el contenedor no tiene
   pantalla): conviene probar abrir, guardar, cerrar con cambios e importar.
 
-## Pendiente (siguiente ronda)
-- `Viewer3D.dispose` no quita sus listeners globales (solo afecta la recarga
-  en caliente del desarrollo).
-- Algunas llamadas sin `try` propio (`handleOrigin`, vista previa de UV,
-  recarga de texturas desde GIMP, conexión del escáner): hoy llegan a la
-  barra de estado por el aviso global, pero sin un mensaje específico.
-- `applyTransform`, cambio de plan de cuerpo y recarga de materiales no
-  descartan respuestas viejas (mismo patrón que se usó en la plantilla).
-- Indicador visual de "cambios sin guardar" en el título.
-- Avisos de estilo de clippy.
+## Segunda ronda
+- ✅ `Viewer3D.dispose` quita sus listeners globales (un `AbortController`),
+  desconecta el `ResizeObserver`, libera `OrbitControls`, cancela los cuadros
+  pendientes y no vuelve a dibujar si alguien lo llama después.
+- ✅ Errores con mensaje propio: escáner (conectar, desconectar, escanear,
+  ajustes, ganancia; el aviso queda en el panel del escáner), centro de masa
+  del origen, tablero de la vista previa de UV y recarga desde GIMP.
+- ✅ Respuestas viejas descartadas en `applyTransform`, forma de cuerpo
+  (comparte contador con la plantilla: las dos reemplazan el esqueleto;
+  si falla, el panel vuelve a la forma anterior), materiales de la escena y
+  piel de los quads (las imágenes descartadas se liberan).
+- ✅ Indicador de cambios sin guardar: punto junto al nombre del archivo y
+  `•` en el título. La comparación serializa todo el proyecto, así que corre
+  después de cada paso del historial (con 0,8 s de respiro), al guardar o
+  abrir, al terminar una tarea larga y cada minuto (ajustes que no pasan por
+  el historial). Cerrar, abrir e importar siguen comparando en el momento.
+- ⛔ Avisos de estilo de clippy: sin hacer. El entorno bloquea
+  `static.crates.io` y no se pueden bajar las dependencias para compilar.
+- Verificado: `tsc --noEmit` y `vite build` limpios; la interfaz compilada
+  arranca en Chromium sin caer en la pantalla de error (los errores de
+  consola por falta del backend de Tauri son los mismos que antes).
+  **No probado en la app de escritorio real.**
+
+## Pendiente
+- Avisos de estilo de clippy (necesita red hacia crates.io).
 
 ## Hecho antes en la misma sesión
 - FK e IK conviven sin pisarse (`chainBlend`, `tidyClips`, ids estables del
