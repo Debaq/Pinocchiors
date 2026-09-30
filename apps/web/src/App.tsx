@@ -2457,26 +2457,6 @@ export const App: Component = () => {
     void history.execute(description, { kind: "poseLibrary", data: { before: poseLibrary(), after } });
 
   /** Resumen de la articulación activa para la barra de estado */
-  const poseInfo = createMemo(() => {
-    const pose = activeJointPose();
-    const j = viewSettings().selectedBone;
-    const name = rigBones()[j]?.name;
-    if (!pose || !name) return undefined;
-    const p = boneProps(rigSettings(), name);
-    const locked = ["X", "Y", "Z"].filter((_, i) => p.lockRotation[i]);
-    const moved = Math.hypot(...pose.translation) > 1e-9;
-    const [x, y, z] = pose.rotation.map((a) => a.toFixed(1));
-    return [
-      name,
-      `X ${x}° Y ${y}° Z ${z}°`,
-      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
-      moved ? "desplazado" : "",
-      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
-    ]
-      .filter(Boolean)
-      .join(" · ");
-  });
-
   // ─── IK (F2) ──────────────────────────────────────────────────────────────
 
   createEffect(() => viewer()?.setAutoIk(autoIk()));
@@ -2785,6 +2765,36 @@ export const App: Component = () => {
       }
     }
     return out;
+  });
+
+  /** Articulación activa en la barra de estado: nombre, giro, bloqueos y límite */
+  const poseInfo = createMemo(() => {
+    const pose = activeJointPose();
+    const j = viewSettings().selectedBone;
+    const name = rigBones()[j]?.name;
+    if (!pose || !name) return undefined;
+    const p = boneProps(rigSettings(), name);
+    const locked = ["X", "Y", "Z"].filter((_, i) => p.lockRotation[i]);
+    const moved = Math.hypot(...pose.translation) > 1e-9;
+    const [x, y, z] = pose.rotation.map((a) => a.toFixed(1));
+    // El visor muestra la pose ya recortada: se mide la animación antes de los límites
+    let excess = 0;
+    const clip = activeClip();
+    if (p.limits && clip) {
+      const ctx = unlimitedCtx();
+      const q = evaluatePose(clip, frame(), ctx).rotations.get(j);
+      if (q) excess = limitExcess(q, ctx.frames[j], p.limits);
+    }
+    return [
+      name,
+      `X ${x}° Y ${y}° Z ${z}°`,
+      locked.length > 0 ? `bloqueado ${locked.join("")}` : "",
+      moved ? "desplazado" : "",
+      excess > 0.5 ? `fuera del límite ${excess.toFixed(0)}° (se recorta)` : "",
+      jointSelection().length > 1 ? `${jointSelection().length} elegidas` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ");
   });
 
   /** Guardar los límites de la articulación activa */
