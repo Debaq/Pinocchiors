@@ -508,6 +508,9 @@ export class Viewer3D {
   private frameCount = 0;
   private fpsTimer: number | null = null;
   private animationId: number | null = null;
+  /** Suelta de una vez los listeners globales en `dispose` */
+  private readonly listeners = new AbortController();
+  private resizeObserver: ResizeObserver | null = null;
   /** Cubo de orientación de la esquina */
   private viewCube = new ViewCube();
   /** El último clic derecho canceló una operación modal */
@@ -635,7 +638,7 @@ export class Viewer3D {
     // Fondo y grilla salen del tema (styles/app.css)
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(themeHex("viewport"));
-    window.addEventListener(THEME_EVENT, () => this.applyTheme());
+    window.addEventListener(THEME_EVENT, () => this.applyTheme(), { signal: this.listeners.signal });
 
     // Camera
     const aspect = canvas.clientWidth / canvas.clientHeight;
@@ -781,12 +784,13 @@ export class Viewer3D {
 
   private setupEventListeners(): void {
     // Resize
-    const resizeObserver = new ResizeObserver(() => this.onResize());
-    resizeObserver.observe(this.canvas.parentElement!);
+    this.resizeObserver = new ResizeObserver(() => this.onResize());
+    this.resizeObserver.observe(this.canvas.parentElement!);
+    const signal = this.listeners.signal;
 
     // Mouse events for ground selection
-    this.canvas.addEventListener("click", (e) => this.onCanvasClick(e));
-    this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e));
+    this.canvas.addEventListener("click", (e) => this.onCanvasClick(e), { signal });
+    this.canvas.addEventListener("mousemove", (e) => this.onCanvasMouseMove(e), { signal });
 
     // Navegación como Blender: antes que OrbitControls (fase de captura),
     // se decide qué hace cada botón según los modificadores
@@ -799,7 +803,7 @@ export class Viewer3D {
         return;
       }
       this.configureNavigation(e);
-    }, true);
+    }, { capture: true, signal });
     this.canvas.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       // El clic derecho que canceló G/R/F no abre el menú
@@ -808,34 +812,34 @@ export class Viewer3D {
         return;
       }
       this.callbacks.onContextMenu?.(e.clientX, e.clientY);
-    });
+    }, { signal });
     window.addEventListener("wheel", (e) => {
       if (e.target === this.canvas) this.onTrackpadWheel(e);
-    }, { capture: true, passive: false });
+    }, { capture: true, passive: false, signal });
 
     // Clic: modal, luz, pincel, gizmo o selección (en ese orden)
-    this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e));
-    window.addEventListener("pointermove", (e) => this.onPointerMove(e));
+    this.canvas.addEventListener("pointerdown", (e) => this.onPointerDown(e), { signal });
+    window.addEventListener("pointermove", (e) => this.onPointerMove(e), { signal });
     window.addEventListener("pointerup", () => {
       this.onLightUp();
       this.finishStroke();
       if (this.modal?.release) this.confirmModal();
-    });
+    }, { signal });
 
     // Teclas mientras hay una operación modal (G, R, F…): antes que los atajos
-    window.addEventListener("keydown", (e) => this.onModalKey(e), true);
+    window.addEventListener("keydown", (e) => this.onModalKey(e), { capture: true, signal });
     window.addEventListener("keydown", (e) => {
       this.keysDown.add(e.key.toLowerCase());
       this.updateGizmoSnap();
-    });
+    }, { signal });
     window.addEventListener("keyup", (e) => {
       this.keysDown.delete(e.key.toLowerCase());
       this.updateGizmoSnap();
-    });
+    }, { signal });
     window.addEventListener("blur", () => {
       this.keysDown.clear();
       this.updateGizmoSnap();
-    });
+    }, { signal });
   }
 
   /** Con Ctrl el gizmo gira de a 5° (Ctrl+Shift, 15°) */
@@ -1721,6 +1725,8 @@ export class Viewer3D {
 
   /** Pide un cuadro; varias peticiones antes del próximo se juntan en uno */
   requestRender(): void {
+    // Ya liberado: una llamada tardía no vuelve a dibujar
+    if (this.listeners.signal.aborted) return;
     if (this.animationId === null) {
       this.animationId = requestAnimationFrame(this.animate);
     }
@@ -2941,6 +2947,11 @@ export class Viewer3D {
   }
 
   dispose(): void {
+    this.listeners.abort();
+    this.resizeObserver?.disconnect();
+    this.controls.dispose();
+    if (this.moveFrame !== null) cancelAnimationFrame(this.moveFrame);
+    if (this.dragFrame !== null) cancelAnimationFrame(this.dragFrame);
     if (this.influenceTimer !== null) clearTimeout(this.influenceTimer);
     if (this.animationId !== null) {
       cancelAnimationFrame(this.animationId);
