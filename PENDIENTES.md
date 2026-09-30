@@ -66,15 +66,20 @@ Hecho el 2026-09-30:
   en `extras` de glTF.
 
 Pendiente:
-- ⬜ Captura: webcam en vivo (en Linux WebKitGTK hay que habilitar
-  `getUserMedia`), detección en un worker, cámara del Revopoint, varias
-  cámaras, cara y manos (Face/Hand Landmarker), recortar el tramo útil antes
-  de convertir. Los "títeres" funcionan con la tabla de mapeo del
+- ✅ Captura con la cámara en vivo (vista previa con los puntos, cuenta
+  regresiva) y recorte del tramo útil en el mapeo. En Linux, WebKitGTK
+  puede no dar acceso a la cámara: habilitar `enable-media-stream` en el
+  webview (Rust, `with_webview`) si hace falta.
+- ⬜ Captura: detección en un worker, cámara del Revopoint, varias cámaras,
+  cara y manos (Face/Hand Landmarker). Los "títeres" funcionan con la tabla de mapeo del
   retargeting (brazos del actor → patas delanteras, etc.), sin plantillas
   por BodyPlan.
 - ⬜ Estirar hacia: sin preservación de volumen (el hueso no tiene escala).
-- ⬜ Ragdoll, colisiones con el propio cuerpo, terreno irregular, parpadeo
-  (no hay huesos de párpados).
+- ✅ Ragdoll horneado desde la pose actual y resortes que no atraviesan el
+  propio cuerpo.
+- ⬜ Terreno irregular (no hay malla de suelo en la app), parpadeo (las
+  plantillas no tienen párpados), colisiones del ragdoll con el propio
+  cuerpo.
 - ⬜ Correctivos por ángulo, shape keys (la escena no las modela: hay que
   agregarlas a `converter-scene`, glTF y USD), huesos segmentados,
   preservación de volumen.
@@ -89,8 +94,9 @@ Pendiente:
 - ✅ **Outliner** (2026-09-30): los nodos del archivo se ocultan, se eligen
   (también con doble clic sobre la malla), muestran su transformación local
   en la pestaña Objeto y se borran (sale su geometría de la malla y de lo
-  exportado). Queda: editar la transformación (hoy solo lectura), ocultar
-  también en el alambre y en la vista de pesos, deshacer el borrado.
+  exportado). También se edita la transformación y se deshace (pila en el
+  backend, `undo_scene_edit`); ocultar vale también para el alambre y la
+  vista de pesos.
 - ⬜ Arrastrar y soltar para importar; archivos recientes; vista previa de la
   información antes de importar.
 - ⬜ Exportar USDA en texto; opciones USD en la interfaz (escala, eje arriba,
@@ -162,8 +168,9 @@ Pendiente:
 En esta sesión crates.io estaba bloqueado: el Rust nuevo solo se revisó con
 `rustfmt` (sintaxis) y a mano. Correr `cargo test --workspace` antes de
 integrar. Toca: `apps/desktop/src/commands.rs` (`set_skeleton_bones`,
-`write_text_file`, `remove_scene_node`, `node_extras`, nodos por grupo en
+`write_text_file`, `remove_scene_node`, `set_scene_node_transform`,
+`undo_scene_edit`, `node_extras`, nodos por grupo en
 `get_mesh_data`, campos nuevos de `BodyPlanDto`), `apps/desktop/src/lib.rs`,
-`libs/pinocchio/skeleton/src/body.rs` (formas y apéndices nuevos, con
+`apps/desktop/src/state.rs` (`scene_edits`), `libs/pinocchio/skeleton/src/body.rs` (formas y apéndices nuevos, con
 tests), `libs/converter/gltf-io` (`node_extras`, con test) y
 `libs/converter/core/src/options.rs`.
