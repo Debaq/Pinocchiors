@@ -400,13 +400,14 @@ export const App: Component = () => {
       revert: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.from),
     },
     paintWeights: {
+      // Primero el backend: si falla, el visor no muestra pesos que no quedaron
       apply: async (d: { vertices: number[]; before: number[]; after: number[] }) => {
-        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.after));
         await sendWeights(d.vertices, d.after);
+        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.after));
       },
       revert: async (d: { vertices: number[]; before: number[]; after: number[] }) => {
-        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.before));
         await sendWeights(d.vertices, d.before);
+        viewerRef?.applyWeightRows(new Uint32Array(d.vertices), new Float32Array(d.before));
       },
     },
   });
@@ -980,6 +981,10 @@ export const App: Component = () => {
     structure: sceneStructure(),
   });
 
+  /** Deshacer y rehacer con el error a la vista si el backend falla */
+  const undo = () => void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
+  const redo = () => void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
+
   // Shortcuts
   const shortcuts = createShortcutManager();
 
@@ -989,8 +994,8 @@ export const App: Component = () => {
     { key: "n", ctrl: true, action: () => handleNewProject(), description: "Proyecto nuevo" },
     { key: "o", ctrl: true, action: () => handleOpenProject(), description: "Abrir proyecto" },
     { key: "i", ctrl: true, action: () => handleLoad(), description: "Importar modelo" },
-    { key: "z", ctrl: true, action: () => void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`)), description: "Deshacer" },
-    { key: "z", ctrl: true, shift: true, action: () => void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`)), description: "Rehacer" },
+    { key: "z", ctrl: true, action: () => undo(), description: "Deshacer" },
+    { key: "z", ctrl: true, shift: true, action: () => redo(), description: "Rehacer" },
     { key: "q", action: () => useTool("select"), description: "Seleccionar" },
     // Sobre el modelo, G/R/S eligen el gizmo. Sobre el esqueleto, como en
     // Blender, G y R son operaciones modales sobre la articulación
@@ -4719,8 +4724,8 @@ export const App: Component = () => {
             onResetView={() => viewerRef?.resetView()}
             canUndo={history.canUndo()}
             canRedo={history.canRedo()}
-            onUndo={() => history.undo()}
-            onRedo={() => history.redo()}
+            onUndo={undo}
+            onRedo={redo}
           />
 
           {/* Viewport y, al animar, la línea de tiempo debajo */}

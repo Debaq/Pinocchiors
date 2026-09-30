@@ -510,8 +510,9 @@ pub(crate) fn write_skel_animation(
         return anim_name;
     }
 
-    // Translations timeSamples
-    if !trans_channels.is_empty() || true {
+    // Translations timeSamples: siempre, aunque no haya canales de traslación
+    // (sin ellas, las articulaciones quedarían en el origen al animar)
+    {
         write_translation_time_samples(
             w, &all_times, &trans_channels, skeleton, skel_data, joint_count, fps, tolerance,
         );
