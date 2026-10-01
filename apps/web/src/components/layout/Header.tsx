@@ -47,6 +47,16 @@ export const Header: Component<HeaderProps> = (props) => {
   const handleToggleMaximize = () => getCurrentWindow().toggleMaximize();
   const handleClose = () => getCurrentWindow().close();
 
+  // `-webkit-app-region` es de Electron: en Tauri la ventana se arrastra
+  // pidiéndolo. Arrastra la barra salvo sus botones; doble clic maximiza
+  const handleBarMouseDown = (e: MouseEvent) => {
+    if (e.button !== 0) return;
+    if ((e.target as HTMLElement).closest("button, a, input, select, textarea, nav, [role='menu']")) return;
+    e.preventDefault();
+    if (e.detail === 2) void handleToggleMaximize();
+    else void getCurrentWindow().startDragging();
+  };
+
   return (
     <header
       class={clsx(
@@ -55,6 +65,7 @@ export const Header: Component<HeaderProps> = (props) => {
         "bg-bg-darker/50 border-b border-border",
         "draggable"
       )}
+      onMouseDown={handleBarMouseDown}
     >
       {/* Left - Logo & Title */}
       <div class="flex items-center gap-3 no-drag">

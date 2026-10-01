@@ -18,10 +18,16 @@ export function createShortcutManager(): ShortcutManager {
   let handler: ((e: KeyboardEvent) => void) | null = null;
 
   const onKeyDown = (e: KeyboardEvent) => {
-    // Ignore when typing in inputs
-    const tag = (e.target as HTMLElement).tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-    if ((e.target as HTMLElement).isContentEditable) return;
+    // Ignore when typing in inputs. Deslizadores, casillas y botones no
+    // escriben: con el foco en ellos (después de usarlos) los atajos siguen
+    const target = e.target as HTMLElement;
+    const tag = target.tagName;
+    const typing =
+      tag === "TEXTAREA" ||
+      tag === "SELECT" ||
+      (tag === "INPUT" && !["range", "checkbox", "radio", "button", "color"].includes((target as HTMLInputElement).type));
+    if (typing) return;
+    if (target.isContentEditable) return;
 
     for (const shortcut of shortcuts) {
       const keyMatch = e.key.toLowerCase() === shortcut.key.toLowerCase();

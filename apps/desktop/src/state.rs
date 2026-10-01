@@ -155,6 +155,9 @@ pub struct AppState {
     /// Escena y malla antes de cada edición de nodos (borrar, transformar),
     /// la última al final: deshacer las saca de a una
     pub scene_edits: Mutex<Vec<(Scene, Mesh)>>,
+
+    /// Copias del estado para deshacer operaciones (ver `project::take_snapshot`)
+    pub undo_snapshots: Mutex<crate::project::UndoSnapshots>,
 }
 
 impl AppState {
@@ -187,6 +190,7 @@ impl AppState {
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
+            undo_snapshots: Mutex::new(Default::default()),
         }
     }
 }
@@ -206,6 +210,7 @@ impl AppState {
         self.rig_on_quad.store(false, Ordering::SeqCst);
         self.use_retopology.store(true, Ordering::SeqCst);
         self.reset_derived();
+        *self.undo_snapshots.lock().unwrap() = Default::default();
     }
 
     /// La malla activa para esqueleto y pesos es la de quads

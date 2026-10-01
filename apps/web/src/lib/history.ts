@@ -62,10 +62,14 @@ export interface HistoryStore {
   canReach: (id: number) => boolean;
   nodes: () => readonly HistoryNode[];
   current: () => number;
+  /** Convierte en hitos los pasos que ya no se pueden deshacer */
+  seal: (match: (step: Step) => boolean) => void;
   /** Solo la raíz (modelo nuevo) */
   clear: () => void;
   save: () => SavedHistory;
-  load: (saved: SavedHistory | undefined) => void;
+  /** `volatile`: tipos de paso que dependen de un estado que no se guardó;
+   *  al cargar pasan a ser hitos */
+  load: (saved: SavedHistory | undefined, volatile?: string[]) => void;
 }
 
 const root = (): HistoryNode => ({ id: 0, parent: null, children: [], description: "Inicio", time: Date.now(), step: null });
@@ -126,12 +130,17 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
     for (let i = from.length - 1; i >= 0 && !to.has(from[i]); i--) {
       if (nodes()[from[i]].milestone) return false;
     }
-    return true;
+    // Ni rehacer un hito, del ancestro común hacia `id`
+    const shared = new Set(from);
+    return [...to].every((n) => shared.has(n) || !nodes()[n].milestone);
   };
 
   const redoTarget = () => {
     const node = nodes()[current()];
-    return node.redoChild ?? node.children[node.children.length - 1];
+    const next = node.redoChild ?? node.children[node.children.length - 1];
+    // Un hito no se puede rehacer (solo pasa con los pasos que dejaron de ser
+    // deshacibles al cargar el proyecto)
+    return next === undefined || nodes()[next].milestone ? undefined : next;
   };
 
   return {
@@ -168,6 +177,16 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
     canReach,
     nodes,
     current,
+    seal: (match) => {
+      let changed = false;
+      for (const node of nodes()) {
+        if (node.step && !node.milestone && match(node.step)) {
+          node.milestone = true;
+          changed = true;
+        }
+      }
+      if (changed) setNodes(nodes());
+    },
     // Lista e índice juntos: con la lista nueva y el índice viejo, nodes()[current()] no existe
     clear: () =>
       batch(() => {
@@ -175,7 +194,7 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
         setCurrent(0);
       }),
     save: () => ({ version: 1, nodes: nodes(), current: current() }),
-    load: (saved) =>
+    load: (saved, volatile = []) =>
       batch(() => {
         const valid =
           saved?.version === 1 &&
@@ -188,7 +207,13 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
           setCurrent(0);
           return;
         }
-        setNodes(saved!.nodes.map((n) => ({ ...n, children: [...n.children] })));
+        setNodes(
+          saved!.nodes.map((n) => ({
+            ...n,
+            children: [...n.children],
+            ...(n.step && volatile.includes(n.step.kind) ? { milestone: true } : {}),
+          }))
+        );
         setCurrent(saved!.current);
       }),
   };

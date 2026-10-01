@@ -617,6 +617,8 @@ pub(crate) fn load_scene(
     drop(scene_lock);
     drop(mesh_lock);
     state.reset_derived();
+    // Modelo nuevo: historial nuevo
+    *state.undo_snapshots.lock().unwrap() = Default::default();
 
     // El rig del archivo reemplaza al esqueleto anterior; sin rig, el
     // esqueleto elegido se conserva para ajustarlo al modelo nuevo
