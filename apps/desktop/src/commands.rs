@@ -4,7 +4,7 @@
 //! Fase 2: Retopología con QuadriFlow
 
 use crate::animation;
-use crate::state::{AppState, SkeletonTransformParams, SkeletonType};
+use crate::state::{AppState, RetopologyState, SkeletonTransformParams, SkeletonType};
 use converter_scene::{IndexData, Scene, VertexAttribute};
 use pinocchio_attachment::Attachment;
 use pinocchio_core::{autorig_with_progress, transfer_weights, AutorigStage, PinocchioConfig, PinocchioOutput, SkeletonFit};
@@ -379,6 +379,8 @@ pub struct QuadMeshInfo {
     pub uv_seam_faces: Option<usize>,
     /// Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados)
     pub rig_kept: bool,
+    /// Para deshacerla y rehacerla con [`swap_retopology`]
+    pub undo_id: u64,
 }
 
 /// Datos de la malla de quads para Three.js
@@ -2361,7 +2363,8 @@ pub async fn run_retopology(
     // Las etapas siguientes pasan a usar la malla nueva. El rig la sigue: el
     // esqueleto ya estaba ajustado a la forma y los pesos se trasladan desde
     // la malla donde se calcularon (la original o la retopología anterior)
-    let rig = state.result.lock().unwrap().take();
+    // El rig se copia: el original queda para deshacer
+    let rig = state.result.lock().unwrap().clone();
     let rig_source = if state.rig_on_quad.load(std::sync::atomic::Ordering::SeqCst) {
         state.quad_mesh.lock().unwrap().as_ref().map(quad_as_mesh)
     } else {
@@ -2393,6 +2396,7 @@ pub async fn run_retopology(
             uv_core::SkinInfo::Unwrapped { .. } => None,
         }),
         rig_kept: rig.is_some(),
+        undo_id: state.next_retopology_swap.fetch_add(1, std::sync::atomic::Ordering::SeqCst),
     };
 
     let _ = on_progress.send(Progress {
@@ -2404,13 +2408,46 @@ pub async fn run_retopology(
         ),
     });
 
-    *state.quad_mesh.lock().unwrap() = Some(quad_mesh);
-    *state.quad_skin.lock().unwrap() = skin;
-    state.use_retopology.store(true, std::sync::atomic::Ordering::SeqCst);
-    state.active_mesh_changed();
-    state.rig_on_quad.store(rig.is_some(), std::sync::atomic::Ordering::SeqCst);
-    *state.result.lock().unwrap() = rig;
+    let rig_on_quad = rig.is_some();
+    let previous = state.swap_retopology_state(RetopologyState {
+        quad_mesh: Some(quad_mesh),
+        quad_skin: skin,
+        use_retopology: true,
+        rig_on_quad,
+        result: rig,
+    });
+    state.retopology_swaps.lock().unwrap().insert(info.undo_id, previous);
     Ok(info)
+}
+
+/// Deshace o rehace la retopología `id`: cambia la malla de quads, su piel y
+/// el rig por los del otro lado del paso. El historial llama siempre en orden
+/// (deshacer, rehacer, deshacer…), así que basta con intercambiar.
+#[tauri::command]
+pub fn swap_retopology(id: u64, state: State<'_, AppState>) -> Result<RetopologySwapInfo, String> {
+    let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
+    let mut swaps = state.retopology_swaps.lock().unwrap();
+    let other = swaps
+        .remove(&id)
+        .ok_or("No se puede deshacer la retopología: su respaldo no se guarda en el proyecto")?;
+    let current = state.swap_retopology_state(other);
+    swaps.insert(id, current);
+    Ok(RetopologySwapInfo {
+        quad_mesh: state.quad_mesh.lock().unwrap().is_some(),
+        retopology: state.active_is_quad(),
+        rig: state.result.lock().unwrap().is_some(),
+    })
+}
+
+/// Estado que deja [`swap_retopology`]
+#[derive(Debug, Clone, Serialize)]
+pub struct RetopologySwapInfo {
+    /// Hay malla de quads
+    pub quad_mesh: bool,
+    /// Esqueleto y pesos usan la malla de quads
+    pub retopology: bool,
+    /// Hay pesos
+    pub rig: bool,
 }
 
 /// Obtiene los datos de la malla de quads para renderizar en Three.js
@@ -4300,6 +4337,38 @@ mod tests {
         let positions: Vec<Vector3> = p.iter().map(|q| Vector3::new(q[0], q[1], 0.0)).collect();
         let mesh = Mesh::from_triangles(&positions, &[[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]]);
         (quad, mesh)
+    }
+
+    #[test]
+    fn retopology_swap_undoes_and_redoes() {
+        use std::sync::atomic::Ordering;
+        let (quad, _) = strip();
+        let state = AppState::new();
+        state.use_retopology.store(false, Ordering::SeqCst);
+        // Como al terminar `run_retopology`: queda la malla nueva y el estado
+        // anterior como respaldo
+        let previous = state.swap_retopology_state(crate::state::RetopologyState {
+            quad_mesh: Some(quad),
+            use_retopology: true,
+            ..Default::default()
+        });
+        assert!(previous.quad_mesh.is_none() && !previous.use_retopology);
+        state.retopology_swaps.lock().unwrap().insert(7, previous);
+
+        let undo = |state: &AppState| {
+            let other = state.retopology_swaps.lock().unwrap().remove(&7).unwrap();
+            let current = state.swap_retopology_state(other);
+            state.retopology_swaps.lock().unwrap().insert(7, current);
+        };
+        undo(&state);
+        assert!(state.quad_mesh.lock().unwrap().is_none());
+        assert!(!state.use_retopology.load(Ordering::SeqCst));
+        undo(&state); // rehacer
+        assert_eq!(state.quad_mesh.lock().unwrap().as_ref().unwrap().num_faces(), 2);
+        assert!(state.active_is_quad());
+
+        state.reset_derived();
+        assert!(state.retopology_swaps.lock().unwrap().is_empty());
     }
 
     #[test]

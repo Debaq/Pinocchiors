@@ -59,6 +59,7 @@ pub fn run() {
             commands::remove_scene_node,
             commands::set_scene_node_transform,
             commands::undo_scene_edit,
+            commands::swap_retopology,
             project::save_project,
             project::new_project,
             project::open_project,

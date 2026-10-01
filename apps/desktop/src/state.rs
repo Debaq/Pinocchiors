@@ -155,6 +155,25 @@ pub struct AppState {
     /// Escena y malla antes de cada edición de nodos (borrar, transformar),
     /// la última al final: deshacer las saca de a una
     pub scene_edits: Mutex<Vec<(Scene, Mesh)>>,
+
+    // ── Deshacer retopología ──
+    /// Por cada retopología, el estado del otro lado del paso: antes de
+    /// deshacerla, el anterior a ella; después, el que ella dejó. Deshacer y
+    /// rehacer lo intercambian con el actual. No se guarda en el proyecto.
+    pub retopology_swaps: Mutex<std::collections::HashMap<u64, RetopologyState>>,
+    /// Identificador de la próxima entrada de `retopology_swaps`
+    pub next_retopology_swap: std::sync::atomic::AtomicU64,
+}
+
+/// Lo que cambia una retopología: la malla de quads, su piel y el rig, que
+/// pasa a la malla nueva
+#[derive(Default)]
+pub struct RetopologyState {
+    pub quad_mesh: Option<QuadMesh>,
+    pub quad_skin: Option<uv_core::Skin<4>>,
+    pub use_retopology: bool,
+    pub rig_on_quad: bool,
+    pub result: Option<PinocchioOutput>,
 }
 
 impl AppState {
@@ -187,6 +206,8 @@ impl AppState {
             mesh_before_print_scale: Mutex::new(None),
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
+            retopology_swaps: Mutex::new(std::collections::HashMap::new()),
+            next_retopology_swap: std::sync::atomic::AtomicU64::new(1),
         }
     }
 }
@@ -254,6 +275,21 @@ impl AppState {
         *self.mesh_before_print_scale.lock().unwrap() = None;
         *self.scene_before_print_scale.lock().unwrap() = None;
         self.scene_edits.lock().unwrap().clear();
+        self.retopology_swaps.lock().unwrap().clear();
+    }
+
+    /// Saca el estado de la retopología (malla de quads, piel y rig) y deja
+    /// `next` en su lugar
+    pub fn swap_retopology_state(&self, next: RetopologyState) -> RetopologyState {
+        let previous = RetopologyState {
+            quad_mesh: std::mem::replace(&mut *self.quad_mesh.lock().unwrap(), next.quad_mesh),
+            quad_skin: std::mem::replace(&mut *self.quad_skin.lock().unwrap(), next.quad_skin),
+            use_retopology: self.use_retopology.swap(next.use_retopology, Ordering::SeqCst),
+            rig_on_quad: self.rig_on_quad.swap(next.rig_on_quad, Ordering::SeqCst),
+            result: std::mem::replace(&mut *self.result.lock().unwrap(), next.result),
+        };
+        *self.joint_centering.lock().unwrap() = None;
+        previous
     }
 }
 

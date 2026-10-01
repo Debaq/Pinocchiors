@@ -348,6 +348,21 @@ interface TauriSubdivideResult {
 }
 
 // Retopology types
+/** Lo que la interfaz muestra de la retopología a cada lado del paso */
+interface RetopologyUi {
+  info: { vertices: number; quads: number };
+  quality?: QuadQuality;
+  show: boolean;
+  exportUse: boolean;
+}
+
+interface RetopologyStep {
+  /** Respaldo del backend (ver `swap_retopology`) */
+  id: number;
+  before: RetopologyUi;
+  after: RetopologyUi;
+}
+
 interface TauriQuadMeshInfo {
   num_vertices: number;
   num_quads: number;
@@ -357,6 +372,8 @@ interface TauriQuadMeshInfo {
   uv_seam_faces: number | null;
   /** Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados) */
   rig_kept: boolean;
+  /** Para deshacerla con `swap_retopology` */
+  undo_id: number;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -440,6 +457,11 @@ export const App: Component = () => {
     moveJoint: {
       apply: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.to),
       revert: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.from),
+    },
+    retopology: {
+      // Se registra ya hecha: solo se aplica al rehacer
+      apply: (d: RetopologyStep) => swapRetopology(d.id, d.after, "Retopología rehecha"),
+      revert: (d: RetopologyStep) => swapRetopology(d.id, d.before, "Retopología deshecha"),
     },
     paintWeights: {
       // Primero el backend: si falla, el visor no muestra pesos que no quedaron
@@ -4188,7 +4210,45 @@ export const App: Component = () => {
     }
   };
 
+  const retopologyUi = (): RetopologyUi => ({
+    info: quadMeshInfo(),
+    quality: quadQuality(),
+    show: showQuadMesh(),
+    exportUse: exportUseRetopology(),
+  });
+
+  /** Deshace o rehace una retopología: el backend cambia quads, piel y rig
+   *  por los del otro lado del paso, y la interfaz los relee */
+  const swapRetopology = async (id: number, ui: RetopologyUi, message: string) => {
+    const r = await busy("Cargando en el visor...", () =>
+      invoke<{ quad_mesh: boolean; retopology: boolean; rig: boolean }>("swap_retopology", { id })
+    );
+    if (r.quad_mesh) {
+      setQuadMeshData(decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data")));
+      setQuadMeshLoaded(true);
+      setQuadMeshInfo(ui.info);
+      setQuadQuality(ui.quality);
+      setShowQuadMesh(ui.show);
+      setExportUseRetopology(ui.exportUse);
+      setActiveQuad(r.retopology);
+      await refreshSkin();
+    } else {
+      clearQuadMesh();
+    }
+    if (r.rig) {
+      const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+      setWeightsData(weights);
+      setBoneNames(weights.boneNames);
+      setPaintMirrorLoaded(false);
+      setAutorigComplete(true);
+    } else {
+      dropWeights();
+    }
+    setStatusMessage(message);
+  };
+
   const handleRetopology = async () => {
+    const before = retopologyUi();
     try {
       setIsProcessing(true);
       setProgress({ value: 0, label: "Preparando retopologia..." });
@@ -4215,8 +4275,6 @@ export const App: Component = () => {
         },
         onProgress,
       });
-      history.milestone("Retopología");
-
       setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
       setQuadQuality(info.quality);
 
@@ -4247,6 +4305,11 @@ export const App: Component = () => {
 
       // Pipeline: mark retopology as completed
       pipeline.markCompleted("retopology");
+      await history.execute(
+        "Retopología",
+        { kind: "retopology", data: { id: info.undo_id, before, after: retopologyUi() } satisfies RetopologyStep },
+        { applied: true }
+      );
     } catch (e) {
       console.error("Retopology error:", e);
       setStatusMessage(`Error: ${e}`);
@@ -5038,7 +5101,9 @@ export const App: Component = () => {
   const restoreProjectUi = async (json: string) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ui: any = JSON.parse(json || "{}");
-    history.load(ui.history);
+    // Los respaldos del backend para deshacer retopologías y ediciones de
+    // nodos no se guardan en el proyecto: esos pasos quedan como hitos
+    history.load(ui.history, ["retopology", "sceneEdit"]);
     setPlacementMode(undefined);
     setBoneEditMode(false);
     setPlaying(false);
