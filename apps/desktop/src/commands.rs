@@ -17,7 +17,7 @@ use pinocchio_skeleton::{
 use quadriflow_core::{remesh_with_callback, Rebuild, RemeshConfig, Symmetry};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tauri::{ipc::{Channel, Response}, AppHandle, Manager, State};
 
 // Repair & Print3D
@@ -44,6 +44,10 @@ pub struct MeshInfo {
     pub format: String,
     /// Esqueleto y animaciones que trae el archivo (glTF con skin)
     pub rig: Option<ImportedRigInfo>,
+    /// Texturas sueltas que se pusieron en los materiales (`normales: x.png → Casco`)
+    pub textures: Vec<String>,
+    /// Texturas elegidas que no se usaron y por qué
+    pub textures_skipped: Vec<String>,
 }
 
 /// Rig del archivo importado: el esqueleto y los pesos quedan en el estado
@@ -500,13 +504,22 @@ pub fn get_supported_formats() -> SupportedFormats {
     }
 }
 
-/// Importa un modelo 3D (auto-detecta formato)
+/// Importa un modelo 3D (auto-detecta formato). `textures`: archivos
+/// elegidos junto al modelo (imágenes de los mapas, el MTL de un OBJ); sin
+/// ellos, se buscan texturas sueltas junto al modelo para los mapas que le faltan.
 #[tauri::command]
-pub async fn import_model(app: AppHandle, path: String, on_progress: Channel<Progress>) -> Result<MeshInfo, String> {
-    in_background(app, move |state| import_model_impl(path, &on_progress, state)).await
+pub async fn import_model(
+    app: AppHandle,
+    path: String,
+    textures: Option<Vec<String>>,
+    on_progress: Channel<Progress>,
+) -> Result<MeshInfo, String> {
+    in_background(app, move |state| import_model_impl(path, textures.unwrap_or_default(), &on_progress, state)).await
 }
 
-fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
+fn import_model_impl(path: String, extra: Vec<String>, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
+    use converter_obj::maps;
+
     let path = Path::new(&path);
     report(progress, "reading", 5, "Leyendo archivo...");
 
@@ -516,14 +529,18 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
         .map(|e| e.to_lowercase())
         .ok_or("No se puede determinar el formato del archivo")?;
 
+    let extra: Vec<PathBuf> = extra.into_iter().map(PathBuf::from).collect();
+    let mtl = extra.iter().find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("mtl")));
+    let images: Vec<PathBuf> = extra.iter().filter(|p| maps::is_image(p)).cloned().collect();
+
     // Import usando converter apropiado
-    let scene = match ext.as_str() {
+    let mut scene = match ext.as_str() {
         "gltf" | "glb" => {
             converter_gltf_io::import_gltf(path)
                 .map_err(|e| format!("Error importando glTF: {:?}", e))?
         }
         "obj" => {
-            converter_obj::import_obj(path)
+            converter_obj::import_obj_with_mtl(path, mtl.map(PathBuf::as_path))
                 .map_err(|e| format!("Error importando OBJ: {:?}", e))?
         }
         "stl" => {
@@ -534,8 +551,19 @@ fn import_model_impl(path: String, progress: &Channel<Progress>, state: &AppStat
         _ => return Err(format!("Formato no soportado: .{}", ext)),
     };
 
+    report(progress, "textures", 40, "Buscando texturas...");
+    let model_name = path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    let attached = if !images.is_empty() {
+        maps::attach_textures(&mut scene, &images, &model_name, true)
+    } else if matches!(ext.as_str(), "gltf" | "glb" | "obj") {
+        maps::attach_textures_from_folder(&mut scene, path)
+    } else {
+        maps::AttachReport::default()
+    };
+
     let name = path.file_name().map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    load_scene(scene, name, ext.to_uppercase(), progress, state)
+    let info = load_scene(scene, name, ext.to_uppercase(), progress, state)?;
+    Ok(MeshInfo { textures: attached.attached, textures_skipped: attached.skipped, ..info })
 }
 
 /// Deja `scene` como el modelo de trabajo (desde un archivo o el escáner)
@@ -560,6 +588,8 @@ pub(crate) fn load_scene(
         bounding_box: bbox,
         format: format.clone(),
         rig: None,
+        textures: Vec::new(),
+        textures_skipped: Vec::new(),
     };
 
     // Convertir Scene a Mesh de pinocchio para autorig
@@ -2880,6 +2910,8 @@ fn scene_mesh_info(scene: &Scene, format: &str) -> MeshInfo {
         bounding_box: calculate_scene_bounds(scene),
         format: format.to_string(),
         rig: None,
+        textures: Vec::new(),
+        textures_skipped: Vec::new(),
     }
 }
 
@@ -3118,6 +3150,8 @@ pub async fn repair_mesh(
         bounding_box: calculate_scene_bounds(&new_scene),
         format: "REPAIRED".to_string(),
         rig: None,
+        textures: Vec::new(),
+        textures_skipped: Vec::new(),
     };
 
     report(&on_progress, "rig", 98, "Trasladando los pesos...");
@@ -3170,6 +3204,8 @@ fn undo_repair_impl(state: &AppState) -> Result<UndoRepairInfo, String> {
         bounding_box: bbox,
         format: "RESTORED".to_string(),
         rig: None,
+        textures: Vec::new(),
+        textures_skipped: Vec::new(),
     };
 
     let repaired = state.mesh.lock().unwrap().replace(backup_mesh);
