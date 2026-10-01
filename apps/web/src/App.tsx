@@ -3889,6 +3889,20 @@ export const App: Component = () => {
     const width = splitRef?.clientWidth ?? 1;
     startDrag(e, "col-resize", (dx) => setScanEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
   };
+  /** Abre Orizon3D en una pestaña (desde la pantalla de inicio) */
+  const openScanEditor = (tab: ScanEditorTab) => {
+    setTextureEditor(undefined);
+    pipeline.setActiveStep("scan");
+    setScanEditorTab(tab);
+    setScanEditorOpen(true);
+  };
+  /** Abre una nube PLY como toma y pasa a limpiarla */
+  const openCloudFromWelcome = async () => {
+    const path = await open({ title: "Abrir nube de puntos", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
+    if (!path || Array.isArray(path)) return;
+    openScanEditor("cloud");
+    await scanCloud.importPly(path);
+  };
   /** La nube se ve y se edita en el visor (en Orizon3D, con una nube abierta) */
   const cloudEditing = () => inScanWorkspace() && !!scanCloud.info() && scanCloud.shown();
   createEffect(() => {
@@ -5762,6 +5776,9 @@ export const App: Component = () => {
             <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig"}>
               <WelcomeScreen
                 onImport={handleLoad}
+                onScan={() => openScanEditor("capture")}
+                onOpenCloud={openCloudFromWelcome}
+                formats={supportedFormats()?.import.flatMap((f) => f.extensions)}
                 onSkeletonOnly={() => pipeline.setActiveStep("skeleton")}
                 onOpenProject={() => handleOpenProject()}
                 recovery={recovery()}

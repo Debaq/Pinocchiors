@@ -409,6 +409,9 @@ export interface PointCloudData {
   version: number;
   positions: Float32Array;
   colors: Uint8Array | null;
+  /** Otras tomas a la vista: se dibujan de fondo, en un solo tono, y no se
+   *  seleccionan */
+  ghost?: Float32Array | null;
 }
 
 /** Herramienta de selección sobre la nube */
@@ -584,6 +587,8 @@ export class Viewer3D {
     base: Uint8Array;
     selected: Uint8Array;
   } | null = null;
+  /** Las demás tomas, de fondo */
+  private cloudGhost: THREE.Points | null = null;
   private cloudGroup = new THREE.Group();
   /** Con la nube a la vista se ocultan el modelo y el esqueleto */
   private cloudFocus = false;
@@ -3152,6 +3157,22 @@ export class Viewer3D {
           : new Uint8Array(data.count);
       this.cloud = { points, count: data.count, version: data.version, base, selected };
       this.cloudGroup.add(points);
+      if (data.ghost && data.ghost.length >= 3) {
+        const ghostGeometry = new THREE.BufferGeometry();
+        ghostGeometry.setAttribute("position", new THREE.BufferAttribute(data.ghost, 3));
+        ghostGeometry.computeBoundingBox();
+        ghostGeometry.computeBoundingSphere();
+        const ghostMaterial = new THREE.PointsMaterial({
+          size: Math.max(1, this.cloudPointSize * 0.75),
+          sizeAttenuation: false,
+          color: 0x5fa8d3,
+          transparent: true,
+          opacity: 0.35,
+          depthWrite: false,
+        });
+        this.cloudGhost = new THREE.Points(ghostGeometry, ghostMaterial);
+        this.cloudGroup.add(this.cloudGhost);
+      }
       this.cloudGroup.scale.setScalar(this.cloudScale());
       this.recolorCloud();
     }
@@ -3174,6 +3195,7 @@ export class Viewer3D {
   setCloudPointSize(px: number): void {
     this.cloudPointSize = px;
     if (this.cloud) (this.cloud.points.material as THREE.PointsMaterial).size = px;
+    if (this.cloudGhost) (this.cloudGhost.material as THREE.PointsMaterial).size = Math.max(1, px * 0.75);
   }
 
   /** Herramienta de selección de la nube (`null`: el clic vuelve a lo de siempre) */
@@ -3227,8 +3249,12 @@ export class Viewer3D {
   }
 
   private cloudBox(): THREE.Box3 | null {
-    const box = this.cloudFocus ? this.cloud?.points.geometry.boundingBox : null;
-    if (!box) return null;
+    const own = this.cloudFocus ? this.cloud?.points.geometry.boundingBox : null;
+    if (!own) return null;
+    // Con las demás tomas a la vista se encuadran todas
+    const box = own.clone();
+    const ghost = this.cloudGhost?.geometry.boundingBox;
+    if (ghost) box.union(ghost);
     const scale = this.cloudScale();
     return new THREE.Box3(box.min.clone().multiplyScalar(scale), box.max.clone().multiplyScalar(scale));
   }
@@ -3241,6 +3267,12 @@ export class Viewer3D {
   }
 
   private clearCloud(): void {
+    if (this.cloudGhost) {
+      this.cloudGroup.remove(this.cloudGhost);
+      this.cloudGhost.geometry.dispose();
+      (this.cloudGhost.material as THREE.Material).dispose();
+      this.cloudGhost = null;
+    }
     if (!this.cloud) return;
     this.cloudGroup.remove(this.cloud.points);
     this.cloud.points.geometry.dispose();
