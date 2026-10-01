@@ -5,7 +5,6 @@ use pinocchio_embedding::EmbeddingResult;
 use pinocchio_math::{Real, Vector3};
 
 /// Resultado del proceso de auto-rigging
-#[derive(Clone)]
 pub struct PinocchioOutput {
     /// Attachment (pesos de skinning)
     pub attachment: Attachment,

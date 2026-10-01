@@ -62,6 +62,8 @@ export interface HistoryStore {
   canReach: (id: number) => boolean;
   nodes: () => readonly HistoryNode[];
   current: () => number;
+  /** Convierte en hitos los pasos que ya no se pueden deshacer */
+  seal: (match: (step: Step) => boolean) => void;
   /** Solo la raíz (modelo nuevo) */
   clear: () => void;
   save: () => SavedHistory;
@@ -175,6 +177,16 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
     canReach,
     nodes,
     current,
+    seal: (match) => {
+      let changed = false;
+      for (const node of nodes()) {
+        if (node.step && !node.milestone && match(node.step)) {
+          node.milestone = true;
+          changed = true;
+        }
+      }
+      if (changed) setNodes(nodes());
+    },
     // Lista e índice juntos: con la lista nueva y el índice viejo, nodes()[current()] no existe
     clear: () =>
       batch(() => {

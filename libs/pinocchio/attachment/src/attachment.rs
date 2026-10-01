@@ -5,7 +5,6 @@ use pinocchio_mesh::Mesh;
 use rayon::prelude::*;
 
 /// Attachment de una malla a un esqueleto
-#[derive(Clone)]
 pub struct Attachment {
     /// Pesos de skinning [vértice][hueso]
     weights: Vec<Vec<Real>>,

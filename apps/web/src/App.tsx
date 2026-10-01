@@ -348,21 +348,6 @@ interface TauriSubdivideResult {
 }
 
 // Retopology types
-/** Lo que la interfaz muestra de la retopología a cada lado del paso */
-interface RetopologyUi {
-  info: { vertices: number; quads: number };
-  quality?: QuadQuality;
-  show: boolean;
-  exportUse: boolean;
-}
-
-interface RetopologyStep {
-  /** Respaldo del backend (ver `swap_retopology`) */
-  id: number;
-  before: RetopologyUi;
-  after: RetopologyUi;
-}
-
 interface TauriQuadMeshInfo {
   num_vertices: number;
   num_quads: number;
@@ -372,8 +357,6 @@ interface TauriQuadMeshInfo {
   uv_seam_faces: number | null;
   /** Había rig y pasó a la malla nueva (mismo esqueleto, pesos trasladados) */
   rig_kept: boolean;
-  /** Para deshacerla con `swap_retopology` */
-  undo_id: number;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -458,10 +441,11 @@ export const App: Component = () => {
       apply: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.to),
       revert: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.from),
     },
-    retopology: {
-      // Se registra ya hecha: solo se aplica al rehacer
-      apply: (d: RetopologyStep) => swapRetopology(d.id, d.after, "Retopología rehecha"),
-      revert: (d: RetopologyStep) => swapRetopology(d.id, d.before, "Retopología deshecha"),
+    // Operaciones del backend (reparar, retopología, pesos, UV…): se
+    // deshacen intercambiando el estado con una copia completa
+    snapshot: {
+      apply: (d: { id: number }) => swapSnapshot(d.id, "after"),
+      revert: (d: { id: number }) => swapSnapshot(d.id, "before"),
     },
     paintWeights: {
       // Primero el backend: si falla, el visor no muestra pesos que no quedaron
@@ -857,27 +841,28 @@ export const App: Component = () => {
     }
   };
 
-  const handleTextureImport = async () => {
-    const key = textureKey();
-    if (!key) return;
-    const path = await open({
-      multiple: false,
-      filters: [{ name: "Imágenes y capas", extensions: ["xcf", "psd", "png", "jpg", "jpeg", "webp"] }],
+  const handleTextureImport = () =>
+    undoable(async (done) => {
+      const key = textureKey();
+      if (!key) return;
+      const path = await open({
+        multiple: false,
+        filters: [{ name: "Imágenes y capas", extensions: ["xcf", "psd", "png", "jpg", "jpeg", "webp"] }],
+      });
+      if (!path || Array.isArray(path)) return;
+      try {
+        setIsProcessing(true);
+        setStatusMessage("Importando textura...");
+        await invoke("import_texture", { key, path });
+        done("Importar textura");
+        await reloadTextures();
+        setStatusMessage("Textura reemplazada (las capas de la malla UV se ignoran)");
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+      }
     });
-    if (!path || Array.isArray(path)) return;
-    try {
-      setIsProcessing(true);
-      setStatusMessage("Importando textura...");
-      await invoke("import_texture", { key, path });
-      history.milestone("Importar textura");
-      await reloadTextures();
-      setStatusMessage("Textura reemplazada (las capas de la malla UV se ignoran)");
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
 
   const handleTextureEditExternally = async () => {
     const key = textureKey();
@@ -1165,11 +1150,77 @@ export const App: Component = () => {
     selectedNode: selectedFileNode(),
   });
 
+  // ─── Deshacer operaciones del backend ────────────────────────────────────
+  // Antes de una operación que cambia el backend (reparar, retopología,
+  // pesos, UV…) se guarda una copia completa de su estado; deshacer la
+  // intercambia con el actual y la interfaz vuelve a como estaba antes
+  /** Interfaz antes y después de cada copia (en memoria, como las copias) */
+  const snapshotUi = new Map<number, { before: string; after: string }>();
+  /** Operaciones deshacibles en curso: deshacer espera a que terminen */
+  let operations = 0;
+
+  /** Corre `run` como paso deshacible: `done(descripción)` lo registra (si no
+   *  se llama, la operación no se hizo y la copia se descarta) */
+  const undoable = async <T,>(run: (done: (description: string) => void) => Promise<T>): Promise<T> => {
+    let id: number | undefined;
+    try {
+      const taken = await invoke<{ id: number; evicted: number[] }>("take_snapshot");
+      id = taken.id;
+      forgetSnapshots(taken.evicted);
+    } catch (e) {
+      // Sin copia la operación igual se hace, pero no se puede deshacer
+      console.warn("Sin copia para deshacer:", e);
+    }
+    const before = projectUi(false);
+    let description: string | undefined;
+    operations++;
+    try {
+      return await run((d) => void (description = d));
+    } finally {
+      operations--;
+      if (description === undefined) {
+        if (id !== undefined) invoke("drop_snapshot", { id }).catch(() => {});
+      } else if (id === undefined) {
+        history.milestone(description);
+      } else {
+        snapshotUi.set(id, { before, after: projectUi(false) });
+        await history.execute(description, { kind: "snapshot", data: { id } }, { applied: true });
+      }
+    }
+  };
+
+  /** Copias que el backend descartó: sus pasos pasan a ser hitos */
+  const forgetSnapshots = (ids: number[]) => {
+    if (ids.length === 0) return;
+    ids.forEach((id) => snapshotUi.delete(id));
+    history.seal((step) => step.kind === "snapshot" && ids.includes((step.data as { id: number }).id));
+  };
+
+  const swapSnapshot = async (id: number, side: "before" | "after") => {
+    const ui = snapshotUi.get(id);
+    if (!ui) throw new Error("la copia para deshacer ya no está");
+    await busy(side === "before" ? "Deshaciendo..." : "Rehaciendo...", () => invoke("swap_snapshot", { id }));
+    await restoreProjectUi(ui[side], true);
+  };
+
+  /** Modelo nuevo: historial nuevo (y sin copias del anterior) */
+  const resetHistory = () => {
+    history.clear();
+    snapshotUi.clear();
+    invoke("clear_snapshots").catch(() => {});
+  };
+
   /** Deshacer y rehacer con el error a la vista si el backend falla */
-  const undo = () =>
-    cloudEditing() ? void scanCloud.history(false) : void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
-  const redo = () =>
-    cloudEditing() ? void scanCloud.history(true) : void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
+  const undo = () => {
+    if (cloudEditing()) return void scanCloud.history(false);
+    if (operations > 0) return setStatusMessage("Espera a que termine la operación para deshacer");
+    void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
+  };
+  const redo = () => {
+    if (cloudEditing()) return void scanCloud.history(true);
+    if (operations > 0) return setStatusMessage("Espera a que termine la operación para rehacer");
+    void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
+  };
 
   // Shortcuts
   const shortcuts = createShortcutManager();
@@ -1406,7 +1457,7 @@ export const App: Component = () => {
     // Se venía animando el esqueleto solo: sus animaciones pasan al modelo
     const keepClips = !info.rig && !meshLoaded() && !!skeletonData() && clips().some((c) => c.tracks.length > 0);
     // Modelo nuevo: historial nuevo
-    history.clear();
+    resetHistory();
     history.milestone(milestone);
 
     const data = await fetchMeshData();
@@ -1471,96 +1522,98 @@ export const App: Component = () => {
   /** Cuenta las elecciones de plantilla y de forma de cuerpo: una respuesta
    * vieja no pisa a la última */
   let skeletonRequest = 0;
-  const handleSkeletonChange = async (presetId: string) => {
-    const request = ++skeletonRequest;
-    const previous = selectedSkeleton();
-    try {
-      setSelectedSkeleton(presetId);
+  const handleSkeletonChange = (presetId: string) =>
+    undoable(async (done) => {
+      const request = ++skeletonRequest;
+      const previous = selectedSkeleton();
+      try {
+        setSelectedSkeleton(presetId);
 
-      const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
-      if (request !== skeletonRequest) return;
-      history.milestone(`Plantilla: ${skeletonPresets().find((p) => p.id === presetId)?.name ?? presetId}`);
-      setSkeletonData(tauriSkeletonToViewer(data));
-      setSkeletonLoaded(true);
-      setFitInfo(undefined);
-      setAutorigComplete(false);
-      const plan = (await invoke<BodyPlan | null>("get_body_plan", { presetId })) ?? undefined;
-      if (request !== skeletonRequest) return;
-      setBodyPlan(plan);
+        const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+        if (request !== skeletonRequest) return;
+        done(`Plantilla: ${skeletonPresets().find((p) => p.id === presetId)?.name ?? presetId}`);
+        setSkeletonData(tauriSkeletonToViewer(data));
+        setSkeletonLoaded(true);
+        setFitInfo(undefined);
+        setAutorigComplete(false);
+        const plan = (await invoke<BodyPlan | null>("get_body_plan", { presetId })) ?? undefined;
+        if (request !== skeletonRequest) return;
+        setBodyPlan(plan);
 
-      const preset = skeletonPresets().find((p) => p.id === presetId);
-      if (preset) {
-        setStatusMessage(`Esqueleto seleccionado: ${preset.name} (${preset.numBones} huesos)`);
+        const preset = skeletonPresets().find((p) => p.id === presetId);
+        if (preset) {
+          setStatusMessage(`Esqueleto seleccionado: ${preset.name} (${preset.numBones} huesos)`);
+        }
+
+        setAutorigComplete(false);
+        setWeightsData(undefined);
+        setSkeletonTransform({ ...defaultTransform });
+        setBoneEditMode(false);
+      } catch (e) {
+        console.error("Skeleton error:", e);
+        setStatusMessage(`Error: ${e}`);
+        // La lista vuelve a mostrar la plantilla que sigue puesta
+        if (request === skeletonRequest) setSelectedSkeleton(previous);
       }
+    });
 
-      setAutorigComplete(false);
-      setWeightsData(undefined);
-      setSkeletonTransform({ ...defaultTransform });
-      setBoneEditMode(false);
-    } catch (e) {
-      console.error("Skeleton error:", e);
-      setStatusMessage(`Error: ${e}`);
-      // La lista vuelve a mostrar la plantilla que sigue puesta
-      if (request === skeletonRequest) setSelectedSkeleton(previous);
-    }
-  };
+  const handleAutorig = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setProgress({ value: 0, label: "Preparando..." });
+        setStatusMessage("Ejecutando autorig...");
 
-  const handleAutorig = async () => {
-    try {
-      setIsProcessing(true);
-      setProgress({ value: 0, label: "Preparando..." });
-      setStatusMessage("Ejecutando autorig...");
+        const config = autorigConfig();
 
-      const config = autorigConfig();
+        const onProgress = new Channel<Progress>();
+        onProgress.onmessage = (msg) => {
+          setProgress({ value: msg.percent, label: msg.message });
+        };
 
-      const onProgress = new Channel<Progress>();
-      onProgress.onmessage = (msg) => {
-        setProgress({ value: msg.percent, label: msg.message });
-      };
+        await invoke("run_autorig", {
+          config: {
+            quality: config.quality,
+            diffusion_weight: config.diffusionWeight,
+            max_influences: config.maxInfluences,
+          },
+          onProgress,
+        });
+        done("Calcular pesos");
 
-      await invoke("run_autorig", {
-        config: {
-          quality: config.quality,
-          diffusion_weight: config.diffusionWeight,
-          max_influences: config.maxInfluences,
-        },
-        onProgress,
-      });
-      history.milestone("Calcular pesos");
+        setProgress({ value: 100, label: "Cargando pesos en el visor..." });
+        const viewerWeights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
+        setWeightsData(viewerWeights);
+        setBoneNames(viewerWeights.boneNames);
 
-      setProgress({ value: 100, label: "Cargando pesos en el visor..." });
-      const viewerWeights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
-      setWeightsData(viewerWeights);
-      setBoneNames(viewerWeights.boneNames);
+        const skelData = await invoke<TauriSkeletonData>("get_skeleton_data");
+        setSkeletonData(tauriSkeletonToViewer(skelData));
 
-      const skelData = await invoke<TauriSkeletonData>("get_skeleton_data");
-      setSkeletonData(tauriSkeletonToViewer(skelData));
+        setIsProcessing(false);
+        setAutorigComplete(true);
+        setWeightsNotice(undefined);
+        setAutorigError(undefined);
+        setPaintMirrorLoaded(false);
+        setProgress(undefined);
+        setStatusMessage(`Autorig completado - ${viewerWeights.numBones} huesos procesados`);
 
-      setIsProcessing(false);
-      setAutorigComplete(true);
-      setWeightsNotice(undefined);
-      setAutorigError(undefined);
-      setPaintMirrorLoaded(false);
-      setProgress(undefined);
-      setStatusMessage(`Autorig completado - ${viewerWeights.numBones} huesos procesados`);
-
-      // Pipeline: mark skeleton as completed
-      pipeline.markCompleted("skeleton");
-    } catch (e) {
-      console.error("Autorig error:", e);
-      setStatusMessage(`Error: ${e}`);
-      setIsProcessing(false);
-      setProgress(undefined);
-      // Que no pase desapercibido: sin pesos no se puede animar ni pintar
-      const message = String(e).replace(/^Error:\s*/, "");
-      setAutorigError(message);
-      void confirmAction({
-        title: "No se pudieron calcular los pesos",
-        message: `${message}\n\nPrueba con calidad "rápida", revisa que el esqueleto quede dentro de la malla o repara la malla (Preparar → Reparar) y vuelve a calcularlos.`,
-        confirmLabel: "Entendido",
-      });
-    }
-  };
+        // Pipeline: mark skeleton as completed
+        pipeline.markCompleted("skeleton");
+      } catch (e) {
+        console.error("Autorig error:", e);
+        setStatusMessage(`Error: ${e}`);
+        setIsProcessing(false);
+        setProgress(undefined);
+        // Que no pase desapercibido: sin pesos no se puede animar ni pintar
+        const message = String(e).replace(/^Error:\s*/, "");
+        setAutorigError(message);
+        void confirmAction({
+          title: "No se pudieron calcular los pesos",
+          message: `${message}\n\nPrueba con calidad "rápida", revisa que el esqueleto quede dentro de la malla o repara la malla (Preparar → Reparar) y vuelve a calcularlos.`,
+          confirmLabel: "Entendido",
+        });
+      }
+    });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // ANIMACIÓN
@@ -4089,234 +4142,198 @@ export const App: Component = () => {
     await applyPlacement(originMatrix(data.positions, mode, com), `Origen en el ${ORIGIN_LABELS[mode]}`);
   };
 
-  const handleUvUnwrap = async () => {
-    try {
-      setIsProcessing(true);
-      setProgress({ value: 0, label: "Desplegando..." });
-      setStatusMessage("Desplegando UV y horneando texturas...");
-      const onProgress = new Channel<Progress>();
-      onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
-      const config = uvConfig();
-      const info = await invoke<UvInfo>("run_uv_unwrap", {
-        config: {
-          texture_size: config.textureSize,
-          padding: config.padding,
-          max_angle: config.maxAngle,
-          // Proyectos viejos no guardaban la distribución
-          layout: config.layout ?? "paintable",
-          by_parts: config.byParts === true && autorigComplete(),
-        },
-        onProgress,
-      });
-      history.milestone("Desplegar UV");
-      setProgress({ value: 100, label: "Cargando en el visor..." });
-      await refreshSkin();
-      setUvPreview("texture");
-      setShowQuadMesh(true);
-      setExportUseRetopology(true);
-      pipeline.markCompleted("uv");
-      setStatusMessage(
-        `UV desplegadas: ${info.num_charts ?? 0} islas, estiramiento ${info.stretch?.toFixed(3) ?? "--"}` +
-          (info.texture_size > 0 ? `, texturas de ${info.texture_size} px` : "")
-      );
-    } catch (e) {
-      console.error("UV unwrap error:", e);
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-      setProgress(undefined);
-    }
-  };
+  const handleUvUnwrap = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setProgress({ value: 0, label: "Desplegando..." });
+        setStatusMessage("Desplegando UV y horneando texturas...");
+        const onProgress = new Channel<Progress>();
+        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+        const config = uvConfig();
+        const info = await invoke<UvInfo>("run_uv_unwrap", {
+          config: {
+            texture_size: config.textureSize,
+            padding: config.padding,
+            max_angle: config.maxAngle,
+            // Proyectos viejos no guardaban la distribución
+            layout: config.layout ?? "paintable",
+            by_parts: config.byParts === true && autorigComplete(),
+          },
+          onProgress,
+        });
+        done("Desplegar UV");
+        setProgress({ value: 100, label: "Cargando en el visor..." });
+        await refreshSkin();
+        setUvPreview("texture");
+        setShowQuadMesh(true);
+        setExportUseRetopology(true);
+        pipeline.markCompleted("uv");
+        setStatusMessage(
+          `UV desplegadas: ${info.num_charts ?? 0} islas, estiramiento ${info.stretch?.toFixed(3) ?? "--"}` +
+            (info.texture_size > 0 ? `, texturas de ${info.texture_size} px` : "")
+        );
+      } catch (e) {
+        console.error("UV unwrap error:", e);
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+        setProgress(undefined);
+      }
+    });
 
   /** Despliega la malla original (sin retopología): la escena pasa a tener
    *  UV nuevas y texturas horneadas; el rig la sigue, como al reparar */
-  const handleUvUnwrapOriginal = async () => {
-    try {
-      setIsProcessing(true);
-      setProgress({ value: 0, label: "Desplegando..." });
-      setStatusMessage("Desplegando UV de la malla original...");
-      const onProgress = new Channel<Progress>();
-      onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
-      const config = uvConfig();
-      const result = await invoke<{ uv: UvInfo; mesh_info: MeshInfo; rig_kept: boolean }>("unwrap_original_mesh", {
-        config: {
-          texture_size: config.textureSize,
-          padding: config.padding,
-          max_angle: config.maxAngle,
-          // Proyectos viejos no guardaban la distribución
-          layout: config.layout ?? "paintable",
-          by_parts: config.byParts === true && autorigComplete(),
-        },
-        onProgress,
-      });
-      history.milestone("Desplegar UV del original");
-      setCanUndoUnwrap(true);
-      // Deshacer la reparación de antes descartaría el desplegado
-      setCanUndoRepair(false);
-      setDiagnostics(undefined);
-      setRepairResult(undefined);
-      dropWeights();
-      clearQuadMesh();
-      setProgress({ value: 100, label: "Cargando en el visor..." });
-      setMeshData(await fetchMeshData());
-      setMeshInfo({ vertices: result.mesh_info.num_vertices, faces: result.mesh_info.num_faces, format: meshInfo().format });
-      if (result.rig_kept) await keepRig();
-      pipeline.markCompleted("uv");
-      setStatusMessage(
-        `UV desplegadas: ${result.uv.num_charts ?? 0} islas, estiramiento ${result.uv.stretch?.toFixed(3) ?? "--"}` +
-          (result.uv.texture_size > 0 ? `, texturas de ${result.uv.texture_size} px` : "")
-      );
-    } catch (e) {
-      console.error("UV unwrap original error:", e);
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-      setProgress(undefined);
-    }
-  };
+  const handleUvUnwrapOriginal = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setProgress({ value: 0, label: "Desplegando..." });
+        setStatusMessage("Desplegando UV de la malla original...");
+        const onProgress = new Channel<Progress>();
+        onProgress.onmessage = (msg) => setProgress({ value: msg.percent, label: msg.message });
+        const config = uvConfig();
+        const result = await invoke<{ uv: UvInfo; mesh_info: MeshInfo; rig_kept: boolean }>("unwrap_original_mesh", {
+          config: {
+            texture_size: config.textureSize,
+            padding: config.padding,
+            max_angle: config.maxAngle,
+            // Proyectos viejos no guardaban la distribución
+            layout: config.layout ?? "paintable",
+            by_parts: config.byParts === true && autorigComplete(),
+          },
+          onProgress,
+        });
+        done("Desplegar UV del original");
+        setCanUndoUnwrap(true);
+        // Deshacer la reparación de antes descartaría el desplegado
+        setCanUndoRepair(false);
+        setDiagnostics(undefined);
+        setRepairResult(undefined);
+        dropWeights();
+        clearQuadMesh();
+        setProgress({ value: 100, label: "Cargando en el visor..." });
+        setMeshData(await fetchMeshData());
+        setMeshInfo({ vertices: result.mesh_info.num_vertices, faces: result.mesh_info.num_faces, format: meshInfo().format });
+        if (result.rig_kept) await keepRig();
+        pipeline.markCompleted("uv");
+        setStatusMessage(
+          `UV desplegadas: ${result.uv.num_charts ?? 0} islas, estiramiento ${result.uv.stretch?.toFixed(3) ?? "--"}` +
+            (result.uv.texture_size > 0 ? `, texturas de ${result.uv.texture_size} px` : "")
+        );
+      } catch (e) {
+        console.error("UV unwrap original error:", e);
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+        setProgress(undefined);
+      }
+    });
 
-  const handleUvUndoOriginal = async () => {
-    try {
-      setIsProcessing(true);
-      const info = await busy("Volviendo a la malla anterior...", () =>
-        invoke<MeshInfo & { rig_kept: boolean }>("undo_unwrap_original")
-      );
-      history.milestone("Deshacer desplegado del original");
-      setCanUndoUnwrap(false);
-      dropWeights();
-      clearQuadMesh();
-      setMeshData(await fetchMeshData());
-      setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
-      if (info.rig_kept) await keepRig();
-      setStatusMessage("Desplegado deshecho");
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+  const handleUvUndoOriginal = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        const info = await busy("Volviendo a la malla anterior...", () =>
+          invoke<MeshInfo & { rig_kept: boolean }>("undo_unwrap_original")
+        );
+        done("Deshacer desplegado del original");
+        setCanUndoUnwrap(false);
+        dropWeights();
+        clearQuadMesh();
+        setMeshData(await fetchMeshData());
+        setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
+        if (info.rig_kept) await keepRig();
+        setStatusMessage("Desplegado deshecho");
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+      }
+    });
 
-  const handleUvRestore = async () => {
-    try {
-      setIsProcessing(true);
-      await invoke<UvInfo>("restore_transferred_uvs");
-      history.milestone("Volver a las UV trasladadas");
-      await refreshSkin();
-      setStatusMessage("UV trasladadas del modelo original");
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+  const handleUvRestore = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        await invoke<UvInfo>("restore_transferred_uvs");
+        done("Volver a las UV trasladadas");
+        await refreshSkin();
+        setStatusMessage("UV trasladadas del modelo original");
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+      }
+    });
 
-  const retopologyUi = (): RetopologyUi => ({
-    info: quadMeshInfo(),
-    quality: quadQuality(),
-    show: showQuadMesh(),
-    exportUse: exportUseRetopology(),
-  });
+  const handleRetopology = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setProgress({ value: 0, label: "Preparando retopologia..." });
+        setStatusMessage("Ejecutando QuadriFlow...");
 
-  /** Deshace o rehace una retopología: el backend cambia quads, piel y rig
-   *  por los del otro lado del paso, y la interfaz los relee */
-  const swapRetopology = async (id: number, ui: RetopologyUi, message: string) => {
-    const r = await busy("Cargando en el visor...", () =>
-      invoke<{ quad_mesh: boolean; retopology: boolean; rig: boolean }>("swap_retopology", { id })
-    );
-    if (r.quad_mesh) {
-      setQuadMeshData(decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data")));
-      setQuadMeshLoaded(true);
-      setQuadMeshInfo(ui.info);
-      setQuadQuality(ui.quality);
-      setShowQuadMesh(ui.show);
-      setExportUseRetopology(ui.exportUse);
-      setActiveQuad(r.retopology);
-      await refreshSkin();
-    } else {
-      clearQuadMesh();
-    }
-    if (r.rig) {
-      const weights = decodeWeights(await invoke<ArrayBuffer>("get_weights_data"));
-      setWeightsData(weights);
-      setBoneNames(weights.boneNames);
-      setPaintMirrorLoaded(false);
-      setAutorigComplete(true);
-    } else {
-      dropWeights();
-    }
-    setStatusMessage(message);
-  };
+        const config = retopologyConfig();
 
-  const handleRetopology = async () => {
-    const before = retopologyUi();
-    try {
-      setIsProcessing(true);
-      setProgress({ value: 0, label: "Preparando retopologia..." });
-      setStatusMessage("Ejecutando QuadriFlow...");
+        const onProgress = new Channel<Progress>();
+        onProgress.onmessage = (msg) => {
+          setProgress({ value: msg.percent, label: msg.message });
+        };
 
-      const config = retopologyConfig();
+        const info = await invoke<TauriQuadMeshInfo>("run_retopology", {
+          config: {
+            target_quads: config.targetQuads,
+            preserve_sharp: config.preserveSharp,
+            sharp_angle: config.sharpAngle,
+            smooth_iterations: config.smoothIterations,
+            rebuild: config.rebuild,
+            curvature_alignment: config.curvatureAlignment,
+            adaptive_density: config.adaptiveDensity,
+            symmetry: config.symmetry,
+            follow_seams: config.followSeams,
+          },
+          onProgress,
+        });
+        done("Retopología");
 
-      const onProgress = new Channel<Progress>();
-      onProgress.onmessage = (msg) => {
-        setProgress({ value: msg.percent, label: msg.message });
-      };
+        setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
+        setQuadQuality(info.quality);
 
-      const info = await invoke<TauriQuadMeshInfo>("run_retopology", {
-        config: {
-          target_quads: config.targetQuads,
-          preserve_sharp: config.preserveSharp,
-          sharp_angle: config.sharpAngle,
-          smooth_iterations: config.smoothIterations,
-          rebuild: config.rebuild,
-          curvature_alignment: config.curvatureAlignment,
-          adaptive_density: config.adaptiveDensity,
-          symmetry: config.symmetry,
-          follow_seams: config.followSeams,
-        },
-        onProgress,
-      });
-      setQuadMeshInfo({ vertices: info.num_vertices, quads: info.num_quads });
-      setQuadQuality(info.quality);
+        setProgress({ value: 100, label: "Cargando en el visor..." });
+        const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
+        setQuadMeshData(quadData);
+        // Las etapas siguientes usan la malla nueva; el rig la sigue con los
+        // pesos trasladados (el esqueleto y las animaciones no cambian)
+        if (info.rig_kept) await reloadWeights();
+        else dropWeights();
+        setActiveQuad(true);
+        await refreshSkin();
+        setQuadMeshLoaded(true);
+        setShowQuadMesh(true);
+        // Lo último que se ve en el visor es lo que se exporta
+        setExportUseRetopology(true);
 
-      setProgress({ value: 100, label: "Cargando en el visor..." });
-      const quadData = decodeMesh(await invoke<ArrayBuffer>("get_quad_mesh_data"));
-      setQuadMeshData(quadData);
-      // Las etapas siguientes usan la malla nueva; el rig la sigue con los
-      // pesos trasladados (el esqueleto y las animaciones no cambian)
-      if (info.rig_kept) await reloadWeights();
-      else dropWeights();
-      setActiveQuad(true);
-      await refreshSkin();
-      setQuadMeshLoaded(true);
-      setShowQuadMesh(true);
-      // Lo último que se ve en el visor es lo que se exporta
-      setExportUseRetopology(true);
+        setIsProcessing(false);
+        setProgress(undefined);
+        const uvNote =
+          info.uv_seam_faces === null
+            ? ""
+            : ` · UV trasladadas (${info.uv_seam_faces.toLocaleString()} caras cruzan costuras)`;
+        const rigNote = info.rig_kept ? " · esqueleto y pesos trasladados" : "";
+        setStatusMessage(
+          `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}${rigNote}`
+        );
 
-      setIsProcessing(false);
-      setProgress(undefined);
-      const uvNote =
-        info.uv_seam_faces === null
-          ? ""
-          : ` · UV trasladadas (${info.uv_seam_faces.toLocaleString()} caras cruzan costuras)`;
-      const rigNote = info.rig_kept ? " · esqueleto y pesos trasladados" : "";
-      setStatusMessage(
-        `Retopologia completada: ${info.num_vertices.toLocaleString()} vertices, ${info.num_quads.toLocaleString()} quads${uvNote}${rigNote}`
-      );
-
-      // Pipeline: mark retopology as completed
-      pipeline.markCompleted("retopology");
-      await history.execute(
-        "Retopología",
-        { kind: "retopology", data: { id: info.undo_id, before, after: retopologyUi() } satisfies RetopologyStep },
-        { applied: true }
-      );
-    } catch (e) {
-      console.error("Retopology error:", e);
-      setStatusMessage(`Error: ${e}`);
-      setIsProcessing(false);
-      setProgress(undefined);
-    }
-  };
+        // Pipeline: mark retopology as completed
+        pipeline.markCompleted("retopology");
+      } catch (e) {
+        console.error("Retopology error:", e);
+        setStatusMessage(`Error: ${e}`);
+        setIsProcessing(false);
+        setProgress(undefined);
+      }
+    });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // REPAIR HANDLERS
@@ -4348,83 +4365,85 @@ export const App: Component = () => {
     }
   };
 
-  const handleRepairMesh = async () => {
-    try {
-      setIsProcessing(true);
-      setStatusMessage("Reparando malla...");
-      const opts = repairOptions();
-      const result = await busy("Reparando malla...", () => invoke<TauriRepairResult>("repair_mesh", {
-        onProgress: progressChannel(),
-        config: {
-          merge_duplicates: opts.mergeDuplicates,
-          remove_degenerates: opts.removeDegenerates,
-          fix_normals: opts.fixNormals,
-          fix_non_manifold: opts.fixNonManifold,
-          orient_outward: opts.orientOutward,
-          remove_small_components: opts.removeSmallComponents,
-          fill_holes: opts.fillHoles,
-          max_hole_edges: opts.maxHoleEdges,
-          refine_fill: opts.refineFill,
-        },
-      }));
-      history.milestone("Reparar malla");
+  const handleRepairMesh = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setStatusMessage("Reparando malla...");
+        const opts = repairOptions();
+        const result = await busy("Reparando malla...", () => invoke<TauriRepairResult>("repair_mesh", {
+          onProgress: progressChannel(),
+          config: {
+            merge_duplicates: opts.mergeDuplicates,
+            remove_degenerates: opts.removeDegenerates,
+            fix_normals: opts.fixNormals,
+            fix_non_manifold: opts.fixNonManifold,
+            orient_outward: opts.orientOutward,
+            remove_small_components: opts.removeSmallComponents,
+            fill_holes: opts.fillHoles,
+            max_hole_edges: opts.maxHoleEdges,
+            refine_fill: opts.refineFill,
+          },
+        }));
+        done("Reparar malla");
 
-      setRepairResult(result);
-      setDiagnostics(result.new_diagnostics);
-      setCanUndoRepair(true);
-      // Deshacer el desplegado de antes descartaría la reparación
-      setCanUndoUnwrap(false);
-      // La retopología se descarta; el rig pasa a la malla reparada
-      dropWeights();
-      clearQuadMesh();
+        setRepairResult(result);
+        setDiagnostics(result.new_diagnostics);
+        setCanUndoRepair(true);
+        // Deshacer el desplegado de antes descartaría la reparación
+        setCanUndoUnwrap(false);
+        // La retopología se descarta; el rig pasa a la malla reparada
+        dropWeights();
+        clearQuadMesh();
 
-      // Refrescar meshData y meshInfo
-      const data = await fetchMeshData();
-      setMeshData(data);
-      setMeshInfo({
-        vertices: result.new_mesh_info.num_vertices,
-        faces: result.new_mesh_info.num_faces,
-        format: meshInfo().format,
-      });
-      if (result.rig_kept) await keepRig();
+        // Refrescar meshData y meshInfo
+        const data = await fetchMeshData();
+        setMeshData(data);
+        setMeshInfo({
+          vertices: result.new_mesh_info.num_vertices,
+          faces: result.new_mesh_info.num_faces,
+          format: meshInfo().format,
+        });
+        if (result.rig_kept) await keepRig();
 
-      setIsProcessing(false);
-      setStatusMessage(
-        result.new_diagnostics.is_healthy
-          ? "Reparación completada: malla sana"
-          : "Reparación completada (revisa el diagnóstico)"
-      );
-      pipeline.markCompleted("repair");
-    } catch (e) {
-      console.error("Repair error:", e);
-      setStatusMessage(`Error: ${e}`);
-      setIsProcessing(false);
-    }
-  };
+        setIsProcessing(false);
+        setStatusMessage(
+          result.new_diagnostics.is_healthy
+            ? "Reparación completada: malla sana"
+            : "Reparación completada (revisa el diagnóstico)"
+        );
+        pipeline.markCompleted("repair");
+      } catch (e) {
+        console.error("Repair error:", e);
+        setStatusMessage(`Error: ${e}`);
+        setIsProcessing(false);
+      }
+    });
 
-  const handleUndoRepair = async () => {
-    try {
-      setStatusMessage("Deshaciendo reparación...");
-      const info = await busy("Deshaciendo reparación...", () =>
-        invoke<MeshInfo & { rig_kept: boolean }>("undo_repair")
-      );
-      history.milestone("Deshacer reparación");
+  const handleUndoRepair = () =>
+    undoable(async (done) => {
+      try {
+        setStatusMessage("Deshaciendo reparación...");
+        const info = await busy("Deshaciendo reparación...", () =>
+          invoke<MeshInfo & { rig_kept: boolean }>("undo_repair")
+        );
+        done("Deshacer reparación");
 
-      const data = await fetchMeshData();
-      setMeshData(data);
-      setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
-      setCanUndoRepair(false);
-      setDiagnostics(undefined);
-      setRepairResult(undefined);
-      dropWeights();
-      clearQuadMesh();
-      if (info.rig_kept) await keepRig();
-      setStatusMessage("Reparación deshecha");
-    } catch (e) {
-      console.error("Undo repair error:", e);
-      setStatusMessage(`Error: ${e}`);
-    }
-  };
+        const data = await fetchMeshData();
+        setMeshData(data);
+        setMeshInfo({ vertices: info.num_vertices, faces: info.num_faces, format: meshInfo().format });
+        setCanUndoRepair(false);
+        setDiagnostics(undefined);
+        setRepairResult(undefined);
+        dropWeights();
+        clearQuadMesh();
+        if (info.rig_kept) await keepRig();
+        setStatusMessage("Reparación deshecha");
+      } catch (e) {
+        console.error("Undo repair error:", e);
+        setStatusMessage(`Error: ${e}`);
+      }
+    });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PRINT3D HANDLERS
@@ -4447,70 +4466,75 @@ export const App: Component = () => {
     }
   };
 
-  const handleUndoPrintScale = async () => {
-    try {
-      setIsProcessing(true);
-      const result = await busy("Deshaciendo escala...", () => invoke<TauriPrint3dAnalysis>("undo_print_scale"));
-      setMeshAnalysis(result);
-      setSubdivideResult(undefined);
-      setAutorigComplete(false);
-      setWeightsData(undefined);
-      clearQuadMesh();
-      const data = await fetchMeshData();
-      setMeshData(data);
-      setCanUndoPrintScale(false);
-      setStatusMessage("Escala deshecha");
-    } catch (e) {
-      console.error("Undo scale error:", e);
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
+  const handleUndoPrintScale = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        const result = await busy("Deshaciendo escala...", () => invoke<TauriPrint3dAnalysis>("undo_print_scale"));
+        setMeshAnalysis(result);
+        setSubdivideResult(undefined);
+        setAutorigComplete(false);
+        setWeightsData(undefined);
+        clearQuadMesh();
+        const data = await fetchMeshData();
+        setMeshData(data);
+        setCanUndoPrintScale(false);
+        done("Deshacer escala");
+        setStatusMessage("Escala deshecha");
+      } catch (e) {
+        console.error("Undo scale error:", e);
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+      }
+    });
 
-  const handleScaleForPrint = async (params: ScaleParams) => {
-    try {
-      setIsProcessing(true);
-      setStatusMessage("Escalando malla...");
-      const result = await busy("Escalando malla...", () => invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params }));
-      setMeshAnalysis(result);
-      setCanUndoPrintScale(true);
-      // El backend descarta el rig al cambiar la geometría
-      setAutorigComplete(false);
-      setWeightsData(undefined);
-      clearQuadMesh();
+  const handleScaleForPrint = (params: ScaleParams) =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setStatusMessage("Escalando malla...");
+        const result = await busy("Escalando malla...", () => invoke<TauriPrint3dAnalysis>("scale_mesh_for_print", { params }));
+        setMeshAnalysis(result);
+        setCanUndoPrintScale(true);
+        done("Escalar para fabricar");
+        // El backend descarta el rig al cambiar la geometría
+        setAutorigComplete(false);
+        setWeightsData(undefined);
+        clearQuadMesh();
 
-      // Refrescar meshData
-      const data = await fetchMeshData();
-      setMeshData(data);
+        // Refrescar meshData
+        const data = await fetchMeshData();
+        setMeshData(data);
 
-      setIsProcessing(false);
-      setStatusMessage(
-        `Escalado completado: ${result.dimensions[0].toFixed(1)} x ${result.dimensions[1].toFixed(1)} x ${result.dimensions[2].toFixed(1)} mm`
-      );
-    } catch (e) {
-      console.error("Scale error:", e);
-      setStatusMessage(`Error: ${e}`);
-      setIsProcessing(false);
-    }
-  };
+        setIsProcessing(false);
+        setStatusMessage(
+          `Escalado completado: ${result.dimensions[0].toFixed(1)} x ${result.dimensions[1].toFixed(1)} x ${result.dimensions[2].toFixed(1)} mm`
+        );
+      } catch (e) {
+        console.error("Scale error:", e);
+        setStatusMessage(`Error: ${e}`);
+        setIsProcessing(false);
+      }
+    });
 
-  const handleSubdivide = async (config: SubdivideConfig) => {
-    try {
-      setIsProcessing(true);
-      setStatusMessage("Subdividiendo malla...");
-      const result = await busy("Subdividiendo malla...", () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
-      history.milestone("Dividir en piezas");
-      setSubdivideResult(result);
-      setIsProcessing(false);
-      setStatusMessage(`Subdivisión completada: ${result.piece_count} piezas`);
-      pipeline.markCompleted("print3d");
-    } catch (e) {
-      console.error("Subdivide error:", e);
-      setStatusMessage(`Error: ${e}`);
-      setIsProcessing(false);
-    }
-  };
+  const handleSubdivide = (config: SubdivideConfig) =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        setStatusMessage("Subdividiendo malla...");
+        const result = await busy("Subdividiendo malla...", () => invoke<TauriSubdivideResult>("subdivide_mesh", { config }));
+        done("Dividir en piezas");
+        setSubdivideResult(result);
+        setIsProcessing(false);
+        setStatusMessage(`Subdivisión completada: ${result.piece_count} piezas`);
+        pipeline.markCompleted("print3d");
+      } catch (e) {
+        console.error("Subdivide error:", e);
+        setStatusMessage(`Error: ${e}`);
+        setIsProcessing(false);
+      }
+    });
 
   const handleExportPiece = async (index: number) => {
     try {
@@ -4607,64 +4631,67 @@ export const App: Component = () => {
   };
 
   /** Cambió un apéndice: se rehace la plantilla */
-  const handleBodyPlanChange = async (plan: BodyPlan) => {
-    const request = ++skeletonRequest;
-    const previous = bodyPlan();
-    setBodyPlan(plan);
-    try {
-      const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
-      if (request !== skeletonRequest) return;
-      history.milestone("Esqueleto por forma de cuerpo");
-      setSkeletonData(tauriSkeletonToViewer(data));
-      setSkeletonTransform({ ...defaultTransform });
-      setFitInfo(undefined);
-      dropWeights("Cambiaste la forma del cuerpo");
-      setStatusMessage(`Plantilla con ${data.bones.length} huesos: ajústala al modelo`);
-    } catch (e) {
-      console.error("Body plan error:", e);
-      setStatusMessage(`Error: ${e}`);
-      // El panel vuelve a mostrar la forma que sigue puesta
-      if (request === skeletonRequest) setBodyPlan(previous);
-    }
-  };
-
-  const handleAutoFit = async () => {
-    try {
-      const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
-        invoke<TauriAutoFitResult>("auto_fit_skeleton")
-      );
-      history.milestone("Ajustar esqueleto al modelo");
-      setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
-      setSkeletonTransform({ ...defaultTransform });
-      dropWeights("Volviste a ajustar el esqueleto al modelo");
-      setFitInfo({
-        quality: fit.quality,
-        extremities: fit.extremities,
-        unusedExtremities: fit.unused_extremities.length,
-      });
-      setStatusMessage(
-        `Esqueleto ajustado: ${fit.extremities} extremidades, proporciones ${Math.round(fit.quality * 100)} %`
-      );
-    } catch (e) {
-      console.error("Auto-fit error:", e);
-      setStatusMessage(`Error: ${e}`);
-    }
-  };
-
-  const handleResetTransform = async () => {
-    const presetId = selectedSkeleton();
-    if (presetId) {
+  const handleBodyPlanChange = (plan: BodyPlan) =>
+    undoable(async (done) => {
+      const request = ++skeletonRequest;
+      const previous = bodyPlan();
+      setBodyPlan(plan);
       try {
-        const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
-        history.milestone("Resetear esqueleto");
+        const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
+        if (request !== skeletonRequest) return;
+        done("Esqueleto por forma de cuerpo");
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonTransform({ ...defaultTransform });
-        setStatusMessage("Esqueleto reseteado");
+        setFitInfo(undefined);
+        dropWeights("Cambiaste la forma del cuerpo");
+        setStatusMessage(`Plantilla con ${data.bones.length} huesos: ajústala al modelo`);
       } catch (e) {
-        console.error("Reset error:", e);
+        console.error("Body plan error:", e);
+        setStatusMessage(`Error: ${e}`);
+        // El panel vuelve a mostrar la forma que sigue puesta
+        if (request === skeletonRequest) setBodyPlan(previous);
       }
-    }
-  };
+    });
+
+  const handleAutoFit = () =>
+    undoable(async (done) => {
+      try {
+        const fit = await busy("Detectando extremidades y ajustando el esqueleto...", () =>
+          invoke<TauriAutoFitResult>("auto_fit_skeleton")
+        );
+        done("Ajustar esqueleto al modelo");
+        setSkeletonData(tauriSkeletonToViewer(fit.skeleton));
+        setSkeletonTransform({ ...defaultTransform });
+        dropWeights("Volviste a ajustar el esqueleto al modelo");
+        setFitInfo({
+          quality: fit.quality,
+          extremities: fit.extremities,
+          unusedExtremities: fit.unused_extremities.length,
+        });
+        setStatusMessage(
+          `Esqueleto ajustado: ${fit.extremities} extremidades, proporciones ${Math.round(fit.quality * 100)} %`
+        );
+      } catch (e) {
+        console.error("Auto-fit error:", e);
+        setStatusMessage(`Error: ${e}`);
+      }
+    });
+
+  const handleResetTransform = () =>
+    undoable(async (done) => {
+      const presetId = selectedSkeleton();
+      if (presetId) {
+        try {
+          const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+          done("Resetear esqueleto");
+          setSkeletonData(tauriSkeletonToViewer(data));
+          setSkeletonTransform({ ...defaultTransform });
+          setStatusMessage("Esqueleto reseteado");
+        } catch (e) {
+          console.error("Reset error:", e);
+        }
+      }
+    });
 
   // Movimientos de articulaciones en orden, uno a la vez: mientras uno va al
   // backend solo se guarda el último pedido (el arrastre manda muchos)
@@ -4708,22 +4735,23 @@ export const App: Component = () => {
   };
 
   /** Centra en el volumen la articulación seleccionada, o todas */
-  const handleCenterBones = async (onlySelected: boolean) => {
-    const selected = viewSettings().selectedBone;
-    try {
-      const data = await busy("Centrando articulaciones...", () =>
-        invoke<TauriSkeletonData>("center_bones", { bones: onlySelected && selected >= 0 ? [selected] : null })
-      );
-      history.milestone(onlySelected ? "Centrar articulación" : "Centrar articulaciones");
-      setSkeletonData(tauriSkeletonToViewer(data));
-      setSkeletonTransform({ ...defaultTransform });
-      dropWeights("Centraste articulaciones");
-      setStatusMessage(onlySelected ? "Articulación centrada en el miembro" : "Articulaciones centradas");
-    } catch (e) {
-      console.error("Center bones error:", e);
-      setStatusMessage(`Error: ${e}`);
-    }
-  };
+  const handleCenterBones = (onlySelected: boolean) =>
+    undoable(async (done) => {
+      const selected = viewSettings().selectedBone;
+      try {
+        const data = await busy("Centrando articulaciones...", () =>
+          invoke<TauriSkeletonData>("center_bones", { bones: onlySelected && selected >= 0 ? [selected] : null })
+        );
+        done(onlySelected ? "Centrar articulación" : "Centrar articulaciones");
+        setSkeletonData(tauriSkeletonToViewer(data));
+        setSkeletonTransform({ ...defaultTransform });
+        dropWeights("Centraste articulaciones");
+        setStatusMessage(onlySelected ? "Articulación centrada en el miembro" : "Articulaciones centradas");
+      } catch (e) {
+        console.error("Center bones error:", e);
+        setStatusMessage(`Error: ${e}`);
+      }
+    });
 
   /** Herramientas de la sección abierta: modelo, esqueleto o animación */
   const toolCtx = createMemo(() => toolContext(pipeline.activeStep(), animating()));
@@ -4760,26 +4788,27 @@ export const App: Component = () => {
   };
 
   /** Elige la malla de las etapas siguientes (quads u original): el rig la sigue */
-  const handleActiveMesh = async (useRetopology: boolean) => {
-    try {
-      const { retopology: active, rig_kept } = await invoke<{ retopology: boolean; rig_kept: boolean }>(
-        "set_active_mesh",
-        { retopology: useRetopology }
-      );
-      history.milestone(useRetopology ? "Usar la malla de quads" : "Usar la malla original");
-      setActiveQuad(active);
-      // El rig pasa a la malla elegida con los pesos trasladados
-      if (rig_kept) await reloadWeights();
-      else dropWeights();
-      setStatusMessage(
-        active
-          ? "UV, esqueleto y pesos usan la malla retopologizada"
-          : "UV y piel siguen en la retopología; esqueleto y pesos usan la malla original"
-      );
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-    }
-  };
+  const handleActiveMesh = (useRetopology: boolean) =>
+    undoable(async (done) => {
+      try {
+        const { retopology: active, rig_kept } = await invoke<{ retopology: boolean; rig_kept: boolean }>(
+          "set_active_mesh",
+          { retopology: useRetopology }
+        );
+        done(useRetopology ? "Usar la malla de quads" : "Usar la malla original");
+        setActiveQuad(active);
+        // El rig pasa a la malla elegida con los pesos trasladados
+        if (rig_kept) await reloadWeights();
+        else dropWeights();
+        setStatusMessage(
+          active
+            ? "UV, esqueleto y pesos usan la malla retopologizada"
+            : "UV y piel siguen en la retopología; esqueleto y pesos usan la malla original"
+        );
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+      }
+    });
 
   /** Pincel: mapa de calor del hueso activo y simetría de vértices */
   const startPainting = async () => {
@@ -4897,34 +4926,35 @@ export const App: Component = () => {
    * Borra un objeto desde el Outliner (o el menú del visor). No se puede
    * deshacer: queda como hito en el historial.
    */
-  const handleDeleteNode = async (nodeId: string) => {
-    if (nodeId.startsWith("node-")) {
-      await deleteFileNode(Number(nodeId.slice(5)));
-      return;
-    }
-    const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
-    if (!["skeleton", "weights", "quadmesh"].includes(kind)) return;
-    try {
-      await invoke("remove_object", { kind });
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-      return;
-    }
-    if (kind === "skeleton") {
-      clearSkeletonUi();
-      setStatusMessage("Esqueleto borrado");
-    } else if (kind === "weights") {
-      dropWeights();
-      setStatusMessage("Pesos borrados");
-    } else {
-      // Un rig calculado sobre los quads se queda sin malla
-      if (usesQuad()) dropWeights();
-      clearQuadMesh();
-      setStatusMessage("Retopología borrada");
-    }
-    // Lo anterior apuntaba a lo borrado: deshacer no pasa de acá
-    history.milestone({ skeleton: "Borrar esqueleto", weights: "Borrar pesos", quadmesh: "Borrar retopología" }[kind]!);
-  };
+  const handleDeleteNode = (nodeId: string) =>
+    undoable(async (done) => {
+      if (nodeId.startsWith("node-")) {
+        await deleteFileNode(Number(nodeId.slice(5)));
+        return;
+      }
+      const kind = nodeId.startsWith("bone-") ? "skeleton" : nodeId;
+      if (!["skeleton", "weights", "quadmesh"].includes(kind)) return;
+      try {
+        await invoke("remove_object", { kind });
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+        return;
+      }
+      if (kind === "skeleton") {
+        clearSkeletonUi();
+        setStatusMessage("Esqueleto borrado");
+      } else if (kind === "weights") {
+        dropWeights();
+        setStatusMessage("Pesos borrados");
+      } else {
+        // Un rig calculado sobre los quads se queda sin malla
+        if (usesQuad()) dropWeights();
+        clearQuadMesh();
+        setStatusMessage("Retopología borrada");
+      }
+      // Lo anterior apuntaba a lo borrado: deshacer no pasa de acá
+      done({ skeleton: "Borrar esqueleto", weights: "Borrar pesos", quadmesh: "Borrar retopología" }[kind]!);
+    });
 
   // ═══════════════════════════════════════════════════════════════════════════
   // PROYECTO (.pinocchio)
@@ -5031,8 +5061,9 @@ export const App: Component = () => {
     document.title = name ? `${unsaved() ? "• " : ""}${name} — Pinocchio` : baseTitle;
   });
 
-  /** Estado de la interfaz que va al proyecto */
-  const projectUi = (): string => {
+  /** Estado de la interfaz que va al proyecto (`withHistory` = false: para
+   *  las copias de deshacer, que no llevan el historial dentro) */
+  const projectUi = (withHistory = true): string => {
     const { trackpadNavigation: _, ...view } = viewSettings();
     return JSON.stringify({
       version: PROJECT_UI_VERSION,
@@ -5071,7 +5102,7 @@ export const App: Component = () => {
       rig: rigSettings(),
       poseLibrary: poseLibrary(),
       mixer: mixer(),
-      history: history.save(),
+      history: withHistory ? history.save() : undefined,
     });
   };
 
@@ -5097,13 +5128,18 @@ export const App: Component = () => {
       ? raw.filter((c) => c && typeof c.id === "string" && Array.isArray(c.tracks) && Number.isFinite(c.start) && Number.isFinite(c.end))
       : [];
 
-  /** Pone la interfaz como estaba y relee del backend lo que ve el visor */
-  const restoreProjectUi = async (json: string) => {
+  /** Pone la interfaz como estaba y relee del backend lo que ve el visor.
+   *  `undoing`: viene de deshacer o rehacer; quedan el historial, la etapa,
+   *  la vista y las luces de ahora */
+  const restoreProjectUi = async (json: string, undoing = false) => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ui: any = JSON.parse(json || "{}");
-    // Los respaldos del backend para deshacer retopologías y ediciones de
-    // nodos no se guardan en el proyecto: esos pasos quedan como hitos
-    history.load(ui.history, ["retopology", "sceneEdit"]);
+    if (!undoing) {
+      // Las copias del backend para deshacer operaciones y ediciones de nodos
+      // no se guardan en el proyecto: esos pasos quedan como hitos
+      snapshotUi.clear();
+      history.load(ui.history, ["snapshot", "sceneEdit"]);
+    }
     setPlacementMode(undefined);
     setBoneEditMode(false);
     setPlaying(false);
@@ -5115,11 +5151,15 @@ export const App: Component = () => {
 
     setFileName(ui.fileName);
     if (ui.meshInfo) setMeshInfo(ui.meshInfo);
-    if (ui.lights) setLights(withDefaults(configDefaults.lights, ui.lights));
-    setViewSettings((prev) => ({ ...prev, ...ui.view, trackpadNavigation: prev.trackpadNavigation }));
-    if (typeof ui.showGrid === "boolean") {
-      setShowGrid(ui.showGrid);
-      viewerRef?.setGridVisible(ui.showGrid);
+    if (undoing) {
+      setViewSettings((prev) => ({ ...prev, selectedBone: ui.view?.selectedBone ?? -1 }));
+    } else {
+      if (ui.lights) setLights(withDefaults(configDefaults.lights, ui.lights));
+      setViewSettings((prev) => ({ ...prev, ...ui.view, trackpadNavigation: prev.trackpadNavigation }));
+      if (typeof ui.showGrid === "boolean") {
+        setShowGrid(ui.showGrid);
+        viewerRef?.setGridVisible(ui.showGrid);
+      }
     }
     setActiveQuad(ui.activeQuad === true);
     setSelectedSkeleton(ui.skeleton?.preset);
@@ -5190,7 +5230,7 @@ export const App: Component = () => {
     }
 
     pipeline.setCompleted(ui.pipeline?.completed ?? ["import"]);
-    pipeline.setActiveStep(ui.pipeline?.active ?? "structure");
+    if (!undoing) pipeline.setActiveStep(ui.pipeline?.active ?? "structure");
   };
 
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
@@ -5291,33 +5331,34 @@ export const App: Component = () => {
   };
 
   /** Descarta todo lo hecho sobre el modelo y vuelve al archivo importado */
-  const handleRevertToOriginal = async () => {
-    const ok = await confirmAction({
-      title: "Volver al modelo original",
-      message: "Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.",
-      confirmLabel: "Descartar",
-      danger: true,
+  const handleRevertToOriginal = () =>
+    undoable(async (done) => {
+      const ok = await confirmAction({
+        title: "Volver al modelo original",
+        message: "Se descarta todo lo hecho sobre el modelo: reparación, esqueleto, pesos, retopología, UV y animaciones.",
+        confirmLabel: "Descartar",
+        danger: true,
+      });
+      if (!ok) return;
+      try {
+        await invoke("revert_to_original");
+        clearSkeletonUi();
+        clearQuadMesh();
+        setDiagnostics(undefined);
+        setRepairResult(undefined);
+        setCanUndoRepair(false);
+        setCanUndoUnwrap(false);
+        setMeshAnalysis(undefined);
+        setSubdivideResult(undefined);
+        setCanUndoPrintScale(false);
+        setLastExport(undefined);
+        done("Volver al modelo original");
+        setMeshData(await fetchMeshData());
+        setStatusMessage("Modelo original restaurado");
+      } catch (e) {
+        setStatusMessage(`Error: ${e}`);
+      }
     });
-    if (!ok) return;
-    try {
-      await invoke("revert_to_original");
-      clearSkeletonUi();
-      clearQuadMesh();
-      setDiagnostics(undefined);
-      setRepairResult(undefined);
-      setCanUndoRepair(false);
-      setCanUndoUnwrap(false);
-      setMeshAnalysis(undefined);
-      setSubdivideResult(undefined);
-      setCanUndoPrintScale(false);
-      setLastExport(undefined);
-      history.milestone("Volver al modelo original");
-      setMeshData(await fetchMeshData());
-      setStatusMessage("Modelo original restaurado");
-    } catch (e) {
-      setStatusMessage(`Error: ${e}`);
-    }
-  };
 
   // ─── Importar animación (BVH) y retargeting ──────────────────────────────
 

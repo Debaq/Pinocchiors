@@ -643,6 +643,7 @@ pub async fn open_project(app: AppHandle, path: String) -> Result<ProjectOpened,
         let project: ProjectState =
             rmp_serde::from_slice(&state_bytes).map_err(|e| format!("Estado del proyecto ilegible: {e}"))?;
         restore(state, project)?;
+        state.undo_snapshots.lock().unwrap().entries.clear();
         *state.last_saved_hash.lock().unwrap() = Some(content_hash(&state_bytes, &ui));
         Ok(ProjectOpened { ui, source_name: manifest.source_name, saved_at: manifest.saved_at })
     })
@@ -691,6 +692,89 @@ pub fn new_project(state: tauri::State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// DESHACER
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Copias completas del estado para deshacer las operaciones que lo cambian
+/// en el backend (reparar, retopología, pesos, UV…). Es lo mismo que va al
+/// proyecto, pero queda en memoria: no se guarda en el archivo.
+#[derive(Default)]
+pub struct UndoSnapshots {
+    next: u64,
+    entries: std::collections::BTreeMap<u64, ProjectState>,
+}
+
+/// Cuántas copias se guardan: cada una lleva el modelo entero
+const MAX_UNDO_SNAPSHOTS: usize = 30;
+
+#[derive(Serialize)]
+pub struct SnapshotTaken {
+    pub id: u64,
+    /// Copias más viejas que se descartaron para no pasar del máximo
+    pub evicted: Vec<u64>,
+}
+
+/// Guarda una copia del estado actual (antes de una operación)
+#[tauri::command]
+pub async fn take_snapshot(app: AppHandle) -> Result<SnapshotTaken, String> {
+    in_background(app, |state| {
+        let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
+        let project = capture(state);
+        Ok(store_snapshot(&mut state.undo_snapshots.lock().unwrap(), project))
+    })
+    .await
+}
+
+fn store_snapshot(snapshots: &mut UndoSnapshots, project: ProjectState) -> SnapshotTaken {
+    snapshots.next += 1;
+    let id = snapshots.next;
+    snapshots.entries.insert(id, project);
+    let mut evicted = Vec::new();
+    while snapshots.entries.len() > MAX_UNDO_SNAPSHOTS {
+        let oldest = *snapshots.entries.keys().next().unwrap();
+        snapshots.entries.remove(&oldest);
+        evicted.push(oldest);
+    }
+    SnapshotTaken { id, evicted }
+}
+
+/// Deshace o rehace la operación de la copia `id`: el estado actual y el de
+/// la copia se intercambian. El historial llama siempre en orden (deshacer,
+/// rehacer, deshacer…), así que con intercambiar alcanza.
+#[tauri::command]
+pub async fn swap_snapshot(app: AppHandle, id: u64) -> Result<(), String> {
+    in_background(app, move |state| {
+        let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
+        swap_snapshot_impl(state, id)
+    })
+    .await
+}
+
+fn swap_snapshot_impl(state: &AppState, id: u64) -> Result<(), String> {
+    let mut snapshots = state.undo_snapshots.lock().unwrap();
+    let other = snapshots
+        .entries
+        .remove(&id)
+        .ok_or("La copia para deshacer ya no está (no se guarda en el proyecto, y las más viejas se descartan)")?;
+    let current = capture(state);
+    restore(state, other)?;
+    snapshots.entries.insert(id, current);
+    Ok(())
+}
+
+/// Descarta una copia (la operación no se hizo)
+#[tauri::command]
+pub fn drop_snapshot(id: u64, state: tauri::State<'_, AppState>) {
+    state.undo_snapshots.lock().unwrap().entries.remove(&id);
+}
+
+/// Descarta todas las copias (modelo nuevo: historial nuevo)
+#[tauri::command]
+pub fn clear_snapshots(state: tauri::State<'_, AppState>) {
+    state.undo_snapshots.lock().unwrap().entries.clear();
+}
+
 /// Vuelve al modelo tal como se importó: descarta todo lo generado después
 #[tauri::command]
 pub fn revert_to_original(state: tauri::State<'_, AppState>) -> Result<(), String> {
@@ -723,6 +807,35 @@ mod tests {
             [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
         ];
         Mesh::try_from_triangles(&p, &t).unwrap()
+    }
+
+    /// Deshacer y rehacer intercambian el estado con la copia
+    #[test]
+    fn snapshot_swap_undoes_and_redoes() {
+        let state = AppState::new();
+        *state.mesh.lock().unwrap() = Some(cube());
+        let id = store_snapshot(&mut state.undo_snapshots.lock().unwrap(), capture(&state)).id;
+        // La "operación": retopología
+        *state.quad_mesh.lock().unwrap() = Some(QuadMesh {
+            vertices: vec![pinocchio_math::nalgebra::Vector3::new(0.0, 0.0, 0.0); 4],
+            faces: vec![QuadFace { v: [0, 1, 2, 3] }],
+        });
+        swap_snapshot_impl(&state, id).unwrap();
+        assert!(state.quad_mesh.lock().unwrap().is_none());
+        assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().vertices.len(), 8);
+        swap_snapshot_impl(&state, id).unwrap();
+        assert_eq!(state.quad_mesh.lock().unwrap().as_ref().unwrap().faces.len(), 1);
+        assert!(swap_snapshot_impl(&state, id + 1).is_err());
+    }
+
+    /// Las copias más viejas se descartan al pasar del máximo
+    #[test]
+    fn old_snapshots_are_evicted() {
+        let mut snapshots = UndoSnapshots::default();
+        let taken: Vec<_> = (0..MAX_UNDO_SNAPSHOTS + 2).map(|_| store_snapshot(&mut snapshots, ProjectState::default())).collect();
+        assert_eq!(snapshots.entries.len(), MAX_UNDO_SNAPSHOTS);
+        assert_eq!(taken[MAX_UNDO_SNAPSHOTS].evicted, vec![1]);
+        assert_eq!(taken[MAX_UNDO_SNAPSHOTS + 1].evicted, vec![2]);
     }
 
     /// Guardar y abrir deja el estado igual (malla, escena, esqueleto, pesos, quads)
