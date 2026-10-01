@@ -6,6 +6,8 @@ export interface CheckboxProps {
   onChange?: (checked: boolean) => void;
   disabled?: boolean;
   label?: string;
+  /** Etiqueta chica, para paneles densos */
+  small?: boolean;
   class?: string;
 }
 
@@ -41,7 +43,7 @@ export const Checkbox = (props: CheckboxProps) => {
       </KobalteCheckbox.Control>
 
       {props.label && (
-        <KobalteCheckbox.Label class="text-sm text-text select-none">
+        <KobalteCheckbox.Label class={clsx(props.small ? "text-xs text-text-muted" : "text-sm text-text", "select-none")}>
           {props.label}
         </KobalteCheckbox.Label>
       )}

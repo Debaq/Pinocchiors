@@ -109,9 +109,21 @@ Pendiente:
   (mapa para pintar) y el color de los vértices horneado en una textura de
   2048 px (`scan_to_skinned_scene`), así se edita en el panel de pieles y lo
   conservan la reparación y la retopología.
+- ✅ Panel de Orizon3D compacto: parámetros en una fila (etiqueta, barra y
+  valor), ayudas en tooltips, barras de herramientas con iconos y fichas de
+  datos; en ancho, dos columnas.
+- ✅ Varios escaneos en una nube (`libs/orizon3d/src/register.rs`): sumar el
+  escaneo o un PLY sin borrar lo anterior, con alineación automática (FPFH +
+  RANSAC, respaldo por grilla de orientaciones, ajuste fino punto a plano),
+  fina o sin alinear, y promedio del solape. "Conservar cada escaneo" suma
+  el anterior al empezar otro. Cada suma se deshace.
+- ✅ Comparar con una referencia (copia de la nube o PLY): media, RMS, P95,
+  máxima, % en tolerancia y mapa de color en el visor; alinear a la referencia.
+- ✅ Tapar agujeros al crear el modelo (también los grandes, como la base no
+  vista): parche curvo o plano, límite de perímetro y piezas sueltas.
 - ⬜ Nube: selección solo de lo visible (hoy atraviesa la nube), recortar
-  por caja o por plano con gizmo, alinear varios escaneos (ICP manual por
-  puntos), y malla por Poisson como alternativa.
+  por caja o por plano con gizmo, alineación manual por puntos cuando la
+  automática falla, y malla por Poisson como alternativa.
 - 🧪 Panel de Orizon3D y herramientas de nube sin probar con el escáner real.
 - ⬜ Arrastrar y soltar para importar; archivos recientes; vista previa de la
   información antes de importar.

@@ -9,6 +9,8 @@ export interface PanelProps {
   icon?: JSX.Element;
   defaultOpen?: boolean;
   collapsible?: boolean;
+  /** Menos aire entre el encabezado y el contenido (paneles de herramientas) */
+  dense?: boolean;
   class?: string;
   headerActions?: JSX.Element;
 }
@@ -20,6 +22,7 @@ export const Panel: ParentComponent<PanelProps> = (props) => {
     "icon",
     "defaultOpen",
     "collapsible",
+    "dense",
     "class",
     "headerActions",
     "children",
@@ -88,7 +91,7 @@ export const Panel: ParentComponent<PanelProps> = (props) => {
 
       {/* Content */}
       <Show when={isOpen()}>
-        <div class="pt-3 pb-4 space-y-4 animate-fade-in">
+        <div class={clsx("animate-fade-in", local.dense ? "pt-1 pb-3 space-y-3" : "pt-3 pb-4 space-y-4")}>
           {local.children}
         </div>
       </Show>

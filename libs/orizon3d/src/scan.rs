@@ -266,7 +266,7 @@ pub fn downsample_positions(points: &[Point], voxel: f32) -> Vec<[f32; 3]> {
 /// Transformación rígida que mejor lleva `src[i]` sobre `dst[i]` (mínimos
 /// cuadrados), por el método de cuaterniones de Horn. `src` y `dst` deben tener
 /// la misma longitud y ser parejas correspondientes.
-fn best_fit_transform(src: &[[f32; 3]], dst: &[[f32; 3]]) -> Transform {
+pub fn best_fit_transform(src: &[[f32; 3]], dst: &[[f32; 3]]) -> Transform {
     let n = src.len();
     if n == 0 {
         return Transform::identity();
