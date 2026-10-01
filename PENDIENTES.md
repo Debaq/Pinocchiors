@@ -105,6 +105,10 @@ Pendiente:
   puntos sueltos por radio, fragmentos sueltos, quitar la mesa (RANSAC),
   simplificar, suavizar, abrir y guardar PLY, deshacer y rehacer (12 pasos).
   "Ver" marca lo que cada filtro quitaría antes de aplicarlo.
+- ✅ El modelo del escáner llega con su color como piel: UV desplegadas
+  (mapa para pintar) y el color de los vértices horneado en una textura de
+  2048 px (`scan_to_skinned_scene`), así se edita en el panel de pieles y lo
+  conservan la reparación y la retopología.
 - ✅ Panel de Orizon3D compacto: parámetros en una fila (etiqueta, barra y
   valor), ayudas en tooltips, barras de herramientas con iconos y fichas de
   datos; en ancho, dos columnas.

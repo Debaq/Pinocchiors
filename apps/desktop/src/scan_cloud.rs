@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
 
-use crate::commands::{in_background, load_scene, report, MeshInfo, Progress};
-use crate::scanner::{finish_mesh, scan_to_scene, MeshSettingsDto, ScannerHandle};
+use crate::commands::{in_background, report, MeshInfo, Progress};
+use crate::scanner::{finish_mesh, load_scan, MeshSettingsDto, ScannerHandle};
 
 /// Pasos que se pueden deshacer (cada uno guarda la nube entera)
 const MAX_UNDO: usize = 12;
@@ -389,8 +389,7 @@ pub async fn scan_cloud_create_model(
         report(&on_progress, "meshing", 10, "Reconstruyendo la malla...");
         let mesh = mesh::reconstruct(&cloud, settings.voxel_mm.max(1.0), settings.fill, settings.smooth);
         let mesh = finish_mesh(mesh, &settings, &on_progress)?;
-        let name = "Escaneo".to_string();
-        load_scene(scan_to_scene(&mesh, &name), name, "Escáner".into(), &on_progress, state)
+        load_scan(&mesh, &on_progress, state)
     })
     .await
 }

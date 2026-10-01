@@ -10,6 +10,7 @@ use tauri::ipc::{Channel, Response};
 use tauri::{AppHandle, Manager, State};
 
 use crate::commands::{in_background, load_scene, report, MeshInfo, Progress};
+use crate::state::AppState;
 
 /// Escáner conectado (uno a la vez). En `Arc` para armar la malla sin
 /// bloquear la vista previa ni el estado
@@ -368,10 +369,72 @@ pub async fn scanner_create_model(
         report(&on_progress, "meshing", 10, "Reconstruyendo la malla...");
         let mesh = scanner.build_mesh(&MeshSettings { voxel_mm: settings.voxel_mm, fill: settings.fill, smooth: settings.smooth })?;
         let mesh = finish_mesh(mesh, &settings, &on_progress)?;
-        let name = "Escaneo".to_string();
-        load_scene(scan_to_scene(&mesh, &name), name, "Escáner".into(), &on_progress, state)
+        load_scan(&mesh, &on_progress, state)
     })
     .await
+}
+
+/// Carga la malla del escaneo como modelo de trabajo, con su color como piel
+pub(crate) fn load_scan(mesh: &orizon3d_core::Mesh, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
+    let name = "Escaneo".to_string();
+    report(progress, "texture", 30, "Desplegando UV y horneando el color del escaneo...");
+    let scene = scan_to_skinned_scene(mesh, &name);
+    load_scene(scene, name, "Escáner".into(), progress, state)
+}
+
+/// Lado de la textura con el color del escaneo (px)
+const SCAN_TEXTURE_SIZE: u32 = 2048;
+
+/// Como [`scan_to_scene`], con el color de los vértices horneado en una
+/// textura sobre UV nuevas: el escaneo llega con su piel, lista para pintar y
+/// editar como la de cualquier modelo importado (y la reparación y la
+/// retopología la conservan). Sin color, o si no se puede desplegar, queda la
+/// escena sin UV.
+pub(crate) fn scan_to_skinned_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
+    let scene = scan_to_scene(mesh, name);
+    if mesh.colors.len() != mesh.vertices.len() || mesh.tris.is_empty() {
+        return scene;
+    }
+    let Ok(work) = crate::commands::scene_to_pinocchio_mesh(&scene) else { return scene };
+    let positions: Vec<[f64; 3]> = work.vertices.iter().map(|v| [v.position.x(), v.position.y(), v.position.z()]).collect();
+    let faces: Vec<[usize; 3]> = (0..work.num_faces()).map(|i| work.get_face_vertices(i)).collect();
+    let options = uv_core::BakeOptions {
+        texture_size: SCAN_TEXTURE_SIZE,
+        // Islas legibles para pintar, como el valor de fábrica del paso UV
+        unwrap: uv_core::UnwrapOptions {
+            charts: uv_core::ChartOptions { max_angle: 55.0, ..Default::default() },
+            layout: uv_core::Layout::Paintable,
+            ..Default::default()
+        },
+    };
+    let mut skin = uv_core::unwrapped_skin(&scene, None, &positions, &faces, &options);
+    let Some(material) = skin.materials.first_mut().filter(|m| m.base_color_texture.is_some()) else { return scene };
+    material.name = name.to_string();
+    // La normal horneada de la misma malla es plana: no aporta y pesa
+    if let Some(normal) = material.normal_texture.take() {
+        skin.textures.remove(normal.texture_index);
+        for m in &mut skin.materials {
+            for r in [&mut m.base_color_texture, &mut m.metallic_roughness_texture, &mut m.occlusion_texture, &mut m.emissive_texture]
+                .into_iter()
+                .flatten()
+            {
+                if r.texture_index > normal.texture_index {
+                    r.texture_index -= 1;
+                }
+            }
+        }
+    }
+    for t in &mut skin.textures {
+        t.name = format!("{name} color");
+    }
+    let (mut skinned, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), &scene);
+    for m in &mut skinned.meshes {
+        m.name = name.to_string();
+    }
+    for n in &mut skinned.nodes {
+        n.name = name.to_string();
+    }
+    skinned
 }
 
 /// Malla del escáner (cámara: X derecha, Y abajo, Z adelante, mm) a escena
@@ -396,7 +459,12 @@ pub(crate) fn scan_to_scene(mesh: &orizon3d_core::Mesh, name: &str) -> Scene {
 
     let mut attributes = vec![VertexAttribute::Positions(positions)];
     if mesh.colors.len() == mesh.vertices.len() {
-        let colors = mesh.colors.iter().map(|c| [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, 1.0]).collect();
+        // La cámara da sRGB; los colores de vértice de la escena (glTF) son lineales
+        let linear = |c: u8| {
+            let c = c as f32 / 255.0;
+            if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+        };
+        let colors = mesh.colors.iter().map(|c| [linear(c[0]), linear(c[1]), linear(c[2]), 1.0]).collect();
         attributes.push(VertexAttribute::Colors(colors));
     }
 
@@ -555,6 +623,47 @@ mod tests {
             let config = quadriflow_core::RemeshConfig { target_faces: 2000, rebuild, ..Default::default() };
             quadriflow_core::remesh(&m, &config).unwrap();
         }
+    }
+
+    #[test]
+    fn scan_color_arrives_as_a_skin() {
+        let scene = scan_to_skinned_scene(&scanned_half_sphere(), "Escaneo");
+        assert_eq!(scene.materials.len(), 1);
+        let material = &scene.materials[0];
+        assert_eq!(material.name, "Escaneo");
+        assert!(material.normal_texture.is_none());
+        let texture = &scene.textures[material.base_color_texture.as_ref().unwrap().texture_index];
+        assert_eq!(scene.textures.len(), 1);
+        for prim in &scene.meshes[0].primitives {
+            assert_eq!(prim.material, Some(0));
+            assert!(prim.attributes.iter().any(|a| matches!(a, VertexAttribute::TexCoords(0, _))));
+            // El color quedó en la textura: con colores de vértice se multiplicaría dos veces
+            assert!(!prim.attributes.iter().any(|a| matches!(a, VertexAttribute::Colors(_))));
+        }
+        // La textura tiene el color del escaneo donde caen las caras
+        let image = image::load_from_memory(&texture.data).unwrap().to_rgba8();
+        let painted: Vec<_> = image.pixels().filter(|p| p.0[3] > 0 && p.0 != [255, 255, 255, 255]).collect();
+        assert!(!painted.is_empty());
+        let near = painted.iter().filter(|p| {
+            let c = p.0;
+            (c[0] as i32 - 180).abs() < 8 && (c[1] as i32 - 120).abs() < 8 && (c[2] as i32 - 90).abs() < 8
+        });
+        assert!(near.count() * 10 >= painted.len() * 9);
+    }
+
+    #[test]
+    fn messy_scan_color_arrives_as_a_skin() {
+        let scene = scan_to_skinned_scene(&scanned_messy(), "Escaneo");
+        assert!(scene.materials[0].base_color_texture.is_some());
+        assert!(scene.validate().is_ok());
+    }
+
+    #[test]
+    fn scan_without_color_stays_without_skin() {
+        let mut mesh = scanned_half_sphere();
+        mesh.colors.clear();
+        let scene = scan_to_skinned_scene(&mesh, "Escaneo");
+        assert!(scene.materials.is_empty());
     }
 
     #[test]
