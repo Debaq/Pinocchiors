@@ -307,9 +307,9 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
   const updateMesh = (partial: Partial<ScanMeshSettings>) => setMesh({ ...mesh(), ...partial });
   const [mergeAlign, setMergeAlign] = createPersisted<AlignMode>("scan.merge.align", "auto");
   const [mergeFuse, setMergeFuse] = createPersisted("scan.merge.fuse", true);
-  /** Al empezar otro escaneo, el anterior se suma a la nube en vez de perderse */
+  /** Al empezar otro escaneo, el anterior se guarda como toma en vez de perderse */
   const [keepScans, setKeepScans] = createPersisted("scan.keep", true);
-  /** El escaneo del escáner ya pasó a la nube (no hace falta sumarlo de nuevo) */
+  /** El escaneo del escáner ya pasó a las tomas (no hace falta sumarlo de nuevo) */
   const [scanKept, setScanKept] = createSignal(false);
   const [storedCompare, setCompareSettings] = createPersisted<CompareSettings>("scan.compare", DEFAULT_COMPARE);
   const compareSettings = (): CompareSettings => ({ ...DEFAULT_COMPARE, ...storedCompare() });
@@ -410,17 +410,17 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
       setStatus(await invoke<ScannerStatus>("scanner_status"));
     });
 
-  /** Escaneo sin pasar a la nube que se perdería al empezar otro */
+  /** Escaneo sin pasar a las tomas que se perdería al empezar otro */
   const scanPending = () => !!status()?.points && !scanKept();
 
-  /** Suma el escaneo actual a la nube, alineado sobre lo que ya hay */
+  /** Guarda el escaneo actual como toma nueva, encajada sobre las que se ven */
   const mergeScan = async () => {
-    const ok = await cloud().merge("scan", mergeAlign(), mergeFuse());
+    const ok = await cloud().addTake("scan", mergeAlign());
     if (ok) setScanKept(true);
     return !!ok;
   };
 
-  /** Empieza otro escaneo; si se conservan, el anterior pasa antes a la nube */
+  /** Empieza otro escaneo; si se conservan, el anterior pasa antes a las tomas */
   const startScan = async () => {
     if (keepScans() && scanPending() && !(await mergeScan())) return;
     await scan("start");
@@ -470,7 +470,7 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
     setMeasured(undefined);
   };
 
-  /** Toma la nube del escáner y pasa a limpiarla */
+  /** Toma la nube del escáner como toma nueva (sin alinear) y pasa a limpiarla */
   const takeCloud = async () => {
     await cloud().take();
     if (cloud().info()) {
@@ -480,9 +480,9 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
   };
 
   const mergePly = async () => {
-    const path = await open({ title: "Sumar nube de puntos", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
+    const path = await open({ title: "Sumar una toma PLY", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
     if (!path || Array.isArray(path)) return;
-    await cloud().merge("ply", mergeAlign(), mergeFuse(), path);
+    await cloud().addTake("ply", mergeAlign(), path);
   };
 
   const referencePly = async () => {
@@ -736,22 +736,21 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
                 disabled={!streaming() || busy() || status()?.scanning || scanKept()}
                 loading={cloud().busy() === "Sumar el escaneo"}
                 icon={<Icons.Stack size={14} />}
-                title="Suma este escaneo a la nube en edición, alineado sobre lo que ya hay"
+                title="Guarda este escaneo como una toma más, encajada sobre las tomas a la vista. Se limpia por separado y se fusiona al final"
                 onClick={mergeScan}
               >
-                {scanKept() ? "Ya está en la nube" : "Sumar a la nube"}
+                {scanKept() ? "Ya es una toma" : `Guardar como toma ${info()!.takes.length + 1}`}
               </Button>
               <ToolButton
-                label="Reemplazar la nube con este escaneo"
-                disabled={!streaming() || busy() || status()?.scanning}
-                icon={<Icons.ArrowsClockwise size={14} />}
-                onClick={takeCloud}
+                label="Ir a las tomas (pestaña Nube)"
+                icon={<Icons.Stack size={14} />}
+                onClick={() => props.onTab("cloud")}
               />
             </div>
           </Show>
           <div class="flex items-center gap-1.5">
             <Checkbox small label="Conservar cada escaneo" checked={keepScans()} onChange={setKeepScans} />
-            <Help text="Al empezar otro escaneo, el anterior se suma solo a la nube (alineado) en vez de perderse. Sirve para escanear el objeto por partes: de pie, dado vuelta, de costado." />
+            <Help text="Al empezar otro escaneo, el anterior se guarda solo como toma (encajada sobre las demás) en vez de perderse. Sirve para escanear el objeto en tandas: de pie, dado vuelta, de costado. Cada toma se limpia por separado y al final se fusionan en la pestaña Nube." />
           </div>
         </Panel>
 
@@ -837,7 +836,10 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
           when={info()}
           fallback={
             <>
-              <Hint>Toma la nube del escaneo (o del cuadro actual) para limpiarla antes de crear el modelo, o abre una nube PLY.</Hint>
+              <Hint>
+                Toma la nube del escaneo (o del cuadro actual) para limpiarla antes de crear el modelo, o abre una nube PLY. Cada
+                escaneo es una toma: se pueden juntar varias y fusionarlas en la nube completa.
+              </Hint>
               <div class="flex gap-1.5">
                 <Button
                   variant="primary"
@@ -875,11 +877,7 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
                   />
                 </ToolGroup>
                 <ToolGroup>
-                  <ToolButton label="Abrir nube PLY" disabled={busy()} icon={<Icons.FolderOpen size={14} />} onClick={importCloud} />
-                  <ToolButton label="Guardar nube PLY" disabled={busy()} icon={<Icons.FloppyDisk size={14} />} onClick={exportCloud} />
-                  <Show when={streaming()}>
-                    <ToolButton label="Volver a tomar del escáner" disabled={busy()} icon={<Icons.Scan size={14} />} onClick={takeCloud} />
-                  </Show>
+                  <ToolButton label="Guardar la toma activa como PLY" disabled={busy()} icon={<Icons.FloppyDisk size={14} />} onClick={exportCloud} />
                 </ToolGroup>
                 <div class="flex-1" />
                 <ToolGroup>
@@ -889,13 +887,13 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
                     icon={cloud().shown() ? <Icons.Eye size={14} /> : <Icons.EyeSlash size={14} />}
                     onClick={() => cloud().setShown(!cloud().shown())}
                   />
-                  <ToolButton label="Cerrar la nube" danger disabled={busy()} icon={<Icons.X size={14} />} onClick={() => cloud().discard()} />
+                  <ToolButton label="Cerrar todas las tomas" danger disabled={busy()} icon={<Icons.X size={14} />} onClick={() => cloud().discard()} />
                 </ToolGroup>
               </div>
               <div class="grid grid-cols-3 gap-1.5">
                 <Stat label="Puntos">{current().points.toLocaleString()}</Stat>
                 <Stat label="Separación">{current().spacing_mm > 0 ? `${current().spacing_mm.toFixed(2)} mm` : "—"}</Stat>
-                <Stat label="Origen">
+                <Stat label="Toma">
                   <span title={current().source}>{current().source}</span>
                 </Stat>
               </div>
@@ -917,6 +915,121 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
       </Panel>
 
       <Show when={info()}>
+        <Panel
+          id="scan.cloud.takes"
+          dense
+          title="Tomas"
+          icon={<Icons.Stack size={14} />}
+          defaultOpen
+          headerActions={
+            <Help text="Cada escaneo o PLY es una toma. Las herramientas actúan sobre la activa (clic en el nombre); las demás a la vista se ven de fondo en azul. Escanea en tandas, limpia cada toma, alinéalas y fusiónalas en una nube completa. La fusión es una toma nueva: las originales quedan ocultas, no se pierden." />
+          }
+        >
+          <div class="flex flex-col gap-0.5">
+            <For each={info()!.takes}>
+              {(take, i) => (
+                <div
+                  class={clsx(
+                    "flex items-center gap-1 rounded px-1 py-0.5 text-xs",
+                    i() === info()!.active ? "bg-accent/15 text-text" : "text-text-muted hover:bg-bg-lighter"
+                  )}
+                >
+                  <ToolButton
+                    label={i() === info()!.active ? "La toma activa siempre se ve" : take.visible ? "Ocultar" : "Mostrar de fondo"}
+                    active={take.visible}
+                    disabled={busy() || i() === info()!.active}
+                    icon={take.visible ? <Icons.Eye size={13} /> : <Icons.EyeSlash size={13} />}
+                    onClick={() => cloud().setTake(i(), take.visible ? "hide" : "show")}
+                  />
+                  <button
+                    class="flex-1 min-w-0 text-left truncate disabled:opacity-60"
+                    disabled={busy()}
+                    title={`${take.name}: clic para editarla, doble clic para renombrarla`}
+                    onClick={() => i() !== info()!.active && cloud().setTake(i(), "select")}
+                    onDblClick={() => {
+                      const name = window.prompt("Nombre de la toma", take.name);
+                      if (name && name.trim() && name !== take.name) void cloud().setTake(i(), "rename", name);
+                    }}
+                  >
+                    {take.name}
+                  </button>
+                  <span class="font-mono text-[10px] text-text-dim shrink-0">
+                    {take.points >= 1000 ? `${Math.round(take.points / 1000)}k` : take.points}
+                  </span>
+                  <ToolButton
+                    label="Quitar esta toma (no se deshace)"
+                    danger
+                    disabled={busy()}
+                    icon={<Icons.X size={12} />}
+                    onClick={() => {
+                      if (window.confirm(`¿Quitar «${take.name}»? No se puede deshacer.`)) void cloud().setTake(i(), "remove");
+                    }}
+                  />
+                </div>
+              )}
+            </For>
+          </div>
+          <div class="flex gap-1.5">
+            <Button
+              size="sm"
+              class="flex-1"
+              disabled={!streaming() || busy() || status()?.scanning || scanKept()}
+              loading={cloud().busy() === "Sumar el escaneo"}
+              icon={<Icons.Scan size={14} />}
+              title={scanKept() ? "El escaneo actual ya es una toma: escanea otro en la pestaña Captura" : "Guarda el escaneo actual del escáner como toma nueva"}
+              onClick={mergeScan}
+            >
+              Sumar escaneo
+            </Button>
+            <Button
+              size="sm"
+              class="flex-1"
+              disabled={busy()}
+              loading={cloud().busy() === "Sumar la nube"}
+              icon={<Icons.FolderOpen size={14} />}
+              title="Abre una nube PLY como toma nueva"
+              onClick={mergePly}
+            >
+              Sumar PLY
+            </Button>
+          </div>
+          <div class="flex items-center gap-2 pt-2 border-t border-border/40">
+            <span class="text-xs text-text-muted shrink-0">Alineación</span>
+            <div class="flex-1 min-w-0">
+              <Segmented value={mergeAlign()} options={ALIGN_MODES} onChange={setMergeAlign} />
+            </div>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <Checkbox small label="Promediar el solape" checked={mergeFuse()} onChange={setMergeFuse} />
+            <Help text="Al fusionar, donde las tomas se cubren deja un punto por celda (el promedio) en vez de dos capas que ensucian la malla." />
+          </div>
+          <div class="flex gap-1.5">
+            <Button
+              size="sm"
+              class="flex-1"
+              disabled={busy() || mergeAlign() === "none" || !info()!.takes.some((t, i) => t.visible && i !== info()!.active)}
+              loading={cloud().busy() === "Alinear la toma"}
+              icon={<Icons.ArrowsOutCardinal size={14} />}
+              title="Encaja la toma activa sobre las demás a la vista (se deshace con Ctrl+Z)"
+              onClick={() => cloud().alignTake(mergeAlign())}
+            >
+              Alinear activa
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              class="flex-1"
+              disabled={busy() || info()!.takes.filter((t) => t.visible).length < 2}
+              loading={cloud().busy() === "Fusionar"}
+              icon={<Icons.Stack size={14} />}
+              title="Junta la toma activa y las demás a la vista en una toma nueva. Las originales se ocultan y se conservan"
+              onClick={() => cloud().fuse(mergeAlign(), mergeFuse())}
+            >
+              Fusionar {info()!.takes.filter((t) => t.visible).length}
+            </Button>
+          </div>
+        </Panel>
+
         <Panel
           id="scan.cloud.select"
           dense
@@ -1108,55 +1221,6 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
             />
             <Checkbox small label="También lo que queda debajo" checked={clean().plane_below} onChange={(v) => updateClean({ plane_below: v })} />
           </Tool>
-        </Panel>
-
-        <Panel
-          id="scan.cloud.merge"
-          dense
-          title="Fusionar nubes"
-          icon={<Icons.Stack size={14} />}
-          defaultOpen
-          headerActions={
-            <Help text="Suma otro escaneo o una nube PLY a la nube en edición sin borrar lo anterior. La automática encaja la nube nueva aunque el objeto se haya dado vuelta; cada suma se deshace con Ctrl+Z." />
-          }
-        >
-          <div class="flex items-center gap-2">
-            <span class="text-xs text-text-muted shrink-0">Alineación</span>
-            <div class="flex-1 min-w-0">
-              <Segmented value={mergeAlign()} options={ALIGN_MODES} onChange={setMergeAlign} />
-            </div>
-          </div>
-          <div class="flex items-center gap-1.5">
-            <Checkbox small label="Promediar el solape" checked={mergeFuse()} onChange={setMergeFuse} />
-            <Help text="Donde las nubes se cubren, deja un punto por celda (el promedio) en vez de dos capas que ensucian la malla." />
-            <div class="flex-1" />
-            <span class="text-xs text-text-muted">
-              <span class="font-mono text-text">{info()!.parts}</span> {info()!.parts === 1 ? "parte" : "partes"}
-            </span>
-          </div>
-          <div class="flex gap-1.5">
-            <Button
-              size="sm"
-              class="flex-1"
-              disabled={!streaming() || busy() || status()?.scanning || scanKept()}
-              loading={cloud().busy() === "Sumar el escaneo"}
-              icon={<Icons.Scan size={14} />}
-              title={scanKept() ? "El escaneo actual ya está en la nube: escanea otro en la pestaña Captura" : "Suma el escaneo actual del escáner"}
-              onClick={mergeScan}
-            >
-              Sumar escaneo
-            </Button>
-            <Button
-              size="sm"
-              class="flex-1"
-              disabled={busy()}
-              loading={cloud().busy() === "Sumar la nube"}
-              icon={<Icons.FolderOpen size={14} />}
-              onClick={mergePly}
-            >
-              Sumar PLY
-            </Button>
-          </div>
         </Panel>
 
         <Panel id="scan.cloud.simplify" dense title="Simplificar y suavizar" icon={<Icons.GridFour size={14} />} defaultOpen={false}>
@@ -1436,8 +1500,11 @@ export const ScanEditor: Component<ScanEditorProps> = (props) => {
           icon={<Icons.Cube size={14} />}
           onClick={() => props.onCreateModel?.(mesh(), fromCloud())}
         >
-          {fromCloud() ? "Crear modelo de la nube" : status()?.points ? "Crear modelo del escaneo" : "Crear modelo del cuadro actual"}
+          {fromCloud() ? `Crear modelo de «${info()!.source}»` : status()?.points ? "Crear modelo del escaneo" : "Crear modelo del cuadro actual"}
         </Button>
+        <Show when={fromCloud() && info()!.takes.filter((t) => t.visible).length > 1}>
+          <Hint>Se malla solo la toma activa. Para el modelo completo, fusiona antes las tomas en la pestaña Nube.</Hint>
+        </Show>
       </Panel>
 
       <Show when={props.hasModel}>

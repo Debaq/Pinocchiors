@@ -2,7 +2,17 @@ import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { CloudSelectTool, PointCloudData, Viewer3D } from "./Viewer3D";
 
-/** Nube en edición (`CloudInfo` en apps/desktop/src/scan_cloud.rs) */
+/** Una toma: un escaneo o una nube abierta (`TakeInfo`) */
+export interface TakeInfo {
+  name: string;
+  points: number;
+  visible: boolean;
+  /** Escaneos o nubes que junta (más de 1 en una fusión) */
+  parts: number;
+}
+
+/** Tomas en edición (`CloudInfo` en apps/desktop/src/scan_cloud.rs); los
+ *  campos sueltos son de la toma activa */
 export interface CloudInfo {
   points: number;
   has_color: boolean;
@@ -11,22 +21,36 @@ export interface CloudInfo {
   source: string;
   undo: string | null;
   redo: string | null;
-  /** Escaneos o nubes sumados */
+  /** Escaneos o nubes que junta la toma activa */
   parts: number;
+  /** Todas las tomas, en orden */
+  takes: TakeInfo[];
+  /** Índice de la toma activa */
+  active: number;
   /** Nube de referencia para comparar */
   reference: { name: string; points: number } | null;
   /** Se muestra el mapa de desviaciones en lugar de los colores */
   comparing: boolean;
 }
 
-/** Cómo se alinea una nube que se suma (`scan_cloud_merge`) */
+/** Cómo se alinea una toma (`scan_cloud_add`, `scan_cloud_fuse`) */
 export type AlignMode = "auto" | "fine" | "none";
 
-/** Resultado de sumar o alinear una nube (`AlignResult`) */
+/** Resultado de sumar o alinear una toma (`AlignResult`) */
 interface AlignResult {
   added: number;
-  overlap: number;
+  /** `null` si no hubo con qué alinear */
+  overlap: number | null;
   rmse: number;
+  note: string | null;
+  info: CloudInfo;
+}
+
+/** Resultado de fusionar las tomas a la vista (`FuseResult`) */
+interface FuseResult {
+  fused: number;
+  worst_overlap: number | null;
+  worst: string | null;
   info: CloudInfo;
 }
 
@@ -66,12 +90,15 @@ interface CloudEditResult {
   info: CloudInfo;
 }
 
-/** Lee la nube binaria de `scan_cloud_data` */
+/** Lee las nubes binarias de `scan_cloud_data`: la toma activa y, de
+ *  fondo, las demás a la vista */
 function parseCloud(buf: ArrayBuffer): PointCloudData {
-  const [count, version, hasColor] = new Uint32Array(buf, 0, 4);
+  const [count, version, hasColor, ghostCount] = new Uint32Array(buf, 0, 4);
   const positions = new Float32Array(buf, 16, count * 3);
   const colors = hasColor ? new Uint8Array(buf, 16 + count * 12, count * 3) : null;
-  return { count, version, positions, colors };
+  const ghostAt = 16 + count * 12 + Math.ceil((count * 3) / 4) * 4;
+  const ghost = ghostCount > 0 ? new Float32Array(buf, ghostAt, ghostCount * 3) : null;
+  return { count, version, positions, colors, ghost };
 }
 
 /**
@@ -119,13 +146,13 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
   const take = () =>
     run("Tomar la nube", async () => {
       await adopt(await invoke<CloudInfo>("scan_cloud_take"), true);
-      onMessage(`Nube lista para editar: ${info()!.points.toLocaleString()} puntos`);
+      onMessage(`${info()!.source}: ${info()!.points.toLocaleString()} puntos`);
     });
 
   const importPly = (path: string) =>
     run("Abrir la nube", async () => {
       await adopt(await invoke<CloudInfo>("scan_cloud_import", { path }), true);
-      onMessage(`Nube abierta: ${info()!.points.toLocaleString()} puntos`);
+      onMessage(`${info()!.source} abierta: ${info()!.points.toLocaleString()} puntos`);
     });
 
   const exportPly = (path: string) =>
@@ -168,20 +195,53 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
       await adopt(await invoke<CloudInfo>("scan_cloud_history", { redo }));
     });
 
-  /** Suma otra nube (del escáner o un PLY) alineada sobre la actual */
-  const merge = (from: "scan" | "ply", align: AlignMode, fuse: boolean, path?: string) =>
+  /** Suma una toma nueva (del escáner o un PLY); con `align` distinto de
+   *  "none" se encaja sobre las tomas a la vista */
+  const addTake = (from: "scan" | "ply", align: AlignMode, path?: string) =>
     run(from === "scan" ? "Sumar el escaneo" : "Sumar la nube", async () => {
       const first = !info();
-      const result = await invoke<AlignResult>("scan_cloud_merge", { from, path: path ?? null, align, fuse });
-      await adopt(result.info, true);
-      if (first) {
-        onMessage(`Nube lista para editar: ${result.info.points.toLocaleString()} puntos`);
-        return true;
+      const result = await invoke<AlignResult>("scan_cloud_add", { from, path: path ?? null, align });
+      await adopt(result.info, first);
+      const name = result.info.source;
+      if (result.note) {
+        onMessage(`${name}: ${result.added.toLocaleString()} puntos. ${result.note}`);
+      } else if (result.overlap !== null) {
+        const warn = result.overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar" : "";
+        onMessage(`${name}: ${result.added.toLocaleString()} puntos · calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)${warn}`);
+      } else {
+        onMessage(`${name}: ${result.added.toLocaleString()} puntos`);
       }
-      const fit = align === "none" ? "" : ` · calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)`;
-      const warn = align !== "none" && result.overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar (se deshace con Ctrl+Z)" : "";
-      onMessage(`Nube sumada: +${result.added.toLocaleString()} puntos, ${result.info.parts} en total${fit}${warn}`);
       return true;
+    });
+
+  /** Elige, muestra, oculta, quita o renombra una toma */
+  const setTake = (index: number, action: "select" | "show" | "hide" | "remove" | "rename", name?: string) =>
+    run("Tomas", async () => {
+      const next = await invoke<CloudInfo | null>("scan_cloud_take_set", { index, action, name: name ?? null });
+      await adopt(next ?? undefined);
+    });
+
+  /** Lleva la toma activa sobre las demás a la vista (se deshace) */
+  const alignTake = (align: AlignMode) =>
+    run("Alinear la toma", async () => {
+      const result = await invoke<AlignResult>("scan_cloud_take_align", { align });
+      await adopt(result.info);
+      const overlap = result.overlap ?? 0;
+      const warn = overlap < 0.15 ? ". Poco solape: revisa que haya caído en su lugar (se deshace con Ctrl+Z)" : "";
+      onMessage(`${result.info.source} alineada: calza ${Math.round(overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)${warn}`);
+    });
+
+  /** Fusiona las tomas a la vista en una toma nueva */
+  const fuse = (align: AlignMode, average: boolean) =>
+    run("Fusionar", async () => {
+      const result = await invoke<FuseResult>("scan_cloud_fuse", { align, fuse: average });
+      await adopt(result.info, true);
+      const worst =
+        result.worst_overlap !== null && result.worst
+          ? ` · el peor encaje: ${result.worst} (${Math.round(result.worst_overlap * 100)} %)`
+          : "";
+      const warn = result.worst_overlap !== null && result.worst_overlap < 0.15 ? ". Poco solape: revisa esa toma" : "";
+      onMessage(`${result.fused} tomas fusionadas: ${result.info.points.toLocaleString()} puntos${worst}${warn}. Las originales quedan ocultas en la lista`);
     });
 
   /** Fija la referencia: la nube actual, un PLY o ninguna */
@@ -196,7 +256,7 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     run("Alinear a la referencia", async () => {
       const result = await invoke<AlignResult>("scan_cloud_align_reference", { align });
       await adopt(result.info);
-      onMessage(`Alineada a la referencia: calza ${Math.round(result.overlap * 100)} % (error ${result.rmse.toFixed(2)} mm)`);
+      onMessage(`Alineada a la referencia: calza ${Math.round((result.overlap ?? 0) * 100)} % (error ${result.rmse.toFixed(2)} mm)`);
     });
 
   /** Compara con la referencia y pinta el mapa; `show = false` lo apaga */
@@ -256,7 +316,10 @@ export function createScanCloud(viewer: () => Viewer3D | undefined, onMessage: (
     keepSelection,
     history,
     discard,
-    merge,
+    addTake,
+    setTake,
+    alignTake,
+    fuse,
     setReference,
     alignToReference,
     compare,
