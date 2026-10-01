@@ -262,7 +262,14 @@ interface MeshInfo {
   format: string;
   /** Esqueleto con pesos y animaciones que trae el archivo (glTF con skin) */
   rig: { num_bones: number; clips: Omit<AnimationClip, "id">[] } | null;
+  /** Texturas sueltas puestas en los materiales (`normales: x.png → Casco`) */
+  textures?: string[];
+  /** Texturas elegidas que no se usaron y por qué */
+  textures_skipped?: string[];
 }
+
+/** Archivos que acompañan a un modelo al importarlo: mapas de textura y el MTL de un OBJ */
+const TEXTURE_FILE_EXTENSIONS = ["png", "jpg", "jpeg", "webp", "tga", "bmp", "mtl"];
 
 interface TauriSkeletonPreset {
   id: string;
@@ -1294,11 +1301,12 @@ export const App: Component = () => {
 
       const extensions = formats.import.flatMap((f) => f.extensions);
       const selected = await open({
-        title: "Importar modelo 3D",
+        title: "Importar modelo 3D (con sus texturas, si vienen aparte)",
+        multiple: true,
         filters: [
           {
-            name: "Modelos 3D",
-            extensions,
+            name: "Modelos 3D y texturas",
+            extensions: [...extensions, ...TEXTURE_FILE_EXTENSIONS],
           },
           ...formats.import.map((f) => ({
             name: f.name,
@@ -1308,21 +1316,37 @@ export const App: Component = () => {
       });
 
       if (!selected) return;
+      const files = typeof selected === "string" ? [selected] : selected;
+      const extensionOf = (f: string) => f.split(".").pop()?.toLowerCase() ?? "";
+      const models = files.filter((f) => extensions.includes(extensionOf(f)));
+      if (models.length !== 1) {
+        setStatusMessage(models.length === 0 ? "Elige también el modelo 3D, no solo las texturas" : "Elige un solo modelo 3D (las texturas pueden ser varias)");
+        return;
+      }
+      const filePath = models[0];
+      const textures = files.filter((f) => f !== filePath && TEXTURE_FILE_EXTENSIONS.includes(extensionOf(f)));
       if (meshLoaded() && !(await confirmDiscard("Importar modelo", "El modelo nuevo reemplaza al abierto.", "Reemplazar"))) return;
 
-      const filePath = typeof selected === "string" ? selected : selected[0];
-      const name = filePath.split("/").pop() ?? filePath;
+      const name = filePath.split(/[\\/]/).pop() ?? filePath;
       setStatusMessage(`Importando ${name}...`);
 
       setSwitching(true);
       const info = await busy(`Importando ${name}...`, () =>
-        invoke<MeshInfo>("import_model", { path: filePath, onProgress: progressChannel() })
+        invoke<MeshInfo>("import_model", { path: filePath, textures, onProgress: progressChannel() })
       );
       // El backend ya tiene el modelo nuevo: el archivo del proyecto anterior no le corresponde
       setProjectPath(undefined);
       await showNewModel(info, `Importar ${name}`);
       // El nombre cambia solo si la importación salió bien
       setFileName(name);
+      const attached = info.textures ?? [];
+      const skipped = info.textures_skipped ?? [];
+      if (attached.length > 0 || skipped.length > 0) {
+        const parts = [];
+        if (attached.length > 0) parts.push(`${attached.length === 1 ? "1 textura puesta" : `${attached.length} texturas puestas`} (${attached.join("; ")})`);
+        if (skipped.length > 0) parts.push(`sin usar: ${skipped.join("; ")}`);
+        setStatusMessage(`Modelo cargado: ${parts.join(" · ")}`);
+      }
       pipeline.setActiveStep("structure");
     } catch (e) {
       console.error("Import error:", e);

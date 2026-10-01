@@ -61,7 +61,7 @@ stl_io = "0.10"
 glam = "0.29"
 
 # Procesamiento de texturas
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "tga", "bmp"] }
 
 # Compresión Draco (Rust puro) y reducción de triángulos
 draco-core = { version = "2.2", default-features = false, features = ["encoder", "decoder", "edgebreaker_valence_encode", "edgebreaker_valence_decode"] }
