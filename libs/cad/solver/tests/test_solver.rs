@@ -772,3 +772,22 @@ fn test_solve_drag_keeps_constraints_and_removes_temp() {
     assert!(solve_drag(&mut sys, 99, Point2::new(0.0, 0.0)).is_err());
     assert_eq!(sys.constraints.len(), n);
 }
+
+#[test]
+fn test_free_points_follow_nullspace() {
+    use cad_solver::diagnose;
+    // Línea horizontal con un extremo fijo: el otro extremo se desliza en x
+    // aunque lo toquen dos ecuaciones (horizontal + nada más en x)
+    let mut sys = ConstraintSystem::new();
+    let a = sys.add_point(0.0, 0.0);
+    let b = sys.add_point(5.0, 0.0);
+    sys.add_constraint(Constraint::Fixed { p_idx: a, position: Point2::new(0.0, 0.0) });
+    sys.add_constraint(Constraint::Horizontal { p1_idx: a, p2_idx: b });
+    let d = diagnose(&sys);
+    assert_eq!(d.dof_per_point[a].1, 0);
+    assert_eq!(d.dof_per_point[b].1, 1);
+    // Con el largo fijo, ya no se mueve
+    sys.add_constraint(Constraint::Distance { p1_idx: a, p2_idx: b, distance: 5.0 });
+    let d = diagnose(&sys);
+    assert_eq!(d.dof_per_point[b].1, 0);
+}

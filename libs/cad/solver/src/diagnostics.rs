@@ -102,11 +102,14 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
         vec![]
     };
 
-    // DOF por punto: contar columnas independientes que el punto contribuye
+    // DOF por punto: cuánto del espacio nulo del Jacobiano mueve al punto
+    // (los movimientos que las restricciones permiten). Mirar solo las
+    // columnas del punto marcaba como fijo a cualquiera tocado por dos
+    // restricciones, aunque pudiera deslizarse.
+    let null = nullspace(&full_jac);
     let mut dof_per_point = Vec::with_capacity(n_points);
     for pi in 0..n_points {
-        let dof_pt = compute_point_dof(&full_jac, pi);
-        dof_per_point.push((pi, dof_pt));
+        dof_per_point.push((pi, point_dof_in_nullspace(&null, pi)));
     }
     let free_points: Vec<usize> = dof_per_point
         .iter()
@@ -218,6 +221,27 @@ fn rank_without_rows(jac: &nalgebra::DMatrix<f64>, start_row: usize, n_rows: usi
 }
 
 /// DOF de un punto: 2 - rank de las 2 columnas del Jacobiano correspondientes.
+/// Base del espacio nulo (columnas) por autovectores de JᵀJ.
+fn nullspace(jac: &nalgebra::DMatrix<f64>) -> nalgebra::DMatrix<f64> {
+    let n = jac.ncols();
+    let jtj = jac.transpose() * jac;
+    let eig = nalgebra::SymmetricEigen::new(jtj);
+    let max = eig.eigenvalues.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
+    let keep: Vec<usize> = (0..n).filter(|&i| eig.eigenvalues[i].abs() <= 1e-10 * max.max(1.0)).collect();
+    nalgebra::DMatrix::from_fn(n, keep.len(), |r, c| eig.eigenvectors[(r, keep[c])])
+}
+
+fn point_dof_in_nullspace(null: &nalgebra::DMatrix<f64>, point_idx: usize) -> i32 {
+    let (cx, cy) = (point_idx * 2, point_idx * 2 + 1);
+    if cy >= null.nrows() || null.ncols() == 0 {
+        return 0;
+    }
+    let sub = nalgebra::DMatrix::from_fn(2, null.ncols(), |r, c| null[(if r == 0 { cx } else { cy }, c)]);
+    let svd = sub.svd(false, false);
+    svd.singular_values.iter().filter(|&&v| v > 1e-6).count() as i32
+}
+
+#[allow(dead_code)]
 fn compute_point_dof(jac: &nalgebra::DMatrix<f64>, point_idx: usize) -> i32 {
     let cols = jac.ncols();
     let cx = point_idx * 2;
