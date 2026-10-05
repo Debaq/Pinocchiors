@@ -462,6 +462,26 @@ export class CadViewer {
     this.controls.update();
   }
 
+  private savedView?: { position: THREE.Vector3; target: THREE.Vector3; up: THREE.Vector3 };
+
+  /** Guarda la vista actual (antes de entrar a un sketch) */
+  saveView() {
+    this.savedView = { position: this.camera.position.clone(), target: this.controls.target.clone(), up: this.camera.up.clone() };
+  }
+
+  /** Vuelve a la vista guardada (al salir del sketch) */
+  restoreView() {
+    const v = this.savedView;
+    if (!v) return this.resetUp();
+    this.camera.position.copy(v.position);
+    this.camera.up.copy(v.up);
+    this.controls.target.copy(v.target);
+    this.camera.lookAt(v.target);
+    this.controls.update();
+    this.savedView = undefined;
+    this.requestRender();
+  }
+
   /** Encuadra todo lo visible */
   frameAll() {
     const box = new THREE.Box3();

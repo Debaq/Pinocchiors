@@ -174,8 +174,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         resetTool();
         if (!viewer) return;
         const s = ui.session();
-        if (feature !== undefined && s) viewer.lookAtPlane(s.plane);
-        else viewer.resetUp();
+        if (feature !== undefined && s) {
+          viewer.saveView();
+          viewer.lookAtPlane(s.plane);
+        } else viewer.restoreView();
       },
     ),
   );
