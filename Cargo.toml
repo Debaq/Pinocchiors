@@ -23,6 +23,7 @@ members = [
     "libs/cad/solver",
     "libs/cad/occt",
     "libs/cad/model",
+    "libs/cad/scan",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
     "libs/converter/gltf-io",
@@ -123,6 +124,7 @@ orizon3d-core = { path = "libs/orizon3d" }
 cad-solver = { path = "libs/cad/solver" }
 cad-occt = { path = "libs/cad/occt" }
 cad-model = { path = "libs/cad/model" }
+cad-scan = { path = "libs/cad/scan" }
 
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }
@@ -183,3 +185,10 @@ opt-level = 2
 lto = true
 codegen-units = 1
 opt-level = 3
+
+# Escaneo → CAD: segmentación y rayos sobre mallas grandes
+[profile.dev.package.cad-scan]
+opt-level = 2
+
+[profile.dev.package.cad-solver]
+opt-level = 2

@@ -1,0 +1,19 @@
+[package]
+name = "cad-scan"
+description = "Escaneo → CAD: elegir planos y cilindros en mallas escaneadas, cortes, contornos a sketch y operaciones"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+cad-model = { workspace = true }
+cad-solver = { workspace = true }
+nalgebra = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
+stl_io = { workspace = true }

@@ -28,6 +28,7 @@ Decisiones (2026-10-05):
 |---|---|---|---|
 | `cad-solver` | `libs/cad/solver` | Solver de restricciones 2D (Newton + LM, dispersas, diagnóstico), ajuste de primitivas (plano/esfera/cilindro, RANSAC), segmentación por normales, simplificación | no |
 | `cad-occt` | `libs/cad/occt` | Puente C++ propio a OCCT: `Shape` con RAII, perfiles con líneas/arcos/círculos, operaciones, topología consultable, teselado con id de cara, STEP | sí |
+| `cad-scan` | `libs/cad/scan` | Escaneo → CAD: elegir plano/cilindro con un clic, cortes, contornos a sketch, profundidad por rayos, detección automática | no |
 | `cad-model` | `libs/cad/model` | Documento: sketches + árbol de operaciones, recálculo, referencias geométricas, serde | vía cad-occt |
 
 ## Fases
@@ -52,7 +53,7 @@ Decisiones (2026-10-05):
       operaciones (sketch, extruir ciego/simétrico/pasante/hasta cara, revolucionar, redondeo,
       chaflán, cáscara, booleana, patrón lineal/circular, espejo, primitiva, STEP importado),
       recálculo con error por operación, retroceso (rollback), suprimir, serde.
-- [ ] **F4 — Escaneo → CAD**: de una malla (`pinocchio_mesh::Mesh` o nube de orizon3d)
+- [x] **F4 — Escaneo → CAD** (`libs/cad/scan`, crate `cad-scan`): de una malla (`pinocchio_mesh::Mesh` o nube de orizon3d)
       segmentar + ajustar → primitivas detectadas (plano, cilindro, esfera) con su error;
       convertirlas en operaciones (plano de trabajo desde plano detectado, agujero/tetón desde
       cilindro, corte de la malla por plano → sketch). Banco con modelos de `~/Descargas`.
@@ -101,3 +102,19 @@ cargo test -p cad-model
   - Límite conocido: dos aristas paralelas equidistantes del punto guardado (p. ej. tras
     duplicar una altura) pueden empatar. Arreglo de fondo: nombres topológicos por historia
     (`BRepAlgoAPI_*::Generated/Modified`), pendiente.
+- **2026-10-05 F4**: `cad-scan`. Test de punta a punta: pieza CAD teselada con ruido ±0,02 →
+  plano superior (z 20 ± 0,05, área ±1 %, 3 contornos), profundidad 20 ± 0,2 por rayos,
+  agujero r 8 ± 0,05 (detectado como agujero), tetón r 10, corte a media altura → sketch
+  con círculo reconocido y rectángulo enderezado → reconstrucción con volumen ±1 %.
+  - Banco (`--example scan_report`): espéculo STL → esfera, cilindro r 8,999, planos, 99 %
+    del área; cabeza de 126 k triángulos en 0,4 s.
+  - Hallazgos: (1) los teselados de CAD traen triángulos largos y finos cuya normal el ruido
+    vuelve cualquier cosa → cara de "normal poco confiable" si su altura < 2× tolerancia; se
+    aceptan por banda de vértices y la segmentación las cruza con la normal de la última
+    cara confiable. (2) La segmentación heredada compara contra la normal semilla y corta
+    cilindros en sectores → segmentación suave cara-vecina, con la heredada solo para
+    rescatar planos en zonas mixtas. (3) Los ajustes de cilindro heredados dependen del
+    orden de los puntos y dieron ejes falsos → `fit_cylinder_normals` (autovector menor de
+    Σ n·nᵀ + círculo de Kåsa en el corte), compite con RANSAC por menor error.
+  - Pendiente: planos grandes con muchos triángulos finos se parten en 2–3 zonas en
+    `detect_all` (no afecta `pick_plane`).

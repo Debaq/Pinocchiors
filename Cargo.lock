@@ -380,6 +380,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cad-scan"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cad-model",
+ "cad-solver",
+ "nalgebra",
+ "serde",
+ "stl_io",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cad-solver"
 version = "0.1.0"
 dependencies = [
