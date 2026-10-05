@@ -709,6 +709,29 @@ const scenarios = {
     near(row[2] - row[0], 50, 1e-6, "paso 2");
   },
 
+  async "elipse extruida"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    // Centro en el origen y eje mayor sobre x (se alinea con el origen): queda definida
+    await b.clickText("Elipse");
+    await b.click(...(await at(0, 0)));
+    await b.click(...(await at(0.2, 0.004)));
+    await b.click(...(await at(0.05, 0.08)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(600);
+    if (!(await sketchText(b, "/Totalmente definido/"))) throw new Error("la elipse no quedó definida");
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    const doc = await call("cad_get_document");
+    const [ra, rb] = doc.features[0].kind.sketch.constraints.filter((c) => c.type === "distance").map((c) => c.value);
+    const h = doc.features[1].kind.extent.distance;
+    near((await body()).volume, Math.PI * ra * rb * h, 1e-6 * ra * rb * h, "volumen de la elipse");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

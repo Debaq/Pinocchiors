@@ -72,6 +72,7 @@
 #include <TopoDS_Shape.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Circ.hxx>
+#include <gp_Elips.hxx>
 #include <gp_GTrsf.hxx>
 #include <gp_Pln.hxx>
 #include <gp_Trsf.hxx>
@@ -188,6 +189,20 @@ TopoDS_Edge make_edge(int32_t kind, int32_t count, const double* d) {
             interp.Perform();
             if (!interp.IsDone()) throw Standard_Failure("spline: no se pudo interpolar");
             return BRepBuilderAPI_MakeEdge(interp.Curve()).Edge();
+        }
+        case 4: {
+            if (count != 11) throw Standard_Failure("elipse: se esperaban 11 valores");
+            double a = d[9], b = d[10];
+            if (a <= 0 || b <= 0) throw Standard_Failure("elipse: radio no positivo");
+            gp_Dir n = dir(d + 3);
+            gp_Dir x = dir(d + 6);
+            // OCCT pide el radio mayor primero: si b es más largo, el eje mayor va a 90°
+            if (b > a) {
+                x = n.Crossed(x);
+                std::swap(a, b);
+            }
+            gp_Elips e(gp_Ax2(pnt(d), n, x), a, b);
+            return BRepBuilderAPI_MakeEdge(e).Edge();
         }
         default:
             throw Standard_Failure("tipo de curva desconocido");

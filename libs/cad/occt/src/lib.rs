@@ -86,6 +86,8 @@ pub enum Curve {
     Circle { center: P3, normal: P3, radius: f64 },
     /// Spline interpolada por los puntos (cerrada si el primero = el último).
     Spline(Vec<P3>),
+    /// Elipse completa: `major` es la dirección del semieje `a`; `b` va a 90°.
+    Ellipse { center: P3, normal: P3, major: P3, a: f64, b: f64 },
 }
 
 impl Curve {
@@ -114,6 +116,14 @@ impl Curve {
                     data.extend_from_slice(p);
                 }
                 3
+            }
+            Curve::Ellipse { center, normal, major, a, b } => {
+                data.extend_from_slice(center);
+                data.extend_from_slice(normal);
+                data.extend_from_slice(major);
+                data.push(*a);
+                data.push(*b);
+                4
             }
         };
         kinds.push(kind);

@@ -705,6 +705,7 @@ fn entity_midpoint(s: &Sketch, id: u32) -> Option<P2> {
         // La spline pasa por sus puntos: el del medio está sobre la curva
         Geometry::Spline { points, .. } => p(points[points.len() / 2])?,
         Geometry::Point { point } => p(*point)?,
+        Geometry::Ellipse { major, .. } => p(*major)?,
     })
 }
 
@@ -795,6 +796,12 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
             }
             // Un punto suelto no forma lazos
             Geometry::Point { .. } => continue,
+            Geometry::Ellipse { center, major, minor } => {
+                let (c, a, b) = (w(*center)?, w(*major)?, w(*minor)?);
+                let (u, v) = (sub(a, c), sub(b, c));
+                let n = if piece.reversed { scale(plane.normal, -1.0) } else { plane.normal };
+                Curve::Ellipse { center: c, normal: n, major: normalize(u), a: norm(u), b: norm(v) }
+            }
         };
         out.push(c);
     }

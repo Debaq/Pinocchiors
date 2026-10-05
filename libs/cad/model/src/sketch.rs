@@ -38,6 +38,10 @@ pub enum Geometry {
     Spline { points: Vec<u32>, closed: bool },
     /// Punto suelto (para agujeros y referencias): no forma perfiles.
     Point { point: u32 },
+    /// Elipse: `major` y `minor` son los extremos de los semiejes (a 90°, la
+    /// perpendicular la pone el solver); acotar sus distancias al centro da
+    /// los radios.
+    Ellipse { center: u32, major: u32, minor: u32 },
 }
 
 impl Geometry {
@@ -48,6 +52,7 @@ impl Geometry {
             Geometry::Arc { center, start, end } => vec![*center, *start, *end],
             Geometry::Spline { points, .. } => points.clone(),
             Geometry::Point { point } => vec![*point],
+            Geometry::Ellipse { center, major, minor } => vec![*center, *major, *minor],
         }
     }
 }
@@ -400,11 +405,16 @@ impl Sketch {
                 _ => {}
             }
         }
-        // Implícitas: los extremos de un arco equidistan del centro
+        // Implícitas: los extremos de un arco equidistan del centro; los
+        // semiejes de una elipse son perpendiculares
         for e in &self.entities {
             if let Geometry::Arc { center, start, end } = e.geometry {
                 let (c, s, t) = (ix(center)?, ix(start)?, ix(end)?);
                 sys.add_constraint(Constraint::EqualLength { l1_p1: c, l1_p2: s, l2_p1: c, l2_p2: t });
+            }
+            if let Geometry::Ellipse { center, major, minor } = e.geometry {
+                let (c, a, b) = (ix(center)?, ix(major)?, ix(minor)?);
+                sys.add_constraint(Constraint::Perpendicular { l1_p1: c, l1_p2: a, l2_p1: c, l2_p2: b });
             }
         }
         if let Some(o) = self.origin {

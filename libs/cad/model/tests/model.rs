@@ -763,3 +763,38 @@ fn circular_pattern_copies_rotate_together() {
     assert_relative_eq!(q[0], 14.0 * c - sn, epsilon = 1e-6);
     assert_relative_eq!(q[1], 14.0 * sn + c, epsilon = 1e-6);
 }
+
+#[test]
+fn ellipse_is_dimensioned_and_extruded_exactly() {
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    // Dibujada torcida y fuera de medida
+    let (m, n) = (s.add_point(4.0, 0.5), s.add_point(-0.3, 2.5));
+    s.add_entity(Geometry::Ellipse { center: o, major: m, minor: n });
+    s.constrain(SketchConstraint::Distance { a: o, b: m, value: 5.0, reference: false });
+    s.constrain(SketchConstraint::Distance { a: o, b: n, value: 2.0, reference: false });
+    let r = s.solve().unwrap();
+    assert_eq!(r.dof, 1, "falta el giro: {r:?}");
+    s.constrain(SketchConstraint::HorizontalPoints { a: o, b: m });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    let q = s.point(n).unwrap();
+    assert_relative_eq!(q[0].abs(), 0.0, epsilon = 1e-6);
+    assert_relative_eq!(q[1].abs(), 2.0, epsilon = 1e-6);
+    assert_eq!(find_regions(&s).unwrap().len(), 1);
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        regions: RegionSelection::All,
+        extent: Extent::Blind { distance: 3.0 },
+        reverse: false,
+        op: BodyOp::Join,
+    }));
+    let ev = doc.evaluate();
+    assert_all_ok(&ev);
+    assert_relative_eq!(volume(&ev), PI * 5.0 * 2.0 * 3.0, max_relative = 1e-6);
+}

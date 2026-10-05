@@ -2,7 +2,7 @@ import { Component, For, Index, Show, createEffect, createMemo, createSignal, on
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { addPoint, constraintIds, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, constraintIds, ellipsePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -24,6 +24,7 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string }[] = 
   { id: "circle", short: "Círculo", label: "Círculo", key: "C" },
   { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A" },
   { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3" },
+  { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I" },
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G" },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
@@ -40,6 +41,16 @@ function circumcenter(a: P2, b: P2, c: P2): P2 | undefined {
   if (Math.abs(d) < 1e-12 * Math.max(1, dist(a, b) * dist(b, c))) return undefined;
   const [a2, b2, c2] = [a, b, c].map((p) => p[0] * p[0] + p[1] * p[1]);
   return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
+}
+
+/** Extremo del semieje menor de una elipse (centro `c`, eje mayor hasta `a`) con el ancho hasta `p` */
+function ellipseMinor(c: P2, a: P2, p: P2): P2 | undefined {
+  const l = dist(c, a);
+  if (l < 1e-12) return undefined;
+  const n: P2 = [-(a[1] - c[1]) / l, (a[0] - c[0]) / l];
+  const b = (p[0] - c[0]) * n[0] + (p[1] - c[1]) * n[1];
+  if (Math.abs(b) < 1e-9) return undefined;
+  return [c[0] + n[0] * Math.abs(b), c[1] + n[1] * Math.abs(b)];
 }
 
 /** Arco de `a` a `b` que pasa por `m`: centro, radio, ángulo inicial y barrido (con signo) */
@@ -79,6 +90,10 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
     else if (g.type === "circle") d = Math.abs(dist(p, pt.get(g.center)!) - g.radius);
     else if (g.type === "arc") d = Math.abs(dist(p, pt.get(g.center)!) - dist(pt.get(g.start)!, pt.get(g.center)!));
     else if (g.type === "point") d = dist(p, pt.get(g.point)!);
+    else if (g.type === "ellipse") {
+      const pts = ellipsePolyline(pt.get(g.center)!, pt.get(g.major)!, pt.get(g.minor)!);
+      for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
+    }
     else {
       const pts = g.points.map((x) => pt.get(x)!);
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
@@ -313,6 +328,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         const m: P2 = [2 * o[0] - c[0], 2 * o[1] - c[1]];
         preview.push([c, [m[0], c[1]], m, [c[0], m[1]], c]);
       }
+      if (t === "ellipse" && an.length === 1) preview.push([an[0], c]);
+      if (t === "ellipse" && an.length === 2) {
+        const e = ellipseMinor(an[0], an[1], c);
+        if (e) preview.push(ellipsePolyline(an[0], an[1], e));
+      }
       if (t === "arc3" && an.length === 1) preview.push([an[0], c]);
       if (t === "arc3" && an.length === 2) {
         const arc = arcThrough(an[0], an[1], c);
@@ -355,8 +375,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     return infer(s.sketch, p, viewer.pixelSizeMm() * 8, {
       exclude: dragging !== undefined ? [dragging] : [],
       from,
-      // No alinearse con los puntos de la forma en curso (daría ancho o alto cero)
-      noAlign: anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])),
+      // Un rectángulo alineado con su primera esquina (o su centro) tendría ancho o alto cero
+      noAlign: ui.tool() === "rect" || ui.tool() === "rect_center" ? anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])) : [],
     });
   };
 
@@ -490,6 +510,24 @@ export const CadView: Component<CadViewProps> = (props) => {
             dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(2 * dy)) }));
           }
         });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "ellipse") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [C, M] = an;
+      const n = ellipseMinor(C.p, M.p, hit.p);
+      if (!n) return ui.setMessage("La elipse necesita ancho: mover el punto hacia un costado del eje");
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const center = placeSnap(sk, C);
+        const major = placeSnap(sk, M);
+        const minor = addPoint(sk, n);
+        ui.addEntity(sk, { type: "ellipse", center, major, minor });
+        if (C.id === undefined || M.id === undefined) dims.push(dim(sk, { type: "distance", a: center, b: major, value: round(dist(C.p, M.p)) }));
+        dims.push(dim(sk, { type: "distance", a: center, b: minor, value: round(dist(C.p, n)) }));
+      });
       setAnchor([]);
       return askDims(dims);
     }
@@ -1045,13 +1083,13 @@ export const CadView: Component<CadViewProps> = (props) => {
           }
         >
           {(s) => (
-            <div class="flex items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
+            <div class="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
               <For each={TOOLS}>
                 {(t) => (
                   <Tooltip content={t.key ? `${t.label} (${t.key})` : t.label}>
                     <button
                       class={clsx(
-                        "px-2 py-1 rounded text-xs",
+                        "px-2 py-1 rounded text-xs whitespace-nowrap",
                         ui.tool() === t.id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
                       )}
                       onClick={() => {
@@ -1112,7 +1150,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       {/* Cota que sobre-define el sketch: dejarla de referencia o quitarla */}
       <Show when={ui.extraDimension()}>
         {(i) => (
-          <div class="absolute top-14 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
+          <div class="absolute top-24 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
             <Icons.Warning size={14} class="text-error" />
             Esta cota sobre-define el sketch
             <Button size="sm" variant="primary" onClick={() => ui.toggleReference(i())}>

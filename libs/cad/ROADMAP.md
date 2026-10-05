@@ -258,3 +258,11 @@ cargo test -p cad-model
   horizontal y vertical, o radios iguales y ángulo entre dos líneas de construcción) y cambiar
   esa cota mueve todas las copias. Con 2 en total el centro es punto medio (180° es inestable
   con `atan2`). Los círculos copiados llevan `equal` (el radio es incógnita).
+- **2026-10-05 Elipse** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 6, primera parte):
+  `Geometry::Ellipse { center, major, minor }` con los extremos de los semiejes como puntos
+  (perpendicular implícita en el solver), así los radios se acotan con distancias y se
+  arrastran. En OCCT es exacta: `Curve::Ellipse` (tipo 4 del puente, `gp_Elips`; si el semieje
+  b es el mayor se gira el eje por dentro). Herramienta Elipse (I): centro, extremo del eje
+  mayor y ancho. Al dibujar, ahora solo los rectángulos evitan alinearse con su primer punto
+  (la elipse, el arco, la ranura y el polígono sí se alinean con su centro). La barra del
+  sketch pasa a dos filas si no entra.

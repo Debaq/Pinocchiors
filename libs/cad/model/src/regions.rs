@@ -87,6 +87,16 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
             catmull_rom(&pts)
         }
         Geometry::Point { point } => vec![s.point(*point)?],
+        Geometry::Ellipse { center, major, minor } => {
+            let (c, a, b) = (s.point(*center)?, s.point(*major)?, s.point(*minor)?);
+            let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+            (0..=64)
+                .map(|i| {
+                    let t = i as f64 / 64.0 * 2.0 * PI;
+                    [c[0] + u[0] * t.cos() + v[0] * t.sin(), c[1] + u[1] * t.cos() + v[1] * t.sin()]
+                })
+                .collect()
+        }
     })
 }
 
@@ -216,7 +226,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
 
     for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
         let pts = sample_entity(s, e.id)?;
-        let closed_alone = matches!(e.geometry, Geometry::Circle { .. } | Geometry::Spline { closed: true, .. });
+        let closed_alone = matches!(e.geometry, Geometry::Circle { .. } | Geometry::Ellipse { .. } | Geometry::Spline { closed: true, .. });
         if closed_alone {
             let mut poly = pts.clone();
             poly.pop();

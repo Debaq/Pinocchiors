@@ -7,7 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
-import type { CadMesh, P2, P3, Plane, Region, Sketch } from "./cad";
+import { ellipsePolyline, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -99,6 +99,10 @@ function entityPolyline(g: Sketch["entities"][number]["geometry"], point: Map<nu
     return Array.from({ length: 33 }, (_, i) => [c[0] + r * Math.cos(a0 + (sweep * i) / 32), c[1] + r * Math.sin(a0 + (sweep * i) / 32)] as P2);
   }
   if (g.type === "point") return undefined;
+  if (g.type === "ellipse") {
+    const [c, a, b] = [point.get(g.center), point.get(g.major), point.get(g.minor)];
+    return c && a && b ? ellipsePolyline(c, a, b) : undefined;
+  }
   const pts = g.points.map((p) => point.get(p));
   if (pts.some((p) => !p)) return undefined;
   if (g.closed && pts.length) pts.push(pts[0]);
@@ -491,7 +495,7 @@ export class CadViewer {
       } else if (g.type === "spline") {
         pts = g.points.map((p) => point.get(p)!);
         if (g.closed && pts.length) pts.push(pts[0]);
-      }
+      } else if (g.type === "ellipse") pts = entityPolyline(g, point) ?? [];
       if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);

@@ -79,7 +79,9 @@ export type Geometry =
   | { type: "arc"; center: number; start: number; end: number }
   | { type: "spline"; points: number[]; closed: boolean }
   /** Punto suelto: no forma perfiles */
-  | { type: "point"; point: number };
+  | { type: "point"; point: number }
+  /** Elipse: extremos de los semiejes (a 90°) */
+  | { type: "ellipse"; center: number; major: number; minor: number };
 
 export interface SketchEntity {
   id: number;
@@ -442,6 +444,16 @@ export function addRectangle(s: Sketch, a: P2, b: P2): number[] {
   return l;
 }
 
+/** Contorno de una elipse de centro `c` y semiejes hasta `a` y `b` */
+export function ellipsePolyline(c: P2, a: P2, b: P2, n = 64): P2[] {
+  const u: P2 = [a[0] - c[0], a[1] - c[1]];
+  const v: P2 = [b[0] - c[0], b[1] - c[1]];
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const t = (i / n) * 2 * Math.PI;
+    return [c[0] + u[0] * Math.cos(t) + v[0] * Math.sin(t), c[1] + u[1] * Math.cos(t) + v[1] * Math.sin(t)] as P2;
+  });
+}
+
 /** Puntos que usa una geometría */
 export function geometryPoints(g: Geometry): number[] {
   switch (g.type) {
@@ -455,6 +467,8 @@ export function geometryPoints(g: Geometry): number[] {
       return g.points;
     case "point":
       return [g.point];
+    case "ellipse":
+      return [g.center, g.major, g.minor];
   }
 }
 
@@ -474,6 +488,7 @@ function copyEntities(s: Sketch, ids: number[], map: (p: number) => number, flip
     else if (g.type === "circle") copy = { type: "circle", center: map(g.center), radius: g.radius };
     else if (g.type === "arc") copy = flip ? { type: "arc", center: map(g.center), start: map(g.end), end: map(g.start) } : { type: "arc", center: map(g.center), start: map(g.start), end: map(g.end) };
     else if (g.type === "spline") copy = { type: "spline", points: g.points.map(map), closed: g.closed };
+    else if (g.type === "ellipse") copy = { type: "ellipse", center: map(g.center), major: map(g.major), minor: map(g.minor) };
     else copy = { type: "point", point: map(g.point) };
     const c = addEntity(s, copy);
     if (e.construction) s.entities.find((x) => x.id === c)!.construction = true;

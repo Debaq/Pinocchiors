@@ -378,3 +378,18 @@ fn history_tracks_faces_through_operations() {
     let (_, h) = with_history(|| b.translate([1.0, 0.0, 0.0])).unwrap();
     assert!(h.images.iter().all(|v| v.len() == 1));
 }
+
+#[test]
+fn ellipse_faces_have_exact_area() {
+    if !require() {
+        return;
+    }
+    // Eje mayor en x (a = 5, b = 2) y con b > a (se gira a 90° por dentro)
+    for (a, b) in [(5.0, 2.0), (2.0, 5.0)] {
+        let face = Shape::face(&[vec![Curve::Ellipse { center: [1.0, 2.0, 0.0], normal: [0.0, 0.0, 1.0], major: [1.0, 0.0, 0.0], a, b }]]).unwrap();
+        let m = face.mass().unwrap();
+        assert_relative_eq!(m.area, PI * a * b, epsilon = 1e-6);
+        // El semieje `a` sigue en x aunque sea el menor
+        assert_relative_eq!(m.bbox_max[0] - m.bbox_min[0], 2.0 * a, epsilon = 1e-3);
+    }
+}

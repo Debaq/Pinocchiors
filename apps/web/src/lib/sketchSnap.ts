@@ -252,7 +252,7 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
   const exclude = opts.exclude ?? [];
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
   const centers = new Set<number>();
-  for (const e of s.entities) if (e.geometry.type === "circle" || e.geometry.type === "arc") centers.add(e.geometry.center);
+  for (const e of s.entities) if (e.geometry.type === "circle" || e.geometry.type === "arc" || e.geometry.type === "ellipse") centers.add(e.geometry.center);
 
   let best: { snap: Snap; d: number } | undefined;
   const offer = (snap: Snap) => {
