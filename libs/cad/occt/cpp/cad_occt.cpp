@@ -49,6 +49,9 @@
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_TrimmedCurve.hxx>
+#include <Message.hxx>
+#include <Message_Messenger.hxx>
+#include <Message_PrinterOStream.hxx>
 #include <Poly.hxx>
 #include <Poly_Triangulation.hxx>
 #include <STEPControl_Reader.hxx>
@@ -76,6 +79,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -902,6 +906,14 @@ void cad_mesh_free(CadMesh* m) {
 
 // --- Archivos ---------------------------------------------------------------
 
+// Los traductores de STEP imprimen estadísticas por stdout: silenciarlas.
+static void quiet_messages() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        Message::DefaultMessenger()->RemovePrinters(STANDARD_TYPE(Message_PrinterOStream));
+    });
+}
+
 static int32_t give_bytes(const std::string& s, uint8_t** out, size_t* len) {
     *out = static_cast<uint8_t*>(std::malloc(s.size() ? s.size() : 1));
     std::memcpy(*out, s.data(), s.size());
@@ -910,6 +922,7 @@ static int32_t give_bytes(const std::string& s, uint8_t** out, size_t* len) {
 }
 
 int32_t cad_write_step(const CadShape* s, uint8_t** out, size_t* len) {
+    quiet_messages();
     return guard("escribir STEP", 0, [&] {
         STEPControl_Writer w;
         if (w.Transfer(s->s, STEPControl_AsIs) != IFSelect_RetDone)
@@ -921,6 +934,7 @@ int32_t cad_write_step(const CadShape* s, uint8_t** out, size_t* len) {
 }
 
 CadShape* cad_read_step(const uint8_t* data, size_t len) {
+    quiet_messages();
     return guard("leer STEP", (CadShape*)nullptr, [&] {
         std::istringstream is(std::string(reinterpret_cast<const char*>(data), len));
         STEPControl_Reader r;

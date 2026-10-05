@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop, clippy::approx_constant)]
+
 //! Tests de casos límite por constraint.
 //!
 //! Objetivo: detectar bugs de robustez antes de tocar el solver.

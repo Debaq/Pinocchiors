@@ -358,6 +358,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "cad-model"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cad-occt",
+ "cad-solver",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cad-occt"
 version = "0.1.0"
 dependencies = [

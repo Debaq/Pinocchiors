@@ -17,8 +17,10 @@ Decisiones (2026-10-05):
   más parecida en el sólido recalculado. Evita el problema de nombres topológicos.
 - **Unidades**: milímetros. **Ejes**: Z arriba dentro del CAD (como cualquier CAD y como
   la UI de la app); al pasar al visor se convierte a Y arriba (`converter_scene::z_up_to_y_up`).
-- **Feature `occt`**: todo lo que enlaza OCCT va detrás de una feature, para que quien no
-  lo tenga instalado siga compilando el resto del workspace.
+- **Sin OCCT compila igual**: `cad-occt` detecta OpenCASCADE en `build.rs`; si no está,
+  compila un stub (todo devuelve "OpenCASCADE no disponible") y `cad_occt::available()`
+  lo dice. Así no hacen falta features en cadena. `CAD_REQUIRE_OCCT=1` lo vuelve error
+  (releases), `CAD_OCCT_STUB=1` fuerza el stub (probar).
 
 ## Crates
 
@@ -26,14 +28,14 @@ Decisiones (2026-10-05):
 |---|---|---|---|
 | `cad-solver` | `libs/cad/solver` | Solver de restricciones 2D (Newton + LM, dispersas, diagnóstico), ajuste de primitivas (plano/esfera/cilindro, RANSAC), segmentación por normales, simplificación | no |
 | `cad-occt` | `libs/cad/occt` | Puente C++ propio a OCCT: `Shape` con RAII, perfiles con líneas/arcos/círculos, operaciones, topología consultable, teselado con id de cara, STEP | sí |
-| `cad-model` | `libs/cad/model` | Documento: sketches + árbol de operaciones, recálculo, referencias geométricas, serde | feature `occt` |
+| `cad-model` | `libs/cad/model` | Documento: sketches + árbol de operaciones, recálculo, referencias geométricas, serde | vía cad-occt |
 
 ## Fases
 
 - [x] **F0 — Plan** (este archivo).
-- [ ] **F1 — `cad-solver`**: portar desde `cad-blender/crates/cadblender_solver` sin pyo3 ni
+- [x] **F1 — `cad-solver`**: portar desde `cad-blender/crates/cadblender_solver` sin pyo3 ni
       marca de licencia. Tests del original pasando. `constraint3d` (código muerto allá) no se trae.
-- [ ] **F2 — `cad-occt`**: puente C++ nuevo (el de cad-blender solo hacía polilíneas y no
+- [x] **F2 — `cad-occt`**: puente C++ nuevo (el de cad-blender solo hacía polilíneas y no
       exponía redondeo ni booleanas).
   - build.rs: OCCT del sistema (`OCCT_INCLUDE_DIR`/`OCCT_LIB_DIR`, rutas comunes, pkg-config),
     nombres de librerías de 7.9 (TKDESTEP) y anteriores.
@@ -45,7 +47,7 @@ Decisiones (2026-10-05):
   - Teselado: vértices, normales, triángulos con id de cara, polilíneas de aristas (para dibujar
     y para elegir con el mouse).
   - Volumen/área/centro de masa/caja; validez (`BRepCheck`). STEP leer/escribir (bytes y archivo).
-- [ ] **F3 — `cad-model`**: documento con sketches en planos (XY/XZ/YZ, cara, plano libre),
+- [x] **F3 — `cad-model`**: documento con sketches en planos (XY/XZ/YZ, cara, plano libre),
       entidades + restricciones resueltas con `cad-solver`, detección de regiones cerradas,
       operaciones (sketch, extruir ciego/simétrico/pasante/hasta cara, revolucionar, redondeo,
       chaflán, cáscara, booleana, patrón lineal/circular, espejo, primitiva, STEP importado),
@@ -74,7 +76,28 @@ Arch: `pacman -S opencascade` (7.9.3). Otras: definir `OCCT_INCLUDE_DIR` y `OCCT
 ```
 cargo test -p cad-solver
 cargo test -p cad-occt
-cargo test -p cad-model --features occt
+cargo test -p cad-model
 ```
 
 ## Bitácora
+
+- **2026-10-05 F1** (c19087b): solver portado; 101 tests. Arreglado `solve_drag` cuando el
+  destino choca con las restricciones (devolvía un compromiso que no cumplía ninguna).
+- **2026-10-05 F2** (7047c85, ab9e38a): puente nuevo, 15 tests con volúmenes exactos.
+  Hallazgos: (1) `ShapeFix_Face` no da vuelta agujeros mal orientados → se decide por área;
+  (2) redondeos imposibles "funcionan" y dejan sólidos inválidos → redondeo, chaflán,
+  cáscara, desmolde y booleanas validan con `BRepCheck_Analyzer`; (3) los traductores STEP
+  imprimen estadísticas por stdout → se quitan los printers del messenger global.
+- **2026-10-05 F3**: `cad-model` con 12 tests de flujo completo (placa paramétrica que cambia
+  de ancho y su redondeo sigue la arista, bolsillo en cara pasante, tetón hasta cara,
+  revolución con eje del sketch, patrón circular de agujeros, simetría, vaciado, corte,
+  errores aislados por operación, retroceso, suprimir, serde, importar STEP).
+  - Regiones: caras del grafo plano (media arista "anterior en orden antihorario"), lazos
+    sueltos para círculos, contención por el lazo más chico; profundidad par = perfil.
+  - Radio de círculos es dato en el solver (no variable): las cotas de radio se aplican
+    antes de resolver. Tangencia línea-arco con extremo común = perpendicular al radio (exacta).
+  - Referencias: cara = punto + normal (coseno ≥ 0,9), arista = punto + dirección; error si
+    la mejor coincidencia está a más de media diagonal del cuerpo.
+  - Límite conocido: dos aristas paralelas equidistantes del punto guardado (p. ej. tras
+    duplicar una altura) pueden empatar. Arreglo de fondo: nombres topológicos por historia
+    (`BRepAlgoAPI_*::Generated/Modified`), pendiente.

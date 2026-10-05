@@ -1,3 +1,5 @@
+#![allow(clippy::needless_range_loop, clippy::approx_constant)]
+
 use approx::assert_relative_eq;
 use cad_solver::constraint::Constraint;
 use cad_solver::solver::{solve, SolverParams};

@@ -4,6 +4,9 @@
 //!
 //! Portado de `cad-blender` (crate `cadblender_solver`) sin la capa de Python.
 
+// Código numérico portado tal cual: índices explícitos a propósito.
+#![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
+
 pub mod constraint;
 pub mod diagnostics;
 pub mod error;
