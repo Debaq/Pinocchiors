@@ -823,6 +823,8 @@ for (const [name, run] of Object.entries(scenarios)) {
   await call("cad_close");
   const b = await launch(URL);
   try {
+    // Con la máquina cargada la app tarda en montar: esperar el encabezado
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Diseñar")`)); t++) await sleep(500);
     await run(b);
     const errors = b.logs.filter((l) => l.startsWith("EXCEPTION"));
     if (errors.length) throw new Error(errors.join("\n"));
