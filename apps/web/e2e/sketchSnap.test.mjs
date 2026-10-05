@@ -203,3 +203,28 @@ test("dibujando desde un punto: paralela, perpendicular y tangente", () => {
   // Sin `from` no hay direcciones
   assert.notEqual(infer(s, [40.3, 4.8], 1).kind, "parallel");
 });
+
+test("dibujando desde un punto: horizontal y vertical, y combinadas con alinearse", () => {
+  const s = {
+    points: [
+      { id: 0, x: 0, y: 0 }, // desde acá
+      { id: 1, x: 20, y: 30 },
+    ],
+    entities: [],
+    constraints: [],
+  };
+  const h = infer(s, [12, 0.6], 1, { from: 0 });
+  assert.equal(h.kind, "horizontal");
+  near(h.p, [12, 0]);
+  const v = infer(s, [-0.4, 9], 1, { from: 0 });
+  assert.equal(v.kind, "vertical");
+  near(v.p, [0, 9]);
+  // Horizontal y en la vertical del punto 1
+  const hv = infer(s, [20.5, 0.4], 1, { from: 0 });
+  assert.equal(hv.axis, "horizontal");
+  assert.deepEqual(hv.align, { v: 1 });
+  near(hv.p, [20, 0]);
+  assert.equal(hv.guides.length, 2);
+  // Lejos de los dos ejes: nada
+  assert.equal(infer(s, [10, 7], 1, { from: 0 }).kind, "free");
+});

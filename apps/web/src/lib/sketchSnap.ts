@@ -24,6 +24,9 @@ export type SnapKind =
   | "on_circle"
   /** Alineado en horizontal o vertical con otros puntos */
   | "aligned"
+  /** Línea horizontal o vertical (dibujando desde un punto) */
+  | "horizontal"
+  | "vertical"
   /** Línea paralela a otra (dibujando desde un punto) */
   | "parallel"
   /** Línea perpendicular a otra */
@@ -46,6 +49,8 @@ export interface Snap {
   quadrant?: 0 | 1 | 2 | 3;
   /** Alineado: `h` = punto a la misma altura, `v` = punto en la misma vertical */
   align?: { h?: number; v?: number };
+  /** La línea que se dibuja desde `from` queda horizontal o vertical */
+  axis?: "horizontal" | "vertical";
   /** Dirección de la línea que se dibuja desde `from` respecto de otra entidad */
   direction?: { kind: "parallel" | "perpendicular" | "tangent"; entity: number };
   /** Líneas guía punteadas (para dibujar) */
@@ -72,6 +77,8 @@ const PRIORITY: Record<SnapKind, number> = {
   on_line: 7,
   on_circle: 7,
   aligned: 8,
+  horizontal: 8,
+  vertical: 8,
   parallel: 8,
   perpendicular: 8,
   tangent: 8,
@@ -88,6 +95,8 @@ export const SNAP_GLYPHS: Record<SnapKind, { glyph: string; label: string }> = {
   on_line: { glyph: "∕", label: "Sobre la línea" },
   on_circle: { glyph: "◠", label: "Sobre la curva" },
   aligned: { glyph: "┆", label: "Alineado" },
+  horizontal: { glyph: "—", label: "Horizontal" },
+  vertical: { glyph: "|", label: "Vertical" },
   parallel: { glyph: "∥", label: "Paralela" },
   perpendicular: { glyph: "⊥", label: "Perpendicular" },
   tangent: { glyph: "◡", label: "Tangente" },
@@ -224,6 +233,31 @@ function directionSnap(s: Sketch, pt: Map<number, P2>, cursor: P2, tol: number, 
   return best?.snap;
 }
 
+/**
+ * Línea horizontal o vertical desde `from`; se combina con la alineación del
+ * otro eje (p. ej. horizontal y a la altura… en la vertical de otro punto).
+ */
+function axisSnap(s: Sketch, pt: Map<number, P2>, cursor: P2, tol: number, from: number, skip: Set<number>): Snap | undefined {
+  const f = pt.get(from);
+  if (!f) return undefined;
+  const [dx, dy] = [Math.abs(cursor[0] - f[0]), Math.abs(cursor[1] - f[1])];
+  if ((dx <= tol && dy <= tol) || Math.min(dx, dy) > tol) return undefined;
+  const axis = dy <= dx ? "horizontal" : "vertical";
+  // El otro eje: alineado con el punto más cercano en esa dirección
+  const k = axis === "horizontal" ? 0 : 1;
+  let best: { id: number; q: P2; d: number } | undefined;
+  for (const q of s.points) {
+    const qq: P2 = [q.x, q.y];
+    const d = Math.abs(cursor[k] - qq[k]);
+    if (skip.has(q.id) || Math.abs(qq[k] - f[k]) < 1e-9 || d > tol || (best && d >= best.d)) continue;
+    best = { id: q.id, q: qq, d };
+  }
+  const p: P2 = axis === "horizontal" ? [best ? best.q[0] : cursor[0], f[1]] : [f[0], best ? best.q[1] : cursor[1]];
+  const guides: [P2, P2][] = [[f, p]];
+  if (best) guides.push([best.q, p]);
+  return { p, kind: axis, axis, guides, ...(best ? { align: axis === "horizontal" ? { v: best.id } : { h: best.id } } : {}) };
+}
+
 /** Alineación horizontal o vertical con los puntos existentes (las dos a la vez si hay) */
 function alignSnap(s: Sketch, cursor: P2, tol: number, skip: Set<number>, from?: P2): Snap | undefined {
   let h: { id: number; q: P2; d: number } | undefined;
@@ -327,11 +361,11 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
     }
   }
   if (best) return best.snap;
-  // Sin nada cerca: dirección de la línea en curso, o alineación con puntos
+  // Sin nada cerca: horizontal/vertical o dirección de la línea en curso, o alineación con puntos
+  const skip = new Set([...exclude, ...(opts.noAlign ?? []), ...(opts.from !== undefined ? [opts.from] : [])]);
   if (opts.from !== undefined) {
-    const d = directionSnap(s, pt, cursor, tol, opts.from);
+    const d = axisSnap(s, pt, cursor, tol, opts.from, skip) ?? directionSnap(s, pt, cursor, tol, opts.from);
     if (d) return d;
   }
-  const skip = new Set([...exclude, ...(opts.noAlign ?? []), ...(opts.from !== undefined ? [opts.from] : [])]);
   return alignSnap(s, cursor, tol, skip, opts.from !== undefined ? pt.get(opts.from) : undefined) ?? { p: cursor, kind: "free" };
 }

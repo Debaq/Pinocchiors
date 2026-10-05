@@ -281,3 +281,10 @@ cargo test -p cad-model
   las esquinas; un contorno todo curvo es una spline cerrada (la "o"). Pruebas en node con la
   fuente real (`e2e/sketchText.test.mjs`) y e2e "Hola" extruido. Pendiente: texto rígido y
   editable (hoy queda como curvas libres).
+- **2026-10-05 Horizontal/vertical al dibujar e íconos** (pedido del usuario): al dibujar una
+  línea desde un punto, a ≤ 8 px de la horizontal o la vertical se pega a ella (glifo y guía
+  punteada), combinado con alinearse en el otro eje con otro punto; la restricción es la que se
+  vio. Reemplaza a la regla vieja que agregaba horizontal/vertical después, si la línea quedaba
+  a menos de 3° (sin aviso). La barra del sketch pasa a íconos propios (`icons/sketch.tsx`,
+  trazo fino, puntos de clic rellenos, auxiliar punteado) en tres grupos (elegir · dibujar ·
+  modificar); el nombre va en el tooltip y en un texto solo para lectores de pantalla.

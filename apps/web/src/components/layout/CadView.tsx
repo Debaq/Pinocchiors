@@ -1,4 +1,4 @@
-import { Component, For, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
+import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
@@ -10,6 +10,7 @@ import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
+import * as SketchIcons from "../icons/sketch";
 
 export interface CadViewProps {
   store: CadStore;
@@ -18,23 +19,24 @@ export interface CadViewProps {
   scanMesh?: MeshData | null;
 }
 
-const TOOLS: { id: SketchTool; short: string; label: string; key?: string }[] = [
-  { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S" },
-  { id: "line", short: "Línea", label: "Línea", key: "L" },
-  { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R" },
-  { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)" },
-  { id: "circle", short: "Círculo", label: "Círculo", key: "C" },
-  { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A" },
-  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3" },
-  { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I" },
-  { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G" },
-  { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
-  { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
-  { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N" },
-  { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X" },
-  { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O" },
-  { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T" },
-  { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E" },
+// Grupos de la barra: elegir · dibujar · modificar
+const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon: (p: { size?: number }) => JSX.Element; group: number }[] = [
+  { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S", icon: SketchIcons.Select, group: 0 },
+  { id: "line", short: "Línea", label: "Línea", key: "L", icon: SketchIcons.Line, group: 1 },
+  { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1 },
+  { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1 },
+  { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1 },
+  { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1 },
+  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1 },
+  { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1 },
+  { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1 },
+  { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P", icon: SketchIcons.Polygon, group: 1 },
+  { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U", icon: SketchIcons.Slot, group: 1 },
+  { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N", icon: SketchIcons.Spline, group: 1 },
+  { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O", icon: SketchIcons.Point, group: 1 },
+  { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
+  { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T", icon: SketchIcons.Trim, group: 2 },
+  { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E", icon: SketchIcons.Extend, group: 2 },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -421,14 +423,6 @@ export const CadView: Component<CadViewProps> = (props) => {
     return Math.round(v / step) * step;
   };
 
-  /** Restricción horizontal/vertical automática para líneas casi alineadas */
-  const autoAxis = (sk: Sketch, line: number, a: P2, b: P2) => {
-    const ang = Math.abs(Math.atan2(b[1] - a[1], b[0] - a[0]));
-    const lim = (3 * Math.PI) / 180;
-    if (Math.min(ang, Math.PI - ang) < lim) sk.constraints.push({ type: "horizontal", line });
-    else if (Math.abs(ang - Math.PI / 2) < lim) sk.constraints.push({ type: "vertical", line });
-  };
-
   const sketchClick = (e: PointerEvent) => {
     const s = ui.session();
     const hit = snapped(e);
@@ -468,10 +462,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         const line = ui.addEntity(sk, { type: "line", start: ch.last, end: id });
         // Entre dos puntos que ya estaban, la línea queda definida por ellos
         const between = snappedToPoint && ch.lastSnapped;
+        // Lo que se vio al dibujar es lo que queda restringido
         const dir = hit.direction;
-        if (dir?.kind === "tangent") sk.constraints.push({ type: "tangent", a: line, b: dir.entity });
+        if (hit.axis) sk.constraints.push({ type: hit.axis, line });
+        else if (dir?.kind === "tangent") sk.constraints.push({ type: "tangent", a: line, b: dir.entity });
         else if (dir) sk.constraints.push({ type: dir.kind, a: dir.entity, b: line });
-        else if (!between) autoAxis(sk, line, [a.x, a.y], hit.p);
         closed = id === ch.first;
         // El tramo que cierra queda determinado por los demás: sin cota propia
         if (!closed && !between) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
@@ -1135,21 +1130,29 @@ export const CadView: Component<CadViewProps> = (props) => {
           {(s) => (
             <div class="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
               <For each={TOOLS}>
-                {(t) => (
-                  <Tooltip content={t.key ? `${t.label} (${t.key})` : t.label}>
-                    <button
-                      class={clsx(
-                        "px-2 py-1 rounded text-xs whitespace-nowrap",
-                        ui.tool() === t.id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
-                      )}
-                      onClick={() => {
-                        ui.setTool(t.id);
-                        resetTool();
-                      }}
-                    >
-                      {t.short}
-                    </button>
-                  </Tooltip>
+                {(t, i) => (
+                  <>
+                    <Show when={i() > 0 && TOOLS[i() - 1].group !== t.group}>
+                      <div class="w-px h-5 bg-border mx-0.5" />
+                    </Show>
+                    <Tooltip content={t.key ? `${t.label} (${t.key})` : t.label}>
+                      <button
+                        aria-label={t.short}
+                        class={clsx(
+                          "p-1 rounded",
+                          ui.tool() === t.id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
+                        )}
+                        onClick={() => {
+                          ui.setTool(t.id);
+                          resetTool();
+                        }}
+                      >
+                        <t.icon size={18} />
+                        {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
+                        <span class="sr-only">{t.short}</span>
+                      </button>
+                    </Tooltip>
+                  </>
                 )}
               </For>
               <Show when={ui.tool() === "text"}>
