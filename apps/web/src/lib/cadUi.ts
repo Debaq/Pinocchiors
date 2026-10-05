@@ -30,7 +30,9 @@ export type PickMode =
   /** Marcar/desmarcar aristas: `toggle` con cada clic */
   | { kind: "edges"; prompt: string; toggle: (edge: EdgeRef, index: number) => void }
   /** Elegir una zona del escaneo */
-  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void };
+  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void }
+  /** Marcar/desmarcar regiones de un sketch con un clic dentro */
+  | { kind: "region"; prompt: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void };
 
 export interface SketchSession {
   feature: number;

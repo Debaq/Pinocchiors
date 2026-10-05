@@ -25,6 +25,21 @@ export interface SketchOverlay {
   freePoints?: number[];
   /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
   preview?: P2[][];
+  /** Eligiendo regiones: se muestran todas y se resaltan las que contienen estos puntos */
+  chosen?: P2[];
+}
+
+function inPolygon(p: P2, poly: P2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [a, b] = [poly[i], poly[j]];
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+export function regionContains(r: Region, p: P2): boolean {
+  return inPolygon(p, r.outer.polygon) && !r.holes.some((h) => inPolygon(p, h.polygon));
 }
 
 const BODY_COLOR = 0x9aa4b8;
@@ -332,8 +347,11 @@ export class CadViewer {
     const point = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
     const selected = new Set(overlay.selected ?? []);
 
-    // Regiones cerradas, rellenas apenas
-    for (const r of overlay.regions.filter((r) => r.depth % 2 === 0)) {
+    // Regiones cerradas, rellenas apenas (eligiendo: todas, las elegidas fuerte)
+    const choosing = overlay.chosen !== undefined;
+    for (const r of overlay.regions.filter((r) => choosing || r.depth % 2 === 0)) {
+      // La más interna que contiene el punto es la elegida
+      const picked = choosing && overlay.chosen!.some((p) => regionContains(r, p) && !overlay.regions.some((o) => o !== r && o.depth > r.depth && regionContains(o, p)));
       const shape = new THREE.Shape(r.outer.polygon.map((p) => new THREE.Vector2(p[0], p[1])));
       shape.holes = r.holes.map((h) => new THREE.Path(h.polygon.map((p) => new THREE.Vector2(p[0], p[1]))));
       const g = new THREE.ShapeGeometry(shape);
@@ -342,7 +360,14 @@ export class CadViewer {
         const v = w([pos.getX(i), pos.getY(i)]);
         pos.setXYZ(i, v.x, v.y, v.z);
       }
-      const m = new THREE.MeshBasicMaterial({ color: themeHex("accent"), transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false });
+      const m = new THREE.MeshBasicMaterial({
+        color: themeHex(picked ? "cyan" : "accent"),
+        transparent: true,
+        opacity: picked ? 0.45 : choosing ? 0.08 : 0.12,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        depthTest: !choosing,
+      });
       const mesh = new THREE.Mesh(g, m);
       mesh.renderOrder = 6;
       this.sketchGroup.add(mesh);

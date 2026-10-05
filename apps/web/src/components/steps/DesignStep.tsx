@@ -19,14 +19,17 @@ import {
   type FaceRef,
   type Feature,
   type FeatureKind,
+  type P2,
   type P3,
   type PatternKind,
+  type RegionSelection,
   type PlaneSpec,
   type ScanPick,
   type Sketch,
   type SketchConstraint,
 } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
+import { regionContains } from "../../lib/CadViewer";
 import { Button, Checkbox, IconButton, Select } from "../ui";
 import * as Icons from "../icons";
 
@@ -749,6 +752,13 @@ const FeatureEditor: Component<{
                       onCommit={(v) => setExtent({ type: k().extent.type as "blind" | "symmetric", distance: v })}
                     />
                   </Show>
+                  <RegionPicker
+                    ui={props.ui}
+                    store={props.store}
+                    sketch={k().sketch}
+                    value={k().regions}
+                    onChange={(r) => update((x) => x.type === "extrude" && (x.regions = r))}
+                  />
                   <Checkbox small label="Hacia el otro lado" checked={k().reverse} onChange={(c) => update((x) => x.type === "extrude" && (x.reverse = c))} />
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "extrude" && (x.op = o)))}</Row>
                 </>
@@ -785,6 +795,13 @@ const FeatureEditor: Component<{
                       }
                     />
                   </Row>
+                  <RegionPicker
+                    ui={props.ui}
+                    store={props.store}
+                    sketch={k().sketch}
+                    value={k().regions}
+                    onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
+                  />
                   <Num label="Ángulo" value={k().angle} suffix="°" onCommit={(v) => update((x) => x.type === "revolve" && (x.angle = v))} />
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
                 </>
@@ -972,6 +989,71 @@ const FeatureEditor: Component<{
 function planeLabelFor(f: Feature): string {
   return f.kind.type === "sketch" ? `Sobre: ${planeLabel(f.kind.plane)}` : "";
 }
+
+/** Qué regiones del sketch usar: todas o las elegidas con clic en el visor */
+const RegionPicker: Component<{ ui: CadUi; store: CadStore; sketch: number; value: RegionSelection; onChange: (r: RegionSelection) => void }> = (props) => {
+  const [draft, setDraft] = createSignal<P2[]>();
+  const picking = () => draft() !== undefined;
+  const start = () => {
+    const initial = props.value.type === "points" ? [...props.value.points] : [];
+    setDraft(initial);
+    props.ui.setPick({
+      kind: "region",
+      sketch: props.sketch,
+      prompt: "Clic dentro de las regiones a usar (otra vez para quitarla); confirmar en el panel",
+      chosen: () => draft() ?? [],
+      toggle: (p) => {
+        const view = props.store.sketchView(props.sketch);
+        if (!view) return;
+        // Región más interna bajo el clic; si ya había un punto en ella, se quita
+        const hit = [...view.regions].filter((r) => regionContains(r, p)).sort((a, b) => b.depth - a.depth)[0];
+        if (!hit) return;
+        setDraft((d) => {
+          const list = d ?? [];
+          const inside = list.filter((q) => regionContains(hit, q) && !view.regions.some((o) => o.depth > hit.depth && regionContains(o, q)));
+          return inside.length ? list.filter((q) => !inside.includes(q)) : [...list, hit.sample];
+        });
+      },
+    });
+  };
+  const confirm = () => {
+    const d = draft() ?? [];
+    props.ui.cancelPick();
+    setDraft(undefined);
+    props.onChange(d.length ? { type: "points", points: d } : { type: "all" });
+  };
+  return (
+    <div class="space-y-1.5">
+      <Row label="Regiones">
+        <span class="text-xs text-text">{props.value.type === "all" ? "Todas" : `${props.value.points.length} elegidas`}</span>
+      </Row>
+      <Show
+        when={picking()}
+        fallback={
+          <div class="flex gap-1.5">
+            <Button size="sm" onClick={start}>
+              Elegir en el visor
+            </Button>
+            <Show when={props.value.type === "points"}>
+              <Button size="sm" variant="ghost" onClick={() => props.onChange({ type: "all" })}>
+                Usar todas
+              </Button>
+            </Show>
+          </div>
+        }
+      >
+        <div class="flex gap-1.5">
+          <Button size="sm" variant="primary" onClick={confirm}>
+            Listo ({draft()?.length ?? 0})
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => (props.ui.cancelPick(), setDraft(undefined))}>
+            Cancelar
+          </Button>
+        </div>
+      </Show>
+    </div>
+  );
+};
 
 const ToolChecklist: Component<{ tools: Feature[]; value: number[]; onChange: (ids: number[]) => void }> = (props) => (
   <div class="space-y-1">

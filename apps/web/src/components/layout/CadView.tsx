@@ -184,6 +184,13 @@ export const CadView: Component<CadViewProps> = (props) => {
     const s = ui.session();
     if (!viewer) return;
     if (!s) {
+      // Eligiendo regiones: el sketch de esa operación con las elegidas resaltadas
+      const mode = ui.pick();
+      if (mode.kind === "region") {
+        const view = store.sketchView(mode.sketch);
+        viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.chosen() } : null);
+        return;
+      }
       // Sketch seleccionado (sin editar): se muestra igual
       const sel = store.selected();
       const view = sel !== undefined ? store.sketchView(sel) : undefined;
@@ -226,7 +233,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
 
   /** Posición del cursor sobre el plano, enganchada a un punto cercano */
-  const snapped = (e: PointerEvent): { p: P2; id?: number } | undefined => {
+  const snapped = (e: PointerEvent): { p: P2; id?: number; on?: { entity: number; kind: "line" | "circle" } } | undefined => {
     const s = ui.session();
     if (!s || !viewer) return undefined;
     const p = viewer.planePoint(e.clientX, e.clientY, s.plane);
@@ -237,7 +244,36 @@ export const CadView: Component<CadViewProps> = (props) => {
       const q = s.sketch.points.find((x) => x.id === hit.point)!;
       return { p: [q.x, q.y], id: q.id };
     }
+    // Sobre una línea o un círculo: el punto queda pegado a la curva
+    if (hit.entity !== undefined) {
+      const g = s.sketch.entities.find((x) => x.id === hit.entity)!.geometry;
+      const pt = (id: number): P2 => {
+        const q = s.sketch.points.find((x) => x.id === id)!;
+        return [q.x, q.y];
+      };
+      if (g.type === "line") {
+        const [a, b] = [pt(g.start), pt(g.end)];
+        const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+        const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1);
+        return { p: [a[0] + t * dx, a[1] + t * dy], on: { entity: hit.entity, kind: "line" } };
+      }
+      if (g.type === "circle" || g.type === "arc") {
+        const c = pt(g.center);
+        const r = g.type === "circle" ? g.radius : dist(c, pt(g.start));
+        const d = dist(p, c) || 1;
+        return { p: [c[0] + ((p[0] - c[0]) * r) / d, c[1] + ((p[1] - c[1]) * r) / d], on: { entity: hit.entity, kind: "circle" } };
+      }
+    }
     return { p };
+  };
+
+  /** Punto nuevo (o el existente enganchado), pegado a la curva si cayó sobre una */
+  const placePoint = (sk: Sketch, hit: { p: P2; id?: number; on?: { entity: number; kind: "line" | "circle" } }): number => {
+    if (hit.id !== undefined) return hit.id;
+    const id = ui.addPoint(sk, hit.p);
+    if (hit.on?.kind === "line") sk.constraints.push({ type: "point_on_line", point: id, line: hit.on.entity });
+    if (hit.on?.kind === "circle") sk.constraints.push({ type: "point_on_circle", point: id, circle: hit.on.entity });
+    return id;
   };
 
   /** Restricción horizontal/vertical automática para líneas casi alineadas */
@@ -273,7 +309,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const ch = chain();
       let closed = false;
       ui.change((sk) => {
-        const id = hit.id ?? ui.addPoint(sk, hit.p);
+        const id = placePoint(sk, hit);
         if (!ch) {
           setChain({ first: id, last: id });
           return;
@@ -380,6 +416,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         const edges = h.edges.includes(hit.edge) ? h.edges.filter((x) => x !== hit.edge) : [...h.edges, hit.edge];
         ui.setHighlight({ faces: [], edges });
         mode.toggle(ref, hit.edge);
+      } else if (mode.kind === "region") {
+        const view = store.sketchView(mode.sketch);
+        const p = view && viewer.planePoint(e.clientX, e.clientY, view.plane);
+        if (p) mode.toggle(p);
       } else if (mode.kind === "scan") {
         const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
         if (hit?.kind !== "scan") return;
