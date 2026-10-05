@@ -98,6 +98,7 @@ function entityPolyline(g: Sketch["entities"][number]["geometry"], point: Map<nu
     while (sweep <= 1e-9) sweep += Math.PI * 2;
     return Array.from({ length: 33 }, (_, i) => [c[0] + r * Math.cos(a0 + (sweep * i) / 32), c[1] + r * Math.sin(a0 + (sweep * i) / 32)] as P2);
   }
+  if (g.type === "point") return undefined;
   const pts = g.points.map((p) => point.get(p));
   if (pts.some((p) => !p)) return undefined;
   if (g.closed && pts.length) pts.push(pts[0]);
@@ -487,11 +488,11 @@ export class CadViewer {
           const t = a0 + (sweep * i) / 32;
           return [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)];
         });
-      } else {
+      } else if (g.type === "spline") {
         pts = g.points.map((p) => point.get(p)!);
         if (g.closed && pts.length) pts.push(pts[0]);
       }
-      if (pts.every(Boolean)) lines(pts, color, !!e.construction);
+      if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
     for (const g of overlay.guides ?? []) lines(g, themeHex("cyan"), true);

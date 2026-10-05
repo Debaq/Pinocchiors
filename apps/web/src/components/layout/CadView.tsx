@@ -16,20 +16,43 @@ export interface CadViewProps {
   scanMesh?: MeshData | null;
 }
 
-const TOOLS: { id: SketchTool; short: string; label: string; key: string }[] = [
+const TOOLS: { id: SketchTool; short: string; label: string; key?: string }[] = [
   { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S" },
   { id: "line", short: "Línea", label: "Línea", key: "L" },
   { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R" },
+  { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)" },
   { id: "circle", short: "Círculo", label: "Círculo", key: "C" },
   { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A" },
+  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3" },
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G" },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
+  { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O" },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T" },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E" },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+/** Centro del círculo que pasa por tres puntos (nada si están en línea) */
+function circumcenter(a: P2, b: P2, c: P2): P2 | undefined {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (Math.abs(d) < 1e-12 * Math.max(1, dist(a, b) * dist(b, c))) return undefined;
+  const [a2, b2, c2] = [a, b, c].map((p) => p[0] * p[0] + p[1] * p[1]);
+  return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
+}
+
+/** Arco de `a` a `b` que pasa por `m`: centro, radio, ángulo inicial y barrido (con signo) */
+function arcThrough(a: P2, b: P2, m: P2): { c: P2; r: number; a0: number; sweep: number } | undefined {
+  const c = circumcenter(a, b, m);
+  if (!c) return undefined;
+  const ang = (p: P2) => Math.atan2(p[1] - c[1], p[0] - c[0]);
+  const rel = (t: number) => ((t - ang(a)) % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+  // Antihorario de a a b si m queda en ese recorrido; si no, horario
+  const sb = rel(ang(b));
+  const sweep = rel(ang(m)) < sb ? sb : sb - 2 * Math.PI;
+  return { c, r: dist(c, a), a0: ang(a), sweep };
+}
 
 /** Distancia de un punto a un segmento */
 function segDist(p: P2, a: P2, b: P2): number {
@@ -55,6 +78,7 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
     if (g.type === "line") d = segDist(p, pt.get(g.start)!, pt.get(g.end)!);
     else if (g.type === "circle") d = Math.abs(dist(p, pt.get(g.center)!) - g.radius);
     else if (g.type === "arc") d = Math.abs(dist(p, pt.get(g.center)!) - dist(pt.get(g.start)!, pt.get(g.center)!));
+    else if (g.type === "point") d = dist(p, pt.get(g.point)!);
     else {
       const pts = g.points.map((x) => pt.get(x)!);
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
@@ -284,6 +308,17 @@ export const CadView: Component<CadViewProps> = (props) => {
           preview.push(Array.from({ length: 33 }, (_, i) => [arc.center[0] + r * Math.cos(a0 + (sweep * i) / 32), arc.center[1] + r * Math.sin(a0 + (sweep * i) / 32)] as P2));
         } else preview.push([tp, c]);
       }
+      if (t === "rect_center" && an.length === 1) {
+        const [o] = an;
+        const m: P2 = [2 * o[0] - c[0], 2 * o[1] - c[1]];
+        preview.push([c, [m[0], c[1]], m, [c[0], m[1]], c]);
+      }
+      if (t === "arc3" && an.length === 1) preview.push([an[0], c]);
+      if (t === "arc3" && an.length === 2) {
+        const arc = arcThrough(an[0], an[1], c);
+        if (arc) preview.push(Array.from({ length: 49 }, (_, i) => [arc.c[0] + arc.r * Math.cos(arc.a0 + (arc.sweep * i) / 48), arc.c[1] + arc.r * Math.sin(arc.a0 + (arc.sweep * i) / 48)] as P2));
+        else preview.push([an[0], an[1]]);
+      }
       if (t === "slot" && an.length === 1) preview.push([an[0], c]);
       if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
@@ -423,6 +458,65 @@ export const CadView: Component<CadViewProps> = (props) => {
         });
       setAnchor([]);
       return askDims(dims);
+    }
+    if (t === "rect_center") {
+      const an = anchor();
+      if (an.length === 0) return setAnchor([hit]);
+      const [C, K] = [an[0], hit];
+      const [dx, dy] = [K.p[0] - C.p[0], K.p[1] - C.p[1]];
+      if (Math.abs(dx) > 1e-9 && Math.abs(dy) > 1e-9)
+        ui.change((sk) => {
+          const c = placeSnap(sk, C);
+          // Esquinas en orden: la del clic y las otras tres reflejadas en el centro
+          const p0 = placeSnap(sk, K);
+          const p1 = addPoint(sk, [C.p[0] - dx, C.p[1] + dy]);
+          const p2 = addPoint(sk, [C.p[0] - dx, C.p[1] - dy]);
+          const p3 = addPoint(sk, [C.p[0] + dx, C.p[1] - dy]);
+          const l = [
+            [p0, p1],
+            [p1, p2],
+            [p2, p3],
+            [p3, p0],
+          ].map(([start, end]) => ui.addEntity(sk, { type: "line", start, end }));
+          sk.constraints.push({ type: "horizontal", line: l[0] }, { type: "horizontal", line: l[2] });
+          sk.constraints.push({ type: "vertical", line: l[1] }, { type: "vertical", line: l[3] });
+          // Diagonal de construcción partida en el centro: dos mitades alineadas e iguales
+          const d1 = ui.addEntity(sk, { type: "line", start: p0, end: c });
+          const d2 = ui.addEntity(sk, { type: "line", start: c, end: p2 });
+          for (const d of [d1, d2]) sk.entities.find((e) => e.id === d)!.construction = true;
+          sk.constraints.push({ type: "parallel", a: d1, b: d2 }, { type: "equal", a: d1, b: d2 });
+          if (C.id === undefined || K.id === undefined) {
+            dims.push(dim(sk, { type: "length", line: l[0], value: round(Math.abs(2 * dx)) }));
+            dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(2 * dy)) }));
+          }
+        });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "arc3") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [A, B] = an;
+      const arc = arcThrough(A.p, B.p, hit.p);
+      if (!arc) return ui.setMessage("Los tres puntos están en línea: mover el tercero hacia un costado");
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const a = placeSnap(sk, A);
+        const b = placeSnap(sk, B);
+        const center = addPoint(sk, arc.c);
+        // Los arcos van antihorarios: si pasa por el otro lado, de b a a
+        const id = ui.addEntity(sk, arc.sweep > 0 ? { type: "arc", center, start: a, end: b } : { type: "arc", center, start: b, end: a });
+        dims.push(dim(sk, { type: "radius", entity: id, value: round(arc.r) }));
+      });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "point") {
+      ui.change((sk) => {
+        const id = placeSnap(sk, hit);
+        if (!sk.entities.some((e) => e.geometry.type === "point" && e.geometry.point === id)) ui.addEntity(sk, { type: "point", point: id });
+      });
+      return;
     }
     if (t === "circle") {
       const an = anchor();
@@ -678,7 +772,14 @@ export const CadView: Component<CadViewProps> = (props) => {
       } else if (e.key === "Enter") void ui.finishSketch();
       else if (e.key === "Delete" || e.key === "Backspace") ui.deleteSelection();
       else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        const t = TOOLS.find((x) => x.key.toLowerCase() === key);
+        // Q: construcción sí/no en lo elegido (como Onshape)
+        if (key === "q" && ui.selection().length) {
+          ui.toggleConstruction();
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+        const t = TOOLS.find((x) => x.key?.toLowerCase() === key);
         if (!t) return;
         ui.setTool(t.id);
         resetTool();
@@ -947,7 +1048,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             <div class="flex items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
               <For each={TOOLS}>
                 {(t) => (
-                  <Tooltip content={`${t.label} (${t.key})`}>
+                  <Tooltip content={t.key ? `${t.label} (${t.key})` : t.label}>
                     <button
                       class={clsx(
                         "px-2 py-1 rounded text-xs",

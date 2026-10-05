@@ -77,7 +77,9 @@ export type Geometry =
   | { type: "line"; start: number; end: number }
   | { type: "circle"; center: number; radius: number }
   | { type: "arc"; center: number; start: number; end: number }
-  | { type: "spline"; points: number[]; closed: boolean };
+  | { type: "spline"; points: number[]; closed: boolean }
+  /** Punto suelto: no forma perfiles */
+  | { type: "point"; point: number };
 
 export interface SketchEntity {
   id: number;
@@ -438,13 +440,28 @@ export function addRectangle(s: Sketch, a: P2, b: P2): number[] {
   return l;
 }
 
+/** Puntos que usa una geometría */
+export function geometryPoints(g: Geometry): number[] {
+  switch (g.type) {
+    case "line":
+      return [g.start, g.end];
+    case "circle":
+      return [g.center];
+    case "arc":
+      return [g.center, g.start, g.end];
+    case "spline":
+      return g.points;
+    case "point":
+      return [g.point];
+  }
+}
+
 /** Borra una entidad, sus restricciones y los puntos que quedan sueltos */
 export function removeEntity(s: Sketch, id: number): void {
   const e = s.entities.find((x) => x.id === id);
   if (!e) return;
   s.entities = s.entities.filter((x) => x.id !== id);
-  const pointsOf = (g: Geometry): number[] =>
-    g.type === "line" ? [g.start, g.end] : g.type === "circle" ? [g.center] : g.type === "arc" ? [g.center, g.start, g.end] : g.points;
+  const pointsOf = geometryPoints;
   const mentions = (c: SketchConstraint, ids: Set<number>) => Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && k !== "value" && k !== "degrees" && k !== "x" && k !== "y" && ids.has(v));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set([id])));
   const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
@@ -504,7 +521,7 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
   const arc = addEntity(s, cross > 0 ? { type: "arc", center: c, start: t1, end: t2 } : { type: "arc", center: c, start: t2, end: t1 });
   // La esquina vieja desaparece con sus restricciones
   s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, val]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && val === point));
-  if (!s.entities.some((e) => e.geometry.type !== "spline" && Object.values(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
+  if (!s.entities.some((e) => geometryPoints(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
   // Las líneas quedaron más cortas: sus cotas de largo ya no valen
   s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
   s.constraints.push({ type: "tangent", a: lines[0].id, b: arc }, { type: "tangent", a: lines[1].id, b: arc }, { type: "radius", entity: arc, value: r });
@@ -641,7 +658,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
     s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
   }
   // Puntos que quedaron sueltos
-  const used = new Set(s.entities.flatMap((e) => (e.geometry.type === "line" ? [e.geometry.start, e.geometry.end] : e.geometry.type === "spline" ? e.geometry.points : e.geometry.type === "circle" ? [e.geometry.center] : [e.geometry.center, e.geometry.start, e.geometry.end])));
+  const used = new Set(s.entities.flatMap((e) => geometryPoints(e.geometry)));
   const loose = new Set(s.points.filter((q) => !used.has(q.id) && q.id !== s.origin).map((q) => q.id));
   s.points = s.points.filter((q) => !loose.has(q.id));
   s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, v]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && typeof v === "number" && loose.has(v)));
@@ -928,10 +945,7 @@ export function trimCurve(s: Sketch, id: number, p: P2): string | undefined {
 
 function dropLoosePoints(s: Sketch) {
   const used = new Set(
-    s.entities.flatMap((e) => {
-      const g = e.geometry;
-      return g.type === "line" ? [g.start, g.end] : g.type === "spline" ? g.points : g.type === "circle" ? [g.center] : [g.center, g.start, g.end];
-    }),
+    s.entities.flatMap((e) => geometryPoints(e.geometry)),
   );
   const loose = new Set(s.points.filter((q) => !used.has(q.id)).map((q) => q.id));
   if (loose.size === 0) return;

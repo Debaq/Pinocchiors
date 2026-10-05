@@ -36,7 +36,20 @@ export type Pick3d =
 
 const samePick = (a: Pick3d, b: Pick3d) => JSON.stringify(a) === JSON.stringify(b);
 
-export type SketchTool = "select" | "line" | "rect" | "circle" | "arc" | "polygon" | "slot" | "trim" | "tangent" | "extend";
+export type SketchTool =
+  | "select"
+  | "line"
+  | "rect"
+  | "rect_center"
+  | "circle"
+  | "arc"
+  | "arc3"
+  | "point"
+  | "polygon"
+  | "slot"
+  | "trim"
+  | "tangent"
+  | "extend";
 
 /** Qué hace un clic en el visor */
 export type PickMode =
@@ -259,7 +272,8 @@ export function createCadUi(store: CadStore) {
     deleteSelection() {
       const ids = new Set(selection());
       ui.change((s) => {
-        for (const e of [...s.entities]) if (ids.has(e.id)) removeEntity(s, e.id);
+        // Un punto suelto se elige por su punto
+        for (const e of [...s.entities]) if (ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point))) removeEntity(s, e.id);
       });
       setSelection([]);
     },

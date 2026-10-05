@@ -36,6 +36,8 @@ pub enum Geometry {
     Arc { center: u32, start: u32, end: u32 },
     /// Spline interpolada por los puntos; `closed` une el último con el primero.
     Spline { points: Vec<u32>, closed: bool },
+    /// Punto suelto (para agujeros y referencias): no forma perfiles.
+    Point { point: u32 },
 }
 
 impl Geometry {
@@ -45,6 +47,7 @@ impl Geometry {
             Geometry::Circle { center, .. } => vec![*center],
             Geometry::Arc { center, start, end } => vec![*center, *start, *end],
             Geometry::Spline { points, .. } => points.clone(),
+            Geometry::Point { point } => vec![*point],
         }
     }
 }

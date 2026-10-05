@@ -101,7 +101,7 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
    horizontal implícita); en los arcos el borde es el inicio.*
 3. **Colores por entidad** y número de grados libres; cotas de referencia. *Hecha el 2026-10-05.*
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
-   rápida.
+   rápida. *Hecha el 2026-10-05.*
 5. **Simetría y patrón en el sketch.**
 6. **Elipse y spline con manijas.**
 7. **Texto** (después de decidir fuentes).

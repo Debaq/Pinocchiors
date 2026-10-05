@@ -687,3 +687,17 @@ fn repeated_dimension_is_reported_even_if_consistent() {
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
 }
+
+#[test]
+fn loose_point_entity_does_not_form_regions() {
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [10.0, 10.0]);
+    let p = s.add_point(5.0, 5.0);
+    let e = s.add_entity(Geometry::Point { point: p });
+    assert_eq!(find_regions(&s).unwrap().len(), 1);
+    // Borrar la entidad borra el punto
+    s.remove_entity(e).unwrap();
+    assert!(s.point(p).is_err());
+    let json = serde_json::to_string(&Geometry::Point { point: 3 }).unwrap();
+    assert_eq!(json, r#"{"type":"point","point":3}"#);
+}

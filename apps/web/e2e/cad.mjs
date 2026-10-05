@@ -600,6 +600,54 @@ const scenarios = {
     near(ref.value, 0.4 * S, 0.11, "la referencia mide el ancho");
   },
 
+  async "rectángulo por el centro, arco por 3 puntos, punto y Q"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    // Rectángulo centrado en el origen
+    await b.clickText("Rect. centro");
+    await b.click(...(await at(0, 0)));
+    await b.click(...(await at(0.2, 0.15)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    // Arco por 3 puntos: de A a B pasando por arriba (va horario: se guarda de B a A)
+    await b.clickText("Arco 3 p.");
+    await b.click(...(await at(0.45, 0.05)));
+    await b.click(...(await at(0.65, 0.05)));
+    await b.click(...(await at(0.55, 0.12)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Punto");
+    await b.click(...(await at(0.3, -0.3)), { wait: 600 });
+    // Q: el lado de arriba pasa a construcción
+    await b.clickText("Elegir");
+    await b.click(...(await at(0.1, 0.15)), { wait: 300 });
+    await b.key("q", "KeyQ", 81);
+    await sleep(800);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const arc = sk.entities.find((e) => e.geometry.type === "arc");
+    if (!arc) throw new Error("sin arco");
+    const pt = (id) => sk.points.find((p) => p.id === id);
+    const [c, a0] = [pt(arc.geometry.center), pt(arc.geometry.start)];
+    near(Math.hypot(a0.x - c.x, a0.y - c.y), 0.10643 * S, 0.11, "radio del arco por 3 puntos");
+    if (a0.x < c.x) throw new Error("el arco por arriba de izquierda a derecha debía guardarse al revés");
+    if (!sk.entities.some((e) => e.geometry.type === "point")) throw new Error("sin punto suelto");
+    if (sk.entities.filter((e) => e.construction).length !== 3) throw new Error("Q no pasó la línea a construcción");
+    // Más ancho: sigue centrado en el origen
+    const width = sk.constraints.find((k) => k.type === "length");
+    width.value = 0.6 * S;
+    await call("cad_set_document", { document: doc });
+    const solved = (await evaluate()).sketches[0].sketch;
+    const xs = solved.entities
+      .filter((e) => e.geometry.type === "line" && !e.construction)
+      .flatMap((e) => [e.geometry.start, e.geometry.end])
+      .map((id) => solved.points.find((p) => p.id === id).x);
+    near(Math.max(...xs), 0.3 * S, 1e-6, "lado derecho");
+    near(Math.min(...xs), -0.3 * S, 1e-6, "lado izquierdo");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

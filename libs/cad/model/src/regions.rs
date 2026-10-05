@@ -86,6 +86,7 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
             }
             catmull_rom(&pts)
         }
+        Geometry::Point { point } => vec![s.point(*point)?],
     })
 }
 
@@ -213,7 +214,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     };
     let mut edges: Vec<Edge> = Vec::new();
 
-    for e in s.entities.iter().filter(|e| !e.construction) {
+    for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
         let pts = sample_entity(s, e.id)?;
         let closed_alone = matches!(e.geometry, Geometry::Circle { .. } | Geometry::Spline { closed: true, .. });
         if closed_alone {

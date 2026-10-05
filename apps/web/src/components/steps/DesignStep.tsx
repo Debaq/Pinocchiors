@@ -1560,7 +1560,7 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
           </Show>
           <div class="flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => ui.toggleConstruction()} disabled={selEntities().length === 0}>
-              Construcción sí/no
+              Construcción sí/no (Q)
             </Button>
             <Button size="sm" variant="danger" icon={<Icons.Trash size={12} />} onClick={() => ui.deleteSelection()} disabled={selEntities().length === 0}>
               Borrar

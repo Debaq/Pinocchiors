@@ -244,3 +244,9 @@ cargo test -p cad-model
   y se muestran entre paréntesis; botón "Ref" en el panel. Una cota que repite lo que ya está
   definido también sobre-define (antes pasaba sin aviso porque no deja residuo): se marca la
   más nueva de las redundantes y el visor ofrece "Dejarla de referencia" o "Quitarla".
+- **2026-10-05 Herramientas simples** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 4): rectángulo
+  por el centro (diagonal de construcción partida en el centro: mitades paralelas e iguales,
+  así el centro puede ser el origen), arco por 3 puntos (inicio, fin y uno por donde pasa;
+  se guarda antihorario, al revés si pasa por el otro lado; tecla 3), punto suelto
+  (`Geometry::Point`, no forma regiones; tecla O) y Q para construcción sí/no en lo elegido.
+  `geometryPoints` reemplaza las cadenas de ternarios que daban por hecho "si no, es arco".
