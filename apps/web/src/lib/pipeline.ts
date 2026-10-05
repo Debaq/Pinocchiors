@@ -15,6 +15,7 @@ export type PipelineStepId =
   | "animate"
   | "print3d"
   | "scan"
+  | "design"
   | "export";
 
 export interface PipelineStep {
@@ -76,6 +77,11 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     icon: Icons.Scan,
   },
   {
+    id: "design",
+    label: "Diseño CAD",
+    icon: Icons.Ruler,
+  },
+  {
     id: "export",
     label: "Exportar",
     icon: Icons.Export,
@@ -90,7 +96,7 @@ export const PIPELINE_STEPS: PipelineStep[] = [
 // (menú Archivo); transformar el modelo está siempre en la pestaña Objeto.
 // ═══════════════════════════════════════════════════════════════════════════
 
-export type WorkspaceId = "prepare" | "rig" | "print" | "scan";
+export type WorkspaceId = "prepare" | "rig" | "print" | "scan" | "design";
 
 export interface Workspace {
   id: WorkspaceId;
@@ -106,6 +112,8 @@ export const WORKSPACES: Workspace[] = [
   { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", label: "Fabricar", sections: ["print3d"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
+  // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
+  { id: "design", label: "Diseñar", sections: ["design"], withoutModel: true },
 ];
 
 export const stepInfo = (id: PipelineStepId) => PIPELINE_STEPS.find((s) => s.id === id) ?? PIPELINE_STEPS[0];

@@ -588,10 +588,10 @@ pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<
     .await
 }
 
-/// mm por unidad del modelo (para mostrar medidas del escaneo en su escala).
+/// mm por unidad de la escena: el visor convierte el sketch (mm) a sus unidades.
 #[tauri::command]
-pub async fn cad_scan_mm_per_unit(app: AppHandle) -> Result<f64, String> {
-    in_background(app, |state| with_scan(state, |scan| Ok(scan.mm_per_unit))).await
+pub fn cad_mm_per_unit(state: tauri::State<'_, AppState>) -> f64 {
+    mm_per_unit(&state)
 }
 
 /// Errores de recálculo legibles (para avisos).

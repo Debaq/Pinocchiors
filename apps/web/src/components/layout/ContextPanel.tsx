@@ -51,6 +51,8 @@ export interface ContextPanelProps {
 
   // Escáner 3D (Orizon3D)
   scanProps: ScanStepProps;
+  /** Panel del espacio Diseñar (lo arma App con el store del CAD) */
+  designPanel?: JSX.Element;
 
   // Export
   exportProps: ExportStepProps;
@@ -346,6 +348,9 @@ const StepContent: Component<ContextPanelProps> = (props) => (
     </Match>
     <Match when={props.activeStep === "scan"}>
       <ScanStep {...props.scanProps} />
+    </Match>
+    <Match when={props.activeStep === "design"}>
+      {props.designPanel}
     </Match>
     <Match when={props.activeStep === "export"}>
       <ExportStep {...props.exportProps} />
