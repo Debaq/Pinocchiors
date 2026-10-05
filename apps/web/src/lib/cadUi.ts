@@ -46,6 +46,7 @@ export type SketchTool =
   | "arc3"
   | "ellipse"
   | "point"
+  | "spline"
   | "polygon"
   | "slot"
   | "trim"

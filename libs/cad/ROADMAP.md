@@ -266,3 +266,10 @@ cargo test -p cad-model
   mayor y ancho. Al dibujar, ahora solo los rectángulos evitan alinearse con su primer punto
   (la elipse, el arco, la ranura y el polígono sí se alinean con su centro). La barra del
   sketch pasa a dos filas si no entra.
+- **2026-10-05 Spline con manijas** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 6, segunda parte):
+  herramienta Spline (N): clics por donde pasa, clic en el primero la cierra, Esc la termina
+  abierta. `Geometry::Spline` suma `start_handle`/`end_handle` opcionales (puntos: la tangente de
+  salida y la de llegada, en el sentido de avance); en OCCT, `Curve::SplineEnds` (tipo 5 del
+  puente, `GeomAPI_Interpolate::Load` con escala: cuenta la dirección, no el largo). En el
+  visor la spline se ve suave (Catmull-Rom con esas tangentes; antes era una polilínea) y las
+  manijas con línea punteada; botón "Manijas en los extremos sí/no".

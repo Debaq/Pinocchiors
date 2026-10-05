@@ -79,7 +79,7 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
             *pts.last_mut().unwrap() = b;
             pts
         }
-        Geometry::Spline { points, closed } => {
+        Geometry::Spline { points, closed, .. } => {
             let mut pts: Vec<P2> = points.iter().map(|p| s.point(*p)).collect::<Result<_, _>>()?;
             if *closed && let Some(&f) = pts.first() {
                 pts.push(f);

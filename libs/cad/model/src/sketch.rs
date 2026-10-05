@@ -35,7 +35,17 @@ pub enum Geometry {
     /// Arco antihorario (visto desde la normal del plano) de `start` a `end`.
     Arc { center: u32, start: u32, end: u32 },
     /// Spline interpolada por los puntos; `closed` une el último con el primero.
-    Spline { points: Vec<u32>, closed: bool },
+    /// Manijas opcionales (solo abierta): la tangente de salida va del primer
+    /// punto a `start_handle` y la de llegada del último a `end_handle` (las
+    /// dos en el sentido de avance).
+    Spline {
+        points: Vec<u32>,
+        closed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_handle: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_handle: Option<u32>,
+    },
     /// Punto suelto (para agujeros y referencias): no forma perfiles.
     Point { point: u32 },
     /// Elipse: `major` y `minor` son los extremos de los semiejes (a 90°, la
@@ -50,7 +60,9 @@ impl Geometry {
             Geometry::Line { start, end } => vec![*start, *end],
             Geometry::Circle { center, .. } => vec![*center],
             Geometry::Arc { center, start, end } => vec![*center, *start, *end],
-            Geometry::Spline { points, .. } => points.clone(),
+            Geometry::Spline { points, start_handle, end_handle, .. } => {
+                points.iter().chain(start_handle).chain(end_handle).copied().collect()
+            }
             Geometry::Point { point } => vec![*point],
             Geometry::Ellipse { center, major, minor } => vec![*center, *major, *minor],
         }

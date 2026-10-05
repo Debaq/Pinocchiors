@@ -7,7 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
-import { ellipsePolyline, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
+import { ellipsePolyline, splineOf, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -103,10 +103,7 @@ function entityPolyline(g: Sketch["entities"][number]["geometry"], point: Map<nu
     const [c, a, b] = [point.get(g.center), point.get(g.major), point.get(g.minor)];
     return c && a && b ? ellipsePolyline(c, a, b) : undefined;
   }
-  const pts = g.points.map((p) => point.get(p));
-  if (pts.some((p) => !p)) return undefined;
-  if (g.closed && pts.length) pts.push(pts[0]);
-  return pts as P2[];
+  return splineOf(g, (id) => point.get(id));
 }
 
 export class CadViewer {
@@ -493,8 +490,14 @@ export class CadViewer {
           return [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)];
         });
       } else if (g.type === "spline") {
-        pts = g.points.map((p) => point.get(p)!);
-        if (g.closed && pts.length) pts.push(pts[0]);
+        pts = splineOf(g, (id) => point.get(id)) ?? [];
+        // Manijas: línea punteada del extremo a la manija
+        for (const [end, h] of [
+          [g.points[0], g.start_handle],
+          [g.points[g.points.length - 1], g.end_handle],
+        ] as const) {
+          if (h !== undefined) lines([point.get(end), point.get(h)], construction, true);
+        }
       } else if (g.type === "ellipse") pts = entityPolyline(g, point) ?? [];
       if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction);
     }

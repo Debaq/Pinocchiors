@@ -15,6 +15,7 @@ import {
   circularPattern,
   linearPattern,
   mirrorEntities,
+  toggleSplineHandles,
   linesAt,
   offsetEntities,
   offsetPlane,
@@ -1563,6 +1564,20 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 Equidistante
               </Button>
             </div>
+          </Show>
+          <Show when={selEntities().length === 1 && selEntities()[0]!.geometry.type === "spline"}>
+            <Button
+              size="sm"
+              title="Puntos que dan la dirección de salida y de llegada; se arrastran"
+              onClick={() => {
+                const id = selEntities()[0]!.id;
+                let msg: string | undefined;
+                ui.change((sk) => (msg = toggleSplineHandles(sk, id)));
+                ui.setMessage(msg);
+              }}
+            >
+              Manijas en los extremos sí/no
+            </Button>
           </Show>
           <Show when={selEntities().length > 0}>
             <div class="space-y-1.5 border-t border-border pt-1.5">

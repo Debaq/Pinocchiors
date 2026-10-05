@@ -732,6 +732,48 @@ const scenarios = {
     near((await body()).volume, Math.PI * ra * rb * h, 1e-6 * ra * rb * h, "volumen de la elipse");
   },
 
+  async "spline con manijas"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    // Spline abierta de tres puntos (Esc la termina) cerrada con una línea
+    await b.clickText("Spline");
+    for (const p of [[0.05, 0.05], [0.15, 0.15], [0.3, 0.05]]) await b.click(...(await at(...p)));
+    await b.key("Escape", "Escape", 27);
+    await sleep(600);
+    await b.clickText("Línea");
+    await b.click(...(await at(0.3, 0.05)));
+    await b.click(...(await at(0.05, 0.05)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    if (!(await sketchText(b, "/\\d+ regiones cerradas/")).startsWith("1")) throw new Error("la spline y la línea no cierran");
+    // Elegir la spline (sobre la curva, entre el primer y el segundo punto) y ponerle manijas
+    await b.clickText("Elegir");
+    await b.click(...(await at(0.0969, 0.1125)), { wait: 300 });
+    await b.clickText("Manijas en los extremos sí/no");
+    await sleep(800);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    const v0 = (await body()).volume;
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const g = sk.entities.find((e) => e.geometry.type === "spline").geometry;
+    if (g.start_handle === undefined || g.end_handle === undefined) throw new Error("sin manijas");
+    // Manijas hacia arriba en los dos extremos (salida hacia arriba, llegada hacia abajo): más área
+    const pt = (id) => sk.points.find((p) => p.id === id);
+    const [a, z] = [pt(g.points[0]), pt(g.points[g.points.length - 1])];
+    Object.assign(pt(g.start_handle), { x: a.x, y: a.y + 5 });
+    Object.assign(pt(g.end_handle), { x: z.x, y: z.y - 5 });
+    sk.constraints.push({ type: "fixed", point: g.start_handle, x: a.x, y: a.y + 5 }, { type: "fixed", point: g.end_handle, x: z.x, y: z.y - 5 });
+    await call("cad_set_document", { document: doc });
+    const r = await body();
+    if (!r.valid) throw new Error("sólido inválido");
+    if (!(r.volume > v0 * 1.05)) throw new Error(`volumen ${v0} → ${r.volume}`);
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

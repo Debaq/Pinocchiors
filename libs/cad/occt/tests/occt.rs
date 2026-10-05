@@ -393,3 +393,18 @@ fn ellipse_faces_have_exact_area() {
         assert_relative_eq!(m.bbox_max[0] - m.bbox_min[0], 2.0 * a, epsilon = 1e-3);
     }
 }
+
+#[test]
+fn spline_end_tangents_change_the_shape() {
+    if !require() {
+        return;
+    }
+    // Arco de spline por tres puntos, cerrado con una línea: con las tangentes
+    // abiertas hacia afuera el área crece
+    let pts = vec![[0.0, 0.0, 0.0], [5.0, 3.0, 0.0], [10.0, 0.0, 0.0]];
+    let close = Curve::Line([10.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let free = Shape::face(&[vec![Curve::Spline(pts.clone()), close.clone()]]).unwrap();
+    let wide = Shape::face(&[vec![Curve::SplineEnds { points: pts, start: [0.0, 1.0, 0.0], end: [0.0, -1.0, 0.0] }, close]]).unwrap();
+    let (a0, a1) = (free.mass().unwrap().area, wide.mass().unwrap().area);
+    assert!(a1 > a0 * 1.05, "{a0} → {a1}");
+}

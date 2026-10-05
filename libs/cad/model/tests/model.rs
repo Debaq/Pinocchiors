@@ -798,3 +798,44 @@ fn ellipse_is_dimensioned_and_extruded_exactly() {
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), PI * 5.0 * 2.0 * 3.0, max_relative = 1e-6);
 }
+
+#[test]
+fn spline_handles_set_end_tangents() {
+    let build = |handles: bool| {
+        let mut s = Sketch::new();
+        let p: Vec<u32> = [[0.0, 0.0], [5.0, 3.0], [10.0, 0.0]].iter().map(|q| s.add_point(q[0], q[1])).collect();
+        let (h0, h1) = if handles { (Some(s.add_point(0.0, 2.0)), Some(s.add_point(10.0, -2.0))) } else { (None, None) };
+        s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: h0, end_handle: h1 });
+        s.add_line(p[2], p[0]);
+        for &id in &p {
+            let q = s.point(id).unwrap();
+            s.constrain(SketchConstraint::Fixed { point: id, x: q[0], y: q[1] });
+        }
+        s
+    };
+    let s = build(true);
+    // Las manijas son puntos de la spline: se borran con ella
+    let mut t = s.clone();
+    let spline = t.entities[0].id;
+    t.remove_entity(spline).unwrap();
+    assert_eq!(t.points.len(), 2, "quedan los dos de la línea (sin el del medio ni las manijas)");
+    if !occt() {
+        return;
+    }
+    let vol = |s: Sketch| {
+        let mut doc = Document::new();
+        let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+        doc.add(FeatureKind::Extrude(Extrude {
+            sketch: sk,
+            regions: RegionSelection::All,
+            extent: Extent::Blind { distance: 1.0 },
+            reverse: false,
+            op: BodyOp::Join,
+        }));
+        let ev = doc.evaluate();
+        assert_all_ok(&ev);
+        volume(&ev)
+    };
+    let (free, held) = (vol(build(false)), vol(build(true)));
+    assert!(held > free * 1.05, "{free} → {held}");
+}

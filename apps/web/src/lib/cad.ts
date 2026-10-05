@@ -77,7 +77,8 @@ export type Geometry =
   | { type: "line"; start: number; end: number }
   | { type: "circle"; center: number; radius: number }
   | { type: "arc"; center: number; start: number; end: number }
-  | { type: "spline"; points: number[]; closed: boolean }
+  /** Manijas opcionales (abierta): dirección de salida y de llegada, en el sentido de avance */
+  | { type: "spline"; points: number[]; closed: boolean; start_handle?: number; end_handle?: number }
   /** Punto suelto: no forma perfiles */
   | { type: "point"; point: number }
   /** Elipse: extremos de los semiejes (a 90°) */
@@ -454,6 +455,71 @@ export function ellipsePolyline(c: P2, a: P2, b: P2, n = 64): P2[] {
   });
 }
 
+/**
+ * Curva suave por los puntos (Catmull-Rom, como se ve antes de recalcular).
+ * `t0`/`t1`: dirección de salida y de llegada impuestas por las manijas.
+ */
+export function splinePolyline(p: P2[], closed: boolean, t0?: P2, t1?: P2, steps = 16): P2[] {
+  const n = p.length;
+  if (n < 2) return p.slice();
+  const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
+  const len = (v: P2) => Math.hypot(v[0], v[1]) || 1;
+  const along = (dir: P2, ref: P2): P2 => [(dir[0] / len(dir)) * len(ref), (dir[1] / len(dir)) * len(ref)];
+  const at = (i: number) => p[((i % n) + n) % n];
+  const tangent = (i: number): P2 => {
+    if (closed) return sub(at(i + 1), at(i - 1)).map((v) => v / 2) as P2;
+    if (i === 0) return t0 ? along(t0, sub(p[1], p[0])) : sub(p[1], p[0]);
+    if (i === n - 1) return t1 ? along(t1, sub(p[n - 1], p[n - 2])) : sub(p[n - 1], p[n - 2]);
+    return sub(p[i + 1], p[i - 1]).map((v) => v / 2) as P2;
+  };
+  const out: P2[] = [];
+  const segs = closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const [a, b, ma, mb] = [at(i), at(i + 1), tangent(i), tangent((i + 1) % (closed ? n : n + 1))];
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      const [h00, h10, h01, h11] = [2 * t ** 3 - 3 * t ** 2 + 1, t ** 3 - 2 * t ** 2 + t, -2 * t ** 3 + 3 * t ** 2, t ** 3 - t ** 2];
+      out.push([h00 * a[0] + h10 * ma[0] + h01 * b[0] + h11 * mb[0], h00 * a[1] + h10 * ma[1] + h01 * b[1] + h11 * mb[1]]);
+    }
+  }
+  out.push(closed ? p[0] : p[n - 1]);
+  return out;
+}
+
+/** Contorno de una spline del sketch (con sus manijas) */
+export function splineOf(g: Extract<Geometry, { type: "spline" }>, point: (id: number) => P2 | undefined): P2[] | undefined {
+  const pts = g.points.map(point);
+  if (pts.some((p) => !p)) return undefined;
+  const p = pts as P2[];
+  const h0 = g.start_handle !== undefined ? point(g.start_handle) : undefined;
+  const h1 = g.end_handle !== undefined ? point(g.end_handle) : undefined;
+  const t0: P2 | undefined = h0 && [h0[0] - p[0][0], h0[1] - p[0][1]];
+  const t1: P2 | undefined = h1 && [h1[0] - p[p.length - 1][0], h1[1] - p[p.length - 1][1]];
+  return splinePolyline(p, g.closed, t0, t1);
+}
+
+/** Manijas en los extremos de una spline abierta (o las quita si ya tiene) */
+export function toggleSplineHandles(s: Sketch, id: number): string | undefined {
+  const e = s.entities.find((x) => x.id === id);
+  if (e?.geometry.type !== "spline") return "Elegir una spline";
+  const g = e.geometry;
+  if (g.closed) return "Las manijas son para splines abiertas";
+  if (g.start_handle !== undefined || g.end_handle !== undefined) {
+    const hs = [g.start_handle, g.end_handle].filter((x): x is number => x !== undefined);
+    delete g.start_handle;
+    delete g.end_handle;
+    s.points = s.points.filter((q) => !hs.includes(q.id) || s.entities.some((x) => geometryPoints(x.geometry).includes(q.id)));
+    s.constraints = s.constraints.filter((k) => !constraintIds(k).some((v) => hs.includes(v)));
+    return undefined;
+  }
+  const p = g.points.map((q) => pointOf(s, q));
+  const n = p.length;
+  // A un tercio del tramo vecino, en el sentido de avance
+  g.start_handle = addPoint(s, [p[0][0] + (p[1][0] - p[0][0]) / 3, p[0][1] + (p[1][1] - p[0][1]) / 3]);
+  g.end_handle = addPoint(s, [p[n - 1][0] + (p[n - 1][0] - p[n - 2][0]) / 3, p[n - 1][1] + (p[n - 1][1] - p[n - 2][1]) / 3]);
+  return undefined;
+}
+
 /** Puntos que usa una geometría */
 export function geometryPoints(g: Geometry): number[] {
   switch (g.type) {
@@ -464,7 +530,7 @@ export function geometryPoints(g: Geometry): number[] {
     case "arc":
       return [g.center, g.start, g.end];
     case "spline":
-      return g.points;
+      return [...g.points, ...(g.start_handle !== undefined ? [g.start_handle] : []), ...(g.end_handle !== undefined ? [g.end_handle] : [])];
     case "point":
       return [g.point];
     case "ellipse":
@@ -487,7 +553,14 @@ function copyEntities(s: Sketch, ids: number[], map: (p: number) => number, flip
     if (g.type === "line") copy = { type: "line", start: map(g.start), end: map(g.end) };
     else if (g.type === "circle") copy = { type: "circle", center: map(g.center), radius: g.radius };
     else if (g.type === "arc") copy = flip ? { type: "arc", center: map(g.center), start: map(g.end), end: map(g.start) } : { type: "arc", center: map(g.center), start: map(g.start), end: map(g.end) };
-    else if (g.type === "spline") copy = { type: "spline", points: g.points.map(map), closed: g.closed };
+    else if (g.type === "spline")
+      copy = {
+        type: "spline",
+        points: g.points.map(map),
+        closed: g.closed,
+        ...(g.start_handle !== undefined ? { start_handle: map(g.start_handle) } : {}),
+        ...(g.end_handle !== undefined ? { end_handle: map(g.end_handle) } : {}),
+      };
     else if (g.type === "ellipse") copy = { type: "ellipse", center: map(g.center), major: map(g.major), minor: map(g.minor) };
     else copy = { type: "point", point: map(g.point) };
     const c = addEntity(s, copy);

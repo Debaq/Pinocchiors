@@ -103,7 +103,7 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
    rápida. *Hecha el 2026-10-05.*
 5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05.*
-6. **Elipse y spline con manijas.**
+6. **Elipse y spline con manijas.** *Hecha el 2026-10-05 (manijas solo en los extremos; las intermedias y la curvatura quedan para más adelante).*
 7. **Texto** (después de decidir fuentes).
 
 ## Pruebas

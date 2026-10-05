@@ -784,7 +784,26 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
                 let (a, b) = (plane.to_world(a), plane.to_world(b));
                 if piece.reversed { Curve::Arc(b, m, a) } else { Curve::Arc(a, m, b) }
             }
-            Geometry::Spline { points, closed } => {
+            Geometry::Spline { points, closed, start_handle, end_handle } if !*closed && (start_handle.is_some() || end_handle.is_some()) => {
+                let mut pts = points.iter().map(|p| w(*p)).collect::<R<Vec<_>>>()?;
+                let n = pts.len();
+                // Sin manija en un extremo: la dirección hacia el punto vecino
+                let start = match start_handle {
+                    Some(h) => sub(w(*h)?, pts[0]),
+                    None => sub(pts[1], pts[0]),
+                };
+                let end = match end_handle {
+                    Some(h) => sub(w(*h)?, pts[n - 1]),
+                    None => sub(pts[n - 1], pts[n - 2]),
+                };
+                if piece.reversed {
+                    pts.reverse();
+                    Curve::SplineEnds { points: pts, start: scale(end, -1.0), end: scale(start, -1.0) }
+                } else {
+                    Curve::SplineEnds { points: pts, start, end }
+                }
+            }
+            Geometry::Spline { points, closed, .. } => {
                 let mut pts = points.iter().map(|p| w(*p)).collect::<R<Vec<_>>>()?;
                 if *closed && let Some(&f) = pts.first() {
                     pts.push(f);

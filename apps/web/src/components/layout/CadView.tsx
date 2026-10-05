@@ -2,7 +2,7 @@ import { Component, For, Index, Show, createEffect, createMemo, createSignal, on
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { addPoint, constraintIds, ellipsePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -28,6 +28,7 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string }[] = 
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G" },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
+  { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N" },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O" },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T" },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E" },
@@ -95,7 +96,7 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     else {
-      const pts = g.points.map((x) => pt.get(x)!);
+      const pts = splineOf(g, (x) => pt.get(x)) ?? [];
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     if (d <= tol && (!best || d < best.d)) best = { id: e.id, d };
@@ -328,6 +329,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         const m: P2 = [2 * o[0] - c[0], 2 * o[1] - c[1]];
         preview.push([c, [m[0], c[1]], m, [c[0], m[1]], c]);
       }
+      if (t === "spline" && an.length >= 1) preview.push(splinePolyline([...an, c], false));
       if (t === "ellipse" && an.length === 1) preview.push([an[0], c]);
       if (t === "ellipse" && an.length === 2) {
         const e = ellipseMinor(an[0], an[1], c);
@@ -377,6 +379,17 @@ export const CadView: Component<CadViewProps> = (props) => {
       from,
       // Un rectángulo alineado con su primera esquina (o su centro) tendría ancho o alto cero
       noAlign: ui.tool() === "rect" || ui.tool() === "rect_center" ? anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])) : [],
+    });
+  };
+
+  /** Crea la spline con los puntos marcados (abierta o cerrada) */
+  const finishSpline = (closed: boolean) => {
+    const an = anchor();
+    setAnchor([]);
+    if (an.length < 2) return;
+    ui.change((sk) => {
+      const points = an.map((a) => placeSnap(sk, a));
+      ui.addEntity(sk, { type: "spline", points, closed });
     });
   };
 
@@ -512,6 +525,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         });
       setAnchor([]);
       return askDims(dims);
+    }
+    if (t === "spline") {
+      const an = anchor();
+      // Clic sobre el primer punto: se cierra
+      if (an.length >= 3 && dist(an[0].p, hit.p) <= viewer.pixelSizeMm() * 8) return finishSpline(true);
+      return setAnchor([...an, hit]);
     }
     if (t === "ellipse") {
       const an = anchor();
@@ -805,7 +824,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (ui.session()) {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
-        if (chain() || anchor().length) resetTool();
+        // La spline se termina con Esc (abierta)
+        if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
+        else if (chain() || anchor().length) resetTool();
         else ui.setTool("select");
       } else if (e.key === "Enter") void ui.finishSketch();
       else if (e.key === "Delete" || e.key === "Backspace") ui.deleteSelection();

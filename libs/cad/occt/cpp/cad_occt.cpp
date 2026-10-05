@@ -190,6 +190,23 @@ TopoDS_Edge make_edge(int32_t kind, int32_t count, const double* d) {
             if (!interp.IsDone()) throw Standard_Failure("spline: no se pudo interpolar");
             return BRepBuilderAPI_MakeEdge(interp.Curve()).Edge();
         }
+        case 5: {
+            // Puntos y al final las tangentes de salida y de llegada
+            if (count < 12 || count % 3 != 0) throw Standard_Failure("spline: puntos incompletos");
+            int n = count / 3 - 2;
+            Handle(TColgp_HArray1OfPnt) pts = new TColgp_HArray1OfPnt(1, n);
+            for (int i = 0; i < n; i++) pts->SetValue(i + 1, pnt(d + 3 * i));
+            gp_Vec t0(d[3 * n], d[3 * n + 1], d[3 * n + 2]);
+            gp_Vec t1(d[3 * n + 3], d[3 * n + 4], d[3 * n + 5]);
+            if (t0.Magnitude() < Precision::Confusion() || t1.Magnitude() < Precision::Confusion())
+                throw Standard_Failure("spline: manija sobre su punto");
+            GeomAPI_Interpolate interp(pts, Standard_False, Precision::Confusion());
+            // Solo la dirección: el largo lo ajusta OCCT a la parametrización
+            interp.Load(t0, t1, Standard_True);
+            interp.Perform();
+            if (!interp.IsDone()) throw Standard_Failure("spline: no se pudo interpolar");
+            return BRepBuilderAPI_MakeEdge(interp.Curve()).Edge();
+        }
         case 4: {
             if (count != 11) throw Standard_Failure("elipse: se esperaban 11 valores");
             double a = d[9], b = d[10];
