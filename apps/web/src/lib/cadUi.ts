@@ -2,7 +2,7 @@
 // (CadView) y el panel (DesignStep): qué se está eligiendo con el mouse y el
 // sketch en edición.
 
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import {
   addEntity,
   addPoint,
@@ -108,8 +108,12 @@ export function createCadUi(store: CadStore) {
       const s = session();
       if (!s) return;
       const next = clone(s.sketch);
-      mutate(next);
-      setSession({ ...s, sketch: next });
+      // Junto con lo que la herramienta actualice dentro de `mutate`: la vista
+      // previa nunca ve el sketch viejo con el estado nuevo de la herramienta
+      batch(() => {
+        mutate(next);
+        setSession({ ...s, sketch: next });
+      });
       void solve(next);
     },
 

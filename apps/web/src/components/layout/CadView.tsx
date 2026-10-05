@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createSignal, on, onCleanup, onMount } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer } from "../../lib/CadViewer";
@@ -79,6 +79,8 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   onMount(async () => {
     viewer = new CadViewer(container);
+    // Para las pruebas en navegador (scratch de desarrollo)
+    if (import.meta.env.DEV) (window as unknown as { __cadViewer?: CadViewer }).__cadViewer = viewer;
     try {
       viewer.mmPerUnit = await invoke<number>("cad_mm_per_unit");
     } catch {
@@ -107,7 +109,14 @@ export const CadView: Component<CadViewProps> = (props) => {
       { defer: true },
     ),
   );
-  createEffect(() => viewer?.setBody(store.mesh()));
+  // Encuadrar cuando aparece el primer sólido (no en cada recálculo)
+  let hadBody = false;
+  createEffect(() => {
+    const m = store.mesh();
+    viewer?.setBody(m);
+    if (m && !hadBody && !ui.session()) viewer?.frameAll();
+    hadBody = !!m;
+  });
   createEffect(() => {
     const h = ui.highlight();
     viewer?.setHighlight(h.faces, h.edges);
@@ -116,9 +125,12 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => viewer?.setScanVisible(scanVisible(), scanOpacity()));
 
   // Sketch: vista de frente al entrar, normal al salir
+  // Memo: el efecto corre al entrar o salir de un sketch, no con cada cambio
+  // del sketch (cortaría la polilínea en cada clic)
+  const editingFeature = createMemo(() => ui.session()?.feature);
   createEffect(
     on(
-      () => ui.session()?.feature,
+      editingFeature,
       (feature) => {
         resetTool();
         if (!viewer) return;
@@ -150,7 +162,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     const an = anchor();
     if (c) {
       const t = ui.tool();
-      if (t === "line" && ch) preview.push([pt(ch.last)!, c]);
+      const from = ch && pt(ch.last);
+      if (t === "line" && from) preview.push([from, c]);
       if (t === "rect" && an.length === 1) {
         const [a] = an;
         preview.push([a, [c[0], a[1]], c, [a[0], c[1]], a]);

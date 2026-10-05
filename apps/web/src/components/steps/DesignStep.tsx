@@ -45,7 +45,7 @@ export interface DesignStepProps {
 const Num: Component<{ value: number; onCommit: (v: number) => void; label?: string; suffix?: string; step?: number; min?: number }> = (props) => (
   <label class="flex items-center gap-2 text-xs">
     <Show when={props.label}>
-      <span class="text-text-muted w-24 shrink-0">{props.label}</span>
+      <span class={clsx("text-text-muted shrink-0", (props.label?.length ?? 0) <= 2 ? "w-3" : "w-24")}>{props.label}</span>
     </Show>
     <input
       type="number"

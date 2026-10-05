@@ -345,8 +345,9 @@ export class CadViewer {
       this.sketchGroup.add(mesh);
     }
 
-    const lines = (pts: P2[], color: number, dashed = false) => {
-      const g = new THREE.BufferGeometry().setFromPoints(pts.map(w));
+    const lines = (pts: (P2 | undefined)[], color: number, dashed = false) => {
+      if (pts.some((p) => !p)) return;
+      const g = new THREE.BufferGeometry().setFromPoints((pts as P2[]).map(w));
       const m = dashed
         ? new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit, depthTest: false })
         : new THREE.LineBasicMaterial({ color, depthTest: false });
@@ -505,6 +506,13 @@ export class CadViewer {
     const nn = plane.normal;
     const y: P3 = [nn[1] * x[2] - nn[2] * x[1], nn[2] * x[0] - nn[0] * x[2], nn[0] * x[1] - nn[1] * x[0]];
     return [d[0] * x[0] + d[1] * x[1] + d[2] * x[2], d[0] * y[0] + d[1] * y[1] + d[2] * y[2]];
+  }
+
+  /** Posición en pantalla (coordenadas de cliente) de un punto del CAD */
+  screenOf(p: P3): [number, number] {
+    const v = this.toView(p).project(this.camera);
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    return [rect.left + ((v.x + 1) / 2) * rect.width, rect.top + ((1 - v.y) / 2) * rect.height];
   }
 
   /** Tamaño en mm de un píxel cerca del objetivo (para tolerancias de clic) */

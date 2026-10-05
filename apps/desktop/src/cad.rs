@@ -133,8 +133,7 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
     Ok(CadResult { status: eval.status.clone(), sketches, body, version: hash })
 }
 
-#[tauri::command]
-pub fn cad_status(state: tauri::State<'_, AppState>) -> CadStatus {
+fn status_impl(state: &AppState) -> CadStatus {
     CadStatus {
         available: cad_model::occt::available(),
         occt_version: cad_model::occt::occt_version(),
@@ -142,15 +141,21 @@ pub fn cad_status(state: tauri::State<'_, AppState>) -> CadStatus {
     }
 }
 
+#[tauri::command]
+pub fn cad_status(state: tauri::State<'_, AppState>) -> CadStatus {
+    status_impl(&state)
+}
+
 /// Empieza un diseño vacío (reemplaza el actual).
 #[tauri::command]
 pub async fn cad_new(app: AppHandle) -> Result<CadResult, String> {
     require_occt()?;
-    in_background(app, |state| {
-        *state.cad_document.lock().unwrap() = Some(Document::new());
-        evaluate(state)
-    })
-    .await
+    in_background(app, new_impl).await
+}
+
+fn new_impl(state: &AppState) -> Result<CadResult, String> {
+    *state.cad_document.lock().unwrap() = Some(Document::new());
+    evaluate(state)
 }
 
 #[tauri::command]
@@ -168,11 +173,12 @@ pub fn cad_get_document(state: tauri::State<'_, AppState>) -> Option<Document> {
 #[tauri::command]
 pub async fn cad_set_document(app: AppHandle, document: Document) -> Result<CadResult, String> {
     require_occt()?;
-    in_background(app, move |state| {
-        *state.cad_document.lock().unwrap() = Some(document);
-        evaluate(state)
-    })
-    .await
+    in_background(app, move |state| set_document_impl(state, document)).await
+}
+
+fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, String> {
+    *state.cad_document.lock().unwrap() = Some(document);
+    evaluate(state)
 }
 
 /// Estado del recálculo actual (sin cambiar nada).
@@ -214,12 +220,16 @@ fn mm_per_unit(state: &AppState) -> f64 {
 /// fin de cada arista (en puntos, acumulado) `u32 × E`, puntos `f32 × 3P`.
 #[tauri::command]
 pub async fn cad_mesh(app: AppHandle) -> Result<Response, String> {
-    in_background(app, |state| {
+    in_background(app, |state| mesh_impl(state).map(Response::new)).await
+}
+
+fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
+    {
         evaluate(state)?;
         let scale = 1.0 / mm_per_unit(state);
         let cache = state.cad_cache.lock().unwrap();
         let Some(body) = cache.as_ref().and_then(|c| c.eval.body.as_ref()) else {
-            return Ok(Response::new(vec![0; 16]));
+            return Ok(vec![0; 16]);
         };
         let t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
         let edge_points: usize = t.edges.iter().map(|e| e.len()).sum();
@@ -242,30 +252,31 @@ pub async fn cad_mesh(app: AppHandle) -> Result<Response, String> {
             out.extend_from_slice(&end.to_le_bytes());
         }
         t.edges.iter().flatten().for_each(|p| put(&mut out, *p, scale));
-        Ok(Response::new(out))
-    })
-    .await
+        Ok(out)
+    }
 }
 
 /// Referencia estable a una cara del sólido actual (índice del teselado).
 #[tauri::command]
 pub async fn cad_face_ref(app: AppHandle, face: usize) -> Result<FaceRef, String> {
-    in_background(app, move |state| {
-        evaluate(state)?;
-        let cache = state.cad_cache.lock().unwrap();
-        cache.as_ref().and_then(|c| c.eval.face_ref(face)).ok_or_else(|| "Esa cara no existe".to_string())
-    })
-    .await
+    in_background(app, move |state| face_ref_impl(state, face)).await
+}
+
+fn face_ref_impl(state: &AppState, face: usize) -> Result<FaceRef, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    cache.as_ref().and_then(|c| c.eval.face_ref(face)).ok_or_else(|| "Esa cara no existe".to_string())
 }
 
 #[tauri::command]
 pub async fn cad_edge_ref(app: AppHandle, edge: usize) -> Result<EdgeRef, String> {
-    in_background(app, move |state| {
-        evaluate(state)?;
-        let cache = state.cad_cache.lock().unwrap();
-        cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
-    })
-    .await
+    in_background(app, move |state| edge_ref_impl(state, edge)).await
+}
+
+fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -280,7 +291,11 @@ pub struct FaceDescription {
 /// Qué es una cara (para el panel de medidas y para ofrecer operaciones).
 #[tauri::command]
 pub async fn cad_face_info(app: AppHandle, face: usize) -> Result<FaceDescription, String> {
-    in_background(app, move |state| {
+    in_background(app, move |state| face_info_impl(state, face)).await
+}
+
+fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, String> {
+    {
         evaluate(state)?;
         let cache = state.cad_cache.lock().unwrap();
         let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
@@ -292,8 +307,7 @@ pub async fn cad_face_info(app: AppHandle, face: usize) -> Result<FaceDescriptio
             normal: f.normal,
             radius: f.radius,
         })
-    })
-    .await
+    }
 }
 
 fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
@@ -462,9 +476,12 @@ pub enum ScanPick {
 /// la malla del visor) y le ajusta un plano o un cilindro.
 #[tauri::command]
 pub async fn cad_scan_pick(app: AppHandle, kind: String, triangle: u32, options: Option<ScanPickOptions>) -> Result<ScanPick, String> {
-    let options = options.unwrap_or_default();
-    in_background(app, move |state| {
-        with_scan(state, |scan| match kind.as_str() {
+    in_background(app, move |state| scan_pick_impl(state, &kind, triangle, options.unwrap_or_default())).await
+}
+
+fn scan_pick_impl(state: &AppState, kind: &str, triangle: u32, options: ScanPickOptions) -> Result<ScanPick, String> {
+    {
+        with_scan(state, |scan| match kind {
             "plane" => {
                 let pick = cad_scan::pick_plane(&scan.mesh, triangle, &options.pick()).map_err(|e| e.to_string())?;
                 let depth = pick.depth(&scan.mesh);
@@ -476,15 +493,17 @@ pub async fn cad_scan_pick(app: AppHandle, kind: String, triangle: u32, options:
             }
             other => Err(format!("Tipo de zona desconocido: {other}")),
         })
-    })
-    .await
+    }
 }
 
 /// Detecta todas las zonas planas, cilíndricas y esféricas del modelo.
 #[tauri::command]
 pub async fn cad_scan_detect(app: AppHandle, options: Option<ScanPickOptions>) -> Result<Vec<Detection>, String> {
-    let options = options.unwrap_or_default();
-    in_background(app, move |state| {
+    in_background(app, move |state| scan_detect_impl(state, options.unwrap_or_default())).await
+}
+
+fn scan_detect_impl(state: &AppState, options: ScanPickOptions) -> Result<Vec<Detection>, String> {
+    {
         with_scan(state, |scan| {
             let d = DetectOptions::default();
             let opts = DetectOptions {
@@ -494,8 +513,7 @@ pub async fn cad_scan_detect(app: AppHandle, options: Option<ScanPickOptions>) -
             };
             Ok(cad_scan::detect_all(&scan.mesh, &opts))
         })
-    })
-    .await
+    }
 }
 
 /// Corte del modelo por un plano (coordenadas del plano, mm).
@@ -523,8 +541,11 @@ pub enum ScanFeature {
 #[tauri::command]
 pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<ScanPickOptions>) -> Result<CadResult, String> {
     require_occt()?;
-    let options = options.unwrap_or_default();
-    in_background(app, move |state| {
+    in_background(app, move |state| scan_add_impl(state, feature, options.unwrap_or_default())).await
+}
+
+fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOptions) -> Result<CadResult, String> {
+    {
         let kinds: Vec<(FeatureKind, Option<String>)> = with_scan(state, |scan| {
             let mesh = &scan.mesh;
             Ok(match &feature {
@@ -584,8 +605,7 @@ pub async fn cad_scan_add(app: AppHandle, feature: ScanFeature, options: Option<
         }
         drop(lock);
         evaluate(state)
-    })
-    .await
+    }
 }
 
 /// mm por unidad de la escena: el visor convierte el sketch (mm) a sus unidades.
@@ -605,6 +625,66 @@ pub fn errors_text(result: &CadResult, doc: &Document) -> Vec<String> {
             _ => None,
         })
         .collect()
+}
+
+/// Los comandos CAD sin Tauri, para probar el frontend en un navegador con el
+/// backend real (ver `examples/cad_http.rs`).
+pub mod bridge {
+    use super::*;
+    use serde_json::{json, Value};
+
+    pub enum Reply {
+        Json(Value),
+        Bytes(Vec<u8>),
+    }
+
+    fn arg<T: serde::de::DeserializeOwned>(args: &Value, name: &str) -> Result<T, String> {
+        serde_json::from_value(args.get(name).cloned().unwrap_or(Value::Null)).map_err(|e| format!("argumento {name}: {e}"))
+    }
+
+    fn ok<T: Serialize>(v: T) -> Result<Reply, String> {
+        serde_json::to_value(v).map(Reply::Json).map_err(|e| e.to_string())
+    }
+
+    /// Ejecuta un comando por nombre. Los que no son del CAD devuelven `null`
+    /// (la app arranca igual), salvo importar un modelo y su malla.
+    pub fn dispatch(state: &AppState, cmd: &str, args: &Value) -> Result<Reply, String> {
+        match cmd {
+            "cad_status" => ok(status_impl(state)),
+            "cad_new" => ok(new_impl(state)?),
+            "cad_close" => {
+                *state.cad_document.lock().unwrap() = None;
+                *state.cad_cache.lock().unwrap() = None;
+                ok(())
+            }
+            "cad_get_document" => ok(state.cad_document.lock().unwrap().clone()),
+            "cad_set_document" => ok(set_document_impl(state, arg(args, "document")?)?),
+            "cad_evaluate" => ok(evaluate(state)?),
+            "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
+            "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
+            "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
+            "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
+            "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_mm_per_unit" => ok(mm_per_unit(state)),
+            "cad_scan_pick" => {
+                let kind: String = arg(args, "kind")?;
+                ok(scan_pick_impl(state, &kind, arg(args, "triangle")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?)
+            }
+            "cad_scan_detect" => ok(scan_detect_impl(state, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
+            "cad_scan_slice" => {
+                let plane: Plane = arg(args, "plane")?;
+                ok(with_scan(state, |scan| Ok(cad_scan::slice(&scan.mesh, &plane)))?)
+            }
+            "cad_scan_add" => ok(scan_add_impl(state, arg(args, "feature")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?),
+            "import_model" => {
+                let channel = Channel::new(|_| Ok(()));
+                ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
+            }
+            "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
+            "get_supported_formats" => ok(crate::commands::get_supported_formats()),
+            _ => Ok(Reply::Json(json!(null))),
+        }
+    }
 }
 
 #[cfg(test)]

@@ -330,9 +330,16 @@ function nextFeatureId(doc: CadDocument): number {
   return Math.max(max, doc.next_id ?? 0);
 }
 
+const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = { box: "Caja", cylinder: "Cilindro", cone: "Cono", sphere: "Esfera", torus: "Toro" };
+
+/** Nombre del tipo de operación (las primitivas, por su forma) */
+export function kindLabel(kind: FeatureKind): string {
+  return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
+}
+
 function defaultName(doc: CadDocument, kind: FeatureKind): string {
-  const label = FEATURE_LABELS[kind.type];
-  const n = doc.features.filter((f) => FEATURE_LABELS[f.kind.type] === label).length + 1;
+  const label = kindLabel(kind);
+  const n = doc.features.filter((f) => kindLabel(f.kind) === label).length + 1;
   return `${label} ${n}`;
 }
 
