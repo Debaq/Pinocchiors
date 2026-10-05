@@ -559,6 +559,47 @@ const scenarios = {
     near(circles[0].radius + circles[1].radius, 0.13 * S, 0.11, "los radios acotados no cambian");
   },
 
+  async "colores por entidad y cota de referencia"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    // Rectángulo desde el origen: con sus dos cotas queda definido
+    await b.clickText("Rectángulo");
+    await b.click(...(await at(0, 0)));
+    await b.click(...(await at(0.4, 0.3)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    // Círculo suelto: el diámetro tiene cota, el centro no
+    await b.clickText("Círculo");
+    await b.click(...(await at(0.6, 0.15)));
+    await b.click(...(await at(0.66, 0.15)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    // Una cota de más: elegir la línea de abajo y pedir "Largo"
+    await b.clickText("Elegir");
+    await b.click(...(await at(0.2, 0)), { wait: 300 });
+    await b.clickText("Largo");
+    await sleep(1200);
+    if (!(await b.eval(`document.body.innerText.includes("Esta cota sobre-define el sketch")`))) throw new Error("no ofreció dejarla de referencia");
+    await b.clickText("Dejarla de referencia");
+    await sleep(1200);
+    if (await b.eval(`document.body.innerText.includes("Esta cota sobre-define el sketch")`)) throw new Error("sigue sobre-definido");
+    const label = await b.eval(`[...document.querySelectorAll("button")].map((x) => x.textContent).find((t) => /^\\(\\d/.test(t ?? ""))`);
+    if (!label) throw new Error("sin etiqueta entre paréntesis");
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const r = await call("cad_solve_sketch", { sketch: sk, drag: null });
+    if (r.report.status !== "under_constrained") throw new Error(`estado: ${r.report.status}`);
+    const circle = sk.entities.find((e) => e.geometry.type === "circle").id;
+    // Solo el círculo (centro libre) queda azul
+    if (JSON.stringify(r.report.free_entities) !== JSON.stringify([circle])) throw new Error(`libres: ${JSON.stringify(r.report.free_entities)}`);
+    const ref = sk.constraints.find((c) => c.reference);
+    if (!ref) throw new Error("la cota de referencia no se guardó");
+    near(ref.value, 0.4 * S, 0.11, "la referencia mide el ancho");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

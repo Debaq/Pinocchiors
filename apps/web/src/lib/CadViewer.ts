@@ -41,6 +41,9 @@ export interface SketchOverlay {
   hover?: number[];
   /** Puntos libres (todavía se pueden mover) */
   freePoints?: number[];
+  /** Entidades a las que les falta definir (azul) y en conflicto (rojo) */
+  freeEntities?: number[];
+  conflictEntities?: number[];
   /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
   preview?: P2[][];
   /** Punto al que se pega el cursor (anclaje activo) */
@@ -448,9 +451,24 @@ export class CadViewer {
     const normal = themeHex("fg");
     const construction = themeHex("comment");
     const sel = themeHex("orange");
+    const freeE = new Set(overlay.freeEntities ?? []);
+    const conflictE = new Set(overlay.conflictEntities ?? []);
+    // Como Onshape: azul = le falta definir, color del texto = definida, rojo = en conflicto
+    const entityColor = (id: number, construct: boolean) =>
+      hover.has(id)
+        ? themeHex("cyan")
+        : selected.has(id)
+          ? sel
+          : conflictE.has(id)
+            ? themeHex("error")
+            : construct
+              ? construction
+              : freeE.has(id)
+                ? themeHex("sketch-free")
+                : normal;
     for (const e of sketch.entities) {
       const g = e.geometry;
-      const color = hover.has(e.id) ? themeHex("cyan") : selected.has(e.id) ? sel : e.construction ? construction : normal;
+      const color = entityColor(e.id, !!e.construction);
       let pts: P2[] = [];
       if (g.type === "line") pts = [point.get(g.start)!, point.get(g.end)!];
       else if (g.type === "circle") {

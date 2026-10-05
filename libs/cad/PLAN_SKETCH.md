@@ -99,7 +99,7 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
    de fondo; todo lo demás se apoya en esto. *Hecha el 2026-10-05: en vez de un parámetro
    aparte, cada círculo lleva un punto oculto en su borde (a la derecha del centro, con
    horizontal implícita); en los arcos el borde es el inicio.*
-3. **Colores por entidad** y número de grados libres; cotas de referencia.
+3. **Colores por entidad** y número de grados libres; cotas de referencia. *Hecha el 2026-10-05.*
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
    rápida.
 5. **Simetría y patrón en el sketch.**

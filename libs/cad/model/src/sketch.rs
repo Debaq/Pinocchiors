@@ -50,7 +50,8 @@ impl Geometry {
 }
 
 /// Restricciones de alto nivel (las que ve el usuario). Distancias en mm,
-/// ángulos en grados.
+/// ángulos en grados. Las cotas con `reference` no restringen: muestran la
+/// medida (se actualiza al resolver), como las cotas entre paréntesis de Onshape.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SketchConstraint {
@@ -75,15 +76,19 @@ pub enum SketchConstraint {
     PointOnCircle { point: u32, circle: u32 },
     Midpoint { point: u32, line: u32 },
     Symmetric { a: u32, b: u32, line: u32 },
-    Distance { a: u32, b: u32, value: f64 },
+    Distance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
     /// `b.x − a.x = value`
-    HorizontalDistance { a: u32, b: u32, value: f64 },
+    HorizontalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
     /// `b.y − a.y = value`
-    VerticalDistance { a: u32, b: u32, value: f64 },
-    Length { line: u32, value: f64 },
-    Radius { entity: u32, value: f64 },
-    Diameter { entity: u32, value: f64 },
-    Angle { a: u32, b: u32, degrees: f64 },
+    VerticalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    Length { line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    Radius { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    Diameter { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    Angle { a: u32, b: u32, degrees: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 impl SketchConstraint {
@@ -100,6 +105,21 @@ impl SketchConstraint {
             Angle { degrees, .. } => Some(*degrees),
             _ => None,
         }
+    }
+
+    /// Cota de referencia (no restringe).
+    pub fn is_reference(&self) -> bool {
+        use SketchConstraint::*;
+        matches!(
+            self,
+            Distance { reference: true, .. }
+                | HorizontalDistance { reference: true, .. }
+                | VerticalDistance { reference: true, .. }
+                | Length { reference: true, .. }
+                | Radius { reference: true, .. }
+                | Diameter { reference: true, .. }
+                | Angle { reference: true, .. }
+        )
     }
 
     pub fn set_value(&mut self, v: f64) -> bool {
@@ -160,6 +180,10 @@ pub struct SolveReport {
     pub conflicting: Vec<usize>,
     /// Puntos que todavía pueden moverse.
     pub free_points: Vec<u32>,
+    /// Entidades que todavía pueden moverse o cambiar de tamaño (alguno de
+    /// sus puntos, o su radio, está libre).
+    #[serde(default)]
+    pub free_entities: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -425,12 +449,45 @@ impl Sketch {
                 }
             }
         }
-        for &(pi, d) in &diag.dof_per_point {
-            if d > 0 && pi < self.points.len() {
+        // Consistente pero con una cota que no agrega nada: también sobra
+        // (Onshape la marca igual); la más nueva es la que se ofrece quitar
+        let mut redundant_dim = false;
+        if conflicting.is_empty()
+            && let Some(ci) = diag
+                .redundant
+                .iter()
+                .filter(|&&i| i >= implicit)
+                .map(|&i| origin[i - implicit])
+                .filter(|&ci| self.constraints[ci].value().is_some() && !self.constraints[ci].is_reference())
+                .max()
+        {
+            conflicting.push(ci);
+            redundant_dim = true;
+        }
+        let free: std::collections::HashSet<usize> = diag.dof_per_point.iter().filter(|(_, d)| *d > 0).map(|(pi, _)| *pi).collect();
+        for &pi in &free {
+            if pi < self.points.len() {
                 free_points.push(self.points[pi].id);
             }
         }
-        let status = if residual > 1e-6 || matches!(status, SolveStatus::OverConstrained) && residual > 1e-9 {
+        free_points.sort_unstable();
+        let mut free_entities = Vec::new();
+        for e in &self.entities {
+            let mut idx: Vec<usize> = e.geometry.point_ids().iter().filter_map(|id| index.get(id).copied()).collect();
+            idx.extend(rims.get(&e.id));
+            if idx.iter().any(|i| free.contains(i)) {
+                free_entities.push(e.id);
+            }
+        }
+        // Las cotas de referencia muestran lo que mide el sketch resuelto
+        for i in 0..self.constraints.len() {
+            if self.constraints[i].is_reference()
+                && let Some(v) = self.measure(&self.constraints[i])
+            {
+                self.constraints[i].set_value(v);
+            }
+        }
+        let status = if redundant_dim || residual > 1e-6 || matches!(status, SolveStatus::OverConstrained) && residual > 1e-9 {
             SketchStatus::OverConstrained
         } else {
             match status {
@@ -439,7 +496,34 @@ impl Sketch {
                 _ => SketchStatus::WellConstrained,
             }
         };
-        Ok(SolveReport { status, dof, residual, conflicting, free_points })
+        Ok(SolveReport { status, dof, residual, conflicting, free_points, free_entities })
+    }
+
+    /// Lo que mide una cota en la geometría actual.
+    pub fn measure(&self, c: &SketchConstraint) -> Option<f64> {
+        use SketchConstraint as S;
+        let p = |id: u32| self.point(id).ok();
+        let dir = |id: u32| -> Option<P2> {
+            let (a, b) = self.line_points(id).ok()?;
+            let (a, b) = (p(a)?, p(b)?);
+            Some([b[0] - a[0], b[1] - a[1]])
+        };
+        Some(match *c {
+            S::Distance { a, b, .. } => dist2(p(a)?, p(b)?),
+            S::HorizontalDistance { a, b, .. } => p(b)?[0] - p(a)?[0],
+            S::VerticalDistance { a, b, .. } => p(b)?[1] - p(a)?[1],
+            S::Length { line, .. } => {
+                let d = dir(line)?;
+                d[0].hypot(d[1])
+            }
+            S::Radius { entity, .. } => self.radius(entity).ok()?,
+            S::Diameter { entity, .. } => 2.0 * self.radius(entity).ok()?,
+            S::Angle { a, b, .. } => {
+                let (d1, d2) = (dir(a)?, dir(b)?);
+                (d1[0] * d2[1] - d1[1] * d2[0]).atan2(d1[0] * d2[0] + d1[1] * d2[1]).to_degrees()
+            }
+            _ => return None,
+        })
     }
 
     /// Traduce una restricción a ecuaciones del solver.
@@ -451,6 +535,9 @@ impl Sketch {
         at: &[Point2],
     ) -> Result<Vec<Constraint>, SketchError> {
         use SketchConstraint as S;
+        if c.is_reference() {
+            return Ok(vec![]);
+        }
         // Centro y punto de borde (radio variable) de un círculo o arco
         let round = |id: u32| -> Result<(usize, usize), SketchError> {
             match (&self.entity(id)?.geometry, rims.get(&id)) {
@@ -483,7 +570,7 @@ impl Sketch {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Perpendicular { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 }]
             }
-            S::Angle { a, b, degrees } => {
+            S::Angle { a, b, degrees, .. } => {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Angle { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2, angle_rad: degrees.to_radians() }]
             }
@@ -568,18 +655,18 @@ impl Sketch {
                 let (l1, l2) = line(l)?;
                 vec![Constraint::Symmetric { p1_idx: ix(a)?, p2_idx: ix(b)?, line_p1: l1, line_p2: l2 }]
             }
-            S::Distance { a, b, value } => vec![Constraint::Distance { p1_idx: ix(a)?, p2_idx: ix(b)?, distance: value }],
-            S::HorizontalDistance { a, b, value } => {
+            S::Distance { a, b, value, .. } => vec![Constraint::Distance { p1_idx: ix(a)?, p2_idx: ix(b)?, distance: value }],
+            S::HorizontalDistance { a, b, value, .. } => {
                 vec![Constraint::HorizontalDist { p1_idx: ix(b)?, p2_idx: ix(a)?, distance: value }]
             }
-            S::VerticalDistance { a, b, value } => {
+            S::VerticalDistance { a, b, value, .. } => {
                 vec![Constraint::VerticalDist { p1_idx: ix(b)?, p2_idx: ix(a)?, distance: value }]
             }
-            S::Length { line: l, value } => {
+            S::Length { line: l, value, .. } => {
                 let (a, b) = line(l)?;
                 vec![Constraint::Distance { p1_idx: a, p2_idx: b, distance: value }]
             }
-            S::Radius { entity, value } | S::Diameter { entity, value } => {
+            S::Radius { entity, value, .. } | S::Diameter { entity, value, .. } => {
                 let r = if matches!(c, S::Diameter { .. }) { value / 2.0 } else { value };
                 let (center, rim) = round(entity)?;
                 vec![Constraint::Distance { p1_idx: center, p2_idx: rim, distance: r }]

@@ -877,7 +877,7 @@ mod tests {
         let mut doc = cad_model::Document::new();
         let mut sk = cad_model::Sketch::new();
         let lines = sk.rectangle([0.0, 0.0], [10.0, 5.0]);
-        sk.constrain(cad_model::SketchConstraint::Length { line: lines[0], value: 12.0 });
+        sk.constrain(cad_model::SketchConstraint::Length { line: lines[0], value: 12.0, reference: false });
         sk.circle([5.0, 2.5], 1.0);
         let sid = doc.add(cad_model::FeatureKind::Sketch { plane: cad_model::PlaneSpec::Xz, offset: 2.0, sketch: sk });
         doc.add(cad_model::FeatureKind::Extrude(cad_model::Extrude {

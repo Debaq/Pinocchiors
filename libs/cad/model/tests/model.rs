@@ -24,8 +24,8 @@ fn plate_sketch(w: f64, h: f64) -> (Sketch, [u32; 4], [usize; 2]) {
     let l = s.rectangle([0.0, 0.0], [w * 0.9, h * 1.1]); // fuera de medida a propósito
     let Geometry::Line { start: corner, .. } = s.entity(l[0]).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::Fixed { point: corner, x: 0.0, y: 0.0 });
-    let cw = s.constrain(SketchConstraint::Length { line: l[0], value: w });
-    let ch = s.constrain(SketchConstraint::Length { line: l[1], value: h });
+    let cw = s.constrain(SketchConstraint::Length { line: l[0], value: w, reference: false });
+    let ch = s.constrain(SketchConstraint::Length { line: l[1], value: h, reference: false });
     (s, l, [cw, ch])
 }
 
@@ -51,7 +51,7 @@ fn sketch_reports_conflicts_and_dof() {
 
     s.constrain(SketchConstraint::Horizontal { line: l });
     s.constrain(SketchConstraint::Vertical { line: l });
-    s.constrain(SketchConstraint::Length { line: l, value: 10.0 });
+    s.constrain(SketchConstraint::Length { line: l, value: 10.0, reference: false });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::OverConstrained, "{r:?}");
     assert!(!r.conflicting.is_empty());
@@ -64,7 +64,7 @@ fn sketch_drag_respects_constraints() {
     let b = s.add_point(10.0, 0.0);
     let l = s.add_line(a, b);
     s.constrain(SketchConstraint::Fixed { point: a, x: 0.0, y: 0.0 });
-    s.constrain(SketchConstraint::Length { line: l, value: 10.0 });
+    s.constrain(SketchConstraint::Length { line: l, value: 10.0, reference: false });
     s.solve_drag(b, [0.0, 30.0]).unwrap();
     let p = s.point(b).unwrap();
     assert_relative_eq!(p[0], 0.0, epsilon = 1e-4);
@@ -483,7 +483,7 @@ fn sketch_origin_is_fixed_and_survives_deletes() {
     let p = s.add_point(3.0, 0.5);
     let l = s.add_line(o, p);
     s.constrain(SketchConstraint::Horizontal { line: l });
-    s.constrain(SketchConstraint::Length { line: l, value: 10.0 });
+    s.constrain(SketchConstraint::Length { line: l, value: 10.0, reference: false });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
     assert_eq!(s.point(o).unwrap(), [0.0, 0.0]);
@@ -564,7 +564,7 @@ fn circle_without_dimension_has_free_radius() {
     assert_eq!(r.status, SketchStatus::UnderConstrained);
     assert_eq!(r.dof, 1, "solo el radio");
     assert_relative_eq!(radius_of(&s, c), 2.5, epsilon = 1e-9);
-    s.constrain(SketchConstraint::Diameter { entity: c, value: 8.0 });
+    s.constrain(SketchConstraint::Diameter { entity: c, value: 8.0, reference: false });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
     assert_relative_eq!(radius_of(&s, c), 4.0, epsilon = 1e-6);
@@ -585,7 +585,7 @@ fn circle_tangent_to_two_lines_and_equal_tangent_circles() {
     let c1 = s.circle([4.0, 5.0], 2.0);
     s.constrain(SketchConstraint::Tangent { a: h, b: c1 });
     s.constrain(SketchConstraint::Tangent { a: v, b: c1 });
-    s.constrain(SketchConstraint::Radius { entity: c1, value: 3.0 });
+    s.constrain(SketchConstraint::Radius { entity: c1, value: 3.0, reference: false });
     // Otro igual, tangente por fuera y a la misma altura → centro (9, 3)
     let c2 = s.circle([10.0, 4.0], 2.0);
     s.constrain(SketchConstraint::Equal { a: c1, b: c2 });
@@ -607,15 +607,15 @@ fn concentric_and_internal_tangency() {
     let outer = s.circle([0.0, 0.0], 10.0);
     let Geometry::Circle { center, .. } = s.entity(outer).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::Fixed { point: center, x: 0.0, y: 0.0 });
-    s.constrain(SketchConstraint::Radius { entity: outer, value: 10.0 });
+    s.constrain(SketchConstraint::Radius { entity: outer, value: 10.0, reference: false });
     // Concéntrico con radio 4
     let ring = s.circle([0.5, 0.3], 4.2);
     s.constrain(SketchConstraint::Concentric { a: outer, b: ring });
-    s.constrain(SketchConstraint::Radius { entity: ring, value: 4.0 });
+    s.constrain(SketchConstraint::Radius { entity: ring, value: 4.0, reference: false });
     // Tangente por dentro al de afuera, de radio 2, sobre el eje x positivo
     let inner = s.circle([7.5, 0.4], 2.2);
     s.constrain(SketchConstraint::Tangent { a: outer, b: inner });
-    s.constrain(SketchConstraint::Radius { entity: inner, value: 2.0 });
+    s.constrain(SketchConstraint::Radius { entity: inner, value: 2.0, reference: false });
     let Geometry::Circle { center: ci, .. } = s.entity(inner).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::HorizontalPoints { a: center, b: ci });
     let r = s.solve().unwrap();
@@ -631,4 +631,59 @@ fn old_circle_without_dimension_keeps_its_radius() {
     let mut s: Sketch = serde_json::from_str(json).unwrap();
     s.solve().unwrap();
     assert_relative_eq!(radius_of(&s, 1), 7.5, epsilon = 1e-9);
+}
+
+#[test]
+fn free_entities_follow_what_is_still_undefined() {
+    let mut s = Sketch::new();
+    let l = s.rectangle([0.0, 0.0], [10.0, 5.0]);
+    let Geometry::Line { start: corner, .. } = s.entity(l[0]).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Fixed { point: corner, x: 0.0, y: 0.0 });
+    s.constrain(SketchConstraint::Length { line: l[0], value: 10.0, reference: false });
+    let r = s.solve().unwrap();
+    // Falta el alto: abajo queda definida, el resto no
+    assert!(!r.free_entities.contains(&l[0]), "{r:?}");
+    for id in &l[1..] {
+        assert!(r.free_entities.contains(id), "{id} {r:?}");
+    }
+    s.constrain(SketchConstraint::Length { line: l[1], value: 5.0, reference: false });
+    let c = s.circle([5.0, 2.5], 1.0);
+    let Geometry::Circle { center, .. } = s.entity(c).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Fixed { point: center, x: 5.0, y: 2.5 });
+    let r = s.solve().unwrap();
+    // Rectángulo definido; el círculo tiene el centro fijo pero el radio libre
+    assert_eq!(r.free_entities, vec![c], "{r:?}");
+}
+
+#[test]
+fn reference_dimension_measures_without_constraining() {
+    let (mut s, l, [cw, _]) = plate_sketch(30.0, 40.0);
+    let Geometry::Line { start: a, .. } = s.entity(l[0]).unwrap().geometry else { unreachable!() };
+    let Geometry::Line { start: b, .. } = s.entity(l[2]).unwrap().geometry else { unreachable!() };
+    // Diagonal de referencia: no sobre-define
+    let d = s.constrain(SketchConstraint::Distance { a, b, value: 1.0, reference: true });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_relative_eq!(s.constraints[d].value().unwrap(), 50.0, epsilon = 1e-6);
+    // Cambia con la geometría
+    s.constraints[cw].set_value(90.0);
+    s.solve().unwrap();
+    assert_relative_eq!(s.constraints[d].value().unwrap(), (90.0f64 * 90.0 + 40.0 * 40.0).sqrt(), epsilon = 1e-6);
+    let json = serde_json::to_string(&s.constraints[d]).unwrap();
+    assert!(json.contains("\"reference\":true"), "{json}");
+    assert!(!serde_json::to_string(&s.constraints[cw]).unwrap().contains("reference"));
+}
+
+#[test]
+fn repeated_dimension_is_reported_even_if_consistent() {
+    let (mut s, l, _) = plate_sketch(30.0, 40.0);
+    let extra = s.constrain(SketchConstraint::Length { line: l[2], value: 30.0, reference: false });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::OverConstrained, "{r:?}");
+    assert_eq!(r.conflicting, vec![extra]);
+    // Como referencia ya no sobra
+    let SketchConstraint::Length { reference, .. } = &mut s.constraints[extra] else { unreachable!() };
+    *reference = true;
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
 }

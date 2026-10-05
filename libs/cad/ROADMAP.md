@@ -237,3 +237,10 @@ cargo test -p cad-model
   "Concéntricos" con dos curvas elegidas. Pruebas: círculo por tres puntos, tangente a una
   esquina en L, iguales y tangentes, concéntrico y tangencia interna, documento viejo con
   radio sin cota.
+- **2026-10-05 Colores por entidad y cotas de referencia** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+  fase 3): `SolveReport.free_entities` (alguno de sus puntos o su radio libre, según el espacio
+  nulo) → azul en el visor (`--color-sketch-free`), en conflicto → rojo, definida → color del
+  texto. Las cotas llevan `reference` (no entran al solver; al resolver se escribe lo que miden)
+  y se muestran entre paréntesis; botón "Ref" en el panel. Una cota que repite lo que ya está
+  definido también sobre-define (antes pasaba sin aviso porque no deja residuo): se marca la
+  más nueva de las redundantes y el visor ofrece "Dejarla de referencia" o "Quitarla".

@@ -6,6 +6,8 @@ import { batch, createEffect, createSignal, on } from "solid-js";
 import type { BasePlane } from "./CadViewer";
 import {
   constraintPath,
+  constraintValue,
+  isReference,
   plainNumber,
   addEntity,
   addPoint,
@@ -197,6 +199,31 @@ export function createCadUi(store: CadStore) {
 
     addConstraint(c: SketchConstraint) {
       ui.change((s) => s.constraints.push(c));
+    },
+
+    /** Pasa una cota a referencia (solo mide) o de vuelta a restringir */
+    toggleReference(index: number) {
+      ui.change((s) => {
+        const c = s.constraints[index];
+        if (!c || !("reference" in c || constraintValue(c) !== undefined)) return;
+        const k = c as { reference?: boolean };
+        if (k.reference) delete k.reference;
+        else k.reference = true;
+      });
+    },
+
+    /**
+     * Con el sketch sobre-definido: la cota en conflicto más nueva (la que se
+     * puede dejar de referencia), o nada.
+     */
+    extraDimension(): number | undefined {
+      const s = session();
+      if (s?.report?.status !== "over_constrained") return undefined;
+      const dims = s.report.conflicting.filter((i) => {
+        const c = s.sketch.constraints[i];
+        return c && constraintValue(c) !== undefined && !isReference(c);
+      });
+      return dims.length ? Math.max(...dims) : undefined;
     },
 
     removeConstraint(index: number) {

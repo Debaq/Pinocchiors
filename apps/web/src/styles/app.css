@@ -33,6 +33,8 @@
   --color-warning: #ffb86c;
   --color-error: #ff5555;
   --color-info: #8be9fd;
+  /* Sketch: entidad a la que le falta definir (azul, como en Onshape) */
+  --color-sketch-free: #82aaff;
 
   /* Texto */
   --color-text: #f8f8f2;
@@ -104,6 +106,7 @@
   --color-warning: #b0520c;
   --color-error: #c92a2a;
   --color-info: #0a6f8c;
+  --color-sketch-free: #2457c5;
 
   --color-text: #1f2030;
   --color-text-muted: #545a73;

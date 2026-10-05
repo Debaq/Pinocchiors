@@ -2,7 +2,7 @@ import { Component, For, Index, Show, createEffect, createMemo, createSignal, on
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { addPoint, constraintValue, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, constraintIds, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -294,6 +294,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       selected: ui.selection(),
       hover: [...ui.hoverIds(), ...(snapView()?.refs ?? [])],
       freePoints: s.report?.free_points,
+      freeEntities: s.report?.free_entities,
+      conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
+        const c = s.sketch.constraints[i];
+        return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
+      }),
       preview,
       snap: snapView()?.p,
       guides: snapView()?.guides,
@@ -727,7 +732,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
     };
     const rect = container.getBoundingClientRect();
-    const out: { index: number; x: number; y: number; text: string; conflict: boolean }[] = [];
+    const out: { index: number; x: number; y: number; text: string; conflict: boolean; reference: boolean }[] = [];
     // Centro del sketch en pantalla: las etiquetas se corren hacia afuera de él
     const pts = s.sketch.points;
     const centroid: P2 = pts.length ? [pts.reduce((a, p) => a + p.x, 0) / pts.length, pts.reduce((a, p) => a + p.y, 0) / pts.length] : [0, 0];
@@ -777,12 +782,16 @@ export const CadView: Component<CadViewProps> = (props) => {
       const prefix = c.type === "radius" ? "R " : c.type === "diameter" ? "Ø " : "";
       const suffix = c.type === "angle" ? "°" : "";
       const expr = (c as { expr?: string }).expr;
+      const reference = isReference(c);
+      const shown = expr && !reference ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : `${prefix}${+v.toFixed(3)}${suffix}`;
       out.push({
         index,
         x: x - rect.left,
         y: y - rect.top,
-        text: expr ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : `${prefix}${+v.toFixed(3)}${suffix}`,
+        // Las de referencia entre paréntesis, como Onshape
+        text: reference ? `(${shown})` : shown,
         conflict: s.report?.conflicting.includes(index) ?? false,
+        reference,
       });
     });
     return out;
@@ -839,13 +848,18 @@ export const CadView: Component<CadViewProps> = (props) => {
               <button
                 class={clsx(
                   "absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[11px] font-mono border",
-                  d().conflict ? "bg-error/20 border-error text-error" : "bg-bg-lighter/90 border-border text-text hover:border-accent",
+                  d().conflict
+                    ? "bg-error/20 border-error text-error"
+                    : d().reference
+                      ? "bg-bg-lighter/70 border-border/60 text-text-muted"
+                      : "bg-bg-lighter/90 border-border text-text hover:border-accent",
                   // Dibujando, los clics son para el dibujo (las cotas se piden solas)
                   ui.tool() !== "select" && "pointer-events-none",
                 )}
                 style={{ left: `${d().x}px`, top: `${d().y}px` }}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => setEditingDim(d().index)}
+                // Una cota de referencia no se escribe: mide
+                onClick={() => !d().reference && setEditingDim(d().index)}
               >
                 {d().text}
               </button>
@@ -992,6 +1006,22 @@ export const CadView: Component<CadViewProps> = (props) => {
             Cancelar (Esc)
           </button>
         </div>
+      </Show>
+
+      {/* Cota que sobre-define el sketch: dejarla de referencia o quitarla */}
+      <Show when={ui.extraDimension()}>
+        {(i) => (
+          <div class="absolute top-14 left-1/2 -translate-x-1/2 flex items-center gap-2 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
+            <Icons.Warning size={14} class="text-error" />
+            Esta cota sobre-define el sketch
+            <Button size="sm" variant="primary" onClick={() => ui.toggleReference(i())}>
+              Dejarla de referencia
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
+              Quitarla
+            </Button>
+          </div>
+        )}
       </Show>
 
       {/* Mensajes y errores */}

@@ -101,13 +101,13 @@ export type SketchConstraint =
   | { type: "point_on_circle"; point: number; circle: number }
   | { type: "midpoint"; point: number; line: number }
   | { type: "symmetric"; a: number; b: number; line: number }
-  | { type: "distance"; a: number; b: number; value: number }
-  | { type: "horizontal_distance"; a: number; b: number; value: number }
-  | { type: "vertical_distance"; a: number; b: number; value: number }
-  | { type: "length"; line: number; value: number }
-  | { type: "radius"; entity: number; value: number }
-  | { type: "diameter"; entity: number; value: number }
-  | { type: "angle"; a: number; b: number; degrees: number };
+  | { type: "distance"; a: number; b: number; value: number; reference?: boolean }
+  | { type: "horizontal_distance"; a: number; b: number; value: number; reference?: boolean }
+  | { type: "vertical_distance"; a: number; b: number; value: number; reference?: boolean }
+  | { type: "length"; line: number; value: number; reference?: boolean }
+  | { type: "radius"; entity: number; value: number; reference?: boolean }
+  | { type: "diameter"; entity: number; value: number; reference?: boolean }
+  | { type: "angle"; a: number; b: number; degrees: number; reference?: boolean };
 
 export interface Sketch {
   points: SketchPoint[];
@@ -201,6 +201,8 @@ export interface SolveReport {
   residual: number;
   conflicting: number[];
   free_points: number[];
+  /** Entidades a las que les falta definir (algún punto o el radio libre) */
+  free_entities?: number[];
 }
 
 export interface SketchView {
@@ -537,7 +539,7 @@ export function splitLineAt(s: Sketch, lineId: number, point: number): number | 
   s.constraints.forEach((k, i) => {
     if (k.type === "length" && k.line === lineId) {
       const expr = (k as { expr?: string }).expr;
-      s.constraints[i] = { type: "distance", a: start, b: oldEnd, value: k.value, ...(expr ? { expr } : {}) } as SketchConstraint;
+      s.constraints[i] = { type: "distance", a: start, b: oldEnd, value: k.value, ...(k.reference ? { reference: true } : {}), ...(expr ? { expr } : {}) } as SketchConstraint;
     }
   });
   // El punto ya es extremo compartido: no necesita "punto en línea"
@@ -1066,6 +1068,11 @@ export function renameInExpr(expr: string, from: string, to: string): string {
 }
 
 /** Valor editable de una restricción (cota), si tiene */
+/** Cota de referencia: muestra la medida, no restringe */
+export function isReference(c: SketchConstraint): boolean {
+  return "reference" in c && !!c.reference;
+}
+
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
   if (c.type === "angle") return c.degrees;

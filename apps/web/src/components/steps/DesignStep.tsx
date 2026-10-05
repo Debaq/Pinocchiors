@@ -9,6 +9,7 @@ import {
   PLANE_LABELS,
   constraintIds,
   constraintValue,
+  isReference,
   emptySketch,
   filletCorner,
   linesAt,
@@ -34,7 +35,7 @@ import {
 } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
 import { regionContains } from "../../lib/CadViewer";
-import { Button, Checkbox, IconButton, Select } from "../ui";
+import { Button, Checkbox, IconButton, Select, Tooltip } from "../ui";
 import * as Icons from "../icons";
 
 export interface DesignStepProps {
@@ -1589,13 +1590,26 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                       {CONSTRAINT_LABELS[c.type]}
                     </button>
                     <Show when={value() !== undefined}>
-                      <div class="w-28">
-                        <Formula
-                          value={value()!}
-                          expr={(c as { expr?: string }).expr}
-                          onCommit={(text) => ui.setConstraintText(i(), text)}
-                        />
-                      </div>
+                      <Show
+                        when={!isReference(c)}
+                        fallback={<span class="w-28 px-1.5 font-mono text-text-dim" title="Cota de referencia: mide, no restringe">({+value()!.toFixed(3)})</span>}
+                      >
+                        <div class="w-28">
+                          <Formula
+                            value={value()!}
+                            expr={(c as { expr?: string }).expr}
+                            onCommit={(text) => ui.setConstraintText(i(), text)}
+                          />
+                        </div>
+                      </Show>
+                      <Tooltip content={isReference(c) ? "Pasar a cota que restringe" : "Dejar como cota de referencia (solo mide)"}>
+                        <button
+                          class={clsx("px-1 rounded text-[10px] border", isReference(c) ? "border-accent text-accent" : "border-border text-text-dim hover:text-text")}
+                          onClick={() => ui.toggleReference(i())}
+                        >
+                          Ref
+                        </button>
+                      </Tooltip>
                     </Show>
                     <IconButton aria-label="Quitar restricción" size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
                       <Icons.X size={10} />
