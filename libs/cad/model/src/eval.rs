@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use cad_occt::{Axis, Curve, Frame, Shape};
+use cad_occt::{Axis, Curve, Frame, History, Shape, SurfaceKind, with_history};
 use serde::{Deserialize, Serialize};
 
 use crate::document::Document;
@@ -37,13 +37,22 @@ pub struct SketchResult {
     pub regions: Vec<Region>,
 }
 
+/// Sólido con el origen de cada cara (`tags[i]` = orígenes de la cara i).
+#[derive(Debug, Clone)]
+struct Tagged {
+    shape: Shape,
+    tags: Vec<Vec<FaceTag>>,
+}
+
 #[derive(Debug, Default)]
 pub struct Evaluation {
     pub body: Option<Shape>,
+    /// Orígenes de cada cara del cuerpo (mismo orden que sus índices).
+    pub face_tags: Vec<Vec<FaceTag>>,
     pub status: Vec<FeatureStatus>,
     pub sketches: HashMap<FeatureId, SketchResult>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
-    tools: HashMap<FeatureId, (Shape, BodyOp)>,
+    tools: HashMap<FeatureId, (Tagged, BodyOp)>,
 }
 
 impl Evaluation {
@@ -64,13 +73,19 @@ impl Evaluation {
     /// Referencia estable a una cara del cuerpo actual.
     pub fn face_ref(&self, face: usize) -> Option<FaceRef> {
         let info = self.body.as_ref()?.face_info(face).ok()?;
-        Some(FaceRef { point: info.point, normal: info.normal })
+        let tags = self.face_tags.get(face).cloned().unwrap_or_default();
+        Some(FaceRef { point: info.point, normal: info.normal, tags })
     }
 
     /// Referencia estable a una arista del cuerpo actual.
     pub fn edge_ref(&self, edge: usize) -> Option<EdgeRef> {
-        let info = self.body.as_ref()?.edge_info(edge).ok()?;
-        Some(EdgeRef { point: info.mid, direction: info.tangent })
+        let body = self.body.as_ref()?;
+        let info = body.edge_info(edge).ok()?;
+        let pair = body.edge_face_pairs().ok()?.get(edge).copied()?;
+        let side = |f: Option<usize>| f.and_then(|f| self.face_tags.get(f).cloned()).unwrap_or_default();
+        let sides = vec![side(pair[0]), side(pair[1])];
+        let sides = if sides.iter().all(|s| !s.is_empty()) { sides } else { vec![] };
+        Some(EdgeRef { point: info.mid, direction: info.tangent, sides })
     }
 }
 
@@ -79,6 +94,46 @@ type ShapeFn = Box<dyn Fn(&Shape) -> R<Shape>>;
 
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+fn tag(feature: FeatureId, name: impl Into<String>) -> FaceTag {
+    FaceTag { feature, name: name.into() }
+}
+
+/// Orígenes de las caras de un resultado a partir de los de sus entradas.
+/// Devuelve también cuántas entradas de la historia se consumieron (lo que
+/// sigue son caras generadas por aristas, en redondeos y chaflanes).
+fn propagate(inputs: &[&[Vec<FaceTag>]], h: &History, n_out: usize) -> (Vec<Vec<FaceTag>>, usize) {
+    let mut out = vec![Vec::new(); n_out];
+    let mut k = 0;
+    for tags in inputs {
+        for t in tags.iter() {
+            if let Some(images) = h.images.get(k) {
+                for &f in images {
+                    if let Some(slot) = out.get_mut(f) {
+                        for x in t {
+                            if !slot.contains(x) {
+                                slot.push(x.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            k += 1;
+        }
+    }
+    (out, k)
+}
+
+/// Copia de los orígenes con un sufijo (copias de patrones y simetrías).
+fn suffixed(tags: &[Vec<FaceTag>], h: &History, n_out: usize, suffix: &str) -> Vec<Vec<FaceTag>> {
+    let renamed: Vec<Vec<FaceTag>> =
+        tags.iter().map(|ts| ts.iter().map(|t| FaceTag { feature: t.feature, name: format!("{}{suffix}", t.name) }).collect()).collect();
+    propagate(&[&renamed], h, n_out).0
+}
+
+fn occt_err(e: String) -> cad_occt::Error {
+    cad_occt::Error(e)
 }
 
 struct Ctx<'a> {
@@ -110,16 +165,45 @@ impl Ctx<'_> {
         self.ev.body.as_ref().ok_or_else(|| "todavía no hay un sólido".to_string())
     }
 
-    fn apply(&mut self, tool: Shape, op: BodyOp) -> R<()> {
-        let new = match (&self.ev.body, op) {
-            (None, BodyOp::Join) => tool,
-            (None, _) => return Err("no hay sólido que cortar".into()),
-            (Some(b), BodyOp::Join) => b.union(&tool).map_err(err)?,
-            (Some(b), BodyOp::Cut) => b.cut(&tool).map_err(err)?,
-            (Some(b), BodyOp::Intersect) => b.intersect(&tool).map_err(err)?,
+    fn apply(&mut self, tool: Tagged, op: BodyOp) -> R<()> {
+        let Some(b) = &self.ev.body else {
+            if op != BodyOp::Join {
+                return Err("no hay sólido que cortar".into());
+            }
+            self.ev.body = Some(tool.shape);
+            self.ev.face_tags = tool.tags;
+            return Ok(());
         };
+        let (new, h) = with_history(|| match op {
+            BodyOp::Join => b.union(&tool.shape),
+            BodyOp::Cut => b.cut(&tool.shape),
+            BodyOp::Intersect => b.intersect(&tool.shape),
+        })
+        .map_err(err)?;
+        let n = new.face_count();
+        self.ev.face_tags = propagate(&[&self.ev.face_tags, &tool.tags], &h, n).0;
         self.ev.body = Some(new);
         Ok(())
+    }
+
+    /// Reemplaza el cuerpo por el resultado de una operación sobre él; los
+    /// orígenes pasan por la historia y `extra` nombra lo generado después.
+    fn replace_body(&mut self, new: Shape, h: &History, extra: impl Fn(usize) -> Option<FaceTag>) {
+        let n = new.face_count();
+        let (mut tags, used) = propagate(&[&self.ev.face_tags], h, n);
+        for (k, images) in h.images.iter().enumerate().skip(used) {
+            if let Some(t) = extra(k - used) {
+                for &f in images {
+                    if let Some(slot) = tags.get_mut(f)
+                        && !slot.contains(&t)
+                    {
+                        slot.push(t.clone());
+                    }
+                }
+            }
+        }
+        self.ev.face_tags = tags;
+        self.ev.body = Some(new);
     }
 
     fn diag(&self) -> f64 {
@@ -128,6 +212,20 @@ impl Ctx<'_> {
 
     fn face(&self, r: &FaceRef) -> R<usize> {
         let body = self.body()?;
+        // Por origen: las caras que lo conservan (la primera etiqueta es la
+        // principal); entre ellas, la más cercana al punto guardado
+        for wanted in [&r.tags[..r.tags.len().min(1)], &r.tags[..]] {
+            let candidates: Vec<usize> = (0..self.ev.face_tags.len())
+                .filter(|&f| self.ev.face_tags[f].iter().any(|t| wanted.contains(t)))
+                .collect();
+            if let Some(best) = candidates
+                .iter()
+                .map(|&f| (f, body.face_distance(f, r.point).unwrap_or(f64::MAX)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+            {
+                return Ok(best.0);
+            }
+        }
         let (i, d) = body
             .closest_face(r.point, Some(r.normal), 0.9)
             .ok_or("la cara de referencia ya no existe")?;
@@ -139,6 +237,24 @@ impl Ctx<'_> {
 
     fn edge(&self, r: &EdgeRef) -> R<usize> {
         let body = self.body()?;
+        // Por origen: la arista entre una cara de cada lado
+        if r.sides.len() == 2 && r.sides.iter().all(|s| !s.is_empty()) {
+            let has = |f: Option<usize>, side: &[FaceTag]| {
+                f.and_then(|f| self.ev.face_tags.get(f)).is_some_and(|ts| ts.iter().any(|t| side.contains(t)))
+            };
+            let pairs = body.edge_face_pairs().map_err(err)?;
+            let best = pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, [a, b])| {
+                    (has(*a, &r.sides[0]) && has(*b, &r.sides[1])) || (has(*a, &r.sides[1]) && has(*b, &r.sides[0]))
+                })
+                .map(|(e, _)| (e, body.edge_distance(e, r.point).unwrap_or(f64::MAX)))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((e, _)) = best {
+                return Ok(e);
+            }
+        }
         let (i, d) = body
             .closest_edge(r.point, Some(r.direction), 0.9)
             .ok_or("la arista de referencia ya no existe")?;
@@ -205,19 +321,35 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Extrude(e) => {
-                let tool = self.extrude(e)?;
+                let tool = self.extrude(f.id, e)?;
                 self.ev.tools.insert(f.id, (tool.clone(), e.op));
                 self.apply(tool, e.op)
             }
             FeatureKind::Revolve(r) => {
                 let axis = self.axis(&r.axis)?;
-                let faces = self.profile_faces(r.sketch, &r.regions)?;
+                let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
                 let angle = r.angle.to_radians();
                 if angle.abs() < 1e-9 {
                     return Err("ángulo cero".into());
                 }
                 let solids = faces.iter().map(|fc| fc.revolve(axis, angle)).collect::<Result<Vec<_>, _>>().map_err(err)?;
-                let tool = fuse(solids)?;
+                let shape = fuse(solids)?;
+                let mut tags = vec![Vec::new(); shape.face_count()];
+                let rot = |p: P3, a: f64| {
+                    let m = cad_occt::rotation_matrix(axis, a);
+                    [0, 1, 2].map(|i| m[i][0] * p[0] + m[i][1] * p[1] + m[i][2] * p[2] + m[i][3])
+                };
+                // Lateral de cada entidad: su punto medio girado a la mitad del ángulo
+                for (id, p) in &entities {
+                    mark(&shape, &mut tags, rot(*p, angle / 2.0), tag(f.id, format!("lado:{id}")));
+                }
+                if angle.abs() < 2.0 * std::f64::consts::PI - 1e-9 {
+                    for p in &samples {
+                        mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
+                        mark(&shape, &mut tags, rot(*p, angle), tag(f.id, "fin"));
+                    }
+                }
+                let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), r.op));
                 self.apply(tool, r.op)
             }
@@ -231,6 +363,7 @@ impl Ctx<'_> {
                     PrimitiveShape::Torus { major, minor } => Shape::torus(frame, major, minor),
                 }
                 .map_err(err)?;
+                let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
                 self.ev.tools.insert(f.id, (tool.clone(), p.op));
                 self.apply(tool, p.op)
             }
@@ -240,63 +373,85 @@ impl Ctx<'_> {
                     ImportFormat::Brep => Shape::from_brep(data),
                 }
                 .map_err(err)?;
+                let tags = (0..tool.face_count()).map(|i| vec![tag(f.id, format!("cara:{i}"))]).collect();
+                let tool = Tagged { shape: tool, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(tool, *op)
             }
             FeatureKind::Fillet { edges, radius } => {
                 let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
-                let new = self.body()?.fillet(&idx, *radius).map_err(err)?;
-                self.ev.body = Some(new);
+                let body = self.body()?.clone();
+                let (new, h) = with_history(|| body.fillet(&idx, *radius)).map_err(err)?;
+                self.replace_body(new, &h, |k| Some(tag(f.id, format!("redondeo:{k}"))));
                 Ok(())
             }
             FeatureKind::Chamfer { edges, distance } => {
                 let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
-                let new = self.body()?.chamfer(&idx, *distance).map_err(err)?;
-                self.ev.body = Some(new);
+                let body = self.body()?.clone();
+                let (new, h) = with_history(|| body.chamfer(&idx, *distance)).map_err(err)?;
+                self.replace_body(new, &h, |k| Some(tag(f.id, format!("chaflan:{k}"))));
                 Ok(())
             }
             FeatureKind::Shell { faces, thickness } => {
                 let idx = faces.iter().map(|r| self.face(r)).collect::<R<Vec<_>>>()?;
-                let new = self.body()?.shell(&idx, -thickness.abs()).map_err(err)?;
-                self.ev.body = Some(new);
+                let body = self.body()?.clone();
+                let (new, h) = with_history(|| body.shell(&idx, -thickness.abs())).map_err(err)?;
+                self.replace_body(new, &h, |_| None);
                 Ok(())
             }
             FeatureKind::Draft { faces, neutral, angle } => {
                 let idx = faces.iter().map(|r| self.face(r)).collect::<R<Vec<_>>>()?;
                 let p = self.plane(neutral)?;
-                let new = self.body()?.draft(&idx, p.normal, angle.to_radians(), p.origin, p.normal).map_err(err)?;
-                self.ev.body = Some(new);
+                let body = self.body()?.clone();
+                let (new, h) =
+                    with_history(|| body.draft(&idx, p.normal, angle.to_radians(), p.origin, p.normal)).map_err(err)?;
+                self.replace_body(new, &h, |_| None);
                 Ok(())
             }
             FeatureKind::Pattern { features, pattern } => {
                 let transforms = self.pattern_transforms(pattern)?;
+                let copies_of = |src: &Tagged| -> R<Vec<Tagged>> {
+                    transforms
+                        .iter()
+                        .enumerate()
+                        .map(|(k, t)| {
+                            let (shape, h) = with_history(|| t(&src.shape).map_err(occt_err)).map_err(err)?;
+                            let tags = suffixed(&src.tags, &h, shape.face_count(), &format!("#{}", k + 1));
+                            Ok(Tagged { shape, tags })
+                        })
+                        .collect()
+                };
                 if features.is_empty() {
-                    let body = self.body()?.clone();
-                    let mut copies = vec![body.clone()];
-                    for t in &transforms {
-                        copies.push(t(&body)?);
-                    }
-                    self.ev.body = Some(fuse(copies)?);
+                    let body = Tagged { shape: self.body()?.clone(), tags: self.ev.face_tags.clone() };
+                    let mut all = vec![body.clone()];
+                    all.extend(copies_of(&body)?);
+                    let fused = fuse_tagged(all)?;
+                    self.ev.body = Some(fused.shape);
+                    self.ev.face_tags = fused.tags;
                     return Ok(());
                 }
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
-                    let copies = transforms.iter().map(|t| t(&tool)).collect::<R<Vec<_>>>()?;
-                    self.apply(fuse(copies)?, op)?;
+                    self.apply(fuse_tagged(copies_of(&tool)?)?, op)?;
                 }
                 Ok(())
             }
             FeatureKind::Mirror { features, plane } => {
                 let p = self.plane(plane)?;
+                let mirrored = |src: &Tagged| -> R<Tagged> {
+                    let (shape, h) = with_history(|| src.shape.mirror(p.origin, p.normal)).map_err(err)?;
+                    let tags = suffixed(&src.tags, &h, shape.face_count(), "#espejo");
+                    Ok(Tagged { shape, tags })
+                };
                 if features.is_empty() {
-                    let body = self.body()?.clone();
-                    let m = body.mirror(p.origin, p.normal).map_err(err)?;
+                    let body = Tagged { shape: self.body()?.clone(), tags: self.ev.face_tags.clone() };
+                    let m = mirrored(&body)?;
                     self.apply(m, BodyOp::Join)?;
                     return Ok(());
                 }
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
-                    let m = tool.mirror(p.origin, p.normal).map_err(err)?;
+                    let m = mirrored(&tool)?;
                     self.apply(m, op)?;
                 }
                 Ok(())
@@ -304,14 +459,16 @@ impl Ctx<'_> {
             FeatureKind::Split { plane, flip } => {
                 let p = self.plane(plane)?;
                 let n = if *flip { scale(p.normal, -1.0) } else { p.normal };
-                let new = self.body()?.split_keep(p.origin, n).map_err(err)?;
-                self.ev.body = Some(new);
+                let body = self.body()?.clone();
+                let (new, h) = with_history(|| body.split_keep(p.origin, n)).map_err(err)?;
+                // Después de las caras del cuerpo vienen las del semiespacio: el corte
+                self.replace_body(new, &h, |_| Some(tag(f.id, "corte")));
                 Ok(())
             }
         }
     }
 
-    fn tool(&self, id: FeatureId) -> R<(Shape, BodyOp)> {
+    fn tool(&self, id: FeatureId) -> R<(Tagged, BodyOp)> {
         self.ev
             .tools
             .get(&id)
@@ -354,22 +511,22 @@ impl Ctx<'_> {
 
     /// Extrusión. Si resta o interseca y hacia ese lado no toca el sólido (un
     /// bolsillo dibujado sobre una cara apunta hacia afuera), se da vuelta sola.
-    fn extrude(&self, e: &Extrude) -> R<Shape> {
-        let tool = self.extrude_dir(e, e.reverse)?;
+    fn extrude(&self, id: FeatureId, e: &Extrude) -> R<Tagged> {
+        let tool = self.extrude_dir(id, e, e.reverse)?;
         let auto_flip = matches!(e.op, BodyOp::Cut | BodyOp::Intersect)
             && matches!(e.extent, Extent::Blind { .. } | Extent::ThroughAll);
         if auto_flip
             && let Some(body) = &self.ev.body
-            && body.intersect(&tool).ok().and_then(|s| s.mass().ok()).is_none_or(|m| m.volume.abs() < 1e-9)
+            && body.intersect(&tool.shape).ok().and_then(|s| s.mass().ok()).is_none_or(|m| m.volume.abs() < 1e-9)
         {
-            return self.extrude_dir(e, !e.reverse);
+            return self.extrude_dir(id, e, !e.reverse);
         }
         Ok(tool)
     }
 
-    fn extrude_dir(&self, e: &Extrude, reverse: bool) -> R<Shape> {
+    fn extrude_dir(&self, id: FeatureId, e: &Extrude, reverse: bool) -> R<Tagged> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
-        let faces = self.profile_faces(e.sketch, &e.regions)?;
+        let (faces, entities, _) = self.profile(e.sketch, &e.regions)?;
         let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
         let (start, length) = match &e.extent {
             Extent::Blind { distance } => (0.0, *distance),
@@ -401,7 +558,73 @@ impl Ctx<'_> {
             let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f };
             solids.push(f.prism(scale(n, length)).map_err(err)?);
         }
-        fuse(solids)
+        let shape = fuse(solids)?;
+        // Tapas por su posición a lo largo de la dirección; laterales por la
+        // entidad del sketch que barren (su punto medio, a media altura)
+        let mut tags = vec![Vec::new(); shape.face_count()];
+        let scale_tol = self.diag().max(length.abs()) * 1e-6;
+        for (i, slot) in tags.iter_mut().enumerate() {
+            let info = shape.face_info(i).map_err(err)?;
+            if info.surface == SurfaceKind::Plane && dot(info.normal, n).abs() > 0.999 {
+                let d = dot(sub(info.point, plane.origin), n);
+                if (d - start).abs() <= scale_tol {
+                    slot.push(tag(id, "inicio"));
+                } else if (d - start - length).abs() <= scale_tol {
+                    slot.push(tag(id, "fin"));
+                }
+            }
+        }
+        for (eid, p) in &entities {
+            let probe = add(*p, scale(n, start + length / 2.0));
+            mark(&shape, &mut tags, probe, tag(id, format!("lado:{eid}")));
+        }
+        Ok(Tagged { shape, tags })
+    }
+
+    /// Caras B-Rep de las regiones elegidas, el punto medio (en el mundo) de
+    /// cada entidad que las borde y un punto interior de cada región.
+    #[allow(clippy::type_complexity)]
+    fn profile(&self, sketch: FeatureId, sel: &RegionSelection) -> R<(Vec<Shape>, Vec<(u32, P3)>, Vec<P3>)> {
+        let faces = self.profile_faces(sketch, sel)?;
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+        let regions = self.selected_regions(sketch, sel)?;
+        let mut entities: Vec<(u32, P3)> = Vec::new();
+        for r in &regions {
+            for l in std::iter::once(&r.outer).chain(&r.holes) {
+                for piece in &l.pieces {
+                    if entities.iter().any(|(e, _)| *e == piece.entity) {
+                        continue;
+                    }
+                    if let Some(p) = entity_midpoint(&s.sketch, piece.entity) {
+                        entities.push((piece.entity, s.plane.to_world(p)));
+                    }
+                }
+            }
+        }
+        let samples = regions.iter().map(|r| s.plane.to_world(r.sample)).collect();
+        Ok((faces, entities, samples))
+    }
+
+    fn selected_regions(&self, sketch: FeatureId, sel: &RegionSelection) -> R<Vec<&Region>> {
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+        Ok(match sel {
+            RegionSelection::All => s.regions.iter().filter(|r| r.depth % 2 == 0).collect(),
+            RegionSelection::Points { points } => {
+                let mut v = Vec::new();
+                for p in points {
+                    let r = s
+                        .regions
+                        .iter()
+                        .filter(|r| r.contains(*p))
+                        .max_by_key(|r| r.depth)
+                        .ok_or("una de las regiones elegidas ya no existe")?;
+                    if !v.contains(&r) {
+                        v.push(r);
+                    }
+                }
+                v
+            }
+        })
     }
 
     /// Caras B-Rep de las regiones elegidas de un sketch.
@@ -440,6 +663,85 @@ impl Ctx<'_> {
             })
             .collect()
     }
+}
+
+/// Agrega `t` a la cara de `shape` que pasa por `p` (si alguna pasa).
+fn mark(shape: &Shape, tags: &mut [Vec<FaceTag>], p: P3, t: FaceTag) {
+    if let Some(m) = shape.mass().ok()
+        && let Some((f, d)) = shape.closest_face(p, None, 0.0)
+        && d <= norm(sub(m.bbox_max, m.bbox_min)).max(1.0) * 1e-6
+        && let Some(slot) = tags.get_mut(f)
+        && !slot.contains(&t)
+    {
+        slot.push(t);
+    }
+}
+
+/// Punto medio de una entidad del sketch (sobre la curva).
+fn entity_midpoint(s: &Sketch, id: u32) -> Option<P2> {
+    let e = s.entity(id).ok()?;
+    let p = |i: u32| s.point(i).ok();
+    Some(match &e.geometry {
+        Geometry::Line { start, end } => {
+            let (a, b) = (p(*start)?, p(*end)?);
+            [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
+        }
+        Geometry::Circle { center, radius } => {
+            let c = p(*center)?;
+            [c[0] + radius, c[1]]
+        }
+        Geometry::Arc { center, start, end } => {
+            let (c, a, b) = (p(*center)?, p(*start)?, p(*end)?);
+            let r = dist2(c, a);
+            let t = (a[1] - c[1]).atan2(a[0] - c[0]) + arc_sweep(c, a, b) / 2.0;
+            [c[0] + r * t.cos(), c[1] + r * t.sin()]
+        }
+        // La spline pasa por sus puntos: el del medio está sobre la curva
+        Geometry::Spline { points, .. } => p(points[points.len() / 2])?,
+    })
+}
+
+/// Origen de las caras de una primitiva según su posición en el marco propio.
+fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTag>> {
+    let z = normalize(p.z);
+    let x = normalize(sub(p.x, scale(z, dot(p.x, z))));
+    let y = cross(z, x);
+    (0..shape.face_count())
+        .map(|i| {
+            let Ok(info) = shape.face_info(i) else { return vec![] };
+            let name = match p.shape {
+                PrimitiveShape::Box { .. } => {
+                    let axes = [("x", x), ("y", y), ("z", z)];
+                    axes.iter().find_map(|(a, v)| {
+                        let d = dot(info.normal, *v);
+                        (d.abs() > 0.9).then(|| format!("{}{a}", if d > 0.0 { "+" } else { "-" }))
+                    })
+                }
+                PrimitiveShape::Cylinder { .. } | PrimitiveShape::Cone { .. } => Some(
+                    if info.surface == SurfaceKind::Plane {
+                        if dot(info.normal, z) > 0.0 { "arriba" } else { "abajo" }
+                    } else {
+                        "lado"
+                    }
+                    .to_string(),
+                ),
+                PrimitiveShape::Sphere { .. } | PrimitiveShape::Torus { .. } => Some("lado".to_string()),
+            };
+            name.map(|n| vec![tag(id, n)]).unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Une sólidos etiquetados en uno, propagando los orígenes.
+fn fuse_tagged(mut parts: Vec<Tagged>) -> R<Tagged> {
+    if parts.len() == 1 {
+        return Ok(parts.pop().unwrap());
+    }
+    let shapes: Vec<Shape> = parts.iter().map(|p| p.shape.clone()).collect();
+    let (shape, h) = with_history(|| Shape::fuse_all(&shapes)).map_err(err)?;
+    let inputs: Vec<&[Vec<FaceTag>]> = parts.iter().map(|p| p.tags.as_slice()).collect();
+    let tags = propagate(&inputs, &h, shape.face_count()).0;
+    Ok(Tagged { shape, tags })
 }
 
 fn fuse(mut shapes: Vec<Shape>) -> R<Shape> {

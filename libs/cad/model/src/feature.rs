@@ -10,19 +10,36 @@ use crate::sketch::Sketch;
 #[serde(transparent)]
 pub struct FeatureId(pub u32);
 
-/// Una cara del sólido, por geometría: el punto donde se eligió y la normal
-/// saliente ahí. Se resuelve buscando la cara más cercana con normal parecida.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Origen de una cara: la operación que la creó y qué parte de ella es
+/// ("inicio", "fin", "lado:7" = lateral que barre la entidad 7 del sketch,
+/// "+z" de una caja, "redondeo:0"…). Se recalcula en cada recálculo y viaja por
+/// las booleanas y redondeos con la historia de OpenCASCADE: una cara partida
+/// por un agujero conserva su origen.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct FaceTag {
+    pub feature: FeatureId,
+    pub name: String,
+}
+
+/// Una cara del sólido. Se resuelve por su origen (`tags`) y, entre las caras
+/// con ese origen, la más cercana a `point`; sin origen reconocible, por
+/// geometría (la cara más cercana con normal parecida).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FaceRef {
     pub point: P3,
     pub normal: P3,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<FaceTag>,
 }
 
-/// Una arista: un punto sobre ella y su dirección ahí.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Una arista: un punto sobre ella y su dirección ahí, más los orígenes de las
+/// dos caras que separa ("la arista entre la tapa y el frente").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EdgeRef {
     pub point: P3,
     pub direction: P3,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sides: Vec<Vec<FaceTag>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

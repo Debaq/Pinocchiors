@@ -342,3 +342,39 @@ fn closest_face_and_edge() {
     // Ninguna arista paralela a una dirección imposible
     assert!(b.closest_edge([5.0, 0.0, 10.0], Some([1.0, 1.0, 0.0]), 0.99).is_none());
 }
+
+#[test]
+fn history_tracks_faces_through_operations() {
+    if !require() {
+        return;
+    }
+    let b = cube(10.0);
+    let top = b.faces().unwrap().iter().position(|f| f.normal[2] > 0.99).unwrap();
+    // Agujero que atraviesa la tapa: la tapa sigue siendo una cara (modificada)
+    let tool = Shape::cylinder(Frame::at([5.0, 5.0, -1.0]), 2.0, 12.0).unwrap();
+    let (cut, h) = with_history(|| b.cut(&tool)).unwrap();
+    assert_eq!(h.images.len(), b.face_count() + tool.face_count());
+    assert_eq!(h.images[top].len(), 1);
+    let new_top = h.images[top][0];
+    assert!(cut.face_info(new_top).unwrap().normal[2] > 0.99);
+    // El lateral del cilindro termina como la pared del agujero
+    let side = tool.faces().unwrap().iter().position(|f| f.surface == SurfaceKind::Cylinder).unwrap();
+    let wall = &h.images[b.face_count() + side];
+    assert_eq!(wall.len(), 1);
+    assert_eq!(cut.face_info(wall[0]).unwrap().surface, SurfaceKind::Cylinder);
+
+    // Redondeo: las caras generadas por la arista elegida van al final
+    let e = (0..cut.edge_count()).find(|&e| {
+        let i = cut.edge_info(e).unwrap();
+        i.curve == CurveKind::Line && (i.mid[2] - 10.0).abs() < 1e-9 && i.mid[1].abs() < 1e-9
+    }).unwrap();
+    let (f, h) = with_history(|| cut.fillet(&[e], 1.0)).unwrap();
+    assert_eq!(h.images.len(), cut.face_count() + 1);
+    let generated = &h.images[cut.face_count()];
+    assert_eq!(generated.len(), 1);
+    assert_eq!(f.face_info(generated[0]).unwrap().surface, SurfaceKind::Cylinder);
+
+    // Transformar: cada cara tiene su copia
+    let (_, h) = with_history(|| b.translate([1.0, 0.0, 0.0])).unwrap();
+    assert!(h.images.iter().all(|v| v.len() == 1));
+}

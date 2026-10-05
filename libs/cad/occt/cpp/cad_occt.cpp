@@ -98,6 +98,10 @@ struct CadShape {
 namespace {
 
 thread_local std::string g_error;
+// Historia de la última operación: para cada cara de las entradas (en orden,
+// entrada por entrada) y luego cada arista elegida (redondeo/chaflán), las
+// caras del resultado que salieron de ella. Ver cad_take_history.
+thread_local std::vector<std::vector<int32_t>> g_history;
 
 void set_error(const std::string& msg) { g_error = msg; }
 
@@ -105,6 +109,7 @@ void set_error(const std::string& msg) { g_error = msg; }
 template <typename F, typename R>
 R guard(const char* what, R fallback, F f) {
     g_error.clear();
+    g_history.clear();
     try {
         return f();
     } catch (const Standard_Failure& e) {
@@ -214,12 +219,42 @@ TopTools_IndexedMapOfShape map_of(const TopoDS_Shape& s, TopAbs_ShapeEnum t) {
     return m;
 }
 
+// Anota en g_history qué caras de `inputs` terminaron en cuáles de `result`
+// (y, si se pasan, qué caras generó cada arista de `generators`).
+void record(BRepBuilderAPI_MakeShape& mk, const std::vector<TopoDS_Shape>& inputs, const TopoDS_Shape& result,
+            const std::vector<TopoDS_Shape>& generators = {}) {
+    g_history.clear();
+    TopTools_IndexedMapOfShape out;
+    TopExp::MapShapes(result, TopAbs_FACE, out);
+    auto images = [&](const TopoDS_Shape& f, bool generated) {
+        std::vector<int32_t> v;
+        const TopTools_ListOfShape& list = generated ? mk.Generated(f) : mk.Modified(f);
+        for (const TopoDS_Shape& g : list) {
+            int i = out.FindIndex(g);
+            if (i > 0) v.push_back(i - 1);
+        }
+        if (!generated && v.empty() && !mk.IsDeleted(f)) {
+            int i = out.FindIndex(f);
+            if (i > 0) v.push_back(i - 1);
+        }
+        return v;
+    };
+    for (const TopoDS_Shape& in : inputs) {
+        TopTools_IndexedMapOfShape faces;
+        TopExp::MapShapes(in, TopAbs_FACE, faces);
+        for (int i = 1; i <= faces.Extent(); i++) g_history.push_back(images(faces(i), false));
+    }
+    for (const TopoDS_Shape& e : generators) g_history.push_back(images(e, true));
+}
+
 TopoDS_Shape boolean_op(const TopoDS_Shape& a, const TopoDS_Shape& b, int32_t op) {
-    auto finish = [](BRepAlgoAPI_BooleanOperation& algo) {
+    auto finish = [&](BRepAlgoAPI_BooleanOperation& algo) {
         algo.Build();
         if (algo.HasErrors() || !algo.IsDone()) throw Standard_Failure("la operación booleana falló");
         algo.SimplifyResult();
-        return algo.Shape();
+        TopoDS_Shape r = algo.Shape();
+        record(algo, {a, b}, r);
+        return r;
     };
     if (op == 0) {
         BRepAlgoAPI_Fuse f(a, b);
@@ -452,6 +487,9 @@ CadShape* cad_fuse_many(const CadShape* const* shapes, int32_t n) {
         f.Build();
         if (f.HasErrors() || !f.IsDone()) throw Standard_Failure("la unión falló");
         f.SimplifyResult();
+        std::vector<TopoDS_Shape> inputs;
+        for (int32_t i = 0; i < n; i++) inputs.push_back(shapes[i]->s);
+        record(f, inputs, f.Shape());
         return wrap(f.Shape());
     });
 }
@@ -470,12 +508,15 @@ CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double 
     return guard("redondeo", (CadShape*)nullptr, [&] {
         auto m = map_of(s->s, TopAbs_EDGE);
         BRepFilletAPI_MakeFillet mk(s->s);
+        std::vector<TopoDS_Shape> chosen;
         for (int32_t i = 0; i < n; i++) {
             if (edges[i] < 0 || edges[i] >= m.Extent()) throw Standard_Failure("arista inexistente");
             mk.Add(radius, TopoDS::Edge(m(edges[i] + 1)));
+            chosen.push_back(m(edges[i] + 1));
         }
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("radio demasiado grande para esas aristas");
+        record(mk, {s->s}, mk.Shape(), chosen);
         return wrap_checked(mk.Shape(), "el radio no entra en esas aristas");
     });
 }
@@ -484,12 +525,15 @@ CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double
     return guard("chaflán", (CadShape*)nullptr, [&] {
         auto m = map_of(s->s, TopAbs_EDGE);
         BRepFilletAPI_MakeChamfer mk(s->s);
+        std::vector<TopoDS_Shape> chosen;
         for (int32_t i = 0; i < n; i++) {
             if (edges[i] < 0 || edges[i] >= m.Extent()) throw Standard_Failure("arista inexistente");
             mk.Add(distance, TopoDS::Edge(m(edges[i] + 1)));
+            chosen.push_back(m(edges[i] + 1));
         }
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("distancia demasiado grande para esas aristas");
+        record(mk, {s->s}, mk.Shape(), chosen);
         return wrap_checked(mk.Shape(), "la distancia no entra en esas aristas");
     });
 }
@@ -507,6 +551,7 @@ CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double t
         mk.MakeThickSolidByJoin(s->s, remove, thickness, 1e-3);
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("grosor incompatible con la forma");
+        record(mk, {s->s}, mk.Shape());
         return wrap_checked(mk.Shape(), "cáscara");
     });
 }
@@ -524,6 +569,7 @@ CadShape* cad_draft(const CadShape* s, const int32_t* faces, int32_t n, const do
         }
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("no se pudo aplicar el desmolde");
+        record(mk, {s->s}, mk.Shape());
         return wrap_checked(mk.Shape(), "desmolde");
     });
 }
@@ -533,13 +579,17 @@ CadShape* cad_transform(const CadShape* s, const double* m) {
         try {
             gp_Trsf t;
             t.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
-            return wrap(BRepBuilderAPI_Transform(s->s, t, Standard_True).Shape());
+            BRepBuilderAPI_Transform mk(s->s, t, Standard_True);
+            record(mk, {s->s}, mk.Shape());
+            return wrap(mk.Shape());
         } catch (const Standard_Failure&) {
             // No es semejanza (escala no uniforme): transformación general.
             gp_GTrsf g;
             g.SetVectorialPart(gp_Mat(m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10]));
             g.SetTranslationPart(gp_XYZ(m[3], m[7], m[11]));
-            return wrap(BRepBuilderAPI_GTransform(s->s, g, Standard_True).Shape());
+            BRepBuilderAPI_GTransform mk(s->s, g, Standard_True);
+            record(mk, {s->s}, mk.Shape());
+            return wrap(mk.Shape());
         }
     });
 }
@@ -548,7 +598,9 @@ CadShape* cad_mirror(const CadShape* s, const double* origin, const double* norm
     return guard("espejar", (CadShape*)nullptr, [&] {
         gp_Trsf t;
         t.SetMirror(gp_Ax2(pnt(origin), dir(normal)));
-        return wrap(BRepBuilderAPI_Transform(s->s, t, Standard_True).Shape());
+        BRepBuilderAPI_Transform mk(s->s, t, Standard_True);
+        record(mk, {s->s}, mk.Shape());
+        return wrap(mk.Shape());
     });
 }
 
@@ -790,6 +842,44 @@ int32_t cad_closest_edge(const CadShape* s, const double* point, const double* d
     });
 }
 
+double cad_face_distance(const CadShape* s, int32_t index, const double* point) {
+    return guard("distancia", -1.0, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("cara inexistente");
+        BRepExtrema_DistShapeShape ext(BRepBuilderAPI_MakeVertex(pnt(point)).Vertex(), m(index + 1));
+        return ext.IsDone() && ext.NbSolution() > 0 ? ext.Value() : -1.0;
+    });
+}
+
+double cad_edge_distance(const CadShape* s, int32_t index, const double* point) {
+    return guard("distancia", -1.0, [&] {
+        auto m = map_of(s->s, TopAbs_EDGE);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("arista inexistente");
+        BRepExtrema_DistShapeShape ext(BRepBuilderAPI_MakeVertex(pnt(point)).Vertex(), m(index + 1));
+        return ext.IsDone() && ext.NbSolution() > 0 ? ext.Value() : -1.0;
+    });
+}
+
+int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out) {
+    return guard("aristas", 0, [&] {
+        auto edges = map_of(s->s, TopAbs_EDGE);
+        auto faces = map_of(s->s, TopAbs_FACE);
+        TopTools_IndexedDataMapOfShapeListOfShape anc;
+        TopExp::MapShapesAndUniqueAncestors(s->s, TopAbs_EDGE, TopAbs_FACE, anc);
+        for (int e = 1; e <= edges.Extent(); e++) {
+            out[2 * (e - 1)] = -1;
+            out[2 * (e - 1) + 1] = -1;
+            const TopTools_ListOfShape& list = anc.FindFromKey(edges(e));
+            int k = 0;
+            for (const TopoDS_Shape& f : list) {
+                if (k >= 2) break;
+                out[2 * (e - 1) + k++] = faces.FindIndex(f) - 1;
+            }
+        }
+        return 1;
+    });
+}
+
 int32_t cad_mass_info(const CadShape* s, CadMassInfo* out) {
     return guard("medidas", 0, [&] {
         std::memset(out, 0, sizeof(CadMassInfo));
@@ -972,5 +1062,27 @@ CadShape* cad_read_brep(const uint8_t* data, size_t len) {
 }
 
 void cad_bytes_free(uint8_t* p) { std::free(p); }
+
+int32_t cad_take_history(CadHistory* out) {
+    std::memset(out, 0, sizeof(CadHistory));
+    std::vector<int32_t> offsets{0}, faces;
+    for (const auto& v : g_history) {
+        faces.insert(faces.end(), v.begin(), v.end());
+        offsets.push_back(static_cast<int32_t>(faces.size()));
+    }
+    out->n = static_cast<int32_t>(g_history.size());
+    out->offsets = static_cast<int32_t*>(std::malloc(sizeof(int32_t) * offsets.size()));
+    std::memcpy(out->offsets, offsets.data(), sizeof(int32_t) * offsets.size());
+    out->faces = static_cast<int32_t*>(std::malloc(sizeof(int32_t) * (faces.empty() ? 1 : faces.size())));
+    if (!faces.empty()) std::memcpy(out->faces, faces.data(), sizeof(int32_t) * faces.size());
+    g_history.clear();
+    return out->n;
+}
+
+void cad_history_free(CadHistory* h) {
+    std::free(h->offsets);
+    std::free(h->faces);
+    std::memset(h, 0, sizeof(CadHistory));
+}
 
 }  // extern "C"

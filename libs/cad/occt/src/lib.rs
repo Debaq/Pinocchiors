@@ -40,6 +40,43 @@ pub fn occt_version() -> String {
     unsafe { CStr::from_ptr(ffi::cad_occt_version()) }.to_string_lossy().into_owned()
 }
 
+/// Qué caras del resultado salieron de cada cara de las entradas de una
+/// operación (ver [`with_history`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct History {
+    /// Entrada i: caras de las entradas en orden (todas las de la primera
+    /// forma, después las de la segunda…) y, en redondeo y chaflán, después
+    /// una por arista elegida con las caras que generó.
+    pub images: Vec<Vec<usize>>,
+}
+
+fn take_history() -> History {
+    let mut h = std::mem::MaybeUninit::<ffi::CadHistory>::zeroed();
+    unsafe { ffi::cad_take_history(h.as_mut_ptr()) };
+    let mut h = unsafe { h.assume_init() };
+    let n = h.n.max(0) as usize;
+    let images = if n == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: el puente reservó n + 1 offsets y offsets[n] caras
+        let off = unsafe { std::slice::from_raw_parts(h.offsets, n + 1) };
+        let faces = unsafe { std::slice::from_raw_parts(h.faces, off[n] as usize) };
+        off.windows(2).map(|w| faces[w[0] as usize..w[1] as usize].iter().map(|&f| f as usize).collect()).collect()
+    };
+    unsafe { ffi::cad_history_free(&mut h) };
+    History { images }
+}
+
+/// Corre una operación y devuelve también su historia (qué caras del
+/// resultado vienen de qué caras de las entradas). Solo para operaciones que la
+/// registran: booleanas, unión múltiple, redondeo, chaflán, cáscara, desmolde,
+/// transformar, espejar y cortar.
+pub fn with_history(op: impl FnOnce() -> Result<Shape>) -> Result<(Shape, History)> {
+    let _ = take_history();
+    let shape = op()?;
+    Ok((shape, take_history()))
+}
+
 /// Curva de un perfil. Todas en 3D: los sketches las ubican en su plano.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Curve {
@@ -531,6 +568,29 @@ impl Shape {
             return Err(last_error());
         }
         Ok(out[..n as usize].iter().filter(|&&f| f >= 0).map(|&f| f as usize).collect())
+    }
+
+    /// Distancia exacta de `point` a la cara `index`.
+    pub fn face_distance(&self, index: usize, point: P3) -> Option<f64> {
+        let d = unsafe { ffi::cad_face_distance(self.ptr(), index as i32, point.as_ptr()) };
+        (d >= 0.0).then_some(d)
+    }
+
+    /// Distancia exacta de `point` a la arista `index`.
+    pub fn edge_distance(&self, index: usize, point: P3) -> Option<f64> {
+        let d = unsafe { ffi::cad_edge_distance(self.ptr(), index as i32, point.as_ptr()) };
+        (d >= 0.0).then_some(d)
+    }
+
+    /// Las caras a cada lado de cada arista (`None` si la arista es borde libre).
+    pub fn edge_face_pairs(&self) -> Result<Vec<[Option<usize>; 2]>> {
+        let n = self.edge_count();
+        let mut out = vec![-1i32; 2 * n];
+        if n > 0 && unsafe { ffi::cad_edge_face_pairs(self.ptr(), out.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        let f = |v: i32| (v >= 0).then_some(v as usize);
+        Ok(out.as_chunks::<2>().0.iter().map(|c| [f(c[0]), f(c[1])]).collect())
     }
 
     /// Cara más cercana a `point` (índice, distancia). Con `normal`, solo caras

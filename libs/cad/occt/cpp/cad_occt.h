@@ -141,6 +141,13 @@ int32_t cad_closest_face(const CadShape* s, const double* point, const double* n
 int32_t cad_closest_edge(const CadShape* s, const double* point, const double* dir,
                          double min_cos, double* dist);
 
+// Distancia de un punto a una cara / arista concreta (−1 si falla).
+double cad_face_distance(const CadShape* s, int32_t index, const double* point);
+double cad_edge_distance(const CadShape* s, int32_t index, const double* point);
+
+// Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
+int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
+
 typedef struct {
     double volume;
     double area;
@@ -178,6 +185,22 @@ CadShape* cad_read_step(const uint8_t* data, size_t len);
 int32_t cad_write_brep(const CadShape* s, uint8_t** out, size_t* len);
 CadShape* cad_read_brep(const uint8_t* data, size_t len);
 void cad_bytes_free(uint8_t* p);
+
+// ---------------------------------------------------------------------------
+// Historia de la última operación del hilo (booleanas, unión múltiple,
+// redondeo, chaflán, cáscara, desmolde, transformar, espejar, cortar). Entrada
+// i: caras del resultado que salieron de la cara i de las entradas (contadas
+// entrada por entrada, en el orden de TopExp) y, en redondeo/chaflán, después
+// las caras que generó cada arista elegida. Se vacía al leerla.
+// ---------------------------------------------------------------------------
+typedef struct {
+    int32_t* offsets;  // n + 1
+    int32_t* faces;
+    int32_t n;
+} CadHistory;
+
+int32_t cad_take_history(CadHistory* out);
+void cad_history_free(CadHistory* h);
 
 #ifdef __cplusplus
 }

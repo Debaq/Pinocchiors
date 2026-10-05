@@ -191,7 +191,7 @@ fn pocket_on_face_through_all_and_up_to_face() {
     // Sketch sobre la tapa: cuadrado 10×10 en (10..20, 10..20)
     let mut s = Sketch::new();
     s.rectangle([10.0, 10.0], [20.0, 20.0]);
-    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: top_ref }, offset: 0.0, sketch: s });
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: top_ref.clone() }, offset: 0.0, sketch: s });
     doc.add(FeatureKind::Extrude(Extrude {
         sketch: sk,
         regions: RegionSelection::All,
@@ -295,7 +295,7 @@ fn shell_split_and_linear_pattern() {
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
     }));
-    let top = FaceRef { point: [20.0, 10.0, 10.0], normal: [0.0, 0.0, 1.0] };
+    let top = FaceRef { point: [20.0, 10.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
     doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0 });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -335,7 +335,7 @@ fn errors_stay_local_rollback_and_suppress() {
     let (mut doc, _, _) = plate_doc();
     // Redondeo imposible
     let bad = doc.add(FeatureKind::Fillet {
-        edges: vec![EdgeRef { point: [50.0, 0.0, 10.0], direction: [1.0, 0.0, 0.0] }],
+        edges: vec![EdgeRef { point: [50.0, 0.0, 10.0], direction: [1.0, 0.0, 0.0], ..Default::default() }],
         radius: 50.0,
     });
     let cut = doc.add(FeatureKind::Primitive(Primitive {
@@ -428,7 +428,7 @@ fn cut_on_face_points_into_material() {
     }));
     let mut s = Sketch::new();
     s.circle([0.0, 0.0], 5.0);
-    let top = FaceRef { point: [10.0, 10.0, 20.0], normal: [0.0, 0.0, 1.0] };
+    let top = FaceRef { point: [10.0, 10.0, 20.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: top }, offset: 0.0, sketch: s });
     let cut = doc.add(FeatureKind::Extrude(Extrude {
         sketch: sk,

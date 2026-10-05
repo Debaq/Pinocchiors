@@ -21,14 +21,24 @@ export interface Plane {
   x_dir: P3;
 }
 
+/** Origen de una cara: operación que la creó y qué parte ("fin", "lado:7", "+z"…) */
+export interface FaceTag {
+  feature: number;
+  name: string;
+}
+
 export interface FaceRef {
   point: P3;
   normal: P3;
+  /** Orígenes de la cara: se busca por ellos antes que por posición */
+  tags?: FaceTag[];
 }
 
 export interface EdgeRef {
   point: P3;
   direction: P3;
+  /** Orígenes de las dos caras que separa la arista */
+  sides?: FaceTag[][];
 }
 
 export type PlaneSpec =

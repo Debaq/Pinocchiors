@@ -58,7 +58,16 @@ pub struct CadMesh {
     pub n_edges: usize,
 }
 
+#[repr(C)]
+pub struct CadHistory {
+    pub offsets: *mut i32,
+    pub faces: *mut i32,
+    pub n: i32,
+}
+
 unsafe extern "C" {
+    pub fn cad_take_history(out: *mut CadHistory) -> i32;
+    pub fn cad_history_free(h: *mut CadHistory);
     pub fn cad_last_error() -> *const std::ffi::c_char;
     pub fn cad_available() -> i32;
     pub fn cad_occt_version() -> *const std::ffi::c_char;
@@ -120,6 +129,9 @@ unsafe extern "C" {
     pub fn cad_edge_faces(s: *const CadShape, edge: i32, out2: *mut i32) -> i32;
     pub fn cad_closest_face(s: *const CadShape, point: *const f64, normal: *const f64, min_cos: f64, dist: *mut f64) -> i32;
     pub fn cad_closest_edge(s: *const CadShape, point: *const f64, dir: *const f64, min_cos: f64, dist: *mut f64) -> i32;
+    pub fn cad_face_distance(s: *const CadShape, index: i32, point: *const f64) -> f64;
+    pub fn cad_edge_distance(s: *const CadShape, index: i32, point: *const f64) -> f64;
+    pub fn cad_edge_face_pairs(s: *const CadShape, out: *mut i32) -> i32;
     pub fn cad_mass_info(s: *const CadShape, out: *mut CadMassInfo) -> i32;
 
     pub fn cad_tessellate(s: *const CadShape, linear: f64, angular: f64, out: *mut CadMesh) -> i32;

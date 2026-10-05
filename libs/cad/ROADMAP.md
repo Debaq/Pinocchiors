@@ -101,8 +101,7 @@ cargo test -p cad-model
   - Referencias: cara = punto + normal (coseno ≥ 0,9), arista = punto + dirección; error si
     la mejor coincidencia está a más de media diagonal del cuerpo.
   - Límite conocido: dos aristas paralelas equidistantes del punto guardado (p. ej. tras
-    duplicar una altura) pueden empatar. Arreglo de fondo: nombres topológicos por historia
-    (`BRepAlgoAPI_*::Generated/Modified`), pendiente.
+    duplicar una altura) pueden empatar. Arreglado el 2026-10-05 con orígenes de caras (abajo).
 - **2026-10-05 F4**: `cad-scan`. Test de punta a punta: pieza CAD teselada con ruido ±0,02 →
   plano superior (z 20 ± 0,05, área ±1 %, 3 contornos), profundidad 20 ± 0,2 por rayos,
   agujero r 8 ± 0,05 (detectado como agujero), tetón r 10, corte a media altura → sketch
@@ -163,3 +162,15 @@ cargo test -p cad-model
 - **Pruebas de punta a punta**: `apps/web/e2e/cad.mjs` (9 escenarios con volúmenes contra el
   teórico) con `examples/cad_http.rs` + vite + Chromium headless. Workspace completo: 775
   tests pasan.
+- **2026-10-05 Referencias por origen**: cada cara del sólido lleva etiquetas de origen
+  (`FaceTag { feature, name }`): extrusión "inicio"/"fin"/"lado:<entidad>", revolución
+  "lado:<entidad>"/"inicio"/"fin", primitivas por eje ("+z", "lado", "arriba"), importado
+  "cara:<i>", redondeo/chaflán "redondeo:<k>", corte "corte", copias de patrón "#k" y simetría
+  "#espejo". Se calculan en cada recálculo y viajan con la historia de OCCT
+  (`Modified/Generated/IsDeleted`, registrada en el puente por operación y leída con
+  `occt::with_history`). `FaceRef.tags` y `EdgeRef.sides` (orígenes de las dos caras de la
+  arista) se resuelven primero por origen y desempatan por distancia exacta al punto guardado;
+  sin origen, la resolución geométrica de antes. Tests en `model/tests/naming.rs`: el redondeo
+  de la arista superior sigue arriba al duplicar la altura (sin orígenes elegía la de abajo),
+  caras partidas por booleanas conservan el origen, sketch sobre la tapa sigue a la tapa.
+  - Sin origen todavía: caras nuevas de vaciado y desmolde (usan la geometría).
