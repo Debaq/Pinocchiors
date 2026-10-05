@@ -11,6 +11,7 @@ import {
   emptySketch,
   filletCorner,
   linesAt,
+  offsetEntities,
   offsetPlane,
   type AxisSpec,
   type BodyOp,
@@ -1205,6 +1206,7 @@ const BodySection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | "
 const SketchPanel: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
+  const [offsetDist, setOffsetDist] = createSignal(2);
   const s = () => ui.session()!;
   const sketch = (): Sketch => s().sketch;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
@@ -1323,6 +1325,26 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 }}
               >
                 Redondear esquina
+              </Button>
+            </div>
+          </Show>
+          <Show when={selEntities().length > 0}>
+            <div class="flex items-end gap-1.5">
+              <div class="flex-1">
+                <Num label="Distancia" suffix="mm" step={0.5} value={offsetDist()} onCommit={setOffsetDist} />
+              </div>
+              <Button
+                size="sm"
+                title="Positivo: hacia afuera del lazo"
+                onClick={() => {
+                  let msg: string | undefined;
+                  const regions = s().regions;
+                  const ids = selEntities().map((e) => e!.id);
+                  ui.change((sk) => (msg = offsetEntities(sk, regions, ids, offsetDist())));
+                  ui.setMessage(msg);
+                }}
+              >
+                Equidistante
               </Button>
             </div>
           </Show>

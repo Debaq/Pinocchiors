@@ -592,6 +592,71 @@ export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
   return undefined;
 }
 
+/**
+ * Equidistante de lo elegido a distancia `d` (positiva = hacia afuera):
+ * círculos concéntricos (mismo centro) y lazos cerrados de líneas como
+ * polígono paralelo (horizontal/vertical se copian). Devuelve un mensaje si
+ * algo no se pudo.
+ */
+export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: number): string | undefined {
+  const pos = (id: number): P2 => {
+    const q = s.points.find((x) => x.id === id)!;
+    return [q.x, q.y];
+  };
+  const done = new Set<number>();
+  let skipped = 0;
+  for (const id of ids) {
+    if (done.has(id)) continue;
+    const e = s.entities.find((x) => x.id === id);
+    if (!e) continue;
+    if (e.geometry.type === "circle") {
+      const r = e.geometry.radius + d;
+      if (r <= 0) {
+        skipped++;
+        continue;
+      }
+      addEntity(s, { type: "circle", center: e.geometry.center, radius: r });
+      done.add(id);
+      continue;
+    }
+    // El lazo cerrado que contiene la entidad, solo de líneas
+    const loop = regions.flatMap((r) => [r.outer, ...r.holes]).find((l) => l.pieces.some((p) => p.entity === id));
+    if (!loop || loop.pieces.some((p) => s.entities.find((x) => x.id === p.entity)?.geometry.type !== "line")) {
+      skipped++;
+      continue;
+    }
+    // Vértices en el orden del lazo (antihorario) y aristas desplazadas
+    const verts: P2[] = loop.pieces.map((p) => {
+      const g = s.entities.find((x) => x.id === p.entity)!.geometry as { start: number; end: number };
+      return pos(p.reversed ? g.end : g.start);
+    });
+    const n = verts.length;
+    const lines = verts.map((a, i) => {
+      const b = verts[(i + 1) % n];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      const nx = (b[1] - a[1]) / len;
+      const ny = -(b[0] - a[0]) / len;
+      // Antihorario: la normal saliente es la derecha del recorrido
+      return { a: [a[0] + nx * d, a[1] + ny * d] as P2, dir: [(b[0] - a[0]) / len, (b[1] - a[1]) / len] as P2 };
+    });
+    const corner = (l1: (typeof lines)[0], l2: (typeof lines)[0]): P2 => {
+      const den = l1.dir[0] * l2.dir[1] - l1.dir[1] * l2.dir[0];
+      if (Math.abs(den) < 1e-12) return l2.a;
+      const t = ((l2.a[0] - l1.a[0]) * l2.dir[1] - (l2.a[1] - l1.a[1]) * l2.dir[0]) / den;
+      return [l1.a[0] + l1.dir[0] * t, l1.a[1] + l1.dir[1] * t];
+    };
+    const pts = lines.map((l, i) => addPoint(s, corner(lines[(i + n - 1) % n], l)));
+    loop.pieces.forEach((piece, i) => {
+      const line = addEntity(s, { type: "line", start: pts[i], end: pts[(i + 1) % n] });
+      for (const k of [...s.constraints]) {
+        if ((k.type === "horizontal" || k.type === "vertical") && k.line === piece.entity) s.constraints.push({ type: k.type, line });
+      }
+      done.add(piece.entity);
+    });
+  }
+  return skipped ? "Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)" : undefined;
+}
+
 /** Valor editable de una restricción (cota), si tiene */
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
