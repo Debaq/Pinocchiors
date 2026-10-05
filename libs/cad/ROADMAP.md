@@ -66,8 +66,10 @@ Decisiones (2026-10-05):
 - [ ] **F7 — Distribución**: workflow manual nuevo (no tocar `release.yml`) que compila OCCT
       estático solo con los toolkits necesarios y lo guarda en caché; Linux, Windows, macOS.
       Medir cuánto engorda el instalador.
-- [ ] **F8 — Sketch completo**: portar herramientas de cad-blender (recortar/extender, offset,
-      polígono, ranura, auto-restricciones, gestor de restricciones, cotas en el visor).
+- [ ] **F8 — Sketch completo**: portar herramientas de cad-blender. Hecho: polígono, ranura,
+      cotas en el visor, enganche a puntos y curvas, horizontal/vertical automáticos, regiones
+      elegidas con clic, puntos libres marcados. Falta: recortar/extender, offset, redondeo de
+      esquinas en el sketch, arcos tangentes, gestor de restricciones con resaltado.
 - [ ] **F9 — Más adelante**: planos 2D (proyección + cotas), ensambles, chapa.
 
 ## Compilar
@@ -142,3 +144,8 @@ cargo test -p cad-model
     y no toca el sólido se da vuelta sola).
   - Pendiente de UI: cotas dibujadas en el visor (hoy se editan en el panel), encuadre del
     sketch al entrar, elegir regiones sueltas con clic, ejes de revolución con clic.
+- **2026-10-05 F8 (parcial)**: polígono regular (círculo de construcción + lados iguales),
+  ranura (arcos tangentes), cotas como etiquetas editables en el visor, puntos pegados a
+  curvas, regiones sueltas elegidas con clic para extruir/revolucionar, zonas detectadas del
+  escaneo agregables. Arreglado el diagnóstico de puntos libres (miraba solo las columnas
+  del punto; ahora el espacio nulo del Jacobiano).
