@@ -4,6 +4,8 @@
 
 import { batch, createSignal } from "solid-js";
 import {
+  constraintPath,
+  plainNumber,
   addEntity,
   addPoint,
   addRectangle,
@@ -61,6 +63,11 @@ export function createCadUi(store: CadStore) {
     if (!s) return;
     try {
       const r = await store.solveSketch(sketch, drag);
+      // El solver no conoce las fórmulas: vuelven a su cota (mismo orden)
+      sketch.constraints.forEach((c, i) => {
+        const expr = (c as { expr?: string }).expr;
+        if (expr && r.sketch.constraints[i]) (r.sketch.constraints[i] as { expr?: string }).expr = expr;
+      });
       const now = session();
       if (now && now.feature === s.feature) setSession({ ...now, sketch: r.sketch, report: r.report, regions: r.regions });
     } catch (e) {
@@ -101,7 +108,14 @@ export function createCadUi(store: CadStore) {
       ui.cancelPick();
       setSelection([]);
       setTool("line");
-      setSession({ feature, plane: view.plane, sketch: clone(f.kind.sketch), report: view.report, regions: view.regions });
+      // El sketch ya resuelto (con las fórmulas aplicadas); cada cota vinculada
+      // lleva su fórmula mientras se edita
+      const sketch = clone(view.sketch);
+      sketch.constraints.forEach((c, i) => {
+        const expr = store.bindingOf(constraintPath(feature, i, c));
+        if (expr) (c as { expr?: string }).expr = expr;
+      });
+      setSession({ feature, plane: view.plane, sketch, report: view.report, regions: view.regions });
       return true;
     },
 
@@ -145,13 +159,30 @@ export function createCadUi(store: CadStore) {
       ui.change((s) => s.constraints.splice(index, 1));
     },
 
-    setConstraintValue(index: number, value: number) {
+    setConstraintValue(index: number, value: number, expr?: string) {
       ui.change((s) => {
         const c = s.constraints[index];
         if (!c) return;
         if ("value" in c) c.value = value;
         else if (c.type === "angle") c.degrees = value;
+        if (expr) (c as { expr?: string }).expr = expr;
+        else delete (c as { expr?: string }).expr;
       });
+    },
+
+    /** Cota escrita como número o fórmula; devuelve el error si no se calcula */
+    async setConstraintText(index: number, text: string): Promise<string | undefined> {
+      const n = plainNumber(text);
+      if (n !== undefined) {
+        ui.setConstraintValue(index, n);
+        return undefined;
+      }
+      try {
+        ui.setConstraintValue(index, await store.evalExpr(text), text.trim());
+        return undefined;
+      } catch (e) {
+        return String(e);
+      }
     },
 
     deleteSelection() {
@@ -175,8 +206,24 @@ export function createCadUi(store: CadStore) {
       if (!s) return;
       setSession(undefined);
       setSelection([]);
-      await store.updateFeature(s.feature, (f) => {
-        if (f.kind.type === "sketch") f.kind.sketch = s.sketch;
+      // Las fórmulas de las cotas pasan a ser vínculos del documento (por
+      // índice: se rehacen todos los de este sketch)
+      const sketch = clone(s.sketch);
+      const exprs = sketch.constraints.map((c) => {
+        const e = (c as { expr?: string }).expr;
+        delete (c as { expr?: string }).expr;
+        return e;
+      });
+      const prefix = `${s.feature}.kind.sketch.constraints.`;
+      await store.commit((d) => {
+        const f = d.features.find((x) => x.id === s.feature);
+        if (f?.kind.type === "sketch") f.kind.sketch = sketch;
+        const bindings = { ...(d.bindings ?? {}) };
+        for (const k of Object.keys(bindings)) if (k.startsWith(prefix)) delete bindings[k];
+        sketch.constraints.forEach((c, i) => {
+          if (exprs[i]) bindings[constraintPath(s.feature, i, c)] = exprs[i]!;
+        });
+        d.bindings = bindings;
       });
     },
 

@@ -219,6 +219,68 @@ const scenarios = {
     if (!(await sketchText(b, "/\\d+ regiones cerradas/")).startsWith("2")) throw new Error("equidistante");
   },
 
+  async "parámetros y fórmulas"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    // Parámetro nuevo (p1 = 10) renombrado a "ancho" y puesto en 30
+    await b.click(...(await b.eval(`(() => { const r = document.querySelector('[aria-label="Agregar parámetro"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`)), { wait: 1200 });
+    const setParam = (nth, value) =>
+      b.eval(`(() => {
+        const row = [...document.querySelectorAll("input")].filter((i) => i.value === "p1" || i.value === "ancho")[0].parentElement;
+        const i = row.querySelectorAll("input")[${nth}];
+        i.value = ${JSON.stringify(value)};
+        i.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+    await setParam(0, "ancho");
+    await sleep(1200);
+    await setParam(1, "30");
+    await sleep(1200);
+    // Ancho de la caja = ancho, alto = ancho / 3 (la caja quedó elegida)
+    await setInput(b, "Ancho (X)", "ancho");
+    await sleep(1500);
+    await setInput(b, "Alto (Z)", "ancho / 3");
+    await sleep(1500);
+    let r = await body();
+    near(r.bbox_max[0] - r.bbox_min[0], 30, 1e-6, "ancho = 30");
+    near(r.bbox_max[2] - r.bbox_min[2], 10, 1e-6, "alto = ancho / 3");
+    const fx = await b.eval(`[...document.querySelectorAll("span")].filter((s) => s.textContent === "fx").length`);
+    if (fx < 2) throw new Error("faltan las marcas fx");
+    await setParam(1, "45");
+    await sleep(2000);
+    r = await body();
+    near(r.bbox_max[0] - r.bbox_min[0], 45, 1e-6, "ancho = 45");
+    near(r.bbox_max[2] - r.bbox_min[2], 15, 1e-6, "alto sigue la fórmula");
+    // Fórmula inválida: queda marcada y no cambia nada
+    await setInput(b, "Alto (Z)", "ancho * ");
+    await sleep(800);
+    const bad = await b.eval(`!!document.querySelector("input.border-error")`);
+    if (!bad) throw new Error("la fórmula mala no se marcó");
+    // Cota del sketch con fórmula desde el visor
+    await b.clickText("Sketch en planta");
+    await sleep(1500);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(700, 500);
+    await b.clickText("Elegir");
+    await b.click(550, 500, { wait: 500 });
+    await b.clickText("Largo");
+    await sleep(1000);
+    const pos = await b.eval(`(() => { const r = document.querySelector("button.font-mono").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.click(pos[0], pos[1], { wait: 500 });
+    await b.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 });
+    await b.send("Input.insertText", { text: "ancho * 2" });
+    await b.key("Enter", "Enter", 13);
+    await sleep(1200);
+    const label = await b.eval(`document.querySelector("button.font-mono")?.textContent`);
+    if (!label?.startsWith("ancho * 2 = 90")) throw new Error(`etiqueta: ${label}`);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const doc = await call("cad_get_document");
+    const key = Object.keys(doc.bindings).find((k) => k.includes("constraints"));
+    if (!key || doc.bindings[key] !== "ancho * 2") throw new Error("la cota no quedó vinculada");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

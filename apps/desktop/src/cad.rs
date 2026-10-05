@@ -78,6 +78,10 @@ pub struct CadResult {
     pub status: Vec<FeatureStatus>,
     pub sketches: Vec<SketchView>,
     pub body: Option<BodyInfo>,
+    /// Parámetros calculados (valor o error)
+    pub parameters: Vec<cad_model::ResolvedValue>,
+    /// Campos calculados por fórmula (ruta → valor o error)
+    pub bindings: Vec<cad_model::ResolvedValue>,
     /// Cambia con cada recálculo: el visor vuelve a pedir la malla
     pub version: u64,
 }
@@ -130,7 +134,14 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
             valid: b.is_valid(),
         })
     });
-    Ok(CadResult { status: eval.status.clone(), sketches, body, version: hash })
+    Ok(CadResult {
+        status: eval.status.clone(),
+        sketches,
+        body,
+        parameters: eval.parameters.clone(),
+        bindings: eval.bindings.clone(),
+        version: hash,
+    })
 }
 
 fn status_impl(state: &AppState) -> CadStatus {
@@ -185,6 +196,12 @@ fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, 
 #[tauri::command]
 pub async fn cad_evaluate(app: AppHandle) -> Result<CadResult, String> {
     in_background(app, evaluate).await
+}
+
+/// Calcula una fórmula con los parámetros dados (para validar mientras se escribe).
+#[tauri::command]
+pub fn cad_eval_expr(expr: String, parameters: Vec<cad_model::Parameter>) -> Result<f64, String> {
+    Document { parameters, ..Default::default() }.eval_expr(&expr)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -666,6 +683,7 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
+            "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {
                 let kind: String = arg(args, "kind")?;
                 ok(scan_pick_impl(state, &kind, arg(args, "triangle")?, arg::<Option<ScanPickOptions>>(args, "options")?.unwrap_or_default())?)

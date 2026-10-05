@@ -1,8 +1,11 @@
 //! Documento: lista ordenada de operaciones y su edición.
 
+use std::collections::{BTreeMap, HashMap};
+
 use serde::{Deserialize, Serialize};
 
 use crate::eval::Evaluation;
+use crate::expr::{Expr, valid_name};
 use crate::feature::{Feature, FeatureId, FeatureKind};
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -15,6 +18,30 @@ pub enum ModelError {
     BreaksOrder(Vec<FeatureId>),
 }
 
+/// Parámetro con nombre: `ancho = 40`, `alto = ancho / 2`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Parameter {
+    pub name: String,
+    pub expr: String,
+}
+
+/// Valor calculado de un parámetro o de un campo vinculado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ResolvedValue {
+    /// Nombre del parámetro o ruta del campo
+    pub key: String,
+    pub value: Option<f64>,
+    pub error: Option<String>,
+}
+
+/// Documento con las fórmulas aplicadas.
+#[derive(Debug, Clone)]
+pub struct Resolution {
+    pub document: Document,
+    pub parameters: Vec<ResolvedValue>,
+    pub bindings: Vec<ResolvedValue>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Document {
     pub features: Vec<Feature>,
@@ -23,6 +50,13 @@ pub struct Document {
     pub rollback: Option<usize>,
     #[serde(default)]
     pub next_id: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<Parameter>,
+    /// Campos calculados por fórmula: ruta → expresión. La ruta empieza con el
+    /// id de la operación y sigue el JSON de la operación, p. ej.
+    /// `3.kind.extent.distance` o `0.kind.sketch.constraints.4.value`.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub bindings: BTreeMap<String, String>,
 }
 
 impl Document {
@@ -124,4 +158,135 @@ impl Document {
     pub fn evaluate(&self) -> Evaluation {
         crate::eval::evaluate(self)
     }
+
+    /// Valores de los parámetros (en cualquier orden de dependencia) y el
+    /// resultado de cada uno, con su error si no se pudo calcular.
+    pub fn parameter_values(&self) -> (HashMap<String, f64>, Vec<ResolvedValue>) {
+        let mut values: HashMap<String, f64> = HashMap::new();
+        let mut errors: HashMap<usize, String> = HashMap::new();
+        let mut parsed: Vec<Option<Expr>> = Vec::new();
+        for (i, p) in self.parameters.iter().enumerate() {
+            if !valid_name(&p.name) {
+                errors.insert(i, format!("«{}» no sirve como nombre", p.name));
+                parsed.push(None);
+            } else if self.parameters[..i].iter().any(|q| q.name == p.name) {
+                errors.insert(i, format!("«{}» está repetido", p.name));
+                parsed.push(None);
+            } else {
+                match Expr::parse(&p.expr) {
+                    Ok(e) => parsed.push(Some(e)),
+                    Err(e) => {
+                        errors.insert(i, e);
+                        parsed.push(None);
+                    }
+                }
+            }
+        }
+        // Calcular en pasadas: cada una resuelve los que ya tienen todo lo que usan
+        let mut pending: Vec<usize> = (0..self.parameters.len()).filter(|i| parsed[*i].is_some()).collect();
+        loop {
+            let before = pending.len();
+            pending.retain(|&i| {
+                let e = parsed[i].as_ref().unwrap();
+                if e.variables().iter().all(|v| values.contains_key(v)) {
+                    match e.eval(&values) {
+                        Ok(v) => {
+                            values.insert(self.parameters[i].name.clone(), v);
+                        }
+                        Err(err) => {
+                            errors.insert(i, err);
+                        }
+                    }
+                    false
+                } else {
+                    true
+                }
+            });
+            if pending.len() == before {
+                break;
+            }
+        }
+        let names: Vec<&str> = self.parameters.iter().map(|p| p.name.as_str()).collect();
+        for i in pending {
+            let vars = parsed[i].as_ref().unwrap().variables();
+            let msg = match vars.iter().find(|v| !names.contains(&v.as_str())) {
+                Some(v) => format!("no hay un parámetro «{v}»"),
+                None => "referencia circular o a un parámetro con error".to_string(),
+            };
+            errors.insert(i, msg);
+        }
+        let report = self
+            .parameters
+            .iter()
+            .enumerate()
+            .map(|(i, p)| ResolvedValue {
+                key: p.name.clone(),
+                value: (!errors.contains_key(&i)).then(|| values.get(&p.name).copied()).flatten(),
+                error: errors.get(&i).cloned(),
+            })
+            .collect();
+        (values, report)
+    }
+
+    /// Calcula una expresión con los parámetros del documento.
+    pub fn eval_expr(&self, expr: &str) -> Result<f64, String> {
+        Expr::parse(expr)?.eval(&self.parameter_values().0)
+    }
+
+    /// Aplica las fórmulas: el documento resultante tiene los números
+    /// calculados en cada campo vinculado.
+    pub fn resolve(&self) -> Resolution {
+        let (values, parameters) = self.parameter_values();
+        if self.bindings.is_empty() {
+            return Resolution { document: self.clone(), parameters, bindings: vec![] };
+        }
+        let Ok(mut json) = serde_json::to_value(self) else {
+            return Resolution { document: self.clone(), parameters, bindings: vec![] };
+        };
+        let mut bindings = Vec::new();
+        for (path, expr) in &self.bindings {
+            let result = Expr::parse(expr).and_then(|e| e.eval(&values)).and_then(|v| set_path(&mut json, path, v).map(|_| v));
+            bindings.push(ResolvedValue { key: path.clone(), value: result.as_ref().ok().copied(), error: result.err() });
+        }
+        match serde_json::from_value::<Document>(json) {
+            Ok(document) => Resolution { document, parameters, bindings },
+            Err(e) => {
+                for b in &mut bindings {
+                    b.error.get_or_insert_with(|| format!("valor no aceptado: {e}"));
+                }
+                Resolution { document: self.clone(), parameters, bindings }
+            }
+        }
+    }
+}
+
+/// Escribe `v` en el campo numérico de la ruta (`<id operación>.<claves…>`).
+fn set_path(doc: &mut serde_json::Value, path: &str, v: f64) -> Result<(), String> {
+    let mut parts = path.split('.');
+    let id: u32 = parts.next().and_then(|p| p.parse().ok()).ok_or("ruta sin operación")?;
+    let features = doc.get_mut("features").and_then(|f| f.as_array_mut()).ok_or("documento sin operaciones")?;
+    let mut node = features
+        .iter_mut()
+        .find(|f| f.get("id").and_then(|x| x.as_u64()) == Some(id as u64))
+        .ok_or_else(|| format!("la operación {id} ya no existe"))?;
+    for key in parts {
+        node = match node {
+            serde_json::Value::Array(a) => key.parse::<usize>().ok().and_then(|i| a.get_mut(i)),
+            serde_json::Value::Object(o) => o.get_mut(key),
+            _ => None,
+        }
+        .ok_or_else(|| format!("el campo «{path}» ya no existe"))?;
+    }
+    *node = match node {
+        // Campos enteros (cantidades): redondear
+        serde_json::Value::Number(n) if n.is_u64() || n.is_i64() => {
+            if v < 0.0 {
+                return Err("tiene que ser un entero positivo".into());
+            }
+            serde_json::json!(v.round() as u64)
+        }
+        serde_json::Value::Number(_) => serde_json::json!(v),
+        _ => return Err(format!("el campo «{path}» no es un número")),
+    };
+    Ok(())
 }

@@ -144,10 +144,26 @@ export interface Feature {
   kind: FeatureKind;
 }
 
+/** Parámetro con nombre: `ancho = 40`, `alto = ancho / 2` */
+export interface Parameter {
+  name: string;
+  expr: string;
+}
+
 export interface CadDocument {
   features: Feature[];
   rollback?: number | null;
   next_id?: number;
+  parameters?: Parameter[];
+  /** Campos calculados por fórmula: ruta (`<id>.kind.…`) → expresión */
+  bindings?: Record<string, string>;
+}
+
+/** Valor calculado de un parámetro (key = nombre) o de un campo vinculado (key = ruta) */
+export interface ResolvedValue {
+  key: string;
+  value: number | null;
+  error: string | null;
 }
 
 // ─── Resultados ───────────────────────────────────────────────────────────
@@ -203,6 +219,8 @@ export interface CadResult {
   status: FeatureStatus[];
   sketches: SketchView[];
   body: BodyInfo | null;
+  parameters: ResolvedValue[];
+  bindings: ResolvedValue[];
   version: number;
 }
 
@@ -667,6 +685,23 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
   return skipped ? "Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)" : undefined;
 }
 
+/** Texto que es solo un número (con punto o coma decimal) */
+export function plainNumber(text: string): number | undefined {
+  const t = text.trim().replace(",", ".");
+  return /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(t) ? parseFloat(t) : undefined;
+}
+
+/** Ruta de vínculo del valor de una restricción de un sketch */
+export function constraintPath(feature: number, index: number, c: SketchConstraint): string {
+  return `${feature}.kind.sketch.constraints.${index}.${c.type === "angle" ? "degrees" : "value"}`;
+}
+
+/** Cambia el nombre de un parámetro dentro de una fórmula (solo palabras completas) */
+export function renameInExpr(expr: string, from: string, to: string): string {
+  const esc = from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return expr.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${esc}(?![\\p{L}\\p{N}_])`, "gu"), to);
+}
+
 /** Valor editable de una restricción (cota), si tiene */
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
@@ -844,6 +879,8 @@ export function createCadStore() {
         if (i < 0) return;
         n.features.splice(i, 1);
         if (n.rollback != null && i < n.rollback) n.rollback -= 1;
+        // Sus campos vinculados se van con ella
+        for (const k of Object.keys(n.bindings ?? {})) if (k.startsWith(`${id}.`)) delete n.bindings![k];
       });
       if (selected() === id) setSelected(undefined);
       return true;
@@ -899,6 +936,67 @@ export function createCadStore() {
 
     sketchView(id: number): SketchView | undefined {
       return result()?.sketches.find((s) => s.id === id);
+    },
+
+    // ─── Parámetros y fórmulas ─────────────────────────────────────────
+    /** Fórmula vinculada a un campo, si tiene */
+    bindingOf: (path: string): string | undefined => doc()?.bindings?.[path],
+    /** Valor calculado de un campo vinculado (o su error) */
+    bindingResult: (path: string): ResolvedValue | undefined => result()?.bindings.find((b) => b.key === path),
+    parameterResult: (name: string): ResolvedValue | undefined => result()?.parameters.find((p) => p.key === name),
+
+    /** Calcula una fórmula con los parámetros actuales (lanza el error si no se puede) */
+    evalExpr: (expr: string) => invoke<number>("cad_eval_expr", { expr, parameters: doc()?.parameters ?? [] }),
+
+    /**
+     * Cambia un campo numérico de una operación: con un número lo desvincula,
+     * con una fórmula la guarda (y el número calculado) en un solo paso deshacible.
+     */
+    async setField(feature: number, path: string, text: string, write: (f: Feature, v: number) => void): Promise<string | undefined> {
+      const n = plainNumber(text);
+      let value = n;
+      if (value === undefined) {
+        try {
+          value = await store.evalExpr(text);
+        } catch (e) {
+          return String(e);
+        }
+      }
+      await commit((d) => {
+        const f = d.features.find((x) => x.id === feature);
+        if (f) write(f, value!);
+        d.bindings = { ...(d.bindings ?? {}) };
+        if (n === undefined) d.bindings[path] = text.trim();
+        else delete d.bindings[path];
+      });
+      return undefined;
+    },
+
+    addParameter(name: string, expr: string) {
+      return commit((d) => {
+        d.parameters = [...(d.parameters ?? []), { name, expr }];
+      });
+    },
+
+    /** Edita un parámetro; al renombrarlo se actualizan las fórmulas que lo usan */
+    updateParameter(index: number, change: Partial<Parameter>) {
+      return commit((d) => {
+        const params = [...(d.parameters ?? [])];
+        const old = params[index];
+        if (!old) return;
+        params[index] = { ...old, ...change };
+        if (change.name && change.name !== old.name) {
+          for (const p of params) p.expr = renameInExpr(p.expr, old.name, change.name);
+          for (const k of Object.keys(d.bindings ?? {})) d.bindings![k] = renameInExpr(d.bindings![k], old.name, change.name);
+        }
+        d.parameters = params;
+      });
+    },
+
+    removeParameter(index: number) {
+      return commit((d) => {
+        d.parameters = (d.parameters ?? []).filter((_, i) => i !== index);
+      });
     },
 
     faceRef: (face: number) => invoke<FaceRef>("cad_face_ref", { face }),

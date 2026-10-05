@@ -71,26 +71,55 @@ const Num: Component<{ value: number; onCommit: (v: number) => void; label?: str
   </label>
 );
 
-const Vec: Component<{ value: P3; onCommit: (v: P3) => void; label: string }> = (props) => (
-  <div class="space-y-1">
-    <span class="text-xs text-text-muted">{props.label}</span>
-    <div class="grid grid-cols-3 gap-1">
-      <For each={["X", "Y", "Z"]}>
-        {(axis, i) => (
-          <Num
-            label={axis}
-            value={props.value[i()]}
-            onCommit={(v) => {
-              const next = [...props.value] as P3;
-              next[i()] = v;
-              props.onCommit(next);
-            }}
-          />
-        )}
-      </For>
-    </div>
-  </div>
-);
+/**
+ * Campo que acepta un número o una fórmula (`ancho / 2`). Con fórmula muestra
+ * "fx" y el valor calculado al pasar el mouse. `onCommit` devuelve un error
+ * si la fórmula no se puede calcular (y el texto queda para corregirlo).
+ */
+export const Formula: Component<{
+  value: number;
+  expr?: string;
+  error?: string | null;
+  label?: string;
+  suffix?: string;
+  onCommit: (text: string) => Promise<string | undefined> | string | undefined;
+}> = (props) => {
+  const [err, setErr] = createSignal<string>();
+  const shown = () => props.expr ?? (Number.isFinite(props.value) ? String(+props.value.toFixed(6)) : "0");
+  const problem = () => err() ?? props.error ?? undefined;
+  return (
+    <label class="flex items-center gap-2 text-xs" title={problem() ?? (props.expr ? `= ${+props.value.toFixed(6)}` : "Acepta fórmulas: ancho / 2, max(a, b)…")}>
+      <Show when={props.label}>
+        <span class={clsx("text-text-muted shrink-0", (props.label?.length ?? 0) <= 2 ? "w-3" : "w-24")}>{props.label}</span>
+      </Show>
+      <div class="relative flex-1 min-w-0">
+        <input
+          type="text"
+          value={shown()}
+          class={clsx(
+            "w-full min-w-0 px-2 py-1 rounded bg-surface/40 border text-xs text-text font-mono outline-none focus:border-accent",
+            problem() ? "border-error" : props.expr ? "border-accent/60 pr-6" : "border-border",
+          )}
+          onChange={async (e) => {
+            const text = e.currentTarget.value.trim();
+            if (!text || text === shown()) return setErr(undefined);
+            setErr((await props.onCommit(text)) ?? undefined);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") e.currentTarget.blur();
+            e.stopPropagation();
+          }}
+        />
+        <Show when={props.expr}>
+          <span class="absolute right-1.5 top-1/2 -translate-y-1/2 text-[9px] font-semibold italic text-accent pointer-events-none">fx</span>
+        </Show>
+      </div>
+      <Show when={props.suffix}>
+        <span class="text-text-dim shrink-0">{props.suffix}</span>
+      </Show>
+    </label>
+  );
+};
 
 const Row: Component<{ label: string; children: JSX.Element }> = (props) => (
   <div class="flex items-center gap-2 text-xs">
@@ -400,6 +429,8 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 )}
               </Show>
 
+              <ParametersSection store={store} />
+
               <FeatureTree store={store} ui={ui} />
 
               <Show when={selectedFeature()}>
@@ -582,6 +613,89 @@ const AddSection: Component<{
   );
 };
 
+// ─── Parámetros ───────────────────────────────────────────────────────────
+
+const NAME_RE = /^[\p{L}_][\p{L}\p{N}_]*$/u;
+
+const ParametersSection: Component<{ store: CadStore }> = (props) => {
+  const store = props.store;
+  const params = () => store.doc()?.parameters ?? [];
+  const [problem, setProblem] = createSignal<string>();
+  const add = () => {
+    let n = params().length + 1;
+    while (params().some((p) => p.name === `p${n}`)) n++;
+    void store.addParameter(`p${n}`, "10");
+  };
+  return (
+    <Section
+      title="Parámetros"
+      right={
+        <IconButton aria-label="Agregar parámetro" size="sm" variant="ghost" onClick={add}>
+          <Icons.Plus size={12} />
+        </IconButton>
+      }
+    >
+      <Show
+        when={params().length > 0}
+        fallback={
+          <p class="text-[11px] text-text-dim leading-relaxed">
+            Medidas con nombre para usar en cualquier campo: escribir <span class="font-mono">ancho / 2</span> en una cota o una distancia
+            la deja atada al parámetro.
+          </p>
+        }
+      >
+        <div class="space-y-1">
+          <For each={params()}>
+            {(p, i) => {
+              const res = () => store.parameterResult(p.name);
+              return (
+                <div class="flex items-center gap-1.5">
+                  <input
+                    value={p.name}
+                    class="w-20 shrink-0 px-1.5 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => {
+                      const name = e.currentTarget.value.trim();
+                      if (name === p.name) return;
+                      if (!NAME_RE.test(name)) return setProblem(`«${name}» no sirve como nombre (letras, números y _)`);
+                      if (params().some((q, j) => j !== i() && q.name === name)) return setProblem(`ya hay un parámetro «${name}»`);
+                      setProblem(undefined);
+                      void store.updateParameter(i(), { name });
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <span class="text-text-dim text-xs">=</span>
+                  <input
+                    value={p.expr}
+                    class={clsx(
+                      "flex-1 min-w-0 px-1.5 py-1 rounded bg-surface/40 border text-xs text-text font-mono outline-none focus:border-accent",
+                      res()?.error ? "border-error" : "border-border",
+                    )}
+                    title={res()?.error ?? undefined}
+                    onChange={(e) => {
+                      const expr = e.currentTarget.value.trim();
+                      if (expr && expr !== p.expr) void store.updateParameter(i(), { expr });
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <span class={clsx("w-14 text-right text-xs font-mono truncate", res()?.error ? "text-error" : "text-text-muted")} title={res()?.error ?? undefined}>
+                    {res()?.error ? "error" : res()?.value != null ? fmt(res()!.value!, 3).replace(/,?0+$/, "") : ""}
+                  </span>
+                  <IconButton aria-label="Quitar parámetro" size="sm" variant="ghost" onClick={() => void store.removeParameter(i())}>
+                    <Icons.X size={10} />
+                  </IconButton>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
+      <Show when={problem()}>
+        <p class="text-[11px] text-error">{problem()}</p>
+      </Show>
+    </Section>
+  );
+};
+
 // ─── Árbol ────────────────────────────────────────────────────────────────
 
 const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
@@ -685,6 +799,21 @@ const FeatureEditor: Component<{
 }> = (props) => {
   const f = () => props.feature;
   const update = (mutate: (k: FeatureKind) => void) => void props.store.updateFeature(f().id, (x) => mutate(x.kind));
+  /** Campo numérico vinculable: `path` relativo a la operación (p. ej. "kind.radius") */
+  const field = (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => {
+    const path = () => `${f().id}.${rel}`;
+    const res = () => props.store.bindingResult(path());
+    return (
+      <Formula
+        label={label}
+        suffix={suffix}
+        value={res()?.value ?? raw}
+        expr={props.store.bindingOf(path())}
+        error={res()?.error}
+        onCommit={(text) => props.store.setField(f().id, path(), text, (x, v) => write(x.kind, v))}
+      />
+    );
+  };
   const state = () => props.store.stateOf(f().id);
   const sketchOptions = () => props.sketches.map((s) => ({ value: String(s.id), label: s.name }));
   const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void) => (
@@ -718,7 +847,7 @@ const FeatureEditor: Component<{
               return (
                 <>
                   <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)))}</Row>
-                  <Num label="Desplazamiento" value={k().offset} suffix="mm" onCommit={(v) => update((x) => x.type === "sketch" && (x.offset = v))} />
+                  {field("Desplazamiento", "kind.offset", k().offset, (x, v) => x.type === "sketch" && (x.offset = v), "mm")}
                   <p class="text-[11px] text-text-dim">
                     {k().sketch.entities.length} entidades · {k().sketch.constraints.length} restricciones · {view()?.regions.length ?? 0} regiones
                   </p>
@@ -762,12 +891,13 @@ const FeatureEditor: Component<{
                     />
                   </Row>
                   <Show when={k().extent.type === "blind" || k().extent.type === "symmetric"}>
-                    <Num
-                      label="Distancia"
-                      value={(k().extent as { distance: number }).distance}
-                      suffix="mm"
-                      onCommit={(v) => setExtent({ type: k().extent.type as "blind" | "symmetric", distance: v })}
-                    />
+                    {field(
+                      "Distancia",
+                      "kind.extent.distance",
+                      (k().extent as { distance: number }).distance,
+                      (x, v) => x.type === "extrude" && "distance" in x.extent && (x.extent.distance = v),
+                      "mm",
+                    )}
                   </Show>
                   <RegionPicker
                     ui={props.ui}
@@ -819,7 +949,7 @@ const FeatureEditor: Component<{
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
                   />
-                  <Num label="Ángulo" value={k().angle} suffix="°" onCommit={(v) => update((x) => x.type === "revolve" && (x.angle = v))} />
+                  {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
                 </>
               );
@@ -827,10 +957,6 @@ const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "primitive" && (f().kind as Extract<FeatureKind, { type: "primitive" }>)}>
             {(k) => {
-              const set = (key: string, v: number) =>
-                update((x) => {
-                  if (x.type === "primitive") (x.shape as unknown as Record<string, number>)[key] = v;
-                });
               const fields: Record<string, [string, string][]> = {
                 box: [["dx", "Ancho (X)"], ["dy", "Fondo (Y)"], ["dz", "Alto (Z)"]],
                 cylinder: [["radius", "Radio"], ["height", "Alto"]],
@@ -842,10 +968,19 @@ const FeatureEditor: Component<{
                 <>
                   <For each={fields[k().shape.type]}>
                     {([key, label]) => (
-                      <Num label={label} suffix="mm" value={(k().shape as unknown as Record<string, number>)[key]} onCommit={(v) => set(key, v)} />
+                      field(label, `kind.shape.${key}`, (k().shape as unknown as Record<string, number>)[key], (x, v) => {
+                        if (x.type === "primitive") (x.shape as unknown as Record<string, number>)[key] = v;
+                      }, "mm")
                     )}
                   </For>
-                  <Vec label="Posición (mm)" value={k().origin} onCommit={(v) => update((x) => x.type === "primitive" && (x.origin = v))} />
+                  <div class="space-y-1">
+                    <span class="text-xs text-text-muted">Posición (mm)</span>
+                    <div class="grid grid-cols-3 gap-1">
+                      <For each={["X", "Y", "Z"]}>
+                        {(axis, i) => field(axis, `kind.origin.${i()}`, k().origin[i()], (x, v) => x.type === "primitive" && (x.origin[i()] = v))}
+                      </For>
+                    </div>
+                  </div>
                   <Row label="Eje">
                     <Select
                       options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
@@ -870,17 +1005,10 @@ const FeatureEditor: Component<{
               const value = () => (kind.type === "fillet" ? kind.radius : kind.distance);
               return (
                 <>
-                  <Num
-                    label={kind.type === "fillet" ? "Radio" : "Distancia"}
-                    suffix="mm"
-                    value={value()}
-                    onCommit={(v) =>
-                      update((x) => {
-                        if (x.type === "fillet") x.radius = v;
-                        else if (x.type === "chamfer") x.distance = v;
-                      })
-                    }
-                  />
+                  {field(kind.type === "fillet" ? "Radio" : "Distancia", kind.type === "fillet" ? "kind.radius" : "kind.distance", value(), (x, v) => {
+                    if (x.type === "fillet") x.radius = v;
+                    else if (x.type === "chamfer") x.distance = v;
+                  }, "mm")}
                   <p class="text-[11px] text-text-dim">{kind.edges.length} aristas</p>
                   <Button size="sm" fullWidth onClick={() => props.onEdges(kind.type)}>
                     Elegir aristas de nuevo
@@ -897,12 +1025,12 @@ const FeatureEditor: Component<{
                   <Show
                     when={kind.type === "draft" && kind}
                     fallback={
-                      <Num label="Grosor de pared" suffix="mm" value={(kind as { thickness: number }).thickness} onCommit={(v) => update((x) => x.type === "shell" && (x.thickness = v))} />
+                      field("Grosor de pared", "kind.thickness", (kind as { thickness: number }).thickness, (x, v) => x.type === "shell" && (x.thickness = v), "mm")
                     }
                   >
                     {(d) => (
                       <>
-                        <Num label="Ángulo" suffix="°" value={d().angle} onCommit={(v) => update((x) => x.type === "draft" && (x.angle = v))} />
+                        {field("Ángulo", "kind.angle", d().angle, (x, v) => x.type === "draft" && (x.angle = v), "°")}
                         <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)))}</Row>
                       </>
                     )}
@@ -930,8 +1058,8 @@ const FeatureEditor: Component<{
                           onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.axis = { type: v as "x" | "y" | "z" }))}
                         />
                       </Row>
-                      <Num label="Cantidad" min={2} value={(k().pattern as { count: number }).count} onCommit={(v) => update((x) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))} />
-                      <Num label="Ángulo total" suffix="°" value={(k().pattern as { angle: number }).angle} onCommit={(v) => update((x) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v))} />
+                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field("Ángulo total", "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
                     </>
                   }
                 >
@@ -944,8 +1072,8 @@ const FeatureEditor: Component<{
                           onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.direction = AXIS_DIRS[v]))}
                         />
                       </Row>
-                      <Num label="Cantidad" min={2} value={lin().count} onCommit={(v) => update((x) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))} />
-                      <Num label="Separación" suffix="mm" value={lin().spacing} onCommit={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v))} />
+                      {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
                     </>
                   )}
                 </Show>
@@ -1370,8 +1498,12 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                   <div class={clsx("flex items-center gap-2 px-1.5 py-0.5 rounded text-xs", conflict() ? "bg-error/15 text-error" : "text-text-muted")}>
                     <span class="flex-1 truncate">{CONSTRAINT_LABELS[c.type]}</span>
                     <Show when={value() !== undefined}>
-                      <div class="w-24">
-                        <Num value={value()!} step={0.1} onCommit={(v) => ui.setConstraintValue(i(), v)} />
+                      <div class="w-28">
+                        <Formula
+                          value={value()!}
+                          expr={(c as { expr?: string }).expr}
+                          onCommit={(text) => ui.setConstraintText(i(), text)}
+                        />
                       </div>
                     </Show>
                     <IconButton aria-label="Quitar restricción" size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>

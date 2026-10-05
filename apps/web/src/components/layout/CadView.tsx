@@ -555,11 +555,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       const [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
       const prefix = c.type === "radius" ? "R " : c.type === "diameter" ? "Ø " : "";
       const suffix = c.type === "angle" ? "°" : "";
+      const expr = (c as { expr?: string }).expr;
       out.push({
         index,
         x: x - rect.left,
         y: y - rect.top,
-        text: `${prefix}${+v.toFixed(3)}${suffix}`,
+        text: expr ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : `${prefix}${+v.toFixed(3)}${suffix}`,
         conflict: s.report?.conflicting.includes(index) ?? false,
       });
     });
@@ -615,10 +616,9 @@ export const CadView: Component<CadViewProps> = (props) => {
           >
             <input
               ref={(el) => setTimeout(() => el.select())}
-              type="number"
-              step="0.1"
-              value={constraintValue(ui.session()!.sketch.constraints[d.index]!) ?? 0}
-              class="absolute -translate-x-1/2 -translate-y-1/2 w-20 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
+              type="text"
+              value={(ui.session()!.sketch.constraints[d.index] as { expr?: string }).expr ?? constraintValue(ui.session()!.sketch.constraints[d.index]!) ?? 0}
+              class="absolute -translate-x-1/2 -translate-y-1/2 w-28 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
               style={{ left: `${d.x}px`, top: `${d.y}px` }}
               onPointerDown={(e) => e.stopPropagation()}
               onKeyDown={(e) => {
@@ -626,9 +626,12 @@ export const CadView: Component<CadViewProps> = (props) => {
                 if (e.key === "Escape") setEditingDim(undefined);
                 e.stopPropagation();
               }}
-              onBlur={(e) => {
-                const v = parseFloat(e.currentTarget.value);
-                if (editingDim() === d.index && !Number.isNaN(v)) ui.setConstraintValue(d.index, v);
+              onBlur={async (e) => {
+                const text = e.currentTarget.value;
+                if (editingDim() === d.index && text.trim()) {
+                  const problem = await ui.setConstraintText(d.index, text);
+                  ui.setMessage(problem);
+                }
                 setEditingDim(undefined);
               }}
             />

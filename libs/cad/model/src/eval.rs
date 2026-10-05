@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use cad_occt::{Axis, Curve, Frame, History, Shape, SurfaceKind, with_history};
 use serde::{Deserialize, Serialize};
 
-use crate::document::Document;
+use crate::document::{Document, ResolvedValue};
 use crate::feature::*;
 use crate::geom::*;
 use crate::regions::{Loop, Region, arc_sweep, find_regions};
@@ -53,6 +53,9 @@ pub struct Evaluation {
     pub sketches: HashMap<FeatureId, SketchResult>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
     tools: HashMap<FeatureId, (Tagged, BodyOp)>,
+    /// Parámetros y campos vinculados, ya calculados.
+    pub parameters: Vec<ResolvedValue>,
+    pub bindings: Vec<ResolvedValue>,
 }
 
 impl Evaluation {
@@ -142,7 +145,10 @@ struct Ctx<'a> {
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
-    let mut ctx = Ctx { doc, ev: Evaluation::default() };
+    // Primero las fórmulas: el árbol se calcula con los números que dan
+    let res = doc.resolve();
+    let doc = &res.document;
+    let mut ctx = Ctx { doc, ev: Evaluation { parameters: res.parameters, bindings: res.bindings, ..Default::default() } };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     for (i, f) in doc.features.iter().enumerate() {
         let state = if i >= limit {

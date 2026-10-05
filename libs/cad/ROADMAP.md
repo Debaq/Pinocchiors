@@ -174,3 +174,13 @@ cargo test -p cad-model
   de la arista superior sigue arriba al duplicar la altura (sin orígenes elegía la de abajo),
   caras partidas por booleanas conservan el origen, sketch sobre la tapa sigue a la tapa.
   - Sin origen todavía: caras nuevas de vaciado y desmolde (usan la geometría).
+- **2026-10-05 Parámetros y fórmulas**: `Document.parameters` (nombre = expresión) y
+  `Document.bindings` (ruta del campo → expresión, p. ej. `3.kind.extent.distance` o
+  `0.kind.sketch.constraints.4.value`). `Document::resolve` evalúa los parámetros en orden de
+  dependencia (ciclos, nombres repetidos o desconocidos dan error sin frenar el resto), aplica
+  las fórmulas sobre el JSON del documento (enteros redondeados) y el recálculo usa ese
+  documento; el guardado conserva números y fórmulas. Expresiones (`expr.rs`): + − × ÷ ^,
+  paréntesis, coma o punto decimal, `pi`, trigonometría en grados, `sqrt abs min max round
+  floor ceil`. En la interfaz cualquier campo numérico acepta fórmula (marca "fx"), las cotas
+  del sketch también (en el panel y en la etiqueta del visor), sección Parámetros con renombre
+  que actualiza las fórmulas que lo usan.

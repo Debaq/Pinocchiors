@@ -10,13 +10,14 @@
 
 pub mod document;
 pub mod eval;
+pub mod expr;
 pub mod feature;
 pub mod geom;
 pub mod regions;
 pub mod sketch;
 
 pub use cad_occt::{self as occt, Shape};
-pub use document::{Document, ModelError};
+pub use document::{Document, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{Evaluation, FeatureState, FeatureStatus, SketchResult};
 pub use feature::*;
 pub use geom::{P2, P3, Plane};
