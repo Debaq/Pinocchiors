@@ -19,8 +19,10 @@ export interface SketchOverlay {
   plane: Plane;
   sketch: Sketch;
   regions: Region[];
-  /** Entidades resaltadas (seleccionadas) */
+  /** Entidades y puntos resaltados (seleccionados) */
   selected?: number[];
+  /** Resaltado pasajero (restricción bajo el mouse en el panel) */
+  hover?: number[];
   /** Puntos libres (todavía se pueden mover) */
   freePoints?: number[];
   /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
@@ -346,6 +348,7 @@ export class CadViewer {
     const w = (p: P2) => this.toView(planeToWorld(plane, p));
     const point = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
     const selected = new Set(overlay.selected ?? []);
+    const hover = new Set(overlay.hover ?? []);
 
     // Regiones cerradas, rellenas apenas (eligiendo: todas, las elegidas fuerte)
     const choosing = overlay.chosen !== undefined;
@@ -389,7 +392,7 @@ export class CadViewer {
     const sel = themeHex("orange");
     for (const e of sketch.entities) {
       const g = e.geometry;
-      const color = selected.has(e.id) ? sel : e.construction ? construction : normal;
+      const color = hover.has(e.id) ? themeHex("cyan") : selected.has(e.id) ? sel : e.construction ? construction : normal;
       let pts: P2[] = [];
       if (g.type === "line") pts = [point.get(g.start)!, point.get(g.end)!];
       else if (g.type === "circle") {
@@ -423,7 +426,9 @@ export class CadViewer {
     for (const p of sketch.points) {
       const v = w([p.x, p.y]);
       pos.push(v.x, v.y, v.z);
-      const c = new THREE.Color(free.has(p.id) ? themeHex("yellow") : themeHex("green"));
+      const c = new THREE.Color(
+        hover.has(p.id) ? themeHex("cyan") : selected.has(p.id) ? themeHex("orange") : free.has(p.id) ? themeHex("yellow") : themeHex("green"),
+      );
       col.push(c.r, c.g, c.b);
     }
     const pg = new THREE.BufferGeometry();

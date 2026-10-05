@@ -450,3 +450,26 @@ fn cut_on_face_points_into_material() {
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), 8000.0 - PI * 25.0 * 20.0 / 4.0, max_relative = 1e-6);
 }
+
+#[test]
+fn tangent_arcs_sharing_an_end() {
+    // Dos arcos encadenados: al mover el centro del segundo, sigue tangente
+    let mut s = Sketch::new();
+    let c1 = s.add_point(0.0, 0.0);
+    let a = s.add_point(10.0, 0.0);
+    let p = s.add_point(0.0, 10.0);
+    let c2 = s.add_point(0.0, 15.0);
+    let b = s.add_point(0.0, 20.0);
+    let arc1 = s.add_entity(Geometry::Arc { center: c1, start: a, end: p });
+    let arc2 = s.add_entity(Geometry::Arc { center: c2, start: b, end: p });
+    s.constrain(SketchConstraint::Fixed { point: c1, x: 0.0, y: 0.0 });
+    s.constrain(SketchConstraint::Fixed { point: p, x: 0.0, y: 10.0 });
+    s.constrain(SketchConstraint::Tangent { a: arc1, b: arc2 });
+    // Arrastrar el centro del segundo fuera de la recta: vuelve a ella
+    let r = s.solve_drag(c2, [3.0, 14.0]).unwrap();
+    assert!(r.residual < 1e-8, "{r:?}");
+    // c1, p y c2 alineados
+    let (c1p, pp, c2p) = (s.point(c1).unwrap(), s.point(p).unwrap(), s.point(c2).unwrap());
+    let cross = (pp[0] - c1p[0]) * (c2p[1] - c1p[1]) - (pp[1] - c1p[1]) * (c2p[0] - c1p[0]);
+    assert!(cross.abs() < 1e-6, "centros alineados con el contacto");
+}

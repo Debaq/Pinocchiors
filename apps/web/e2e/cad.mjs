@@ -281,6 +281,73 @@ const scenarios = {
     if (!key || doc.bindings[key] !== "ancho * 2") throw new Error("la cota no quedó vinculada");
   },
 
+  async "arco tangente, extender, recortar círculo y gestor de restricciones"(b) {
+    const sketchDoc = async () => {
+      await b.clickText("Terminar sketch");
+      await sleep(1500);
+      return (await call("cad_get_document")).features.at(-1).kind.sketch;
+    };
+    const status = () => call("cad_evaluate").then((r) => r.sketches.at(-1).report.status);
+    await begin(b);
+    // Línea y dos arcos tangentes encadenados
+    await b.clickText("Sketch en planta");
+    await sleep(1500);
+    await b.clickText("Línea");
+    await b.click(400, 400);
+    await b.click(600, 400);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Tangente");
+    await b.click(600, 400);
+    await b.click(650, 350, { wait: 600 });
+    await b.click(700, 400, { wait: 600 });
+    await sleep(800);
+    let sk = await sketchDoc();
+    const kinds = sk.entities.map((e) => e.geometry.type).sort().join(",");
+    if (kinds !== "arc,arc,line") throw new Error(`entidades: ${kinds}`);
+    if (sk.constraints.filter((c) => c.type === "tangent").length !== 2) throw new Error("tangencias");
+    if ((await status()) === "over_constrained") throw new Error("arcos tangentes en conflicto");
+
+    // Extender una línea hasta otra vertical
+    await b.clickText("Sketch en planta");
+    await sleep(1500);
+    await b.clickText("Línea");
+    await b.click(600, 300);
+    await b.click(600, 500);
+    await b.key("Escape", "Escape", 27);
+    await b.click(400, 400);
+    await b.click(500, 400);
+    await b.key("Escape", "Escape", 27);
+    await b.clickContains("Extender");
+    await b.click(495, 400, { wait: 800 });
+    sk = await sketchDoc();
+    const lines = sk.entities.filter((e) => e.geometry.type === "line");
+    if (lines.length !== 3) throw new Error(`líneas tras extender: ${lines.length}`);
+    const xs = sk.points.map((p) => p.x);
+    const vertical = sk.points.filter((p) => Math.abs(p.x - Math.max(...xs)) < 1e-6).length;
+    if (vertical < 3) throw new Error("la extensión no llegó a la vertical");
+
+    // Recortar el tramo de un círculo que queda dentro de un rectángulo
+    await b.clickText("Sketch en planta");
+    await sleep(1500);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(700, 500);
+    await b.clickText("Círculo");
+    await b.click(700, 400);
+    await b.click(750, 400);
+    await b.clickText("Recortar");
+    await b.click(650, 400, { wait: 800 });
+    const regions = await b.eval(`(document.body.innerText.match(/\\d+ regiones cerradas/) ?? [""])[0]`);
+    // Gestor: elegir lo que nombra la primera restricción
+    await b.eval(`[...document.querySelectorAll("button")].find((x) => x.title === "Elegir lo que restringe")?.click()`);
+    await sleep(400);
+    const chosen = await b.eval(`(document.body.innerText.match(/ELEGIDO \\((\\d+)\\)/i) ?? [])[1]`);
+    sk = await sketchDoc();
+    if (sk.entities.some((e) => e.geometry.type === "circle")) throw new Error("el círculo no pasó a arco");
+    if (!regions.startsWith("2")) throw new Error(`regiones: ${regions}`);
+    if (!(Number(chosen) > 0)) throw new Error(`gestor: elegido ${chosen}`);
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

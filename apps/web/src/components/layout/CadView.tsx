@@ -2,7 +2,7 @@ import { Component, For, Show, createEffect, createMemo, createSignal, on, onCle
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { constraintValue, splitLineAt, trimLine, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { constraintValue, extendLine, leavingDirection, splitLineAt, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -15,15 +15,17 @@ export interface CadViewProps {
   scanMesh?: MeshData | null;
 }
 
-const TOOLS: { id: SketchTool; label: string; key: string }[] = [
-  { id: "select", label: "Elegir y arrastrar", key: "S" },
-  { id: "line", label: "Línea", key: "L" },
-  { id: "rect", label: "Rectángulo", key: "R" },
-  { id: "circle", label: "Círculo", key: "C" },
-  { id: "arc", label: "Arco (centro, inicio, fin)", key: "A" },
-  { id: "polygon", label: "Polígono regular (centro, vértice)", key: "P" },
-  { id: "slot", label: "Ranura (centro, centro, ancho)", key: "U" },
-  { id: "trim", label: "Recortar (clic en el tramo a quitar)", key: "T" },
+const TOOLS: { id: SketchTool; short: string; label: string; key: string }[] = [
+  { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S" },
+  { id: "line", short: "Línea", label: "Línea", key: "L" },
+  { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R" },
+  { id: "circle", short: "Círculo", label: "Círculo", key: "C" },
+  { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A" },
+  { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G" },
+  { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
+  { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
+  { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T" },
+  { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E" },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -98,6 +100,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [cursor, setCursor] = createSignal<P2>();
   // Estado de la herramienta en curso (clics ya dados)
   const [chain, setChain] = createSignal<{ first: number; last: number }>();
+  // Arco tangente: desde qué punto, en qué dirección y de qué entidad viene
+  const [tangentFrom, setTangentFrom] = createSignal<{ point: number; dir: P2; entity: number }>();
   const [anchor, setAnchor] = createSignal<P2[]>([]);
   const [polygonSides, setPolygonSides] = createSignal(6);
   const [scanVisible, setScanVisible] = createSignal(true);
@@ -113,6 +117,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const resetTool = () => {
     setChain(undefined);
     setAnchor([]);
+    setTangentFrom(undefined);
   };
 
   onMount(async () => {
@@ -222,6 +227,19 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       if (t === "arc" && an.length >= 1) preview.push([an[0], an.length === 2 ? an[1] : c]);
       if (t === "polygon" && an.length === 1) preview.push(polygonPoints(an[0], c, polygonSides(), true));
+      const tf = tangentFrom();
+      const tp = tf && pt(tf.point);
+      if (t === "tangent" && tf && tp) {
+        const arc = tangentArc(tp, tf.dir, c);
+        if (arc) {
+          const r = dist(arc.center, tp);
+          const a0 = Math.atan2(tp[1] - arc.center[1], tp[0] - arc.center[0]);
+          let sweep = Math.atan2(c[1] - arc.center[1], c[0] - arc.center[0]) - a0;
+          if (arc.ccw) while (sweep <= 0) sweep += 2 * Math.PI;
+          else while (sweep >= 0) sweep -= 2 * Math.PI;
+          preview.push(Array.from({ length: 33 }, (_, i) => [arc.center[0] + r * Math.cos(a0 + (sweep * i) / 32), arc.center[1] + r * Math.sin(a0 + (sweep * i) / 32)] as P2));
+        } else preview.push([tp, c]);
+      }
       if (t === "slot" && an.length === 1) preview.push([an[0], c]);
       if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
@@ -230,6 +248,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketch: s.sketch,
       regions: s.regions,
       selected: ui.selection(),
+      hover: ui.hoverIds(),
       freePoints: s.report?.free_points,
       preview,
     });
@@ -340,13 +359,52 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (r > 1e-9) ui.change((sk) => ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: r }));
       return setAnchor([]);
     }
+    if (t === "extend") {
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      if (target === undefined) return;
+      let msg: string | undefined;
+      ui.change((sk) => (msg = extendLine(sk, target, raw)));
+      ui.setMessage(msg);
+      return;
+    }
+    if (t === "tangent") {
+      const from = tangentFrom();
+      if (!from) {
+        // Primer clic: un extremo de una línea o un arco
+        if (hit.id === undefined) return ui.setMessage("Empezar en el extremo de una línea o de un arco");
+        const owner = s.sketch.entities.find(
+          (en) => (en.geometry.type === "line" || en.geometry.type === "arc") && [en.geometry.start, en.geometry.end].includes(hit.id!),
+        );
+        const dir = owner && leavingDirection(s.sketch, owner.id, hit.id);
+        if (!owner || !dir) return ui.setMessage("Empezar en el extremo de una línea o de un arco");
+        ui.setMessage(undefined);
+        setTangentFrom({ point: hit.id, dir, entity: owner.id });
+        return;
+      }
+      const startPos = s.sketch.points.find((q) => q.id === from.point);
+      if (!startPos) return setTangentFrom(undefined);
+      const arc = tangentArc([startPos.x, startPos.y], from.dir, hit.p);
+      if (!arc) return ui.setMessage("En línea recta no hay arco: mover el punto hacia un costado");
+      let next: { point: number; dir: P2; entity: number } | undefined;
+      ui.change((sk) => {
+        const end = hit.id ?? ui.addPoint(sk, hit.p);
+        const center = ui.addPoint(sk, arc.center);
+        const id = ui.addEntity(sk, arc.ccw ? { type: "arc", center, start: from.point, end } : { type: "arc", center, start: end, end: from.point });
+        sk.constraints.push({ type: "tangent", a: from.entity, b: id });
+        next = { point: end, dir: arc.outDir, entity: id };
+      });
+      // Encadenar: el próximo arco sale tangente a este
+      setTangentFrom(next);
+      return;
+    }
     if (t === "trim") {
       // El enganche a puntos no sirve acá: la línea bajo el cursor
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
       let msg: string | undefined;
-      ui.change((sk) => (msg = trimLine(sk, target, raw)));
+      ui.change((sk) => (msg = trimAt(sk, target, raw)));
       ui.setMessage(msg);
       return;
     }
@@ -676,7 +734,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                         resetTool();
                       }}
                     >
-                      {t.label.split(" ")[0]}
+                      {t.short}
                     </button>
                   </Tooltip>
                 )}

@@ -67,8 +67,9 @@ Decisiones (2026-10-05):
       toca `release.yml`). Linux probado en local; Windows y macOS escritos pero sin correr.
 - [ ] **F8 — Sketch completo**: portar herramientas de cad-blender. Hecho: polígono, ranura,
       cotas en el visor, enganche a puntos y curvas, horizontal/vertical automáticos, regiones
-      elegidas con clic, puntos libres marcados. Falta: recortar/extender, offset, redondeo de
-      esquinas en el sketch, arcos tangentes, gestor de restricciones con resaltado.
+      elegidas con clic, puntos libres marcados, recortar (líneas, círculos y arcos), extender,
+      equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones
+      que resalta y elige lo que restringe.
 - [ ] **F9 — Más adelante**: planos 2D (proyección + cotas), ensambles, chapa.
 
 ## Compilar
@@ -184,3 +185,10 @@ cargo test -p cad-model
   floor ceil`. En la interfaz cualquier campo numérico acepta fórmula (marca "fx"), las cotas
   del sketch también (en el panel y en la etiqueta del visor), sección Parámetros con renombre
   que actualiza las fórmulas que lo usan.
+- **2026-10-05 F8 (resto)**: arco tangente (G) desde el extremo de una línea o arco, encadenable
+  (tangencia arco-arco con extremo común = centros alineados con el contacto, nuevo en el
+  solver); extender (E) hasta el primer cruce; recortar círculos (pasan a arco) y arcos (se
+  acortan o se parten); gestor de restricciones: pasar el mouse resalta en el visor lo que
+  nombra, clic lo elige. Bug encontrado: con dos cruces sobre el mismo lado, el segundo punto
+  partía la línea original ya cortada (rompía las regiones); ahora se parte el tramo que lo
+  contiene.

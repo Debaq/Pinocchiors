@@ -7,6 +7,7 @@ import {
   FEATURE_LABELS,
   OP_LABELS,
   PLANE_LABELS,
+  constraintIds,
   constraintValue,
   emptySketch,
   filletCorner,
@@ -1495,8 +1496,18 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 const conflict = () => s().report?.conflicting.includes(i()) ?? false;
                 const value = () => constraintValue(c);
                 return (
-                  <div class={clsx("flex items-center gap-2 px-1.5 py-0.5 rounded text-xs", conflict() ? "bg-error/15 text-error" : "text-text-muted")}>
-                    <span class="flex-1 truncate">{CONSTRAINT_LABELS[c.type]}</span>
+                  <div
+                    class={clsx("flex items-center gap-2 px-1.5 py-0.5 rounded text-xs hover:bg-surface", conflict() ? "bg-error/15 text-error" : "text-text-muted")}
+                    onMouseEnter={() => ui.setHoverIds(constraintIds(c))}
+                    onMouseLeave={() => ui.setHoverIds([])}
+                  >
+                    <button
+                      class="flex-1 truncate text-left hover:text-text"
+                      title="Elegir lo que restringe"
+                      onClick={() => ui.setSelection(constraintIds(c))}
+                    >
+                      {CONSTRAINT_LABELS[c.type]}
+                    </button>
                     <Show when={value() !== undefined}>
                       <div class="w-28">
                         <Formula

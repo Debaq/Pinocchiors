@@ -22,7 +22,7 @@ import {
   type SolveReport,
 } from "./cad";
 
-export type SketchTool = "select" | "line" | "rect" | "circle" | "arc" | "polygon" | "slot" | "trim";
+export type SketchTool = "select" | "line" | "rect" | "circle" | "arc" | "polygon" | "slot" | "trim" | "tangent" | "extend";
 
 /** Qué hace un clic en el visor */
 export type PickMode =
@@ -53,6 +53,8 @@ export function createCadUi(store: CadStore) {
   const [session, setSession] = createSignal<SketchSession>();
   const [tool, setTool] = createSignal<SketchTool>("line");
   const [selection, setSelection] = createSignal<number[]>([]);
+  // Lo que nombra la restricción bajo el mouse en el panel (resaltado en el visor)
+  const [hoverIds, setHoverIds] = createSignal<number[]>([]);
   const [message, setMessage] = createSignal<string>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
@@ -96,6 +98,8 @@ export function createCadUi(store: CadStore) {
     setTool,
     selection,
     setSelection,
+    hoverIds,
+    setHoverIds,
 
     /** Empieza a editar el sketch de la operación `feature` */
     editSketch(feature: number): boolean {

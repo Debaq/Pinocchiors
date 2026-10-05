@@ -582,10 +582,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
   const after = cuts.find((c) => c.t > tc);
   const at = (c: { t: number }): P2 => [A[0] + c.t * d[0], A[1] + c.t * d[1]];
   // Las líneas cruzadas se parten en el punto (cierra regiones); en curvas, pegado
-  const stick = (point: number, c: { entity: number; kind: "line" | "circle" }) => {
-    if (c.kind === "line") splitLineAt(s, c.entity, point);
-    else s.constraints.push({ type: "point_on_circle", point, circle: c.entity });
-  };
+  const stick = (point: number, c: { entity: number; kind: "line" | "circle" }) => stickTo(s, point, c);
   if (before && after) {
     // Tramo del medio: la línea queda partida en dos
     const p1 = addPoint(s, at(before));
@@ -683,6 +680,292 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
     });
   }
   return skipped ? "Algunas entidades no se pudieron desplazar (solo círculos y lazos cerrados de líneas)" : undefined;
+}
+
+// ─── Geometría de sketch: cruces, recortes, extensiones ───────────────────
+
+type Hit = { entity: number; kind: "line" | "circle" };
+
+function pointOf(s: Sketch, id: number): P2 {
+  const q = s.points.find((x) => x.id === id)!;
+  return [q.x, q.y];
+}
+
+/** Centro y radio de un círculo o arco; barrido y ángulo inicial si es arco */
+function circleOf(s: Sketch, g: Geometry): { c: P2; r: number; a0?: number; sweep?: number } | undefined {
+  if (g.type === "circle") return { c: pointOf(s, g.center), r: g.radius };
+  if (g.type === "arc") {
+    const [c, a, b] = [pointOf(s, g.center), pointOf(s, g.start), pointOf(s, g.end)];
+    const a0 = Math.atan2(a[1] - c[1], a[0] - c[0]);
+    let sweep = Math.atan2(b[1] - c[1], b[0] - c[0]) - a0;
+    while (sweep <= 1e-12) sweep += 2 * Math.PI;
+    return { c, r: Math.hypot(a[0] - c[0], a[1] - c[1]), a0, sweep };
+  }
+  return undefined;
+}
+
+/** Ángulo relativo al inicio del arco, en [0, 2π) */
+function relAngle(p: P2, c: P2, a0: number): number {
+  let t = Math.atan2(p[1] - c[1], p[0] - c[0]) - a0;
+  while (t < 0) t += 2 * Math.PI;
+  while (t >= 2 * Math.PI) t -= 2 * Math.PI;
+  return t;
+}
+
+/** Puntos donde las demás entidades (no de construcción) cruzan un círculo o arco */
+function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hit: Hit }[] {
+  const out: { p: P2; hit: Hit }[] = [];
+  for (const e of s.entities) {
+    if (e.id === id || e.construction) continue;
+    const g = e.geometry;
+    if (g.type === "line") {
+      const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
+      const d: P2 = [B[0] - A[0], B[1] - A[1]];
+      const m: P2 = [A[0] - c[0], A[1] - c[1]];
+      const qa = d[0] * d[0] + d[1] * d[1];
+      const qb = 2 * (m[0] * d[0] + m[1] * d[1]);
+      const qc = m[0] * m[0] + m[1] * m[1] - r * r;
+      const disc = qb * qb - 4 * qa * qc;
+      if (disc < 0 || qa === 0) continue;
+      for (const u of [(-qb - Math.sqrt(disc)) / (2 * qa), (-qb + Math.sqrt(disc)) / (2 * qa)]) {
+        if (u >= -1e-9 && u <= 1 + 1e-9) out.push({ p: [A[0] + u * d[0], A[1] + u * d[1]], hit: { entity: e.id, kind: "line" } });
+      }
+    } else {
+      const o = circleOf(s, g);
+      if (!o) continue;
+      const dx = o.c[0] - c[0];
+      const dy = o.c[1] - c[1];
+      const dd = Math.hypot(dx, dy);
+      if (dd < 1e-12 || dd > r + o.r || dd < Math.abs(r - o.r)) continue;
+      const a = (r * r - o.r * o.r + dd * dd) / (2 * dd);
+      const h = Math.sqrt(Math.max(0, r * r - a * a));
+      const base: P2 = [c[0] + (a * dx) / dd, c[1] + (a * dy) / dd];
+      for (const sgn of h > 1e-12 ? [1, -1] : [1]) {
+        const p: P2 = [base[0] - (sgn * h * dy) / dd, base[1] + (sgn * h * dx) / dd];
+        if (o.sweep !== undefined && relAngle(p, o.c, o.a0!) > o.sweep + 1e-9) continue;
+        out.push({ p, hit: { entity: e.id, kind: "circle" } });
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Deja el punto nuevo sobre lo que cruza: parte la línea o lo pega a la curva.
+ * Si la línea ya se partió antes (dos cruces sobre el mismo lado), se parte el
+ * tramo que de verdad contiene el punto.
+ */
+function stickTo(s: Sketch, point: number, hit: Hit) {
+  if (hit.kind !== "line") {
+    s.constraints.push({ type: "point_on_circle", point, circle: hit.entity });
+    return;
+  }
+  const p = pointOf(s, point);
+  const onSegment = (id: number) => {
+    const g = s.entities.find((e) => e.id === id)?.geometry;
+    if (g?.type !== "line") return Infinity;
+    const [a, b] = [pointOf(s, g.start), pointOf(s, g.end)];
+    const d: P2 = [b[0] - a[0], b[1] - a[1]];
+    const l2 = d[0] * d[0] + d[1] * d[1] || 1;
+    const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / l2;
+    if (t < -1e-9 || t > 1 + 1e-9) return Infinity;
+    return Math.hypot(p[0] - a[0] - t * d[0], p[1] - a[1] - t * d[1]);
+  };
+  const tol = 1e-6 * Math.max(1, Math.hypot(p[0], p[1]));
+  if (onSegment(hit.entity) <= tol) return splitLineAt(s, hit.entity, point);
+  // La línea cruzada ya se partió: el tramo que contiene el punto (sin contar
+  // las que ya lo tienen como extremo)
+  const lines = s.entities.filter(
+    (e) => e.geometry.type === "line" && e.geometry.start !== point && e.geometry.end !== point,
+  );
+  const best = lines.reduce<{ id: number; d: number } | undefined>((acc, e) => {
+    const d = onSegment(e.id);
+    return d <= tol && (!acc || d < acc.d) ? { id: e.id, d } : acc;
+  }, undefined);
+  if (best) splitLineAt(s, best.id, point);
+  else s.constraints.push({ type: "point_on_line", point, line: hit.entity });
+}
+
+/**
+ * Recorta un círculo o un arco en el tramo entre cruces donde cayó `p`: el
+ * círculo pasa a ser arco; el arco se acorta o se parte en dos. Sin cruces se
+ * borra entero.
+ */
+export function trimCurve(s: Sketch, id: number, p: P2): string | undefined {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e) return undefined;
+  const o = circleOf(s, e.geometry);
+  if (!o) return "Solo círculos y arcos";
+  const g = e.geometry as { center: number };
+  const a0 = o.a0 ?? 0;
+  const sweep = o.sweep ?? 2 * Math.PI;
+  const cuts = crossingsOnCircle(s, id, o.c, o.r)
+    .map((x) => ({ ...x, t: relAngle(x.p, o.c, a0) }))
+    .filter((x) => (o.sweep === undefined ? true : x.t > 1e-9 && x.t < sweep - 1e-9))
+    .sort((x, y) => x.t - y.t);
+  if (cuts.length === 0) {
+    removeEntity(s, id);
+    return undefined;
+  }
+  const tc = relAngle(p, o.c, a0);
+  if (e.geometry.type === "circle") {
+    if (cuts.length < 2) return "El círculo necesita al menos dos cruces para recortarlo";
+    // Tramo quitado: entre el último cruce antes del clic y el primero después
+    const after = cuts.find((x) => x.t > tc) ?? cuts[0];
+    const before = [...cuts].reverse().find((x) => x.t < tc) ?? cuts[cuts.length - 1];
+    const ps = addPoint(s, after.p);
+    const pe = addPoint(s, before.p);
+    e.geometry = { type: "arc", center: g.center, start: ps, end: pe };
+    stickTo(s, ps, after.hit);
+    stickTo(s, pe, before.hit);
+    return undefined;
+  }
+  const arc = e.geometry as { center: number; start: number; end: number };
+  const before = [...cuts].reverse().find((x) => x.t < tc);
+  const after = cuts.find((x) => x.t > tc);
+  if (before && after) {
+    const pb = addPoint(s, before.p);
+    const pa = addPoint(s, after.p);
+    const oldEnd = arc.end;
+    arc.end = pb;
+    addEntity(s, { type: "arc", center: arc.center, start: pa, end: oldEnd });
+    stickTo(s, pb, before.hit);
+    stickTo(s, pa, after.hit);
+  } else if (after) {
+    const pa = addPoint(s, after.p);
+    arc.start = pa;
+    stickTo(s, pa, after.hit);
+  } else if (before) {
+    const pb = addPoint(s, before.p);
+    arc.end = pb;
+    stickTo(s, pb, before.hit);
+  }
+  dropLoosePoints(s);
+  return undefined;
+}
+
+function dropLoosePoints(s: Sketch) {
+  const used = new Set(
+    s.entities.flatMap((e) => {
+      const g = e.geometry;
+      return g.type === "line" ? [g.start, g.end] : g.type === "spline" ? g.points : g.type === "circle" ? [g.center] : [g.center, g.start, g.end];
+    }),
+  );
+  const loose = new Set(s.points.filter((q) => !used.has(q.id)).map((q) => q.id));
+  if (loose.size === 0) return;
+  s.points = s.points.filter((q) => !loose.has(q.id));
+  s.constraints = s.constraints.filter((k) => !constraintIds(k).some((v) => loose.has(v)));
+}
+
+/**
+ * Alarga una línea por el extremo más cercano a `p` hasta lo primero que
+ * cruce (otra línea, círculo o arco). El extremo nuevo queda sobre eso.
+ */
+export function extendLine(s: Sketch, lineId: number, p: P2): string | undefined {
+  const line = s.entities.find((e) => e.id === lineId);
+  if (!line || line.geometry.type !== "line") return "Solo se extienden líneas";
+  const g = line.geometry;
+  const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
+  const atEnd = Math.hypot(p[0] - B[0], p[1] - B[1]) <= Math.hypot(p[0] - A[0], p[1] - A[1]);
+  const from = atEnd ? B : A;
+  const other = atEnd ? A : B;
+  const len = Math.hypot(from[0] - other[0], from[1] - other[1]);
+  const d: P2 = [(from[0] - other[0]) / len, (from[1] - other[1]) / len];
+  let best: { t: number; hit: Hit } | undefined;
+  const consider = (t: number, hit: Hit) => {
+    if (t > 1e-9 && (!best || t < best.t)) best = { t, hit };
+  };
+  for (const e of s.entities) {
+    if (e.id === lineId || e.construction) continue;
+    const og = e.geometry;
+    if (og.type === "line") {
+      const [C, D] = [pointOf(s, og.start), pointOf(s, og.end)];
+      const f: P2 = [D[0] - C[0], D[1] - C[1]];
+      const den = d[0] * f[1] - d[1] * f[0];
+      if (Math.abs(den) < 1e-12) continue;
+      const t = ((C[0] - from[0]) * f[1] - (C[1] - from[1]) * f[0]) / den;
+      const u = ((C[0] - from[0]) * d[1] - (C[1] - from[1]) * d[0]) / den;
+      if (u >= -1e-9 && u <= 1 + 1e-9) consider(t, { entity: e.id, kind: "line" });
+    } else {
+      const o = circleOf(s, og);
+      if (!o) continue;
+      const m: P2 = [from[0] - o.c[0], from[1] - o.c[1]];
+      const b = 2 * (m[0] * d[0] + m[1] * d[1]);
+      const c = m[0] * m[0] + m[1] * m[1] - o.r * o.r;
+      const disc = b * b - 4 * c;
+      if (disc < 0) continue;
+      for (const t of [(-b - Math.sqrt(disc)) / 2, (-b + Math.sqrt(disc)) / 2]) {
+        const q: P2 = [from[0] + t * d[0], from[1] + t * d[1]];
+        if (o.sweep !== undefined && relAngle(q, o.c, o.a0!) > o.sweep + 1e-9) continue;
+        consider(t, { entity: e.id, kind: "circle" });
+      }
+    }
+  }
+  if (!best) return "No hay nada en esa dirección hasta donde extender";
+  const target: P2 = [from[0] + best.t * d[0], from[1] + best.t * d[1]];
+  // Punto nuevo para el extremo (si el viejo lo comparte otra entidad, queda allí)
+  const np = addPoint(s, target);
+  if (atEnd) g.end = np;
+  else g.start = np;
+  s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  stickTo(s, np, best.hit);
+  dropLoosePoints(s);
+  return undefined;
+}
+
+/** Recorta lo que haya bajo el clic: líneas, círculos o arcos */
+export function trimAt(s: Sketch, id: number, p: P2): string | undefined {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e) return undefined;
+  if (e.geometry.type === "line") return trimLine(s, id, p);
+  if (e.geometry.type === "circle" || e.geometry.type === "arc") return trimCurve(s, id, p);
+  return "Las splines no se recortan";
+}
+
+/** Puntos y entidades que nombra una restricción (para resaltarla) */
+export function constraintIds(c: SketchConstraint): number[] {
+  return Object.entries(c)
+    .filter(([k, v]) => typeof v === "number" && !["value", "degrees", "x", "y"].includes(k))
+    .map(([, v]) => v as number);
+}
+
+/**
+ * Arco tangente que sale de `start` en la dirección `t` (unitaria) y llega a
+ * `end`. Devuelve centro, si va antihorario y la dirección de salida en `end`.
+ */
+export function tangentArc(start: P2, t: P2, end: P2): { center: P2; ccw: boolean; outDir: P2 } | undefined {
+  const n: P2 = [-t[1], t[0]];
+  const se: P2 = [start[0] - end[0], start[1] - end[1]];
+  const den = 2 * (n[0] * se[0] + n[1] * se[1]);
+  if (Math.abs(den) < 1e-12) return undefined; // en línea recta: no hay arco
+  const k = -(se[0] * se[0] + se[1] * se[1]) / den;
+  const center: P2 = [start[0] + n[0] * k, start[1] + n[1] * k];
+  const ccw = k > 0;
+  const r: P2 = [end[0] - center[0], end[1] - center[1]];
+  const rl = Math.hypot(r[0], r[1]);
+  const outDir: P2 = ccw ? [-r[1] / rl, r[0] / rl] : [r[1] / rl, -r[0] / rl];
+  return { center, ccw, outDir };
+}
+
+/** Dirección en que se sale de `point` siguiendo la entidad hacia afuera de ella */
+export function leavingDirection(s: Sketch, entity: number, point: number): P2 | undefined {
+  const e = s.entities.find((x) => x.id === entity);
+  if (!e) return undefined;
+  const g = e.geometry;
+  if (g.type === "line") {
+    const [p, q] = g.end === point ? [pointOf(s, g.end), pointOf(s, g.start)] : [pointOf(s, g.start), pointOf(s, g.end)];
+    const l = Math.hypot(p[0] - q[0], p[1] - q[1]);
+    return [(p[0] - q[0]) / l, (p[1] - q[1]) / l];
+  }
+  if (g.type === "arc") {
+    const c = pointOf(s, g.center);
+    const r = pointOf(s, point);
+    const v: P2 = [r[0] - c[0], r[1] - c[1]];
+    const l = Math.hypot(v[0], v[1]);
+    // Al final de un arco antihorario se sigue antihorario; al inicio, al revés
+    return g.end === point ? [-v[1] / l, v[0] / l] : [v[1] / l, -v[0] / l];
+  }
+  return undefined;
 }
 
 /** Texto que es solo un número (con punto o coma decimal) */

@@ -467,6 +467,16 @@ impl Sketch {
                 _ => return Err(SketchError::Unsupported("igualdad entre entidades de distinto tipo".into())),
             },
             S::Tangent { a, b } => {
+                // Dos arcos que comparten un extremo: los centros quedan alineados
+                // con el punto de contacto (tangencia en ese punto)
+                if let (Geometry::Arc { center: c1, start: s1, end: e1 }, Geometry::Arc { center: c2, start: s2, end: e2 }) =
+                    (&self.entity(a)?.geometry, &self.entity(b)?.geometry)
+                {
+                    let shared = [s1, e1].into_iter().find(|p| *p == s2 || *p == e2).ok_or_else(|| {
+                        SketchError::Unsupported("arcos tangentes sin un extremo en común".into())
+                    })?;
+                    return Ok(vec![Constraint::PointOnLine { p_idx: ix(*c2)?, line_p1: ix(*c1)?, line_p2: ix(*shared)? }]);
+                }
                 let (l, other) = match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
                     (Geometry::Line { .. }, _) => (a, b),
                     (_, Geometry::Line { .. }) => (b, a),
