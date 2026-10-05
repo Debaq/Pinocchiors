@@ -7,13 +7,15 @@ import { mkdirSync, writeFileSync } from "node:fs";
 const OUT = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
 export async function launch(url, { width = 1400, height = 900 } = {}) {
   mkdirSync(OUT, { recursive: true });
+  // Puerto propio: otro Chromium de pruebas en un puerto fijo se confundiría con este
+  const port = 9400 + Math.floor(Math.random() * 500);
   const chrome = spawn("chromium", [
-    "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--remote-debugging-port=9333",
-    `--window-size=${width},${height}`, `--user-data-dir=${OUT}/chrome`, "--no-first-run", "about:blank",
+    "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", `--remote-debugging-port=${port}`,
+    `--window-size=${width},${height}`, `--user-data-dir=${OUT}/chrome-${port}`, "--no-first-run", "about:blank",
   ], { stdio: "ignore" });
   let targets;
   for (let i = 0; i < 50; i++) {
-    try { targets = await (await fetch("http://127.0.0.1:9333/json")).json(); if (targets.length) break; } catch {}
+    try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); if (targets.length) break; } catch {}
     await sleep(200);
   }
   const page = targets.find((t) => t.type === "page");
