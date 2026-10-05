@@ -2,7 +2,8 @@
 // (CadView) y el panel (DesignStep): qué se está eligiendo con el mouse y el
 // sketch en edición.
 
-import { batch, createSignal } from "solid-js";
+import { batch, createEffect, createSignal, on } from "solid-js";
+import type { BasePlane } from "./CadViewer";
 import {
   constraintPath,
   plainNumber,
@@ -15,12 +16,22 @@ import {
   type FaceRef,
   type P2,
   type Plane,
+  type PlaneSpec,
   type Region,
   type ScanPick,
   type Sketch,
   type SketchConstraint,
   type SolveReport,
 } from "./cad";
+
+/** Algo elegido en el visor fuera de la edición de sketches */
+export type Pick3d =
+  | { kind: "face"; face: number }
+  | { kind: "edge"; edge: number }
+  | { kind: "region"; sketch: number; region: number }
+  | { kind: "plane"; plane: BasePlane };
+
+const samePick = (a: Pick3d, b: Pick3d) => JSON.stringify(a) === JSON.stringify(b);
 
 export type SketchTool = "select" | "line" | "rect" | "circle" | "arc" | "polygon" | "slot" | "trim" | "tangent" | "extend";
 
@@ -34,7 +45,9 @@ export type PickMode =
   /** Elegir una zona del escaneo */
   | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void }
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
-  | { kind: "region"; prompt: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void };
+  | { kind: "region"; prompt: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
+  /** Dónde va un sketch nuevo: un plano base o una cara plana */
+  | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void };
 
 export interface SketchSession {
   feature: number;
@@ -55,6 +68,12 @@ export function createCadUi(store: CadStore) {
   const [selection, setSelection] = createSignal<number[]>([]);
   // Lo que nombra la restricción bajo el mouse en el panel (resaltado en el visor)
   const [hoverIds, setHoverIds] = createSignal<number[]>([]);
+  // Selección en el visor (caras, aristas, regiones, planos), como en Onshape
+  const [picks, setPicks] = createSignal<Pick3d[]>([]);
+  const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
+  const [showPlanes, setShowPlanes] = createSignal(true);
+  // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
+  createEffect(on(() => store.result()?.version, () => setPicks((p) => p.filter((x) => x.kind === "plane")), { defer: true }));
   const [message, setMessage] = createSignal<string>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
@@ -100,6 +119,25 @@ export function createCadUi(store: CadStore) {
     setSelection,
     hoverIds,
     setHoverIds,
+
+    // ─── Selección en el visor ────────────────────────────────────────────
+    picks,
+    setPicks,
+    /** Agrega o quita (con `additive`) o reemplaza la selección */
+    pickToggle(p: Pick3d, additive: boolean) {
+      setPicks((cur) => {
+        const has = cur.some((x) => samePick(x, p));
+        if (additive) return has ? cur.filter((x) => !samePick(x, p)) : [...cur, p];
+        return has && cur.length === 1 ? [] : [p];
+      });
+    },
+    clearPicks: () => setPicks([]),
+    hiddenSketches,
+    toggleSketchVisible(id: number) {
+      setHiddenSketches((h) => (h.includes(id) ? h.filter((x) => x !== id) : [...h, id]));
+    },
+    showPlanes,
+    setShowPlanes,
 
     /** Empieza a editar el sketch de la operación `feature` */
     editSketch(feature: number): boolean {

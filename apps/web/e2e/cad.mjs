@@ -27,6 +27,17 @@ async function begin(b) {
 }
 
 const evaluate = () => call("cad_evaluate");
+
+/** Sketch nuevo en la planta: botón "Sketch" y clic en el plano base */
+async function sketchOn(b) {
+  await b.clickText("Sketch");
+  await sleep(400);
+  // Un punto de la planta delante-derecha: el rayo no cruza los otros planos
+  // (la cámara mira desde +X, +Z del visor) ni la caja (que está en y ≥ 0)
+  const s = await b.eval(`window.__cadViewer.planeSize`);
+  const [x, y] = await b.eval(`window.__cadViewer.screenOf([${0.4 * s}, ${-0.4 * s}, 0])`);
+  await b.click(x, y, { wait: 1500 });
+}
 const body = async () => (await evaluate()).body;
 const sketchText = (b, re) => b.eval(`(document.body.innerText.match(${re}) ?? [""])[0]`);
 const setInput = (b, labelStart, value) =>
@@ -43,8 +54,7 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(1500);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
@@ -78,18 +88,16 @@ const scenarios = {
     if ((await body()).faces !== 8) throw new Error("caras tras r=3");
   },
 
-  async "triángulo cerrado con clics, arrastre y agujero"(b) {
+  async "triángulo cerrado con clics y agujero"(b) {
     await begin(b);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Línea");
     await b.click(400, 450);
     await b.click(700, 450);
     await b.click(550, 250);
     await b.click(400, 450);
     await sleep(800);
-    await b.clickText("Elegir");
-    await b.drag(550, 250, 620, 180, 12);
+    await b.key("Escape", "Escape", 27);
     await b.clickText("Círculo");
     await b.click(550, 400);
     await b.click(580, 400);
@@ -106,7 +114,7 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(2000);
-    await b.clickText("Sketch en una cara");
+    await b.clickText("Sketch");
     await sleep(300);
     let [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 20])`);
     await b.click(x, y, { wait: 2500 });
@@ -130,19 +138,16 @@ const scenarios = {
 
   async "cota editada en el visor"(b) {
     await begin(b);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
     await sleep(800);
-    await b.clickText("Elegir");
-    await b.click(550, 500, { wait: 500 });
-    await b.clickText("Largo");
-    await sleep(1000);
-    const pos = await b.eval(`(() => { const r = document.querySelector("button.font-mono").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
-    await b.click(pos[0], pos[1], { wait: 500 });
+    // Al terminar el rectángulo se piden sus cotas: ancho (escribir 40 + Enter) y alto (Enter: queda)
+    if (!(await b.eval(`document.activeElement?.tagName === "INPUT"`))) throw new Error("no se pidió la cota");
     await b.send("Input.insertText", { text: "40" });
+    await b.key("Enter", "Enter", 13);
+    await sleep(600);
     await b.key("Enter", "Enter", 13);
     await sleep(1200);
     await b.clickText("Terminar sketch");
@@ -153,8 +158,7 @@ const scenarios = {
 
   async "polígono y ranura"(b) {
     await begin(b);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Polígono");
     await b.click(350, 400);
     await b.click(450, 400);
@@ -168,8 +172,7 @@ const scenarios = {
 
   async "redondear esquina del sketch"(b) {
     await begin(b);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
@@ -190,8 +193,7 @@ const scenarios = {
 
   async "recortar y equidistante"(b) {
     await begin(b);
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
@@ -206,8 +208,7 @@ const scenarios = {
     await b.clickText("Descartar");
     await sleep(800);
     // Equidistante sobre un rectángulo nuevo
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
@@ -257,22 +258,18 @@ const scenarios = {
     const bad = await b.eval(`!!document.querySelector("input.border-error")`);
     if (!bad) throw new Error("la fórmula mala no se marcó");
     // Cota del sketch con fórmula desde el visor
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
-    await b.clickText("Elegir");
-    await b.click(550, 500, { wait: 500 });
-    await b.clickText("Largo");
-    await sleep(1000);
-    const pos = await b.eval(`(() => { const r = document.querySelector("button.font-mono").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
-    await b.click(pos[0], pos[1], { wait: 500 });
-    await b.send("Input.dispatchKeyEvent", { type: "keyDown", key: "a", code: "KeyA", modifiers: 2 });
+    await sleep(800);
+    // La cota del ancho se pide sola: fórmula + Enter; el alto, Escape (queda lo dibujado)
     await b.send("Input.insertText", { text: "ancho * 2" });
     await b.key("Enter", "Enter", 13);
+    await sleep(600);
+    await b.key("Escape", "Escape", 27);
     await sleep(1200);
-    const label = await b.eval(`document.querySelector("button.font-mono")?.textContent`);
+    const label = await b.eval(`[...document.querySelectorAll("button.font-mono")].map((x) => x.textContent).find((t) => t.startsWith("ancho"))`);
     if (!label?.startsWith("ancho * 2 = 90")) throw new Error(`etiqueta: ${label}`);
     await b.clickText("Terminar sketch");
     await sleep(1500);
@@ -290,8 +287,7 @@ const scenarios = {
     const status = () => call("cad_evaluate").then((r) => r.sketches.at(-1).report.status);
     await begin(b);
     // Línea y dos arcos tangentes encadenados
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Línea");
     await b.click(400, 400);
     await b.click(600, 400);
@@ -308,8 +304,7 @@ const scenarios = {
     if ((await status()) === "over_constrained") throw new Error("arcos tangentes en conflicto");
 
     // Extender una línea hasta otra vertical
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Línea");
     await b.click(600, 300);
     await b.click(600, 500);
@@ -327,11 +322,11 @@ const scenarios = {
     if (vertical < 3) throw new Error("la extensión no llegó a la vertical");
 
     // Recortar el tramo de un círculo que queda dentro de un rectángulo
-    await b.clickText("Sketch en planta");
-    await sleep(1500);
+    await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
+    await b.key("Escape", "Escape", 27); // las cotas pedidas quedan como se dibujó
     await b.clickText("Círculo");
     await b.click(700, 400);
     await b.click(750, 400);
@@ -348,13 +343,53 @@ const scenarios = {
     if (!(Number(chosen) > 0)) throw new Error(`gestor: elegido ${chosen}`);
   },
 
+  async "selección como Onshape: región, cara y arista"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    // Dos círculos en la planta, fuera de la caja
+    await sketchOn(b);
+    await b.clickText("Círculo");
+    for (const y of [-15, 15]) {
+      await b.click(...(await at([-15, y, 0])));
+      await b.click(...(await at([-10, y, 0])), { wait: 600 });
+      await b.key("Escape", "Escape", 27);
+    }
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // Elegir solo la región del primer círculo y extruir
+    await b.click(...(await at([-15, -15, 0])), { wait: 500 });
+    const summary = await b.eval(`[...document.querySelectorAll("span")].map((x) => x.textContent).find((t) => t?.startsWith("Elegido"))`);
+    if (summary !== "Elegido: 1 región") throw new Error(`selección: ${summary}`);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    near((await body()).volume, 8000 + Math.PI * 25 * 10, 0.5, "solo la región elegida");
+    // Cara superior de la caja elegida → sketch sobre ella
+    await b.click(...(await at([10, 10, 20])), { wait: 600 });
+    await b.clickText("Sketch");
+    await sleep(1500);
+    const planes = (await evaluate()).sketches.map((v) => v.plane.origin[2]);
+    if (!planes.some((z) => Math.abs(z - 20) < 1e-6)) throw new Error(`plano del sketch: ${planes}`);
+    await b.clickText("Descartar");
+    await sleep(800);
+    // Arista superior frontal elegida → redondeo directo
+    await b.key("Escape", "Escape", 27);
+    const faces = (await body()).faces;
+    await b.click(...(await at([10, 0, 20])), { wait: 600 });
+    await b.clickText("Redondeo");
+    await sleep(2000);
+    if ((await body()).faces !== faces + 1) throw new Error("el redondeo no tomó la arista elegida");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");
     await sleep(4000);
     await begin(b);
     await b.clickContains("Cilindro / agujero");
-    await b.click(560, 260, { wait: 3000 });
+    // Pared del cilindro superior del espéculo (r 9, z 30..45), del lado de la cámara
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([6.3, -6.3, 38])`)), { wait: 3000 });
     await b.clickContains("Agregar el cilindro");
     await sleep(3000);
     const r = await body();

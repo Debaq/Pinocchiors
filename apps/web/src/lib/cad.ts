@@ -490,6 +490,8 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
   // La esquina vieja desaparece con sus restricciones
   s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, val]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && val === point));
   if (!s.entities.some((e) => e.geometry.type !== "spline" && Object.values(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
+  // Las líneas quedaron más cortas: sus cotas de largo ya no valen
+  s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
   s.constraints.push({ type: "tangent", a: lines[0].id, b: arc }, { type: "tangent", a: lines[1].id, b: arc }, { type: "radius", entity: arc, value: r });
   return undefined;
 }

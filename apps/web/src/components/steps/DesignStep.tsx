@@ -144,6 +144,17 @@ const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1]
 
 const fmt = (v: number, d = 2) => v.toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
 
+function pickSummary(picks: { kind: string }[]): string {
+  const count = (k: string) => picks.filter((p) => p.kind === k).length;
+  const parts: [number, string, string][] = [
+    [count("region"), "región", "regiones"],
+    [count("face"), "cara", "caras"],
+    [count("edge"), "arista", "aristas"],
+    [count("plane"), "plano", "planos"],
+  ];
+  return parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(", ");
+}
+
 function planeLabel(p: PlaneSpec): string {
   if (p.type === "face") return "Cara del sólido";
   if (p.type === "custom") return "Plano propio";
@@ -178,8 +189,33 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     ui.editSketch(id);
   };
 
-  const sketchOnFace = () =>
-    ui.setPick({ kind: "face", prompt: "Elegir una cara plana del sólido para el sketch", done: (face) => void newSketch({ type: "face", face }) });
+  /** Nuevo sketch en el plano o la cara elegida; sin elegir, se pide dónde */
+  const startSketch = async () => {
+    const picks = ui.picks();
+    const plane = picks.find((p) => p.kind === "plane");
+    if (plane?.kind === "plane") {
+      ui.clearPicks();
+      return newSketch({ type: plane.plane });
+    }
+    const face = picks.find((p) => p.kind === "face");
+    if (face?.kind === "face") {
+      const ref = await store.faceRef(face.face);
+      ui.clearPicks();
+      return newSketch({ type: "face", face: ref });
+    }
+    ui.setPick({ kind: "place", prompt: "Elegir dónde va el sketch: un plano base o una cara plana", done: (spec) => void newSketch(spec) });
+  };
+
+  /** Regiones elegidas en el visor, del primer sketch que tenga alguna */
+  const pickedRegions = (): { sketch: number; points: P2[] } | undefined => {
+    const regs = ui.picks().flatMap((p) => (p.kind === "region" ? [p] : []));
+    if (!regs.length) return undefined;
+    const sketch = regs[0].sketch;
+    const view = store.sketchView(sketch);
+    if (!view) return undefined;
+    const points = regs.filter((r) => r.sketch === sketch).map((r) => view.regions[r.region]?.sample).filter((p): p is P2 => !!p);
+    return { sketch, points };
+  };
 
   /** Sketch al que apuntan extrusiones y revoluciones nuevas: el elegido o el último */
   const targetSketch = (): Feature | undefined => {
@@ -189,12 +225,15 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   };
 
   const addExtrude = () => {
-    const s = targetSketch();
+    // Con regiones elegidas en el visor se extruyen esas; si no, todo el sketch
+    const picked = pickedRegions();
+    const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s) return say("Primero hace falta un sketch con una región cerrada");
+    ui.clearPicks();
     void store.addFeature({
       type: "extrude",
       sketch: s.id,
-      regions: { type: "all" },
+      regions: picked ? { type: "points", points: picked.points } : { type: "all" },
       extent: { type: "blind", distance: 10 },
       reverse: false,
       op: "join",
@@ -202,12 +241,15 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   };
 
   const addRevolve = () => {
-    const s = targetSketch();
+    const picked = pickedRegions();
+    const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con una región cerrada");
+    ui.clearPicks();
     // Eje: la primera línea de construcción del sketch, o Z
     const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
     const axis: AxisSpec = axisLine ? { type: "sketch_line", sketch: s.id, line: axisLine.id } : { type: "z" };
-    void store.addFeature({ type: "revolve", sketch: s.id, regions: { type: "all" }, axis, angle: 360, op: "join" });
+    const regions: RegionSelection = picked ? { type: "points", points: picked.points } : { type: "all" };
+    void store.addFeature({ type: "revolve", sketch: s.id, regions, axis, angle: 360, op: "join" });
   };
 
   const addPrimitive = (shape: FeatureKind & { type: "primitive" }) => void store.addFeature(shape);
@@ -222,8 +264,17 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
 
   /** Redondeo o chaflán: se eligen aristas y se crea al confirmar */
   const [edgePick, setEdgePick] = createSignal<{ kind: "fillet" | "chamfer"; edges: EdgeRef[]; feature?: number }>();
-  const startEdges = (kind: "fillet" | "chamfer", feature?: number) => {
+  const startEdges = async (kind: "fillet" | "chamfer", feature?: number) => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
+    // Aristas ya elegidas en el visor: se usan directo
+    const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
+    if (picked.length && feature === undefined) {
+      const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
+      ui.clearPicks();
+      if (kind === "fillet") void store.addFeature({ type: "fillet", edges, radius: 1 });
+      else void store.addFeature({ type: "chamfer", edges, distance: 1 });
+      return;
+    }
     setEdgePick({ kind, edges: [], feature });
     ui.setHighlight({ faces: [], edges: [] });
     ui.setPick({
@@ -260,8 +311,16 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       done: (face) => setFacePick((p) => (p ? { ...p, faces: [...p.faces, face] } : p)),
     });
   };
-  const startFaces = (kind: "shell" | "draft", feature?: number) => {
+  const startFaces = async (kind: "shell" | "draft", feature?: number) => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    if (picked.length && feature === undefined) {
+      const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+      ui.clearPicks();
+      if (kind === "shell") void store.addFeature({ type: "shell", faces, thickness: 1 });
+      else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
+      return;
+    }
     setFacePick({ kind, faces: [], feature });
     pickNextFace();
   };
@@ -375,9 +434,16 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
         >
           <Show when={ui.session()} fallback={
             <>
+              <Show when={ui.picks().length > 0}>
+                <div class="flex items-center justify-between rounded-md border border-cyan/40 bg-cyan/5 px-2 py-1.5 text-xs">
+                  <span class="text-text">Elegido: {pickSummary(ui.picks())}</span>
+                  <button class="text-text-muted hover:text-text" onClick={() => ui.clearPicks()}>
+                    Limpiar (Esc)
+                  </button>
+                </div>
+              </Show>
               <AddSection
-                onSketch={(p) => void newSketch(p)}
-                onSketchOnFace={sketchOnFace}
+                onSketch={() => void startSketch()}
                 onExtrude={addExtrude}
                 onRevolve={addRevolve}
                 onPrimitive={(s) => addPrimitive(primitive(s))}
@@ -553,8 +619,7 @@ const NoKernel: Component = () => (
 // ─── Agregar ──────────────────────────────────────────────────────────────
 
 const AddSection: Component<{
-  onSketch: (p: PlaneSpec) => void;
-  onSketchOnFace: () => void;
+  onSketch: () => void;
   onExtrude: () => void;
   onRevolve: () => void;
   onPrimitive: (s: Extract<FeatureKind, { type: "primitive" }>["shape"]) => void;
@@ -581,15 +646,10 @@ const AddSection: Component<{
   return (
     <Section title="Agregar">
       <div class="space-y-2">
-        <div class="grid grid-cols-2 gap-1.5">
-          <B label="Sketch en planta" onClick={() => props.onSketch({ type: "xy" })} />
-          <B label="Sketch de frente" onClick={() => props.onSketch({ type: "xz" })} />
-          <B label="Sketch lateral" onClick={() => props.onSketch({ type: "yz" })} />
-          <B label="Sketch en una cara" onClick={props.onSketchOnFace} disabled={!props.hasBody} />
-        </div>
-        <div class="grid grid-cols-2 gap-1.5">
-          <B label="Extrusión" onClick={props.onExtrude} title="Del sketch elegido (o el último)" />
-          <B label="Revolución" onClick={props.onRevolve} title="Eje: la primera línea de construcción del sketch, o Z" />
+        <div class="grid grid-cols-3 gap-1.5">
+          <B label="Sketch" onClick={props.onSketch} title="En el plano o la cara elegida; si no hay nada elegido, se elige en el visor" />
+          <B label="Extrusión" onClick={props.onExtrude} title="Las regiones elegidas en el visor; si no hay, todo el último sketch" />
+          <B label="Revolución" onClick={props.onRevolve} title="Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" />
         </div>
         <div class="grid grid-cols-3 gap-1.5">
           <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20 })} />
@@ -737,14 +797,28 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                       <IconButton aria-label="Bajar" size="sm" variant="ghost" onClick={() => !store.moveFeature(f.id, 1) && props.ui.setMessage("No se puede: otra operación la necesita antes")}>
                         <Icons.CaretDown size={10} />
                       </IconButton>
-                      <IconButton
-                        aria-label={f.suppressed ? "Activar" : "Suprimir"}
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => void store.updateFeature(f.id, (x) => (x.suppressed = !x.suppressed))}
+                      <Show
+                        when={f.kind.type === "sketch"}
+                        fallback={
+                          <IconButton
+                            aria-label={f.suppressed ? "Activar" : "Suprimir"}
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => void store.updateFeature(f.id, (x) => (x.suppressed = !x.suppressed))}
+                          >
+                            {f.suppressed ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                          </IconButton>
+                        }
                       >
-                        {f.suppressed ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
-                      </IconButton>
+                        <IconButton
+                          aria-label={props.ui.hiddenSketches().includes(f.id) ? "Mostrar en el visor" : "Ocultar en el visor"}
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => props.ui.toggleSketchVisible(f.id)}
+                        >
+                          {props.ui.hiddenSketches().includes(f.id) ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                        </IconButton>
+                      </Show>
                       <IconButton
                         aria-label="Borrar"
                         size="sm"

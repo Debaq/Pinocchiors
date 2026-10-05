@@ -192,3 +192,15 @@ cargo test -p cad-model
   nombra, clic lo elige. Bug encontrado: con dos cruces sobre el mismo lado, el segundo punto
   partía la línea original ya cortada (rompía las regiones); ahora se parte el tramo que lo
   contiene.
+- **2026-10-05 Flujo tipo Onshape** (pedido del usuario): "Sketch" se pone en el plano o la
+  cara elegida, o pide elegir uno (planos base planta/frente/lateral visibles en el visor, a
+  escala del modelo). Al terminar cada forma se piden sus cotas en el visor (rectángulo:
+  ancho y alto; círculo: diámetro; línea: largo, salvo el tramo que cierra; arco y arco
+  tangente: radio; ranura: largo y radio; polígono: radio): quedan con lo dibujado
+  (redondeado según el zoom), Enter/Tab aplica y pasa a la siguiente, Esc corta. Fuera del
+  sketch se eligen caras, aristas, regiones de sketches visibles y planos (Mayús/Ctrl suma);
+  Extrusión/Revolución usan las regiones elegidas, Redondeo/Chaflán las aristas,
+  Vaciado/Desmolde las caras. Los planos solo se eligen si no hay caras ni regiones bajo el
+  puntero. Bugs encontrados por las pruebas: el campo de cota se recreaba en cada cuadro y
+  perdía el foco (For → Index), Esc en la cota no cortaba la polilínea, las etiquetas tapaban
+  clics de dibujo (ahora sin clic mientras se dibuja y corridas fuera de la figura).

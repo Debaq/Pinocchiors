@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
+import { Component, For, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
@@ -110,6 +110,19 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
   const [viewTick, setViewTick] = createSignal(0);
   const [editingDim, setEditingDim] = createSignal<number>();
+  // Cotas que se piden al terminar una forma, en orden (índices de restricciones)
+  const [dimQueue, setDimQueue] = createSignal<number[]>([]);
+  /** Pide las cotas recién creadas: la primera queda en edición */
+  const askDims = (indices: number[]) => {
+    setDimQueue(indices.slice(1));
+    setEditingDim(indices[0]);
+  };
+  /** Pasa a la siguiente cota pedida (o termina) */
+  const nextDim = () => {
+    const q = dimQueue();
+    setDimQueue(q.slice(1));
+    setEditingDim(q[0]);
+  };
 
   const ui = props.ui;
   const store = props.store;
@@ -133,6 +146,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer.setScan(props.scanMesh);
     viewer.setBody(store.mesh());
     viewer.frameAll();
+    setPlanesReady((n) => n + 1);
   });
   onCleanup(() => viewer?.dispose());
 
@@ -149,6 +163,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         viewer.setScan(m);
         viewer.setBody(store.mesh());
         viewer.frameAll();
+        setPlanesReady((n) => n + 1);
       },
       { defer: true },
     ),
@@ -163,7 +178,34 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
   createEffect(() => {
     const h = ui.highlight();
-    viewer?.setHighlight(h.faces, h.edges);
+    const picks = ui.picks();
+    const faces = [...h.faces, ...picks.flatMap((p) => (p.kind === "face" ? [p.face] : []))];
+    const edges = [...h.edges, ...picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : []))];
+    viewer?.setHighlight(faces, edges);
+  });
+  // Sketches visibles (todos menos los ocultos y el que se edita), con sus regiones elegibles
+  createEffect(() => {
+    const editing = ui.session()?.feature;
+    const hidden = ui.hiddenSketches();
+    const picks = ui.picks();
+    const list = (store.result()?.sketches ?? [])
+      .filter((v) => v.id !== editing && !hidden.includes(v.id))
+      .map((v) => ({
+        id: v.id,
+        plane: v.plane,
+        sketch: v.sketch,
+        regions: v.regions,
+        selected: picks.flatMap((p) => (p.kind === "region" && p.sketch === v.id ? [p.region] : [])),
+      }));
+    viewer?.setVisibleSketches(list);
+  });
+  // Planos base: visibles fuera de la edición (y al elegir dónde va un sketch)
+  const [planesReady, setPlanesReady] = createSignal(0);
+  createEffect(() => {
+    planesReady();
+    const show = ui.showPlanes() && !ui.session();
+    const selected = ui.picks().flatMap((p) => (p.kind === "plane" ? [p.plane] : []));
+    viewer?.setPlanes(show || ui.pick().kind === "place", selected);
   });
   createEffect(() => viewer?.setScanHighlight(ui.scanHighlight()));
   createEffect(() => viewer?.setScanVisible(scanVisible(), scanOpacity()));
@@ -199,10 +241,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.chosen() } : null);
         return;
       }
-      // Sketch seleccionado (sin editar): se muestra igual
-      const sel = store.selected();
-      const view = sel !== undefined ? store.sketchView(sel) : undefined;
-      viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions } : null);
+      // Fuera de la edición los sketches se ven como sketches visibles
+      viewer.setSketch(null);
       return;
     }
     const c = cursor();
@@ -299,6 +339,18 @@ export const CadView: Component<CadViewProps> = (props) => {
     return id;
   };
 
+  /** Agrega una cota y devuelve su índice */
+  const dim = (sk: Sketch, c: SketchConstraint): number => {
+    sk.constraints.push(c);
+    return sk.constraints.length - 1;
+  };
+  /** Medida dibujada, redondeada a algo legible según el zoom */
+  const round = (v: number) => {
+    const px = viewer?.pixelSizeMm() ?? 0.1;
+    const step = Math.pow(10, Math.floor(Math.log10(Math.max(px, 1e-6))));
+    return Math.round(v / step) * step;
+  };
+
   /** Restricción horizontal/vertical automática para líneas casi alineadas */
   const autoAxis = (sk: Sketch, line: number, a: P2, b: P2) => {
     const ang = Math.abs(Math.atan2(b[1] - a[1], b[0] - a[0]));
@@ -328,6 +380,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!e.shiftKey) ui.setSelection([]);
       return;
     }
+    // Cotas de la forma recién dibujada (se piden enseguida)
+    const dims: number[] = [];
     if (t === "line") {
       const ch = chain();
       let closed = false;
@@ -342,22 +396,36 @@ export const CadView: Component<CadViewProps> = (props) => {
         const line = ui.addEntity(sk, { type: "line", start: ch.last, end: id });
         autoAxis(sk, line, [a.x, a.y], hit.p);
         closed = id === ch.first;
+        // El tramo que cierra queda determinado por los demás: sin cota propia
+        if (!closed) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
         setChain(closed ? undefined : { first: ch.first, last: id });
       });
+      askDims(dims);
       return;
     }
     if (t === "rect") {
       const an = anchor();
       if (an.length === 0) return setAnchor([hit.p]);
-      if (dist(an[0], hit.p) > 1e-9) ui.change((sk) => ui.addRectangle(sk, an[0], hit.p));
-      return setAnchor([]);
+      if (dist(an[0], hit.p) > 1e-9)
+        ui.change((sk) => {
+          const l = ui.addRectangle(sk, an[0], hit.p);
+          dims.push(dim(sk, { type: "length", line: l[0], value: round(Math.abs(hit.p[0] - an[0][0])) }));
+          dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(hit.p[1] - an[0][1])) }));
+        });
+      setAnchor([]);
+      return askDims(dims);
     }
     if (t === "circle") {
       const an = anchor();
       if (an.length === 0) return setAnchor([hit.p]);
       const r = dist(an[0], hit.p);
-      if (r > 1e-9) ui.change((sk) => ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: r }));
-      return setAnchor([]);
+      if (r > 1e-9)
+        ui.change((sk) => {
+          const c = ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: round(r) });
+          dims.push(dim(sk, { type: "diameter", entity: c, value: round(2 * r) }));
+        });
+      setAnchor([]);
+      return askDims(dims);
     }
     if (t === "extend") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
@@ -392,11 +460,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         const center = ui.addPoint(sk, arc.center);
         const id = ui.addEntity(sk, arc.ccw ? { type: "arc", center, start: from.point, end } : { type: "arc", center, start: end, end: from.point });
         sk.constraints.push({ type: "tangent", a: from.entity, b: id });
+        dims.push(dim(sk, { type: "radius", entity: id, value: round(dist(arc.center, hit.p)) }));
         next = { point: end, dir: arc.outDir, entity: id };
       });
       // Encadenar: el próximo arco sale tangente a este
       setTangentFrom(next);
-      return;
+      return askDims(dims);
     }
     if (t === "trim") {
       // El enganche a puntos no sirve acá: la línea bajo el cursor
@@ -422,8 +491,10 @@ export const CadView: Component<CadViewProps> = (props) => {
           const lines = pts.map((p, i) => ui.addEntity(sk, { type: "line", start: p, end: pts[(i + 1) % n] }));
           pts.forEach((p) => sk.constraints.push({ type: "point_on_circle", point: p, circle }));
           for (let i = 1; i < n; i++) sk.constraints.push({ type: "equal", a: lines[0], b: lines[i] });
+          dims.push(dim(sk, { type: "radius", entity: circle, value: round(r) }));
         });
-      return setAnchor([]);
+      setAnchor([]);
+      return askDims(dims);
     }
     if (t === "slot") {
       const an = anchor();
@@ -452,8 +523,11 @@ export const CadView: Component<CadViewProps> = (props) => {
             { type: "tangent", a: bottom, b: arcA },
             { type: "equal", a: arcA, b: arcB },
           );
+          dims.push(dim(sk, { type: "distance", a: ca, b: cb, value: round(len) }));
+          dims.push(dim(sk, { type: "radius", entity: arcA, value: round(r) }));
         });
-      return setAnchor([]);
+      setAnchor([]);
+      return askDims(dims);
     }
     if (t === "arc") {
       const an = anchor();
@@ -463,9 +537,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       const ang = Math.atan2(hit.p[1] - c[1], hit.p[0] - c[0]);
       const b: P2 = [c[0] + r * Math.cos(ang), c[1] + r * Math.sin(ang)];
       ui.change((sk) => {
-        ui.addEntity(sk, { type: "arc", center: ui.addPoint(sk, c), start: ui.addPoint(sk, a), end: ui.addPoint(sk, b) });
+        const id = ui.addEntity(sk, { type: "arc", center: ui.addPoint(sk, c), start: ui.addPoint(sk, a), end: ui.addPoint(sk, b) });
+        dims.push(dim(sk, { type: "radius", entity: id, value: round(r) }));
       });
       setAnchor([]);
+      askDims(dims);
     }
   };
 
@@ -500,23 +576,38 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
         mode.done(result, hit.triangle);
+      } else if (mode.kind === "place") {
+        // Dónde va el sketch: un plano base o una cara plana
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true });
+        if (hit?.kind === "plane") {
+          ui.setPick({ kind: "none" });
+          mode.done({ type: hit.plane });
+        } else if (hit?.kind === "face") {
+          const info = await invoke<{ surface: string }>("cad_face_info", { face: hit.face });
+          if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana: elegir una cara plana o un plano base");
+          const face = await store.faceRef(hit.face);
+          ui.setPick({ kind: "none" });
+          mode.done({ type: "face", face });
+        }
       } else {
-        // Sin herramienta: describir lo que se clicó
-        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true });
-        if (!hit) {
-          ui.setHighlight({ faces: [], edges: [] });
+        // Sin herramienta: elegir caras, aristas, regiones de sketches y planos
+        // (Mayús o Ctrl suma a la selección), como en Onshape
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, regions: true, planes: true });
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (!hit || hit.kind === "scan") {
+          if (!additive) ui.clearPicks();
           return ui.setMessage(undefined);
         }
-        if (hit.kind === "face") {
-          ui.setHighlight({ faces: [hit.face], edges: [] });
+        if (hit.kind === "face") ui.pickToggle({ kind: "face", face: hit.face }, additive);
+        else if (hit.kind === "edge") ui.pickToggle({ kind: "edge", edge: hit.edge }, additive);
+        else if (hit.kind === "region") ui.pickToggle({ kind: "region", sketch: hit.sketch, region: hit.region }, additive);
+        else ui.pickToggle({ kind: "plane", plane: hit.plane }, additive);
+        if (hit.kind === "face" && ui.picks().length === 1) {
           const info = await invoke<{ surface: string; area: number; radius: number | null }>("cad_face_info", { face: hit.face });
           const names: Record<string, string> = { plane: "plana", cylinder: "cilíndrica", cone: "cónica", sphere: "esférica", torus: "tórica" };
           const radius = info.radius != null ? ` · radio ${info.radius.toFixed(3)} mm` : "";
           ui.setMessage(`Cara ${names[info.surface] ?? info.surface} · área ${info.area.toFixed(2)} mm²${radius}`);
-        } else if (hit.kind === "edge") {
-          ui.setHighlight({ faces: [], edges: [hit.edge] });
-          ui.setMessage(`Arista ${hit.edge + 1}`);
-        }
+        } else ui.setMessage(undefined);
       }
     } catch (err) {
       ui.setMessage(String(err));
@@ -564,6 +655,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else if (e.key === "Escape" && ui.pick().kind !== "none") {
       ui.cancelPick();
       e.stopPropagation();
+    } else if (e.key === "Escape" && ui.picks().length) {
+      ui.clearPicks();
+      e.stopPropagation();
     }
   };
   onMount(() => window.addEventListener("keydown", onKey, true));
@@ -606,11 +700,52 @@ export const CadView: Component<CadViewProps> = (props) => {
     };
     const rect = container.getBoundingClientRect();
     const out: { index: number; x: number; y: number; text: string; conflict: boolean }[] = [];
+    // Centro del sketch en pantalla: las etiquetas se corren hacia afuera de él
+    const pts = s.sketch.points;
+    const centroid: P2 = pts.length ? [pts.reduce((a, p) => a + p.x, 0) / pts.length, pts.reduce((a, p) => a + p.y, 0) / pts.length] : [0, 0];
+    const [mx, my] = viewer.screenOf(planeToWorld(s.plane, centroid));
+    /** Extremos de la línea o los puntos que acota (para correr la etiqueta a un costado) */
+    const ends = (c: SketchConstraint): [P2, P2] | undefined => {
+      if (c.type === "length" || c.type === "angle") {
+        const g = ent.get(c.type === "length" ? c.line : c.a);
+        const a = g?.type === "line" ? pt.get(g.start) : undefined;
+        const b = g?.type === "line" ? pt.get(g.end) : undefined;
+        return a && b ? [a, b] : undefined;
+      }
+      if (c.type === "distance" || c.type === "horizontal_distance" || c.type === "vertical_distance") {
+        const [a, b] = [pt.get(c.a), pt.get(c.b)];
+        return a && b ? [a, b] : undefined;
+      }
+      return undefined;
+    };
     s.sketch.constraints.forEach((c, index) => {
       const v = constraintValue(c);
       const a = anchor(c);
       if (v === undefined || !a) return;
-      const [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
+      let [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
+      // Correr 16 px perpendicular a lo acotado, hacia afuera del sketch, para
+      // no tapar la línea (y poder elegirla con un clic)
+      const e2 = ends(c);
+      if (e2) {
+        const [p0, p1] = e2.map((p) => viewer!.screenOf(planeToWorld(s.plane, p)));
+        let nx = -(p1[1] - p0[1]);
+        let ny = p1[0] - p0[0];
+        const l = Math.hypot(nx, ny) || 1;
+        nx /= l;
+        ny /= l;
+        if (nx * (x - mx) + ny * (y - my) < 0) {
+          nx = -nx;
+          ny = -ny;
+        }
+        x += nx * 22;
+        y += ny * 22;
+      } else {
+        const dx = x - mx;
+        const dy = y - my;
+        const l = Math.hypot(dx, dy) || 1;
+        x += (dx / l) * 14;
+        y += (dy / l) * 14;
+      }
       const prefix = c.type === "radius" ? "R " : c.type === "diameter" ? "Ø " : "";
       const suffix = c.type === "angle" ? "°" : "";
       const expr = (c as { expr?: string }).expr;
@@ -654,48 +789,76 @@ export const CadView: Component<CadViewProps> = (props) => {
       />
 
       {/* Cotas del sketch: clic para cambiar el valor */}
-      <For each={dimensions()}>
+      <Index each={dimensions()}>
         {(d) => (
           <Show
-            when={editingDim() === d.index}
+            when={editingDim() === d().index}
             fallback={
               <button
                 class={clsx(
                   "absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[11px] font-mono border",
-                  d.conflict ? "bg-error/20 border-error text-error" : "bg-bg-lighter/90 border-border text-text hover:border-accent",
+                  d().conflict ? "bg-error/20 border-error text-error" : "bg-bg-lighter/90 border-border text-text hover:border-accent",
+                  // Dibujando, los clics son para el dibujo (las cotas se piden solas)
+                  ui.tool() !== "select" && "pointer-events-none",
                 )}
-                style={{ left: `${d.x}px`, top: `${d.y}px` }}
+                style={{ left: `${d().x}px`, top: `${d().y}px` }}
                 onPointerDown={(e) => e.stopPropagation()}
-                onClick={() => setEditingDim(d.index)}
+                onClick={() => setEditingDim(d().index)}
               >
-                {d.text}
+                {d().text}
               </button>
             }
           >
             <input
-              ref={(el) => setTimeout(() => el.select())}
+              ref={(el) =>
+                setTimeout(() => {
+                  el.focus();
+                  el.select();
+                })
+              }
               type="text"
-              value={(ui.session()!.sketch.constraints[d.index] as { expr?: string }).expr ?? constraintValue(ui.session()!.sketch.constraints[d.index]!) ?? 0}
-              class="absolute -translate-x-1/2 -translate-y-1/2 w-28 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
-              style={{ left: `${d.x}px`, top: `${d.y}px` }}
+              // Solo al abrir: si el solver responde mientras se escribe, no pisa el texto
+              value={untrack(() => {
+                const c = ui.session()!.sketch.constraints[d().index]!;
+                return (c as { expr?: string }).expr ?? constraintValue(c) ?? 0;
+              })}
+              class="absolute -translate-x-1/2 -translate-y-1/2 w-20 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
+              style={{ left: `${d().x}px`, top: `${d().y}px` }}
               onPointerDown={(e) => e.stopPropagation()}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") e.currentTarget.blur();
-                if (e.key === "Escape") setEditingDim(undefined);
+              onKeyDown={async (e) => {
                 e.stopPropagation();
+                if (e.key === "Escape") {
+                  // Como en el visor: Esc corta las cotas pedidas y la herramienta en curso
+                  setDimQueue([]);
+                  setEditingDim(undefined);
+                  resetTool();
+                  return;
+                }
+                if (e.key !== "Enter" && e.key !== "Tab") return;
+                e.preventDefault();
+                // Enter/Tab: aplicar y pasar a la siguiente cota pedida
+                const input = e.currentTarget;
+                const text = input.value.trim();
+                const before = String(input.defaultValue);
+                if (text && text !== before) ui.setMessage(await ui.setConstraintText(d().index, text));
+                input.dataset.done = "1";
+                nextDim();
               }}
               onBlur={async (e) => {
-                const text = e.currentTarget.value;
-                if (editingDim() === d.index && text.trim()) {
-                  const problem = await ui.setConstraintText(d.index, text);
-                  ui.setMessage(problem);
+                const input = e.currentTarget;
+                if (input.dataset.done) return;
+                // Clic en otro lado: lo escrito vale; si no se escribió, queda lo dibujado
+                const text = input.value.trim();
+                if (editingDim() === d().index && text && text !== String(input.defaultValue)) {
+                  ui.setMessage(await ui.setConstraintText(d().index, text));
                 }
-                setEditingDim(undefined);
+                setDimQueue([]);
+                if (editingDim() === d().index) setEditingDim(undefined);
               }}
             />
           </Show>
         )}
-      </For>
+      </Index>
 
       {/* Barra superior */}
       <div class="absolute top-2 left-2 right-2 flex items-start gap-2 pointer-events-none">
@@ -706,6 +869,11 @@ export const CadView: Component<CadViewProps> = (props) => {
               <IconButton aria-label="Encuadrar todo" size="sm" onClick={() => viewer?.frameAll()}>
                 <Icons.FrameCorners size={14} />
               </IconButton>
+              <Tooltip content={ui.showPlanes() ? "Ocultar los planos base" : "Mostrar los planos base"}>
+                <IconButton aria-label="Planos base" size="sm" active={ui.showPlanes()} onClick={() => ui.setShowPlanes(!ui.showPlanes())}>
+                  <Icons.Square size={14} />
+                </IconButton>
+              </Tooltip>
               <Show when={props.scanMesh}>
                 <Tooltip content={scanVisible() ? "Ocultar el modelo de referencia" : "Mostrar el modelo de referencia"}>
                   <IconButton aria-label="Modelo de referencia" size="sm" active={scanVisible()} onClick={() => setScanVisible(!scanVisible())}>
