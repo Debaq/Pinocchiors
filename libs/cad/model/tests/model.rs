@@ -412,3 +412,41 @@ fn serde_roundtrip_and_step_import() {
     let back: Document = serde_json::from_str(&json).unwrap();
     assert_relative_eq!(volume(&back.evaluate()), v, max_relative = 1e-6);
 }
+
+#[test]
+fn cut_on_face_points_into_material() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 20.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    let mut s = Sketch::new();
+    s.circle([0.0, 0.0], 5.0);
+    let top = FaceRef { point: [10.0, 10.0, 20.0], normal: [0.0, 0.0, 1.0] };
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: top }, offset: 0.0, sketch: s });
+    let cut = doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        regions: RegionSelection::All,
+        extent: Extent::Blind { distance: 5.0 },
+        reverse: false, // hacia afuera de la cara: se da vuelta sola
+        op: BodyOp::Cut,
+    }));
+    let ev = doc.evaluate();
+    assert_all_ok(&ev);
+    // El origen del sketch en una cara es la proyección del origen del mundo:
+    // el círculo (0,0) r=5 queda en la esquina y corta un cuarto de cilindro
+    assert_relative_eq!(volume(&ev), 8000.0 - PI * 25.0 * 5.0 / 4.0, max_relative = 1e-6);
+
+    if let FeatureKind::Extrude(e) = &mut doc.get_mut(cut).unwrap().kind {
+        e.extent = Extent::ThroughAll;
+    }
+    let ev = doc.evaluate();
+    assert_all_ok(&ev);
+    assert_relative_eq!(volume(&ev), 8000.0 - PI * 25.0 * 20.0 / 4.0, max_relative = 1e-6);
+}

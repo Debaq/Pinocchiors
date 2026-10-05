@@ -60,7 +60,7 @@ Decisiones (2026-10-05):
 - [x] **F5 — App de escritorio** (`apps/desktop/src/cad.rs`): feature `cad` en `apps/desktop`, comandos Tauri (documento,
       agregar/editar/borrar operación, recalcular, teselado para el visor, exportar STEP/STL/3MF,
       convertir el sólido en el modelo de la app), guardado en `.pinocchio`.
-- [ ] **F6 — Espacio de trabajo "Diseñar"** en la web: árbol de operaciones, panel de parámetros,
+- [x] **F6 — Espacio de trabajo "Diseñar"** en la web: árbol de operaciones, panel de parámetros,
       primitivas, sketch básico (línea, rectángulo, círculo, arco) sobre plano o cara, extruir,
       elegir caras/aristas en el visor, redondeo. Textos sin mencionar Blender.
 - [ ] **F7 — Distribución**: workflow manual nuevo (no tocar `release.yml`) que compila OCCT
@@ -127,3 +127,18 @@ cargo test -p cad-model
   sirve de semilla. Exporta STEP exacto y STL/3MF/OBJ/PLY/GLB teselados; `cad_to_model`
   convierte el sólido en el modelo de la app. El diseño se guarda en `.pinocchio`
   (probado en MessagePack con enums etiquetados y bytes de STEP).
+- **2026-10-05 F6**: espacio "Diseñar" (`CadView` + `CadViewer` + `DesignStep`, estado en
+  `lib/cad.ts` y `lib/cadUi.ts`). Probado con el backend real sin Tauri (la sesión estaba
+  bloqueada): `examples/cad_http.rs` sirve los comandos `cad_*` por HTTP y un HTML temporal
+  reemplaza `__TAURI_INTERNALS__`; Chromium headless manejado por CDP desde Node 22
+  (WebSocket nativo, sin puppeteer). Flujos verificados: caja + sketch con rectángulo
+  dibujado + extrusión; triángulo con líneas cerrado con clics + arrastre de vértice +
+  círculo como agujero; cota de largo editada (50 mm exactos); redondeo eligiendo aristas en
+  el visor (volumen = teórico) y cambio de radio; Ctrl+Z; sketch sobre una cara + agujero
+  pasante; escaneo STL → cilindro elegido con un clic → cilindro CAD calzado sobre el escaneo.
+  - Bugs encontrados en la prueba: polilínea cortada en cada clic (efecto dependía del
+    objeto sesión entero), caída de la interfaz por carrera entre estado de herramienta y
+    sketch, bolsillos sobre caras que apuntaban hacia afuera (ahora una extrusión que resta
+    y no toca el sólido se da vuelta sola).
+  - Pendiente de UI: cotas dibujadas en el visor (hoy se editan en el panel), encuadre del
+    sketch al entrar, elegir regiones sueltas con clic, ejes de revolución con clic.

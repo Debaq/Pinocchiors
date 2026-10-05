@@ -352,10 +352,25 @@ impl Ctx<'_> {
         Ok(out)
     }
 
+    /// Extrusión. Si resta o interseca y hacia ese lado no toca el sólido (un
+    /// bolsillo dibujado sobre una cara apunta hacia afuera), se da vuelta sola.
     fn extrude(&self, e: &Extrude) -> R<Shape> {
+        let tool = self.extrude_dir(e, e.reverse)?;
+        let auto_flip = matches!(e.op, BodyOp::Cut | BodyOp::Intersect)
+            && matches!(e.extent, Extent::Blind { .. } | Extent::ThroughAll);
+        if auto_flip
+            && let Some(body) = &self.ev.body
+            && body.intersect(&tool).ok().and_then(|s| s.mass().ok()).is_none_or(|m| m.volume.abs() < 1e-9)
+        {
+            return self.extrude_dir(e, !e.reverse);
+        }
+        Ok(tool)
+    }
+
+    fn extrude_dir(&self, e: &Extrude, reverse: bool) -> R<Shape> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
         let faces = self.profile_faces(e.sketch, &e.regions)?;
-        let mut n = if e.reverse { scale(plane.normal, -1.0) } else { plane.normal };
+        let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
         let (start, length) = match &e.extent {
             Extent::Blind { distance } => (0.0, *distance),
             Extent::Symmetric { distance } => (-distance / 2.0, *distance),
