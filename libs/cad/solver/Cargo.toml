@@ -1,0 +1,16 @@
+[package]
+name = "cad-solver"
+description = "Solver de restricciones 2D para sketches, ajuste de primitivas y segmentación de mallas (portado de cad-blender)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+nalgebra = { workspace = true }
+nalgebra-sparse = "0.10"
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = { workspace = true }
