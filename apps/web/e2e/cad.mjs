@@ -136,6 +136,36 @@ const scenarios = {
     near((await body()).volume, 8000 - Math.PI * 25 * 20, 0.5, "volumen con agujero");
   },
 
+  async "anclajes a las aristas del sólido"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(2000);
+    await b.clickText("Sketch");
+    await sleep(300);
+    let [x, y] = await b.eval(`window.__cadViewer.screenOf([7, 7, 20])`);
+    await b.click(x, y, { wait: 2500 });
+    await b.clickText("Línea");
+    const glyph = () => b.eval(`document.querySelector("[data-snap]")?.dataset.snap`);
+    // Cerca de la esquina de la cara: vértice del sólido
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([20, 20, 20])`);
+    await b.click(x - 3, y + 2);
+    if ((await glyph()) !== "solid_vertex") throw new Error(`glifo en la esquina: ${await glyph()}`);
+    // Cerca del medio de la arista de adelante
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 0, 20])`);
+    await b.mouse("mouseMoved", x + 3, y - 2, { buttons: 0 });
+    await sleep(200);
+    if ((await glyph()) !== "solid_midpoint") throw new Error(`glifo en el medio: ${await glyph()}`);
+    await b.click(x + 3, y - 2, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const sk = (await call("cad_get_document")).features.find((f) => f.kind.type === "sketch").kind.sketch;
+    const [p, q] = sk.points.filter((r) => r.id !== sk.origin);
+    near(Math.hypot(p.x - q.x, p.y - q.y), Math.hypot(10, 20), 1e-3, "línea de la esquina al medio");
+    if (sk.constraints.filter((c) => c.type === "fixed").length !== 2) throw new Error("los extremos no quedaron fijos");
+    if (sk.constraints.some((c) => c.type === "length")) throw new Error("cota de largo entre dos anclajes");
+  },
+
   async "cota editada en el visor"(b) {
     await begin(b);
     await sketchOn(b);

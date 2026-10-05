@@ -32,7 +32,8 @@ Hoy (`CadView.tsx`, `snapped` / `placePoint`):
 | Intersección de dos curvas | Sí (fase 2) | Sobre las dos (las líneas se parten) |
 | Alineación con otro punto (línea punteada H/V) | Sí (fase 3) | Horizontal/vertical entre los dos puntos |
 | Paralela / perpendicular / tangente al dibujar una línea | Sí (fase 3) | `parallel` / `perpendicular` / `tangent` |
-| **Vértices y aristas del sólido** (al dibujar sobre una cara) | **No** | — |
+| Vértices, medios de aristas rectas y centros de aristas circulares del sólido | Sí (fase 4, primera versión) | Fijo en esa posición |
+| Sobre una arista del sólido contenida en el plano | Sí (fase 4, primera versión) | Ninguna (solo posición) |
 | Aviso visual de qué anclaje está activo | Sí (fase 1): punto resaltado y glifo | — |
 | Anclajes en todas las herramientas, Mayús para dibujar libre | Sí (fase 1) | — |
 
@@ -116,7 +117,11 @@ infer(sketch, cursor, { tolerancia, puntoAnterior?, entidadDeOrigen?, geometría
 4. **Geometría del sólido.**
    - Al dibujar sobre una cara: proyectar al plano sus vértices y aristas (bordes de la cara
      primero, después el resto visible) y ofrecerlos como candidatos.
-   - Primera versión: el anclaje solo toma la posición (sin restricción).
+   - Primera versión: *hecha el 2026-10-05.* `solidRefs` proyecta las aristas del teselado
+     (`cad_mesh`) al plano: vértices, medios de rectas y centros de circulares de todo el sólido
+     (proyectados), y "sobre la arista" solo para las que están en el plano. Vértice, medio y
+     centro dejan el punto **fijo** (no sigue al sólido si cambia); sobre la arista no deja
+     restricción. La Línea no pone cota de largo entre dos anclajes de este tipo.
    - Segunda versión, "Usar arista": entidad de construcción ligada a la arista del sólido (por
      su origen, como los redondeos) que se recalcula si el sólido cambia; los anclajes a ella sí
      dejan restricción.

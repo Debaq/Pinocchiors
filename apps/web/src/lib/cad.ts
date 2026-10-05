@@ -1067,6 +1067,9 @@ function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hi
   return out;
 }
 
+/** Vértice, centro o medio de una arista del sólido: el punto queda fijo ahí */
+export const isSolidPoint = (snap: Snap) => snap.kind === "solid_vertex" || snap.kind === "solid_center" || snap.kind === "solid_midpoint";
+
 /**
  * Punto para un anclaje (ver `sketchSnap.infer`): el existente, o uno nuevo
  * con la restricción que corresponde. Punto medio: parte la línea y deja las
@@ -1075,13 +1078,15 @@ function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hi
  * misma vertical que esos puntos. La dirección (paralela, perpendicular,
  * tangente) la pone la herramienta Línea, que crea la línea.
  * Sobre una línea: la parte (así cierra regiones). Sobre una curva: punto en
- * círculo.
+ * círculo. Vértice, centro o medio del sólido: fijo en esa posición (no sigue
+ * al sólido si cambia). Sobre una arista del sólido: solo la posición.
  */
 export function placeSnap(s: Sketch, snap: Snap): number {
   if (snap.id !== undefined && s.points.some((q) => q.id === snap.id)) return snap.id;
   const id = addPoint(s, snap.p);
   if (snap.align?.h !== undefined) s.constraints.push({ type: "horizontal_points", a: snap.align.h, b: id });
   if (snap.align?.v !== undefined) s.constraints.push({ type: "vertical_points", a: snap.align.v, b: id });
+  if (isSolidPoint(snap)) s.constraints.push({ type: "fixed", point: id, x: snap.p[0], y: snap.p[1] });
   const e = snap.entity;
   if (e === undefined) return id;
   if (snap.kind === "midpoint") {

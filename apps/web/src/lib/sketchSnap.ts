@@ -3,7 +3,7 @@
 // hace `placeSnap` en cad.ts. Sin dependencias de ejecución para probarlo con
 // node (e2e/sketchSnap.test.mjs).
 
-import type { P2, Sketch } from "./cad";
+import type { P2, P3, Plane, Sketch } from "./cad";
 
 export type SnapKind =
   /** Punto existente (extremo, vértice) */
@@ -33,6 +33,14 @@ export type SnapKind =
   | "perpendicular"
   /** Línea tangente al arco del que sale */
   | "tangent"
+  /** Vértice del sólido (proyectado al plano) */
+  | "solid_vertex"
+  /** Centro de una arista circular del sólido */
+  | "solid_center"
+  /** Punto medio de una arista recta del sólido */
+  | "solid_midpoint"
+  /** Sobre una arista del sólido que está en el plano del sketch */
+  | "on_edge"
   /** Nada cerca */
   | "free";
 
@@ -64,6 +72,22 @@ export interface InferOptions {
   from?: number;
   /** Puntos con los que no alinearse (los de la forma en curso) */
   noAlign?: number[];
+  /** Geometría del sólido proyectada al plano (`solidRefs`) */
+  solid?: SolidRefs;
+}
+
+/**
+ * Aristas del sólido vistas desde el plano del sketch: vértices, centros de
+ * aristas circulares y medios de las rectas (proyectados), y las aristas que
+ * están en el plano (para quedar sobre ellas). Solo posición: el punto que se
+ * crea no queda atado al sólido.
+ */
+export interface SolidRefs {
+  vertices: P2[];
+  centers: P2[];
+  midpoints: P2[];
+  /** Polilíneas de las aristas contenidas en el plano */
+  edges: P2[][];
 }
 
 /** Prioridad cuando hay varios candidatos cerca (menor gana), como Onshape */
@@ -82,6 +106,10 @@ const PRIORITY: Record<SnapKind, number> = {
   parallel: 8,
   perpendicular: 8,
   tangent: 8,
+  solid_vertex: 4,
+  solid_center: 4,
+  solid_midpoint: 5,
+  on_edge: 7,
   free: 9,
 };
 
@@ -100,6 +128,10 @@ export const SNAP_GLYPHS: Record<SnapKind, { glyph: string; label: string }> = {
   parallel: { glyph: "∥", label: "Paralela" },
   perpendicular: { glyph: "⊥", label: "Perpendicular" },
   tangent: { glyph: "◡", label: "Tangente" },
+  solid_vertex: { glyph: "●", label: "Vértice del sólido" },
+  solid_center: { glyph: "⊙", label: "Centro de la arista" },
+  solid_midpoint: { glyph: "△", label: "Medio de la arista" },
+  on_edge: { glyph: "∕", label: "Sobre la arista" },
   free: { glyph: "", label: "" },
 };
 
@@ -196,6 +228,85 @@ export function crossings(k1: Curve, k2: Curve): P2[] {
     out = [(-qb - Math.sqrt(disc)) / (2 * qa), (-qb + Math.sqrt(disc)) / (2 * qa)].map((u) => [l.a[0] + u * d[0], l.a[1] + u * d[1]] as P2);
   }
   return out.filter((p) => within(k1, p) && within(k2, p));
+}
+
+/**
+ * Proyecta las aristas del sólido (polilíneas en mm del CAD) al plano del
+ * sketch. Las rectas dan su punto medio y las circulares su centro (si el
+ * círculo queda paralelo al plano); los extremos son los vértices.
+ */
+export function solidRefs(edges: P3[][], plane: Plane): SolidRefs {
+  const [o, n, x] = [plane.origin, plane.normal, plane.x_dir];
+  const y: P3 = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+  const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const out: SolidRefs = { vertices: [], centers: [], midpoints: [], edges: [] };
+  // La malla viene en float32: tolerancia relativa al tamaño
+  let size = 0;
+  for (const poly of edges) for (const q of poly) size = Math.max(size, Math.abs(q[0]), Math.abs(q[1]), Math.abs(q[2]));
+  const eps = 1e-3 + 2e-5 * size;
+  const seen = new Set<string>();
+  const add = (list: P2[], p: P2) => {
+    const key = `${list === out.vertices ? "v" : list === out.centers ? "c" : "m"}${Math.round(p[0] / eps)},${Math.round(p[1] / eps)}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    list.push(p);
+  };
+  for (const poly of edges) {
+    if (poly.length < 2) continue;
+    const pts: P2[] = [];
+    let off = 0;
+    for (const q of poly) {
+      const d: P3 = [q[0] - o[0], q[1] - o[1], q[2] - o[2]];
+      pts.push([dot(d, x), dot(d, y)]);
+      off = Math.max(off, Math.abs(dot(d, n)));
+    }
+    const [a, b] = [pts[0], pts[pts.length - 1]];
+    const closed = dist(a, b) <= eps;
+    if (!closed) {
+      add(out.vertices, a);
+      add(out.vertices, b);
+    }
+    if (off <= eps) out.edges.push(pts);
+    const len = pts.slice(1).reduce((l, p, i) => l + dist(p, pts[i]), 0);
+    if (len <= eps) continue;
+    // Recta: todos los puntos sobre el segmento de los extremos
+    const lineDev = closed ? Infinity : Math.max(...pts.map((p) => curveDist(p, { id: 0, kind: "line", a, b })));
+    if (lineDev <= eps) {
+      if (dist(a, b) > eps) add(out.midpoints, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+      continue;
+    }
+    // Circular: círculo por tres puntos y todos a la misma distancia del centro
+    if (pts.length < 3) continue;
+    const c = circumcenter(pts[0], pts[Math.floor(pts.length / 3)], pts[Math.floor((2 * pts.length) / 3)]);
+    if (!c) continue;
+    const r = dist(c, pts[0]);
+    if (r > eps && pts.every((p) => Math.abs(dist(c, p) - r) <= Math.max(eps, 1e-3 * r))) add(out.centers, c);
+  }
+  return out;
+}
+
+function circumcenter(a: P2, b: P2, c: P2): P2 | undefined {
+  const d = 2 * (a[0] * (b[1] - c[1]) + b[0] * (c[1] - a[1]) + c[0] * (a[1] - b[1]));
+  if (Math.abs(d) < 1e-12) return undefined;
+  const [a2, b2, c2] = [a, b, c].map((p) => p[0] * p[0] + p[1] * p[1]);
+  return [(a2 * (b[1] - c[1]) + b2 * (c[1] - a[1]) + c2 * (a[1] - b[1])) / d, (a2 * (c[0] - b[0]) + b2 * (a[0] - c[0]) + c2 * (b[0] - a[0])) / d];
+}
+
+/** Punto más cercano de una polilínea */
+function nearestOnPolyline(poly: P2[], p: P2): P2 {
+  let best: P2 = poly[0];
+  let bd = Infinity;
+  for (let i = 0; i + 1 < poly.length; i++) {
+    const [a, b] = [poly[i], poly[i + 1]];
+    const dx = b[0] - a[0];
+    const dy = b[1] - a[1];
+    const l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+    const q: P2 = [a[0] + t * dx, a[1] + t * dy];
+    const d = dist(p, q);
+    if (d < bd) [best, bd] = [q, d];
+  }
+  return best;
 }
 
 /** Direcciones de salida desde `from`: paralela o perpendicular a una línea, tangente a su arco */
@@ -349,6 +460,12 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
         if (inArc(p)) offer({ p, kind: "on_circle", entity: e.id });
       }
     }
+  }
+  if (opts.solid) {
+    for (const p of opts.solid.vertices) offer({ p, kind: "solid_vertex" });
+    for (const p of opts.solid.centers) offer({ p, kind: "solid_center" });
+    for (const p of opts.solid.midpoints) offer({ p, kind: "solid_midpoint" });
+    for (const poly of opts.solid.edges) offer({ p: nearestOnPolyline(poly, cursor), kind: "on_edge" });
   }
   // Cruces: solo entre curvas que pasan cerca del cursor
   const near = s.entities.flatMap((e) => {

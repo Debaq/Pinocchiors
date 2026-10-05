@@ -4,8 +4,8 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
-import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -380,6 +380,26 @@ export const CadView: Component<CadViewProps> = (props) => {
     });
   });
 
+  // Aristas del sólido proyectadas al plano del sketch en curso (anclajes)
+  const solid = createMemo(() => {
+    const plane = ui.session()?.plane;
+    const m = store.mesh();
+    if (!plane || !m || !viewer) return undefined;
+    const s = viewer.mmPerUnit;
+    const edges: P3[][] = [];
+    let start = 0;
+    for (const end of m.edgeEnds) {
+      const poly: P3[] = [];
+      for (let i = start; i < end; i++) {
+        const [x, y, z] = m.edgePoints.subarray(i * 3, i * 3 + 3);
+        poly.push([x * s, -z * s, y * s]);
+      }
+      edges.push(poly);
+      start = end;
+    }
+    return solidRefs(edges, plane);
+  });
+
   /**
    * Posición del cursor sobre el plano con su anclaje (punto, origen, medio,
    * centro, cuadrante, sobre una curva). Con Mayús se dibuja libre.
@@ -395,6 +415,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     return infer(s.sketch, p, viewer.pixelSizeMm() * 8, {
       exclude: dragging !== undefined ? [dragging] : [],
       from,
+      solid: solid(),
       // Un rectángulo alineado con su primera esquina (o su centro) tendría ancho o alto cero
       noAlign: ui.tool() === "rect" || ui.tool() === "rect_center" ? anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])) : [],
     });
@@ -450,7 +471,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "line") {
       const ch = chain();
       let closed = false;
-      const snappedToPoint = hit.id !== undefined;
+      const snappedToPoint = hit.id !== undefined || isSolidPoint(hit);
       ui.change((sk) => {
         const id = placeSnap(sk, hit);
         if (!ch) {

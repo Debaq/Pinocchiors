@@ -2,7 +2,7 @@
 //   node apps/web/e2e/sketchSnap.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { infer } from "../src/lib/sketchSnap.ts";
+import { infer, solidRefs } from "../src/lib/sketchSnap.ts";
 
 /** Sketch con origen, una línea (0,0)-(10,0) que no sale del origen, un círculo y un arco */
 function sample() {
@@ -227,4 +227,59 @@ test("dibujando desde un punto: horizontal y vertical, y combinadas con alinears
   assert.equal(hv.guides.length, 2);
   // Lejos de los dos ejes: nada
   assert.equal(infer(s, [10, 7], 1, { from: 0 }).kind, "free");
+});
+
+/** Cara superior (z = 10) de una caja 40×20 con un agujero r = 5 en (10, 10) */
+function boxTop() {
+  const circle = Array.from({ length: 33 }, (_, i) => {
+    const t = (i / 32) * 2 * Math.PI;
+    return [10 + 5 * Math.cos(t), 10 + 5 * Math.sin(t), 10];
+  });
+  return [
+    [[0, 0, 10], [40, 0, 10]],
+    [[40, 0, 10], [40, 20, 10]],
+    [[40, 20, 10], [0, 20, 10]],
+    [[0, 20, 10], [0, 0, 10]],
+    [[0, 0, 0], [0, 0, 10]], // vertical: fuera del plano
+    circle,
+  ];
+}
+const top = { origin: [0, 0, 10], normal: [0, 0, 1], x_dir: [1, 0, 0] };
+const empty = () => ({ origin: 0, points: [{ id: 0, x: -100, y: -100 }], entities: [], constraints: [] });
+
+test("aristas del sólido: vértices, medios, centros y aristas en el plano", () => {
+  const r = solidRefs(boxTop(), top);
+  assert.equal(r.vertices.length, 4); // la vertical se proyecta sobre (0, 0)
+  assert.equal(r.midpoints.length, 4); // la vertical proyectada mide cero
+  assert.equal(r.centers.length, 1);
+  near(r.centers[0], [10, 10]);
+  assert.equal(r.edges.length, 5); // cuatro lados y el círculo; la vertical no
+});
+
+test("anclajes al sólido al dibujar sobre una cara", () => {
+  const solid = solidRefs(boxTop(), top);
+  const s = empty();
+  const v = infer(s, [40.3, 19.8], 1, { solid });
+  assert.equal(v.kind, "solid_vertex");
+  near(v.p, [40, 20]);
+  const c = infer(s, [10.4, 9.7], 1, { solid });
+  assert.equal(c.kind, "solid_center");
+  near(c.p, [10, 10]);
+  const m = infer(s, [20.2, 0.4], 1, { solid });
+  assert.equal(m.kind, "solid_midpoint");
+  near(m.p, [20, 0]);
+  const e = infer(s, [30, 0.5], 1, { solid });
+  assert.equal(e.kind, "on_edge");
+  near(e.p, [30, 0]);
+  // Un punto del sketch encima le gana al vértice del sólido
+  s.points.push({ id: 1, x: 40, y: 20 });
+  assert.equal(infer(s, [40.3, 19.8], 1, { solid }).kind, "point");
+});
+
+test("sketch en otro plano: vértices y centros proyectados, sin aristas", () => {
+  const base = { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0, 0] };
+  const r = solidRefs(boxTop(), base);
+  assert.equal(r.edges.length, 0);
+  assert.equal(r.centers.length, 1);
+  assert.equal(infer(empty(), [39.6, 0.2], 1, { solid: r }).kind, "solid_vertex");
 });
