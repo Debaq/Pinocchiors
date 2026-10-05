@@ -57,7 +57,7 @@ Decisiones (2026-10-05):
       segmentar + ajustar → primitivas detectadas (plano, cilindro, esfera) con su error;
       convertirlas en operaciones (plano de trabajo desde plano detectado, agujero/tetón desde
       cilindro, corte de la malla por plano → sketch). Banco con modelos de `~/Descargas`.
-- [ ] **F5 — App de escritorio**: feature `cad` en `apps/desktop`, comandos Tauri (documento,
+- [x] **F5 — App de escritorio** (`apps/desktop/src/cad.rs`): feature `cad` en `apps/desktop`, comandos Tauri (documento,
       agregar/editar/borrar operación, recalcular, teselado para el visor, exportar STEP/STL/3MF,
       convertir el sólido en el modelo de la app), guardado en `.pinocchio`.
 - [ ] **F6 — Espacio de trabajo "Diseñar"** en la web: árbol de operaciones, panel de parámetros,
@@ -118,3 +118,12 @@ cargo test -p cad-model
     Σ n·nᵀ + círculo de Kåsa en el corte), compite con RANSAC por menor error.
   - Pendiente: planos grandes con muchos triángulos finos se parten en 2–3 zonas en
     `detect_all` (no afecta `pick_plane`).
+- **2026-10-05 F5**: comandos `cad_*` en la app. El frontend edita el documento entero y lo
+  manda con `cad_set_document` (deshacer = copias del documento); el recálculo queda en
+  caché por huella del JSON. `cad_mesh` devuelve binario (posiciones/normales Y arriba en
+  unidades de la escena, índices, cara por triángulo, polilíneas de aristas) para que el
+  sólido calce sobre el escaneo. `cad_scan_*` toma el modelo cargado (Z arriba, mm según
+  `meters_per_unit`) con caché por huella de posiciones; el índice de triángulo del visor
+  sirve de semilla. Exporta STEP exacto y STL/3MF/OBJ/PLY/GLB teselados; `cad_to_model`
+  convierte el sólido en el modelo de la app. El diseño se guarda en `.pinocchio`
+  (probado en MessagePack con enums etiquetados y bytes de STEP).

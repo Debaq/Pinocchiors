@@ -158,6 +158,14 @@ pub struct AppState {
 
     /// Copias del estado para deshacer operaciones (ver `project::take_snapshot`)
     pub undo_snapshots: Mutex<crate::project::UndoSnapshots>,
+
+    // ── CAD ──
+    /// Diseño paramétrico abierto (se guarda en el proyecto)
+    pub cad_document: Mutex<Option<cad_model::Document>>,
+    /// Último recálculo del diseño
+    pub cad_cache: Mutex<Option<crate::cad::CadCache>>,
+    /// Modelo preparado para escaneo → CAD
+    pub cad_scan: Mutex<Option<crate::cad::ScanCache>>,
 }
 
 impl AppState {
@@ -191,6 +199,9 @@ impl AppState {
             scene_before_print_scale: Mutex::new(None),
             scene_edits: Mutex::new(Vec::new()),
             undo_snapshots: Mutex::new(Default::default()),
+            cad_document: Mutex::new(None),
+            cad_cache: Mutex::new(None),
+            cad_scan: Mutex::new(None),
         }
     }
 }
@@ -211,6 +222,9 @@ impl AppState {
         self.use_retopology.store(true, Ordering::SeqCst);
         self.reset_derived();
         *self.undo_snapshots.lock().unwrap() = Default::default();
+        *self.cad_document.lock().unwrap() = None;
+        *self.cad_cache.lock().unwrap() = None;
+        *self.cad_scan.lock().unwrap() = None;
     }
 
     /// La malla activa para esqueleto y pesos es la de quads

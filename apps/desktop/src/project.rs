@@ -69,6 +69,8 @@ struct ProjectState {
     print3d_pieces: Option<Vec<PieceDto>>,
     mesh_before_print_scale: Option<MeshDto>,
     scene_before_print_scale: Option<Scene>,
+    /// Diseño CAD (recetas: el sólido se recalcula al abrir)
+    cad: Option<cad_model::Document>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -460,6 +462,7 @@ fn capture(state: &AppState) -> ProjectState {
         }),
         mesh_before_print_scale: mesh(&state.mesh_before_print_scale),
         scene_before_print_scale: state.scene_before_print_scale.lock().unwrap().clone(),
+        cad: state.cad_document.lock().unwrap().clone(),
     }
 }
 
@@ -505,6 +508,9 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.print3d_pieces.lock().unwrap() = pieces;
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
+    *state.cad_document.lock().unwrap() = p.cad;
+    *state.cad_cache.lock().unwrap() = None;
+    *state.cad_scan.lock().unwrap() = None;
     Ok(())
 }
 
@@ -867,6 +873,22 @@ mod tests {
         state.use_retopology.store(true, Ordering::SeqCst);
         *state.mesh_before_repair.lock().unwrap() = Some(cube());
         *state.mesh.lock().unwrap() = Some(mesh.clone());
+        // Diseño CAD con sketch, restricciones y un STEP importado (bytes)
+        let mut doc = cad_model::Document::new();
+        let mut sk = cad_model::Sketch::new();
+        let lines = sk.rectangle([0.0, 0.0], [10.0, 5.0]);
+        sk.constrain(cad_model::SketchConstraint::Length { line: lines[0], value: 12.0 });
+        sk.circle([5.0, 2.5], 1.0);
+        let sid = doc.add(cad_model::FeatureKind::Sketch { plane: cad_model::PlaneSpec::Xz, offset: 2.0, sketch: sk });
+        doc.add(cad_model::FeatureKind::Extrude(cad_model::Extrude {
+            sketch: sid,
+            regions: cad_model::RegionSelection::Points { points: vec![[1.0, 1.0]] },
+            extent: cad_model::Extent::Symmetric { distance: 4.0 },
+            reverse: true,
+            op: cad_model::BodyOp::Join,
+        }));
+        doc.add(cad_model::FeatureKind::Import { format: cad_model::ImportFormat::Step, data: vec![0, 1, 2, 255], op: cad_model::BodyOp::Cut });
+        *state.cad_document.lock().unwrap() = Some(doc.clone());
 
         let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
         let dir = std::env::temp_dir().join(format!("pinocchio-test-{}", std::process::id()));
@@ -883,6 +905,7 @@ mod tests {
         let loaded = AppState::new();
         restore(&loaded, project).unwrap();
 
+        assert_eq!(loaded.cad_document.lock().unwrap().as_ref(), Some(&doc));
         let m = loaded.mesh.lock().unwrap().clone().unwrap();
         assert_eq!(m.vertices.len(), mesh.vertices.len());
         assert_eq!(m.edges.len(), mesh.edges.len());
