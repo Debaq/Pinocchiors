@@ -627,6 +627,8 @@ export const App: Component = () => {
   const [exportBoneShapes, setExportBoneShapes] = createSignal(false);
   /** Hay algo con qué trabajar: un modelo o, sin modelo, un esqueleto */
   const hasWork = () => meshLoaded() || !!skeletonData();
+  /** Algo que guardar en el proyecto: también un diseño CAD sin modelo */
+  const hasProjectWork = () => hasWork() || (cad.doc()?.features.length ?? 0) > 0;
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
   /** Compactar el mapa UV al exportar; sin elegir, sí cuando el mapa es para pintar */
   const [exportCompactUv, setExportCompactUv] = createSignal<boolean | undefined>();
@@ -5027,7 +5029,7 @@ export const App: Component = () => {
 
   /** Hay trabajo que se perdería: sin archivo propio, o con cambios desde que se guardó o abrió */
   const hasUnsavedWork = async () => {
-    if (!hasWork()) return false;
+    if (!hasProjectWork()) return false;
     if (!projectPath()) return true;
     try {
       return await invoke<boolean>("project_changed", { ui: projectUi() });
@@ -5278,8 +5280,8 @@ export const App: Component = () => {
 
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
-    if (!hasWork()) {
-      setStatusMessage("No hay nada que guardar: importa un modelo o elige un esqueleto");
+    if (!hasProjectWork()) {
+      setStatusMessage("No hay nada que guardar: importa un modelo, elige un esqueleto o empieza un diseño");
       return;
     }
     let path = as ? undefined : projectPath();
@@ -5537,8 +5539,8 @@ export const App: Component = () => {
   const fileMenuItems = (): MenuEntry[] => [
     { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
-    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasWork(), onSelect: () => handleSaveProject() },
-    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasWork(), onSelect: () => handleSaveProject(true) },
+    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
+    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
     { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
@@ -5557,7 +5559,7 @@ export const App: Component = () => {
   let autosaving = false;
   const autosaveTimer = setInterval(async () => {
     const settings = autosave();
-    if (autosaving || !hasWork() || isProcessing() || progress() || switching()) return;
+    if (autosaving || !hasProjectWork() || isProcessing() || progress() || switching()) return;
     const minutes = settings.enabled ? settings.minutes : RECOVERY_MINUTES;
     if (Date.now() - lastAutosave < minutes * 60_000) return;
     autosaving = true;
