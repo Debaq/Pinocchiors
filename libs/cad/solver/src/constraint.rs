@@ -92,6 +92,25 @@ pub enum Constraint {
         internal: bool,
     },
 
+    /// Mismo desplazamiento: b2 − b1 = a2 − a1 (copias de un patrón lineal)
+    EqualVector {
+        a1: usize,
+        a2: usize,
+        b1: usize,
+        b2: usize,
+    },
+
+    /// Misma rotación alrededor de `center`: `b2` es `b1` girado lo mismo que
+    /// `a2` respecto de `a1` (copias de un patrón circular; |a2 − c| = |a1 − c|
+    /// lo pone otra restricción)
+    EqualRotation {
+        center: usize,
+        a1: usize,
+        a2: usize,
+        b1: usize,
+        b2: usize,
+    },
+
     /// Longitudes iguales de dos líneas
     EqualLength {
         l1_p1: usize,
@@ -161,6 +180,8 @@ impl Constraint {
             Constraint::TangentLineCircle { .. } => 1,
             Constraint::TangentLineCircleVar { .. } => 1,
             Constraint::TangentCircles { .. } => 1,
+            Constraint::EqualVector { .. } => 2,
+            Constraint::EqualRotation { .. } => 2,
             Constraint::EqualLength { .. } => 1,
             Constraint::Midpoint { .. } => 2,
             Constraint::Symmetric { .. } => 2,
@@ -216,6 +237,8 @@ impl Constraint {
                 vec![*line_p1, *line_p2, *center_idx, *rim_idx]
             }
             Constraint::TangentCircles { c1, rim1, c2, rim2, .. } => vec![*c1, *rim1, *c2, *rim2],
+            Constraint::EqualVector { a1, a2, b1, b2 } => vec![*a1, *a2, *b1, *b2],
+            Constraint::EqualRotation { center, a1, a2, b1, b2 } => vec![*center, *a1, *a2, *b1, *b2],
             Constraint::EqualLength {
                 l1_p1,
                 l1_p2,
@@ -291,6 +314,14 @@ impl Constraint {
                 line_p2: r(line_p2),
                 center_idx: r(center_idx),
                 rim_idx: r(rim_idx),
+            },
+            Constraint::EqualVector { a1, a2, b1, b2 } => Constraint::EqualVector { a1: r(a1), a2: r(a2), b1: r(b1), b2: r(b2) },
+            Constraint::EqualRotation { center, a1, a2, b1, b2 } => Constraint::EqualRotation {
+                center: r(center),
+                a1: r(a1),
+                a2: r(a2),
+                b1: r(b1),
+                b2: r(b2),
             },
             Constraint::TangentCircles { c1, rim1, c2, rim2, internal } => Constraint::TangentCircles {
                 c1: r(c1),
@@ -452,6 +483,24 @@ impl Constraint {
                 // Lineal como TangentLineCircle (ver ahí por qué no cuadrática)
                 let cross = d.x * f.y - d.y * f.x;
                 vec![cross.abs() / len - (points[*rim_idx].co - c.co).norm()]
+            }
+
+            Constraint::EqualVector { a1, a2, b1, b2 } => {
+                let (a, b) = (points[*a2].co - points[*a1].co, points[*b2].co - points[*b1].co);
+                vec![b.x - a.x, b.y - a.y]
+            }
+
+            Constraint::EqualRotation { center, a1, a2, b1, b2 } => {
+                let c = points[*center].co;
+                let (u, v) = (points[*a1].co - c, points[*a2].co - c);
+                let (a, b) = (points[*b1].co - c, points[*b2].co - c);
+                let uu = u.dot(&u);
+                if uu < 1e-24 {
+                    return vec![0.0, 0.0];
+                }
+                // Giro de u a v (con |v| = |u|): coseno y seno
+                let (cos, sin) = (u.dot(&v) / uu, (u.x * v.y - u.y * v.x) / uu);
+                vec![b.x - (cos * a.x - sin * a.y), b.y - (sin * a.x + cos * a.y)]
             }
 
             Constraint::TangentCircles { c1, rim1, c2, rim2, internal } => {
@@ -711,7 +760,20 @@ impl Constraint {
                 self.jacobian_numerical(points)
             }
 
-            Constraint::TangentLineCircleVar { .. } | Constraint::TangentCircles { .. } => self.jacobian_numerical(points),
+            Constraint::TangentLineCircleVar { .. } | Constraint::TangentCircles { .. } | Constraint::EqualRotation { .. } => {
+                self.jacobian_numerical(points)
+            }
+
+            Constraint::EqualVector { a1, a2, b1, b2 } => vec![
+                (0, *a1, 1.0, 0.0),
+                (0, *a2, -1.0, 0.0),
+                (0, *b1, -1.0, 0.0),
+                (0, *b2, 1.0, 0.0),
+                (1, *a1, 0.0, 1.0),
+                (1, *a2, 0.0, -1.0),
+                (1, *b1, 0.0, -1.0),
+                (1, *b2, 0.0, 1.0),
+            ],
 
             Constraint::EqualLength {
                 l1_p1,

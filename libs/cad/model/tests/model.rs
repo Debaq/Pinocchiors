@@ -701,3 +701,65 @@ fn loose_point_entity_does_not_form_regions() {
     let json = serde_json::to_string(&Geometry::Point { point: 3 }).unwrap();
     assert_eq!(json, r#"{"type":"point","point":3}"#);
 }
+
+#[test]
+fn linear_pattern_copies_follow_spacing_and_size() {
+    let (mut s, l, [cw, _]) = plate_sketch(10.0, 5.0);
+    s.solve().unwrap();
+    // Copia de los 4 puntos, corrida 20 en x; solo el primer par lleva cotas
+    let orig: Vec<u32> = l.iter().map(|&id| match s.entity(id).unwrap().geometry {
+        Geometry::Line { start, .. } => start,
+        _ => unreachable!(),
+    }).collect();
+    let copy: Vec<u32> = orig.iter().map(|&p| {
+        let q = s.point(p).unwrap();
+        s.add_point(q[0] + 20.0, q[1])
+    }).collect();
+    for i in 0..4 {
+        s.add_line(copy[i], copy[(i + 1) % 4]);
+    }
+    let gap = s.constrain(SketchConstraint::HorizontalDistance { a: orig[0], b: copy[0], value: 20.0, reference: false });
+    s.constrain(SketchConstraint::VerticalDistance { a: orig[0], b: copy[0], value: 0.0, reference: false });
+    for i in 1..4 {
+        s.constrain(SketchConstraint::EqualOffset { a1: orig[0], a2: copy[0], b1: orig[i], b2: copy[i] });
+    }
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    s.constraints[gap].set_value(30.0);
+    s.constraints[cw].set_value(12.0);
+    s.solve().unwrap();
+    // Esquina opuesta de la copia: (30 + 12, 5)
+    let q = s.point(copy[2]).unwrap();
+    assert_relative_eq!(q[0], 42.0, epsilon = 1e-6);
+    assert_relative_eq!(q[1], 5.0, epsilon = 1e-6);
+}
+
+#[test]
+fn circular_pattern_copies_rotate_together() {
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    let seg = s.line([10.0, 0.0], [14.0, 1.0]);
+    let Geometry::Line { start: p0, end: p1 } = s.entity(seg).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Fixed { point: p0, x: 10.0, y: 0.0 });
+    s.constrain(SketchConstraint::Fixed { point: p1, x: 14.0, y: 1.0 });
+    // Copia girada 90°: el primer par con radios iguales y ángulo; el resto, mismo giro
+    let (q0, q1) = (s.add_point(0.0, 10.0), s.add_point(-1.0, 14.0));
+    s.add_line(q0, q1);
+    let r0 = s.add_line(o, p0);
+    let r1 = s.add_line(o, q0);
+    for id in [r0, r1] {
+        s.entities.iter_mut().find(|e| e.id == id).unwrap().construction = true;
+    }
+    s.constrain(SketchConstraint::Equal { a: r0, b: r1 });
+    let ang = s.constrain(SketchConstraint::Angle { a: r0, b: r1, degrees: 90.0, reference: false });
+    s.constrain(SketchConstraint::EqualRotation { center: o, a1: p0, a2: q0, b1: p1, b2: q1 });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    // A 150°: la copia de (14, 1) es (14, 1) girado 150°
+    s.constraints[ang].set_value(150.0);
+    s.solve().unwrap();
+    let (c, sn) = (150f64.to_radians().cos(), 150f64.to_radians().sin());
+    let q = s.point(q1).unwrap();
+    assert_relative_eq!(q[0], 14.0 * c - sn, epsilon = 1e-6);
+    assert_relative_eq!(q[1], 14.0 * sn + c, epsilon = 1e-6);
+}

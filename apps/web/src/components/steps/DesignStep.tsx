@@ -12,6 +12,9 @@ import {
   isReference,
   emptySketch,
   filletCorner,
+  circularPattern,
+  linearPattern,
+  mirrorEntities,
   linesAt,
   offsetEntities,
   offsetPlane,
@@ -1411,6 +1414,9 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
   const [offsetDist, setOffsetDist] = createSignal(2);
+  const [patternCount, setPatternCount] = createSignal(3);
+  const [patternKind, setPatternKind] = createSignal<"linear" | "circular">("linear");
+  const [patternStep, setPatternStep] = createSignal<P2>([20, 0]);
   const s = () => ui.session()!;
   const sketch = (): Sketch => s().sketch;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
@@ -1555,6 +1561,69 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 }}
               >
                 Equidistante
+              </Button>
+            </div>
+          </Show>
+          <Show when={selEntities().length > 0}>
+            <div class="space-y-1.5 border-t border-border pt-1.5">
+              <Show when={lines().length > 0 && selEntities().length > 1}>
+                <Button
+                  size="sm"
+                  title="El eje es la primera línea elegida; lo demás se copia reflejado"
+                  onClick={() => {
+                    const ids = selEntities().map((e) => e!.id);
+                    let msg: string | undefined;
+                    ui.change((sk) => (msg = mirrorEntities(sk, ids, lines()[0]!.id)));
+                    ui.setMessage(msg);
+                    if (!msg) ui.setSelection([]);
+                  }}
+                >
+                  Simetría (eje: primera línea elegida)
+                </Button>
+              </Show>
+              <div class="flex items-end gap-1.5">
+                <div class="flex-1">
+                  <Num label="Cantidad" min={2} value={patternCount()} onCommit={(v) => setPatternCount(Math.max(2, Math.round(v)))} />
+                </div>
+                <Select
+                  options={[
+                    { value: "linear", label: "Lineal" },
+                    { value: "circular", label: "Circular" },
+                  ]}
+                  value={patternKind()}
+                  onChange={(v) => setPatternKind(v as "linear" | "circular")}
+                />
+              </div>
+              <Show
+                when={patternKind() === "linear"}
+                fallback={
+                  <p class="text-[11px] text-text-dim">
+                    {selPoints().length === 1 ? "Alrededor del punto elegido" : "Alrededor del origen (o elegir también un punto)"}, repartidos en la vuelta
+                  </p>
+                }
+              >
+                <div class="flex gap-1.5">
+                  <Num label="X" suffix="mm" step={1} value={patternStep()[0]} onCommit={(v) => setPatternStep([v, patternStep()[1]])} />
+                  <Num label="Y" suffix="mm" step={1} value={patternStep()[1]} onCommit={(v) => setPatternStep([patternStep()[0], v])} />
+                </div>
+              </Show>
+              <Button
+                size="sm"
+                onClick={() => {
+                  const ids = selEntities().map((e) => e!.id);
+                  const n = patternCount();
+                  let msg: string | undefined;
+                  if (patternKind() === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, patternStep())));
+                  else {
+                    const center = selPoints().length === 1 ? selPoints()[0] : sketch().origin;
+                    if (center === undefined) msg = "Elegir el punto alrededor del cual repetir";
+                    else ui.change((sk) => (msg = circularPattern(sk, ids, n, center)));
+                  }
+                  ui.setMessage(msg);
+                  if (!msg) ui.setSelection([]);
+                }}
+              >
+                Repetir en patrón
               </Button>
             </div>
           </Show>

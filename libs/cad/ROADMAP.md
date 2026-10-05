@@ -250,3 +250,11 @@ cargo test -p cad-model
   se guarda antihorario, al revés si pasa por el otro lado; tecla 3), punto suelto
   (`Geometry::Point`, no forma regiones; tecla O) y Q para construcción sí/no en lo elegido.
   `geometryPoints` reemplaza las cadenas de ternarios que daban por hecho "si no, es arco".
+- **2026-10-05 Simetría y patrones en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 5):
+  simetría respecto de la primera línea elegida (cada punto copiado `symmetric` con su
+  original, los que están sobre el eje se comparten, los arcos se invierten). Patrón lineal y
+  circular con dos restricciones nuevas del solver, `EqualVector` (mismo desplazamiento) y
+  `EqualRotation` (mismo giro alrededor de un centro): solo el primer par lleva cotas (distancia
+  horizontal y vertical, o radios iguales y ángulo entre dos líneas de construcción) y cambiar
+  esa cota mueve todas las copias. Con 2 en total el centro es punto medio (180° es inestable
+  con `atan2`). Los círculos copiados llevan `equal` (el radio es incógnita).

@@ -103,6 +103,8 @@ export type SketchConstraint =
   | { type: "point_on_circle"; point: number; circle: number }
   | { type: "midpoint"; point: number; line: number }
   | { type: "symmetric"; a: number; b: number; line: number }
+  | { type: "equal_offset"; a1: number; a2: number; b1: number; b2: number }
+  | { type: "equal_rotation"; center: number; a1: number; a2: number; b1: number; b2: number }
   | { type: "distance"; a: number; b: number; value: number; reference?: boolean }
   | { type: "horizontal_distance"; a: number; b: number; value: number; reference?: boolean }
   | { type: "vertical_distance"; a: number; b: number; value: number; reference?: boolean }
@@ -454,6 +456,153 @@ export function geometryPoints(g: Geometry): number[] {
     case "point":
       return [g.point];
   }
+}
+
+/**
+ * Copia de las entidades con sus puntos pasados por `map` (los que devuelve
+ * igual se comparten). Los círculos copiados quedan con el mismo radio;
+ * `flip` invierte los arcos (la simetría cambia el sentido).
+ */
+function copyEntities(s: Sketch, ids: number[], map: (p: number) => number, flip = false): number[] {
+  const out: number[] = [];
+  for (const id of ids) {
+    const e = s.entities.find((x) => x.id === id);
+    if (!e) continue;
+    const g = e.geometry;
+    let copy: Geometry;
+    if (g.type === "line") copy = { type: "line", start: map(g.start), end: map(g.end) };
+    else if (g.type === "circle") copy = { type: "circle", center: map(g.center), radius: g.radius };
+    else if (g.type === "arc") copy = flip ? { type: "arc", center: map(g.center), start: map(g.end), end: map(g.start) } : { type: "arc", center: map(g.center), start: map(g.start), end: map(g.end) };
+    else if (g.type === "spline") copy = { type: "spline", points: g.points.map(map), closed: g.closed };
+    else copy = { type: "point", point: map(g.point) };
+    const c = addEntity(s, copy);
+    if (e.construction) s.entities.find((x) => x.id === c)!.construction = true;
+    if (g.type === "circle") s.constraints.push({ type: "equal", a: id, b: c });
+    out.push(c);
+  }
+  return out;
+}
+
+/** Puntos de las entidades, sin repetir, en orden */
+function pointsOfEntities(s: Sketch, ids: number[]): number[] {
+  const out: number[] = [];
+  for (const id of ids) {
+    const e = s.entities.find((x) => x.id === id);
+    for (const p of e ? geometryPoints(e.geometry) : []) if (!out.includes(p)) out.push(p);
+  }
+  return out;
+}
+
+/**
+ * Simetría: copia las entidades reflejadas respecto de la línea `axis`. Cada
+ * punto copiado queda simétrico de su original; los que están sobre el eje
+ * se comparten. Devuelve un mensaje si no se puede.
+ */
+export function mirrorEntities(s: Sketch, ids: number[], axis: number): string | undefined {
+  const ax = s.entities.find((e) => e.id === axis)?.geometry;
+  if (ax?.type !== "line") return "El eje de la simetría tiene que ser una línea";
+  const [A, B] = [pointOf(s, ax.start), pointOf(s, ax.end)];
+  const d: P2 = [B[0] - A[0], B[1] - A[1]];
+  const l2 = d[0] * d[0] + d[1] * d[1];
+  if (l2 === 0) return "El eje no tiene largo";
+  const items = ids.filter((id) => id !== axis);
+  if (!items.length) return "Elegir también lo que se refleja";
+  const tol = 1e-9 * Math.max(1, Math.sqrt(l2));
+  const made = new Map<number, number>();
+  const map = (p: number): number => {
+    if (made.has(p)) return made.get(p)!;
+    const P = pointOf(s, p);
+    const t = ((P[0] - A[0]) * d[0] + (P[1] - A[1]) * d[1]) / l2;
+    const foot: P2 = [A[0] + t * d[0], A[1] + t * d[1]];
+    if (Math.hypot(P[0] - foot[0], P[1] - foot[1]) <= tol) {
+      made.set(p, p);
+      return p;
+    }
+    const q = addPoint(s, [2 * foot[0] - P[0], 2 * foot[1] - P[1]]);
+    s.constraints.push({ type: "symmetric", a: p, b: q, line: axis });
+    made.set(p, q);
+    return q;
+  };
+  copyEntities(s, items, map, true);
+  return undefined;
+}
+
+/**
+ * Patrón lineal: `count` en total (el original y count − 1 copias) corridas de
+ * a `offset`. Solo el primer par lleva cotas (distancia horizontal y
+ * vertical); el resto sigue con "mismo desplazamiento".
+ */
+export function linearPattern(s: Sketch, ids: number[], count: number, offset: P2): string | undefined {
+  const pts = pointsOfEntities(s, ids);
+  if (!pts.length || count < 2) return "Elegir qué repetir y al menos 2 en total";
+  let prev = new Map(pts.map((p) => [p, p]));
+  let master: [number, number] | undefined;
+  for (let k = 1; k < count; k++) {
+    const next = new Map<number, number>();
+    for (const p of pts) {
+      const P = pointOf(s, p);
+      const q = addPoint(s, [P[0] + k * offset[0], P[1] + k * offset[1]]);
+      next.set(p, q);
+      if (!master) {
+        master = [p, q];
+        s.constraints.push({ type: "horizontal_distance", a: p, b: q, value: offset[0] }, { type: "vertical_distance", a: p, b: q, value: offset[1] });
+      } else s.constraints.push({ type: "equal_offset", a1: master[0], a2: master[1], b1: prev.get(p)!, b2: q });
+    }
+    copyEntities(s, ids, (p) => next.get(p) ?? p);
+    prev = next;
+  }
+  return undefined;
+}
+
+/**
+ * Patrón circular alrededor del punto `center`: `count` en total repartidos
+ * en la vuelta. El primer par lleva radios iguales y una cota de ángulo
+ * (entre dos líneas de construcción); el resto sigue con "mismo giro".
+ */
+export function circularPattern(s: Sketch, ids: number[], count: number, center: number): string | undefined {
+  const pts = pointsOfEntities(s, ids);
+  const lead = pts.find((p) => p !== center);
+  if (lead === undefined || count < 2) return "Elegir qué repetir y al menos 2 en total";
+  const C = pointOf(s, center);
+  const step = (2 * Math.PI) / count;
+  const rot = (P: P2, a: number): P2 => {
+    const [x, y] = [P[0] - C[0], P[1] - C[1]];
+    return [C[0] + x * Math.cos(a) - y * Math.sin(a), C[1] + x * Math.sin(a) + y * Math.cos(a)];
+  };
+  let prev = new Map(pts.map((p) => [p, p]));
+  let master: [number, number] | undefined;
+  for (let k = 1; k < count; k++) {
+    const next = new Map<number, number>();
+    for (const p of pts) {
+      if (p === center) {
+        next.set(p, p);
+        continue;
+      }
+      const q = addPoint(s, rot(pointOf(s, p), k * step));
+      next.set(p, q);
+      if (!master && p === lead) {
+        master = [p, q];
+        if (count === 2) {
+          // Media vuelta: el centro es el punto medio (un ángulo de 180° es inestable en el solver)
+          const d = addEntity(s, { type: "line", start: p, end: q });
+          s.entities.find((x) => x.id === d)!.construction = true;
+          s.constraints.push({ type: "midpoint", point: center, line: d });
+        } else {
+          const r0 = addEntity(s, { type: "line", start: center, end: p });
+          const r1 = addEntity(s, { type: "line", start: center, end: q });
+          for (const r of [r0, r1]) s.entities.find((x) => x.id === r)!.construction = true;
+          s.constraints.push({ type: "equal", a: r0, b: r1 }, { type: "angle", a: r0, b: r1, degrees: +((step * 180) / Math.PI).toFixed(6) });
+        }
+      }
+    }
+    for (const p of pts) {
+      if (p === center || (k === 1 && p === lead)) continue;
+      s.constraints.push({ type: "equal_rotation", center, a1: master![0], a2: master![1], b1: prev.get(p)!, b2: next.get(p)! });
+    }
+    copyEntities(s, ids, (p) => next.get(p) ?? p);
+    prev = next;
+  }
+  return undefined;
 }
 
 /** Borra una entidad, sus restricciones y los puntos que quedan sueltos */
@@ -1109,6 +1258,8 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   point_on_circle: "Punto en círculo",
   midpoint: "Punto medio",
   symmetric: "Simétricos",
+  equal_offset: "Patrón lineal",
+  equal_rotation: "Patrón circular",
   distance: "Distancia",
   horizontal_distance: "Distancia horizontal",
   vertical_distance: "Distancia vertical",

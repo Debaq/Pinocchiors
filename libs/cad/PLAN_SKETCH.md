@@ -102,7 +102,7 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
 3. **Colores por entidad** y número de grados libres; cotas de referencia. *Hecha el 2026-10-05.*
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
    rápida. *Hecha el 2026-10-05.*
-5. **Simetría y patrón en el sketch.**
+5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05.*
 6. **Elipse y spline con manijas.**
 7. **Texto** (después de decidir fuentes).
 

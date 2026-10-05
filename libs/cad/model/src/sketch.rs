@@ -79,6 +79,11 @@ pub enum SketchConstraint {
     PointOnCircle { point: u32, circle: u32 },
     Midpoint { point: u32, line: u32 },
     Symmetric { a: u32, b: u32, line: u32 },
+    /// Patrón lineal: `b2 − b1 = a2 − a1` (puntos).
+    EqualOffset { a1: u32, a2: u32, b1: u32, b2: u32 },
+    /// Patrón circular: `b2` es `b1` girado alrededor de `center` lo mismo que
+    /// `a2` respecto de `a1` (puntos).
+    EqualRotation { center: u32, a1: u32, a2: u32, b1: u32, b2: u32 },
     Distance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
     /// `b.x − a.x = value`
     HorizontalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
@@ -155,6 +160,8 @@ impl SketchConstraint {
             PointOnLine { point: q, line } | Midpoint { point: q, line } => p(q) || e(line),
             PointOnCircle { point: q, circle } => p(q) || e(circle),
             Symmetric { a, b, line } => p(a) || p(b) || e(line),
+            EqualOffset { a1, a2, b1, b2 } => p(a1) || p(a2) || p(b1) || p(b2),
+            EqualRotation { center, a1, a2, b1, b2 } => p(center) || p(a1) || p(a2) || p(b1) || p(b2),
             Distance { a, b, .. } | HorizontalDistance { a, b, .. } | VerticalDistance { a, b, .. } => p(a) || p(b),
             Radius { entity: x, .. } | Diameter { entity: x, .. } => e(x),
         }
@@ -658,6 +665,16 @@ impl Sketch {
                 let (l1, l2) = line(l)?;
                 vec![Constraint::Symmetric { p1_idx: ix(a)?, p2_idx: ix(b)?, line_p1: l1, line_p2: l2 }]
             }
+            S::EqualOffset { a1, a2, b1, b2 } => {
+                vec![Constraint::EqualVector { a1: ix(a1)?, a2: ix(a2)?, b1: ix(b1)?, b2: ix(b2)? }]
+            }
+            S::EqualRotation { center, a1, a2, b1, b2 } => vec![Constraint::EqualRotation {
+                center: ix(center)?,
+                a1: ix(a1)?,
+                a2: ix(a2)?,
+                b1: ix(b1)?,
+                b2: ix(b2)?,
+            }],
             S::Distance { a, b, value, .. } => vec![Constraint::Distance { p1_idx: ix(a)?, p2_idx: ix(b)?, distance: value }],
             S::HorizontalDistance { a, b, value, .. } => {
                 vec![Constraint::HorizontalDist { p1_idx: ix(b)?, p2_idx: ix(a)?, distance: value }]

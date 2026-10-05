@@ -648,6 +648,67 @@ const scenarios = {
     near(Math.min(...xs), -0.3 * S, 1e-6, "lado izquierdo");
   },
 
+  async "simetría y patrones en el sketch"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    // Eje vertical desde el origen y un círculo a la derecha
+    await b.clickText("Línea");
+    await b.click(...(await at(0, 0)));
+    await b.click(...(await at(0, 0.3)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Círculo");
+    await b.click(...(await at(0.15, 0.1)));
+    await b.click(...(await at(0.19, 0.1)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    // Simetría: primero el eje, después el círculo
+    await b.clickText("Elegir");
+    await b.click(...(await at(0, 0.2)), { wait: 300 });
+    await b.click(...(await at(0.15, 0.14)), { wait: 300, modifiers: 8 });
+    await b.clickText("Simetría (eje: primera línea elegida)");
+    await sleep(1000);
+    // Patrón lineal del círculo de la derecha: 3 en total, de a 20 mm en x
+    await b.click(...(await at(0.15, 0.14)), { wait: 300 });
+    await setInput(b, "Cantidad", 3);
+    await b.clickText("Repetir en patrón");
+    await sleep(1000);
+    // Patrón circular del reflejado alrededor del origen: 4 en total
+    await b.click(...(await at(-0.15, 0.14)), { wait: 300 });
+    await setInput(b, "Cantidad", 4);
+    await b.clickText("Lineal");
+    await b.clickText("Circular");
+    await b.clickText("Repetir en patrón");
+    await sleep(1200);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const centers = () => sk.entities.filter((e) => e.geometry.type === "circle").map((e) => sk.points.find((p) => p.id === e.geometry.center));
+    if (centers().length !== 7) throw new Error(`círculos: ${centers().length}`);
+    const has = (list, x, y, what) => {
+      if (!list.some((c) => Math.abs(c.x - x) < 0.05 && Math.abs(c.y - y) < 0.05)) throw new Error(`${what}: ${JSON.stringify(list.map((c) => [c.x, c.y]))}`);
+    };
+    const [x0, y0] = [0.15 * S, 0.1 * S];
+    has(centers(), -x0, y0, "reflejado");
+    has(centers(), x0 + 20, y0, "copia lineal 1");
+    has(centers(), x0 + 40, y0, "copia lineal 2");
+    has(centers(), -y0, -x0, "copia circular a 90°");
+    has(centers(), x0, -y0, "copia circular a 180°");
+    // El paso del patrón lineal es una cota: a 25 mm las copias la siguen
+    const step = sk.constraints.find((k) => k.type === "horizontal_distance");
+    step.value = 25;
+    await call("cad_set_document", { document: doc });
+    const solved = (await evaluate()).sketches[0].sketch;
+    const after = solved.entities.filter((e) => e.geometry.type === "circle").map((e) => solved.points.find((p) => p.id === e.geometry.center));
+    // El original no tiene cotas de posición (el solver también lo corre): se mide relativo
+    const row = after.filter((c) => c.x > 0 && Math.abs(c.y - after[0].y) < 1e-6).map((c) => c.x).sort((a, b) => a - b);
+    if (row.length !== 3) throw new Error(`fila del patrón: ${row}`);
+    near(row[1] - row[0], 25, 1e-6, "paso 1");
+    near(row[2] - row[0], 50, 1e-6, "paso 2");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");
