@@ -525,3 +525,110 @@ fn old_sketch_without_origin_still_loads() {
     let o = s.ensure_origin();
     assert_eq!(o, 3, "id nuevo, no pisa los existentes");
 }
+
+fn radius_of(s: &Sketch, id: u32) -> f64 {
+    let Geometry::Circle { radius, .. } = s.entity(id).unwrap().geometry else { unreachable!() };
+    radius
+}
+
+fn center_of(s: &Sketch, id: u32) -> [f64; 2] {
+    let Geometry::Circle { center, .. } = s.entity(id).unwrap().geometry else { unreachable!() };
+    s.point(center).unwrap()
+}
+
+#[test]
+fn circle_radius_is_solved_through_three_points() {
+    // Círculo por tres puntos fijos: centro y radio salen del solver
+    let mut s = Sketch::new();
+    let c = s.circle([1.0, 1.0], 2.0);
+    for (x, y) in [(5.0, 0.0), (-5.0, 0.0), (0.0, 5.0)] {
+        let p = s.add_point(x, y);
+        s.constrain(SketchConstraint::Fixed { point: p, x, y });
+        s.constrain(SketchConstraint::PointOnCircle { point: p, circle: c });
+    }
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_relative_eq!(radius_of(&s, c), 5.0, epsilon = 1e-6);
+    let o = center_of(&s, c);
+    assert_relative_eq!(o[0], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(o[1], 0.0, epsilon = 1e-6);
+}
+
+#[test]
+fn circle_without_dimension_has_free_radius() {
+    let mut s = Sketch::new();
+    let c = s.circle([3.0, 4.0], 2.5);
+    let Geometry::Circle { center, .. } = s.entity(c).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Fixed { point: center, x: 3.0, y: 4.0 });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::UnderConstrained);
+    assert_eq!(r.dof, 1, "solo el radio");
+    assert_relative_eq!(radius_of(&s, c), 2.5, epsilon = 1e-9);
+    s.constrain(SketchConstraint::Diameter { entity: c, value: 8.0 });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_relative_eq!(radius_of(&s, c), 4.0, epsilon = 1e-6);
+}
+
+#[test]
+fn circle_tangent_to_two_lines_and_equal_tangent_circles() {
+    // Esquina en L fija; círculo tangente a las dos con radio 3 → centro (3, 3)
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    let a = s.add_point(20.0, 0.0);
+    let b = s.add_point(0.0, 20.0);
+    let h = s.add_line(o, a);
+    let v = s.add_line(o, b);
+    for (p, x, y) in [(a, 20.0, 0.0), (b, 0.0, 20.0)] {
+        s.constrain(SketchConstraint::Fixed { point: p, x, y });
+    }
+    let c1 = s.circle([4.0, 5.0], 2.0);
+    s.constrain(SketchConstraint::Tangent { a: h, b: c1 });
+    s.constrain(SketchConstraint::Tangent { a: v, b: c1 });
+    s.constrain(SketchConstraint::Radius { entity: c1, value: 3.0 });
+    // Otro igual, tangente por fuera y a la misma altura → centro (9, 3)
+    let c2 = s.circle([10.0, 4.0], 2.0);
+    s.constrain(SketchConstraint::Equal { a: c1, b: c2 });
+    s.constrain(SketchConstraint::Tangent { a: c1, b: c2 });
+    s.constrain(SketchConstraint::Tangent { a: h, b: c2 });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    let (p1, p2) = (center_of(&s, c1), center_of(&s, c2));
+    assert_relative_eq!(p1[0], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(p1[1], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(p2[0], 9.0, epsilon = 1e-6);
+    assert_relative_eq!(p2[1], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(radius_of(&s, c2), 3.0, epsilon = 1e-6);
+}
+
+#[test]
+fn concentric_and_internal_tangency() {
+    let mut s = Sketch::new();
+    let outer = s.circle([0.0, 0.0], 10.0);
+    let Geometry::Circle { center, .. } = s.entity(outer).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Fixed { point: center, x: 0.0, y: 0.0 });
+    s.constrain(SketchConstraint::Radius { entity: outer, value: 10.0 });
+    // Concéntrico con radio 4
+    let ring = s.circle([0.5, 0.3], 4.2);
+    s.constrain(SketchConstraint::Concentric { a: outer, b: ring });
+    s.constrain(SketchConstraint::Radius { entity: ring, value: 4.0 });
+    // Tangente por dentro al de afuera, de radio 2, sobre el eje x positivo
+    let inner = s.circle([7.5, 0.4], 2.2);
+    s.constrain(SketchConstraint::Tangent { a: outer, b: inner });
+    s.constrain(SketchConstraint::Radius { entity: inner, value: 2.0 });
+    let Geometry::Circle { center: ci, .. } = s.entity(inner).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::HorizontalPoints { a: center, b: ci });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_relative_eq!(center_of(&s, ring)[0], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(center_of(&s, inner)[0], 8.0, epsilon = 1e-6);
+}
+
+#[test]
+fn old_circle_without_dimension_keeps_its_radius() {
+    let json = r#"{"points":[{"id":0,"x":2,"y":0}],
+        "entities":[{"id":1,"geometry":{"type":"circle","center":0,"radius":7.5}}],"constraints":[],"next_id":2}"#;
+    let mut s: Sketch = serde_json::from_str(json).unwrap();
+    s.solve().unwrap();
+    assert_relative_eq!(radius_of(&s, 1), 7.5, epsilon = 1e-9);
+}

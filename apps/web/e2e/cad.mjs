@@ -473,8 +473,9 @@ const scenarios = {
     const sk = (await call("cad_get_document")).features[0].kind.sketch;
     const circle = sk.entities.find((e) => e.geometry.type === "circle");
     const c = sk.points.find((p) => p.id === circle.geometry.center);
-    near(c.x, X * S, 1e-4, "centro x");
-    near(c.y, X * S, 1e-4, "centro y");
+    // Las cotas de largo se redondean al dibujar: el solver corre un poco las líneas libres
+    near(c.x, X * S, 0.1, "centro x");
+    near(c.y, X * S, 0.1, "centro y");
     const ends = sk.entities.filter((e) => e.geometry.type === "line" && [e.geometry.start, e.geometry.end].includes(c.id)).length;
     if (ends !== 4) throw new Error(`las líneas no se partieron en el cruce: ${ends}`);
   },
@@ -528,6 +529,34 @@ const scenarios = {
     };
     const [u, v] = [dir(perp.a), dir(perp.b)];
     near(u[0] * v[0] + u[1] * v[1], 0, 1e-6, "ángulo recto");
+  },
+
+  async "círculos tangentes desde el panel"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    const circle = async (c, r) => {
+      await b.clickText("Círculo");
+      await b.click(...(await at(...c)));
+      await b.click(...(await at(c[0] + r, c[1])), { wait: 800 });
+      await b.key("Escape", "Escape", 27);
+    };
+    await circle([0.2, 0.2], 0.08);
+    await circle([0.5, 0.25], 0.05);
+    // Elegir los dos (Mayús suma) y "Tangentes" en el panel
+    await b.clickText("Elegir");
+    await b.click(...(await at(0.2, 0.28)), { wait: 300 });
+    await b.click(...(await at(0.5, 0.3)), { wait: 300, modifiers: 8 });
+    await b.clickText("Tangentes");
+    await sleep(1200);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const solved = (await evaluate()).sketches[0].sketch;
+    const circles = solved.entities.filter((e) => e.geometry.type === "circle").map((e) => e.geometry);
+    const c = circles.map((g) => solved.points.find((p) => p.id === g.center));
+    near(Math.hypot(c[1].x - c[0].x, c[1].y - c[0].y), circles[0].radius + circles[1].radius, 1e-6, "tangentes por fuera");
+    near(circles[0].radius + circles[1].radius, 0.13 * S, 0.11, "los radios acotados no cambian");
   },
 
   async "escaneo: cilindro elegido con un clic"(b) {

@@ -66,8 +66,11 @@ pub enum SketchConstraint {
     Perpendicular { a: u32, b: u32 },
     /// Líneas del mismo largo, o círculos/arcos del mismo radio.
     Equal { a: u32, b: u32 },
-    /// Línea tangente a círculo o arco.
+    /// Tangencia entre línea y círculo/arco, o entre dos círculos/arcos (por
+    /// fuera o por dentro, según cómo estén al resolver).
     Tangent { a: u32, b: u32 },
+    /// Círculos o arcos con el mismo centro.
+    Concentric { a: u32, b: u32 },
     PointOnLine { point: u32, line: u32 },
     PointOnCircle { point: u32, circle: u32 },
     Midpoint { point: u32, line: u32 },
@@ -123,7 +126,7 @@ impl SketchConstraint {
             Coincident { a, b } | HorizontalPoints { a, b } | VerticalPoints { a, b } => p(a) || p(b),
             Fixed { point: q, .. } => p(q),
             Horizontal { line } | Vertical { line } | Length { line, .. } => e(line),
-            Parallel { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Angle { a, b, .. } => {
+            Parallel { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Concentric { a, b } | Angle { a, b, .. } => {
                 e(a) || e(b)
             }
             PointOnLine { point: q, line } | Midpoint { point: q, line } => p(q) || e(line),
@@ -337,7 +340,6 @@ impl Sketch {
     }
 
     fn run_solver(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
-        self.apply_radius_constraints()?;
         let index: HashMap<u32, usize> = self.points.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
         let mut sys = ConstraintSystem::new();
         for p in &self.points {
@@ -345,6 +347,25 @@ impl Sketch {
         }
         let ix = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
 
+        // El radio es una incógnita más: cada círculo lleva un punto oculto en
+        // su borde, a la derecha del centro (radio = distancia al centro). En
+        // los arcos el borde es el inicio.
+        let mut rims: HashMap<u32, usize> = HashMap::new();
+        for e in &self.entities {
+            match e.geometry {
+                Geometry::Circle { center, radius } => {
+                    let c = ix(center)?;
+                    let p = self.point(center)?;
+                    let rim = sys.add_point(p[0] + radius.abs().max(1e-9), p[1]);
+                    sys.add_constraint(Constraint::Horizontal { p1_idx: c, p2_idx: rim });
+                    rims.insert(e.id, rim);
+                }
+                Geometry::Arc { start, .. } => {
+                    rims.insert(e.id, ix(start)?);
+                }
+                _ => {}
+            }
+        }
         // Implícitas: los extremos de un arco equidistan del centro
         for e in &self.entities {
             if let Geometry::Arc { center, start, end } = e.geometry {
@@ -359,7 +380,7 @@ impl Sketch {
         let implicit = sys.constraints.len();
         let mut origin: Vec<usize> = Vec::new();
         for (ci, c) in self.constraints.iter().enumerate() {
-            for low in self.lower(c, &ix)? {
+            for low in self.lower(c, &ix, &rims, &sys.points)? {
                 sys.add_constraint(low);
                 origin.push(ci);
             }
@@ -374,6 +395,13 @@ impl Sketch {
                 for (p, q) in self.points.iter_mut().zip(&r.points) {
                     p.x = q.x();
                     p.y = q.y();
+                }
+                for e in &mut self.entities {
+                    if let Geometry::Circle { center, radius } = &mut e.geometry
+                        && let (Some(&rim), Some(&c)) = (rims.get(&e.id), index.get(center))
+                    {
+                        *radius = (r.points[rim].co - r.points[c].co).norm();
+                    }
                 }
                 // El origen queda exacto (el solver lo deja a 1e-13)
                 if let Some(o) = self.points.iter_mut().find(|p| Some(p.id) == self.origin) {
@@ -414,43 +442,22 @@ impl Sketch {
         Ok(SolveReport { status, dof, residual, conflicting, free_points })
     }
 
-    /// Cotas de radio de círculos: el solver trata el radio como dato, así que
-    /// se aplican antes de resolver. Igualdad de círculos copia el radio.
-    fn apply_radius_constraints(&mut self) -> Result<(), SketchError> {
-        let mut set: Vec<(u32, f64)> = Vec::new();
-        for c in &self.constraints {
-            match *c {
-                SketchConstraint::Radius { entity, value } => set.push((entity, value)),
-                SketchConstraint::Diameter { entity, value } => set.push((entity, value / 2.0)),
-                _ => {}
-            }
-        }
-        for c in &self.constraints {
-            if let SketchConstraint::Equal { a, b } = *c
-                && let (Ok(ea), Ok(eb)) = (self.entity(a), self.entity(b))
-                && let (Geometry::Circle { .. }, Geometry::Circle { .. }) = (&ea.geometry, &eb.geometry)
-            {
-                let r = set.iter().find(|(e, _)| *e == a).map(|x| x.1).unwrap_or(self.radius(a)?);
-                set.push((b, r));
-            }
-        }
-        for (id, r) in set {
-            if let Some(e) = self.entities.iter_mut().find(|e| e.id == id)
-                && let Geometry::Circle { radius, .. } = &mut e.geometry
-            {
-                *radius = r;
-            }
-        }
-        Ok(())
-    }
-
     /// Traduce una restricción a ecuaciones del solver.
     fn lower(
         &self,
         c: &SketchConstraint,
         ix: &dyn Fn(u32) -> Result<usize, SketchError>,
+        rims: &HashMap<u32, usize>,
+        at: &[Point2],
     ) -> Result<Vec<Constraint>, SketchError> {
         use SketchConstraint as S;
+        // Centro y punto de borde (radio variable) de un círculo o arco
+        let round = |id: u32| -> Result<(usize, usize), SketchError> {
+            match (&self.entity(id)?.geometry, rims.get(&id)) {
+                (Geometry::Circle { center, .. } | Geometry::Arc { center, .. }, Some(&rim)) => Ok((ix(*center)?, rim)),
+                _ => Err(SketchError::WrongKind(id, "un círculo o arco")),
+            }
+        };
         let line = |id| -> Result<(usize, usize), SketchError> {
             let (a, b) = self.line_points(id)?;
             Ok((ix(a)?, ix(b)?))
@@ -484,13 +491,9 @@ impl Sketch {
                 (Geometry::Line { start: a1, end: a2 }, Geometry::Line { start: b1, end: b2 }) => {
                     vec![Constraint::EqualLength { l1_p1: ix(*a1)?, l1_p2: ix(*a2)?, l2_p1: ix(*b1)?, l2_p2: ix(*b2)? }]
                 }
-                (Geometry::Arc { center: c1, start: s1, .. }, Geometry::Arc { center: c2, start: s2, .. }) => {
-                    vec![Constraint::EqualLength { l1_p1: ix(*c1)?, l1_p2: ix(*s1)?, l2_p1: ix(*c2)?, l2_p2: ix(*s2)? }]
-                }
-                (Geometry::Circle { .. }, Geometry::Circle { .. }) => vec![], // aplicado antes
-                (Geometry::Circle { radius, .. }, Geometry::Arc { center, start, .. })
-                | (Geometry::Arc { center, start, .. }, Geometry::Circle { radius, .. }) => {
-                    vec![Constraint::Distance { p1_idx: ix(*center)?, p2_idx: ix(*start)?, distance: *radius }]
+                (Geometry::Circle { .. } | Geometry::Arc { .. }, Geometry::Circle { .. } | Geometry::Arc { .. }) => {
+                    let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
+                    vec![Constraint::EqualLength { l1_p1: c1, l1_p2: r1, l2_p1: c2, l2_p2: r2 }]
                 }
                 _ => return Err(SketchError::Unsupported("igualdad entre entidades de distinto tipo".into())),
             },
@@ -508,16 +511,21 @@ impl Sketch {
                 let (l, other) = match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
                     (Geometry::Line { .. }, _) => (a, b),
                     (_, Geometry::Line { .. }) => (b, a),
-                    _ => return Err(SketchError::Unsupported("tangencia entre curvas (solo línea con círculo/arco)".into())),
+                    _ => {
+                        // Dos curvas: por fuera o por dentro, según cómo están ahora
+                        let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
+                        let len = |p: usize, q: usize| (at[q].co - at[p].co).norm();
+                        let (d, ra, rb) = (len(c1, c2), len(c1, r1), len(c2, r2));
+                        let internal = (d - (ra - rb).abs()).abs() < (d - (ra + rb)).abs();
+                        return Ok(vec![Constraint::TangentCircles { c1, rim1: r1, c2, rim2: r2, internal }]);
+                    }
                 };
                 let (l1, l2) = self.line_points(l)?;
                 match self.entity(other)?.geometry {
-                    Geometry::Circle { center, radius } => vec![Constraint::TangentLineCircle {
-                        line_p1: ix(l1)?,
-                        line_p2: ix(l2)?,
-                        center_idx: ix(center)?,
-                        radius,
-                    }],
+                    Geometry::Circle { .. } => {
+                        let (center_idx, rim_idx) = round(other)?;
+                        vec![Constraint::TangentLineCircleVar { line_p1: ix(l1)?, line_p2: ix(l2)?, center_idx, rim_idx }]
+                    }
                     Geometry::Arc { center, start, end } => {
                         // Si comparten extremo, tangencia exacta: la línea es
                         // perpendicular al radio en ese punto (sin fijar el radio).
@@ -529,11 +537,11 @@ impl Sketch {
                                 l2_p1: ix(center)?,
                                 l2_p2: ix(p)?,
                             }],
-                            None => vec![Constraint::TangentLineCircle {
+                            None => vec![Constraint::TangentLineCircleVar {
                                 line_p1: ix(l1)?,
                                 line_p2: ix(l2)?,
                                 center_idx: ix(center)?,
-                                radius: self.radius(other)?,
+                                rim_idx: ix(start)?,
                             }],
                         }
                     }
@@ -544,18 +552,14 @@ impl Sketch {
                 let (a, b) = line(l)?;
                 vec![Constraint::PointOnLine { p_idx: ix(point)?, line_p1: a, line_p2: b }]
             }
-            S::PointOnCircle { point, circle } => match self.entity(circle)?.geometry {
-                Geometry::Circle { center, radius } => {
-                    vec![Constraint::PointOnCircle { p_idx: ix(point)?, center_idx: ix(center)?, radius }]
-                }
-                Geometry::Arc { center, start, .. } => vec![Constraint::EqualLength {
-                    l1_p1: ix(center)?,
-                    l1_p2: ix(point)?,
-                    l2_p1: ix(center)?,
-                    l2_p2: ix(start)?,
-                }],
-                _ => return Err(SketchError::WrongKind(circle, "un círculo o arco")),
-            },
+            S::PointOnCircle { point, circle } => {
+                let (c, rim) = round(circle)?;
+                vec![Constraint::EqualLength { l1_p1: c, l1_p2: ix(point)?, l2_p1: c, l2_p2: rim }]
+            }
+            S::Concentric { a, b } => {
+                let ((c1, _), (c2, _)) = (round(a)?, round(b)?);
+                vec![Constraint::Coincident { p1_idx: c1, p2_idx: c2 }]
+            }
             S::Midpoint { point, line: l } => {
                 let (a, b) = line(l)?;
                 vec![Constraint::Midpoint { p_idx: ix(point)?, line_p1: a, line_p2: b }]
@@ -577,13 +581,8 @@ impl Sketch {
             }
             S::Radius { entity, value } | S::Diameter { entity, value } => {
                 let r = if matches!(c, S::Diameter { .. }) { value / 2.0 } else { value };
-                match self.entity(entity)?.geometry {
-                    Geometry::Circle { .. } => vec![], // aplicado antes
-                    Geometry::Arc { center, start, .. } => {
-                        vec![Constraint::Distance { p1_idx: ix(center)?, p2_idx: ix(start)?, distance: r }]
-                    }
-                    _ => return Err(SketchError::WrongKind(entity, "un círculo o arco")),
-                }
+                let (center, rim) = round(entity)?;
+                vec![Constraint::Distance { p1_idx: center, p2_idx: rim, distance: r }]
             }
         })
     }

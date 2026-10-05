@@ -94,9 +94,11 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
 
 ## Fases
 
-1. **Inferencias** — según [PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fases 1 a 3.
+1. **Inferencias** — según [PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fases 1 a 3. *Hecha el 2026-10-05.*
 2. **Radio variable** en el solver + concéntrico, igual y tangencias generales. Es el cambio
-   de fondo; todo lo demás se apoya en esto.
+   de fondo; todo lo demás se apoya en esto. *Hecha el 2026-10-05: en vez de un parámetro
+   aparte, cada círculo lleva un punto oculto en su borde (a la derecha del centro, con
+   horizontal implícita); en los arcos el borde es el inicio.*
 3. **Colores por entidad** y número de grados libres; cotas de referencia.
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
    rápida.

@@ -227,3 +227,13 @@ cargo test -p cad-model
   la forma en curso). Líneas guía punteadas y la entidad de referencia resaltada. Las pruebas
   e2e con clics en coordenadas fijas ahora tienen que quedar lejos (> 8 px) de alineaciones
   sin querer.
+- **2026-10-05 Radio variable** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 2): el radio de los
+  círculos deja de ser dato. Cada círculo suma al solver un punto oculto en su borde (misma
+  altura que el centro); radio, diámetro, igual, punto en círculo y tangencias se escriben
+  sobre esa distancia, y después de resolver el radio vuelve a `Geometry::Circle`. Un círculo
+  sin cota tiene su radio libre (un grado más, como Onshape). Solver: `TangentLineCircleVar`
+  y `TangentCircles` (por fuera o por dentro según cómo estén al resolver). Modelo:
+  `Concentric`, tangencia entre dos círculos/arcos sin extremo común. Panel: "Tangentes" y
+  "Concéntricos" con dos curvas elegidas. Pruebas: círculo por tres puntos, tangente a una
+  esquina en L, iguales y tangentes, concéntrico y tangencia interna, documento viejo con
+  radio sin cota.

@@ -73,6 +73,25 @@ pub enum Constraint {
         radius: f64,
     },
 
+    /// Tangencia línea-círculo con radio variable: el radio es la distancia
+    /// del centro a `rim_idx` (un punto del círculo)
+    TangentLineCircleVar {
+        line_p1: usize,
+        line_p2: usize,
+        center_idx: usize,
+        rim_idx: usize,
+    },
+
+    /// Tangencia entre dos círculos de radio variable (|rim − centro|):
+    /// externa |c1 − c2| = r1 + r2, interna |c1 − c2| = |r1 − r2|
+    TangentCircles {
+        c1: usize,
+        rim1: usize,
+        c2: usize,
+        rim2: usize,
+        internal: bool,
+    },
+
     /// Longitudes iguales de dos líneas
     EqualLength {
         l1_p1: usize,
@@ -140,6 +159,8 @@ impl Constraint {
             Constraint::Parallel { .. } => 1,
             Constraint::Angle { .. } => 1,
             Constraint::TangentLineCircle { .. } => 1,
+            Constraint::TangentLineCircleVar { .. } => 1,
+            Constraint::TangentCircles { .. } => 1,
             Constraint::EqualLength { .. } => 1,
             Constraint::Midpoint { .. } => 2,
             Constraint::Symmetric { .. } => 2,
@@ -191,6 +212,10 @@ impl Constraint {
                 center_idx,
                 ..
             } => vec![*line_p1, *line_p2, *center_idx],
+            Constraint::TangentLineCircleVar { line_p1, line_p2, center_idx, rim_idx } => {
+                vec![*line_p1, *line_p2, *center_idx, *rim_idx]
+            }
+            Constraint::TangentCircles { c1, rim1, c2, rim2, .. } => vec![*c1, *rim1, *c2, *rim2],
             Constraint::EqualLength {
                 l1_p1,
                 l1_p2,
@@ -261,6 +286,19 @@ impl Constraint {
                 Constraint::Angle { l1_p1: r(l1_p1), l1_p2: r(l1_p2), l2_p1: r(l2_p1), l2_p2: r(l2_p2), angle_rad: *angle_rad },
             Constraint::TangentLineCircle { line_p1, line_p2, center_idx, radius } =>
                 Constraint::TangentLineCircle { line_p1: r(line_p1), line_p2: r(line_p2), center_idx: r(center_idx), radius: *radius },
+            Constraint::TangentLineCircleVar { line_p1, line_p2, center_idx, rim_idx } => Constraint::TangentLineCircleVar {
+                line_p1: r(line_p1),
+                line_p2: r(line_p2),
+                center_idx: r(center_idx),
+                rim_idx: r(rim_idx),
+            },
+            Constraint::TangentCircles { c1, rim1, c2, rim2, internal } => Constraint::TangentCircles {
+                c1: r(c1),
+                rim1: r(rim1),
+                c2: r(c2),
+                rim2: r(rim2),
+                internal: *internal,
+            },
             Constraint::EqualLength { l1_p1, l1_p2, l2_p1, l2_p2 } =>
                 Constraint::EqualLength { l1_p1: r(l1_p1), l1_p2: r(l1_p2), l2_p1: r(l2_p1), l2_p2: r(l2_p2) },
             Constraint::Midpoint { p_idx, line_p1, line_p2 } =>
@@ -401,6 +439,26 @@ impl Constraint {
                 // pero el sub-gradient ±1 permite que NR/LM salgan.
                 let cross = d.x * f.y - d.y * f.x;
                 vec![cross.abs() / len - radius]
+            }
+
+            Constraint::TangentLineCircleVar { line_p1, line_p2, center_idx, rim_idx } => {
+                let (lp1, lp2, c) = (&points[*line_p1], &points[*line_p2], &points[*center_idx]);
+                let d = lp2.co - lp1.co;
+                let f = lp1.co - c.co;
+                let len = d.norm();
+                if len < 1e-15 {
+                    return vec![0.0];
+                }
+                // Lineal como TangentLineCircle (ver ahí por qué no cuadrática)
+                let cross = d.x * f.y - d.y * f.x;
+                vec![cross.abs() / len - (points[*rim_idx].co - c.co).norm()]
+            }
+
+            Constraint::TangentCircles { c1, rim1, c2, rim2, internal } => {
+                let r1 = (points[*rim1].co - points[*c1].co).norm();
+                let r2 = (points[*rim2].co - points[*c2].co).norm();
+                let d = (points[*c2].co - points[*c1].co).norm();
+                vec![if *internal { d - (r1 - r2).abs() } else { d - (r1 + r2) }]
             }
 
             Constraint::EqualLength {
@@ -652,6 +710,8 @@ impl Constraint {
                 // Numérico por complejidad de las derivadas con cociente
                 self.jacobian_numerical(points)
             }
+
+            Constraint::TangentLineCircleVar { .. } | Constraint::TangentCircles { .. } => self.jacobian_numerical(points),
 
             Constraint::EqualLength {
                 l1_p1,

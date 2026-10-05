@@ -96,6 +96,7 @@ export type SketchConstraint =
   | { type: "perpendicular"; a: number; b: number }
   | { type: "equal"; a: number; b: number }
   | { type: "tangent"; a: number; b: number }
+  | { type: "concentric"; a: number; b: number }
   | { type: "point_on_line"; point: number; line: number }
   | { type: "point_on_circle"; point: number; circle: number }
   | { type: "midpoint"; point: number; line: number }
@@ -1082,6 +1083,7 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   perpendicular: "Perpendiculares",
   equal: "Iguales",
   tangent: "Tangente",
+  concentric: "Concéntricos",
   point_on_line: "Punto en línea",
   point_on_circle: "Punto en círculo",
   midpoint: "Punto medio",
