@@ -135,7 +135,7 @@ cargo test -p cad-model
   (WebSocket nativo, sin puppeteer). Flujos verificados: caja + sketch con rectángulo
   dibujado + extrusión; triángulo con líneas cerrado con clics + arrastre de vértice +
   círculo como agujero; cota de largo editada (50 mm exactos); redondeo eligiendo aristas en
-  el visor (volumen = teórico) y cambio de radio; Ctrl+Z; sketch sobre una cara + agujero
+  el visor (volumen a 0,1 mm³ del teórico: el empalme del vértice común suma un poco) y cambio de radio; Ctrl+Z; sketch sobre una cara + agujero
   pasante; escaneo STL → cilindro elegido con un clic → cilindro CAD calzado sobre el escaneo.
   - Bugs encontrados en la prueba: polilínea cortada en cada clic (efecto dependía del
     objeto sesión entero), caída de la interfaz por carrera entre estado de herramienta y
@@ -160,3 +160,6 @@ cargo test -p cad-model
     rama por defecto); en Windows se define `OCCT_STATIC_BUILD` y se enlazan user32/advapi32/
     ws2_32/gdi32/shell32, en Linux dl/pthread; macOS sin extras. Podrían faltar libs del
     sistema que solo se ven al enlazar en esas plataformas.
+- **Pruebas de punta a punta**: `apps/web/e2e/cad.mjs` (9 escenarios con volúmenes contra el
+  teórico) con `examples/cad_http.rs` + vite + Chromium headless. Workspace completo: 775
+  tests pasan.

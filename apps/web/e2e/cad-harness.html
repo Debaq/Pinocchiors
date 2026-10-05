@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Arnés CAD</title>
+    <script>
+      // Reemplazo de Tauri: los comandos van al puente HTTP con el backend real
+      const BRIDGE = "http://127.0.0.1:8766/invoke/";
+      let cb = 1;
+      window.__invokeLog = [];
+      window.__TAURI_INTERNALS__ = {
+        metadata: { currentWindow: { label: "main" }, currentWebview: { label: "main", windowLabel: "main" }, windows: [], webviews: [] },
+        transformCallback: () => cb++,
+        unregisterCallback: () => {},
+        convertFileSrc: (p) => p,
+        invoke: async (cmd, args) => {
+          // Diálogos: devuelven la ruta preparada por la prueba
+          if (cmd === "plugin:dialog|open" || cmd === "plugin:dialog|save") {
+            const p = window.__nextPath ?? null;
+            window.__nextPath = null;
+            return p;
+          }
+          if (cmd === "list_skeleton_presets") return [];
+          const body = JSON.stringify(args ?? {}, (k, v) => (v && typeof v === "object" && v.constructor?.name === "Channel" ? null : v));
+          const r = await fetch(BRIDGE + cmd, { method: "POST", body });
+          window.__invokeLog.push(cmd);
+          const type = r.headers.get("content-type") || "";
+          const data = type.includes("octet-stream") ? await r.arrayBuffer() : await r.json();
+          if (!r.ok) throw data;
+          return data;
+        },
+      };
+      window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => {} };
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/index.tsx"></script>
+  </body>
+</html>
