@@ -273,3 +273,11 @@ cargo test -p cad-model
   puente, `GeomAPI_Interpolate::Load` con escala: cuenta la dirección, no el largo). En el
   visor la spline se ve suave (Catmull-Rom con esas tangentes; antes era una polilínea) y las
   manijas con línea punteada; botón "Manijas en los extremos sí/no".
+- **2026-10-05 Texto** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 7; el usuario eligió opentype.js
+  en vez de OCCT + freetype): herramienta Texto (X) con el texto, el tamaño (em, en mm) y la
+  fuente (incluida Liberation Sans, SIL OFL, en `apps/web/public/fonts` con su licencia; o un
+  .ttf/.otf elegido). `lib/sketchText.ts` pasa los contornos a líneas y splines: las Bézier
+  seguidas que empalman suave (< 15°) van en una sola spline por puntos muestreados, cortando en
+  las esquinas; un contorno todo curvo es una spline cerrada (la "o"). Pruebas en node con la
+  fuente real (`e2e/sketchText.test.mjs`) y e2e "Hola" extruido. Pendiente: texto rígido y
+  editable (hoy queda como curvas libres).

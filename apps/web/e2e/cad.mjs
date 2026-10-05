@@ -774,6 +774,33 @@ const scenarios = {
     if (!(r.volume > v0 * 1.05)) throw new Error(`volumen ${v0} → ${r.volume}`);
   },
 
+  async "texto extruido"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    await b.clickText("Texto");
+    await b.eval(`(() => {
+      const i = document.querySelector('input[aria-label="Texto"]');
+      i.value = "Hola";
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await b.click(...(await at(0.07, 0.13)), { wait: 2000 });
+    // H (1) + o (anillo y su agujero) + l (1) + a (cuerpo y agujero)
+    const regions = parseInt(await sketchText(b, "/\\d+ regiones cerradas/"));
+    if (!(regions >= 5)) throw new Error(`regiones: ${regions}`);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await sleep(3000);
+    const r = await body();
+    if (!r.valid) throw new Error("sólido inválido");
+    const w = r.bbox_max[0] - r.bbox_min[0];
+    // "Hola" a 10 mm en Liberation Sans mide unos 19 mm de ancho
+    if (!(w > 15 && w < 25)) throw new Error(`ancho ${w}`);
+    if (!(r.volume > 0)) throw new Error("sin volumen");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

@@ -10,6 +10,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { Snap } from "./sketchSnap";
+import type { Contour } from "./sketchText";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -518,6 +519,37 @@ export function toggleSplineHandles(s: Sketch, id: number): string | undefined {
   g.start_handle = addPoint(s, [p[0][0] + (p[1][0] - p[0][0]) / 3, p[0][1] + (p[1][1] - p[0][1]) / 3]);
   g.end_handle = addPoint(s, [p[n - 1][0] + (p[n - 1][0] - p[n - 2][0]) / 3, p[n - 1][1] + (p[n - 1][1] - p[n - 2][1]) / 3]);
   return undefined;
+}
+
+/**
+ * Agrega al sketch los contornos de un texto (ver `sketchText.outlineContours`):
+ * los tramos de un mismo contorno comparten sus extremos. Devuelve las
+ * entidades creadas.
+ */
+export function addTextContours(s: Sketch, contours: Contour[]): number[] {
+  const out: number[] = [];
+  for (const c of contours) {
+    if ("closed" in c) {
+      if (c.closed.length < 3) continue;
+      out.push(addEntity(s, { type: "spline", points: c.closed.map((p) => addPoint(s, p)), closed: true }));
+      continue;
+    }
+    const ids = new Map<string, number>();
+    const at = (p: P2) => {
+      const k = `${p[0].toFixed(9)},${p[1].toFixed(9)}`;
+      if (!ids.has(k)) ids.set(k, addPoint(s, p));
+      return ids.get(k)!;
+    };
+    for (const piece of c.pieces) {
+      if (piece.kind === "line") out.push(addEntity(s, { type: "line", start: at(piece.a), end: at(piece.b) }));
+      else {
+        const pts = piece.points;
+        const ids2 = pts.map((p, i) => (i === 0 || i === pts.length - 1 ? at(p) : addPoint(s, p)));
+        out.push(addEntity(s, { type: "spline", points: ids2, closed: false }));
+      }
+    }
+  }
+  return out;
 }
 
 /** Puntos que usa una geometría */

@@ -2,7 +2,9 @@ import { Component, For, Index, Show, createEffect, createMemo, createSignal, on
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { addPoint, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { parse as parseFont, type Font } from "opentype.js";
+import { outlineContours } from "../../lib/sketchText";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -29,12 +31,23 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string }[] = 
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P" },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U" },
   { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N" },
+  { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X" },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O" },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T" },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E" },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+// Fuente del texto: la incluida (Liberation Sans, OFL) o la que se elija
+let textFont: { name: string; font: Font } | undefined;
+async function loadTextFont(): Promise<Font> {
+  if (!textFont) {
+    const res = await fetch(`${import.meta.env.BASE_URL}fonts/LiberationSans-Regular.ttf`);
+    textFont = { name: "Liberation Sans", font: parseFont(await res.arrayBuffer()) };
+  }
+  return textFont.font;
+}
 
 /** Centro del círculo que pasa por tres puntos (nada si están en línea) */
 function circumcenter(a: P2, b: P2, c: P2): P2 | undefined {
@@ -148,6 +161,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
   const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
+  const [textValue, setTextValue] = createSignal("Texto");
+  const [textSize, setTextSize] = createSignal(10);
+  const [fontName, setFontName] = createSignal("Liberation Sans");
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
@@ -525,6 +541,19 @@ export const CadView: Component<CadViewProps> = (props) => {
         });
       setAnchor([]);
       return askDims(dims);
+    }
+    if (t === "text") {
+      const text = textValue().trim();
+      if (!text) return ui.setMessage("Escribir el texto en la barra del sketch");
+      const at = hit.p;
+      loadTextFont()
+        .then((font) => {
+          const contours = outlineContours(font.getPath(text, 0, 0, textSize()).commands, at);
+          ui.change((sk) => addTextContours(sk, contours));
+          ui.setMessage(undefined);
+        })
+        .catch((err) => ui.setMessage(`No se pudo leer la fuente: ${err}`));
+      return;
     }
     if (t === "spline") {
       const an = anchor();
@@ -1123,6 +1152,45 @@ export const CadView: Component<CadViewProps> = (props) => {
                   </Tooltip>
                 )}
               </For>
+              <Show when={ui.tool() === "text"}>
+                <input
+                  type="text"
+                  value={textValue()}
+                  aria-label="Texto"
+                  class="w-32 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                  onInput={(e) => setTextValue(e.currentTarget.value)}
+                />
+                <label class="flex items-center gap-1 text-xs text-text-muted">
+                  Tamaño
+                  <input
+                    type="number"
+                    min="0.1"
+                    step="1"
+                    value={textSize()}
+                    class="w-14 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => setTextSize(Math.max(0.1, parseFloat(e.currentTarget.value) || 10))}
+                  />
+                  mm
+                </label>
+                <label class="px-2 py-1 rounded text-xs text-text-muted hover:text-text hover:bg-surface cursor-pointer whitespace-nowrap" title="Fuente .ttf u .otf">
+                  {fontName()}…
+                  <input
+                    type="file"
+                    accept=".ttf,.otf"
+                    class="hidden"
+                    onChange={async (e) => {
+                      const file = e.currentTarget.files?.[0];
+                      if (!file) return;
+                      try {
+                        textFont = { name: file.name.replace(/\.[^.]+$/, ""), font: parseFont(await file.arrayBuffer()) };
+                        setFontName(textFont.name);
+                      } catch (err) {
+                        ui.setMessage(`No se pudo leer la fuente: ${err}`);
+                      }
+                    }}
+                  />
+                </label>
+              </Show>
               <Show when={ui.tool() === "polygon"}>
                 <label class="flex items-center gap-1 text-xs text-text-muted">
                   Lados

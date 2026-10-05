@@ -104,7 +104,9 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
    rápida. *Hecha el 2026-10-05.*
 5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05.*
 6. **Elipse y spline con manijas.** *Hecha el 2026-10-05 (manijas solo en los extremos; las intermedias y la curvatura quedan para más adelante).*
-7. **Texto** (después de decidir fuentes).
+7. **Texto** (después de decidir fuentes). *Hecha el 2026-10-05 con opentype.js (decisión del
+   usuario): el texto se inserta como curvas; pendiente: que quede rígido (hoy sus puntos
+   quedan libres) y poder editarlo después.*
 
 ## Pruebas
 

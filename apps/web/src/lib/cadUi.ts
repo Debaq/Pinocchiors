@@ -47,6 +47,7 @@ export type SketchTool =
   | "ellipse"
   | "point"
   | "spline"
+  | "text"
   | "polygon"
   | "slot"
   | "trim"
