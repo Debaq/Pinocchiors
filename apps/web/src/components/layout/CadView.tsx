@@ -2,7 +2,7 @@ import { Component, For, Show, createEffect, createMemo, createSignal, on, onCle
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { constraintValue, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { constraintValue, splitLineAt, trimLine, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -23,6 +23,7 @@ const TOOLS: { id: SketchTool; label: string; key: string }[] = [
   { id: "arc", label: "Arco (centro, inicio, fin)", key: "A" },
   { id: "polygon", label: "Polígono regular (centro, vértice)", key: "P" },
   { id: "slot", label: "Ranura (centro, centro, ancho)", key: "U" },
+  { id: "trim", label: "Recortar (clic en el tramo a quitar)", key: "T" },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -37,10 +38,10 @@ function segDist(p: P2, a: P2, b: P2): number {
 }
 
 /** Entidad o punto bajo el cursor (ids), los puntos primero */
-function hitTest(s: Sketch, p: P2, tol: number): { point?: number; entity?: number } {
+function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number } {
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
   let best: { id: number; d: number } | undefined;
-  for (const q of s.points) {
+  for (const q of withPoints ? s.points : []) {
     const d = dist(p, [q.x, q.y]);
     if (d <= tol && (!best || d < best.d)) best = { id: q.id, d };
   }
@@ -271,7 +272,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const placePoint = (sk: Sketch, hit: { p: P2; id?: number; on?: { entity: number; kind: "line" | "circle" } }): number => {
     if (hit.id !== undefined) return hit.id;
     const id = ui.addPoint(sk, hit.p);
-    if (hit.on?.kind === "line") sk.constraints.push({ type: "point_on_line", point: id, line: hit.on.entity });
+    // Sobre una línea: se parte ahí (el cruce cierra regiones)
+    if (hit.on?.kind === "line") splitLineAt(sk, hit.on.entity, id);
     if (hit.on?.kind === "circle") sk.constraints.push({ type: "point_on_circle", point: id, circle: hit.on.entity });
     return id;
   };
@@ -335,6 +337,16 @@ export const CadView: Component<CadViewProps> = (props) => {
       const r = dist(an[0], hit.p);
       if (r > 1e-9) ui.change((sk) => ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: r }));
       return setAnchor([]);
+    }
+    if (t === "trim") {
+      // El enganche a puntos no sirve acá: la línea bajo el cursor
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      if (target === undefined) return;
+      let msg: string | undefined;
+      ui.change((sk) => (msg = trimLine(sk, target, raw)));
+      ui.setMessage(msg);
+      return;
     }
     if (t === "polygon") {
       const an = anchor();

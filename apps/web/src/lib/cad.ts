@@ -466,6 +466,132 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
   return undefined;
 }
 
+/**
+ * Parte la línea `lineId` en el punto `point` (que debe estar sobre ella): dos
+ * líneas que lo comparten, así las regiones se cierran en ese cruce. Copia
+ * horizontal/vertical; las cotas de largo de la línea entera se quitan.
+ */
+export function splitLineAt(s: Sketch, lineId: number, point: number): void {
+  const line = s.entities.find((e) => e.id === lineId);
+  if (!line || line.geometry.type !== "line") return;
+  const g = line.geometry;
+  if (g.start === point || g.end === point) return;
+  const oldEnd = g.end;
+  g.end = point;
+  const rest = addEntity(s, { type: "line", start: point, end: oldEnd });
+  if (line.construction) s.entities.find((e) => e.id === rest)!.construction = true;
+  for (const k of [...s.constraints]) {
+    if ((k.type === "horizontal" || k.type === "vertical") && k.line === lineId) s.constraints.push({ type: k.type, line: rest });
+  }
+  s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  // El punto ya es extremo compartido: no necesita "punto en línea"
+  s.constraints = s.constraints.filter((k) => !(k.type === "point_on_line" && k.point === point && k.line === lineId));
+}
+
+/**
+ * Recorta una línea: quita el tramo entre cruces (con otras líneas, círculos
+ * o arcos) donde cayó el clic `p`. Los extremos nuevos quedan pegados a la
+ * curva que cruzan. Devuelve un mensaje si no hay nada que recortar.
+ */
+export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
+  const line = s.entities.find((e) => e.id === lineId);
+  if (!line || line.geometry.type !== "line") return "Solo se recortan líneas";
+  const g = line.geometry;
+  const pos = (id: number): P2 => {
+    const q = s.points.find((x) => x.id === id)!;
+    return [q.x, q.y];
+  };
+  const A = pos(g.start);
+  const B = pos(g.end);
+  const d: P2 = [B[0] - A[0], B[1] - A[1]];
+  const len2 = d[0] * d[0] + d[1] * d[1];
+  const eps = 1e-9;
+  // Cruces: parámetro sobre la línea y con qué entidad
+  const cuts: { t: number; entity: number; kind: "line" | "circle" }[] = [];
+  for (const e of s.entities) {
+    if (e.id === lineId || e.construction) continue;
+    const o = e.geometry;
+    if (o.type === "line") {
+      const [C, D] = [pos(o.start), pos(o.end)];
+      const f: P2 = [D[0] - C[0], D[1] - C[1]];
+      const den = d[0] * f[1] - d[1] * f[0];
+      if (Math.abs(den) < eps) continue;
+      const t = ((C[0] - A[0]) * f[1] - (C[1] - A[1]) * f[0]) / den;
+      const u = ((C[0] - A[0]) * d[1] - (C[1] - A[1]) * d[0]) / den;
+      if (t > eps && t < 1 - eps && u >= -eps && u <= 1 + eps) cuts.push({ t, entity: e.id, kind: "line" });
+    } else if (o.type === "circle" || o.type === "arc") {
+      const c = pos(o.center);
+      const r = o.type === "circle" ? o.radius : Math.hypot(pos(o.start)[0] - c[0], pos(o.start)[1] - c[1]);
+      const m: P2 = [A[0] - c[0], A[1] - c[1]];
+      const b = 2 * (m[0] * d[0] + m[1] * d[1]);
+      const cc = m[0] * m[0] + m[1] * m[1] - r * r;
+      const disc = b * b - 4 * len2 * cc;
+      if (disc < 0) continue;
+      for (const t of [(-b - Math.sqrt(disc)) / (2 * len2), (-b + Math.sqrt(disc)) / (2 * len2)]) {
+        if (t <= eps || t >= 1 - eps) continue;
+        if (o.type === "arc") {
+          // ¿El cruce cae dentro del barrido del arco?
+          const q: P2 = [A[0] + t * d[0] - c[0], A[1] + t * d[1] - c[1]];
+          const a0 = Math.atan2(pos(o.start)[1] - c[1], pos(o.start)[0] - c[0]);
+          let sweep = Math.atan2(pos(o.end)[1] - c[1], pos(o.end)[0] - c[0]) - a0;
+          while (sweep <= 0) sweep += 2 * Math.PI;
+          let a = Math.atan2(q[1], q[0]) - a0;
+          while (a < 0) a += 2 * Math.PI;
+          if (a > sweep) continue;
+        }
+        cuts.push({ t, entity: e.id, kind: "circle" });
+      }
+    }
+  }
+  if (cuts.length === 0) {
+    // Sin cruces: el tramo entero se va
+    removeEntity(s, lineId);
+    return undefined;
+  }
+  cuts.sort((x, y) => x.t - y.t);
+  const tc = ((p[0] - A[0]) * d[0] + (p[1] - A[1]) * d[1]) / len2;
+  const before = [...cuts].reverse().find((c) => c.t < tc);
+  const after = cuts.find((c) => c.t > tc);
+  const at = (c: { t: number }): P2 => [A[0] + c.t * d[0], A[1] + c.t * d[1]];
+  // Las líneas cruzadas se parten en el punto (cierra regiones); en curvas, pegado
+  const stick = (point: number, c: { entity: number; kind: "line" | "circle" }) => {
+    if (c.kind === "line") splitLineAt(s, c.entity, point);
+    else s.constraints.push({ type: "point_on_circle", point, circle: c.entity });
+  };
+  if (before && after) {
+    // Tramo del medio: la línea queda partida en dos
+    const p1 = addPoint(s, at(before));
+    const p2 = addPoint(s, at(after));
+    const oldEnd = g.end;
+    g.end = p1;
+    const rest = addEntity(s, { type: "line", start: p2, end: oldEnd });
+    stick(p1, before);
+    stick(p2, after);
+    // Horizontal/vertical valen para las dos partes
+    for (const k of [...s.constraints]) {
+      if ((k.type === "horizontal" || k.type === "vertical") && k.line === lineId) s.constraints.push({ type: k.type, line: rest });
+    }
+    // Cotas de largo de la línea entera ya no tienen sentido
+    s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  } else if (after) {
+    const np = addPoint(s, at(after));
+    g.start = np;
+    stick(np, after);
+    s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  } else if (before) {
+    const np = addPoint(s, at(before));
+    g.end = np;
+    stick(np, before);
+    s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  }
+  // Puntos que quedaron sueltos
+  const used = new Set(s.entities.flatMap((e) => (e.geometry.type === "line" ? [e.geometry.start, e.geometry.end] : e.geometry.type === "spline" ? e.geometry.points : e.geometry.type === "circle" ? [e.geometry.center] : [e.geometry.center, e.geometry.start, e.geometry.end])));
+  const loose = new Set(s.points.filter((q) => !used.has(q.id)).map((q) => q.id));
+  s.points = s.points.filter((q) => !loose.has(q.id));
+  s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, v]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && typeof v === "number" && loose.has(v)));
+  return undefined;
+}
+
 /** Valor editable de una restricción (cota), si tiene */
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
