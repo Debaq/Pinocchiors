@@ -358,6 +358,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cad-occt"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cc",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cad-solver"
 version = "0.1.0"
 dependencies = [

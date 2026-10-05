@@ -1,0 +1,625 @@
+//! Núcleo B-Rep de Pinocchiors sobre OpenCASCADE.
+//!
+//! [`Shape`] envuelve un `TopoDS_Shape` (copia barata: comparte la geometría).
+//! Todas las operaciones devuelven una forma nueva; las de entrada no cambian.
+//! Unidades: milímetros. Ángulos: radianes.
+//!
+//! Los índices de caras y aristas valen para *esa* forma: tras recalcular
+//! cambian. Para referencias que sobrevivan (sketch sobre una cara, redondeo de
+//! una arista) usar la geometría de [`FaceInfo`] / [`EdgeInfo`].
+//!
+//! Sin OpenCASCADE instalado el crate compila igual y todo devuelve
+//! [`Error`] con "OpenCASCADE no disponible" ([`available`] dice cuál es el caso).
+
+mod ffi;
+
+use std::ffi::CStr;
+use std::ptr::NonNull;
+
+pub type P3 = [f64; 3];
+
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[error("{0}")]
+pub struct Error(pub String);
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+fn last_error() -> Error {
+    // SAFETY: el puente siempre devuelve un C string válido (thread-local).
+    let msg = unsafe { CStr::from_ptr(ffi::cad_last_error()) }.to_string_lossy().into_owned();
+    Error(if msg.is_empty() { "OpenCASCADE falló sin mensaje".into() } else { msg })
+}
+
+/// `true` si esta compilación incluye OpenCASCADE.
+pub fn available() -> bool {
+    unsafe { ffi::cad_available() != 0 }
+}
+
+/// Versión de OpenCASCADE enlazada ("" sin OCCT).
+pub fn occt_version() -> String {
+    unsafe { CStr::from_ptr(ffi::cad_occt_version()) }.to_string_lossy().into_owned()
+}
+
+/// Curva de un perfil. Todas en 3D: los sketches las ubican en su plano.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Curve {
+    Line(P3, P3),
+    /// Arco que pasa por inicio, punto medio y fin.
+    Arc(P3, P3, P3),
+    Circle { center: P3, normal: P3, radius: f64 },
+    /// Spline interpolada por los puntos (cerrada si el primero = el último).
+    Spline(Vec<P3>),
+}
+
+impl Curve {
+    fn encode(&self, kinds: &mut Vec<i32>, counts: &mut Vec<i32>, data: &mut Vec<f64>) {
+        let before = data.len();
+        let kind = match self {
+            Curve::Line(a, b) => {
+                data.extend_from_slice(a);
+                data.extend_from_slice(b);
+                0
+            }
+            Curve::Arc(a, m, b) => {
+                data.extend_from_slice(a);
+                data.extend_from_slice(m);
+                data.extend_from_slice(b);
+                1
+            }
+            Curve::Circle { center, normal, radius } => {
+                data.extend_from_slice(center);
+                data.extend_from_slice(normal);
+                data.push(*radius);
+                2
+            }
+            Curve::Spline(pts) => {
+                for p in pts {
+                    data.extend_from_slice(p);
+                }
+                3
+            }
+        };
+        kinds.push(kind);
+        counts.push((data.len() - before) as i32);
+    }
+}
+
+/// Sistema de coordenadas para primitivas: origen, eje Z y eje X.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub origin: P3,
+    pub z: P3,
+    pub x: P3,
+}
+
+impl Frame {
+    pub const WORLD: Frame = Frame { origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
+
+    pub fn at(origin: P3) -> Self {
+        Frame { origin, ..Self::WORLD }
+    }
+
+    fn raw(&self) -> [f64; 9] {
+        let [o, z, x] = [self.origin, self.z, self.x];
+        [o[0], o[1], o[2], z[0], z[1], z[2], x[0], x[1], x[2]]
+    }
+}
+
+/// Eje de revolución (o de rotación).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Axis {
+    pub origin: P3,
+    pub dir: P3,
+}
+
+impl Axis {
+    fn raw(&self) -> [f64; 6] {
+        let [o, d] = [self.origin, self.dir];
+        [o[0], o[1], o[2], d[0], d[1], d[2]]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BooleanOp {
+    Union,
+    Cut,
+    Intersect,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShapeKind {
+    Null,
+    Compound,
+    CompSolid,
+    Solid,
+    Shell,
+    Face,
+    Wire,
+    Edge,
+    Vertex,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SurfaceKind {
+    Plane,
+    Cylinder,
+    Cone,
+    Sphere,
+    Torus,
+    BSpline,
+    Revolution,
+    Extrusion,
+    Offset,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CurveKind {
+    Line,
+    Circle,
+    Ellipse,
+    BSpline,
+    Other,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaceInfo {
+    pub surface: SurfaceKind,
+    pub area: f64,
+    /// Centro de masa de la cara (puede caer fuera de ella).
+    pub center: P3,
+    /// Punto sobre la cara cercano al centro, y la normal saliente ahí.
+    pub point: P3,
+    pub normal: P3,
+    /// Eje de cilindros/conos/toros; centro de esferas en `origin`.
+    pub axis: Option<Axis>,
+    pub radius: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EdgeInfo {
+    pub curve: CurveKind,
+    pub length: f64,
+    pub start: P3,
+    pub end: P3,
+    pub mid: P3,
+    pub tangent: P3,
+    /// Círculos: centro, eje y radio.
+    pub circle: Option<(P3, P3, f64)>,
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MassInfo {
+    pub volume: f64,
+    pub area: f64,
+    pub center: P3,
+    pub bbox_min: P3,
+    pub bbox_max: P3,
+}
+
+/// Malla de visualización de una forma.
+#[derive(Debug, Clone, Default)]
+pub struct Tessellation {
+    pub positions: Vec<P3>,
+    pub normals: Vec<P3>,
+    pub triangles: Vec<[u32; 3]>,
+    /// Cara de origen de cada triángulo (para elegir caras con el mouse).
+    pub triangle_face: Vec<u32>,
+    /// Polilínea de cada arista, en el orden de los índices de arista.
+    pub edges: Vec<Vec<P3>>,
+}
+
+pub struct Shape(NonNull<ffi::CadShape>);
+
+// SAFETY: TopoDS_Shape usa conteo de referencias atómico; una forma no se
+// muta después de creada (salvo la triangulación cacheada al teselar, que
+// OCCT protege). No es Sync: no teselar la misma forma desde dos hilos.
+unsafe impl Send for Shape {}
+
+impl Drop for Shape {
+    fn drop(&mut self) {
+        unsafe { ffi::cad_shape_free(self.0.as_ptr()) }
+    }
+}
+
+impl Clone for Shape {
+    fn clone(&self) -> Self {
+        let p = unsafe { ffi::cad_shape_clone(self.ptr()) };
+        Shape(NonNull::new(p).expect("clonar forma"))
+    }
+}
+
+impl std::fmt::Debug for Shape {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Shape({:?}, {} caras)", self.kind(), self.face_count())
+    }
+}
+
+fn wrap(p: *mut ffi::CadShape) -> Result<Shape> {
+    NonNull::new(p).map(Shape).ok_or_else(last_error)
+}
+
+fn idx(v: &[usize]) -> Vec<i32> {
+    v.iter().map(|&i| i as i32).collect()
+}
+
+fn ptrs(shapes: &[Shape]) -> Vec<*const ffi::CadShape> {
+    shapes.iter().map(|s| s.ptr()).collect()
+}
+
+impl Shape {
+    fn ptr(&self) -> *const ffi::CadShape {
+        self.0.as_ptr()
+    }
+
+    // --- Perfiles ---
+
+    /// Cara plana: el primer lazo es el borde, los demás son agujeros.
+    pub fn face(loops: &[Vec<Curve>]) -> Result<Shape> {
+        let (mut kinds, mut counts, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        let mut sizes = Vec::new();
+        for l in loops {
+            sizes.push(l.len() as i32);
+            for c in l {
+                c.encode(&mut kinds, &mut counts, &mut data);
+            }
+        }
+        wrap(unsafe {
+            ffi::cad_make_face(kinds.as_ptr(), counts.as_ptr(), data.as_ptr(), sizes.as_ptr(), sizes.len() as i32)
+        })
+    }
+
+    /// Alambre abierto o cerrado (trayectorias, perfiles de loft).
+    pub fn wire(curves: &[Curve]) -> Result<Shape> {
+        let (mut kinds, mut counts, mut data) = (Vec::new(), Vec::new(), Vec::new());
+        for c in curves {
+            c.encode(&mut kinds, &mut counts, &mut data);
+        }
+        wrap(unsafe { ffi::cad_make_wire(kinds.as_ptr(), counts.as_ptr(), data.as_ptr(), curves.len() as i32) })
+    }
+
+    /// Polígono cerrado como cara.
+    pub fn polygon(points: &[P3]) -> Result<Shape> {
+        let n = points.len();
+        let curves: Vec<Curve> = (0..n).map(|i| Curve::Line(points[i], points[(i + 1) % n])).collect();
+        Shape::face(&[curves])
+    }
+
+    // --- Primitivas ---
+
+    pub fn make_box(frame: Frame, dx: f64, dy: f64, dz: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_box(frame.raw().as_ptr(), dx, dy, dz) })
+    }
+
+    pub fn cylinder(frame: Frame, radius: f64, height: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_cylinder(frame.raw().as_ptr(), radius, height) })
+    }
+
+    pub fn cone(frame: Frame, r1: f64, r2: f64, height: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_cone(frame.raw().as_ptr(), r1, r2, height) })
+    }
+
+    pub fn sphere(center: P3, radius: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_sphere(center.as_ptr(), radius) })
+    }
+
+    pub fn torus(frame: Frame, major: f64, minor: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_torus(frame.raw().as_ptr(), major, minor) })
+    }
+
+    // --- Operaciones ---
+
+    /// Extruye un perfil (cara → sólido, alambre → superficie).
+    pub fn prism(&self, v: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_prism(self.ptr(), v[0], v[1], v[2]) })
+    }
+
+    /// Revoluciona un perfil; `angle` ≥ 2π da la vuelta completa.
+    pub fn revolve(&self, axis: Axis, angle: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_revol(self.ptr(), axis.raw().as_ptr(), angle) })
+    }
+
+    /// Barre este perfil a lo largo de `spine` (alambre).
+    pub fn sweep(&self, spine: &Shape) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_pipe(self.ptr(), spine.ptr()) })
+    }
+
+    /// Loft entre perfiles (alambres o caras).
+    pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        wrap(unsafe { ffi::cad_loft(p.as_ptr(), p.len() as i32, solid as i32, ruled as i32) })
+    }
+
+    pub fn boolean(&self, other: &Shape, op: BooleanOp) -> Result<Shape> {
+        let op = match op {
+            BooleanOp::Union => 0,
+            BooleanOp::Cut => 1,
+            BooleanOp::Intersect => 2,
+        };
+        wrap(unsafe { ffi::cad_boolean(self.ptr(), other.ptr(), op) })
+    }
+
+    pub fn union(&self, other: &Shape) -> Result<Shape> {
+        self.boolean(other, BooleanOp::Union)
+    }
+
+    pub fn cut(&self, other: &Shape) -> Result<Shape> {
+        self.boolean(other, BooleanOp::Cut)
+    }
+
+    pub fn intersect(&self, other: &Shape) -> Result<Shape> {
+        self.boolean(other, BooleanOp::Intersect)
+    }
+
+    /// Une muchas formas en una sola operación (patrones).
+    pub fn fuse_all(shapes: &[Shape]) -> Result<Shape> {
+        let p = ptrs(shapes);
+        wrap(unsafe { ffi::cad_fuse_many(p.as_ptr(), p.len() as i32) })
+    }
+
+    /// Agrupa formas sin fusionarlas (cuerpos separados).
+    pub fn compound(shapes: &[Shape]) -> Result<Shape> {
+        let p = ptrs(shapes);
+        wrap(unsafe { ffi::cad_compound(p.as_ptr(), p.len() as i32) })
+    }
+
+    pub fn fillet(&self, edges: &[usize], radius: f64) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_fillet(self.ptr(), e.as_ptr(), e.len() as i32, radius) })
+    }
+
+    pub fn chamfer(&self, edges: &[usize], distance: f64) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_chamfer(self.ptr(), e.as_ptr(), e.len() as i32, distance) })
+    }
+
+    /// Ahueca quitando `open_faces`; grosor negativo crece hacia adentro.
+    pub fn shell(&self, open_faces: &[usize], thickness: f64) -> Result<Shape> {
+        let f = idx(open_faces);
+        wrap(unsafe { ffi::cad_shell(self.ptr(), f.as_ptr(), f.len() as i32, thickness) })
+    }
+
+    /// Ángulo de desmolde para las caras indicadas.
+    pub fn draft(&self, faces: &[usize], pull: P3, angle: f64, neutral_origin: P3, neutral_normal: P3) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe {
+            ffi::cad_draft(
+                self.ptr(),
+                f.as_ptr(),
+                f.len() as i32,
+                pull.as_ptr(),
+                angle,
+                neutral_origin.as_ptr(),
+                neutral_normal.as_ptr(),
+            )
+        })
+    }
+
+    /// Transformación afín: matriz 3×4 por filas.
+    pub fn transform(&self, m: [[f64; 4]; 3]) -> Result<Shape> {
+        let flat: Vec<f64> = m.iter().flatten().copied().collect();
+        wrap(unsafe { ffi::cad_transform(self.ptr(), flat.as_ptr()) })
+    }
+
+    pub fn translate(&self, v: P3) -> Result<Shape> {
+        self.transform([[1.0, 0.0, 0.0, v[0]], [0.0, 1.0, 0.0, v[1]], [0.0, 0.0, 1.0, v[2]]])
+    }
+
+    /// Rotación de `angle` rad alrededor de `axis` (Rodrigues).
+    pub fn rotate(&self, axis: Axis, angle: f64) -> Result<Shape> {
+        self.transform(rotation_matrix(axis, angle))
+    }
+
+    pub fn mirror(&self, origin: P3, normal: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_mirror(self.ptr(), origin.as_ptr(), normal.as_ptr()) })
+    }
+
+    /// Corta por un plano y conserva el lado hacia donde apunta `normal`.
+    pub fn split_keep(&self, origin: P3, normal: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_split_keep(self.ptr(), origin.as_ptr(), normal.as_ptr()) })
+    }
+
+    /// Sólido cosido a partir de triángulos. Lento con mallas grandes
+    /// (una cara B-Rep por triángulo): pensado para piezas chicas o simplificadas.
+    pub fn from_mesh(vertices: &[P3], triangles: &[[u32; 3]], tolerance: f64) -> Result<Shape> {
+        let v: Vec<f64> = vertices.iter().flatten().copied().collect();
+        let t: Vec<i32> = triangles.iter().flatten().map(|&i| i as i32).collect();
+        wrap(unsafe {
+            ffi::cad_from_mesh(v.as_ptr(), vertices.len() as i32, t.as_ptr(), triangles.len() as i32, tolerance)
+        })
+    }
+
+    // --- Consultas ---
+
+    pub fn kind(&self) -> ShapeKind {
+        match unsafe { ffi::cad_shape_kind(self.ptr()) } {
+            1 => ShapeKind::Compound,
+            2 => ShapeKind::CompSolid,
+            3 => ShapeKind::Solid,
+            4 => ShapeKind::Shell,
+            5 => ShapeKind::Face,
+            6 => ShapeKind::Wire,
+            7 => ShapeKind::Edge,
+            8 => ShapeKind::Vertex,
+            _ => ShapeKind::Null,
+        }
+    }
+
+    /// Chequeo topológico y geométrico completo (`BRepCheck_Analyzer`).
+    pub fn is_valid(&self) -> bool {
+        unsafe { ffi::cad_shape_is_valid(self.ptr()) != 0 }
+    }
+
+    pub fn face_count(&self) -> usize {
+        unsafe { ffi::cad_count_faces(self.ptr()) }.max(0) as usize
+    }
+
+    pub fn edge_count(&self) -> usize {
+        unsafe { ffi::cad_count_edges(self.ptr()) }.max(0) as usize
+    }
+
+    pub fn face_info(&self, index: usize) -> Result<FaceInfo> {
+        let mut r = ffi::CadFaceInfo::default();
+        if unsafe { ffi::cad_face_info(self.ptr(), index as i32, &mut r) } == 0 {
+            return Err(last_error());
+        }
+        let surface = match r.surface {
+            0 => SurfaceKind::Plane,
+            1 => SurfaceKind::Cylinder,
+            2 => SurfaceKind::Cone,
+            3 => SurfaceKind::Sphere,
+            4 => SurfaceKind::Torus,
+            5 => SurfaceKind::BSpline,
+            6 => SurfaceKind::Revolution,
+            7 => SurfaceKind::Extrusion,
+            8 => SurfaceKind::Offset,
+            _ => SurfaceKind::Other,
+        };
+        let analytic = matches!(
+            surface,
+            SurfaceKind::Cylinder | SurfaceKind::Cone | SurfaceKind::Sphere | SurfaceKind::Torus
+        );
+        Ok(FaceInfo {
+            surface,
+            area: r.area,
+            center: r.center,
+            point: r.point,
+            normal: r.normal,
+            axis: analytic.then_some(Axis { origin: r.axis_origin, dir: r.axis_dir }),
+            radius: analytic.then_some(r.radius),
+        })
+    }
+
+    pub fn faces(&self) -> Result<Vec<FaceInfo>> {
+        (0..self.face_count()).map(|i| self.face_info(i)).collect()
+    }
+
+    pub fn edge_info(&self, index: usize) -> Result<EdgeInfo> {
+        let mut r = ffi::CadEdgeInfo::default();
+        if unsafe { ffi::cad_edge_info(self.ptr(), index as i32, &mut r) } == 0 {
+            return Err(last_error());
+        }
+        let curve = match r.curve {
+            0 => CurveKind::Line,
+            1 => CurveKind::Circle,
+            2 => CurveKind::Ellipse,
+            3 => CurveKind::BSpline,
+            _ => CurveKind::Other,
+        };
+        Ok(EdgeInfo {
+            curve,
+            length: r.length,
+            start: r.start,
+            end: r.end,
+            mid: r.mid,
+            tangent: r.tangent,
+            circle: (curve == CurveKind::Circle).then_some((r.center, r.axis, r.radius)),
+            closed: r.closed != 0,
+        })
+    }
+
+    pub fn edges(&self) -> Result<Vec<EdgeInfo>> {
+        (0..self.edge_count()).map(|i| self.edge_info(i)).collect()
+    }
+
+    /// Caras que comparten la arista (1 o 2).
+    pub fn edge_faces(&self, edge: usize) -> Result<Vec<usize>> {
+        let mut out = [-1i32; 2];
+        let n = unsafe { ffi::cad_edge_faces(self.ptr(), edge as i32, out.as_mut_ptr()) };
+        if n == 0 && edge >= self.edge_count() {
+            return Err(last_error());
+        }
+        Ok(out[..n as usize].iter().filter(|&&f| f >= 0).map(|&f| f as usize).collect())
+    }
+
+    pub fn mass(&self) -> Result<MassInfo> {
+        let mut r = ffi::CadMassInfo::default();
+        if unsafe { ffi::cad_mass_info(self.ptr(), &mut r) } == 0 {
+            return Err(last_error());
+        }
+        Ok(MassInfo { volume: r.volume, area: r.area, center: r.center, bbox_min: r.bbox_min, bbox_max: r.bbox_max })
+    }
+
+    /// Malla para mostrar. `linear` en mm (error máximo a la superficie),
+    /// `angular` en radianes.
+    pub fn tessellate(&self, linear: f64, angular: f64) -> Result<Tessellation> {
+        let mut m = std::mem::MaybeUninit::<ffi::CadMesh>::zeroed();
+        let ok = unsafe { ffi::cad_tessellate(self.ptr(), linear, angular, m.as_mut_ptr()) };
+        let mut m = unsafe { m.assume_init() };
+        if ok == 0 {
+            return Err(last_error());
+        }
+        // SAFETY: el puente reservó exactamente estos tamaños.
+        let t = unsafe {
+            let pos = std::slice::from_raw_parts(m.positions, m.n_vertices * 3);
+            let nor = std::slice::from_raw_parts(m.normals, m.n_vertices * 3);
+            let tri = std::slice::from_raw_parts(m.triangles, m.n_triangles * 3);
+            let tf = std::slice::from_raw_parts(m.triangle_face, m.n_triangles);
+            let off = std::slice::from_raw_parts(m.edge_offsets, m.n_edges + 1);
+            let ep = std::slice::from_raw_parts(m.edge_points, off[m.n_edges] * 3);
+            let p3 = |s: &[f64]| s.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect::<Vec<P3>>();
+            Tessellation {
+                positions: p3(pos),
+                normals: p3(nor),
+                triangles: tri.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect(),
+                triangle_face: tf.iter().map(|&f| f as u32).collect(),
+                edges: off.windows(2).map(|w| p3(&ep[w[0] * 3..w[1] * 3])).collect(),
+            }
+        };
+        unsafe { ffi::cad_mesh_free(&mut m) };
+        Ok(t)
+    }
+
+    // --- Archivos ---
+
+    pub fn to_step(&self) -> Result<Vec<u8>> {
+        take_bytes(|out, len| unsafe { ffi::cad_write_step(self.ptr(), out, len) })
+    }
+
+    pub fn from_step(data: &[u8]) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_read_step(data.as_ptr(), data.len()) })
+    }
+
+    /// Formato nativo de OCCT: exacto y rápido, para guardar formas importadas.
+    pub fn to_brep(&self) -> Result<Vec<u8>> {
+        take_bytes(|out, len| unsafe { ffi::cad_write_brep(self.ptr(), out, len) })
+    }
+
+    pub fn from_brep(data: &[u8]) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_read_brep(data.as_ptr(), data.len()) })
+    }
+}
+
+fn take_bytes(f: impl FnOnce(*mut *mut u8, *mut usize) -> i32) -> Result<Vec<u8>> {
+    let mut p: *mut u8 = std::ptr::null_mut();
+    let mut len = 0usize;
+    if f(&mut p, &mut len) == 0 || p.is_null() {
+        return Err(last_error());
+    }
+    let v = unsafe { std::slice::from_raw_parts(p, len) }.to_vec();
+    unsafe { ffi::cad_bytes_free(p) };
+    Ok(v)
+}
+
+/// Matriz 3×4 de rotación de `angle` alrededor de `axis`.
+pub fn rotation_matrix(axis: Axis, angle: f64) -> [[f64; 4]; 3] {
+    let d = axis.dir;
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let [x, y, z] = [d[0] / len, d[1] / len, d[2] / len];
+    let (s, c) = angle.sin_cos();
+    let t = 1.0 - c;
+    let r = [
+        [t * x * x + c, t * x * y - s * z, t * x * z + s * y],
+        [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
+        [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
+    ];
+    // Trasladar para rotar alrededor de axis.origin: p' = R(p − o) + o
+    let o = axis.origin;
+    let mut m = [[0.0; 4]; 3];
+    for i in 0..3 {
+        m[i][..3].copy_from_slice(&r[i]);
+        m[i][3] = o[i] - (r[i][0] * o[0] + r[i][1] * o[1] + r[i][2] * o[2]);
+    }
+    m
+}

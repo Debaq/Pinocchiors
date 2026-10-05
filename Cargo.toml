@@ -21,6 +21,7 @@ members = [
     "libs/orizon3d",
     # CAD paramétrico
     "libs/cad/solver",
+    "libs/cad/occt",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
     "libs/converter/gltf-io",
@@ -119,6 +120,7 @@ orizon3d-core = { path = "libs/orizon3d" }
 
 # Crates internos - CAD
 cad-solver = { path = "libs/cad/solver" }
+cad-occt = { path = "libs/cad/occt" }
 
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }

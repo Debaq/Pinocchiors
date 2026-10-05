@@ -1,0 +1,50 @@
+/* Stub sin OpenCASCADE: misma interfaz, todo falla con un mensaje claro. */
+#include "cad_occt.h"
+#include <string.h>
+
+static const char* MSG = "OpenCASCADE no disponible: esta compilación no incluye el CAD";
+#define FAIL_PTR return NULL
+#define FAIL_INT return 0
+
+const char* cad_last_error(void) { return MSG; }
+int32_t cad_available(void) { return 0; }
+const char* cad_occt_version(void) { return ""; }
+void cad_shape_free(CadShape* s) { (void)s; }
+CadShape* cad_shape_clone(const CadShape* s) { (void)s; FAIL_PTR; }
+int32_t cad_shape_kind(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_shape_is_valid(const CadShape* s) { (void)s; FAIL_INT; }
+CadShape* cad_make_face(const int32_t* k, const int32_t* c, const double* d, const int32_t* l, int32_t n) { (void)k; (void)c; (void)d; (void)l; (void)n; FAIL_PTR; }
+CadShape* cad_make_wire(const int32_t* k, const int32_t* c, const double* d, int32_t n) { (void)k; (void)c; (void)d; (void)n; FAIL_PTR; }
+CadShape* cad_make_box(const double* a, double x, double y, double z) { (void)a; (void)x; (void)y; (void)z; FAIL_PTR; }
+CadShape* cad_make_cylinder(const double* a, double r, double h) { (void)a; (void)r; (void)h; FAIL_PTR; }
+CadShape* cad_make_cone(const double* a, double r1, double r2, double h) { (void)a; (void)r1; (void)r2; (void)h; FAIL_PTR; }
+CadShape* cad_make_sphere(const double* c, double r) { (void)c; (void)r; FAIL_PTR; }
+CadShape* cad_make_torus(const double* a, double r1, double r2) { (void)a; (void)r1; (void)r2; FAIL_PTR; }
+CadShape* cad_prism(const CadShape* p, double x, double y, double z) { (void)p; (void)x; (void)y; (void)z; FAIL_PTR; }
+CadShape* cad_revol(const CadShape* p, const double* a, double t) { (void)p; (void)a; (void)t; FAIL_PTR; }
+CadShape* cad_pipe(const CadShape* p, const CadShape* s) { (void)p; (void)s; FAIL_PTR; }
+CadShape* cad_loft(const CadShape* const* w, int32_t n, int32_t s, int32_t r) { (void)w; (void)n; (void)s; (void)r; FAIL_PTR; }
+CadShape* cad_boolean(const CadShape* a, const CadShape* b, int32_t op) { (void)a; (void)b; (void)op; FAIL_PTR; }
+CadShape* cad_fuse_many(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
+CadShape* cad_compound(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
+CadShape* cad_fillet(const CadShape* s, const int32_t* e, int32_t n, double r) { (void)s; (void)e; (void)n; (void)r; FAIL_PTR; }
+CadShape* cad_chamfer(const CadShape* s, const int32_t* e, int32_t n, double d) { (void)s; (void)e; (void)n; (void)d; FAIL_PTR; }
+CadShape* cad_shell(const CadShape* s, const int32_t* f, int32_t n, double t) { (void)s; (void)f; (void)n; (void)t; FAIL_PTR; }
+CadShape* cad_draft(const CadShape* s, const int32_t* f, int32_t n, const double* d, double a, const double* o, const double* nn) { (void)s; (void)f; (void)n; (void)d; (void)a; (void)o; (void)nn; FAIL_PTR; }
+CadShape* cad_transform(const CadShape* s, const double* m) { (void)s; (void)m; FAIL_PTR; }
+CadShape* cad_mirror(const CadShape* s, const double* o, const double* n) { (void)s; (void)o; (void)n; FAIL_PTR; }
+CadShape* cad_split_keep(const CadShape* s, const double* o, const double* n) { (void)s; (void)o; (void)n; FAIL_PTR; }
+CadShape* cad_from_mesh(const double* v, int32_t nv, const int32_t* t, int32_t nt, double tol) { (void)v; (void)nv; (void)t; (void)nt; (void)tol; FAIL_PTR; }
+int32_t cad_count_faces(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_count_edges(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_face_info(const CadShape* s, int32_t i, CadFaceInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
+int32_t cad_edge_info(const CadShape* s, int32_t i, CadEdgeInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
+int32_t cad_edge_faces(const CadShape* s, int32_t e, int32_t* o) { (void)s; (void)e; (void)o; FAIL_INT; }
+int32_t cad_mass_info(const CadShape* s, CadMassInfo* o) { (void)s; (void)o; FAIL_INT; }
+int32_t cad_tessellate(const CadShape* s, double l, double a, CadMesh* o) { (void)s; (void)l; (void)a; memset(o, 0, sizeof(*o)); FAIL_INT; }
+void cad_mesh_free(CadMesh* m) { (void)m; }
+int32_t cad_write_step(const CadShape* s, uint8_t** o, size_t* l) { (void)s; (void)o; (void)l; FAIL_INT; }
+CadShape* cad_read_step(const uint8_t* d, size_t l) { (void)d; (void)l; FAIL_PTR; }
+int32_t cad_write_brep(const CadShape* s, uint8_t** o, size_t* l) { (void)s; (void)o; (void)l; FAIL_INT; }
+CadShape* cad_read_brep(const uint8_t* d, size_t l) { (void)d; (void)l; FAIL_PTR; }
+void cad_bytes_free(uint8_t* p) { (void)p; }
