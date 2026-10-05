@@ -358,6 +358,51 @@ dependencies = [
 ]
 
 [[package]]
+name = "cad-model"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cad-occt",
+ "cad-solver",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cad-occt"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cc",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cad-scan"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "cad-model",
+ "cad-solver",
+ "nalgebra",
+ "serde",
+ "stl_io",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "cad-solver"
+version = "0.1.0"
+dependencies = [
+ "approx 0.5.1",
+ "nalgebra",
+ "nalgebra-sparse",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cairo-rs"
 version = "0.18.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2432,6 +2477,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nalgebra-sparse"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1107e2587bc373090389bd5b54e05ac3184fd02d7c102decf5d76b8feb84b2d0"
+dependencies = [
+ "nalgebra",
+ "num-traits",
+]
+
+[[package]]
 name = "ndarray"
 version = "0.17.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3125,6 +3180,8 @@ checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
 name = "pinocchio-app"
 version = "0.1.0"
 dependencies = [
+ "cad-model",
+ "cad-scan",
  "converter-3mf",
  "converter-gltf-io",
  "converter-layers",

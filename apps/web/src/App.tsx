@@ -244,6 +244,10 @@ import { SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
+import { CadView } from "./components/layout/CadView";
+import { DesignStep } from "./components/steps/DesignStep";
+import { createCadStore } from "./lib/cad";
+import { createCadUi } from "./lib/cadUi";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan } from "./components/panels/BodyPlanPanel";
 
@@ -383,6 +387,12 @@ function tauriSkeletonToViewer(data: TauriSkeletonData): SkeletonData {
 export const App: Component = () => {
   // Pipeline
   const pipeline = createPipelineStore();
+
+  // Diseño CAD: documento propio con su historial (copias del documento)
+  const cad = createCadStore();
+  const cadUi = createCadUi(cad);
+  const inDesign = () => pipeline.workspace()?.id === "design";
+  onMount(() => void cad.init().catch(() => {}));
 
   // History (undo/redo)
   // Pasos del historial como datos (se guardan en el proyecto); cada tipo
@@ -617,6 +627,8 @@ export const App: Component = () => {
   const [exportBoneShapes, setExportBoneShapes] = createSignal(false);
   /** Hay algo con qué trabajar: un modelo o, sin modelo, un esqueleto */
   const hasWork = () => meshLoaded() || !!skeletonData();
+  /** Algo que guardar en el proyecto: también un diseño CAD sin modelo */
+  const hasProjectWork = () => hasWork() || (cad.doc()?.features.length ?? 0) > 0;
   const [exportUseRetopology, setExportUseRetopology] = createSignal(false);
   /** Compactar el mapa UV al exportar; sin elegir, sí cuando el mapa es para pintar */
   const [exportCompactUv, setExportCompactUv] = createSignal<boolean | undefined>();
@@ -1212,11 +1224,13 @@ export const App: Component = () => {
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
   const undo = () => {
+    if (inDesign()) return cad.undo();
     if (cloudEditing()) return void scanCloud.history(false);
     if (operations > 0) return setStatusMessage("Espera a que termine la operación para deshacer");
     void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
   };
   const redo = () => {
+    if (inDesign()) return cad.redo();
     if (cloudEditing()) return void scanCloud.history(true);
     if (operations > 0) return setStatusMessage("Espera a que termine la operación para rehacer");
     void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));
@@ -1446,6 +1460,23 @@ export const App: Component = () => {
       await showNewModel(info, "Escanear");
     } catch (e) {
       console.error("Scan model error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  /** El sólido del diseño pasa a ser el modelo de la app (fabricar, pintar, animar) */
+  const handleCadToModel = async () => {
+    if (blockedByTask()) return;
+    if (meshLoaded() && !(await confirmDiscard("Usar el diseño como modelo", "El sólido del diseño reemplaza al modelo abierto.", "Reemplazar"))) return;
+    setIsProcessing(true);
+    try {
+      const info = await busy("Convirtiendo el diseño en modelo...", () => invoke<MeshInfo>("cad_to_model", { onProgress: progressChannel() }));
+      setProjectPath(undefined);
+      setFileName("Diseño");
+      await showNewModel(info, "Diseño CAD");
+    } catch (e) {
       setStatusMessage(`Error: ${e}`);
     } finally {
       setIsProcessing(false);
@@ -4998,7 +5029,7 @@ export const App: Component = () => {
 
   /** Hay trabajo que se perdería: sin archivo propio, o con cambios desde que se guardó o abrió */
   const hasUnsavedWork = async () => {
-    if (!hasWork()) return false;
+    if (!hasProjectWork()) return false;
     if (!projectPath()) return true;
     try {
       return await invoke<boolean>("project_changed", { ui: projectUi() });
@@ -5249,8 +5280,8 @@ export const App: Component = () => {
 
   /** Guarda en el archivo del proyecto; sin archivo (o con `as`) lo pregunta */
   const handleSaveProject = async (as = false) => {
-    if (!hasWork()) {
-      setStatusMessage("No hay nada que guardar: importa un modelo o elige un esqueleto");
+    if (!hasProjectWork()) {
+      setStatusMessage("No hay nada que guardar: importa un modelo, elige un esqueleto o empieza un diseño");
       return;
     }
     let path = as ? undefined : projectPath();
@@ -5296,6 +5327,8 @@ export const App: Component = () => {
     try {
       opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
       await restoreProjectUi(opened.ui);
+      cadUi.cancelSketch();
+      await cad.reload();
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
       setRecovery(undefined);
@@ -5327,6 +5360,8 @@ export const App: Component = () => {
     setSwitching(true);
     try {
       await invoke("new_project");
+      cadUi.cancelSketch();
+      await cad.reload();
       clearSkeletonUi();
       // Un proyecto vacío y sin modelo deja la interfaz como al abrir la app
       await restoreProjectUi(JSON.stringify({ model: false }));
@@ -5504,8 +5539,8 @@ export const App: Component = () => {
   const fileMenuItems = (): MenuEntry[] => [
     { label: "Nuevo proyecto", shortcut: "Ctrl+N", onSelect: () => handleNewProject() },
     { label: "Abrir proyecto…", shortcut: "Ctrl+O", onSelect: () => handleOpenProject() },
-    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasWork(), onSelect: () => handleSaveProject() },
-    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasWork(), onSelect: () => handleSaveProject(true) },
+    { label: "Guardar", shortcut: "Ctrl+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject() },
+    { label: "Guardar como…", shortcut: "Ctrl+Shift+S", disabled: !hasProjectWork(), onSelect: () => handleSaveProject(true) },
     { separator: true },
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
     { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
@@ -5524,7 +5559,7 @@ export const App: Component = () => {
   let autosaving = false;
   const autosaveTimer = setInterval(async () => {
     const settings = autosave();
-    if (autosaving || !hasWork() || isProcessing() || progress() || switching()) return;
+    if (autosaving || !hasProjectWork() || isProcessing() || progress() || switching()) return;
     const minutes = settings.enabled ? settings.minutes : RECOVERY_MINUTES;
     if (Date.now() - lastAutosave < minutes * 60_000) return;
     autosaving = true;
@@ -5654,8 +5689,8 @@ export const App: Component = () => {
             activeTool={activeTool()}
             onToolChange={(tool) => useTool(tool)}
             onResetView={() => viewerRef?.resetView()}
-            canUndo={history.canUndo()}
-            canRedo={history.canRedo()}
+            canUndo={inDesign() ? cad.canUndo() : history.canUndo()}
+            canRedo={inDesign() ? cad.canRedo() : history.canRedo()}
             onUndo={undo}
             onRedo={redo}
           />
@@ -5772,8 +5807,13 @@ export const App: Component = () => {
               }
             />
 
+            {/* Espacio Diseñar: su propio visor encima del principal */}
+            <Show when={inDesign()}>
+              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() ? meshData() : null} />
+            </Show>
+
             {/* Welcome Screen overlay */}
-            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig"}>
+            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !inDesign()}>
               <WelcomeScreen
                 onImport={handleLoad}
                 onScan={() => openScanEditor("capture")}
@@ -5891,6 +5931,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
+            designPanel={<DesignStep store={cad} ui={cadUi} hasModel={meshLoaded()} onUseAsModel={handleCadToModel} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

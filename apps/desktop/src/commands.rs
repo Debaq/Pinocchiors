@@ -107,7 +107,7 @@ impl MeshData {
     /// [`pack_mesh`] y al final, si hay, los grupos por material: `u32`
     /// cantidad y luego `[inicio, cantidad, material]` por grupo; después, si
     /// hay, el nodo de cada grupo (`u32` por grupo)
-    fn to_bytes(&self) -> Vec<u8> {
+    pub(crate) fn to_bytes(&self) -> Vec<u8> {
         let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
         append_groups(&mut out, &self.groups);
         if !self.groups.is_empty() && self.group_nodes.len() == self.groups.len() {
@@ -517,7 +517,7 @@ pub async fn import_model(
     in_background(app, move |state| import_model_impl(path, textures.unwrap_or_default(), &on_progress, state)).await
 }
 
-fn import_model_impl(path: String, extra: Vec<String>, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
+pub(crate) fn import_model_impl(path: String, extra: Vec<String>, progress: &Channel<Progress>, state: &AppState) -> Result<MeshInfo, String> {
     use converter_obj::maps;
 
     let path = Path::new(&path);
@@ -650,7 +650,7 @@ pub async fn get_mesh_data(app: AppHandle) -> Result<Response, String> {
     Ok(Response::new(bytes))
 }
 
-fn get_mesh_data_impl(state: &AppState) -> Result<MeshData, String> {
+pub(crate) fn get_mesh_data_impl(state: &AppState) -> Result<MeshData, String> {
     let scene_lock = state.scene.lock().unwrap();
     let scene = scene_lock.as_ref().ok_or("No hay escena cargada")?;
     Ok(scene_mesh_data(scene))

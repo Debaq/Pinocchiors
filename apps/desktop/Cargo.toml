@@ -45,6 +45,10 @@ image = { workspace = true }
 # Escáneres 3D (Orizon3D)
 orizon3d-core = { workspace = true }
 
+# CAD paramétrico (OpenCASCADE) y escaneo → CAD
+cad-model = { workspace = true }
+cad-scan = { workspace = true }
+
 # USDA/USDZ export
 converter-usda = { workspace = true }
 

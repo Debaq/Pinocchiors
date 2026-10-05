@@ -2,6 +2,7 @@
 
 pub mod animation;
 pub mod body_parts;
+pub mod cad;
 pub mod bvh;
 pub mod imported_rig;
 pub mod commands;
@@ -136,6 +137,26 @@ pub fn run() {
             scan_cloud::scan_cloud_reference,
             scan_cloud::scan_cloud_align_reference,
             scan_cloud::scan_cloud_compare,
+            // CAD paramétrico y escaneo → CAD
+            cad::cad_status,
+            cad::cad_new,
+            cad::cad_close,
+            cad::cad_get_document,
+            cad::cad_set_document,
+            cad::cad_evaluate,
+            cad::cad_solve_sketch,
+            cad::cad_mesh,
+            cad::cad_face_ref,
+            cad::cad_edge_ref,
+            cad::cad_face_info,
+            cad::cad_export,
+            cad::cad_import_step,
+            cad::cad_to_model,
+            cad::cad_scan_pick,
+            cad::cad_scan_detect,
+            cad::cad_scan_slice,
+            cad::cad_scan_add,
+            cad::cad_mm_per_unit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

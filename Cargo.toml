@@ -19,6 +19,11 @@ members = [
     "libs/uv/core",
     # Orizon3D - Escáneres 3D
     "libs/orizon3d",
+    # CAD paramétrico
+    "libs/cad/solver",
+    "libs/cad/occt",
+    "libs/cad/model",
+    "libs/cad/scan",
     # Converter - Conversión de formatos 3D
     "libs/converter/scene",
     "libs/converter/gltf-io",
@@ -115,6 +120,12 @@ quadriflow-core = { path = "libs/quadriflow/core" }
 uv-core = { path = "libs/uv/core" }
 orizon3d-core = { path = "libs/orizon3d" }
 
+# Crates internos - CAD
+cad-solver = { path = "libs/cad/solver" }
+cad-occt = { path = "libs/cad/occt" }
+cad-model = { path = "libs/cad/model" }
+cad-scan = { path = "libs/cad/scan" }
+
 # Crates internos - Converter
 converter-scene = { path = "libs/converter/scene" }
 converter-gltf-io = { path = "libs/converter/gltf-io", default-features = false }
@@ -174,3 +185,10 @@ opt-level = 2
 lto = true
 codegen-units = 1
 opt-level = 3
+
+# Escaneo → CAD: segmentación y rayos sobre mallas grandes
+[profile.dev.package.cad-scan]
+opt-level = 2
+
+[profile.dev.package.cad-solver]
+opt-level = 2
