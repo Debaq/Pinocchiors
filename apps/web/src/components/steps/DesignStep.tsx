@@ -9,6 +9,8 @@ import {
   PLANE_LABELS,
   constraintValue,
   emptySketch,
+  filletCorner,
+  linesAt,
   offsetPlane,
   type AxisSpec,
   type BodyOp,
@@ -1202,6 +1204,7 @@ const BodySection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | "
 
 const SketchPanel: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
+  const [cornerRadius, setCornerRadius] = createSignal(5);
   const s = () => ui.session()!;
   const sketch = (): Sketch => s().sketch;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
@@ -1305,6 +1308,24 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
               )}
             </For>
           </div>
+          <Show when={selPoints().length === 1 && linesAt(sketch(), selPoints()[0]).length === 2}>
+            <div class="flex items-end gap-1.5">
+              <div class="flex-1">
+                <Num label="Radio" suffix="mm" step={0.5} value={cornerRadius()} onCommit={setCornerRadius} />
+              </div>
+              <Button
+                size="sm"
+                onClick={() => {
+                  let msg: string | undefined;
+                  ui.change((s) => (msg = filletCorner(s, selPoints()[0], cornerRadius())));
+                  if (msg) ui.setMessage(msg);
+                  else ui.setSelection([]);
+                }}
+              >
+                Redondear esquina
+              </Button>
+            </div>
+          </Show>
           <div class="flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => ui.toggleConstruction()} disabled={selEntities().length === 0}>
               Construcción sí/no

@@ -409,6 +409,63 @@ export function removeEntity(s: Sketch, id: number): void {
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set(loose)));
 }
 
+/** Líneas que llegan a un punto (para redondear esquinas) */
+export function linesAt(s: Sketch, point: number): SketchEntity[] {
+  return s.entities.filter((e) => e.geometry.type === "line" && (e.geometry.start === point || e.geometry.end === point));
+}
+
+/**
+ * Redondea la esquina entre las dos líneas que comparten `point`: las acorta
+ * hasta los puntos de tangencia y pone un arco de radio `r` con su cota.
+ * Devuelve un mensaje si no se puede.
+ */
+export function filletCorner(s: Sketch, point: number, r: number): string | undefined {
+  const lines = linesAt(s, point);
+  if (lines.length !== 2) return "La esquina debe unir exactamente dos líneas";
+  const pos = (id: number): P2 => {
+    const p = s.points.find((q) => q.id === id)!;
+    return [p.x, p.y];
+  };
+  const P = pos(point);
+  const other = (e: SketchEntity) => {
+    const g = e.geometry as { start: number; end: number };
+    return g.start === point ? g.end : g.start;
+  };
+  const [A, B] = [pos(other(lines[0])), pos(other(lines[1]))];
+  const unit = (v: P2): P2 => {
+    const l = Math.hypot(v[0], v[1]);
+    return [v[0] / l, v[1] / l];
+  };
+  const u = unit([A[0] - P[0], A[1] - P[1]]);
+  const v = unit([B[0] - P[0], B[1] - P[1]]);
+  const cos = Math.max(-1, Math.min(1, u[0] * v[0] + u[1] * v[1]));
+  const half = Math.acos(cos) / 2;
+  if (half < 1e-3 || Math.PI / 2 - half < 1e-3) return "Las líneas están alineadas";
+  const t = r / Math.tan(half);
+  if (t >= Math.hypot(A[0] - P[0], A[1] - P[1]) || t >= Math.hypot(B[0] - P[0], B[1] - P[1])) return "El radio no entra en esas líneas";
+  const bis = unit([u[0] + v[0], u[1] + v[1]]);
+  const d = r / Math.sin(half);
+  const T1: P2 = [P[0] + u[0] * t, P[1] + u[1] * t];
+  const T2: P2 = [P[0] + v[0] * t, P[1] + v[1] * t];
+  const C: P2 = [P[0] + bis[0] * d, P[1] + bis[1] * d];
+  const t1 = addPoint(s, T1);
+  const t2 = addPoint(s, T2);
+  const c = addPoint(s, C);
+  for (const [line, tp] of [[lines[0], t1], [lines[1], t2]] as const) {
+    const g = line.geometry as { start: number; end: number };
+    if (g.start === point) g.start = tp;
+    else g.end = tp;
+  }
+  // Arco antihorario por el lado corto
+  const cross = (T1[0] - C[0]) * (T2[1] - C[1]) - (T1[1] - C[1]) * (T2[0] - C[0]);
+  const arc = addEntity(s, cross > 0 ? { type: "arc", center: c, start: t1, end: t2 } : { type: "arc", center: c, start: t2, end: t1 });
+  // La esquina vieja desaparece con sus restricciones
+  s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, val]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && val === point));
+  if (!s.entities.some((e) => e.geometry.type !== "spline" && Object.values(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
+  s.constraints.push({ type: "tangent", a: lines[0].id, b: arc }, { type: "tangent", a: lines[1].id, b: arc }, { type: "radius", entity: arc, value: r });
+  return undefined;
+}
+
 /** Valor editable de una restricción (cota), si tiene */
 export function constraintValue(c: SketchConstraint): number | undefined {
   if ("value" in c) return c.value;
