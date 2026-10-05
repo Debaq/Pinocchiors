@@ -22,6 +22,14 @@ export type SnapKind =
   | "on_line"
   /** Sobre un círculo o arco */
   | "on_circle"
+  /** Alineado en horizontal o vertical con otros puntos */
+  | "aligned"
+  /** Línea paralela a otra (dibujando desde un punto) */
+  | "parallel"
+  /** Línea perpendicular a otra */
+  | "perpendicular"
+  /** Línea tangente al arco del que sale */
+  | "tangent"
   /** Nada cerca */
   | "free";
 
@@ -36,6 +44,21 @@ export interface Snap {
   other?: number;
   /** Cuadrante: 0 = +x, 1 = +y, 2 = −x, 3 = −y desde el centro */
   quadrant?: 0 | 1 | 2 | 3;
+  /** Alineado: `h` = punto a la misma altura, `v` = punto en la misma vertical */
+  align?: { h?: number; v?: number };
+  /** Dirección de la línea que se dibuja desde `from` respecto de otra entidad */
+  direction?: { kind: "parallel" | "perpendicular" | "tangent"; entity: number };
+  /** Líneas guía punteadas (para dibujar) */
+  guides?: [P2, P2][];
+}
+
+export interface InferOptions {
+  /** Puntos que no cuentan para nada (p. ej. el que se arrastra) */
+  exclude?: number[];
+  /** Punto desde el que se dibuja una línea: habilita paralela, perpendicular y tangente */
+  from?: number;
+  /** Puntos con los que no alinearse (los de la forma en curso) */
+  noAlign?: number[];
 }
 
 /** Prioridad cuando hay varios candidatos cerca (menor gana), como Onshape */
@@ -48,6 +71,10 @@ const PRIORITY: Record<SnapKind, number> = {
   quadrant: 5,
   on_line: 7,
   on_circle: 7,
+  aligned: 8,
+  parallel: 8,
+  perpendicular: 8,
+  tangent: 8,
   free: 9,
 };
 
@@ -60,6 +87,10 @@ export const SNAP_GLYPHS: Record<SnapKind, { glyph: string; label: string }> = {
   quadrant: { glyph: "◇", label: "Cuadrante" },
   on_line: { glyph: "∕", label: "Sobre la línea" },
   on_circle: { glyph: "◠", label: "Sobre la curva" },
+  aligned: { glyph: "┆", label: "Alineado" },
+  parallel: { glyph: "∥", label: "Paralela" },
+  perpendicular: { glyph: "⊥", label: "Perpendicular" },
+  tangent: { glyph: "◡", label: "Tangente" },
   free: { glyph: "", label: "" },
 };
 
@@ -158,11 +189,67 @@ export function crossings(k1: Curve, k2: Curve): P2[] {
   return out.filter((p) => within(k1, p) && within(k2, p));
 }
 
+/** Direcciones de salida desde `from`: paralela o perpendicular a una línea, tangente a su arco */
+function directionSnap(s: Sketch, pt: Map<number, P2>, cursor: P2, tol: number, from: number): Snap | undefined {
+  const f = pt.get(from);
+  if (!f) return undefined;
+  const v: P2 = [cursor[0] - f[0], cursor[1] - f[1]];
+  let best: { snap: Snap; d: number } | undefined;
+  const tryDir = (u: P2, kind: "parallel" | "perpendicular" | "tangent", entity: number) => {
+    // Horizontal y vertical las pone la restricción de eje de la línea
+    if (Math.abs(u[0]) < 1e-9 || Math.abs(u[1]) < 1e-9) return;
+    const t = v[0] * u[0] + v[1] * u[1];
+    const p: P2 = [f[0] + t * u[0], f[1] + t * u[1]];
+    const d = dist(cursor, p);
+    if (d <= tol && Math.abs(t) > tol && (!best || d < best.d)) best = { snap: { p, kind, direction: { kind, entity }, guides: [[f, p]] }, d };
+  };
+  for (const e of s.entities) {
+    const g = e.geometry;
+    if (g.type === "line") {
+      const [a, b] = [pt.get(g.start), pt.get(g.end)];
+      if (!a || !b) continue;
+      const l = dist(a, b);
+      if (l < 1e-12) continue;
+      const u: P2 = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+      tryDir(u, "parallel", e.id);
+      tryDir([-u[1], u[0]], "perpendicular", e.id);
+    } else if (g.type === "arc" && (g.start === from || g.end === from)) {
+      const c = pt.get(g.center);
+      if (!c) continue;
+      const r = dist(c, f);
+      if (r < 1e-12) continue;
+      tryDir([-(f[1] - c[1]) / r, (f[0] - c[0]) / r], "tangent", e.id);
+    }
+  }
+  return best?.snap;
+}
+
+/** Alineación horizontal o vertical con los puntos existentes (las dos a la vez si hay) */
+function alignSnap(s: Sketch, cursor: P2, tol: number, skip: Set<number>, from?: P2): Snap | undefined {
+  let h: { id: number; q: P2; d: number } | undefined;
+  let v: { id: number; q: P2; d: number } | undefined;
+  for (const q of s.points) {
+    if (skip.has(q.id)) continue;
+    const dy = Math.abs(cursor[1] - q.y);
+    const dx = Math.abs(cursor[0] - q.x);
+    // A la altura del punto de salida ya la da la línea horizontal (y vertical)
+    if (dy <= tol && !(from && Math.abs(q.y - from[1]) < 1e-9) && (!h || dy < h.d)) h = { id: q.id, q: [q.x, q.y], d: dy };
+    if (dx <= tol && !(from && Math.abs(q.x - from[0]) < 1e-9) && (!v || dx < v.d)) v = { id: q.id, q: [q.x, q.y], d: dx };
+  }
+  if (!h && !v) return undefined;
+  const p: P2 = [v ? v.q[0] : cursor[0], h ? h.q[1] : cursor[1]];
+  const guides: [P2, P2][] = [];
+  if (h) guides.push([h.q, p]);
+  if (v) guides.push([v.q, p]);
+  return { p, kind: "aligned", align: { h: h?.id, v: v?.id }, guides };
+}
+
 /**
  * Anclaje para el cursor `cursor` (coordenadas del sketch) con tolerancia
- * `tol` (mm). `exclude`: puntos que no cuentan (p. ej. el que se arrastra).
+ * `tol` (mm).
  */
-export function infer(s: Sketch, cursor: P2, tol: number, exclude: number[] = []): Snap {
+export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {}): Snap {
+  const exclude = opts.exclude ?? [];
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
   const centers = new Set<number>();
   for (const e of s.entities) if (e.geometry.type === "circle" || e.geometry.type === "arc") centers.add(e.geometry.center);
@@ -239,5 +326,12 @@ export function infer(s: Sketch, cursor: P2, tol: number, exclude: number[] = []
       for (const p of crossings(near[i], near[j])) offer({ p, kind: "intersection", entity: near[i].id, other: near[j].id });
     }
   }
-  return best?.snap ?? { p: cursor, kind: "free" };
+  if (best) return best.snap;
+  // Sin nada cerca: dirección de la línea en curso, o alineación con puntos
+  if (opts.from !== undefined) {
+    const d = directionSnap(s, pt, cursor, tol, opts.from);
+    if (d) return d;
+  }
+  const skip = new Set([...exclude, ...(opts.noAlign ?? []), ...(opts.from !== undefined ? [opts.from] : [])]);
+  return alignSnap(s, cursor, tol, skip, opts.from !== undefined ? pt.get(opts.from) : undefined) ?? { p: cursor, kind: "free" };
 }

@@ -456,11 +456,12 @@ const scenarios = {
       await b.key("Escape", "Escape", 27);
       await b.key("Escape", "Escape", 27);
     };
-    // y = x y una que la cruza fuera de los puntos medios
-    await line([0.1, 0.1], [0.3, 0.3]);
-    await line([0.12, 0.3], [0.3, 0.15]);
-    const t = 0.18 / 0.33;
-    const X = 0.12 + 0.18 * t;
+    // y = x y una que la cruza fuera de los puntos medios, lejos (> 8 px) de
+    // alinearse con otros puntos o de quedar perpendicular
+    await line([0.1, 0.1], [0.35, 0.35]);
+    await line([0.14, 0.42], [0.4, 0.25]);
+    const t = 0.28 / 0.43;
+    const X = 0.14 + 0.26 * t;
     await b.clickText("Círculo");
     const [cx, cy] = await at(X, X);
     await b.click(cx + 3, cy - 2);
@@ -476,6 +477,57 @@ const scenarios = {
     near(c.y, X * S, 1e-4, "centro y");
     const ends = sk.entities.filter((e) => e.geometry.type === "line" && [e.geometry.start, e.geometry.end].includes(c.id)).length;
     if (ends !== 4) throw new Error(`las líneas no se partieron en el cruce: ${ends}`);
+  },
+
+  async "anclajes: alineado y perpendicular"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    const glyph = () => b.eval(`document.querySelector("[data-snap]")?.dataset.snap`);
+    await b.clickText("Rectángulo");
+    await b.click(...(await at(0, 0)));
+    await b.click(...(await at(0.4, 0.3)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    // Polilínea: el primer punto a la altura de la esquina de arriba, el
+    // tercero perpendicular al primer tramo
+    await b.clickText("Línea");
+    const [x1, y1] = await at(0.52, 0.3);
+    await b.click(x1, y1 + 3);
+    if ((await glyph()) !== "aligned") throw new Error(`glifo alineado: ${await glyph()}`);
+    await b.click(...(await at(0.64, 0.18)), { wait: 600 });
+    const [x3, y3] = await at(0.7, 0.24);
+    await b.click(x3 + 1, y3 + 1);
+    if ((await glyph()) !== "perpendicular") throw new Error(`glifo perpendicular: ${await glyph()}`);
+    await sleep(600);
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    const count = (t) => doc.features[0].kind.sketch.constraints.filter((c) => c.type === t).length;
+    if (count("horizontal_points") !== 1 || count("perpendicular") !== 1) throw new Error(JSON.stringify(doc.features[0].kind.sketch.constraints));
+    // Más alto el rectángulo: el punto alineado sube con él y el ángulo recto se mantiene
+    const sk = doc.features[0].kind.sketch;
+    sk.constraints.filter((c) => c.type === "length").forEach((c) => {
+      const g = sk.entities.find((e) => e.id === c.line).geometry;
+      const [a, q] = [sk.points.find((p) => p.id === g.start), sk.points.find((p) => p.id === g.end)];
+      if (Math.abs(a.x - q.x) < 1e-6) c.value = 0.5 * S; // la cota de alto del rectángulo
+    });
+    await call("cad_set_document", { document: doc });
+    const solved = (await evaluate()).sketches[0].sketch;
+    const pt = new Map(solved.points.map((p) => [p.id, p]));
+    const aligned = solved.constraints.find((c) => c.type === "horizontal_points");
+    near(pt.get(aligned.b).y, 0.5 * S, 1e-6, "punto alineado");
+    const perp = solved.constraints.find((c) => c.type === "perpendicular");
+    const dir = (id) => {
+      const g = solved.entities.find((e) => e.id === id).geometry;
+      const [a, q] = [pt.get(g.start), pt.get(g.end)];
+      const l = Math.hypot(q.x - a.x, q.y - a.y);
+      return [(q.x - a.x) / l, (q.y - a.y) / l];
+    };
+    const [u, v] = [dir(perp.a), dir(perp.b)];
+    near(u[0] * v[0] + u[1] * v[1], 0, 1e-6, "ángulo recto");
   },
 
   async "escaneo: cilindro elegido con un clic"(b) {

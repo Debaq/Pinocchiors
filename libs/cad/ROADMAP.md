@@ -220,3 +220,10 @@ cargo test -p cad-model
   (los arcos recortados a su barrido), con prioridad entre el origen y el punto medio; solo se
   cruzan las curvas que pasan cerca del cursor. El punto queda sobre las dos (las líneas se
   parten ahí). E2E: centro de un círculo en el cruce de dos líneas → cuatro mitades.
+- **2026-10-05 Anclajes, fase 3**: sin un punto cerca, al dibujar una línea desde un punto se
+  ofrece salir paralela o perpendicular a otra línea, o tangente al arco del que sale (no las
+  horizontales/verticales: esas las pone la restricción de eje); si no, el punto se alinea en
+  horizontal y/o vertical con los puntos cercanos (nunca con el punto de salida ni con los de
+  la forma en curso). Líneas guía punteadas y la entidad de referencia resaltada. Las pruebas
+  e2e con clics en coordenadas fijas ahora tienen que quedar lejos (> 8 px) de alineaciones
+  sin querer.

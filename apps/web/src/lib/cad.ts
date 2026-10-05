@@ -782,13 +782,17 @@ function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hi
  * Punto para un anclaje (ver `sketchSnap.infer`): el existente, o uno nuevo
  * con la restricción que corresponde. Punto medio: parte la línea y deja las
  * dos mitades iguales. Cuadrante: sobre la curva y alineado con el centro.
- * Intersección: sobre las dos curvas.
+ * Intersección: sobre las dos curvas. Alineado: a la misma altura o en la
+ * misma vertical que esos puntos. La dirección (paralela, perpendicular,
+ * tangente) la pone la herramienta Línea, que crea la línea.
  * Sobre una línea: la parte (así cierra regiones). Sobre una curva: punto en
  * círculo.
  */
 export function placeSnap(s: Sketch, snap: Snap): number {
   if (snap.id !== undefined && s.points.some((q) => q.id === snap.id)) return snap.id;
   const id = addPoint(s, snap.p);
+  if (snap.align?.h !== undefined) s.constraints.push({ type: "horizontal_points", a: snap.align.h, b: id });
+  if (snap.align?.v !== undefined) s.constraints.push({ type: "vertical_points", a: snap.align.v, b: id });
   const e = snap.entity;
   if (e === undefined) return id;
   if (snap.kind === "midpoint") {

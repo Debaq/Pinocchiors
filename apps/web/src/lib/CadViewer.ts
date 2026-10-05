@@ -45,6 +45,8 @@ export interface SketchOverlay {
   preview?: P2[][];
   /** Punto al que se pega el cursor (anclaje activo) */
   snap?: P2;
+  /** Líneas guía del anclaje (alineaciones, dirección) */
+  guides?: [P2, P2][];
   /** Eligiendo regiones: se muestran todas y se resaltan las que contienen estos puntos */
   chosen?: P2[];
 }
@@ -474,6 +476,7 @@ export class CadViewer {
       if (pts.every(Boolean)) lines(pts, color, !!e.construction);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
+    for (const g of overlay.guides ?? []) lines(g, themeHex("cyan"), true);
 
     // Puntos: libres en amarillo, definidos en verde
     const free = new Set(overlay.freePoints ?? []);

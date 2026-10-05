@@ -30,8 +30,8 @@ Hoy (`CadView.tsx`, `snapped` / `placePoint`):
 | Punto medio de una línea | Sí (fase 1) | Parte la línea, mitades iguales |
 | Cuadrantes de un círculo o arco (0°, 90°, 180°, 270°) | Sí (fase 1) | Punto en círculo + alineado H/V con el centro |
 | Intersección de dos curvas | Sí (fase 2) | Sobre las dos (las líneas se parten) |
-| **Alineación** con otro punto (línea punteada H/V) | **No** | — |
-| **Paralela / perpendicular / tangente** al dibujar | **No** | — |
+| Alineación con otro punto (línea punteada H/V) | Sí (fase 3) | Horizontal/vertical entre los dos puntos |
+| Paralela / perpendicular / tangente al dibujar una línea | Sí (fase 3) | `parallel` / `perpendicular` / `tangent` |
 | **Vértices y aristas del sólido** (al dibujar sobre una cara) | **No** | — |
 | Aviso visual de qué anclaje está activo | Sí (fase 1): punto resaltado y glifo | — |
 | Anclajes en todas las herramientas, Mayús para dibujar libre | Sí (fase 1) | — |
@@ -107,7 +107,7 @@ infer(sketch, cursor, { tolerancia, puntoAnterior?, entidadDeOrigen?, geometría
      tangente), no solo en Línea.
    - Glifo del anclaje activo.
 2. **Intersecciones.** *Hecha el 2026-10-05.* Candidato en los cruces entre curvas, dejando el punto sobre las dos.
-3. **Líneas de inferencia.**
+3. **Líneas de inferencia.** *Hecha el 2026-10-05.*
    - Restricciones nuevas en el modelo: horizontal y vertical **entre dos puntos** (el solver
      ya las tiene).
    - Alineación H/V con puntos existentes, con línea guía.

@@ -106,7 +106,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [tangentFrom, setTangentFrom] = createSignal<{ point: number; dir: P2; entity: number }>();
   const [anchor, setAnchor] = createSignal<Snap[]>([]);
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
-  const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number }>();
+  const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
@@ -292,10 +292,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketch: s.sketch,
       regions: s.regions,
       selected: ui.selection(),
-      hover: ui.hoverIds(),
+      hover: [...ui.hoverIds(), ...(snapView()?.refs ?? [])],
       freePoints: s.report?.free_points,
       preview,
       snap: snapView()?.p,
+      guides: snapView()?.guides,
     });
   });
 
@@ -309,7 +310,14 @@ export const CadView: Component<CadViewProps> = (props) => {
     const p = viewer.planePoint(e.clientX, e.clientY, s.plane);
     if (!p) return undefined;
     if (e.shiftKey) return { p, kind: "free" };
-    return infer(s.sketch, p, viewer.pixelSizeMm() * 8, dragging !== undefined ? [dragging] : []);
+    // Dibujando una línea: puede salir paralela, perpendicular o tangente
+    const from = ui.tool() === "line" ? chain()?.last : undefined;
+    return infer(s.sketch, p, viewer.pixelSizeMm() * 8, {
+      exclude: dragging !== undefined ? [dragging] : [],
+      from,
+      // No alinearse con los puntos de la forma en curso (daría ancho o alto cero)
+      noAlign: anchor().flatMap((a) => (a.id !== undefined ? [a.id] : [])),
+    });
   };
 
   /** Agrega una cota y devuelve su índice */
@@ -371,7 +379,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         const line = ui.addEntity(sk, { type: "line", start: ch.last, end: id });
         // Entre dos puntos que ya estaban, la línea queda definida por ellos
         const between = snappedToPoint && ch.lastSnapped;
-        if (!between) autoAxis(sk, line, [a.x, a.y], hit.p);
+        const dir = hit.direction;
+        if (dir?.kind === "tangent") sk.constraints.push({ type: "tangent", a: line, b: dir.entity });
+        else if (dir) sk.constraints.push({ type: dir.kind, a: dir.entity, b: line });
+        else if (!between) autoAxis(sk, line, [a.x, a.y], hit.p);
         closed = id === ch.first;
         // El tramo que cierra queda determinado por los demás: sin cota propia
         if (!closed && !between) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
@@ -632,7 +643,15 @@ export const CadView: Component<CadViewProps> = (props) => {
     const drawing = !["select", "trim", "extend"].includes(ui.tool());
     if (hit && drawing && hit.kind !== "free") {
       const rect = container.getBoundingClientRect();
-      setSnapView({ kind: hit.kind, p: hit.p, x: e.clientX - rect.left, y: e.clientY - rect.top });
+      setSnapView({
+        kind: hit.kind,
+        p: hit.p,
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top,
+        guides: hit.guides ?? [],
+        // Lo que origina el anclaje se resalta (la línea paralela, el arco tangente...)
+        refs: [hit.direction?.entity, hit.align?.h, hit.align?.v].filter((x): x is number => x !== undefined),
+      });
     } else setSnapView(undefined);
     if (dragging !== undefined && hit && (e.buttons & 1) === 1) {
       void ui.drag(dragging, viewer!.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p);

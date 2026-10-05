@@ -65,8 +65,10 @@ test("sobre una curva y libre", () => {
   assert.equal(c.kind, "on_circle");
   assert.equal(c.entity, 11);
   assert.deepEqual(infer(s, [100, 100], 1), { p: [100, 100], kind: "free" });
-  // Fuera del segmento no hay "sobre la línea"
-  assert.equal(infer(s, [35, 0.2], 1).kind, "free");
+  // Fuera del segmento no hay "sobre la línea": queda alineado con los puntos a y = 0
+  const a = infer(s, [35, 0.2], 1);
+  assert.equal(a.kind, "aligned");
+  near(a.p, [35, 0]);
 });
 
 test("prioridad: el punto gana al medio aunque el medio esté más cerca", () => {
@@ -79,7 +81,7 @@ test("prioridad: el punto gana al medio aunque el medio esté más cerca", () =>
 });
 
 test("excluir el punto que se arrastra", () => {
-  assert.equal(infer(sample(), [0.1, 0], 1, [0]).kind, "free");
+  assert.equal(infer(sample(), [0.1, 3], 1, { exclude: [0] }).kind, "free");
 });
 
 /** Dos líneas en X, un círculo y un arco de 0° a 90° */
@@ -152,4 +154,52 @@ test("extremos compartidos ganan a la intersección", () => {
   const r = infer(crossingSample(), [45.2, 0.1], 1);
   assert.equal(r.kind, "point");
   assert.equal(r.id, 6);
+});
+
+test("alineado en horizontal y vertical a la vez", () => {
+  const s = sample();
+  // x = 20 (punto 1) e y = 50 (centro del círculo)
+  const r = infer(s, [20.4, 49.5], 1);
+  assert.equal(r.kind, "aligned");
+  assert.deepEqual(r.align, { h: 3, v: 1 });
+  near(r.p, [20, 50]);
+  assert.equal(r.guides.length, 2);
+  // noAlign: sin esos puntos solo queda lo que haya
+  assert.equal(infer(s, [20.4, 49.5], 1, { noAlign: [1, 3] }).kind, "free");
+});
+
+test("dibujando desde un punto: paralela, perpendicular y tangente", () => {
+  const s = {
+    points: [
+      { id: 0, x: 0, y: 0 },
+      { id: 1, x: 10, y: 5 },
+      { id: 2, x: 30, y: 0 }, // desde acá se dibuja
+      { id: 3, x: 50, y: 0 }, // centro del arco
+      { id: 4, x: 60, y: 0 },
+      { id: 5, x: 50, y: 10 }, // fin del arco (90°)
+    ],
+    entities: [
+      { id: 10, geometry: { type: "line", start: 0, end: 1 } },
+      { id: 11, geometry: { type: "arc", center: 3, start: 4, end: 5 } },
+    ],
+    constraints: [],
+  };
+  // Paralela a (0,0)-(10,5) desde (30,0): (30,0) + t (2,1)/√5
+  const par = infer(s, [40.3, 4.8], 1, { from: 2 });
+  assert.equal(par.kind, "parallel");
+  assert.equal(par.direction.entity, 10);
+  near(par.p, [30 + 2 * ((10.3 * 2 + 4.8) / 5), (10.3 * 2 + 4.8) / 5]);
+  // Perpendicular: dirección (−1, 2)
+  const per = infer(s, [25.2, 10.1], 1, { from: 2 });
+  assert.equal(per.kind, "perpendicular");
+  // Tangente al salir del fin del arco (50,10): dirección horizontal → la da el eje, no la tangente
+  assert.notEqual(infer(s, [40, 10.2], 1, { from: 5 }).kind, "tangent");
+  // Arco que termina a 45°: la tangente sale a 135°
+  const r = 10 / Math.SQRT2;
+  s.points[5] = { id: 5, x: 50 + r, y: r };
+  const tan = infer(s, [50 + r - 5, r + 5.3], 1, { from: 5 });
+  assert.equal(tan.kind, "tangent");
+  assert.equal(tan.direction.entity, 11);
+  // Sin `from` no hay direcciones
+  assert.notEqual(infer(s, [40.3, 4.8], 1).kind, "parallel");
 });
