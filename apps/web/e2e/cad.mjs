@@ -803,7 +803,7 @@ const scenarios = {
 
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
-    await b.clickContains("Importar un modelo");
+    await b.clickContains("Abrir / importar");
     await sleep(4000);
     await begin(b);
     await b.clickContains("Cilindro / agujero");

@@ -1380,7 +1380,11 @@ export const App: Component = () => {
     void scanCloud.attach(v);
   };
 
-  const handleLoad = async () => {
+  /**
+   * Importa un modelo. Con `projects` el mismo diálogo abre también proyectos
+   * .pinocchio (pantalla de inicio); `then` es la sección a la que se pasa
+   */
+  const handleLoad = async (opts: { projects?: boolean; then?: PipelineStepId } = {}) => {
     if (blockedByTask()) return;
     try {
       const formats = supportedFormats();
@@ -1388,13 +1392,14 @@ export const App: Component = () => {
 
       const extensions = formats.import.flatMap((f) => f.extensions);
       const selected = await open({
-        title: "Importar modelo 3D (con sus texturas, si vienen aparte)",
+        title: opts.projects ? "Abrir un proyecto o importar un modelo 3D" : "Importar modelo 3D (con sus texturas, si vienen aparte)",
         multiple: true,
         filters: [
           {
-            name: "Modelos 3D y texturas",
-            extensions: [...extensions, ...TEXTURE_FILE_EXTENSIONS],
+            name: opts.projects ? "Proyectos, modelos 3D y texturas" : "Modelos 3D y texturas",
+            extensions: [...(opts.projects ? ["pinocchio"] : []), ...extensions, ...TEXTURE_FILE_EXTENSIONS],
           },
+          ...(opts.projects ? [{ name: "Proyecto de Pinocchio", extensions: ["pinocchio"] }] : []),
           ...formats.import.map((f) => ({
             name: f.name,
             extensions: f.extensions,
@@ -1405,6 +1410,11 @@ export const App: Component = () => {
       if (!selected) return;
       const files = typeof selected === "string" ? [selected] : selected;
       const extensionOf = (f: string) => f.split(".").pop()?.toLowerCase() ?? "";
+      const project = files.find((f) => extensionOf(f) === "pinocchio");
+      if (project) {
+        await handleOpenProject(project);
+        return;
+      }
       const models = files.filter((f) => extensions.includes(extensionOf(f)));
       if (models.length !== 1) {
         setStatusMessage(models.length === 0 ? "Elige también el modelo 3D, no solo las texturas" : "Elige un solo modelo 3D (las texturas pueden ser varias)");
@@ -1434,7 +1444,7 @@ export const App: Component = () => {
         if (skipped.length > 0) parts.push(`sin usar: ${skipped.join("; ")}`);
         setStatusMessage(`Modelo cargado: ${parts.join(" · ")}`);
       }
-      pipeline.setActiveStep("structure");
+      pipeline.setActiveStep(opts.then ?? "structure");
     } catch (e) {
       console.error("Import error:", e);
       setStatusMessage(`Error: ${e}`);
@@ -3927,13 +3937,6 @@ export const App: Component = () => {
     setScanEditorTab(tab);
     setScanEditorOpen(true);
   };
-  /** Abre una nube PLY como toma y pasa a limpiarla */
-  const openCloudFromWelcome = async () => {
-    const path = await open({ title: "Abrir nube de puntos", multiple: false, filters: [{ name: "Nube de puntos PLY", extensions: ["ply"] }] });
-    if (!path || Array.isArray(path)) return;
-    openScanEditor("cloud");
-    await scanCloud.importPly(path);
-  };
   /** La nube se ve y se edita en el visor (en Orizon3D, con una nube abierta) */
   const cloudEditing = () => inScanWorkspace() && !!scanCloud.info() && scanCloud.shown();
   createEffect(() => {
@@ -5815,12 +5818,12 @@ export const App: Component = () => {
             {/* Welcome Screen overlay */}
             <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !inDesign()}>
               <WelcomeScreen
-                onImport={handleLoad}
+                onOpen={() => handleLoad({ projects: true })}
                 onScan={() => openScanEditor("capture")}
-                onOpenCloud={openCloudFromWelcome}
+                onAnimate={() => pipeline.openWorkspace("rig")}
+                onDesign={() => pipeline.openWorkspace("design")}
+                onFabricate={() => handleLoad({ then: "print3d" })}
                 formats={supportedFormats()?.import.flatMap((f) => f.extensions)}
-                onSkeletonOnly={() => pipeline.setActiveStep("skeleton")}
-                onOpenProject={() => handleOpenProject()}
                 recovery={recovery()}
                 onRecover={() => handleOpenProject(recovery()!.path, true)}
               />

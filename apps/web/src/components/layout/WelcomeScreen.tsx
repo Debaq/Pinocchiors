@@ -1,16 +1,19 @@
 import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import * as Icons from "../icons";
+import logo from "../../assets/logo.svg";
 
 export interface WelcomeScreenProps {
-  onImport?: () => void;
+  /** Un solo diálogo para proyectos .pinocchio y modelos 3D */
+  onOpen?: () => void;
   /** Escanear con Orizon3D (pestaña Captura) */
   onScan?: () => void;
-  /** Abrir una nube de puntos PLY para limpiarla y mallarla */
-  onOpenCloud?: () => void;
-  /** Trabajar sin modelo: elegir un esqueleto, animarlo y exportarlo */
-  onSkeletonOnly?: () => void;
-  onOpenProject?: () => void;
+  /** Rig y animación: se puede armar un esqueleto sin modelo */
+  onAnimate?: () => void;
+  /** CAD paramétrico desde cero */
+  onDesign?: () => void;
+  /** Importar un modelo y pasar a fabricarlo */
+  onFabricate?: () => void;
   /** Formatos de modelo que se importan (extensiones en minúscula) */
   formats?: string[];
   /** Última sesión guardada por el guardado automático */
@@ -27,42 +30,42 @@ interface Choice {
 }
 
 /**
- * Inicio sin trabajo abierto: todas las formas de empezar, no solo importar
- * un modelo. También se puede soltar un modelo sobre el visor
+ * Inicio sin trabajo abierto: el logo en una lámina a la izquierda y las
+ * formas de empezar a la derecha. También se puede soltar un modelo sobre el visor
  */
 export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
   const formats = () => (props.formats?.length ? props.formats.map((f) => f.toUpperCase()).join(", ") : "GLB, GLTF, OBJ, STL");
   const choices = (): Choice[] => [
     {
-      title: "Importar un modelo",
-      detail: `${formats()}, con sus texturas`,
-      icon: <Icons.FolderOpen size={22} />,
-      action: props.onImport,
+      title: "Abrir / importar",
+      detail: `Proyecto .pinocchio o modelo ${formats()}`,
+      icon: <Icons.FolderOpen size={20} />,
+      action: props.onOpen,
       primary: true,
     },
     {
       title: "Escanear",
-      detail: "Revopoint por USB, en una o varias tomas",
-      icon: <Icons.Scan size={22} />,
+      detail: "Revopoint o plato giratorio, y nubes de puntos",
+      icon: <Icons.Scan size={20} />,
       action: props.onScan,
     },
     {
-      title: "Abrir una nube de puntos",
-      detail: "PLY: limpiar, fusionar y mallar",
-      icon: <Icons.Stack size={22} />,
-      action: props.onOpenCloud,
+      title: "Animar",
+      detail: "Esqueleto, pesos, poses y animación, con o sin modelo",
+      icon: <Icons.PersonArmsSpread size={20} />,
+      action: props.onAnimate,
     },
     {
-      title: "Empezar con un esqueleto",
-      detail: "Armar, animar y exportar sin modelo",
-      icon: <Icons.Bone size={22} />,
-      action: props.onSkeletonOnly,
+      title: "Diseñar",
+      detail: "Piezas paramétricas desde un boceto",
+      icon: <Icons.Ruler size={20} />,
+      action: props.onDesign,
     },
     {
-      title: "Abrir un proyecto",
-      detail: "Archivo .pinocchio guardado",
-      icon: <Icons.FloppyDisk size={22} />,
-      action: props.onOpenProject,
+      title: "Fabricar",
+      detail: "Importar un modelo para imprimirlo en piezas",
+      icon: <Icons.Printer size={20} />,
+      action: props.onFabricate,
     },
   ];
 
@@ -70,60 +73,70 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
     <div class="absolute inset-0 flex items-center justify-center z-10 pointer-events-auto p-8 overflow-auto">
       <div
         class={clsx(
-          "flex flex-col gap-5 p-8",
-          "rounded-2xl border-2 border-dashed border-border",
-          "bg-bg-darker/80 backdrop-blur-sm",
-          "max-w-xl w-full"
+          "flex flex-col sm:flex-row overflow-hidden",
+          "rounded-2xl border border-border shadow-2xl",
+          "bg-bg-darker/90 backdrop-blur-sm",
+          "max-w-3xl w-full"
         )}
       >
-        <div class="text-center space-y-1">
-          <h2 class="text-lg font-semibold text-text">¿Por dónde empezamos?</h2>
-          <p class="text-xs text-text-muted">También puedes arrastrar un modelo 3D sobre el visor</p>
+        <div class="sm:w-[44%] shrink-0 bg-splash flex flex-col items-center justify-center px-6 pt-6 pb-5">
+          <img src={logo} alt="" class="w-full max-w-60 select-none" draggable={false} />
+          <div class="text-center mt-3">
+            <div class="text-2xl font-bold tracking-tight text-splash-text">Pinocchio</div>
+            <div class="text-[11px] text-splash-muted">Escanear, reparar, animar y fabricar modelos 3D</div>
+          </div>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <For each={choices()}>
-            {(choice) => (
-              <button
-                class={clsx(
-                  "flex items-center gap-3 p-3 rounded-xl border text-left transition-colors",
-                  "disabled:opacity-40 disabled:cursor-not-allowed",
-                  choice.primary
-                    ? "sm:col-span-2 border-accent/50 bg-accent/10 hover:bg-accent/20"
-                    : "border-border bg-bg-lighter/40 hover:bg-bg-lighter hover:border-accent/40"
-                )}
-                disabled={!choice.action}
-                onClick={() => choice.action?.()}
-              >
-                <span
+        <div class="flex-1 min-w-0 flex flex-col gap-4 p-6">
+          <div class="space-y-0.5">
+            <h2 class="text-base font-semibold text-text">¿Por dónde empezamos?</h2>
+            <p class="text-xs text-text-muted">También puedes arrastrar un modelo 3D sobre el visor</p>
+          </div>
+
+          <div class="flex flex-col gap-1.5">
+            <For each={choices()}>
+              {(choice) => (
+                <button
                   class={clsx(
-                    "w-10 h-10 shrink-0 rounded-lg flex items-center justify-center",
-                    choice.primary ? "bg-accent/20 text-accent" : "bg-bg-darker text-text-muted"
+                    "flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors",
+                    "disabled:opacity-40 disabled:cursor-not-allowed",
+                    choice.primary
+                      ? "border-accent/50 bg-accent/10 hover:bg-accent/20"
+                      : "border-transparent hover:bg-bg-lighter hover:border-border"
                   )}
+                  disabled={!choice.action}
+                  onClick={() => choice.action?.()}
                 >
-                  {choice.icon}
-                </span>
-                <span class="min-w-0">
-                  <span class="block text-sm font-medium text-text">{choice.title}</span>
-                  <span class="block text-[11px] text-text-muted leading-snug">{choice.detail}</span>
-                </span>
+                  <span
+                    class={clsx(
+                      "w-9 h-9 shrink-0 rounded-lg flex items-center justify-center",
+                      choice.primary ? "bg-accent/20 text-accent" : "bg-bg-lighter text-text-muted"
+                    )}
+                  >
+                    {choice.icon}
+                  </span>
+                  <span class="min-w-0">
+                    <span class="block text-sm font-medium text-text">{choice.title}</span>
+                    <span class="block text-[11px] text-text-muted leading-snug">{choice.detail}</span>
+                  </span>
+                </button>
+              )}
+            </For>
+          </div>
+
+          <Show when={props.recovery}>
+            {(r) => (
+              <button
+                class="mt-auto flex items-center gap-2 text-xs text-text-muted hover:text-text"
+                onClick={() => props.onRecover?.()}
+              >
+                <Icons.ArrowCounterClockwise size={13} />
+                Recuperar la sesión{r().source_name ? ` de ${r().source_name}` : ""} ·{" "}
+                {new Date(r().saved_at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
               </button>
             )}
-          </For>
+          </Show>
         </div>
-
-        <Show when={props.recovery}>
-          {(r) => (
-            <button
-              class="flex items-center justify-center gap-2 text-xs text-text-muted hover:text-text"
-              onClick={() => props.onRecover?.()}
-            >
-              <Icons.ArrowCounterClockwise size={13} />
-              Recuperar la sesión{r().source_name ? ` de ${r().source_name}` : ""} ·{" "}
-              {new Date(r().saved_at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
-            </button>
-          )}
-        </Show>
       </div>
     </div>
   );

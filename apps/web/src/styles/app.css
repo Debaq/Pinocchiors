@@ -57,6 +57,12 @@
   --color-cube-text: #f8f8f2;
   --color-uv-edge: #50fa7bb3;
 
+  /* Lámina del logo en la pantalla de inicio: papel claro en los dos temas,
+     como la portada del manual (los hilos de la marioneta son oscuros) */
+  --color-splash: #efe9df;
+  --color-splash-text: #2a1d0e;
+  --color-splash-muted: #7a6650;
+
   /* Layout Sizes */
   --size-header: 44px;
   --size-sidebar: 260px;
@@ -125,6 +131,8 @@
   --color-cube-border: #878ba5;
   --color-cube-text: #1f2030;
   --color-uv-edge: #19803acc;
+
+  --color-splash: #fdfaf4;
 }
 
 :root {
