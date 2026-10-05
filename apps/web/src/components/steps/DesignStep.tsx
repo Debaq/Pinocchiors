@@ -166,7 +166,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       regions: { type: "all" },
       extent: { type: "blind", distance: 10 },
       reverse: false,
-      op: store.result()?.body ? "join" : "join",
+      op: "join",
     });
   };
 

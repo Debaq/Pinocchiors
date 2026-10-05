@@ -63,9 +63,8 @@ Decisiones (2026-10-05):
 - [x] **F6 — Espacio de trabajo "Diseñar"** en la web: árbol de operaciones, panel de parámetros,
       primitivas, sketch básico (línea, rectángulo, círculo, arco) sobre plano o cara, extruir,
       elegir caras/aristas en el visor, redondeo. Textos sin mencionar Blender.
-- [ ] **F7 — Distribución**: workflow manual nuevo (no tocar `release.yml`) que compila OCCT
-      estático solo con los toolkits necesarios y lo guarda en caché; Linux, Windows, macOS.
-      Medir cuánto engorda el instalador.
+- [~] **F7 — Distribución**: `scripts/build-occt.sh` + workflow manual `release-cad.yml` (no
+      toca `release.yml`). Linux probado en local; Windows y macOS escritos pero sin correr.
 - [ ] **F8 — Sketch completo**: portar herramientas de cad-blender. Hecho: polígono, ranura,
       cotas en el visor, enganche a puntos y curvas, horizontal/vertical automáticos, regiones
       elegidas con clic, puntos libres marcados. Falta: recortar/extender, offset, redondeo de
@@ -149,3 +148,15 @@ cargo test -p cad-model
   curvas, regiones sueltas elegidas con clic para extruir/revolucionar, zonas detectadas del
   escaneo agregables. Arreglado el diagnóstico de puntos libres (miraba solo las columnas
   del punto; ahora el espacio nulo del Jacobiano).
+- **2026-10-05 F7**: OCCT 7.9.3 estático y mínimo (`scripts/build-occt.sh`, ~25 min con 16
+  núcleos): modelado + TKDESTEP; CMake arrastra XCAF/V3d/LCAF como dependencias de TKDESTEP
+  pero sin freetype/OpenGL/X11 compilan igual, y al enlazar estático no entra ningún objeto de
+  ellos (0 símbolos XCAFDoc/V3d/Graphic3d en el binario). Tests de cad-occt y cad-model pasan
+  enlazados estáticos; el binario solo depende de libstdc++/libc.
+  - Tamaño de la app release (Linux): 62,7 MB con CAD contra 23,6 MB sin CAD; sin símbolos
+    51,8 contra 19,5 MB (+32 MB); comprimido con xz 14,8 contra 5,4 MB (+9,4 MB). Lo grueso es
+    el esquema STEP AP214 y los algoritmos booleanos.
+  - Pendiente: correr el workflow (para `workflow_dispatch` el archivo tiene que estar en la
+    rama por defecto); en Windows se define `OCCT_STATIC_BUILD` y se enlazan user32/advapi32/
+    ws2_32/gdi32/shell32, en Linux dl/pthread; macOS sin extras. Podrían faltar libs del
+    sistema que solo se ven al enlazar en esas plataformas.
