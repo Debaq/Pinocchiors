@@ -21,6 +21,8 @@ const TOOLS: { id: SketchTool; label: string; key: string }[] = [
   { id: "rect", label: "Rectángulo", key: "R" },
   { id: "circle", label: "Círculo", key: "C" },
   { id: "arc", label: "Arco (centro, inicio, fin)", key: "A" },
+  { id: "polygon", label: "Polígono regular (centro, vértice)", key: "P" },
+  { id: "slot", label: "Ranura (centro, centro, ancho)", key: "U" },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -58,6 +60,37 @@ function hitTest(s: Sketch, p: P2, tol: number): { point?: number; entity?: numb
   return best ? { entity: best.id } : {};
 }
 
+/** Vértices de un polígono regular de centro `c` con un vértice en `v` */
+function polygonPoints(c: P2, v: P2, n: number, closed = false): P2[] {
+  const r = dist(c, v);
+  const a0 = Math.atan2(v[1] - c[1], v[0] - c[0]);
+  const pts: P2[] = Array.from({ length: n }, (_, i) => [c[0] + r * Math.cos(a0 + (2 * Math.PI * i) / n), c[1] + r * Math.sin(a0 + (2 * Math.PI * i) / n)]);
+  if (closed) pts.push(pts[0]);
+  return pts;
+}
+
+/** Radio de una ranura: distancia del cursor a la recta entre centros */
+function slotRadius(a: P2, b: P2, p: P2): number {
+  const d = dist(a, b) || 1;
+  return Math.abs(((b[0] - a[0]) * (a[1] - p[1]) - (a[0] - p[0]) * (b[1] - a[1])) / d);
+}
+
+/** Contorno de una ranura para la vista previa */
+function slotOutline(a: P2, b: P2, r: number): P2[] {
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+  const out: P2[] = [];
+  for (let i = 0; i <= 16; i++) {
+    const t = ang - Math.PI / 2 + (Math.PI * i) / 16;
+    out.push([b[0] + r * Math.cos(t), b[1] + r * Math.sin(t)]);
+  }
+  for (let i = 0; i <= 16; i++) {
+    const t = ang + Math.PI / 2 + (Math.PI * i) / 16;
+    out.push([a[0] + r * Math.cos(t), a[1] + r * Math.sin(t)]);
+  }
+  out.push(out[0]);
+  return out;
+}
+
 export const CadView: Component<CadViewProps> = (props) => {
   let container!: HTMLDivElement;
   let viewer: CadViewer | undefined;
@@ -65,6 +98,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Estado de la herramienta en curso (clics ya dados)
   const [chain, setChain] = createSignal<{ first: number; last: number }>();
   const [anchor, setAnchor] = createSignal<P2[]>([]);
+  const [polygonSides, setPolygonSides] = createSignal(6);
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
@@ -177,6 +211,9 @@ export const CadView: Component<CadViewProps> = (props) => {
         preview.push(Array.from({ length: 49 }, (_, i) => [an[0][0] + r * Math.cos((i / 48) * 2 * Math.PI), an[0][1] + r * Math.sin((i / 48) * 2 * Math.PI)] as P2));
       }
       if (t === "arc" && an.length >= 1) preview.push([an[0], an.length === 2 ? an[1] : c]);
+      if (t === "polygon" && an.length === 1) preview.push(polygonPoints(an[0], c, polygonSides(), true));
+      if (t === "slot" && an.length === 1) preview.push([an[0], c]);
+      if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
     viewer.setSketch({
       plane: s.plane,
@@ -261,6 +298,53 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length === 0) return setAnchor([hit.p]);
       const r = dist(an[0], hit.p);
       if (r > 1e-9) ui.change((sk) => ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: r }));
+      return setAnchor([]);
+    }
+    if (t === "polygon") {
+      const an = anchor();
+      if (an.length === 0) return setAnchor([hit.p]);
+      const n = Math.max(3, Math.round(polygonSides()));
+      const r = dist(an[0], hit.p);
+      if (r > 1e-9)
+        ui.change((sk) => {
+          const center = ui.addPoint(sk, an[0]);
+          const circle = ui.addEntity(sk, { type: "circle", center, radius: r });
+          sk.entities.find((e) => e.id === circle)!.construction = true;
+          const pts = polygonPoints(an[0], hit.p, n).map((p) => ui.addPoint(sk, p));
+          const lines = pts.map((p, i) => ui.addEntity(sk, { type: "line", start: p, end: pts[(i + 1) % n] }));
+          pts.forEach((p) => sk.constraints.push({ type: "point_on_circle", point: p, circle }));
+          for (let i = 1; i < n; i++) sk.constraints.push({ type: "equal", a: lines[0], b: lines[i] });
+        });
+      return setAnchor([]);
+    }
+    if (t === "slot") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit.p]);
+      const [a, b] = an;
+      const r = slotRadius(a, b, hit.p);
+      const len = dist(a, b);
+      if (r > 1e-9 && len > 1e-9)
+        ui.change((sk) => {
+          const n: P2 = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
+          const off = (p: P2, s: number): P2 => [p[0] + n[0] * r * s, p[1] + n[1] * r * s];
+          const ca = ui.addPoint(sk, a);
+          const cb = ui.addPoint(sk, b);
+          const a1 = ui.addPoint(sk, off(a, 1));
+          const a2 = ui.addPoint(sk, off(a, -1));
+          const b1 = ui.addPoint(sk, off(b, 1));
+          const b2 = ui.addPoint(sk, off(b, -1));
+          const bottom = ui.addEntity(sk, { type: "line", start: a2, end: b2 });
+          const arcB = ui.addEntity(sk, { type: "arc", center: cb, start: b2, end: b1 });
+          const top = ui.addEntity(sk, { type: "line", start: b1, end: a1 });
+          const arcA = ui.addEntity(sk, { type: "arc", center: ca, start: a1, end: a2 });
+          sk.constraints.push(
+            { type: "tangent", a: bottom, b: arcB },
+            { type: "tangent", a: top, b: arcB },
+            { type: "tangent", a: top, b: arcA },
+            { type: "tangent", a: bottom, b: arcA },
+            { type: "equal", a: arcA, b: arcB },
+          );
+        });
       return setAnchor([]);
     }
     if (t === "arc") {
@@ -540,6 +624,19 @@ export const CadView: Component<CadViewProps> = (props) => {
                   </Tooltip>
                 )}
               </For>
+              <Show when={ui.tool() === "polygon"}>
+                <label class="flex items-center gap-1 text-xs text-text-muted">
+                  Lados
+                  <input
+                    type="number"
+                    min="3"
+                    max="64"
+                    value={polygonSides()}
+                    class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => setPolygonSides(Math.max(3, Math.min(64, parseInt(e.currentTarget.value) || 6)))}
+                  />
+                </label>
+              </Show>
               <div class="w-px h-5 bg-border mx-1" />
               <span
                 class={clsx(

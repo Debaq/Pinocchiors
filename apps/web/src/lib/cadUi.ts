@@ -20,7 +20,7 @@ import {
   type SolveReport,
 } from "./cad";
 
-export type SketchTool = "select" | "line" | "rect" | "circle" | "arc";
+export type SketchTool = "select" | "line" | "rect" | "circle" | "arc" | "polygon" | "slot";
 
 /** Qué hace un clic en el visor */
 export type PickMode =
