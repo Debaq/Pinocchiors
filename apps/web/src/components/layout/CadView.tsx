@@ -1,8 +1,8 @@
 import { Component, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { CadViewer } from "../../lib/CadViewer";
-import type { CadStore, P2, Sketch } from "../../lib/cad";
+import { CadViewer, planeToWorld } from "../../lib/CadViewer";
+import { constraintValue, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -68,6 +68,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
+  // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
+  const [viewTick, setViewTick] = createSignal(0);
+  const [editingDim, setEditingDim] = createSignal<number>();
 
   const ui = props.ui;
   const store = props.store;
@@ -79,6 +82,7 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   onMount(async () => {
     viewer = new CadViewer(container);
+    viewer.onRender = () => setViewTick((t) => t + 1);
     // Para las pruebas en navegador (scratch de desarrollo)
     if (import.meta.env.DEV) (window as unknown as { __cadViewer?: CadViewer }).__cadViewer = viewer;
     try {
@@ -369,6 +373,61 @@ export const CadView: Component<CadViewProps> = (props) => {
   onMount(() => window.addEventListener("keydown", onKey, true));
   onCleanup(() => window.removeEventListener("keydown", onKey, true));
 
+  /** Cotas del sketch en edición: dónde dibujar cada valor */
+  const dimensions = createMemo(() => {
+    viewTick();
+    const s = ui.session();
+    if (!s || !viewer) return [];
+    const pt = new Map(s.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+    const ent = new Map(s.sketch.entities.map((e) => [e.id, e.geometry]));
+    const mid = (a?: P2, b?: P2): P2 | undefined => (a && b ? [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] : undefined);
+    const lineMid = (id: number) => {
+      const g = ent.get(id);
+      return g?.type === "line" ? mid(pt.get(g.start), pt.get(g.end)) : undefined;
+    };
+    const anchor = (c: SketchConstraint): P2 | undefined => {
+      switch (c.type) {
+        case "length":
+          return lineMid(c.line);
+        case "angle":
+          return lineMid(c.a);
+        case "distance":
+        case "horizontal_distance":
+        case "vertical_distance":
+          return mid(pt.get(c.a), pt.get(c.b));
+        case "radius":
+        case "diameter": {
+          const g = ent.get(c.entity);
+          if (!g || (g.type !== "circle" && g.type !== "arc")) return undefined;
+          const center = pt.get(g.center);
+          if (!center) return undefined;
+          const r = g.type === "circle" ? g.radius : dist(center, pt.get(g.start) ?? center);
+          return [center[0] + r * Math.SQRT1_2, center[1] + r * Math.SQRT1_2];
+        }
+        default:
+          return undefined;
+      }
+    };
+    const rect = container.getBoundingClientRect();
+    const out: { index: number; x: number; y: number; text: string; conflict: boolean }[] = [];
+    s.sketch.constraints.forEach((c, index) => {
+      const v = constraintValue(c);
+      const a = anchor(c);
+      if (v === undefined || !a) return;
+      const [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
+      const prefix = c.type === "radius" ? "R " : c.type === "diameter" ? "Ø " : "";
+      const suffix = c.type === "angle" ? "°" : "";
+      out.push({
+        index,
+        x: x - rect.left,
+        y: y - rect.top,
+        text: `${prefix}${+v.toFixed(3)}${suffix}`,
+        conflict: s.report?.conflicting.includes(index) ?? false,
+      });
+    });
+    return out;
+  });
+
   const promptText = () => {
     const m = ui.pick();
     return m.kind === "none" ? undefined : m.prompt;
@@ -396,6 +455,48 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerUp={onPointerUp}
         onContextMenu={(e) => e.preventDefault()}
       />
+
+      {/* Cotas del sketch: clic para cambiar el valor */}
+      <For each={dimensions()}>
+        {(d) => (
+          <Show
+            when={editingDim() === d.index}
+            fallback={
+              <button
+                class={clsx(
+                  "absolute -translate-x-1/2 -translate-y-1/2 px-1.5 py-0.5 rounded text-[11px] font-mono border",
+                  d.conflict ? "bg-error/20 border-error text-error" : "bg-bg-lighter/90 border-border text-text hover:border-accent",
+                )}
+                style={{ left: `${d.x}px`, top: `${d.y}px` }}
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={() => setEditingDim(d.index)}
+              >
+                {d.text}
+              </button>
+            }
+          >
+            <input
+              ref={(el) => setTimeout(() => el.select())}
+              type="number"
+              step="0.1"
+              value={constraintValue(ui.session()!.sketch.constraints[d.index]!) ?? 0}
+              class="absolute -translate-x-1/2 -translate-y-1/2 w-20 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
+              style={{ left: `${d.x}px`, top: `${d.y}px` }}
+              onPointerDown={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") setEditingDim(undefined);
+                e.stopPropagation();
+              }}
+              onBlur={(e) => {
+                const v = parseFloat(e.currentTarget.value);
+                if (editingDim() === d.index && !Number.isNaN(v)) ui.setConstraintValue(d.index, v);
+                setEditingDim(undefined);
+              }}
+            />
+          </Show>
+        )}
+      </For>
 
       {/* Barra superior */}
       <div class="absolute top-2 left-2 right-2 flex items-start gap-2 pointer-events-none">

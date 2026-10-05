@@ -29,7 +29,7 @@ export interface SketchOverlay {
 
 const BODY_COLOR = 0x9aa4b8;
 
-function planeToWorld(plane: Plane, p: P2): P3 {
+export function planeToWorld(plane: Plane, p: P2): P3 {
   const [o, n, x] = [plane.origin, plane.normal, plane.x_dir];
   const y: P3 = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
   return [o[0] + x[0] * p[0] + y[0] * p[1], o[1] + x[1] * p[0] + y[1] * p[1], o[2] + x[2] * p[0] + y[2] * p[1]];
@@ -56,6 +56,8 @@ export class CadViewer {
 
   /** mm por unidad de la escena */
   mmPerUnit = 1;
+  /** Se llama después de dibujar (la cámara pudo moverse): etiquetas HTML encima */
+  onRender?: () => void;
   scanOpacity = 0.35;
   showScan = true;
 
@@ -128,6 +130,7 @@ export class CadViewer {
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
       this.renderer.render(this.scene, this.camera);
+      this.onRender?.();
     });
   }
 

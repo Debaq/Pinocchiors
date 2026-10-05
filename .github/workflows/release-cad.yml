@@ -1,0 +1,182 @@
+# Release de la app de escritorio CON el núcleo CAD (OpenCASCADE estático).
+#
+# Variante aparte de release.yml (que sale sin CAD: sin OCCT, cad-occt compila
+# un stub). Se lanza SOLO a mano:
+#   gh workflow run "Release con CAD" --ref <rama> -f plataformas=linux
+#
+# OCCT se compila mínimo y estático con scripts/build-occt.sh (solo modelado y
+# STEP, sin visualización ni X11) y queda en caché por versión y por hash del
+# script: la primera vez tarda ~30 min por plataforma, después sale de caché.
+# Los archivos llevan "-cad" en el nombre y se suben a la release del commit
+# (pre.<YYYY>.<MM>.<DD>.<sha7>), creándola si no existe.
+
+name: Release con CAD
+
+on:
+  workflow_dispatch:
+    inputs:
+      plataformas:
+        description: "Plataformas a compilar"
+        type: choice
+        options: [linux, todas]
+        default: linux
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  OCCT_VERSION: "7.9.3"
+
+jobs:
+  matrix:
+    name: Plataformas
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      desktop: ${{ steps.m.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: tag
+        run: |
+          date=$(TZ=UTC0 git show -s --format=%cd --date=format-local:%Y.%m.%d HEAD)
+          sha=$(git rev-parse --short=7 HEAD)
+          echo "tag=pre.${date}.${sha}" >> "$GITHUB_OUTPUT"
+      - id: m
+        run: |
+          desktop='[{"os":"ubuntu-22.04","platform":"linux"}'
+          if [[ "${{ inputs.plataformas }}" == todas ]]; then
+            desktop+=',{"os":"windows-latest","platform":"windows"}'
+            desktop+=',{"os":"macos-latest","platform":"macos"}'
+          fi
+          echo "desktop=${desktop}]" >> "$GITHUB_OUTPUT"
+
+  desktop:
+    name: Desktop con CAD (${{ matrix.platform }})
+    needs: matrix
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.matrix.outputs.desktop) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias del sistema (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev patchelf file
+
+      - name: Entorno de MSVC (Windows)
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: OCCT en caché
+        id: occt-cache
+        uses: actions/cache@v4
+        with:
+          path: occt-static
+          key: occt-${{ env.OCCT_VERSION }}-${{ matrix.os }}-${{ hashFiles('scripts/build-occt.sh') }}
+
+      - name: Compilar OCCT estático
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        env:
+          CMAKE_GENERATOR: Ninja
+        run: |
+          if [[ "${{ matrix.platform }}" == linux ]]; then sudo apt-get install -y ninja-build; fi
+          if [[ "${{ matrix.platform }}" == macos ]]; then brew install ninja; fi
+          OCCT_WORK_DIR="$RUNNER_TEMP/occt" scripts/build-occt.sh "$PWD/occt-static" "$OCCT_VERSION"
+
+      - name: Rutas de OCCT
+        run: |
+          echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
+          echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
+          echo "OCCT_INCLUDE_DIR=$PWD/occt-static/include/opencascade" >> "$GITHUB_ENV"
+          echo "OCCT_LIB_DIR=$PWD/occt-static/lib" >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: desktop-cad-${{ matrix.platform }}
+
+      - name: Tests del CAD
+        run: cargo test --locked -p cad-occt -p cad-model -p cad-scan
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Instalar frontend
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Build Tauri
+        working-directory: apps/desktop
+        run: |
+          if [[ "${{ matrix.platform }}" == linux ]]; then
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build --bundles appimage
+          else
+            node ../web/node_modules/@tauri-apps/cli/tauri.js build
+          fi
+
+      - name: Renombrar instaladores
+        env:
+          TAG: ${{ needs.matrix.outputs.tag }}
+        run: |
+          mkdir -p dist
+          shopt -s nullglob
+          for f in target/release/bundle/*/*; do
+            case "$f" in
+              *.AppImage)  out="linux-amd64-cad.AppImage" ;;
+              *.msi)       out="windows-x64-cad.msi" ;;
+              *-setup.exe) out="windows-x64-cad-setup.exe" ;;
+              *.dmg)       out="macos-arm64-cad.dmg" ;;
+              *)           continue ;;
+            esac
+            cp "$f" "dist/Pinocchio-${TAG}-${out}"
+          done
+          if [[ "${{ matrix.platform }}" == linux ]]; then
+            cp target/release/pinocchio-app "dist/Pinocchio-${TAG}-linux-x86_64-cad"
+            chmod +x "dist/Pinocchio-${TAG}-linux-x86_64-cad"
+          fi
+          ls -la dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-cad-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publicar
+    needs: [matrix, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Subir a la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.matrix.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          cd dist && sha256sum * > SHA256SUMS-cad.txt && cd ..
+          if gh release view "$TAG" -R "$REPO" > /dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber -R "$REPO"
+          else
+            gh release create "$TAG" dist/* -R "$REPO" \
+              --target "$GITHUB_SHA" \
+              --title "$TAG" \
+              --latest \
+              --generate-notes
+          fi
