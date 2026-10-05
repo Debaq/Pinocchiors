@@ -87,6 +87,8 @@ export interface TimelineProps {
   onMode: (mode: TimelineMode) => void;
   onTool: (tool: TimelineTool) => void;
   onToggleGroup?: (id: string) => void;
+  /** Silencia o reactiva las pistas de las filas; `branch`: también lo que cuelga de cada hueso */
+  onMute?: (rows: TimelineRow[], muted: boolean, branch: boolean) => void;
   onlySelection: boolean;
   onOnlySelection: (v: boolean) => void;
   onMarker: (change: { rename?: { frame: number; name: string }; move?: { from: number; to: number }; remove?: number }) => void;
@@ -217,6 +219,15 @@ export const Timeline: Component<TimelineProps> = (props) => {
     return row.control || row.ik ? props.onSelectControl?.(row.bone) : props.onSelectJoint(row.joint);
   };
 
+  /** Pistas con keys de una fila (las de los miembros, en un grupo) */
+  const rowTracks = (row: TimelineRow): BoneTrack[] =>
+    row.group ? row.group.members.flatMap((m) => tracks().get(`b|${m}`) ?? []) : [trackOf(row) ?? []].flat();
+  /** Silenciada: todas sus pistas lo están */
+  const rowMuted = (row: TimelineRow) => {
+    const list = rowTracks(row);
+    return list.length > 0 && list.every((t) => t.muted);
+  };
+
   const summaryFrames = createMemo(() => [...new Set(props.clip.tracks.flatMap(keyFrames))].sort((a, b) => a - b));
   /** Cuadros con keys de los miembros de un grupo, y sus ids */
   const groupKeys = (members: string[], frame: number) =>
@@ -305,9 +316,9 @@ export const Timeline: Component<TimelineProps> = (props) => {
 
   const Playhead = () => <div class="absolute inset-y-0 w-px bg-accent pointer-events-none" style={{ left: `${x(props.frame)}px` }} />;
 
-  const Lane: Component<{ children: any; onClick?: () => void; active?: boolean; tint?: string }> = (p) => (
+  const Lane: Component<{ children: any; onClick?: () => void; active?: boolean; tint?: string; muted?: boolean }> = (p) => (
     <div
-      class={clsx("relative border-b border-border/40", p.active && "bg-accent/5")}
+      class={clsx("relative border-b border-border/40", p.active && "bg-accent/5", p.muted && "opacity-40")}
       style={{ height: `${ROW}px`, ...(p.tint ? { background: `color-mix(in srgb, ${p.tint} 8%, transparent)` } : {}) }}
       onPointerDown={() => p.onClick?.()}
     >
@@ -565,7 +576,28 @@ export const Timeline: Component<TimelineProps> = (props) => {
                     <Show when={row.ik}>
                       <span class="text-[9px] font-mono shrink-0">{row.constraint ? "R" : "IK"}</span>
                     </Show>
-                    {row.label ?? row.bone}
+                    <span class={clsx("flex-1 truncate", rowMuted(row) && "line-through opacity-60")}>{row.label ?? row.bone}</span>
+                    <Show when={props.onMute && rowTracks(row).length > 0}>
+                      <button
+                        class={clsx("shrink-0 mr-1.5", rowMuted(row) ? "text-text" : "text-text-dim hover:text-text")}
+                        title={
+                          rowMuted(row)
+                            ? "Activar: vuelve a reproducirse"
+                            : row.group
+                              ? "Silenciar el grupo: no se reproduce ni se exporta"
+                              : "Silenciar: no se reproduce ni se exporta (Mayús: también lo que cuelga)"
+                        }
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          props.onMute?.([row], !rowMuted(row), e.shiftKey);
+                        }}
+                      >
+                        <Show when={rowMuted(row)} fallback={<Icons.Eye size={12} />}>
+                          <Icons.EyeSlash size={12} />
+                        </Show>
+                      </button>
+                    </Show>
                   </div>
                 )}
               </For>
@@ -579,7 +611,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                   if (row.group) {
                     const g = row.group;
                     return (
-                      <Lane tint={g.color} onClick={() => props.onSelection(new Set())}>
+                      <Lane tint={g.color} muted={rowMuted(row)} onClick={() => props.onSelection(new Set())}>
                         <For each={groupFrames(g.members)}>{(f) => <Diamond frame={f} ids={groupKeys(g.members, f)} step={false} tint={g.color} />}</For>
                       </Lane>
                     );
@@ -590,6 +622,7 @@ export const Timeline: Component<TimelineProps> = (props) => {
                   return (
                     <Lane
                       active={isActive(row)}
+                      muted={track()?.muted}
                       onClick={() => {
                         props.onSelection(new Set());
                         selectRow(row);

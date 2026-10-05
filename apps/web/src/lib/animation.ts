@@ -52,6 +52,8 @@ export interface BoneTrack {
   blend?: Key<number>[];
   pin?: Key<number>[];
   roll?: Key<number>[];
+  /** Silenciada: conserva sus keys pero no se reproduce ni se exporta */
+  muted?: boolean;
 }
 
 export type ScalarChannel = "blend" | "pin" | "roll";
@@ -172,7 +174,7 @@ export function samplePose(
   const pose = emptyPose();
   const cycle = clip?.cyclic ? clip.end - clip.start : undefined;
   for (const track of clip?.tracks ?? []) {
-    if (track.kind === "ik") continue;
+    if (track.kind === "ik" || track.muted) continue;
     const rot = (keys: Key<Quat>[]): Quat | undefined => sample(keys, frame, slerp, rotationCodecs(track), cycle);
     const pos = (keys: Key<Vec3>[]): Vec3 | undefined => sample(keys, frame, lerp3, vec3Codec, cycle);
     if (track.kind === "control") {
@@ -195,7 +197,7 @@ export function samplePose(
 
 /** Valor de un canal escalar de la cadena IK `chain` en `frame` (`undefined` sin keys) */
 export function sampleScalar(clip: AnimationClip | undefined, chain: string, channel: ScalarChannel, frame: number): number | undefined {
-  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain)?.[channel];
+  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain && !t.muted)?.[channel];
   if (!keys || keys.length === 0) return undefined;
   if (channel === "pin") {
     // Fijar es sí o no: la key vale hasta la siguiente
@@ -211,7 +213,7 @@ export function sampleScalar(clip: AnimationClip | undefined, chain: string, cha
  * las keys seguidas que fijan (`undefined` si en `frame` no está fijado)
  */
 export function pinStart(clip: AnimationClip | undefined, chain: string, frame: number): number | undefined {
-  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain)?.pin ?? [];
+  const keys = clip?.tracks.find((t) => t.kind === "ik" && t.bone === chain && !t.muted)?.pin ?? [];
   let i = -1;
   keys.forEach((k, n) => k.frame <= frame && (i = n));
   if (i < 0 || keys[i].value < 0.5) return undefined;
@@ -326,6 +328,24 @@ export function setKeysInterpolation(
   );
 }
 
+/** Pista de una fila de la línea de tiempo: hueso (sin `kind`), control o cadena/restricción */
+export interface TrackRef {
+  bone: string;
+  kind?: "control" | "ik";
+}
+
+/** Silencia o reactiva pistas: conservan sus keys pero no cuentan al reproducir ni al exportar */
+export function setTracksMuted(clip: AnimationClip, refs: TrackRef[], muted: boolean): AnimationClip {
+  const hit = (t: BoneTrack) => refs.some((r) => r.bone === t.bone && r.kind === t.kind);
+  if (!clip.tracks.some((t) => hit(t) && !!t.muted !== muted)) return clip;
+  const tracks = clip.tracks.map((t) => {
+    if (!hit(t)) return t;
+    const { muted: _, ...rest } = t;
+    return muted ? { ...rest, muted: true } : rest;
+  });
+  return { ...clip, tracks };
+}
+
 /** Todas las keys de una pista (giro, desplazamiento y canales escalares) */
 function trackKeys(track: BoneTrack): Key<unknown>[] {
   return [...track.rotation, ...track.translation, ...SCALAR_CHANNELS.flatMap((c) => track[c] ?? [])];
@@ -352,7 +372,7 @@ export function clipsForExport(clips: AnimationClip[], boneIndex: Map<string, nu
     start: clip.start,
     end: clip.end,
     tracks: clip.tracks.flatMap((t) => {
-      if (t.kind) return [];
+      if (t.kind || t.muted) return [];
       const joint = boneIndex.get(t.bone);
       return joint === undefined ? [] : [{ joint, rotation: t.rotation, translation: t.translation }];
     }),

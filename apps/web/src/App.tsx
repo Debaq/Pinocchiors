@@ -132,6 +132,7 @@ import {
   insertScalarKey,
   samplePose,
   sampleScalar,
+  setTracksMuted,
   type ScalarChannel,
   keyId,
   moveKeys,
@@ -141,6 +142,7 @@ import {
   type KeyInterpolation,
   type Pose,
   type Quat,
+  type TrackRef,
 } from "./lib/animation";
 import {
   applyRotationLocks,
@@ -1902,6 +1904,24 @@ export const App: Component = () => {
     const next = change(clip);
     if (next === clip) return;
     await history.execute(description, { kind: "clip", data: { before: clip, after: next } });
+  };
+
+  /** Silencia o reactiva pistas desde la línea de tiempo; `branch` suma los huesos que cuelgan de cada fila */
+  const handleMuteRows = (rows: TimelineRow[], muted: boolean, branch: boolean) => {
+    const bones = skeletonData()?.bones ?? [];
+    const refs: TrackRef[] = [];
+    const addBranch = (j: number) => {
+      refs.push({ bone: bones[j].name });
+      bones.forEach((b, i) => b.parent === j && addBranch(i));
+    };
+    for (const row of rows) {
+      if (row.group) refs.push(...row.group.members.map((bone) => ({ bone })));
+      else if (row.control) refs.push({ bone: row.bone, kind: "control" });
+      else if (row.ik) refs.push({ bone: row.bone, kind: "ik" });
+      else if (branch && bones[row.joint]) addBranch(row.joint);
+      else refs.push({ bone: row.bone });
+    }
+    void editClip(muted ? "Silenciar pista" : "Activar pista", (clip) => setTracksMuted(clip, refs, muted));
   };
 
   const handleNewClip = () => {
@@ -5875,6 +5895,7 @@ export const App: Component = () => {
                   else next.add(id);
                   setCollapsedGroups(next);
                 }}
+                onMute={handleMuteRows}
                 onlySelection={onlySelection()}
                 onOnlySelection={setOnlySelection}
                 onMarker={handleMarker}
