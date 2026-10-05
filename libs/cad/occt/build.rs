@@ -98,8 +98,13 @@ fn main() {
         return;
     };
 
+    let static_link = env::var("OCCT_STATIC").is_ok_and(|v| v == "1");
     let mut build = cc::Build::new();
     build.cpp(true).std("c++17").file("cpp/cad_occt.cpp").include(&include);
+    if static_link {
+        // Sin esto los headers de OCCT marcan todo como dllimport en Windows
+        build.define("OCCT_STATIC_BUILD", None);
+    }
     if target_os != "windows" {
         build.flag_if_supported("-w");
     } else {
@@ -113,7 +118,7 @@ fn main() {
     {
         println!("cargo:rustc-link-search=native={dir}");
     }
-    let kind = if env::var("OCCT_STATIC").is_ok_and(|v| v == "1") { "static" } else { "dylib" };
+    let kind = if static_link { "static" } else { "dylib" };
     let new_step = has_lib(&dirs, "TKDESTEP");
     for tk in TOOLKITS {
         if !new_step && (*tk == "TKDESTEP" || *tk == "TKDE") {
@@ -128,5 +133,20 @@ fn main() {
         "macos" => println!("cargo:rustc-link-lib=c++"),
         "windows" => {}
         _ => println!("cargo:rustc-link-lib=stdc++"),
+    }
+    // OCCT estático trae lo que antes resolvían sus .so/.dll
+    if static_link {
+        match target_os.as_str() {
+            "windows" => {
+                for lib in ["user32", "advapi32", "ws2_32", "gdi32", "shell32"] {
+                    println!("cargo:rustc-link-lib={lib}");
+                }
+            }
+            "macos" => {}
+            _ => {
+                println!("cargo:rustc-link-lib=dl");
+                println!("cargo:rustc-link-lib=pthread");
+            }
+        }
     }
 }
