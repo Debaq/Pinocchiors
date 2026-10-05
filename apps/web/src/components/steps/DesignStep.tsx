@@ -451,15 +451,29 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       <div class="max-h-48 overflow-y-auto space-y-0.5">
                         <For each={list()} fallback={<p class="text-xs text-text-dim">No se encontraron zonas</p>}>
                           {(d) => (
-                            <button
-                              class="w-full flex justify-between gap-2 px-2 py-1 rounded text-xs text-left hover:bg-surface"
-                              onClick={() => ui.setScanHighlight(d.faces)}
-                            >
-                              <span class="text-text">
-                                {d.shape.type === "plane" ? "Plano" : d.shape.type === "cylinder" ? `Cilindro r ${fmt(d.shape.radius)}` : `Esfera r ${fmt(d.shape.radius)}`}
-                              </span>
-                              <span class="text-text-dim font-mono">{fmt(d.area, 0)} mm²</span>
-                            </button>
+                            <div class="group flex items-center gap-1 rounded hover:bg-surface">
+                              <button class="flex-1 flex justify-between gap-2 px-2 py-1 text-xs text-left" onClick={() => ui.setScanHighlight(d.faces)}>
+                                <span class="text-text">
+                                  {d.shape.type === "plane" ? "Plano" : d.shape.type === "cylinder" ? `Cilindro r ${fmt(d.shape.radius)}` : `Esfera r ${fmt(d.shape.radius)}`}
+                                </span>
+                                <span class="text-text-dim font-mono">{fmt(d.area, 0)} mm²</span>
+                              </button>
+                              <Show when={d.shape.type !== "sphere"}>
+                                <button
+                                  class="hidden group-hover:block px-1.5 text-[11px] text-accent hover:text-accent-hover"
+                                  title={d.shape.type === "plane" ? "Agregar el contorno como sketch" : "Agregar el cilindro"}
+                                  onClick={() =>
+                                    void addScan(
+                                      d.shape.type === "plane"
+                                        ? { kind: "plane_outline", triangle: d.faces[0], extrude: false }
+                                        : { kind: "cylinder", triangle: d.faces[0] },
+                                    )
+                                  }
+                                >
+                                  Agregar
+                                </button>
+                              </Show>
+                            </div>
                           )}
                         </For>
                       </div>

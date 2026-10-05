@@ -107,6 +107,7 @@ pub enum DetectedShape {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Detection {
     pub shape: DetectedShape,
+    /// Triángulos de la zona; el primero es el más grande (semilla para elegirla)
     pub faces: Vec<u32>,
     pub area: f64,
     pub rms: f64,
@@ -173,7 +174,11 @@ fn segment_smooth(mesh: &ScanMesh, angle: f64, tol: f64) -> Vec<Vec<u32>> {
     out
 }
 
-fn fit_region(mesh: &ScanMesh, faces: Vec<u32>, tol: f64) -> Option<Detection> {
+fn fit_region(mesh: &ScanMesh, mut faces: Vec<u32>, tol: f64) -> Option<Detection> {
+    // La cara más grande primero: es la mejor semilla para volver a elegir la zona
+    if let Some(i) = (0..faces.len()).max_by(|&a, &b| mesh.face_areas[faces[a] as usize].total_cmp(&mesh.face_areas[faces[b] as usize])) {
+        faces.swap(0, i);
+    }
     let area: f64 = faces.iter().map(|&f| mesh.face_areas[f as usize]).sum();
     let (pts, nrm) = mesh.sample_faces(&faces, 6000);
     let fit = fitting::fit_best_with_normals(&pts, Some(&nrm), tol);
