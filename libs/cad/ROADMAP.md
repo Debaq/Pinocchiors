@@ -216,3 +216,7 @@ cargo test -p cad-model
   glifo junto al cursor. Bug encontrado: partir una línea inclinada dejaba las dos mitades
   sin alinear (ahora quedan paralelas) y borraba la cota de largo (ahora pasa a distancia
   entre los extremos, con su fórmula).
+- **2026-10-05 Anclajes, fase 2**: intersecciones línea-línea, línea-círculo y círculo-círculo
+  (los arcos recortados a su barrido), con prioridad entre el origen y el punto medio; solo se
+  cruzan las curvas que pasan cerca del cursor. El punto queda sobre las dos (las líneas se
+  parten ahí). E2E: centro de un círculo en el cruce de dos líneas → cuatro mitades.

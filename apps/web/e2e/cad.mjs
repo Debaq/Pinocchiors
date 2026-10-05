@@ -444,6 +444,40 @@ const scenarios = {
     near(pt.get(mid.geometry.start).x, W, 1e-6, "línea del medio");
   },
 
+  async "anclajes: intersección"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x * S}, ${y * S}, 0])`);
+    const line = async (p, q) => {
+      await b.clickText("Línea");
+      await b.click(...(await at(...p)));
+      await b.click(...(await at(...q)), { wait: 800 });
+      await b.key("Escape", "Escape", 27);
+      await b.key("Escape", "Escape", 27);
+    };
+    // y = x y una que la cruza fuera de los puntos medios
+    await line([0.1, 0.1], [0.3, 0.3]);
+    await line([0.12, 0.3], [0.3, 0.15]);
+    const t = 0.18 / 0.33;
+    const X = 0.12 + 0.18 * t;
+    await b.clickText("Círculo");
+    const [cx, cy] = await at(X, X);
+    await b.click(cx + 3, cy - 2);
+    if ((await b.eval(`document.querySelector("[data-snap]")?.dataset.snap`)) !== "intersection") throw new Error("sin glifo de intersección");
+    await b.click(...(await at(X + 0.04, X)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const sk = (await call("cad_get_document")).features[0].kind.sketch;
+    const circle = sk.entities.find((e) => e.geometry.type === "circle");
+    const c = sk.points.find((p) => p.id === circle.geometry.center);
+    near(c.x, X * S, 1e-4, "centro x");
+    near(c.y, X * S, 1e-4, "centro y");
+    const ends = sk.entities.filter((e) => e.geometry.type === "line" && [e.geometry.start, e.geometry.end].includes(c.id)).length;
+    if (ends !== 4) throw new Error(`las líneas no se partieron en el cruce: ${ends}`);
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Importar un modelo");

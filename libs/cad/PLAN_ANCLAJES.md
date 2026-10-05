@@ -29,7 +29,7 @@ Hoy (`CadView.tsx`, `snapped` / `placePoint`):
 | Origen del sketch | Sí (fase 1) | Comparte el punto origen |
 | Punto medio de una línea | Sí (fase 1) | Parte la línea, mitades iguales |
 | Cuadrantes de un círculo o arco (0°, 90°, 180°, 270°) | Sí (fase 1) | Punto en círculo + alineado H/V con el centro |
-| **Intersección** de dos curvas | **No** | — |
+| Intersección de dos curvas | Sí (fase 2) | Sobre las dos (las líneas se parten) |
 | **Alineación** con otro punto (línea punteada H/V) | **No** | — |
 | **Paralela / perpendicular / tangente** al dibujar | **No** | — |
 | **Vértices y aristas del sólido** (al dibujar sobre una cara) | **No** | — |
@@ -106,7 +106,7 @@ infer(sketch, cursor, { tolerancia, puntoAnterior?, entidadDeOrigen?, geometría
    - Usarlo en **todas** las herramientas (rectángulo, círculo, arco, polígono, ranura, arco
      tangente), no solo en Línea.
    - Glifo del anclaje activo.
-2. **Intersecciones.** Candidato en los cruces entre curvas, dejando el punto sobre las dos.
+2. **Intersecciones.** *Hecha el 2026-10-05.* Candidato en los cruces entre curvas, dejando el punto sobre las dos.
 3. **Líneas de inferencia.**
    - Restricciones nuevas en el modelo: horizontal y vertical **entre dos puntos** (el solver
      ya las tiene).

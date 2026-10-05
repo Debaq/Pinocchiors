@@ -81,3 +81,75 @@ test("prioridad: el punto gana al medio aunque el medio esté más cerca", () =>
 test("excluir el punto que se arrastra", () => {
   assert.equal(infer(sample(), [0.1, 0], 1, [0]).kind, "free");
 });
+
+/** Dos líneas en X, un círculo y un arco de 0° a 90° */
+function crossingSample() {
+  return {
+    points: [
+      { id: 0, x: 0, y: 0 },
+      { id: 1, x: 10, y: 10 },
+      { id: 2, x: 0, y: 8 },
+      { id: 3, x: 12, y: 2 },
+      { id: 4, x: 20, y: 0 }, // centro círculo r = 5
+      { id: 5, x: 40, y: 0 }, // centro arco r = 5 (0° a 90°)
+      { id: 6, x: 45, y: 0 },
+      { id: 7, x: 40, y: 5 },
+    ],
+    entities: [
+      { id: 10, geometry: { type: "line", start: 0, end: 1 } },
+      { id: 11, geometry: { type: "line", start: 2, end: 3 } },
+      { id: 12, geometry: { type: "circle", center: 4, radius: 5 } },
+      { id: 13, geometry: { type: "line", start: 4, end: 5 } }, // cruza el círculo en x = 25
+      { id: 14, geometry: { type: "arc", center: 5, start: 6, end: 7 } },
+      { id: 15, geometry: { type: "line", start: 6, end: 7 } }, // cuerda del arco: se tocan en sus extremos
+    ],
+    constraints: [],
+  };
+}
+
+test("intersección línea-línea", () => {
+  // y = x con y = 8 − x/2 → x = 16/3
+  const r = infer(crossingSample(), [5.5, 5.2], 1);
+  assert.equal(r.kind, "intersection");
+  assert.deepEqual([r.entity, r.other].sort(), [10, 11]);
+  near(r.p, [16 / 3, 16 / 3]);
+});
+
+test("intersección línea-círculo y fuera del barrido del arco", () => {
+  const s = crossingSample();
+  const r = infer(s, [25.3, 0.2], 1);
+  assert.equal(r.kind, "intersection");
+  near(r.p, [25, 0]);
+  // (35, 0) sería el cruce de la línea 13 con el arco como círculo completo
+  // (y su cuadrante de 180°), pero el arco va de 0° a 90°: queda "sobre la línea"
+  assert.equal(infer(s, [35, 0.1], 1).kind, "on_line");
+});
+
+test("intersección círculo-círculo, arco recortado", () => {
+  const s = {
+    points: [
+      { id: 0, x: 0, y: 0 },
+      { id: 1, x: 6, y: 0 },
+      { id: 2, x: 11, y: 0 },
+      { id: 3, x: 6, y: 5 },
+    ],
+    entities: [
+      { id: 10, geometry: { type: "circle", center: 0, radius: 5 } },
+      // Arco de centro (6,0) r = 5 de 0° a 90°: no llega a los cruces con el círculo (x = 3)
+      { id: 11, geometry: { type: "arc", center: 1, start: 2, end: 3 } },
+    ],
+    constraints: [],
+  };
+  assert.notEqual(infer(s, [3, 4], 1).kind, "intersection");
+  // Como círculo completo sí se cruzan en (3, ±4)
+  s.entities[1] = { id: 11, geometry: { type: "circle", center: 1, radius: 5 } };
+  const r = infer(s, [3.2, 3.8], 1);
+  assert.equal(r.kind, "intersection");
+  near(r.p, [3, 4]);
+});
+
+test("extremos compartidos ganan a la intersección", () => {
+  const r = infer(crossingSample(), [45.2, 0.1], 1);
+  assert.equal(r.kind, "point");
+  assert.equal(r.id, 6);
+});
