@@ -58,6 +58,10 @@ pub enum SketchConstraint {
     Fixed { point: u32, x: f64, y: f64 },
     Horizontal { line: u32 },
     Vertical { line: u32 },
+    /// Dos puntos a la misma altura (`a.y = b.y`).
+    HorizontalPoints { a: u32, b: u32 },
+    /// Dos puntos en la misma vertical (`a.x = b.x`).
+    VerticalPoints { a: u32, b: u32 },
     Parallel { a: u32, b: u32 },
     Perpendicular { a: u32, b: u32 },
     /// Líneas del mismo largo, o círculos/arcos del mismo radio.
@@ -116,7 +120,7 @@ impl SketchConstraint {
         let p = |id: &u32| Some(*id) == point;
         let e = |id: &u32| Some(*id) == entity;
         match self {
-            Coincident { a, b } => p(a) || p(b),
+            Coincident { a, b } | HorizontalPoints { a, b } | VerticalPoints { a, b } => p(a) || p(b),
             Fixed { point: q, .. } => p(q),
             Horizontal { line } | Vertical { line } | Length { line, .. } => e(line),
             Parallel { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Angle { a, b, .. } => {
@@ -174,6 +178,11 @@ pub struct Sketch {
     pub constraints: Vec<SketchConstraint>,
     #[serde(default)]
     pub next_id: u32,
+    /// Punto origen del sketch, fijo en (0, 0): se usa como cualquier otro
+    /// punto (anclar, acotar) pero no se mueve ni se borra. Los sketches
+    /// viejos no lo tienen hasta que se editan.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<u32>,
 }
 
 impl Sketch {
@@ -191,6 +200,16 @@ impl Sketch {
     }
 
     // --- Construcción ---
+
+    /// Id del punto origen; lo crea en (0, 0) si el sketch no lo tiene.
+    pub fn ensure_origin(&mut self) -> u32 {
+        if let Some(id) = self.origin.filter(|id| self.points.iter().any(|p| p.id == *id)) {
+            return id;
+        }
+        let id = self.add_point(0.0, 0.0);
+        self.origin = Some(id);
+        id
+    }
 
     pub fn add_point(&mut self, x: f64, y: f64) -> u32 {
         let id = self.fresh_id();
@@ -269,7 +288,7 @@ impl Sketch {
         let removed = self.entities.remove(pos);
         self.constraints.retain(|c| !c.mentions(None, Some(id)));
         for p in removed.geometry.point_ids() {
-            if !self.entities.iter().any(|e| e.geometry.point_ids().contains(&p)) {
+            if Some(p) != self.origin && !self.entities.iter().any(|e| e.geometry.point_ids().contains(&p)) {
                 self.points.retain(|q| q.id != p);
                 self.constraints.retain(|c| !c.mentions(Some(p), None));
             }
@@ -333,6 +352,9 @@ impl Sketch {
                 sys.add_constraint(Constraint::EqualLength { l1_p1: c, l1_p2: s, l2_p1: c, l2_p2: t });
             }
         }
+        if let Some(o) = self.origin {
+            sys.add_constraint(Constraint::Fixed { p_idx: ix(o)?, position: Point2::new(0.0, 0.0) });
+        }
         // Qué restricción de alto nivel generó cada ecuación del solver
         let implicit = sys.constraints.len();
         let mut origin: Vec<usize> = Vec::new();
@@ -352,6 +374,10 @@ impl Sketch {
                 for (p, q) in self.points.iter_mut().zip(&r.points) {
                     p.x = q.x();
                     p.y = q.y();
+                }
+                // El origen queda exacto (el solver lo deja a 1e-13)
+                if let Some(o) = self.points.iter_mut().find(|p| Some(p.id) == self.origin) {
+                    (o.x, o.y) = (0.0, 0.0);
                 }
                 (r.status, r.dof, r.residual)
             }
@@ -440,6 +466,8 @@ impl Sketch {
                 let (a, b) = line(l)?;
                 vec![Constraint::Vertical { p1_idx: a, p2_idx: b }]
             }
+            S::HorizontalPoints { a, b } => vec![Constraint::Horizontal { p1_idx: ix(a)?, p2_idx: ix(b)? }],
+            S::VerticalPoints { a, b } => vec![Constraint::Vertical { p1_idx: ix(a)?, p2_idx: ix(b)? }],
             S::Parallel { a, b } => {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Parallel { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 }]

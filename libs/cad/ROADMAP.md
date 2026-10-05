@@ -204,3 +204,15 @@ cargo test -p cad-model
   puntero. Bugs encontrados por las pruebas: el campo de cota se recreaba en cada cuadro y
   perdía el foco (For → Index), Esc en la cota no cortaba la polilínea, las etiquetas tapaban
   clics de dibujo (ahora sin clic mientras se dibuja y corridas fuera de la figura).
+- **2026-10-05 Anclajes, fase 1** ([PLAN_ANCLAJES.md](PLAN_ANCLAJES.md)): `Sketch.origin`, punto
+  fijo en (0, 0) con ecuación implícita en el solver, que no se borra al quitar entidades (los
+  sketches viejos lo reciben al editarse). Restricciones nuevas `horizontal_points` /
+  `vertical_points` (también en el panel con dos puntos elegidos). `lib/sketchSnap.ts` calcula
+  el anclaje bajo el cursor con prioridad punto/centro > origen > medio > cuadrante > sobre la
+  curva (pruebas en node: `e2e/sketchSnap.test.mjs`); `placeSnap` deja la restricción: medio =
+  parte la línea con mitades iguales, cuadrante = punto en círculo alineado con el centro.
+  Todas las herramientas lo usan (rectángulo, círculo, arco, polígono, ranura, arco tangente);
+  entre dos puntos que ya estaban no se piden cotas (quedan definidas). Mayús dibuja libre;
+  glifo junto al cursor. Bug encontrado: partir una línea inclinada dejaba las dos mitades
+  sin alinear (ahora quedan paralelas) y borraba la cota de largo (ahora pasa a distancia
+  entre los extremos, con su fórmula).

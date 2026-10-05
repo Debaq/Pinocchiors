@@ -26,14 +26,15 @@ Hoy (`CadView.tsx`, `snapped` / `placePoint`):
 | Sobre una línea | Sí | Parte la línea en ese punto |
 | Sobre círculo o arco | Sí | Punto en círculo |
 | Horizontal / vertical de la propia línea (±3°) | Sí | Horizontal / vertical |
-| **Origen del sketch** | **No** | — |
-| **Punto medio** de una línea | **No** | — |
-| **Cuadrantes** de un círculo (0°, 90°, 180°, 270°) | **No** | — |
+| Origen del sketch | Sí (fase 1) | Comparte el punto origen |
+| Punto medio de una línea | Sí (fase 1) | Parte la línea, mitades iguales |
+| Cuadrantes de un círculo o arco (0°, 90°, 180°, 270°) | Sí (fase 1) | Punto en círculo + alineado H/V con el centro |
 | **Intersección** de dos curvas | **No** | — |
 | **Alineación** con otro punto (línea punteada H/V) | **No** | — |
 | **Paralela / perpendicular / tangente** al dibujar | **No** | — |
 | **Vértices y aristas del sólido** (al dibujar sobre una cara) | **No** | — |
-| Aviso visual de qué anclaje está activo | **No** (solo la vista previa) | — |
+| Aviso visual de qué anclaje está activo | Sí (fase 1): punto resaltado y glifo | — |
+| Anclajes en todas las herramientas, Mayús para dibujar libre | Sí (fase 1) | — |
 
 Por qué faltan:
 
@@ -98,7 +99,7 @@ infer(sketch, cursor, { tolerancia, puntoAnterior?, entidadDeOrigen?, geometría
 
 ## Fases
 
-1. **Origen y puntos clave.**
+1. **Origen y puntos clave.** *Hecha el 2026-10-05; ver la bitácora de [ROADMAP.md](ROADMAP.md).*
    - Origen del sketch: un punto reservado y fijo en (0, 0) del plano (backend: punto marcado
      como origen, con restricción fija implícita, sin poder borrarlo), dibujado como en Onshape.
    - Candidatos: punto medio, cuadrantes, más lo que ya hay.

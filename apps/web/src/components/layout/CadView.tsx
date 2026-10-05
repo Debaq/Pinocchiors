@@ -2,7 +2,8 @@ import { Component, For, Index, Show, createEffect, createMemo, createSignal, on
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
-import { constraintValue, extendLine, leavingDirection, splitLineAt, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, constraintValue, extendLine, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { infer, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -99,10 +100,13 @@ export const CadView: Component<CadViewProps> = (props) => {
   let viewer: CadViewer | undefined;
   const [cursor, setCursor] = createSignal<P2>();
   // Estado de la herramienta en curso (clics ya dados)
-  const [chain, setChain] = createSignal<{ first: number; last: number }>();
+  // `lastSnapped`: el último punto ya existía (se ancló a él) al hacer clic
+  const [chain, setChain] = createSignal<{ first: number; last: number; lastSnapped: boolean }>();
   // Arco tangente: desde qué punto, en qué dirección y de qué entidad viene
   const [tangentFrom, setTangentFrom] = createSignal<{ point: number; dir: P2; entity: number }>();
-  const [anchor, setAnchor] = createSignal<P2[]>([]);
+  const [anchor, setAnchor] = createSignal<Snap[]>([]);
+  // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
+  const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
@@ -252,7 +256,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       return p ? [p.x, p.y] : undefined;
     };
     const ch = chain();
-    const an = anchor();
+    const an = anchor().map((a) => a.p);
     if (c) {
       const t = ui.tool();
       const from = ch && pt(ch.last);
@@ -291,52 +295,21 @@ export const CadView: Component<CadViewProps> = (props) => {
       hover: ui.hoverIds(),
       freePoints: s.report?.free_points,
       preview,
+      snap: snapView()?.p,
     });
   });
 
-  /** Posición del cursor sobre el plano, enganchada a un punto cercano */
-  const snapped = (e: PointerEvent): { p: P2; id?: number; on?: { entity: number; kind: "line" | "circle" } } | undefined => {
+  /**
+   * Posición del cursor sobre el plano con su anclaje (punto, origen, medio,
+   * centro, cuadrante, sobre una curva). Con Mayús se dibuja libre.
+   */
+  const snapped = (e: PointerEvent): Snap | undefined => {
     const s = ui.session();
     if (!s || !viewer) return undefined;
     const p = viewer.planePoint(e.clientX, e.clientY, s.plane);
     if (!p) return undefined;
-    const tol = viewer.pixelSizeMm() * 8;
-    const hit = hitTest(s.sketch, p, tol);
-    if (hit.point !== undefined) {
-      const q = s.sketch.points.find((x) => x.id === hit.point)!;
-      return { p: [q.x, q.y], id: q.id };
-    }
-    // Sobre una línea o un círculo: el punto queda pegado a la curva
-    if (hit.entity !== undefined) {
-      const g = s.sketch.entities.find((x) => x.id === hit.entity)!.geometry;
-      const pt = (id: number): P2 => {
-        const q = s.sketch.points.find((x) => x.id === id)!;
-        return [q.x, q.y];
-      };
-      if (g.type === "line") {
-        const [a, b] = [pt(g.start), pt(g.end)];
-        const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
-        const t = ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1);
-        return { p: [a[0] + t * dx, a[1] + t * dy], on: { entity: hit.entity, kind: "line" } };
-      }
-      if (g.type === "circle" || g.type === "arc") {
-        const c = pt(g.center);
-        const r = g.type === "circle" ? g.radius : dist(c, pt(g.start));
-        const d = dist(p, c) || 1;
-        return { p: [c[0] + ((p[0] - c[0]) * r) / d, c[1] + ((p[1] - c[1]) * r) / d], on: { entity: hit.entity, kind: "circle" } };
-      }
-    }
-    return { p };
-  };
-
-  /** Punto nuevo (o el existente enganchado), pegado a la curva si cayó sobre una */
-  const placePoint = (sk: Sketch, hit: { p: P2; id?: number; on?: { entity: number; kind: "line" | "circle" } }): number => {
-    if (hit.id !== undefined) return hit.id;
-    const id = ui.addPoint(sk, hit.p);
-    // Sobre una línea: se parte ahí (el cruce cierra regiones)
-    if (hit.on?.kind === "line") splitLineAt(sk, hit.on.entity, id);
-    if (hit.on?.kind === "circle") sk.constraints.push({ type: "point_on_circle", point: id, circle: hit.on.entity });
-    return id;
+    if (e.shiftKey) return { p, kind: "free" };
+    return infer(s.sketch, p, viewer.pixelSizeMm() * 8, dragging !== undefined ? [dragging] : []);
   };
 
   /** Agrega una cota y devuelve su índice */
@@ -365,7 +338,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!s || !hit || !viewer) return;
     const t = ui.tool();
     if (t === "select") {
-      const h = hitTest(s.sketch, hit.p, viewer.pixelSizeMm() * 8);
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const h = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8);
       if (h.point !== undefined) {
         dragging = h.point;
         if (e.shiftKey) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
@@ -385,44 +359,67 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "line") {
       const ch = chain();
       let closed = false;
+      const snappedToPoint = hit.id !== undefined;
       ui.change((sk) => {
-        const id = placePoint(sk, hit);
+        const id = placeSnap(sk, hit);
         if (!ch) {
-          setChain({ first: id, last: id });
+          setChain({ first: id, last: id, lastSnapped: snappedToPoint });
           return;
         }
         if (id === ch.last) return;
         const a = sk.points.find((q) => q.id === ch.last)!;
         const line = ui.addEntity(sk, { type: "line", start: ch.last, end: id });
-        autoAxis(sk, line, [a.x, a.y], hit.p);
+        // Entre dos puntos que ya estaban, la línea queda definida por ellos
+        const between = snappedToPoint && ch.lastSnapped;
+        if (!between) autoAxis(sk, line, [a.x, a.y], hit.p);
         closed = id === ch.first;
         // El tramo que cierra queda determinado por los demás: sin cota propia
-        if (!closed) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
-        setChain(closed ? undefined : { first: ch.first, last: id });
+        if (!closed && !between) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
+        setChain(closed ? undefined : { first: ch.first, last: id, lastSnapped: snappedToPoint });
       });
       askDims(dims);
       return;
     }
     if (t === "rect") {
       const an = anchor();
-      if (an.length === 0) return setAnchor([hit.p]);
-      if (dist(an[0], hit.p) > 1e-9)
+      if (an.length === 0) return setAnchor([hit]);
+      const [A, B] = [an[0], hit];
+      if (Math.abs(A.p[0] - B.p[0]) > 1e-9 && Math.abs(A.p[1] - B.p[1]) > 1e-9)
         ui.change((sk) => {
-          const l = ui.addRectangle(sk, an[0], hit.p);
-          dims.push(dim(sk, { type: "length", line: l[0], value: round(Math.abs(hit.p[0] - an[0][0])) }));
-          dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(hit.p[1] - an[0][1])) }));
+          // Las esquinas elegidas usan sus anclajes; las otras dos son nuevas
+          const pa = placeSnap(sk, A);
+          const pb = placeSnap(sk, B);
+          const pc = addPoint(sk, [B.p[0], A.p[1]]);
+          const pd = addPoint(sk, [A.p[0], B.p[1]]);
+          const l = [
+            [pa, pc],
+            [pc, pb],
+            [pb, pd],
+            [pd, pa],
+          ].map(([start, end]) => ui.addEntity(sk, { type: "line", start, end }));
+          sk.constraints.push({ type: "horizontal", line: l[0] }, { type: "horizontal", line: l[2] });
+          sk.constraints.push({ type: "vertical", line: l[1] }, { type: "vertical", line: l[3] });
+          // Entre dos puntos que ya estaban, el rectángulo queda definido por ellos
+          if (A.id === undefined || B.id === undefined) {
+            dims.push(dim(sk, { type: "length", line: l[0], value: round(Math.abs(B.p[0] - A.p[0])) }));
+            dims.push(dim(sk, { type: "length", line: l[1], value: round(Math.abs(B.p[1] - A.p[1])) }));
+          }
         });
       setAnchor([]);
       return askDims(dims);
     }
     if (t === "circle") {
       const an = anchor();
-      if (an.length === 0) return setAnchor([hit.p]);
-      const r = dist(an[0], hit.p);
+      if (an.length === 0) return setAnchor([hit]);
+      const r = dist(an[0].p, hit.p);
       if (r > 1e-9)
         ui.change((sk) => {
-          const c = ui.addEntity(sk, { type: "circle", center: ui.addPoint(sk, an[0]), radius: round(r) });
-          dims.push(dim(sk, { type: "diameter", entity: c, value: round(2 * r) }));
+          const center = placeSnap(sk, an[0]);
+          // Por un punto que ya estaba: el círculo pasa por él, sin cota
+          const through = hit.id !== undefined && hit.id !== center ? hit.id : undefined;
+          const c = ui.addEntity(sk, { type: "circle", center, radius: through !== undefined ? r : round(r) });
+          if (through !== undefined) sk.constraints.push({ type: "point_on_circle", point: through, circle: c });
+          else dims.push(dim(sk, { type: "diameter", entity: c, value: round(2 * r) }));
         });
       setAnchor([]);
       return askDims(dims);
@@ -456,7 +453,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (!arc) return ui.setMessage("En línea recta no hay arco: mover el punto hacia un costado");
       let next: { point: number; dir: P2; entity: number } | undefined;
       ui.change((sk) => {
-        const end = hit.id ?? ui.addPoint(sk, hit.p);
+        const end = placeSnap(sk, hit);
         const center = ui.addPoint(sk, arc.center);
         const id = ui.addEntity(sk, arc.ccw ? { type: "arc", center, start: from.point, end } : { type: "arc", center, start: end, end: from.point });
         sk.constraints.push({ type: "tangent", a: from.entity, b: id });
@@ -479,35 +476,36 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     if (t === "polygon") {
       const an = anchor();
-      if (an.length === 0) return setAnchor([hit.p]);
+      if (an.length === 0) return setAnchor([hit]);
       const n = Math.max(3, Math.round(polygonSides()));
-      const r = dist(an[0], hit.p);
+      const r = dist(an[0].p, hit.p);
       if (r > 1e-9)
         ui.change((sk) => {
-          const center = ui.addPoint(sk, an[0]);
+          const center = placeSnap(sk, an[0]);
           const circle = ui.addEntity(sk, { type: "circle", center, radius: r });
           sk.entities.find((e) => e.id === circle)!.construction = true;
-          const pts = polygonPoints(an[0], hit.p, n).map((p) => ui.addPoint(sk, p));
+          // El primer vértice es el del clic (con su anclaje)
+          const pts = polygonPoints(an[0].p, hit.p, n).map((p, i) => (i === 0 ? placeSnap(sk, hit) : ui.addPoint(sk, p)));
           const lines = pts.map((p, i) => ui.addEntity(sk, { type: "line", start: p, end: pts[(i + 1) % n] }));
           pts.forEach((p) => sk.constraints.push({ type: "point_on_circle", point: p, circle }));
           for (let i = 1; i < n; i++) sk.constraints.push({ type: "equal", a: lines[0], b: lines[i] });
-          dims.push(dim(sk, { type: "radius", entity: circle, value: round(r) }));
+          if (an[0].id === undefined || hit.id === undefined) dims.push(dim(sk, { type: "radius", entity: circle, value: round(r) }));
         });
       setAnchor([]);
       return askDims(dims);
     }
     if (t === "slot") {
       const an = anchor();
-      if (an.length < 2) return setAnchor([...an, hit.p]);
-      const [a, b] = an;
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [a, b] = [an[0].p, an[1].p];
       const r = slotRadius(a, b, hit.p);
       const len = dist(a, b);
       if (r > 1e-9 && len > 1e-9)
         ui.change((sk) => {
           const n: P2 = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
           const off = (p: P2, s: number): P2 => [p[0] + n[0] * r * s, p[1] + n[1] * r * s];
-          const ca = ui.addPoint(sk, a);
-          const cb = ui.addPoint(sk, b);
+          const ca = placeSnap(sk, an[0]);
+          const cb = placeSnap(sk, an[1]);
           const a1 = ui.addPoint(sk, off(a, 1));
           const a2 = ui.addPoint(sk, off(a, -1));
           const b1 = ui.addPoint(sk, off(b, 1));
@@ -523,7 +521,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             { type: "tangent", a: bottom, b: arcA },
             { type: "equal", a: arcA, b: arcB },
           );
-          dims.push(dim(sk, { type: "distance", a: ca, b: cb, value: round(len) }));
+          if (an[0].id === undefined || an[1].id === undefined) dims.push(dim(sk, { type: "distance", a: ca, b: cb, value: round(len) }));
           dims.push(dim(sk, { type: "radius", entity: arcA, value: round(r) }));
         });
       setAnchor([]);
@@ -531,15 +529,21 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     if (t === "arc") {
       const an = anchor();
-      if (an.length < 2) return setAnchor([...an, hit.p]);
-      const [c, a] = an;
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [C, A] = an;
+      const [c, a] = [C.p, A.p];
       const r = dist(c, a);
       const ang = Math.atan2(hit.p[1] - c[1], hit.p[0] - c[0]);
       const b: P2 = [c[0] + r * Math.cos(ang), c[1] + r * Math.sin(ang)];
-      ui.change((sk) => {
-        const id = ui.addEntity(sk, { type: "arc", center: ui.addPoint(sk, c), start: ui.addPoint(sk, a), end: ui.addPoint(sk, b) });
-        dims.push(dim(sk, { type: "radius", entity: id, value: round(r) }));
-      });
+      if (r > 1e-9)
+        ui.change((sk) => {
+          const center = placeSnap(sk, C);
+          const start = placeSnap(sk, A);
+          // El fin solo se pega a un punto que ya estaba (el resto queda en el radio)
+          const end = hit.id !== undefined && hit.id !== start && hit.id !== center ? hit.id : ui.addPoint(sk, b);
+          const id = ui.addEntity(sk, { type: "arc", center, start, end });
+          if (C.id === undefined || A.id === undefined) dims.push(dim(sk, { type: "radius", entity: id, value: round(r) }));
+        });
       setAnchor([]);
       askDims(dims);
     }
@@ -625,6 +629,11 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!s) return;
     const hit = snapped(e);
     setCursor(hit?.p);
+    const drawing = !["select", "trim", "extend"].includes(ui.tool());
+    if (hit && drawing && hit.kind !== "free") {
+      const rect = container.getBoundingClientRect();
+      setSnapView({ kind: hit.kind, p: hit.p, x: e.clientX - rect.left, y: e.clientY - rect.top });
+    } else setSnapView(undefined);
     if (dragging !== undefined && hit && (e.buttons & 1) === 1) {
       void ui.drag(dragging, viewer!.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p);
     }
@@ -785,8 +794,22 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerLeave={() => setSnapView(undefined)}
         onContextMenu={(e) => e.preventDefault()}
       />
+
+      {/* A qué se pega el cursor (anclaje) */}
+      <Show when={snapView()}>
+        {(v) => (
+          <span
+            data-snap={v().kind}
+            class="absolute pointer-events-none px-1 rounded text-[11px] bg-bg-lighter/90 border border-border text-cyan"
+            style={{ left: `${v().x + 14}px`, top: `${v().y + 14}px` }}
+          >
+            {SNAP_GLYPHS[v().kind].glyph} {SNAP_GLYPHS[v().kind].label}
+          </span>
+        )}
+      </Show>
 
       {/* Cotas del sketch: clic para cambiar el valor */}
       <Index each={dimensions()}>
@@ -965,7 +988,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         </Show>
         <Show when={ui.session()}>
           <span class="text-[11px] text-text-dim">
-            Clic: dibujar · Esc: cortar la herramienta · Supr: borrar lo elegido · Enter: terminar · Alt+arrastrar o botón del medio: girar la
+            Clic: dibujar · Mayús: sin anclajes · Esc: cortar la herramienta · Supr: borrar lo elegido · Enter: terminar · Alt+arrastrar o botón del medio: girar la
             vista
           </span>
         </Show>

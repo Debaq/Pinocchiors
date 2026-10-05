@@ -10,6 +10,7 @@ import {
   addEntity,
   addPoint,
   addRectangle,
+  ensureOrigin,
   removeEntity,
   type CadStore,
   type EdgeRef,
@@ -153,6 +154,7 @@ export function createCadUi(store: CadStore) {
       // El sketch ya resuelto (con las fórmulas aplicadas); cada cota vinculada
       // lleva su fórmula mientras se edita
       const sketch = clone(view.sketch);
+      ensureOrigin(sketch);
       sketch.constraints.forEach((c, i) => {
         const expr = store.bindingOf(constraintPath(feature, i, c));
         if (expr) (c as { expr?: string }).expr = expr;

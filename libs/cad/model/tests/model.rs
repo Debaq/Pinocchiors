@@ -473,3 +473,55 @@ fn tangent_arcs_sharing_an_end() {
     let cross = (pp[0] - c1p[0]) * (c2p[1] - c1p[1]) - (pp[1] - c1p[1]) * (c2p[0] - c1p[0]);
     assert!(cross.abs() < 1e-6, "centros alineados con el contacto");
 }
+
+#[test]
+fn sketch_origin_is_fixed_and_survives_deletes() {
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    assert_eq!(s.ensure_origin(), o, "no se duplica");
+    // Línea desde el origen, horizontal y con largo: queda definida sin "fijo"
+    let p = s.add_point(3.0, 0.5);
+    let l = s.add_line(o, p);
+    s.constrain(SketchConstraint::Horizontal { line: l });
+    s.constrain(SketchConstraint::Length { line: l, value: 10.0 });
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
+    assert_eq!(s.point(o).unwrap(), [0.0, 0.0]);
+    assert_relative_eq!(s.point(p).unwrap()[0], 10.0, epsilon = 1e-6);
+    // Arrastrar el origen no lo mueve
+    s.solve_drag(o, [5.0, 5.0]).unwrap();
+    assert_relative_eq!(s.point(o).unwrap()[0], 0.0, epsilon = 1e-9);
+    // Borrar la línea deja el origen
+    s.remove_entity(l).unwrap();
+    assert!(s.point(o).is_ok());
+    assert!(s.point(p).is_err());
+    // Sketch sin entidades: solo el origen, nada libre
+    let r = s.solve().unwrap();
+    assert_eq!(r.dof, 0, "{r:?}");
+}
+
+#[test]
+fn sketch_points_aligned_horizontally_and_vertically() {
+    let mut s = Sketch::new();
+    let o = s.ensure_origin();
+    let a = s.add_point(4.0, 0.3);
+    let b = s.add_point(-0.2, 7.0);
+    s.constrain(SketchConstraint::HorizontalPoints { a: o, b: a });
+    s.constrain(SketchConstraint::VerticalPoints { a: o, b });
+    s.solve().unwrap();
+    assert_relative_eq!(s.point(a).unwrap()[1], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(s.point(b).unwrap()[0], 0.0, epsilon = 1e-6);
+    let json = serde_json::to_string(&s).unwrap();
+    assert!(json.contains("\"horizontal_points\"") && json.contains("\"origin\""), "{json}");
+}
+
+#[test]
+fn old_sketch_without_origin_still_loads() {
+    let json = r#"{"points":[{"id":0,"x":0,"y":0},{"id":1,"x":5,"y":0}],
+        "entities":[{"id":2,"geometry":{"type":"line","start":0,"end":1}}],"constraints":[],"next_id":3}"#;
+    let mut s: Sketch = serde_json::from_str(json).unwrap();
+    assert_eq!(s.origin, None);
+    assert!(!serde_json::to_string(&s).unwrap().contains("origin"));
+    let o = s.ensure_origin();
+    assert_eq!(o, 3, "id nuevo, no pisa los existentes");
+}

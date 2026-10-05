@@ -43,6 +43,8 @@ export interface SketchOverlay {
   freePoints?: number[];
   /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
   preview?: P2[][];
+  /** Punto al que se pega el cursor (anclaje activo) */
+  snap?: P2;
   /** Eligiendo regiones: se muestran todas y se resaltan las que contienen estos puntos */
   chosen?: P2[];
 }
@@ -477,7 +479,20 @@ export class CadViewer {
     const free = new Set(overlay.freePoints ?? []);
     const pos: number[] = [];
     const col: number[] = [];
+    // Origen y anclaje activo: puntos más grandes, aparte
+    const marker = (p: P2, color: number, size: number) => {
+      const v = w(p);
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute([v.x, v.y, v.z], 3));
+      const m = new THREE.Points(g, new THREE.PointsMaterial({ color, size, sizeAttenuation: false, depthTest: false }));
+      m.renderOrder = 9;
+      this.sketchGroup.add(m);
+    };
     for (const p of sketch.points) {
+      if (p.id === sketch.origin) {
+        marker([p.x, p.y], hover.has(p.id) ? themeHex("cyan") : selected.has(p.id) ? themeHex("orange") : themeHex("purple"), 10);
+        continue;
+      }
       const v = w([p.x, p.y]);
       pos.push(v.x, v.y, v.z);
       const c = new THREE.Color(
@@ -491,6 +506,7 @@ export class CadViewer {
     const pts = new THREE.Points(pg, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true, depthTest: false }));
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
+    if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
 
     // Ejes del plano
     const axisLen = 20;

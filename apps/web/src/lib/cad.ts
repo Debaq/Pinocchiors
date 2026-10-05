@@ -9,6 +9,7 @@
 
 import { createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
+import type { Snap } from "./sketchSnap";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -89,6 +90,8 @@ export type SketchConstraint =
   | { type: "fixed"; point: number; x: number; y: number }
   | { type: "horizontal"; line: number }
   | { type: "vertical"; line: number }
+  | { type: "horizontal_points"; a: number; b: number }
+  | { type: "vertical_points"; a: number; b: number }
   | { type: "parallel"; a: number; b: number }
   | { type: "perpendicular"; a: number; b: number }
   | { type: "equal"; a: number; b: number }
@@ -110,6 +113,8 @@ export interface Sketch {
   entities: SketchEntity[];
   constraints: SketchConstraint[];
   next_id?: number;
+  /** Punto origen, fijo en (0, 0): no se borra */
+  origin?: number;
 }
 
 export type PrimitiveShape =
@@ -389,7 +394,14 @@ export function dependencies(kind: FeatureKind): number[] {
 }
 
 export function emptySketch(): Sketch {
-  return { points: [], entities: [], constraints: [], next_id: 0 };
+  return { points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [], next_id: 1, origin: 0 };
+}
+
+/** Agrega el punto origen a un sketch que no lo tiene (los de antes) */
+export function ensureOrigin(s: Sketch): number {
+  if (s.origin !== undefined && s.points.some((p) => p.id === s.origin)) return s.origin;
+  s.origin = addPoint(s, [0, 0]);
+  return s.origin;
 }
 
 /** Id nuevo dentro de un sketch (puntos y entidades comparten numeración) */
@@ -432,7 +444,7 @@ export function removeEntity(s: Sketch, id: number): void {
     g.type === "line" ? [g.start, g.end] : g.type === "circle" ? [g.center] : g.type === "arc" ? [g.center, g.start, g.end] : g.points;
   const mentions = (c: SketchConstraint, ids: Set<number>) => Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && k !== "value" && k !== "degrees" && k !== "x" && k !== "y" && ids.has(v));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set([id])));
-  const loose = pointsOf(e.geometry).filter((p) => !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
+  const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
   s.points = s.points.filter((p) => !loose.includes(p.id));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set(loose)));
 }
@@ -499,23 +511,37 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
 /**
  * Parte la línea `lineId` en el punto `point` (que debe estar sobre ella): dos
  * líneas que lo comparten, así las regiones se cierran en ese cruce. Copia
- * horizontal/vertical; las cotas de largo de la línea entera se quitan.
+ * horizontal/vertical (o deja las dos mitades paralelas: alineadas, porque
+ * comparten el punto); la cota de largo de la línea entera pasa a ser la
+ * distancia entre sus extremos. Devuelve la mitad nueva.
  */
-export function splitLineAt(s: Sketch, lineId: number, point: number): void {
+export function splitLineAt(s: Sketch, lineId: number, point: number): number | undefined {
   const line = s.entities.find((e) => e.id === lineId);
   if (!line || line.geometry.type !== "line") return;
   const g = line.geometry;
   if (g.start === point || g.end === point) return;
-  const oldEnd = g.end;
+  const [start, oldEnd] = [g.start, g.end];
   g.end = point;
   const rest = addEntity(s, { type: "line", start: point, end: oldEnd });
   if (line.construction) s.entities.find((e) => e.id === rest)!.construction = true;
+  let axis = false;
   for (const k of [...s.constraints]) {
-    if ((k.type === "horizontal" || k.type === "vertical") && k.line === lineId) s.constraints.push({ type: k.type, line: rest });
+    if ((k.type === "horizontal" || k.type === "vertical") && k.line === lineId) {
+      s.constraints.push({ type: k.type, line: rest });
+      axis = true;
+    }
   }
-  s.constraints = s.constraints.filter((k) => !(k.type === "length" && k.line === lineId));
+  if (!axis) s.constraints.push({ type: "parallel", a: lineId, b: rest });
+  // En el lugar (mismo índice): la fórmula vinculada sigue valiendo
+  s.constraints.forEach((k, i) => {
+    if (k.type === "length" && k.line === lineId) {
+      const expr = (k as { expr?: string }).expr;
+      s.constraints[i] = { type: "distance", a: start, b: oldEnd, value: k.value, ...(expr ? { expr } : {}) } as SketchConstraint;
+    }
+  });
   // El punto ya es extremo compartido: no necesita "punto en línea"
   s.constraints = s.constraints.filter((k) => !(k.type === "point_on_line" && k.point === point && k.line === lineId));
+  return rest;
 }
 
 /**
@@ -613,7 +639,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
   }
   // Puntos que quedaron sueltos
   const used = new Set(s.entities.flatMap((e) => (e.geometry.type === "line" ? [e.geometry.start, e.geometry.end] : e.geometry.type === "spline" ? e.geometry.points : e.geometry.type === "circle" ? [e.geometry.center] : [e.geometry.center, e.geometry.start, e.geometry.end])));
-  const loose = new Set(s.points.filter((q) => !used.has(q.id)).map((q) => q.id));
+  const loose = new Set(s.points.filter((q) => !used.has(q.id) && q.id !== s.origin).map((q) => q.id));
   s.points = s.points.filter((q) => !loose.has(q.id));
   s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, v]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && typeof v === "number" && loose.has(v)));
   return undefined;
@@ -750,6 +776,44 @@ function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hi
     }
   }
   return out;
+}
+
+/**
+ * Punto para un anclaje (ver `sketchSnap.infer`): el existente, o uno nuevo
+ * con la restricción que corresponde. Punto medio: parte la línea y deja las
+ * dos mitades iguales. Cuadrante: sobre la curva y alineado con el centro.
+ * Sobre una línea: la parte (así cierra regiones). Sobre una curva: punto en
+ * círculo.
+ */
+export function placeSnap(s: Sketch, snap: Snap): number {
+  if (snap.id !== undefined && s.points.some((q) => q.id === snap.id)) return snap.id;
+  const id = addPoint(s, snap.p);
+  const e = snap.entity;
+  if (e === undefined) return id;
+  if (snap.kind === "midpoint") {
+    const g = s.entities.find((x) => x.id === e)?.geometry;
+    // La línea pudo partirse con otro punto de la misma forma: entonces solo "sobre"
+    const mid = g?.type === "line" ? [(pointOf(s, g.start)[0] + pointOf(s, g.end)[0]) / 2, (pointOf(s, g.start)[1] + pointOf(s, g.end)[1]) / 2] : undefined;
+    if (mid && Math.hypot(mid[0] - snap.p[0], mid[1] - snap.p[1]) <= 1e-9 * Math.max(1, Math.hypot(snap.p[0], snap.p[1]))) {
+      const rest = splitLineAt(s, e, id);
+      if (rest !== undefined) s.constraints.push({ type: "equal", a: e, b: rest });
+      return id;
+    }
+    stickTo(s, id, { entity: e, kind: "line" });
+    return id;
+  }
+  if (snap.kind === "quadrant") {
+    const g = s.entities.find((x) => x.id === e)?.geometry;
+    s.constraints.push({ type: "point_on_circle", point: id, circle: e });
+    if (g?.type === "circle" || g?.type === "arc") {
+      const q = snap.quadrant ?? 0;
+      s.constraints.push({ type: q % 2 === 0 ? "horizontal_points" : "vertical_points", a: g.center, b: id });
+    }
+    return id;
+  }
+  if (snap.kind === "on_line") stickTo(s, id, { entity: e, kind: "line" });
+  else if (snap.kind === "on_circle") s.constraints.push({ type: "point_on_circle", point: id, circle: e });
+  return id;
 }
 
 /**
@@ -999,6 +1063,8 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   fixed: "Fijo",
   horizontal: "Horizontal",
   vertical: "Vertical",
+  horizontal_points: "Alineados horizontal",
+  vertical_points: "Alineados vertical",
   parallel: "Paralelas",
   perpendicular: "Perpendiculares",
   equal: "Iguales",

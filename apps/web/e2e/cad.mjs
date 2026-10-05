@@ -152,7 +152,8 @@ const scenarios = {
     await sleep(1200);
     await b.clickText("Terminar sketch");
     await sleep(1200);
-    const pts = (await call("cad_get_document")).features[0].kind.sketch.points.map((p) => p.x);
+    const sk0 = (await call("cad_get_document")).features[0].kind.sketch;
+    const pts = sk0.points.filter((p) => p.id !== sk0.origin).map((p) => p.x);
     near(Math.max(...pts) - Math.min(...pts), 40, 1e-6, "ancho acotado");
   },
 
@@ -380,6 +381,67 @@ const scenarios = {
     await b.clickText("Redondeo");
     await sleep(2000);
     if ((await body()).faces !== faces + 1) throw new Error("el redondeo no tomó la arista elegida");
+  },
+
+  async "anclajes: origen, punto medio y cuadrante"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    const [W, H] = [0.4 * S, 0.3 * S];
+    // Rectángulo desde el origen (clic 3 px al lado: se pega igual)
+    await b.clickText("Rectángulo");
+    const [ox, oy] = await at(0, 0);
+    await b.click(ox + 3, oy - 2);
+    await b.click(...(await at(W, H)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    // Línea de medio a medio (abajo y arriba)
+    await b.clickText("Línea");
+    const [mx, my] = await at(W / 2, 0);
+    await b.click(mx + 2, my + 2);
+    // El glifo dice a qué se pega
+    const glyph = await b.eval(`document.querySelector("[data-snap]")?.dataset.snap`);
+    if (glyph !== "midpoint") throw new Error(`glifo: ${glyph}`);
+    await b.click(...(await at(W / 2, H)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    // Círculo a la derecha y línea desde su cuadrante superior
+    await b.clickText("Círculo");
+    const R = 0.05 * S;
+    await b.click(...(await at(W + 4 * R, H / 2)));
+    await b.click(...(await at(W + 5 * R, H / 2)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Línea");
+    await b.click(...(await at(W + 4 * R, H / 2 + R)));
+    await b.click(...(await at(W + 7 * R, H / 2 + R)), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    if (!(await sketchText(b, "/\\d+ regiones cerradas/")).startsWith("3")) throw new Error("regiones");
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const lines = sk.entities.filter((e) => e.geometry.type === "line");
+    if (!lines.some((e) => e.geometry.start === sk.origin || e.geometry.end === sk.origin)) throw new Error("el rectángulo no sale del origen");
+    const count = (t) => sk.constraints.filter((c) => c.type === t).length;
+    if (count("equal") !== 2) throw new Error(`mitades iguales: ${count("equal")}`);
+    if (count("vertical_points") !== 1) throw new Error("cuadrante sin alinear con el centro");
+    // Ancho a 2W: la línea del medio sigue en el medio y el rectángulo en el origen
+    const width = sk.constraints.findIndex((c) => c.type === "distance");
+    if (width < 0) throw new Error("la cota de ancho no pasó a distancia");
+    sk.constraints[width].value = 2 * W;
+    await call("cad_set_document", { document: doc });
+    const solved = (await evaluate()).sketches[0].sketch;
+    const pt = new Map(solved.points.map((p) => [p.id, p]));
+    const xs = solved.points.filter((p) => p.y > -1e-6 && p.y < H + 1e-6 && p.x < 2 * W + 1e-6).map((p) => p.x);
+    near(Math.min(...xs), 0, 1e-6, "esquina en el origen");
+    const mid = lines.find((e) => {
+      const [a, c] = [pt.get(e.geometry.start), pt.get(e.geometry.end)];
+      return Math.abs(a.x - c.x) < 1e-6 && Math.abs(a.y - c.y) > H / 2 && a.x > 1e-3 && a.x < 2 * W - 1e-3;
+    });
+    if (!mid) throw new Error("no está la línea del medio");
+    near(pt.get(mid.geometry.start).x, W, 1e-6, "línea del medio");
   },
 
   async "escaneo: cilindro elegido con un clic"(b) {
