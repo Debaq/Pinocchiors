@@ -1,5 +1,6 @@
 // Implementación del puente con OpenCASCADE. Ver cad_occt.h.
 
+#define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
 #include <BRepAdaptor_Curve.hxx>
@@ -82,8 +83,13 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
 
 struct CadShape {
     TopoDS_Shape s;
