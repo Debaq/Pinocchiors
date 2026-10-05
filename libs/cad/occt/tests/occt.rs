@@ -318,3 +318,27 @@ fn clone_is_independent_handle() {
     assert_relative_eq!(b.mass().unwrap().volume, 8.0, epsilon = 1e-9);
     assert!(!occt_version().is_empty());
 }
+
+#[test]
+fn closest_face_and_edge() {
+    if !require() {
+        return;
+    }
+    let b = cube(10.0);
+    let faces = b.faces().unwrap();
+    // Punto apenas sobre la tapa: la tapa, también filtrando por normal
+    let (top, d) = b.closest_face([3.0, 4.0, 10.5], None, 0.0).unwrap();
+    assert!(faces[top].normal[2] > 0.99);
+    assert_relative_eq!(d, 0.5, epsilon = 1e-9);
+    // Cerca de la arista superior frontal pero pidiendo normal −Y: la cara frontal
+    let (front, _) = b.closest_face([5.0, 0.1, 9.9], Some([0.0, -1.0, 0.0]), 0.9).unwrap();
+    assert!(faces[front].normal[1] < -0.99);
+    // Arista paralela a X más cercana a (5, 0, 10)
+    let (e, d) = b.closest_edge([5.0, -0.2, 10.0], Some([1.0, 0.0, 0.0]), 0.9).unwrap();
+    let info = b.edge_info(e).unwrap();
+    assert_relative_eq!(info.mid[2], 10.0, epsilon = 1e-9);
+    assert_relative_eq!(info.mid[1], 0.0, epsilon = 1e-9);
+    assert_relative_eq!(d, 0.2, epsilon = 1e-9);
+    // Ninguna arista paralela a una dirección imposible
+    assert!(b.closest_edge([5.0, 0.0, 10.0], Some([1.0, 1.0, 0.0]), 0.99).is_none());
+}

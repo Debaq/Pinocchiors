@@ -40,6 +40,8 @@ int32_t cad_count_edges(const CadShape* s) { (void)s; FAIL_INT; }
 int32_t cad_face_info(const CadShape* s, int32_t i, CadFaceInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 int32_t cad_edge_info(const CadShape* s, int32_t i, CadEdgeInfo* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 int32_t cad_edge_faces(const CadShape* s, int32_t e, int32_t* o) { (void)s; (void)e; (void)o; FAIL_INT; }
+int32_t cad_closest_face(const CadShape* s, const double* p, const double* n, double c, double* d) { (void)s; (void)p; (void)n; (void)c; (void)d; return -1; }
+int32_t cad_closest_edge(const CadShape* s, const double* p, const double* n, double c, double* d) { (void)s; (void)p; (void)n; (void)c; (void)d; return -1; }
 int32_t cad_mass_info(const CadShape* s, CadMassInfo* o) { (void)s; (void)o; FAIL_INT; }
 int32_t cad_tessellate(const CadShape* s, double l, double a, CadMesh* o) { (void)s; (void)l; (void)a; memset(o, 0, sizeof(*o)); FAIL_INT; }
 void cad_mesh_free(CadMesh* m) { (void)m; }

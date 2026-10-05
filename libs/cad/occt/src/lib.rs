@@ -533,6 +533,24 @@ impl Shape {
         Ok(out[..n as usize].iter().filter(|&&f| f >= 0).map(|&f| f as usize).collect())
     }
 
+    /// Cara más cercana a `point` (índice, distancia). Con `normal`, solo caras
+    /// cuya normal ahí forme un coseno ≥ `min_cos` con ella.
+    pub fn closest_face(&self, point: P3, normal: Option<P3>, min_cos: f64) -> Option<(usize, f64)> {
+        let mut d = 0.0;
+        let n = normal.as_ref().map_or(std::ptr::null(), |n| n.as_ptr());
+        let i = unsafe { ffi::cad_closest_face(self.ptr(), point.as_ptr(), n, min_cos, &mut d) };
+        (i >= 0).then_some((i as usize, d))
+    }
+
+    /// Arista más cercana a `point`. Con `dir`, solo aristas paralelas
+    /// (|cos| ≥ `min_cos`) en el punto más cercano.
+    pub fn closest_edge(&self, point: P3, dir: Option<P3>, min_cos: f64) -> Option<(usize, f64)> {
+        let mut d = 0.0;
+        let t = dir.as_ref().map_or(std::ptr::null(), |t| t.as_ptr());
+        let i = unsafe { ffi::cad_closest_edge(self.ptr(), point.as_ptr(), t, min_cos, &mut d) };
+        (i >= 0).then_some((i as usize, d))
+    }
+
     pub fn mass(&self) -> Result<MassInfo> {
         let mut r = ffi::CadMassInfo::default();
         if unsafe { ffi::cad_mass_info(self.ptr(), &mut r) } == 0 {

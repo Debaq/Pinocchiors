@@ -132,6 +132,15 @@ int32_t cad_edge_info(const CadShape* s, int32_t index, CadEdgeInfo* out);
 // Caras adyacentes a una arista (hasta 2); devuelve cuántas escribió.
 int32_t cad_edge_faces(const CadShape* s, int32_t edge, int32_t* out2);
 
+// Cara más cercana a `point`. Si `normal` no es NULL, solo considera caras cuya
+// normal en el punto más cercano forme con ella un coseno ≥ `min_cos`.
+// Devuelve el índice (o -1) y escribe la distancia en `dist`.
+int32_t cad_closest_face(const CadShape* s, const double* point, const double* normal,
+                         double min_cos, double* dist);
+// Arista más cercana; con `dir`, solo aristas cuya tangente cumpla |cos| ≥ `min_cos`.
+int32_t cad_closest_edge(const CadShape* s, const double* point, const double* dir,
+                         double min_cos, double* dist);
+
 typedef struct {
     double volume;
     double area;

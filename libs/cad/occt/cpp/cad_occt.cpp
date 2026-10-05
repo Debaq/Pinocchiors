@@ -16,7 +16,9 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepCheck_Analyzer.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepClass_FaceClassifier.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -704,6 +706,77 @@ int32_t cad_edge_faces(const CadShape* s, int32_t edge, int32_t* out2) {
             out2[k++] = faces.FindIndex(f) - 1;
         }
         return k;
+    });
+}
+
+int32_t cad_closest_face(const CadShape* s, const double* point, const double* normal,
+                         double min_cos, double* dist) {
+    return guard("buscar cara", (int32_t)-1, [&]() -> int32_t {
+        auto m = map_of(s->s, TopAbs_FACE);
+        TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(pnt(point)).Vertex();
+        int32_t best = -1;
+        double best_d = 1e300;
+        for (int i = 1; i <= m.Extent(); i++) {
+            TopoDS_Face face = TopoDS::Face(m(i));
+            BRepExtrema_DistShapeShape ext(v, face);
+            if (!ext.IsDone() || ext.NbSolution() < 1) continue;
+            double d = ext.Value();
+            if (d >= best_d) continue;
+            if (normal) {
+                double u = 0, w = 0;
+                gp_Pnt p;
+                gp_Vec n;
+                if (ext.SupportTypeShape2(1) == BRepExtrema_IsInFace) {
+                    ext.ParOnFaceS2(1, u, w);
+                } else {
+                    // Punto más cercano en un borde/vértice: proyectar para tener (u, v)
+                    GeomAPI_ProjectPointOnSurf proj(ext.PointOnShape2(1), BRep_Tool::Surface(face));
+                    if (proj.NbPoints() < 1) continue;
+                    proj.LowerDistanceParameters(u, w);
+                }
+                BRepGProp_Face(face).Normal(u, w, p, n);
+                if (n.Magnitude() < 1e-12) continue;
+                n.Normalize();
+                if (n.Dot(gp_Vec(normal[0], normal[1], normal[2]).Normalized()) < min_cos) continue;
+            }
+            best_d = d;
+            best = i - 1;
+        }
+        *dist = best_d;
+        return best;
+    });
+}
+
+int32_t cad_closest_edge(const CadShape* s, const double* point, const double* d,
+                         double min_cos, double* dist) {
+    return guard("buscar arista", (int32_t)-1, [&]() -> int32_t {
+        auto m = map_of(s->s, TopAbs_EDGE);
+        TopoDS_Vertex v = BRepBuilderAPI_MakeVertex(pnt(point)).Vertex();
+        int32_t best = -1;
+        double best_d = 1e300;
+        for (int i = 1; i <= m.Extent(); i++) {
+            TopoDS_Edge edge = TopoDS::Edge(m(i));
+            if (BRep_Tool::Degenerated(edge)) continue;
+            BRepExtrema_DistShapeShape ext(v, edge);
+            if (!ext.IsDone() || ext.NbSolution() < 1) continue;
+            double dd = ext.Value();
+            if (dd >= best_d) continue;
+            if (d) {
+                BRepAdaptor_Curve c(edge);
+                double t = (c.FirstParameter() + c.LastParameter()) / 2;
+                if (ext.SupportTypeShape2(1) == BRepExtrema_IsOnEdge) ext.ParOnEdgeS2(1, t);
+                gp_Pnt p;
+                gp_Vec tan;
+                c.D1(t, p, tan);
+                if (tan.Magnitude() < 1e-12) continue;
+                tan.Normalize();
+                if (std::fabs(tan.Dot(gp_Vec(d[0], d[1], d[2]).Normalized())) < min_cos) continue;
+            }
+            best_d = dd;
+            best = i - 1;
+        }
+        *dist = best_d;
+        return best;
     });
 }
 

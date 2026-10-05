@@ -118,6 +118,8 @@ unsafe extern "C" {
     pub fn cad_face_info(s: *const CadShape, index: i32, out: *mut CadFaceInfo) -> i32;
     pub fn cad_edge_info(s: *const CadShape, index: i32, out: *mut CadEdgeInfo) -> i32;
     pub fn cad_edge_faces(s: *const CadShape, edge: i32, out2: *mut i32) -> i32;
+    pub fn cad_closest_face(s: *const CadShape, point: *const f64, normal: *const f64, min_cos: f64, dist: *mut f64) -> i32;
+    pub fn cad_closest_edge(s: *const CadShape, point: *const f64, dir: *const f64, min_cos: f64, dist: *mut f64) -> i32;
     pub fn cad_mass_info(s: *const CadShape, out: *mut CadMassInfo) -> i32;
 
     pub fn cad_tessellate(s: *const CadShape, linear: f64, angular: f64, out: *mut CadMesh) -> i32;
