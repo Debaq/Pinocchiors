@@ -17,6 +17,7 @@ pub mod pointcloud;
 pub mod recording;
 pub mod register;
 pub mod scan;
+pub mod turntable;
 mod scanner;
 
 pub use camera::{CameraDescription, StreamInfo};

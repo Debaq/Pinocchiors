@@ -10,7 +10,21 @@ crossbeam-channel = "0.5"
 log = "0.4"
 # Decodificador JPEG en Rust puro para el stream de color (MJPG)
 zune-jpeg = "0.4"
+# Geometría del rig de plato giratorio y render sintético en paralelo
+nalgebra = { workspace = true }
+rayon = { workspace = true }
+# Arduino del rig scanEar: puerto serie y respuestas JSON
+serialport = { version = "4.10", default-features = false }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Captura V4L2 directa (el escáner es un dispositivo UVC), solo existe en Linux
 [target.'cfg(target_os = "linux")'.dependencies]
 v4l = "0.14"
+
+[dev-dependencies]
+# El ejemplo del plato giratorio escanea mallas STL reales
+stl_io = { workspace = true }
+pinocchio-math = { workspace = true }
+pinocchio-spatial = { workspace = true }
+image = { workspace = true }
