@@ -269,6 +269,11 @@ export const CadView: Component<CadViewProps> = (props) => {
     const selected = ui.picks().flatMap((p) => (p.kind === "plane" ? [p.plane] : []));
     viewer?.setPlanes(show || ui.pick().kind === "place", selected);
   });
+  // Herramienta de la operación en el diálogo (translúcida, verde o roja)
+  createEffect(() => {
+    const t = store.tool();
+    viewer?.setTool(t?.mesh ?? null, t?.op);
+  });
   createEffect(() => viewer?.setScanHighlight(ui.scanHighlight()));
   createEffect(() => viewer?.setScanVisible(scanVisible(), scanOpacity()));
 

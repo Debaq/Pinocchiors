@@ -7,7 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
-import { ellipsePolyline, splineOf, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
+import { ellipsePolyline, splineOf, type BodyOp, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -118,6 +118,7 @@ export class CadViewer {
   private body?: THREE.Mesh;
   private bodyEdges?: THREE.LineSegments;
   private bodyData: CadMesh | null = null;
+  private tool?: THREE.Group;
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
   private sketchGroup = new THREE.Group();
@@ -360,6 +361,50 @@ export class CadViewer {
       this.scene.add(this.bodyEdges);
     }
     this.paintBody();
+    this.requestRender();
+  }
+
+  /**
+   * Herramienta de la operación en edición, translúcida como en Onshape: verde
+   * si suma, roja si resta, ámbar si interseca.
+   */
+  setTool(data: CadMesh | null, op: BodyOp = "join") {
+    if (this.tool) {
+      this.scene.remove(this.tool);
+      this.tool.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+          o.geometry.dispose();
+          (o.material as THREE.Material).dispose();
+        }
+      });
+      this.tool = undefined;
+    }
+    if (data) {
+      const color = themeHex(op === "join" ? "green" : op === "cut" ? "red" : "warning");
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+      g.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+      g.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      g.computeBoundingSphere();
+      const mesh = new THREE.Mesh(
+        g,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      mesh.renderOrder = 4;
+      const segs: number[] = [];
+      let start = 0;
+      for (const end of data.edgeEnds) {
+        for (let i = start; i < end - 1; i++) segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
+        start = end;
+      }
+      const eg = new THREE.BufferGeometry();
+      eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
+      const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false }));
+      lines.renderOrder = 4;
+      this.tool = new THREE.Group();
+      this.tool.add(mesh, lines);
+      this.scene.add(this.tool);
+    }
     this.requestRender();
   }
 
@@ -831,6 +876,7 @@ export class CadViewer {
     this.resizeObserver.disconnect();
     this.controls.dispose();
     this.setBody(null);
+    this.setTool(null);
     this.setScan(null);
     this.setSketch(null);
     this.renderer.dispose();

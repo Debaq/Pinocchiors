@@ -73,6 +73,12 @@ impl Evaluation {
             .collect()
     }
 
+    /// Herramienta de una operación (el prisma de una extrusión, la primitiva…)
+    /// y cómo se combinó con el cuerpo; para la vista previa.
+    pub fn tool(&self, id: FeatureId) -> Option<(&Shape, BodyOp)> {
+        self.tools.get(&id).map(|(t, op)| (&t.shape, *op))
+    }
+
     /// Referencia estable a una cara del cuerpo actual.
     pub fn face_ref(&self, face: usize) -> Option<FaceRef> {
         let info = self.body.as_ref()?.face_info(face).ok()?;

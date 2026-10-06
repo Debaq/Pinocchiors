@@ -90,7 +90,9 @@ nuevo.
    muestra el sólido de antes de la operación (`Draft.selecting`) y `cad_resolve_refs` dice
    qué arista o cara es cada referencia para resaltarla, quitarla con otro clic o marcarla "no
    encontrada". El sketch sigue en una lista (no hay nada que elegir en el visor).*
-3. **Herramienta transparente** (verde/roja) en la vista previa.
+3. **Herramienta transparente** (verde/roja) en la vista previa. *Hecha el 2026-10-06: `cad_tool_mesh`
+   tesela la herramienta guardada en la evaluación (`Evaluation::tool`) en vez de sumarla a
+   `CadResult`; el store la pide tras cada vista previa de una operación con `op`.*
 4. **Referencias rotas**: reporte por referencia, marcado y reemplazo.
 5. **Árbol**: doble clic, editar desde la cara, barra arrastrable, reordenar.
 6. **Carpetas.**

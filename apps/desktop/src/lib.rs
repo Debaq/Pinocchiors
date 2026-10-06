@@ -150,6 +150,7 @@ pub fn run() {
             cad::cad_solve_sketch,
             cad::cad_eval_expr,
             cad::cad_mesh,
+            cad::cad_tool_mesh,
             cad::cad_face_ref,
             cad::cad_edge_ref,
             cad::cad_face_info,

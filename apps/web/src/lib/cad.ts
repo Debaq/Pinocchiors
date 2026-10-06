@@ -1433,6 +1433,8 @@ export function createCadStore() {
   const [status, setStatus] = createSignal<CadStatus>();
   const [committed, setDoc] = createSignal<CadDocument | null>(null);
   const [draft, setDraft] = createSignal<Draft>();
+  // Herramienta de la operación en el diálogo (vista previa verde/roja)
+  const [tool, setTool] = createSignal<{ mesh: CadMesh; op: BodyOp } | null>(null);
   // Con un diálogo abierto, todo lo que lee el documento ve el borrador
   const doc = () => draft()?.doc ?? committed();
   const [result, setResult] = createSignal<CadResult | null>(null);
@@ -1460,6 +1462,16 @@ export function createCadStore() {
     await refreshMesh(r.version);
   };
 
+  /** Herramienta de la operación del diálogo, si suma, resta o interseca (no mientras se elige en una caja) */
+  const refreshTool = async (seq: number) => {
+    const d = draft();
+    const f = d && !d.selecting ? d.doc.features.find((x) => x.id === d.feature) : undefined;
+    const op = f && "op" in f.kind ? f.kind.op : undefined;
+    if (!d || !op) return setTool(null);
+    const mesh = decodeCadMesh(await invoke<ArrayBuffer>("cad_tool_mesh", { feature: d.feature }));
+    if (seq === sendSeq) setTool(mesh ? { mesh, op } : null);
+  };
+
   /** Guarda `next` en el backend, o con `preview` solo lo muestra (`null` = volver al documento) */
   const send = (next: CadDocument | null, preview = false) => (lastSend = sendNow(next, preview));
   const sendNow = async (next: CadDocument | null, preview: boolean) => {
@@ -1472,6 +1484,7 @@ export function createCadStore() {
       if (seq === sendSeq) {
         setError(undefined);
         await apply(r);
+        await refreshTool(seq);
       }
     } catch (e) {
       if (seq === sendSeq) setError(String(e));
@@ -1546,6 +1559,8 @@ export function createCadStore() {
     doc,
     /** El documento guardado (sin el borrador del diálogo abierto) */
     committed,
+    /** Herramienta de la operación en el diálogo, para dibujarla translúcida */
+    tool,
     draft,
     acceptDraft,
     cancelDraft,

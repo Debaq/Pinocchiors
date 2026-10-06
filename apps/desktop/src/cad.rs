@@ -282,13 +282,36 @@ pub async fn cad_mesh(app: AppHandle) -> Result<Response, String> {
 }
 
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
+    evaluate(state)?;
+    let scale = 1.0 / mm_per_unit(state);
+    let cache = state.cad_cache.lock().unwrap();
+    match cache.as_ref().and_then(|c| c.eval.body.as_ref()) {
+        Some(body) => encode_view_mesh(body, scale),
+        None => Ok(vec![0; 16]),
+    }
+}
+
+/// Herramienta de una operación (vista previa: verde si suma, roja si resta),
+/// en el mismo formato que [`cad_mesh`]; vacía si la operación no tiene.
+#[tauri::command]
+pub async fn cad_tool_mesh(app: AppHandle, feature: cad_model::FeatureId) -> Result<Response, String> {
+    in_background(app, move |state| tool_mesh_impl(state, feature).map(Response::new)).await
+}
+
+fn tool_mesh_impl(state: &AppState, feature: cad_model::FeatureId) -> Result<Vec<u8>, String> {
+    evaluate(state)?;
+    let scale = 1.0 / mm_per_unit(state);
+    let cache = state.cad_cache.lock().unwrap();
+    match cache.as_ref().and_then(|c| c.eval.tool(feature)) {
+        Some((shape, _)) => encode_view_mesh(shape, scale),
+        None => Ok(vec![0; 16]),
+    }
+}
+
+/// Teselado para el visor: posiciones y normales (Y arriba, unidades de la
+/// escena), triángulos, cara de cada triángulo y aristas como polilíneas.
+fn encode_view_mesh(body: &cad_model::Shape, scale: f64) -> Result<Vec<u8>, String> {
     {
-        evaluate(state)?;
-        let scale = 1.0 / mm_per_unit(state);
-        let cache = state.cad_cache.lock().unwrap();
-        let Some(body) = cache.as_ref().and_then(|c| c.eval.body.as_ref()) else {
-            return Ok(vec![0; 16]);
-        };
         let t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
         let edge_points: usize = t.edges.iter().map(|e| e.len()).sum();
         let mut out = Vec::with_capacity(16 + t.positions.len() * 24 + t.triangles.len() * 16 + edge_points * 12);
@@ -751,6 +774,7 @@ pub mod bridge {
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
+            "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
@@ -862,6 +886,22 @@ mod tests {
         let r = resolve_refs_impl(&state, &[face, far], &[edge]).unwrap();
         assert_eq!(r.faces, vec![Some(2), None]);
         assert_eq!(r.edges, vec![Some(5)]);
+    }
+
+    #[test]
+    fn tool_mesh_of_a_feature() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        let doc = box_doc();
+        let id = doc.features[0].id;
+        *state.cad_document.lock().unwrap() = Some(doc);
+        let tool = tool_mesh_impl(&state, id).unwrap();
+        let triangles = u32::from_le_bytes(tool[4..8].try_into().unwrap());
+        assert_eq!(triangles, 12, "la caja como herramienta");
+        let none = tool_mesh_impl(&state, cad_model::FeatureId(99)).unwrap();
+        assert_eq!(none, vec![0; 16]);
     }
 
     #[test]

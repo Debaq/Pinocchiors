@@ -313,3 +313,10 @@ cargo test -p cad-model
   de "Aplicar" se fueron. Redondeo, chaflán y desmolde sin nada elegido dicen qué falta. El
   editor del panel se monta por id y aceptar o cancelar cambian todo en un `batch` (antes,
   cerrar el diálogo podía leer una operación ya desmontada y cortar el guardado).
+- **2026-10-06 Herramienta translúcida** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 3): con el
+  diálogo de una extrusión, revolución, primitiva o importación abierto, su herramienta se
+  dibuja translúcida encima del resultado, como en Onshape: verde si suma, roja si resta, ámbar
+  si interseca, con el contorno visible a través del sólido. `Evaluation::tool` da la forma y
+  `cad_tool_mesh` la tesela en el formato de `cad_mesh` (vacía si la operación no tiene); el
+  store la pide después de cada vista previa (`store.tool()`). No se dibuja mientras se elige
+  en una caja (el sólido es el de antes) ni después de aceptar o cancelar.

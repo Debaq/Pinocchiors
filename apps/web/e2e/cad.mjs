@@ -187,6 +187,43 @@ const scenarios = {
     if (ext.regions.type !== "points" || ext.regions.points.length !== 1) throw new Error(JSON.stringify(ext.regions));
   },
 
+  async "herramienta translúcida en la vista previa"(b) {
+    const tool = () => b.eval(`(() => { const t = __cadStore.tool(); return t && { op: t.op, triangles: t.mesh.indices.length / 3 }; })()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    if ((await tool())?.op !== "join") throw new Error(`caja: ${JSON.stringify(await tool())}`);
+    await accept(b);
+    if (await tool()) throw new Error("la herramienta quedó después de aceptar");
+    // Círculo sobre la cara de arriba, extruido hacia adentro y restando
+    await b.clickText("Sketch");
+    await sleep(300);
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`)), { wait: 2500 });
+    await b.clickText("Círculo");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`)));
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([5, 0, 20])`)), { wait: 800 });
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    await b.eval(`__cadStore.commit((d) => { const k = d.features.at(-1).kind; k.op = "cut"; k.reverse = true; })`);
+    await sleep(2000);
+    const t = await tool();
+    if (t?.op !== "cut" || !(t.triangles > 0)) throw new Error(`extrusión: ${JSON.stringify(t)}`);
+    near((await body()).volume, 8000 - Math.PI * 25 * 10, 0.5, "vista previa del agujero");
+    await b.shot("herramienta_resta");
+    // Eligiendo regiones no se dibuja la herramienta
+    await b.eval(`document.querySelector('[aria-label="Regiones"]').click()`);
+    await sleep(1500);
+    if (await tool()) throw new Error("herramienta mientras se elige");
+    await b.key("Escape", "Escape", 27);
+    await sleep(1500);
+    if ((await tool())?.op !== "cut") throw new Error("no volvió la herramienta");
+    await b.key("Escape", "Escape", 27);
+    await sleep(1500);
+    if (await tool()) throw new Error("la herramienta quedó después de cancelar");
+  },
+
   async "diálogo de operación: cancelar y aceptar"(b) {
     await begin(b);
     await b.clickText("Caja");
