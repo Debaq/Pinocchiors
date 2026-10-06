@@ -127,7 +127,8 @@ export interface Sketch {
 }
 
 export type PrimitiveShape =
-  | { type: "box"; dx: number; dy: number; dz: number }
+  /** `centered`: centrada en X e Y sobre el origen (las cajas viejas van desde la esquina) */
+  | { type: "box"; dx: number; dy: number; dz: number; centered?: boolean }
   | { type: "cylinder"; radius: number; height: number }
   | { type: "cone"; r1: number; r2: number; height: number }
   | { type: "sphere"; radius: number }
@@ -1398,9 +1399,33 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
 
 const HISTORY_LIMIT = 100;
 
+/**
+ * Operación abierta en su diálogo: los cambios van a `doc` (con vista previa
+ * en el visor) y recién al aceptar pasan al documento en un solo paso de
+ * deshacer; cancelar vuelve a `base`.
+ */
+export interface Draft {
+  feature: number;
+  /** Creada en este diálogo (cancelar la quita) */
+  isNew: boolean;
+  base: CadDocument;
+  doc: CadDocument;
+}
+
+/** Lo que se evalúa para la vista previa: hasta la operación en edición, como Onshape */
+export function previewDocument(d: Draft): CadDocument {
+  const doc = clone(d.doc);
+  const i = doc.features.findIndex((f) => f.id === d.feature);
+  doc.rollback = i < 0 || i + 1 >= doc.features.length ? null : i + 1;
+  return doc;
+}
+
 export function createCadStore() {
   const [status, setStatus] = createSignal<CadStatus>();
-  const [doc, setDoc] = createSignal<CadDocument | null>(null);
+  const [committed, setDoc] = createSignal<CadDocument | null>(null);
+  const [draft, setDraft] = createSignal<Draft>();
+  // Con un diálogo abierto, todo lo que lee el documento ve el borrador
+  const doc = () => draft()?.doc ?? committed();
   const [result, setResult] = createSignal<CadResult | null>(null);
   const [mesh, setMesh] = createSignal<CadMesh | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -1412,6 +1437,7 @@ export function createCadStore() {
   let meshVersion = -1;
   // Envíos encadenados: el último gana y los intermedios no pisan el resultado
   let sendSeq = 0;
+  let lastSend: Promise<void> = Promise.resolve();
 
   const refreshMesh = async (version: number) => {
     if (version === meshVersion) return;
@@ -1425,11 +1451,15 @@ export function createCadStore() {
     await refreshMesh(r.version);
   };
 
-  const send = async (next: CadDocument) => {
+  /** Guarda `next` en el backend, o con `preview` solo lo muestra (`null` = volver al documento) */
+  const send = (next: CadDocument | null, preview = false) => (lastSend = sendNow(next, preview));
+  const sendNow = async (next: CadDocument | null, preview: boolean) => {
     const seq = ++sendSeq;
     setBusy(true);
     try {
-      const r = await invoke<CadResult>("cad_set_document", { document: next });
+      const r = preview
+        ? await invoke<CadResult>("cad_preview", { document: next })
+        : await invoke<CadResult>("cad_set_document", { document: next });
       if (seq === sendSeq) {
         setError(undefined);
         await apply(r);
@@ -1441,9 +1471,17 @@ export function createCadStore() {
     }
   };
 
-  /** Cambia el documento (deshacible) y recalcula */
+  /** Cambia el documento (deshacible) y recalcula; con un diálogo abierto, cambia el borrador */
   const commit = (mutate: (d: CadDocument) => void) => {
-    const current = doc() ?? { features: [] };
+    const d = draft();
+    if (d) {
+      const next = clone(d.doc);
+      mutate(next);
+      const nd = { ...d, doc: next };
+      setDraft(nd);
+      return send(previewDocument(nd), true);
+    }
+    const current = committed() ?? { features: [] };
     const next = clone(current);
     mutate(next);
     undoStack.push(current);
@@ -1454,16 +1492,65 @@ export function createCadStore() {
     return send(next);
   };
 
+  const openDraft = (d: Draft) => {
+    setDraft(d);
+    setSelected(d.feature);
+    return send(previewDocument(d), true);
+  };
+
+  /** Acepta el diálogo abierto: un paso de deshacer si cambió algo */
+  const acceptDraft = () => {
+    const d = draft();
+    if (!d) return lastSend;
+    setDraft(undefined);
+    setSelected(undefined);
+    if (!d.isNew && JSON.stringify(d.doc) === JSON.stringify(d.base)) return send(null, true);
+    undoStack.push(d.base);
+    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+    redoStack.length = 0;
+    setHistoryVersion((v) => v + 1);
+    setDoc(d.doc);
+    return send(d.doc);
+  };
+
+  /** Cierra el diálogo sin cambiar el documento */
+  const cancelDraft = () => {
+    if (!draft()) return lastSend;
+    setDraft(undefined);
+    setSelected(undefined);
+    return send(null, true);
+  };
+
   const store = {
     status,
     doc,
+    /** El documento guardado (sin el borrador del diálogo abierto) */
+    committed,
+    draft,
+    acceptDraft,
+    cancelDraft,
+    /** Espera a que termine el último recálculo pedido */
+    settled: () => lastSend,
     result,
     mesh,
     busy,
     error,
     setError,
     selected,
-    select: setSelected,
+    /**
+     * Elige una operación: abre su diálogo (los sketches se editan aparte).
+     * Si había otro abierto, se acepta.
+     */
+    select(id: number | undefined) {
+      const d = draft();
+      if (d?.feature === id && id !== undefined) return;
+      if (d) void acceptDraft();
+      setSelected(id);
+      const base = committed();
+      const f = base?.features.find((x) => x.id === id);
+      if (!base || !f || f.kind.type === "sketch") return;
+      void openDraft({ feature: f.id, isNew: false, base, doc: clone(base) });
+    },
     canUndo: () => (historyVersion(), undoStack.length > 0),
     canRedo: () => (historyVersion(), redoStack.length > 0),
 
@@ -1479,6 +1566,7 @@ export function createCadStore() {
       undoStack.length = 0;
       redoStack.length = 0;
       setHistoryVersion((v) => v + 1);
+      setDraft(undefined);
       setDoc(d);
       setSelected(undefined);
       if (!d) {
@@ -1496,6 +1584,7 @@ export function createCadStore() {
 
     async newDesign() {
       const r = await invoke<CadResult>("cad_new");
+      setDraft(undefined);
       undoStack.length = 0;
       redoStack.length = 0;
       setHistoryVersion((v) => v + 1);
@@ -1511,17 +1600,28 @@ export function createCadStore() {
 
     commit,
 
-    /** Agrega una operación al final (o donde está la barra de retroceso) y la selecciona */
+    /**
+     * Agrega una operación al final (o donde está la barra de retroceso) y abre
+     * su diálogo; los sketches entran directo al documento.
+     */
     async addFeature(kind: FeatureKind, name?: string): Promise<number> {
-      const current = doc() ?? { features: [] };
+      if (draft()) void acceptDraft();
+      const current = committed() ?? { features: [] };
       const id = nextFeatureId(current);
-      setSelected(id);
-      await commit((d) => {
+      const insert = (d: CadDocument) => {
         const at = Math.min(d.rollback ?? d.features.length, d.features.length);
         d.features.splice(at, 0, { id, name: name ?? defaultName(d, kind), suppressed: false, kind });
         d.next_id = id + 1;
         if (d.rollback != null) d.rollback += 1;
-      });
+      };
+      if (kind.type === "sketch") {
+        setSelected(id);
+        await commit(insert);
+        return id;
+      }
+      const next = clone(current);
+      insert(next);
+      await openDraft({ feature: id, isNew: true, base: current, doc: next });
       return id;
     },
 
@@ -1534,7 +1634,13 @@ export function createCadStore() {
 
     /** Borra la operación; `false` si otras dependen de ella */
     removeFeature(id: number): boolean {
-      const d = doc();
+      const open = draft();
+      if (open?.feature === id && open.isNew) {
+        void cancelDraft();
+        return true;
+      }
+      if (open) void acceptDraft();
+      const d = committed();
       if (!d) return false;
       if (d.features.some((f) => dependencies(f.kind).includes(id))) return false;
       void commit((n) => {
@@ -1551,7 +1657,8 @@ export function createCadStore() {
 
     /** Mueve la operación una posición; `false` si rompe dependencias */
     moveFeature(id: number, delta: -1 | 1): boolean {
-      const d = doc();
+      if (draft()) void acceptDraft();
+      const d = committed();
       if (!d) return false;
       const i = d.features.findIndex((f) => f.id === id);
       const j = i + delta;
@@ -1568,12 +1675,15 @@ export function createCadStore() {
     },
 
     setRollback(index: number | null) {
+      if (draft()) void acceptDraft();
       return commit((d) => {
         d.rollback = index == null || index >= d.features.length ? null : index;
       });
     },
 
+    /** Con un diálogo abierto, deshacer lo cancela */
     undo() {
+      if (draft()) return void cancelDraft();
       const prev = undoStack.pop();
       if (!prev) return;
       const current = doc();
@@ -1584,6 +1694,7 @@ export function createCadStore() {
     },
 
     redo() {
+      if (draft()) return;
       const next = redoStack.pop();
       if (!next) return;
       const current = doc();
@@ -1669,6 +1780,9 @@ export function createCadStore() {
     exportDesign: (path: string, format: string) => invoke<number>("cad_export", { path, format }),
 
     async importStep(path: string, op: BodyOp = "join") {
+      // El backend cambia el documento y descarta el borrador
+      setDraft(undefined);
+      setSelected(undefined);
       setBusy(true);
       try {
         await apply(await invoke<CadResult>("cad_import_step", { path, op }));
@@ -1683,7 +1797,9 @@ export function createCadStore() {
     scanDetect: () => invoke<Detection[]>("cad_scan_detect", { options: null }),
 
     async scanAdd(feature: ScanFeature) {
-      const before = doc();
+      setDraft(undefined);
+      setSelected(undefined);
+      const before = committed();
       setBusy(true);
       try {
         await apply(await invoke<CadResult>("cad_scan_add", { feature, options: null }));

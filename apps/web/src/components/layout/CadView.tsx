@@ -896,6 +896,12 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else if (e.key === "Escape" && ui.picks().length) {
       ui.clearPicks();
       e.stopPropagation();
+    } else if (store.draft() && (e.key === "Escape" || e.key === "Enter") && !target.closest("button, a, [role=listbox], [role=option], [role=combobox], [role=dialog]")) {
+      // Diálogo de la operación abierta: Enter acepta, Esc cancela (salvo en
+      // un botón o una lista desplegada, que usan esas teclas)
+      void (e.key === "Enter" ? store.acceptDraft() : store.cancelDraft());
+      e.preventDefault();
+      e.stopPropagation();
     }
   };
   onMount(() => window.addEventListener("keydown", onKey, true));

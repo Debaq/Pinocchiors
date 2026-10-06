@@ -34,6 +34,9 @@ pub struct CadCache {
     /// Huella del documento con el que se calculó
     pub doc_hash: u64,
     pub eval: cad_model::Evaluation,
+    /// El recálculo anterior: ir y volver entre el borrador de una operación y
+    /// el documento (cancelar, exportar con el diálogo abierto) no recalcula
+    pub previous: Option<(u64, cad_model::Evaluation)>,
 }
 
 /// Malla del escaneo preparada para elegir zonas (cara a cara con el visor).
@@ -101,13 +104,35 @@ fn require_occt() -> Result<(), String> {
     }
 }
 
-/// Recalcula si el documento cambió desde la última vez.
+/// Recalcula lo que muestra el visor (el borrador abierto, o el documento) si
+/// cambió desde la última vez.
 fn evaluate(state: &AppState) -> Result<CadResult, String> {
+    let preview = state.cad_preview.lock().unwrap().clone();
+    let doc = match preview {
+        Some(d) => d,
+        None => state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?,
+    };
+    evaluate_doc(state, &doc)
+}
+
+/// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
+fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
     let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
-    let hash = doc_hash(&doc);
+    evaluate_doc(state, &doc)
+}
+
+fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
+    let hash = doc_hash(doc);
     let mut cache = state.cad_cache.lock().unwrap();
-    if cache.as_ref().is_none_or(|c| c.doc_hash != hash) {
-        *cache = Some(CadCache { doc_hash: hash, eval: doc.evaluate() });
+    match cache.take() {
+        Some(c) if c.doc_hash == hash => *cache = Some(c),
+        Some(CadCache { doc_hash, eval, previous: Some((h, prev)) }) if h == hash => {
+            *cache = Some(CadCache { doc_hash: h, eval: prev, previous: Some((doc_hash, eval)) });
+        }
+        old => {
+            let previous = old.map(|c| (c.doc_hash, c.eval));
+            *cache = Some(CadCache { doc_hash: hash, eval: doc.evaluate(), previous });
+        }
     }
     let eval = &cache.as_ref().unwrap().eval;
     let mut sketches: Vec<SketchView> = eval
@@ -166,12 +191,14 @@ pub async fn cad_new(app: AppHandle) -> Result<CadResult, String> {
 
 fn new_impl(state: &AppState) -> Result<CadResult, String> {
     *state.cad_document.lock().unwrap() = Some(Document::new());
+    *state.cad_preview.lock().unwrap() = None;
     evaluate(state)
 }
 
 #[tauri::command]
 pub fn cad_close(state: tauri::State<'_, AppState>) {
     *state.cad_document.lock().unwrap() = None;
+    *state.cad_preview.lock().unwrap() = None;
     *state.cad_cache.lock().unwrap() = None;
 }
 
@@ -189,6 +216,20 @@ pub async fn cad_set_document(app: AppHandle, document: Document) -> Result<CadR
 
 fn set_document_impl(state: &AppState, document: Document) -> Result<CadResult, String> {
     *state.cad_document.lock().unwrap() = Some(document);
+    *state.cad_preview.lock().unwrap() = None;
+    evaluate(state)
+}
+
+/// Vista previa de una operación en edición: el visor muestra `document` sin
+/// reemplazar el documento guardado. `None` vuelve al documento (cancelar).
+#[tauri::command]
+pub async fn cad_preview(app: AppHandle, document: Option<Document>) -> Result<CadResult, String> {
+    require_occt()?;
+    in_background(app, move |state| preview_impl(state, document)).await
+}
+
+fn preview_impl(state: &AppState, document: Option<Document>) -> Result<CadResult, String> {
+    *state.cad_preview.lock().unwrap() = document;
     evaluate(state)
 }
 
@@ -328,7 +369,7 @@ fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, Stri
 }
 
 fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
-    evaluate(state)?;
+    evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
     // Más fino que el del visor: es lo que se imprime o se exporta
@@ -362,11 +403,15 @@ fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
 #[tauri::command]
 pub async fn cad_export(app: AppHandle, path: String, format: String) -> Result<u64, String> {
     require_occt()?;
-    in_background(app, move |state| {
-        let p = std::path::Path::new(&path);
-        match format.as_str() {
+    in_background(app, move |state| export_impl(state, &path, &format)).await
+}
+
+fn export_impl(state: &AppState, path: &str, format: &str) -> Result<u64, String> {
+    {
+        let p = std::path::Path::new(path);
+        match format {
             "step" | "stp" => {
-                evaluate(state)?;
+                evaluate_committed(state)?;
                 let cache = state.cad_cache.lock().unwrap();
                 let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
                 let bytes = body.to_step().map_err(|e| e.to_string())?;
@@ -381,8 +426,7 @@ pub async fn cad_export(app: AppHandle, path: String, format: String) -> Result<
             other => return Err(format!("Formato no soportado para el diseño: {other}")),
         }
         Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
-    })
-    .await
+    }
 }
 
 /// Agrega un STEP como operación (unir, restar o intersecar).
@@ -393,6 +437,7 @@ pub async fn cad_import_step(app: AppHandle, path: String, op: Option<BodyOp>) -
         let data = std::fs::read(&path).map_err(|e| format!("No se pudo leer {path}: {e}"))?;
         // Validar antes de meterlo al documento
         cad_model::Shape::from_step(&data).map_err(|e| e.to_string())?;
+        *state.cad_preview.lock().unwrap() = None;
         let mut lock = state.cad_document.lock().unwrap();
         let doc = lock.get_or_insert_with(Document::new);
         let id = doc.add(FeatureKind::Import { format: ImportFormat::Step, data, op: op.unwrap_or_default() });
@@ -602,6 +647,7 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                 }
             })
         })?;
+        *state.cad_preview.lock().unwrap() = None;
         let mut lock = state.cad_document.lock().unwrap();
         let doc = lock.get_or_insert_with(Document::new);
         let mut last_sketch = None;
@@ -671,11 +717,13 @@ pub mod bridge {
             "cad_new" => ok(new_impl(state)?),
             "cad_close" => {
                 *state.cad_document.lock().unwrap() = None;
+                *state.cad_preview.lock().unwrap() = None;
                 *state.cad_cache.lock().unwrap() = None;
                 ok(())
             }
             "cad_get_document" => ok(state.cad_document.lock().unwrap().clone()),
             "cad_set_document" => ok(set_document_impl(state, arg(args, "document")?)?),
+            "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
@@ -683,6 +731,10 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
+            "cad_export" => {
+                let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
+                ok(export_impl(state, &path, &format)?)
+            }
             "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {
                 let kind: String = arg(args, "kind")?;
@@ -712,7 +764,7 @@ mod tests {
     fn box_doc() -> Document {
         let mut doc = Document::new();
         doc.add(FeatureKind::Primitive(cad_model::Primitive {
-            shape: cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 30.0 },
+            shape: cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 30.0, centered: false },
             origin: [0.0; 3],
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
@@ -737,6 +789,36 @@ mod tests {
         // Sin cambios: misma versión (caché)
         assert_eq!(evaluate(&state).unwrap().version, v);
         assert!(errors_text(&evaluate(&state).unwrap(), &box_doc()).is_empty());
+    }
+
+    #[test]
+    fn preview_leaves_document_alone() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(box_doc());
+        let base = evaluate(&state).unwrap();
+        // Borrador con la caja más alta
+        let mut draft = box_doc();
+        if let FeatureKind::Primitive(p) = &mut draft.features[0].kind {
+            p.shape = cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 60.0, centered: false };
+        }
+        let r = preview_impl(&state, Some(draft)).unwrap();
+        assert!((r.body.unwrap().volume - 12000.0).abs() < 1e-6);
+        assert_eq!(state.cad_document.lock().unwrap().as_ref(), Some(&box_doc()));
+        // Exportar usa el documento, no el borrador
+        let scene = body_scene(&state, "Diseño").unwrap();
+        let max_y = scene.world_primitives()[0].positions.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        assert!((max_y - 30.0).abs() < 1e-4);
+        // Cancelar vuelve al recálculo anterior
+        let back = preview_impl(&state, None).unwrap();
+        assert_eq!(back.version, base.version);
+        assert!((back.body.unwrap().volume - 6000.0).abs() < 1e-6);
+        // Guardar un documento descarta el borrador
+        preview_impl(&state, Some(Document::new())).unwrap();
+        set_document_impl(&state, box_doc()).unwrap();
+        assert!(state.cad_preview.lock().unwrap().is_none());
     }
 
     #[test]

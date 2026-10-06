@@ -2,10 +2,12 @@ import { Component, For, Show } from "solid-js";
 import { Button, Checkbox, Select, Slider } from "../ui";
 import * as Icons from "../icons";
 
-export type ExportFormat = "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
+export type ExportFormat = "step" | "glb" | "gltf" | "obj" | "stl" | "3mf" | "ply" | "usdz" | "bvh" | "json";
 
 /** Formatos que llevan el esqueleto sin modelo */
 export const SKELETON_FORMATS: ExportFormat[] = ["glb", "gltf", "bvh"];
+/** Formatos del sólido de Diseñar */
+export const DESIGN_FORMATS: ExportFormat[] = ["step", "stl", "3mf", "obj", "ply", "glb"];
 export type WebPreset = "none" | "balanced" | "light" | "custom";
 
 export interface ExportOptions {
@@ -67,6 +69,7 @@ interface FormatEntry {
 }
 
 const FORMATS: FormatEntry[] = [
+  { id: "step", name: "STEP", hint: "Sólido exacto para otros programas de CAD (FreeCAD, Onshape, Fusion, SolidWorks)." },
   { id: "glb", name: "GLB", hint: "Web, juegos y AR. Un solo archivo con texturas, rig y animaciones." },
   { id: "gltf", name: "glTF", hint: "Como GLB, pero en JSON + .bin separados: fácil de inspeccionar." },
   { id: "usdz", name: "USDZ", hint: "AR en iPhone/iPad (Quick Look). Conserva el rig." },
@@ -107,6 +110,8 @@ export interface ExportStepProps {
   canExport?: boolean;
   /** No hay modelo: se exporta el esqueleto solo con sus animaciones */
   skeletonOnly?: boolean;
+  /** Se exporta el sólido de Diseñar */
+  design?: boolean;
   hasSkeleton?: boolean;
   /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
   boneShapes?: boolean;
@@ -136,15 +141,20 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
     else set({ preset: preset as WebPreset, ...PRESETS[preset as Exclude<WebPreset, "custom">] });
   };
   const formatDisabled = (id: ExportFormat) =>
-    (id === "json" && !props.autorigComplete) ||
-    (id === "bvh" && !props.hasSkeleton) ||
-    (props.skeletonOnly === true && !SKELETON_FORMATS.includes(id));
+    props.design
+      ? !DESIGN_FORMATS.includes(id)
+      : id === "step" ||
+        (id === "json" && !props.autorigComplete) ||
+        (id === "bvh" && !props.hasSkeleton) ||
+        (props.skeletonOnly === true && !SKELETON_FORMATS.includes(id));
+  // Del modelo de la app (no del diseño)
+  const model = () => !props.design;
   const current = () => FORMATS.find((f) => f.id === opts().format) ?? FORMATS[0];
   const keepsRig = () => ["glb", "gltf", "usdz"].includes(opts().format);
 
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">{props.skeletonOnly ? "Exportar esqueleto" : "Exportar Modelo"}</h3>
+      <h3 class="text-sm font-semibold text-text">{props.design ? "Exportar diseño" : props.skeletonOnly ? "Exportar esqueleto" : "Exportar Modelo"}</h3>
 
       {/* Formato */}
       <div class="space-y-2">
@@ -170,8 +180,15 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
         <p class="text-[10px] text-text-dim leading-relaxed">{current().hint}</p>
       </div>
 
+      <Show when={props.design}>
+        <p class="text-[10px] text-text-dim leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
+          Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales); los demás
+          formatos, como una malla fina.
+        </p>
+      </Show>
+
       {/* Esqueleto solo */}
-      <Show when={props.skeletonOnly && opts().format !== "bvh"}>
+      <Show when={model() && props.skeletonOnly && opts().format !== "bvh"}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Checkbox
             label="Figura visible de los huesos"
@@ -192,7 +209,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       </Show>
 
       {/* Contenido */}
-      <Show when={!props.skeletonOnly && opts().format !== "json" && opts().format !== "bvh"}>
+      <Show when={model() && !props.skeletonOnly && opts().format !== "json" && opts().format !== "bvh"}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Checkbox
             label="Incluir esqueleto y pesos"
@@ -223,7 +240,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       </Show>
 
       {/* Optimización web */}
-      <Show when={isGltf(opts().format) && !props.skeletonOnly}>
+      <Show when={model() && isGltf(opts().format) && !props.skeletonOnly}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
           <Select
             label="Optimización web"

@@ -134,8 +134,8 @@ const Row: Component<{ label: string; children: JSX.Element }> = (props) => (
   </div>
 );
 
-const Section: Component<{ title: string; children: JSX.Element; right?: JSX.Element }> = (props) => (
-  <div class="space-y-2">
+const Section: Component<{ title: string; children: JSX.Element; right?: JSX.Element; class?: string }> = (props) => (
+  <div class={clsx("space-y-2", props.class)}>
     <div class="flex items-center justify-between">
       <h4 class="text-[11px] font-semibold uppercase tracking-wide text-text-dim">{props.title}</h4>
       {props.right}
@@ -501,10 +501,6 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 )}
               </Show>
 
-              <ParametersSection store={store} />
-
-              <FeatureTree store={store} ui={ui} />
-
               <Show when={selectedFeature()}>
                 {(f) => (
                   <FeatureEditor
@@ -518,6 +514,11 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                   />
                 )}
               </Show>
+
+              <ParametersSection store={store} />
+
+              <FeatureTree store={store} ui={ui} />
+
 
               <Show when={props.hasModel}>
                 <Section title="Desde el escaneo">
@@ -657,7 +658,7 @@ const AddSection: Component<{
           <B label="Revolución" onClick={props.onRevolve} title="Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" />
         </div>
         <div class="grid grid-cols-3 gap-1.5">
-          <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20 })} />
+          <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true })} />
           <B label="Cilindro" onClick={() => props.onPrimitive({ type: "cylinder", radius: 10, height: 20 })} />
           <B label="Esfera" onClick={() => props.onPrimitive({ type: "sphere", radius: 10 })} />
           <B label="Cono" onClick={() => props.onPrimitive({ type: "cone", r1: 10, r2: 0, height: 20 })} />
@@ -775,7 +776,7 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           <For each={doc()?.features ?? []}>
             {(f, i) => {
               const state = () => store.stateOf(f.id);
-              const rolled = () => rollback() !== null && i() >= rollback()!;
+              const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
               return (
                 <>
                   <div
@@ -785,7 +786,7 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                       (f.suppressed || rolled()) && "opacity-50",
                     )}
                     onClick={() => store.select(store.selected() === f.id ? undefined : f.id)}
-                    onDblClick={() => f.kind.type === "sketch" && props.ui.editSketch(f.id)}
+                    onDblClick={() => f.kind.type === "sketch" && void store.settled().then(() => props.ui.editSketch(f.id))}
                     title={state()?.state === "error" ? (state() as { message: string }).message : undefined}
                   >
                     <Show
@@ -908,9 +909,33 @@ const FeatureEditor: Component<{
     />
   );
   const opSelect = (value: BodyOp, set: (o: BodyOp) => void) => <Select options={OP_OPTIONS} value={value} onChange={(v) => set(v as BodyOp)} />;
+  // Diálogo abierto: los cambios se ven en el visor y quedan al aceptar
+  const open = () => props.store.draft()?.feature === f().id;
 
   return (
-    <Section title={FEATURE_LABELS[f().kind.type]}>
+    <Section
+      title={FEATURE_LABELS[f().kind.type]}
+      class={clsx(open() && "rounded-md border border-accent/50 bg-accent/5 p-2")}
+      right={
+        <Show when={open()}>
+          <div class="flex items-center gap-1">
+            <Show when={props.store.busy()}>
+              <span class="text-[11px] text-text-dim">Calculando…</span>
+            </Show>
+            <Tooltip content="Aceptar (Enter)">
+              <IconButton aria-label="Aceptar" size="sm" variant="primary" onClick={() => void props.store.acceptDraft()}>
+                <Icons.Check size={12} />
+              </IconButton>
+            </Tooltip>
+            <Tooltip content="Cancelar (Esc)">
+              <IconButton aria-label="Cancelar" size="sm" onClick={() => void props.store.cancelDraft()}>
+                <Icons.X size={12} />
+              </IconButton>
+            </Tooltip>
+          </div>
+        </Show>
+      }
+    >
       <div class="space-y-2">
         <input
           class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"

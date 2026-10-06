@@ -8,6 +8,7 @@
 // Capturas en $E2E_OUT (por defecto /tmp/pinocchio-e2e). Cada escenario
 // verifica volúmenes contra el valor teórico.
 
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { launch, sleep } from "./cdp.mjs";
 
 const URL = "http://localhost:5173/e2e/cad-harness.html";
@@ -39,6 +40,20 @@ async function sketchOn(b) {
   await b.click(x, y, { wait: 1500 });
 }
 const body = async () => (await evaluate()).body;
+/** Acepta el diálogo de la operación recién creada (✓) */
+async function accept(b, wait = 1500) {
+  await b.eval(`document.querySelector('[aria-label="Aceptar"]')?.click()`);
+  await sleep(wait);
+}
+/** Clic en una fila del árbol de operaciones por su nombre */
+async function clickRow(b, name) {
+  const r = await b.eval(`(() => {
+    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null);
+    if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];
+  })()`);
+  if (!r) throw new Error("no encontré la operación " + name);
+  await b.click(r[0], r[1], { wait: 1200 });
+}
 const sketchText = (b, re) => b.eval(`(document.body.innerText.match(${re}) ?? [""])[0]`);
 const setInput = (b, labelStart, value) =>
   b.eval(`(() => {
@@ -54,6 +69,7 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(1500);
+    await accept(b);
     await sketchOn(b);
     await b.clickText("Rectángulo");
     await b.click(400, 300);
@@ -63,6 +79,7 @@ const scenarios = {
     await sleep(1500);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     const r = await evaluate();
     if (r.status.some((s) => s.state !== "ok")) throw new Error(JSON.stringify(r.status));
     if (!r.body.valid) throw new Error("sólido inválido");
@@ -72,9 +89,10 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(2000);
+    await accept(b);
     await b.clickText("Redondeo");
     await sleep(400);
-    for (const p of [[10, 0, 20], [20, 10, 20]]) {
+    for (const p of [[0, -10, 20], [10, 0, 20]]) {
       const [x, y] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
       await b.click(x, y, { wait: 800 });
     }
@@ -86,6 +104,76 @@ const scenarios = {
     await setInput(b, "Radio", 3);
     await sleep(2000);
     if ((await body()).faces !== 8) throw new Error("caras tras r=3");
+  },
+
+  async "diálogo de operación: cancelar y aceptar"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const base = await call("cad_get_document");
+    const dz = () => call("cad_get_document").then((d) => d.features[0].kind.shape.dz);
+    // Tres cambios con vista previa y cancelar: el documento no cambia
+    await clickRow(b, "Caja 1");
+    for (const h of [30, 40, 50]) {
+      await setInput(b, "Alto (Z)", h);
+      await sleep(1000);
+    }
+    near((await body()).volume, 20 * 20 * 50, 1e-6, "vista previa");
+    if ((await dz()) !== 20) throw new Error("la vista previa cambió el documento");
+    await b.key("Escape", "Escape", 27);
+    await sleep(1200);
+    near((await body()).volume, 8000, 1e-6, "cancelar");
+    if (JSON.stringify(await call("cad_get_document")) !== JSON.stringify(base)) throw new Error("cancelar no volvió al documento");
+    // Dos cambios y aceptar con Enter: un solo paso de deshacer
+    await clickRow(b, "Caja 1");
+    await setInput(b, "Alto (Z)", 25);
+    await sleep(1000);
+    await setInput(b, "Alto (Z)", 40);
+    await sleep(1000);
+    await b.eval(`document.activeElement?.blur()`);
+    await b.key("Enter", "Enter", 13);
+    await sleep(1500);
+    if ((await dz()) !== 40) throw new Error("aceptar no guardó");
+    near((await body()).volume, 16000, 1e-6, "aceptado");
+    await b.clickText("Deshacer");
+    await sleep(1500);
+    if ((await dz()) !== 20) throw new Error("deshacer no volvió en un paso");
+    // Operación nueva cancelada: no queda en el árbol
+    await b.clickText("Cilindro");
+    await sleep(1500);
+    await b.eval(`document.querySelector('[aria-label="Cancelar"]').click()`);
+    await sleep(1200);
+    if ((await call("cad_get_document")).features.length !== 1) throw new Error("el cilindro cancelado quedó");
+    if (await b.eval(`[...document.querySelectorAll("span")].some((s) => s.textContent === "Cilindro 1")`)) throw new Error("el cilindro sigue en el árbol");
+  },
+
+  async "caja centrada y exportar el diseño"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    let r = await body();
+    near(r.bbox_min[0], -10, 1e-6, "caja centrada en X");
+    near(r.bbox_min[1], -10, 1e-6, "caja centrada en Y");
+    near(r.bbox_min[2], 0, 1e-6, "base en el origen");
+    await accept(b);
+    // Exportar del encabezado: con un diseño y sin modelo, exporta el sólido
+    await b.clickContains("Exportar");
+    await sleep(800);
+    if (!(await b.eval(`document.body.innerText.includes("Exportar diseño")`))) throw new Error("no abrió la exportación del diseño");
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    for (const [fmt, label] of [["step", "Exportar STEP"], ["stl", "Exportar STL"]]) {
+      await b.clickText(fmt.toUpperCase());
+      const path = `${out}/caja.${fmt}`;
+      rmSync(path, { force: true });
+      await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+      await b.clickText(label);
+      await sleep(2000);
+      if (!existsSync(path)) throw new Error(`no se escribió ${path}`);
+      const head = readFileSync(path).subarray(0, 80).toString("latin1");
+      if (fmt === "step" && !head.startsWith("ISO-10303-21")) throw new Error(`STEP raro: ${head}`);
+      if (fmt === "stl" && statSync(path).size !== 84 + 12 * 50) throw new Error(`STL de ${statSync(path).size} bytes`);
+    }
   },
 
   async "triángulo cerrado con clics y agujero"(b) {
@@ -107,6 +195,7 @@ const scenarios = {
     await sleep(1200);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     if ((await body()).faces !== 6) throw new Error("placa triangular con agujero");
   },
 
@@ -114,13 +203,14 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(2000);
+    await accept(b);
     await b.clickText("Sketch");
     await sleep(300);
-    let [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 20])`);
+    let [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`);
     await b.click(x, y, { wait: 2500 });
     await b.clickText("Círculo");
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 20])`);
-    const [x2, y2] = await b.eval(`window.__cadViewer.screenOf([15, 10, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`);
+    const [x2, y2] = await b.eval(`window.__cadViewer.screenOf([5, 0, 20])`);
     await b.click(x, y);
     await b.click(x2, y2);
     await sleep(800);
@@ -128,6 +218,7 @@ const scenarios = {
     await sleep(1500);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     const doc = await call("cad_get_document");
     const ext = doc.features.find((f) => f.kind.type === "extrude");
     ext.kind.op = "cut";
@@ -140,18 +231,19 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(2000);
+    await accept(b);
     await b.clickText("Sketch");
     await sleep(300);
-    let [x, y] = await b.eval(`window.__cadViewer.screenOf([7, 7, 20])`);
+    let [x, y] = await b.eval(`window.__cadViewer.screenOf([-3, -3, 20])`);
     await b.click(x, y, { wait: 2500 });
     await b.clickText("Línea");
     const glyph = () => b.eval(`document.querySelector("[data-snap]")?.dataset.snap`);
     // Cerca de la esquina de la cara: vértice del sólido
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([20, 20, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 20])`);
     await b.click(x - 3, y + 2);
     if ((await glyph()) !== "solid_vertex") throw new Error(`glifo en la esquina: ${await glyph()}`);
     // Cerca del medio de la arista de adelante
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 0, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, -10, 20])`);
     await b.mouse("mouseMoved", x + 3, y - 2, { buttons: 0 });
     await sleep(200);
     if ((await glyph()) !== "solid_midpoint") throw new Error(`glifo en el medio: ${await glyph()}`);
@@ -217,6 +309,7 @@ const scenarios = {
     await sleep(1500);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     const r = await body();
     const [w, h] = [r.bbox_max[0] - r.bbox_min[0], r.bbox_max[1] - r.bbox_min[1]];
     near(r.volume, w * h * 10 - (100 - (Math.PI * 100) / 4) * 10, 0.01, "volumen con esquina redondeada");
@@ -253,13 +346,15 @@ const scenarios = {
 
   async "parámetros y fórmulas"(b) {
     await begin(b);
+    // La caja queda con su diálogo abierto: parámetros y campos van al borrador
     await b.clickText("Caja");
     await sleep(1500);
     // Parámetro nuevo (p1 = 10) renombrado a "ancho" y puesto en 30
-    await b.click(...(await b.eval(`(() => { const r = document.querySelector('[aria-label="Agregar parámetro"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`)), { wait: 1200 });
+    await b.click(...(await b.eval(`(() => { const e = document.querySelector('[aria-label="Agregar parámetro"]'); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`)), { wait: 1200 });
     const setParam = (nth, value) =>
       b.eval(`(() => {
-        const row = [...document.querySelectorAll("input")].filter((i) => i.value === "p1" || i.value === "ancho")[0].parentElement;
+        // La fila del parámetro (nombre = expresión), no el campo de la caja con la fórmula
+        const row = [...document.querySelectorAll("input")].filter((i) => (i.value === "p1" || i.value === "ancho") && i.nextElementSibling?.textContent === "=")[0].parentElement;
         const i = row.querySelectorAll("input")[${nth}];
         i.value = ${JSON.stringify(value)};
         i.dispatchEvent(new Event("change", { bubbles: true }));
@@ -379,6 +474,7 @@ const scenarios = {
     await begin(b);
     await b.clickText("Caja");
     await sleep(1500);
+    await accept(b);
     // Dos círculos en la planta, fuera de la caja
     await sketchOn(b);
     await b.clickText("Círculo");
@@ -395,9 +491,10 @@ const scenarios = {
     if (summary !== "Elegido: 1 región") throw new Error(`selección: ${summary}`);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     near((await body()).volume, 8000 + Math.PI * 25 * 10, 0.5, "solo la región elegida");
     // Cara superior de la caja elegida → sketch sobre ella
-    await b.click(...(await at([10, 10, 20])), { wait: 600 });
+    await b.click(...(await at([0, 0, 20])), { wait: 600 });
     await b.clickText("Sketch");
     await sleep(1500);
     const planes = (await evaluate()).sketches.map((v) => v.plane.origin[2]);
@@ -407,7 +504,7 @@ const scenarios = {
     // Arista superior frontal elegida → redondeo directo
     await b.key("Escape", "Escape", 27);
     const faces = (await body()).faces;
-    await b.click(...(await at([10, 0, 20])), { wait: 600 });
+    await b.click(...(await at([0, -10, 20])), { wait: 600 });
     await b.clickText("Redondeo");
     await sleep(2000);
     if ((await body()).faces !== faces + 1) throw new Error("el redondeo no tomó la arista elegida");
@@ -756,6 +853,7 @@ const scenarios = {
     await sleep(1200);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     const doc = await call("cad_get_document");
     const [ra, rb] = doc.features[0].kind.sketch.constraints.filter((c) => c.type === "distance").map((c) => c.value);
     const h = doc.features[1].kind.extent.distance;
@@ -787,6 +885,7 @@ const scenarios = {
     await sleep(1200);
     await b.clickText("Extrusión");
     await sleep(2000);
+    await accept(b);
     const v0 = (await body()).volume;
     const doc = await call("cad_get_document");
     const sk = doc.features[0].kind.sketch;
@@ -823,6 +922,7 @@ const scenarios = {
     await sleep(1500);
     await b.clickText("Extrusión");
     await sleep(3000);
+    await accept(b);
     const r = await body();
     if (!r.valid) throw new Error("sólido inválido");
     const w = r.bbox_max[0] - r.bbox_min[0];

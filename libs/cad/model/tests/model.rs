@@ -289,7 +289,7 @@ fn shell_split_and_linear_pattern() {
     }
     let mut doc = Document::new();
     doc.add(FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 10.0 },
+        shape: PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 10.0, centered: false },
         origin: [0.0; 3],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -312,7 +312,7 @@ fn shell_split_and_linear_pattern() {
 
     let mut doc = Document::new();
     let pin = doc.add(FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 1.0, dy: 1.0, dz: 1.0 },
+        shape: PrimitiveShape::Box { dx: 1.0, dy: 1.0, dz: 1.0, centered: false },
         origin: [0.0; 3],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -339,7 +339,7 @@ fn errors_stay_local_rollback_and_suppress() {
         radius: 50.0,
     });
     let cut = doc.add(FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 30.0 },
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 30.0, centered: false },
         origin: [0.0, 0.0, -10.0],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -420,7 +420,7 @@ fn cut_on_face_points_into_material() {
     }
     let mut doc = Document::new();
     doc.add(FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 20.0 },
+        shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 20.0, centered: false },
         origin: [0.0; 3],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -838,4 +838,29 @@ fn spline_handles_set_end_tangents() {
     };
     let (free, held) = (vol(build(false)), vol(build(true)));
     assert!(held > free * 1.05, "{free} → {held}");
+}
+
+#[test]
+fn centered_box() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    // Eje Y: la base queda en el plano XZ, centrada en X y Z
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 10.0, centered: true },
+        origin: [0.0; 3],
+        z: [0.0, 1.0, 0.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    let ev = doc.evaluate();
+    assert_all_ok(&ev);
+    let m = ev.body.as_ref().unwrap().mass().unwrap();
+    for (a, b) in m.bbox_min.iter().zip([-20.0, 0.0, -10.0]).chain(m.bbox_max.iter().zip([20.0, 10.0, 10.0])) {
+        assert_relative_eq!(*a, b, epsilon = 1e-6);
+    }
+    // Sin el campo (documentos viejos): desde la esquina
+    let old: PrimitiveShape = serde_json::from_str(r#"{"type":"box","dx":1,"dy":2,"dz":3}"#).unwrap();
+    assert_eq!(old, PrimitiveShape::Box { dx: 1.0, dy: 2.0, dz: 3.0, centered: false });
 }

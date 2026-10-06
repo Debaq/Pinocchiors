@@ -243,7 +243,7 @@ import {
 import type { SkeletonTransform } from "./components/panels/SkeletonTransformPanel";
 import type { MeshDiagnostics, RepairResult, RepairAnalysisConfig, RepairOptions } from "./components/panels/RepairPanel";
 import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from "./components/panels/Print3DPanel";
-import { SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
+import { DESIGN_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
@@ -396,6 +396,22 @@ export const App: Component = () => {
   const cadUi = createCadUi(cad);
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
+  // Salir de Diseñar con el diálogo de una operación abierto lo acepta (si no, quedaría oculto)
+  createEffect(() => {
+    if (!inDesign() && cad.draft()) void cad.acceptDraft();
+  });
+  /** El sólido del diseño, si hay */
+  const hasDesignBody = () => !!cad.committed() && !!cad.result()?.body;
+  // Exportar desde Diseñar (o sin modelo) exporta el sólido del diseño
+  const [exportDesign, setExportDesign] = createSignal(false);
+  const openExport = () => {
+    const design = hasDesignBody() && (inDesign() || !hasWork());
+    setExportDesign(design);
+    if (design && !DESIGN_FORMATS.includes(exportOptions().format)) setExportOptions({ ...exportOptions(), format: "step" });
+    pipeline.setActiveStep("export");
+  };
+  /** Visor del diseño: en Diseñar y mientras se exporta el diseño */
+  const showCad = () => inDesign() || (exportDesign() && pipeline.activeStep() === "export");
 
   // History (undo/redo)
   // Pasos del historial como datos (se guardan en el proyecto); cada tipo
@@ -4002,6 +4018,31 @@ export const App: Component = () => {
     return out;
   };
 
+  /** Exporta el sólido del diseño (STEP exacto o malla) */
+  const handleExportDesign = async () => {
+    try {
+      const format = exportOptions().format;
+      const extensions = format === "step" ? ["step", "stp"] : [format];
+      const name = format.toUpperCase();
+      const selected = await save({
+        title: `Exportar ${name}`,
+        defaultPath: `${(fileName() ?? "diseño").replace(/\.[^.]+$/, "")}.${extensions[0]}`,
+        filters: [{ name, extensions }],
+      });
+      if (!selected) return;
+      const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${extensions[0]}`;
+      const file = path.split("/").pop();
+      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format));
+      setLastExport({ bytes, files: [path] });
+      setStatusMessage(`Diseño exportado: ${file} (${formatBytes(bytes)})`);
+      pipeline.markCompleted("export");
+    } catch (e) {
+      console.error("Export error:", e);
+      setStatusMessage(`Error: ${e}`);
+      setProgress(undefined);
+    }
+  };
+
   const handleExport = async () => {
     try {
       const formats = supportedFormats();
@@ -5586,7 +5627,7 @@ export const App: Component = () => {
     { label: "Importar modelo…", shortcut: "Ctrl+I", onSelect: () => handleLoad() },
     { label: "Importar animación (BVH)…", disabled: !skeletonData(), onSelect: () => void handleImportBvh() },
     { label: "Capturar movimiento de un video…", disabled: !skeletonData(), onSelect: handleCapture },
-    { label: "Exportar…", disabled: !hasWork(), onSelect: () => pipeline.setActiveStep("export") },
+    { label: "Exportar…", disabled: !hasWork() && !hasDesignBody(), onSelect: openExport },
     { label: "Volver al modelo original…", disabled: !meshLoaded(), onSelect: () => handleRevertToOriginal() },
     { separator: true },
     { label: "Configuración…", onSelect: () => setSettingsOpen(true) },
@@ -5716,9 +5757,9 @@ export const App: Component = () => {
           workspace={pipeline.workspace()?.id}
           onWorkspace={pipeline.openWorkspace}
           exporting={pipeline.activeStep() === "export"}
-          onExport={() => pipeline.setActiveStep("export")}
+          onExport={openExport}
           hasModel={meshLoaded()}
-          canExport={hasWork()}
+          canExport={hasWork() || hasDesignBody()}
         />
 
         {/* Main Content */}
@@ -5849,12 +5890,12 @@ export const App: Component = () => {
             />
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
-            <Show when={inDesign()}>
+            <Show when={showCad()}>
               <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() ? meshData() : null} />
             </Show>
 
             {/* Welcome Screen overlay */}
-            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !inDesign()}>
+            <Show when={!hasWork() && pipeline.activeStep() !== "scan" && pipeline.workspace()?.id !== "rig" && !showCad()}>
               <WelcomeScreen
                 onOpen={() => handleLoad({ projects: true })}
                 onScan={() => openScanEditor("capture")}
@@ -6179,8 +6220,9 @@ export const App: Component = () => {
             }}
             exportProps={{
 
-              onExport: handleExport,
-              canExport: hasWork(),
+              onExport: () => void (exportDesign() ? handleExportDesign() : handleExport()),
+              canExport: exportDesign() ? hasDesignBody() : hasWork(),
+              design: exportDesign(),
               skeletonOnly: !meshLoaded(),
               hasSkeleton: !!skeletonData(),
               boneShapes: exportBoneShapes(),

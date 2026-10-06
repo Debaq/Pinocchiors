@@ -81,7 +81,10 @@ nuevo.
 ## Fases
 
 1. **Borrador y ✓/✗** para las operaciones existentes, con vista previa por evaluación de la
-   copia. Un paso de deshacer por operación.
+   copia. Un paso de deshacer por operación. *Hecha el 2026-10-05: el borrador vive en el store
+   (`Draft`); el backend lo recibe con `cad_preview` y lo evalúa sin tocar el documento guardado
+   (ni el `.pinocchio`); la vista previa se calcula hasta la operación en edición. Los sketches
+   siguen entrando directo (tienen su propia edición).*
 2. **Cajas de selección** en el diálogo (regiones, caras, aristas, sketch).
 3. **Herramienta transparente** (verde/roja) en la vista previa.
 4. **Referencias rotas**: reporte por referencia, marcado y reemplazo.

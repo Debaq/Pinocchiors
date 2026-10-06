@@ -288,3 +288,16 @@ cargo test -p cad-model
   a menos de 3° (sin aviso). La barra del sketch pasa a íconos propios (`icons/sketch.tsx`,
   trazo fino, puntos de clic rellenos, auxiliar punteado) en tres grupos (elegir · dibujar ·
   modificar); el nombre va en el tooltip y en un texto solo para lectores de pantalla.
+- **2026-10-05 Diálogo de operación con vista previa** ([PLAN_EDICION.md](PLAN_EDICION.md),
+  fase 1): crear o elegir una operación abre su diálogo (✓ / ✗, Enter / Esc). Mientras está
+  abierto, `commit` cambia un borrador (`Draft` en `cad.ts`, `store.doc()` lo devuelve) y se
+  manda con `cad_preview`, que el backend guarda aparte (`AppState::cad_preview`) y evalúa
+  hasta la operación en edición, como Onshape; lo de abajo se ve atenuado. Aceptar deja un solo
+  paso de deshacer; cancelar vuelve atrás y una operación nueva cancelada desaparece. Exportar y
+  pasar a modelo usan el documento guardado (`evaluate_committed`). La caché guarda el recálculo
+  anterior: cancelar o aceptar sin cambios no recalcula. Salir de Diseñar acepta el diálogo.
+- **2026-10-05 Caja centrada y exportar desde el encabezado** (pedido del usuario): las cajas
+  nuevas llevan `centered` (centradas en X e Y, base en Z = 0; las de documentos viejos siguen
+  desde la esquina). El botón Exportar del encabezado se habilita con un diseño y, abierto desde
+  Diseñar o sin modelo, exporta el sólido (STEP, STL, 3MF, OBJ, PLY, GLB) con el visor del
+  diseño a la vista; `cad_export` también en el puente HTTP para el e2e.

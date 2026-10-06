@@ -509,6 +509,7 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
     *state.cad_document.lock().unwrap() = p.cad;
+    *state.cad_preview.lock().unwrap() = None;
     *state.cad_cache.lock().unwrap() = None;
     *state.cad_scan.lock().unwrap() = None;
     Ok(())

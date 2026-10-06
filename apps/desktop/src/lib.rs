@@ -145,6 +145,7 @@ pub fn run() {
             cad::cad_close,
             cad::cad_get_document,
             cad::cad_set_document,
+            cad::cad_preview,
             cad::cad_evaluate,
             cad::cad_solve_sketch,
             cad::cad_eval_expr,

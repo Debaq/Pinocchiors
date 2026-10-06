@@ -162,6 +162,9 @@ pub struct AppState {
     // ── CAD ──
     /// Diseño paramétrico abierto (se guarda en el proyecto)
     pub cad_document: Mutex<Option<cad_model::Document>>,
+    /// Borrador de una operación abierta en su diálogo: el visor muestra este
+    /// documento hasta que se acepta o se cancela (no se guarda)
+    pub cad_preview: Mutex<Option<cad_model::Document>>,
     /// Último recálculo del diseño
     pub cad_cache: Mutex<Option<crate::cad::CadCache>>,
     /// Modelo preparado para escaneo → CAD
@@ -200,6 +203,7 @@ impl AppState {
             scene_edits: Mutex::new(Vec::new()),
             undo_snapshots: Mutex::new(Default::default()),
             cad_document: Mutex::new(None),
+            cad_preview: Mutex::new(None),
             cad_cache: Mutex::new(None),
             cad_scan: Mutex::new(None),
         }
@@ -223,6 +227,7 @@ impl AppState {
         self.reset_derived();
         *self.undo_snapshots.lock().unwrap() = Default::default();
         *self.cad_document.lock().unwrap() = None;
+        *self.cad_preview.lock().unwrap() = None;
         *self.cad_cache.lock().unwrap() = None;
         *self.cad_scan.lock().unwrap() = None;
     }

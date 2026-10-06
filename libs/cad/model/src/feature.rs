@@ -129,7 +129,15 @@ pub struct Revolve {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PrimitiveShape {
-    Box { dx: f64, dy: f64, dz: f64 },
+    /// `centered`: centrada en el origen en X e Y (la base sigue en el origen
+    /// en Z, como el cilindro); los documentos viejos la tienen en una esquina.
+    Box {
+        dx: f64,
+        dy: f64,
+        dz: f64,
+        #[serde(default)]
+        centered: bool,
+    },
     Cylinder { radius: f64, height: f64 },
     Cone { r1: f64, r2: f64, height: f64 },
     Sphere { radius: f64 },

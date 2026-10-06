@@ -362,7 +362,10 @@ impl Ctx<'_> {
             FeatureKind::Primitive(p) => {
                 let frame = Frame { origin: p.origin, z: p.z, x: p.x };
                 let tool = match p.shape {
-                    PrimitiveShape::Box { dx, dy, dz } => Shape::make_box(frame, dx, dy, dz),
+                    PrimitiveShape::Box { dx, dy, dz, centered } => {
+                        let frame = if centered { box_centered(frame, dx, dy) } else { frame };
+                        Shape::make_box(frame, dx, dy, dz)
+                    }
                     PrimitiveShape::Cylinder { radius, height } => Shape::cylinder(frame, radius, height),
                     PrimitiveShape::Cone { r1, r2, height } => Shape::cone(frame, r1, r2, height),
                     PrimitiveShape::Sphere { radius } => Shape::sphere(p.origin, radius),
@@ -707,6 +710,15 @@ fn entity_midpoint(s: &Sketch, id: u32) -> Option<P2> {
         Geometry::Point { point } => p(*point)?,
         Geometry::Ellipse { major, .. } => p(*major)?,
     })
+}
+
+/// Marco de una caja centrada en X e Y: la esquina queda en −dx/2, −dy/2.
+fn box_centered(f: Frame, dx: f64, dy: f64) -> Frame {
+    let z = normalize(f.z);
+    let x = normalize(sub(f.x, scale(z, dot(f.x, z))));
+    let y = cross(z, x);
+    let origin = sub(sub(f.origin, scale(x, dx / 2.0)), scale(y, dy / 2.0));
+    Frame { origin, ..f }
 }
 
 /// Origen de las caras de una primitiva según su posición en el marco propio.
