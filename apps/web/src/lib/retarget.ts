@@ -15,7 +15,7 @@
  */
 
 import * as THREE from "three";
-import type { AnimationClip, BoneTrack, Key, Quat, Vec3 } from "./animation";
+import type { AnimationClip, BoneTrack, Key, Pose, Quat, Vec3 } from "./animation";
 import { slerp } from "./animation";
 import { Fk, rotationBetween, rotationBetweenFrames } from "./ik";
 import { analyzeBody, type Body, type SkeletonBone } from "./presetAnimations";
@@ -237,69 +237,83 @@ export interface RetargetOptions {
 }
 
 /**
- * Clip del modelo que reproduce `motion` con el mapeo `map`. Una key por
- * cuadro, reducida después (se ve igual con menos keys).
+ * Pose del modelo para un cuadro del origen. Se arma una vez por esqueleto y
+ * mapeo (ejes, escala, qué hijos dan la dirección de cada articulación) y se
+ * usa cuadro a cuadro: para hornear un clip o para seguir al actor en vivo.
  */
-export function retargetClip(target: SkeletonBone[], motion: SourceMotion, map: RetargetMap, options: RetargetOptions = {}): AnimationClip {
-  const tb = analyzeBody(target);
-  const sb = analyzeBody(motion.bones);
-  const tf = bodyFrame(target, tb);
-  const sf = bodyFrame(motion.bones, sb);
-  // De los ejes del origen a los del modelo (arriba y adelante, por la geometría)
-  const align =
-    tf && sf ? new THREE.Quaternion(...rotationBetweenFrames(sf.up, sf.forward, tf.up, tf.forward)) : new THREE.Quaternion();
-  const scale = tb && sb && sb.height > 1e-9 ? tb.height / sb.height : 1;
-  const tRoot = tb?.root ?? target.findIndex((b) => b.parent === null);
-  const sRoot = map.get(tRoot) ?? sb?.root ?? motion.bones.findIndex((b) => b.parent === null);
+export class Retargeter {
+  readonly root: number;
+  private align: THREE.Quaternion;
+  private alignInverse: THREE.Quaternion;
+  private scale: number;
+  private sRoot: number;
+  private aims: number[][];
+  private rest: THREE.Vector3[];
+  private pose: Pose = { rotations: new Map<number, Quat>(), translations: new Map<number, Vec3>(), controls: new Map() };
+  private fk: Fk;
 
-  const children = target.map(() => [] as number[]);
-  target.forEach((b, i) => b.parent !== null && children[b.parent]?.push(i));
-  // Descendiente mapeado más cercano por cada hijo (siguiendo tramos sin ramificar)
-  const mappedBelow = (c: number): number | undefined => {
-    for (let j: number | undefined = c, depth = 0; j !== undefined && depth < 4; depth++) {
-      if (map.has(j)) return j;
-      j = children[j].length === 1 ? children[j][0] : undefined;
-    }
-    return undefined;
-  };
-  const sides = canonicalNames(target).map((n) => n.side);
-  // Para cada articulación que gira: uno o dos hijos que dan su dirección
-  const aims = target.map((_, j) => {
-    if (!map.has(j)) return [] as number[];
-    const kids = children[j].flatMap((c) => {
-      const d = mappedBelow(c);
-      return d !== undefined && map.get(d) !== map.get(j) ? [d] : [];
+  constructor(
+    target: SkeletonBone[],
+    source: SkeletonBone[],
+    private map: RetargetMap
+  ) {
+    const tb = analyzeBody(target);
+    const sb = analyzeBody(source);
+    const tf = bodyFrame(target, tb);
+    const sf = bodyFrame(source, sb);
+    // De los ejes del origen a los del modelo (arriba y adelante, por la geometría)
+    this.align = tf && sf ? new THREE.Quaternion(...rotationBetweenFrames(sf.up, sf.forward, tf.up, tf.forward)) : new THREE.Quaternion();
+    this.alignInverse = this.align.clone().invert();
+    this.scale = tb && sb && sb.height > 1e-9 ? tb.height / sb.height : 1;
+    this.root = tb?.root ?? target.findIndex((b) => b.parent === null);
+    this.sRoot = map.get(this.root) ?? sb?.root ?? source.findIndex((b) => b.parent === null);
+
+    const children = target.map(() => [] as number[]);
+    target.forEach((b, i) => b.parent !== null && children[b.parent]?.push(i));
+    // Descendiente mapeado más cercano por cada hijo (siguiendo tramos sin ramificar)
+    const mappedBelow = (c: number): number | undefined => {
+      for (let j: number | undefined = c, depth = 0; j !== undefined && depth < 4; depth++) {
+        if (map.has(j)) return j;
+        j = children[j].length === 1 ? children[j][0] : undefined;
+      }
+      return undefined;
+    };
+    const sides = canonicalNames(target).map((n) => n.side);
+    // Para cada articulación que gira: uno o dos hijos que dan su dirección
+    this.aims = target.map((_, j) => {
+      if (!map.has(j)) return [] as number[];
+      const kids = children[j].flatMap((c) => {
+        const d = mappedBelow(c);
+        return d !== undefined && map.get(d) !== map.get(j) ? [d] : [];
+      });
+      // Primero el del centro (columna), después el de un costado
+      kids.sort((a, b) => Math.abs(sides[a]) - Math.abs(sides[b]));
+      return kids.slice(0, 2);
     });
-    // Primero el del centro (columna), después el de un costado
-    kids.sort((a, b) => Math.abs(sides[a]) - Math.abs(sides[b]));
-    return kids.slice(0, 2);
-  });
+    this.rest = source.map((b) => v3(b.position));
+    this.fk = new Fk(target, this.pose);
+  }
 
-  const [first, last] = options.range ?? [0, motion.positions.length - 1];
-  const rest = motion.bones.map((b) => v3(b.position));
-  const rotations = new Map<number, Key<Quat>[]>();
-  const translations: Key<Vec3>[] = [];
-  const pose = { rotations: new Map<number, Quat>(), translations: new Map<number, Vec3>(), controls: new Map() };
-  const fk = new Fk(target, pose);
-  const order = fk.order;
-
-  for (let f = first; f <= last; f++) {
-    const src = motion.positions[f];
-    if (!src) break;
+  /**
+   * Pose para las posiciones `src` del origen y el giro de su raíz. La pose
+   * devuelta se reusa en la llamada siguiente: copiarla si se guarda.
+   */
+  solve(src: Vec3[], rootRotation: Quat, rootMotion = true): Pose {
+    const { pose, fk, align, map } = this;
     pose.rotations.clear();
     pose.translations.clear();
     // Raíz: giro del origen pasado a los ejes del modelo
-    const R = new THREE.Quaternion(...motion.rootRotation[f]);
-    pose.rotations.set(tRoot, fq(align.clone().multiply(R).multiply(align.clone().invert()).normalize()));
-    if (options.rootMotion !== false && sRoot >= 0) {
-      const d = v3(src[sRoot]).sub(rest[sRoot]).applyQuaternion(align).multiplyScalar(scale);
-      pose.translations.set(tRoot, toV(d));
+    const R = new THREE.Quaternion(...rootRotation);
+    pose.rotations.set(this.root, fq(align.clone().multiply(R).multiply(this.alignInverse).normalize()));
+    if (rootMotion && this.sRoot >= 0 && src[this.sRoot]) {
+      const d = v3(src[this.sRoot]).sub(this.rest[this.sRoot]).applyQuaternion(align).multiplyScalar(this.scale);
+      pose.translations.set(this.root, toV(d));
     }
     fk.update();
     // Resto: cada hueso apunta como el del origen
-    for (const j of order) {
-      if (j === tRoot) continue;
-      const aim = aims[j];
+    for (const j of fk.order) {
+      if (j === this.root) continue;
+      const aim = this.aims[j];
       if (aim.length === 0) continue;
       const s = map.get(j)!;
       const want = (c: number) => v3(src[map.get(c)!]).sub(v3(src[s])).applyQuaternion(align);
@@ -313,6 +327,25 @@ export function retargetClip(target: SkeletonBone[], motion: SourceMotion, map: 
           : rotationBetween(toV(h0), toV(w0));
       fk.rotate(j, delta);
     }
+    return pose;
+  }
+}
+
+/**
+ * Clip del modelo que reproduce `motion` con el mapeo `map`. Una key por
+ * cuadro, reducida después (se ve igual con menos keys).
+ */
+export function retargetClip(target: SkeletonBone[], motion: SourceMotion, map: RetargetMap, options: RetargetOptions = {}): AnimationClip {
+  const retargeter = new Retargeter(target, motion.bones, map);
+  const tRoot = retargeter.root;
+  const [first, last] = options.range ?? [0, motion.positions.length - 1];
+  const rotations = new Map<number, Key<Quat>[]>();
+  const translations: Key<Vec3>[] = [];
+
+  for (let f = first; f <= last; f++) {
+    const src = motion.positions[f];
+    if (!src) break;
+    const pose = retargeter.solve(src, motion.rootRotation[f], options.rootMotion !== false);
     const frame = f - first;
     for (const [j, q] of pose.rotations) {
       if (!rotations.has(j)) rotations.set(j, []);
@@ -322,7 +355,7 @@ export function retargetClip(target: SkeletonBone[], motion: SourceMotion, map: 
     if (t) translations.push({ frame, value: t, interpolation: "linear" });
   }
 
-  const size = tb?.size ?? 1;
+  const size = analyzeBody(target)?.size ?? 1;
   const tracks: BoneTrack[] = [...rotations.keys()]
     .sort((a, b) => a - b)
     .map((j) => ({

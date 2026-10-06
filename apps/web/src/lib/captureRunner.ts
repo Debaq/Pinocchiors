@@ -69,7 +69,8 @@ export interface LiveCapture {
   close: () => void;
 }
 
-export async function startLive(model?: Uint8Array): Promise<LiveCapture> {
+/** `onFrame` recibe cada cuadro detectado con su tiempo en segundos (para seguir al actor en vivo) */
+export async function startLive(model?: Uint8Array, onFrame?: (frame: CaptureFrame | null, time: number) => void): Promise<LiveCapture> {
   if (!navigator.mediaDevices?.getUserMedia) {
     throw new Error("Este visor no da acceso a la cámara (en Linux, WebKitGTK puede tenerlo desactivado): graba un video y usa el archivo");
   }
@@ -95,6 +96,7 @@ export async function startLive(model?: Uint8Array): Promise<LiveCapture> {
     lastTime = video.currentTime;
     last = toFrame(landmarker.detectForVideo(video, performance.now()) as unknown as Result);
     recording?.frames.push(last);
+    onFrame?.(last, lastTime);
   };
   raf = requestAnimationFrame(loop);
   return {

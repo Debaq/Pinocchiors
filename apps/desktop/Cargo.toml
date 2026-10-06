@@ -70,6 +70,10 @@ tokio = { version = "1", features = ["sync"] }
 thiserror = { workspace = true }
 rayon = { workspace = true }
 
+# Cámara en el webview de Linux (captura de movimiento en vivo)
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0", features = ["v2_4"] }
+
 [dev-dependencies]
 nalgebra = { workspace = true }
 tempfile = "3"

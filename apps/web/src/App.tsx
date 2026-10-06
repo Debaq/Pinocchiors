@@ -93,6 +93,7 @@ import {
 } from "./components/layout/SettingsDialog";
 import { RetargetDialog, type RetargetRequest } from "./components/layout/RetargetDialog";
 import { CaptureDialog } from "./components/layout/CaptureDialog";
+import { LivePuppet } from "./components/layout/LivePuppet";
 import type { CaptureMotion } from "./lib/capture";
 import { ragdollClip } from "./lib/ragdoll";
 import type { NodeTransform } from "./components/panels/ObjectTab";
@@ -1793,6 +1794,7 @@ export const App: Component = () => {
     weightsData();
     const ctx = rigCtx();
     if (animating()) {
+      if (puppeteering()) return;
       // La pose de las keys (FK) queda a mano para rehacer el IK mientras se arrastra un control
       if (mixing()) {
         const { pose, top } = mixKeys(displayMixer(), clips(), frame(), ctx);
@@ -5456,20 +5458,7 @@ export const App: Component = () => {
   /** Abre el mapeo del retargeting para un movimiento de origen (BVH o captura) */
   const openRetarget = (motion: SourceMotion, sourceName: string) => {
     const bones = rigBones();
-    // Una plantilla guardada para este mismo esqueleto de origen manda sobre el automático
-    const saved = retargetTemplates()[sourceSignature(motion.bones)];
-    let map: RetargetMap;
-    if (saved) {
-      const sourceIndex = new Map(motion.bones.map((b, i) => [b.name, i]));
-      map = new Map(
-        bones.flatMap((b, j) => {
-          const k = saved[b.name] === undefined ? undefined : sourceIndex.get(saved[b.name]);
-          return k === undefined ? [] : [[j, k] as [number, number]];
-        })
-      );
-    } else {
-      map = autoMap(bones, motion.bones);
-    }
+    const { map, fromTemplate } = initialRetargetMap(motion.bones);
     setRetargeting({
       sourceName,
       source: motion.bones,
@@ -5477,10 +5466,39 @@ export const App: Component = () => {
       map,
       frames: motion.positions.length,
       fps: motion.fps,
-      fromTemplate: !!saved,
+      fromTemplate,
       motion,
     });
   };
+
+  /** Mapeo del origen al esqueleto: la plantilla guardada para ese origen manda sobre el automático */
+  const initialRetargetMap = (source: SkeletonBone[]): { map: RetargetMap; fromTemplate: boolean } => {
+    const bones = rigBones();
+    const saved = retargetTemplates()[sourceSignature(source)];
+    if (!saved) return { map: autoMap(bones, source), fromTemplate: false };
+    const sourceIndex = new Map(source.map((b, i) => [b.name, i]));
+    const map: RetargetMap = new Map(
+      bones.flatMap((b, j) => {
+        const k = saved[b.name] === undefined ? undefined : sourceIndex.get(saved[b.name]);
+        return k === undefined ? [] : [[j, k] as [number, number]];
+      })
+    );
+    return { map, fromTemplate: true };
+  };
+
+  /** Cámara en vivo: el esqueleto sigue al actor (manda sobre la pose de las keys) */
+  const [puppeteering, setPuppeteering] = createSignal(false);
+  const togglePuppet = () => {
+    if (puppeteering()) return setPuppeteering(false);
+    if (rigBones().length === 0) {
+      setStatusMessage("Primero elige o ajusta un esqueleto: la cámara mueve sus articulaciones");
+      return;
+    }
+    setPuppeteering(true);
+  };
+  createEffect(() => {
+    if (!animating()) setPuppeteering(false);
+  });
 
   const [capturing, setCapturing] = createSignal(false);
   const handleCapture = () => {
@@ -5849,6 +5867,16 @@ export const App: Component = () => {
               />
             </Show>
 
+            <Show when={puppeteering()}>
+              <LivePuppet
+                target={rigBones()}
+                mapFor={(source) => initialRetargetMap(source).map}
+                onPose={(pose) => viewer()?.setPose(pose)}
+                onRecorded={openRetarget}
+                onClose={() => setPuppeteering(false)}
+              />
+            </Show>
+
             <ProgressOverlay progress={progress()} />
 
             {/* Con el panel derecho oculto, una pestaña para traerlo de vuelta */}
@@ -6144,6 +6172,10 @@ export const App: Component = () => {
               selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
               editorOpen: rigEditorOpen(),
               onToggleEditor: toggleRigEditor,
+              puppeteering: puppeteering(),
+              onTogglePuppet: togglePuppet,
+              onCaptureVideo: handleCapture,
+              onImportBvh: () => void handleImportBvh(),
             }}
             exportProps={{
 

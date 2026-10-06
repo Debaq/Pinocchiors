@@ -30,6 +30,8 @@ pub fn run() {
             app.manage(textures::TextureWatch::default());
             app.manage(scanner::ScannerHandle::default());
             app.manage(scan_cloud::CloudEditor::default());
+            #[cfg(target_os = "linux")]
+            enable_camera(app);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -161,4 +163,28 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// WebKitGTK trae la cámara apagada y niega los permisos que nadie atiende:
+/// se enciende y se acepta el pedido de la cámara (captura de movimiento)
+#[cfg(target_os = "linux")]
+fn enable_camera(app: &tauri::App) {
+    use webkit2gtk::glib::prelude::*;
+    use webkit2gtk::{PermissionRequestExt, SettingsExt, UserMediaPermissionRequest, WebViewExt};
+    for window in app.webview_windows().values() {
+        let _ = window.with_webview(|webview| {
+            let view = webview.inner();
+            if let Some(settings) = WebViewExt::settings(&view) {
+                settings.set_enable_media_stream(true);
+            }
+            view.connect_permission_request(|_, request| {
+                if request.is::<UserMediaPermissionRequest>() {
+                    request.allow();
+                    true
+                } else {
+                    false
+                }
+            });
+        });
+    }
 }

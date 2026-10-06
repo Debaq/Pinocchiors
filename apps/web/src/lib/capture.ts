@@ -18,6 +18,7 @@
 
 import type { Quat, Vec3 } from "./animation";
 import { rotationBetweenFrames } from "./ik";
+import type { SkeletonBone } from "./presetAnimations";
 import type { SourceMotion } from "./retarget";
 
 export interface CapturePoint {
@@ -120,8 +121,7 @@ export function captureMotion(frames: (CaptureFrame | null)[], fps: number, opti
   // Rellena huecos de cada punto interpolando entre los cuadros buenos. Una
   // punta que nunca se ve (dedos, extremo de la mano) toma el punto de su
   // articulación; sin cadera, hombros o miembros no hay captura
-  const used = [...new Set(JOINTS.flatMap((j) => j.from))].sort((a, b) => a - b);
-  const TIP_FALLBACK: Record<number, number> = { 0: 7, 17: 15, 19: 15, 18: 16, 20: 16, 31: 27, 32: 28 };
+  const used = USED;
   for (const k of used) {
     const good = world.flatMap((f, i) => (f[k] ? [i] : []));
     if (good.length > 0) {
@@ -136,9 +136,7 @@ export function captureMotion(frames: (CaptureFrame | null)[], fps: number, opti
     for (const f of world) f[k] = [...f[fallback]!] as Vec3;
   }
   // Filtro 1€ por coordenada: más suavizado, corte más bajo
-  const s = Math.max(0, Math.min(1, options.smoothing));
-  const minCutoff = 4 * (1 - s) + 0.3 * s;
-  const beta = 0.6 * (1 - s) + 0.05 * s;
+  const { minCutoff, beta } = filterParams(options.smoothing);
   const dt = 1 / (fps > 0 ? fps : 30);
   for (const k of used) {
     const filters = [0, 1, 2].map(() => new OneEuro(minCutoff, beta));
@@ -216,6 +214,113 @@ export function captureMotion(frames: (CaptureFrame | null)[], fps: number, opti
 }
 
 const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+/** Pares izquierda/derecha de MediaPipe Pose (la nariz, 0, queda sola) */
+const MIRROR = Array.from({ length: 33 }, (_, k) => (k === 0 ? 0 : k <= 3 ? k + 3 : k <= 6 ? k - 3 : k % 2 ? k + 1 : k - 1));
+
+/** El cuadro visto en un espejo: el lado izquierdo del actor mueve el derecho del modelo */
+export function mirrorFrame(frame: CaptureFrame | null): CaptureFrame | null {
+  if (!frame) return null;
+  const flip = (points: CapturePoint[], x: (v: number) => number) => points.map((_, k) => ({ ...points[MIRROR[k]], x: x(points[MIRROR[k]].x) }));
+  return { world: flip(frame.world, (v) => -v), image: flip(frame.image, (v) => 1 - v) };
+}
+
+/** Parámetros del filtro 1€ para un suavizado de 0 (crudo) a 1 (muy suave) */
+function filterParams(smoothing: number) {
+  const s = Math.max(0, Math.min(1, smoothing));
+  return { minCutoff: 4 * (1 - s) + 0.3 * s, beta: 0.6 * (1 - s) + 0.05 * s };
+}
+
+/** Puntos de MediaPipe que usan las articulaciones */
+const USED = [...new Set(JOINTS.flatMap((j) => j.from))].sort((a, b) => a - b);
+/** Punta que no se ve → el punto de su articulación */
+const TIP_FALLBACK: Record<number, number> = { 0: 7, 17: 15, 19: 15, 18: 16, 20: 16, 31: 27, 32: 28 };
+
+/**
+ * Captura en vivo: el mismo esqueleto del actor que `captureMotion`, cuadro
+ * a cuadro, para mover el modelo mientras la persona se mueve. El reposo es
+ * el primer cuadro con el cuerpo entero a la vista (`recalibrate` lo
+ * vuelve a tomar). Lo que deja de verse un momento queda donde estaba.
+ */
+export class LiveSolver {
+  /** Esqueleto del actor en reposo (null hasta verlo entero) */
+  bones: SkeletonBone[] | null = null;
+  private filters = new Map<number, OneEuro[]>();
+  private last = new Map<number, Vec3>();
+  private rest: { right: Vec3; up: Vec3 } | null = null;
+  private hip0: [number, number] | null = null;
+  private metersPerImage = 0;
+
+  constructor(
+    private smoothing: number,
+    private minVisibility = 0.5
+  ) {}
+
+  setSmoothing(smoothing: number): void {
+    this.smoothing = smoothing;
+    this.filters.clear();
+  }
+
+  recalibrate(): void {
+    this.bones = null;
+    this.rest = null;
+    this.hip0 = null;
+    this.filters.clear();
+    this.last.clear();
+  }
+
+  /** Posiciones de las articulaciones del actor y giro del torso, o null si todavía no hay reposo */
+  push(frame: CaptureFrame | null, dt: number): { positions: Vec3[]; rootRotation: Quat } | null {
+    if (!frame) return null;
+    const { minCutoff, beta } = filterParams(this.smoothing);
+    const points = new Map<number, Vec3>();
+    for (const k of USED) {
+      const p = frame.world[k];
+      if (p && (p.visibility ?? 1) >= this.minVisibility) {
+        let filters = this.filters.get(k);
+        if (!filters) this.filters.set(k, (filters = [0, 1, 2].map(() => new OneEuro(minCutoff, beta))));
+        const v: Vec3 = [filters[0].filter(p.x, dt), filters[1].filter(-p.y, dt), filters[2].filter(-p.z, dt)];
+        this.last.set(k, v);
+      }
+      const v = this.last.get(k);
+      if (v) points.set(k, v);
+    }
+    for (const k of USED) {
+      if (points.has(k)) continue;
+      const fallback = points.get(TIP_FALLBACK[k]);
+      if (!fallback) return null;
+      points.set(k, fallback);
+    }
+    const mean = (from: number[]): Vec3 => {
+      const sum: Vec3 = [0, 0, 0];
+      for (const k of from) for (let a = 0; a < 3; a++) sum[a] += points.get(k)![a] / from.length;
+      return sum;
+    };
+    const joints = JOINTS.map((j) => mean(j.from));
+    const right = sub(mean([24]), mean([23]));
+    const up = sub(mean([11, 12]), mean([23, 24]));
+    const image = frame.image;
+    if (!this.bones) {
+      const index = new Map(JOINTS.map((j, i) => [j.name, i]));
+      this.bones = JOINTS.map((j, i) => ({ name: j.name, parent: j.parent === null ? null : index.get(j.parent)!, position: joints[i] }));
+      this.rest = { right, up };
+      // Metros por unidad de imagen: altura del actor contra su altura en la imagen
+      const feet = mean([27, 28]);
+      const height = Math.hypot(...sub(mean([0]), feet));
+      const imageHeight = image[0] && image[27] && image[28] ? Math.abs((image[27].y + image[28].y) / 2 - image[0].y) : 0;
+      this.metersPerImage = imageHeight > 1e-3 ? height / imageHeight : 0;
+      this.hip0 = null;
+    }
+    // Desplazamiento de la cadera en la imagen (en metros)
+    if (image[23] && image[24] && this.metersPerImage > 0) {
+      const hip: [number, number] = [(image[23].x + image[24].x) / 2, (image[23].y + image[24].y) / 2];
+      this.hip0 ??= hip;
+      const offset: Vec3 = [(hip[0] - this.hip0[0]) * this.metersPerImage, -(hip[1] - this.hip0[1]) * this.metersPerImage, 0];
+      for (const p of joints) for (let a = 0; a < 3; a++) p[a] += offset[a];
+    }
+    return { positions: joints, rootRotation: rotationBetweenFrames(this.rest!.right, this.rest!.up, right, up) };
+  }
+}
 
 /** Completa el punto `k` en los cuadros que no lo tienen, con los cuadros buenos `good` */
 function fillMissing(world: (Vec3 | null)[][], k: number, good: number[]): void {

@@ -30,6 +30,12 @@ export interface AnimateStepProps {
   /** El editor de pose y rig (al costado del visor) está abierto */
   editorOpen?: boolean;
   onToggleEditor?: () => void;
+  /** La cámara en vivo mueve el esqueleto */
+  puppeteering?: boolean;
+  onTogglePuppet?: () => void;
+  /** Captura de movimiento desde un video grabado */
+  onCaptureVideo?: () => void;
+  onImportBvh?: () => void;
 }
 
 const SHORTCUTS: [string, string][] = [
@@ -124,6 +130,27 @@ export const AnimateStep: Component<AnimateStepProps> = (props) => {
               </div>
             )}
           </Show>
+        </div>
+
+        {/* Captura de movimiento */}
+        <div class="space-y-1.5">
+          <span class="text-xs font-semibold text-text">Captura de movimiento</span>
+          <Button size="sm" fullWidth variant={props.puppeteering ? "default" : "primary"} onClick={props.onTogglePuppet}>
+            <span class="flex items-center gap-1">
+              <Icons.PersonArmsSpread size={12} /> {props.puppeteering ? "Apagar la cámara" : "Mover con la cámara en vivo"}
+            </span>
+          </Button>
+          <p class="text-xs text-text-dim leading-relaxed">
+            El esqueleto copia tus movimientos frente a la cámara; graba para guardarlos como animación.
+          </p>
+          <div class="grid grid-cols-2 gap-1">
+            <Button size="sm" variant="ghost" onClick={props.onCaptureVideo} title="Detecta los movimientos de una persona en un video grabado">
+              Desde un video…
+            </Button>
+            <Button size="sm" variant="ghost" onClick={props.onImportBvh} title="Animación de captura de movimiento en formato BVH">
+              Importar BVH…
+            </Button>
+          </div>
         </div>
 
         <Button size="sm" fullWidth variant="ghost" onClick={props.onOpenLibrary} title="Animaciones básicas, poses de fábrica y poses guardadas">
