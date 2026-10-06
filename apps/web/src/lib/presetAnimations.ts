@@ -1,6 +1,8 @@
 /**
  * Animaciones básicas generadas a partir del esqueleto: reposo, caminar,
- * correr o trotar, saludar, aletear, nadar y reptar.
+ * correr, trotar o galopar, saltar, saludar, aplaudir, golpear, patear,
+ * bailar, asentir, negar, comer, sacudirse, mover la cola, aletear, planear,
+ * nadar, reptar, atacar, amenazar y arrastrarse con tentáculos.
  *
  * No depende de la plantilla elegida: parte el esqueleto en cadenas (tramos
  * sin ramificar) y reconoce patas, brazos, alas, cola, cabeza, trompa,
@@ -74,7 +76,32 @@ export interface Body {
   neck: number[];
 }
 
-export type PresetAnimationId = "idle" | "walk" | "run" | "trot" | "wave" | "fly" | "swim" | "slither";
+export type PresetAnimationId =
+  | "idle"
+  | "walk"
+  | "run"
+  | "trot"
+  | "gallop"
+  | "jump"
+  | "wave"
+  | "clap"
+  | "punch"
+  | "kick"
+  | "dance"
+  | "nod"
+  | "shakeHead"
+  | "eat"
+  | "shake"
+  | "wag"
+  | "fly"
+  | "glide"
+  | "swim"
+  | "swimFast"
+  | "slither"
+  | "strike"
+  | "pinch"
+  | "threat"
+  | "tentacleCrawl";
 
 export interface PresetAnimation {
   id: PresetAnimationId;
@@ -301,6 +328,23 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   fly: { name: "Aletear", description: "Batido de alas con las patas recogidas" },
   swim: { name: "Nadar", description: "Ondulación del cuerpo y la cola, o pulsos de los tentáculos" },
   slither: { name: "Reptar", description: "Onda que recorre el cuerpo de la cabeza a la cola" },
+  gallop: { name: "Galopar", description: "Las patas traseras empujan y las delanteras caen una tras otra; la espalda se flexiona" },
+  jump: { name: "Saltar", description: "Se agacha, salta en el lugar y amortigua al caer" },
+  clap: { name: "Aplaudir", description: "Brazos adelante, las manos se juntan cuatro veces" },
+  punch: { name: "Golpear", description: "Guardia y golpes rectos alternando los brazos" },
+  kick: { name: "Patada", description: "Recoge la rodilla, patea adelante y vuelve a apoyar" },
+  dance: { name: "Bailar", description: "Rebota con las rodillas, mece el tronco y sube los brazos al ritmo" },
+  nod: { name: "Asentir", description: "Dice que sí con la cabeza" },
+  shakeHead: { name: "Negar", description: "Dice que no con la cabeza" },
+  eat: { name: "Comer", description: "Baja la cabeza al suelo, mastica o picotea y la vuelve a subir" },
+  shake: { name: "Sacudirse", description: "Sacude el cuerpo como un perro mojado, de la cabeza a la cola" },
+  wag: { name: "Mover la cola", description: "La cola se mueve rápido de lado a lado" },
+  glide: { name: "Planear", description: "Alas extendidas, inclinándose al virar" },
+  swimFast: { name: "Nadar rápido", description: "Ondulación más amplia y el doble de rápida" },
+  strike: { name: "Atacar", description: "Levanta la cabeza, se enrosca hacia atrás y se lanza adelante" },
+  pinch: { name: "Atacar con pinzas", description: "Levanta las pinzas y las cierra de golpe; la cola pica si la tiene" },
+  threat: { name: "Amenazar", description: "Se alza sobre las patas traseras y agita las delanteras" },
+  tentacleCrawl: { name: "Arrastrarse", description: "Los tentáculos se enroscan y estiran por turnos" },
 };
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
@@ -319,6 +363,25 @@ export function availableAnimations(body: Body): PresetAnimation[] {
     ids.push("swim");
   }
   if (legs.length === 0 && body.chains.some((c) => c.kind === "body" && c.rotating.length >= 3)) ids.push("slither");
+  // Las nuevas, por parte del cuerpo
+  const arms = limbs(body, "arm").length;
+  const head = headJoints(body).length > 0;
+  if (upright.length >= 4) ids.push("gallop");
+  // Un elefante no salta (y la trompa atravesaría el suelo al agacharse)
+  if (upright.length >= 2 && count(body, "trunk") === 0) ids.push("jump");
+  if (arms >= 2) ids.push("clap");
+  if (arms >= 2 && upright.length === 2) ids.push("punch", "dance");
+  if (upright.length === 2) ids.push("kick");
+  if (head) ids.push("nod", "shakeHead");
+  if (head && upright.length >= 2 && arms === 0) ids.push("eat");
+  if (upright.length >= 4) ids.push("shake");
+  if (legs.length >= 2 && count(body, "tail") > 0 && count(body, "pincer") === 0) ids.push("wag");
+  if (count(body, "wing") >= 2) ids.push("glide");
+  if (ids.includes("swim")) ids.push("swimFast");
+  if (legs.length === 0 && body.chains.some((c) => c.kind === "body" && c.rotating.length >= 6)) ids.push("strike");
+  if (count(body, "pincer") > 0) ids.push("pinch");
+  if (legs.length >= 4 && legs.every((l) => l.sprawl)) ids.push("threat");
+  if (legs.length === 0 && count(body, "tentacle") >= 6) ids.push("tentacleCrawl");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }
 
@@ -518,7 +581,7 @@ function stride(u: number, duty: number): { swing: number; lift: number } {
 
 const left = (leg: Chain) => leg.side < 0;
 
-const GAITS: Record<"walk" | "run" | "trot" | "crawl", Gait> = {
+const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl", Gait> = {
   walk: {
     frames: 24,
     duty: 0.62,
@@ -553,6 +616,18 @@ const GAITS: Record<"walk" | "run" | "trot" | "crawl", Gait> = {
     lean: 0,
     // Diagonales juntas
     phase: (leg, pair) => (left(leg) ? 0 : 0.5) + (pair === 0 ? 0.5 : 0),
+  },
+  gallop: {
+    frames: 12,
+    duty: 0.32,
+    hip: deg(40),
+    knee: deg(80),
+    lift: deg(25),
+    arm: deg(30),
+    elbow: deg(40),
+    lean: 0,
+    // Galope transverso: traseras casi juntas, delanteras media vuelta después
+    phase: (leg, pair) => (pair === 0 ? 0.45 : 0) + (left(leg) ? 0 : 0.12),
   },
   crawl: {
     frames: 20,
@@ -784,25 +859,25 @@ function fly(body: Body, pose: PoseBuilder, t: number): void {
   appendages(body, pose, t, 1, 0.3);
 }
 
-function swim(body: Body, pose: PoseBuilder, t: number, vertical: boolean): void {
+function swim(body: Body, pose: PoseBuilder, t: number, vertical: boolean, cycles = 1, strength = 1): void {
   const tentacles = chainsOf(body, "tentacle");
   if (tentacles.length >= 3) {
     // Pulsos: los brazos se cierran y abren a la vez y el cuerpo avanza
     for (const arm of tentacles) {
-      chainWave(pose, arm, (i) => liftAxis(body, segment(body, arm, i)), () => deg(22), t, 1, 0.05);
+      chainWave(pose, arm, (i) => liftAxis(body, segment(body, arm, i)), () => deg(22) * strength, t, cycles, 0.05);
     }
-    pose.move([0, 0.08 * body.size * wave(t, 1, 0.2), 0]);
+    pose.move([0, 0.08 * body.size * strength * wave(t, cycles, 0.2), 0]);
     return;
   }
   const axis = vertical ? nodAxis(body) : body.up;
   // Ondulación que crece hacia la punta de la cola; la raíz compensa
   for (const tail of chainsOf(body, "tail", "body")) {
     const n = tail.rotating.length;
-    chainWave(pose, tail, () => axis, (i) => deg(8 + (16 * i) / Math.max(n - 1, 1)), t, 1, 0.1);
+    chainWave(pose, tail, () => axis, (i) => deg(8 + (16 * i) / Math.max(n - 1, 1)) * strength, t, cycles, 0.1);
   }
-  pose.turn(body.root, axis, -deg(5) * wave(t, 1, -0.1));
+  pose.turn(body.root, axis, -deg(5) * strength * wave(t, cycles, -0.1));
   for (const fin of chainsOf(body, "fin")) {
-    pose.turn(fin.rotating[0], liftAxis(body, segment(body, fin, 0)), deg(20) * wave(t, 2));
+    pose.turn(fin.rotating[0], liftAxis(body, segment(body, fin, 0)), deg(20) * wave(t, 2 * cycles));
   }
 }
 
@@ -817,6 +892,358 @@ function slither(body: Body, pose: PoseBuilder, t: number): void {
     pose.turn(chain.rotating[0], body.up, deg(12) * wave(t, 1, 0.1));
   }
   appendages(body, pose, t, 1, 0.5);
+}
+
+// ─── Más generadores ────────────────────────────────────────────────────────
+
+/** Curva por puntos (t, valor) con tramos suaves; fuera de rango, el extremo */
+function curve(t: number, points: [number, number][]): number {
+  if (t <= points[0][0]) return points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    const [t1, v1] = points[i];
+    const [t0, v0] = points[i - 1];
+    if (t <= t1) return v0 + (v1 - v0) * smoothstep((t - t0) / Math.max(t1 - t0, 1e-9));
+  }
+  return points[points.length - 1][1];
+}
+
+/** Giro que lleva la dirección `from` a `to` (unitarias), en la fracción `amount` */
+function aim(pose: PoseBuilder, joint: number, from: Vec3, to: Vec3, amount = 1): void {
+  const axis = cross(from, to);
+  if (length(axis) < 1e-6) return;
+  pose.turn(joint, unit(axis, [1, 0, 0]), angleBetween(from, to) * amount);
+}
+
+/** Baja o sube el cuerpo para que la más baja de `joints` toque el suelo */
+function plant(body: Body, pose: PoseBuilder, joints: number[]): void {
+  if (joints.length === 0) return;
+  const positions = jointPositions(body.bones, pose.rotations, pose.offset);
+  pose.move([0, body.ground - Math.min(...joints.map((j) => positions[j][1])), 0]);
+}
+
+const uprightLegs = (body: Body) => limbs(body, "leg").filter((l) => !l.sprawl);
+const tipOf = (chain: Chain) => chain.joints[chain.joints.length - 1];
+const pos = (body: Body, j: number) => body.bones[j].position;
+/** Pulso de 0 a 1 entre `a` y `b`: sube en la fracción `rise` del tramo y baja en el resto */
+function pulse(t: number, a: number, b: number, rise = 0.3): number {
+  if (t < a || t > b) return 0;
+  const u = (t - a) / (b - a);
+  return u < rise ? smoothstep(u / rise) : 1 - smoothstep((u - rise) / (1 - rise));
+}
+
+/** Brazo estirado hacia `point`: el hombro apunta ahí (la mano llega si el brazo está recto) */
+function reach(body: Body, pose: PoseBuilder, arm: Chain, point: Vec3, amount: number): void {
+  const shoulder = pos(body, arm.joints[0]);
+  aim(pose, arm.rotating[0], segment(body, arm, 0), unit(sub(point, shoulder), body.forward), amount);
+}
+
+/** Lugar al frente del pecho, a la altura `drop` (en largos de brazo) bajo los hombros, abierto `open` hacia el lado */
+function frontPoint(body: Body, arm: Chain, drop: number, open: number): Vec3 {
+  const shoulder = pos(body, arm.joints[0]);
+  const length_ = length(sub(pos(body, tipOf(arm)), shoulder));
+  const root = pos(body, body.root);
+  const lateral = dot(sub(shoulder, root), body.right);
+  const side = lateral - Math.sign(lateral || arm.side) * (1 - open) * Math.abs(lateral);
+  const down = drop * length_;
+  const ahead = Math.sqrt(Math.max(0.05 * length_ ** 2, length_ ** 2 - (lateral - side) ** 2 - down ** 2));
+  return add(add(add(shoulder, scale(body.right, side - lateral)), scale(body.forward, ahead)), scale(body.up, -down));
+}
+
+/** Codo doblado `angle` (positivo lleva el antebrazo hacia adelante) */
+function bendElbow(body: Body, pose: PoseBuilder, arm: Chain, angle: number): void {
+  if (arm.rotating.length < 2) return;
+  const elbow = bendIndex(body, arm, /elbow/i);
+  pose.turn(arm.rotating[elbow], swingAxis(body, segment(body, arm, elbow)), angle);
+}
+
+function gallop(body: Body, pose: PoseBuilder, t: number): void {
+  // La espalda se encoge con las traseras adelante y se estira al volar
+  const flex = wave(t, 1, 0.1);
+  body.spine.forEach((j) => pose.turn(j, nodAxis(body), (deg(6) / Math.max(body.spine.length, 1)) * flex));
+  gait(body, GAITS.gallop, pose, t);
+}
+
+function jump(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = uprightLegs(body);
+  // Agacharse, despegar, recoger en el aire, amortiguar, pararse
+  const crouch = curve(t, [[0, 0], [0.25, 1], [0.34, 0], [0.5, 0.35], [0.66, 0], [0.74, 0.8], [1, 0]]);
+  const height = 0.35 * Math.max(...legs.map((l) => legSize(body, l)), 0.2 * body.height);
+  const air = t > 0.34 && t < 0.68 ? Math.sin((Math.PI * (t - 0.34)) / 0.34) : 0;
+  for (const leg of legs) bendLeg(body, pose, leg, deg(50) * crouch, deg(95) * crouch);
+  if (body.spine[0] !== undefined) pose.turn(body.spine[0], nodAxis(body), deg(18) * crouch);
+  // Brazos atrás al agacharse y arriba al saltar
+  const swing = curve(t, [[0, 0], [0.25, -deg(40)], [0.42, deg(125)], [0.7, deg(30)], [0.85, 0]]);
+  for (const arm of limbs(body, "arm")) pose.turn(arm.rotating[0], swingAxis(body, segment(body, arm, 0)), swing);
+  for (const wing of chainsOf(body, "wing")) pose.turn(wing.rotating[0], liftAxis(body, segment(body, wing, 0)), deg(45) * air);
+  for (const j of headJoints(body)) pose.turn(j, nodAxis(body), (-deg(10) * crouch) / headJoints(body).length);
+  appendages(body, pose, t, 1, 0.5);
+  plant(body, pose, legs.map(tipOf));
+  pose.move(scale(body.up, height * air));
+}
+
+function clap(body: Body, pose: PoseBuilder, t: number): void {
+  const arms = limbs(body, "arm");
+  const raise = smoothstep(t / 0.15) * (1 - smoothstep((t - 0.85) / 0.15));
+  // Cuatro palmadas entre la subida y la bajada
+  const open = 0.5 + 0.5 * Math.cos(TAU * 4 * Math.min(1, Math.max(0, (t - 0.15) / 0.7)));
+  for (const arm of arms) {
+    reach(body, pose, arm, frontPoint(body, arm, 0.25, 0.05 + 0.5 * open), raise);
+    bendElbow(body, pose, arm, deg(15) * raise);
+  }
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, nodAxis(body), (deg(6) * raise) / head.length));
+  appendages(body, pose, t, 2, 0.6);
+}
+
+function punch(body: Body, pose: PoseBuilder, t: number): void {
+  const arms = limbs(body, "arm").sort((a, b) => a.side - b.side);
+  arms.forEach((arm, k) => {
+    // Un golpe por brazo: el izquierdo en la primera mitad, el derecho en la segunda
+    const hit = pulse(t, k * 0.5, k * 0.5 + 0.5, 0.25);
+    const guard = frontPoint(body, arm, 0.75, 0.45);
+    const target = frontPoint(body, arm, 0.05, 0.15);
+    const point = add(scale(guard, 1 - hit), scale(target, hit));
+    reach(body, pose, arm, point, 1);
+    bendElbow(body, pose, arm, deg(115) * (1 - hit) + deg(5) * hit);
+    // El tronco gira para acompañar el golpe
+    body.spine.forEach((j) => pose.turn(j, body.up, (-Math.sign(arm.side || 1) * deg(14) * hit) / body.spine.length));
+  });
+  for (const leg of uprightLegs(body)) bendLeg(body, pose, leg, deg(12), deg(22));
+  pose.turn(body.root, body.up, deg(3) * wave(t, 2));
+}
+
+function kick(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = uprightLegs(body);
+  const kicker = legs.find((l) => l.side > 0) ?? legs[0];
+  const hip = curve(t, [[0, 0], [0.25, deg(75)], [0.4, deg(85)], [0.6, deg(60)], [0.8, 0]]);
+  const knee = curve(t, [[0, 0], [0.25, deg(100)], [0.38, deg(5)], [0.5, deg(5)], [0.65, deg(90)], [0.85, 0]]);
+  for (const leg of legs) {
+    if (leg === kicker) bendLeg(body, pose, leg, hip, knee);
+    else bendLeg(body, pose, leg, deg(10), deg(18));
+  }
+  const effort = Math.min(1, hip / deg(75));
+  if (body.spine[0] !== undefined) pose.turn(body.spine[0], nodAxis(body), -deg(12) * effort);
+  for (const arm of limbs(body, "arm")) {
+    reach(body, pose, arm, frontPoint(body, arm, 0.7, 0.5), 0.8);
+    bendElbow(body, pose, arm, deg(100));
+  }
+  appendages(body, pose, t, 1, 0.6);
+}
+
+function dance(body: Body, pose: PoseBuilder, t: number): void {
+  // Cuatro tiempos: las rodillas rebotan en cada uno, el tronco va y viene cada dos
+  const bounce = 0.5 - 0.5 * Math.cos(TAU * 4 * t);
+  for (const leg of uprightLegs(body)) bendLeg(body, pose, leg, deg(14) * bounce, deg(28) * bounce);
+  const sway = wave(t, 2);
+  body.spine.forEach((j) => {
+    pose.turn(j, body.forward, (deg(8) * sway) / body.spine.length);
+    pose.turn(j, body.up, (deg(12) * sway) / body.spine.length);
+  });
+  limbs(body, "arm").forEach((arm) => {
+    const up = Math.max(0, wave(t, 2, arm.side > 0 ? 0.5 : 0));
+    pose.turn(arm.rotating[0], liftAxis(body, segment(body, arm, 0)), deg(100) * up);
+    pose.turn(arm.rotating[0], swingAxis(body, segment(body, arm, 0)), deg(25));
+    bendElbow(body, pose, arm, deg(30) + deg(50) * up);
+  });
+  const head = headJoints(body);
+  head.forEach((j) => {
+    pose.turn(j, nodAxis(body), (deg(8) * bounce) / head.length);
+    pose.turn(j, body.forward, (-deg(6) * sway) / head.length);
+  });
+  appendages(body, pose, t, 4, 0.8);
+}
+
+function nod(body: Body, pose: PoseBuilder, t: number): void {
+  const head = headJoints(body);
+  // Tres veces que sí, con la cabeza volviendo arriba entre una y otra
+  const down = (0.5 - 0.5 * Math.cos(TAU * 3 * t)) * smoothstep(t / 0.1) * (1 - smoothstep((t - 0.85) / 0.15));
+  head.forEach((j) => pose.turn(j, nodAxis(body), (deg(22) * down) / head.length));
+  appendages(body, pose, t, 1, 0.4);
+}
+
+function shakeHead(body: Body, pose: PoseBuilder, t: number): void {
+  const head = headJoints(body);
+  const envelope = Math.sin(Math.PI * t);
+  head.forEach((j) => pose.turn(j, body.up, (deg(28) * envelope * wave(t, 3)) / head.length));
+  appendages(body, pose, t, 1, 0.4);
+}
+
+/** Hocico: lo que más adelante llega de lo que cuelga de la primera articulación de la cabeza (no una oreja ni un cuerno) */
+function muzzle(body: Body): number {
+  const first = headJoints(body)[0];
+  const children = body.bones.map(() => [] as number[]);
+  body.bones.forEach((b, i) => b.parent !== null && children[b.parent]?.push(i));
+  let far = first;
+  const ahead = (j: number) => dot(sub(pos(body, j), pos(body, first)), body.forward);
+  const visit = (j: number) => {
+    if (ahead(j) > ahead(far)) far = j;
+    children[j].forEach(visit);
+  };
+  visit(first);
+  return far;
+}
+
+/** Inclinación (respecto de la horizontal hacia adelante) de lo que mira la cabeza */
+function headPitch(body: Body): number {
+  const first = pos(body, headJoints(body)[0]);
+  const d = sub(pos(body, muzzle(body)), first);
+  return Math.atan2(dot(d, body.up), dot(d, body.forward));
+}
+
+function eat(body: Body, pose: PoseBuilder, t: number): void {
+  const head = headJoints(body);
+  const trunks = chainsOf(body, "trunk");
+  if (trunks.length > 0) {
+    // Con trompa: la cabeza apenas baja y la trompa lleva la comida a la boca tres veces
+    const curl = 0.5 - 0.5 * Math.cos(TAU * 3 * t);
+    head.forEach((j) => pose.turn(j, nodAxis(body), (deg(8) * (1 - curl)) / head.length));
+    for (const trunk of trunks) {
+      const n = trunk.rotating.length;
+      trunk.rotating.forEach((j, i) => pose.turn(j, liftAxis(body, segment(body, trunk, i)), (deg(150) * curl) / n));
+    }
+    appendages(body, pose, t, 2, 0.6);
+    return;
+  }
+  const down = smoothstep((t - 0.08) / 0.15) * (1 - smoothstep((t - 0.8) / 0.15));
+  // Lleva la cabeza a mirar 65° hacia abajo; la espalda ayuda un poco
+  const needed = Math.max(0, headPitch(body) + deg(65));
+  const spine = body.spine.length > 0 ? Math.min(deg(15), 0.25 * needed) : 0;
+  body.spine.forEach((j) => pose.turn(j, nodAxis(body), (spine * down) / body.spine.length));
+  const chew = deg(5) * wave(t, 10) * down;
+  head.forEach((j) => pose.turn(j, nodAxis(body), ((needed - spine) * down + chew) / head.length));
+  appendages(body, pose, t, 2, 0.8);
+  // Cuello corto: el cuerpo se inclina adelante (sobre la cadera) hasta que el
+  // hocico llegue cerca del suelo y las patas se doblan para no moverse
+  const legs = uprightLegs(body).filter((l) => ikLegs(body).includes(l));
+  if (legs.length < 2 || down <= 0) return;
+  const tip = muzzle(body);
+  const positions = jointPositions(body.bones, pose.rotations, pose.offset);
+  const root = pos(body, body.root);
+  const gap = positions[tip][1] - (body.ground + 0.04 * body.height);
+  const ahead = dot(sub(positions[tip], root), body.forward);
+  if (gap > 0 && ahead > 1e-6) pose.turn(body.root, nodAxis(body), Math.min(deg(25), Math.atan2(gap, ahead)) * down);
+  legsOnGround(body, pose, legs);
+}
+
+/** Las patas con rodilla vuelven a pisar donde estaban en reposo (IK de dos huesos) */
+function legsOnGround(body: Body, pose: PoseBuilder, legs: Chain[]): void {
+  const fk = new Fk(body.bones, { rotations: pose.rotations, translations: new Map([[body.root, pose.offset]]), controls: new Map() });
+  for (const leg of legs) {
+    const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+    const [a, b, c] = [leg.joints[k - 1], leg.joints[k], leg.joints[k + 1]];
+    solveTwoBone(fk, a, b, c, pos(body, c), { restNormal: legNormal(body, a, b, c) });
+  }
+}
+
+function shakeOff(body: Body, pose: PoseBuilder, t: number): void {
+  const envelope = Math.sin(Math.PI * t) ** 2;
+  const turns = 5;
+  // Onda de giro que nace en la cabeza y llega a la cola
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, body.up, (deg(30) * envelope * wave(t, turns)) / head.length));
+  body.spine.forEach((j, i) => pose.turn(j, body.forward, (deg(6) * envelope * wave(t, turns, 0.15 * (i + 1))) / body.spine.length));
+  for (const tail of chainsOf(body, "tail")) {
+    chainWave(pose, tail, () => body.up, () => (deg(30) * envelope) / Math.sqrt(tail.rotating.length), t, turns, 0.1, 0.4);
+  }
+  chainsOf(body, "ear").forEach((ear) =>
+    chainWave(pose, ear, (i) => liftAxis(body, segment(body, ear, i)), () => deg(35) * envelope, t, turns, 0.1, ear.side > 0 ? 0.5 : 0)
+  );
+}
+
+function wag(body: Body, pose: PoseBuilder, t: number): void {
+  for (const tail of chainsOf(body, "tail")) {
+    const n = tail.rotating.length;
+    // Alzada y moviéndose rápido de lado a lado
+    pose.turn(tail.rotating[0], nodAxis(body), deg(25));
+    chainWave(pose, tail, () => body.up, () => deg(30) / Math.sqrt(n), t, 4, 0.08);
+  }
+  pose.turn(body.root, body.up, -deg(3) * wave(t, 4));
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, nodAxis(body), (-deg(5) - deg(2) * wave(t, 4)) / Math.max(head.length, 1)));
+  chainsOf(body, "ear").forEach((ear) => pose.turn(ear.rotating[0], liftAxis(body, segment(body, ear, 0)), deg(10)));
+}
+
+function glide(body: Body, pose: PoseBuilder, t: number): void {
+  for (const wing of chainsOf(body, "wing")) {
+    pose.turn(wing.rotating[0], liftAxis(body, segment(body, wing, 0)), deg(6) + deg(3) * wave(t, 2));
+  }
+  // Vira a un lado y al otro: el cuerpo se inclina y la cola compensa
+  const bank = wave(t);
+  pose.turn(body.root, body.forward, deg(14) * bank);
+  pose.turn(body.root, body.up, deg(6) * bank);
+  for (const leg of chainsOf(body, "leg")) {
+    if (leg.sprawl) pose.turn(leg.rotating[0], liftAxis(body, flat(leg.dir)), -deg(20));
+    else pose.turn(leg.rotating[0], swingAxis(body, segment(body, leg, 0)), -deg(40));
+  }
+  for (const tail of chainsOf(body, "tail")) tail.rotating.forEach((j) => pose.turn(j, body.up, (-deg(8) * bank) / tail.rotating.length));
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, body.forward, (-deg(10) * bank) / head.length));
+  pose.move(scale(body.up, 0.02 * body.size * wave(t, 2)));
+  // En el aire: nada por debajo del suelo
+  const lowest = Math.min(...jointPositions(body.bones, pose.rotations, pose.offset).map((p) => p[1]));
+  if (lowest < body.ground) pose.move([0, body.ground - lowest + 0.05 * body.height, 0]);
+}
+
+function strike(body: Body, pose: PoseBuilder, t: number): void {
+  const chain = chainsOf(body, "body")[0];
+  const n = chain.rotating.length;
+  const m = Math.max(2, Math.round(n * 0.35));
+  // Cabeza alzada; se echa atrás enroscándose y se lanza
+  const rise = curve(t, [[0, deg(30)], [0.35, deg(55)], [0.5, deg(15)], [0.65, deg(20)], [1, deg(30)]]);
+  const coil = curve(t, [[0, 0.2], [0.35, 1], [0.48, 0], [0.7, 0], [1, 0.2]]);
+  const lunge = curve(t, [[0, 0], [0.35, -0.08], [0.5, 0.25], [0.65, 0.22], [1, 0]]);
+  const nodA = nodAxis(body);
+  pose.turn(chain.rotating[0], nodA, -rise);
+  pose.turn(chain.rotating[m], nodA, rise);
+  // S del cuello: curvas alternadas entre la cabeza y la parte apoyada
+  for (let i = 1; i < m; i++) pose.turn(chain.rotating[i], body.up, deg(28) * coil * (i % 2 ? 1 : -1));
+  const length_ = length(sub(pos(body, tipOf(chain)), pos(body, chain.joints[0])));
+  pose.move(scale(body.forward, lunge * length_));
+  plant(body, pose, chain.joints.slice(m));
+}
+
+function pinch(body: Body, pose: PoseBuilder, t: number): void {
+  const hit = pulse(t, 0.3, 0.75, 0.25);
+  const raise = smoothstep(t / 0.2) * (1 - smoothstep((t - 0.8) / 0.2));
+  for (const pincer of chainsOf(body, "pincer")) {
+    const d = segment(body, pincer, 0);
+    pose.turn(pincer.rotating[0], liftAxis(body, d), deg(30) * raise - deg(20) * hit);
+    // La pinza se abre al alzarse y se cierra de golpe al atacar
+    const claw = pincer.rotating[pincer.rotating.length - 1];
+    pose.turn(claw, body.up, Math.sign(pincer.side || 1) * (deg(30) * raise * (1 - hit) - deg(5) * hit));
+  }
+  for (const tail of chainsOf(body, "tail")) {
+    tail.rotating.forEach((j) => pose.turn(j, nodAxis(body), (deg(35) * hit) / tail.rotating.length));
+  }
+  pose.move(scale(body.forward, 0.04 * body.size * hit));
+  appendages(body, pose, t, 2, 0.5);
+}
+
+function threat(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = chainsOf(body, "leg");
+  const front = Math.max(...legs.map((l) => l.along));
+  const raised = legs.filter((l) => l.along >= front - 1e-6);
+  const up = smoothstep(t / 0.2) * (1 - smoothstep((t - 0.8) / 0.2));
+  // Se alza adelante y agita las patas delanteras
+  pose.turn(body.root, nodAxis(body), -deg(15) * up);
+  for (const leg of raised) {
+    pose.turn(leg.rotating[0], liftAxis(body, flat(leg.dir)), deg(45) * up + deg(15) * up * wave(t, 4, leg.side > 0 ? 0.5 : 0));
+  }
+  for (const pincer of chainsOf(body, "pincer")) {
+    pose.turn(pincer.rotating[0], liftAxis(body, segment(body, pincer, 0)), deg(35) * up);
+  }
+  appendages(body, pose, t, 2, 1);
+  plant(body, pose, legs.filter((l) => !raised.includes(l)).map(tipOf));
+}
+
+function tentacleCrawl(body: Body, pose: PoseBuilder, t: number): void {
+  const tentacles = chainsOf(body, "tentacle");
+  tentacles.forEach((arm, k) => {
+    // Mitad de los brazos se enrosca mientras la otra se estira (alternados alrededor del cuerpo)
+    chainWave(pose, arm, (i) => liftAxis(body, segment(body, arm, i)), () => deg(9), t, 2, 0.08, (k % 2) * 0.5 + 0.25, 1);
+  });
+  pose.turn(body.root, nodAxis(body), deg(4) * wave(t, 2));
+  plant(body, pose, tentacles.flatMap((a) => a.joints));
 }
 
 /** Con patas a IK los pies ya pisan el suelo; si no, se baja el cuerpo hasta la pata más baja */
@@ -855,6 +1282,40 @@ export function generateAnimation(
       return bake(name, body, { frames: 36, step: 3, fps }, (p, t) => swim(body, p, t, !!options.verticalSwim));
     case "slither":
       return bake(name, body, { frames: 36, step: 3, fps }, (p, t) => slither(body, p, t));
+    case "gallop":
+      return bake(name, body, { frames: GAITS.gallop.frames, step: 1, grounded: grounded(body), fps }, (p, t) => gallop(body, p, t));
+    case "jump":
+      return bake(name, body, { frames: 36, step: 1, fps }, (p, t) => jump(body, p, t));
+    case "clap":
+      return bake(name, body, { frames: 48, step: 1, grounded: legs.length > 0, fps }, (p, t) => clap(body, p, t));
+    case "punch":
+      return bake(name, body, { frames: 32, step: 1, grounded: true, fps }, (p, t) => punch(body, p, t));
+    case "kick":
+      return bake(name, body, { frames: 36, step: 1, grounded: true, fps }, (p, t) => kick(body, p, t));
+    case "dance":
+      return bake(name, body, { frames: 48, step: 1, grounded: true, fps }, (p, t) => dance(body, p, t));
+    case "nod":
+      return bake(name, body, { frames: 36, step: 2, grounded: legs.length > 0, fps }, (p, t) => nod(body, p, t));
+    case "shakeHead":
+      return bake(name, body, { frames: 36, step: 2, grounded: legs.length > 0, fps }, (p, t) => shakeHead(body, p, t));
+    case "eat":
+      return bake(name, body, { frames: 72, step: 2, grounded: true, fps }, (p, t) => eat(body, p, t));
+    case "shake":
+      return bake(name, body, { frames: 36, step: 1, grounded: true, fps }, (p, t) => shakeOff(body, p, t));
+    case "wag":
+      return bake(name, body, { frames: 24, step: 1, grounded: legs.length > 0, fps }, (p, t) => wag(body, p, t));
+    case "glide":
+      return bake(name, body, { frames: 72, step: 4, fps }, (p, t) => glide(body, p, t));
+    case "swimFast":
+      return bake(name, body, { frames: 36, step: 2, fps }, (p, t) => swim(body, p, t, !!options.verticalSwim, 2, 1.3));
+    case "strike":
+      return bake(name, body, { frames: 36, step: 1, fps }, (p, t) => strike(body, p, t));
+    case "pinch":
+      return bake(name, body, { frames: 32, step: 1, grounded: legs.length > 0, fps }, (p, t) => pinch(body, p, t));
+    case "threat":
+      return bake(name, body, { frames: 36, step: 2, fps }, (p, t) => threat(body, p, t));
+    case "tentacleCrawl":
+      return bake(name, body, { frames: 48, step: 2, fps }, (p, t) => tentacleCrawl(body, p, t));
   }
 }
 
