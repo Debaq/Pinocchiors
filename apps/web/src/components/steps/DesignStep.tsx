@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createSignal, type JSX } from "solid-js";
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import {
@@ -267,79 +267,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     op: "join",
   });
 
-  /** Redondeo o chaflán: se eligen aristas y se crea al confirmar */
-  const [edgePick, setEdgePick] = createSignal<{ kind: "fillet" | "chamfer"; edges: EdgeRef[]; feature?: number }>();
-  const startEdges = async (kind: "fillet" | "chamfer", feature?: number) => {
+  /** Redondeo o chaflán con las aristas ya elegidas; si no hay, se eligen en la caja del diálogo */
+  const startEdges = async (kind: "fillet" | "chamfer") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
-    // Aristas ya elegidas en el visor: se usan directo
     const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
-    if (picked.length && feature === undefined) {
-      const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
-      ui.clearPicks();
-      if (kind === "fillet") void store.addFeature({ type: "fillet", edges, radius: 1 });
-      else void store.addFeature({ type: "chamfer", edges, distance: 1 });
-      return;
-    }
-    setEdgePick({ kind, edges: [], feature });
-    ui.setHighlight({ faces: [], edges: [] });
-    ui.setPick({
-      kind: "edges",
-      prompt: "Elegir aristas (clic para marcar o desmarcar) y confirmar en el panel",
-      toggle: (ref) =>
-        setEdgePick((p) => {
-          if (!p) return p;
-          const same = (a: EdgeRef) => Math.hypot(a.point[0] - ref.point[0], a.point[1] - ref.point[1], a.point[2] - ref.point[2]) < 1e-6;
-          const edges = p.edges.some(same) ? p.edges.filter((a) => !same(a)) : [...p.edges, ref];
-          return { ...p, edges };
-        }),
-    });
-  };
-  const confirmEdges = () => {
-    const p = edgePick();
-    ui.cancelPick();
-    setEdgePick(undefined);
-    if (!p || p.edges.length === 0) return;
-    if (p.feature !== undefined) {
-      void store.updateFeature(p.feature, (f) => {
-        if (f.kind.type === "fillet" || f.kind.type === "chamfer") f.kind.edges = p.edges;
-      });
-    } else if (p.kind === "fillet") void store.addFeature({ type: "fillet", edges: p.edges, radius: 1 });
-    else void store.addFeature({ type: "chamfer", edges: p.edges, distance: 1 });
+    const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
+    ui.clearPicks();
+    if (kind === "fillet") void store.addFeature({ type: "fillet", edges, radius: 1 });
+    else void store.addFeature({ type: "chamfer", edges, distance: 1 });
   };
 
-  /** Elegir varias caras (vaciado, desmolde) */
-  const [facePick, setFacePick] = createSignal<{ kind: "shell" | "draft"; faces: FaceRef[]; feature?: number }>();
-  const pickNextFace = () => {
-    ui.setPick({
-      kind: "face",
-      prompt: "Elegir una cara (se pueden sumar más desde el panel)",
-      done: (face) => setFacePick((p) => (p ? { ...p, faces: [...p.faces, face] } : p)),
-    });
-  };
-  const startFaces = async (kind: "shell" | "draft", feature?: number) => {
+  /** Vaciado o desmolde con las caras ya elegidas; si no hay, se eligen en la caja del diálogo */
+  const startFaces = async (kind: "shell" | "draft") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
-    if (picked.length && feature === undefined) {
-      const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
-      ui.clearPicks();
-      if (kind === "shell") void store.addFeature({ type: "shell", faces, thickness: 1 });
-      else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
-      return;
-    }
-    setFacePick({ kind, faces: [], feature });
-    pickNextFace();
-  };
-  const confirmFaces = () => {
-    const p = facePick();
-    ui.cancelPick();
-    setFacePick(undefined);
-    if (!p || p.faces.length === 0) return;
-    if (p.feature !== undefined) {
-      void store.updateFeature(p.feature, (f) => {
-        if (f.kind.type === "shell" || f.kind.type === "draft") f.kind.faces = p.faces;
-      });
-    } else if (p.kind === "shell") void store.addFeature({ type: "shell", faces: p.faces, thickness: 1 });
-    else void store.addFeature({ type: "draft", faces: p.faces, neutral: { type: "xy" }, angle: 3 });
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    if (kind === "shell") void store.addFeature({ type: "shell", faces, thickness: 1 });
+    else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
   };
 
   const addPattern = (kind: "linear" | "circular") => {
@@ -463,57 +408,18 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 hasBody={!!store.result()?.body}
               />
 
-              <Show when={edgePick()}>
-                {(p) => (
-                  <div class="rounded-md border border-accent/50 p-2 space-y-2">
-                    <p class="text-xs text-text">
-                      {p().kind === "fillet" ? "Redondeo" : "Chaflán"}: {p().edges.length} aristas elegidas
-                    </p>
-                    <div class="flex gap-2">
-                      <Button size="sm" variant="primary" disabled={p().edges.length === 0} onClick={confirmEdges}>
-                        Aplicar
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => (ui.cancelPick(), setEdgePick(undefined))}>
-                        Cancelar
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </Show>
-              <Show when={facePick()}>
-                {(p) => (
-                  <div class="rounded-md border border-accent/50 p-2 space-y-2">
-                    <p class="text-xs text-text">
-                      {p().kind === "shell" ? "Vaciado (caras que quedan abiertas)" : "Desmolde"}: {p().faces.length} caras
-                    </p>
-                    <div class="flex gap-2 flex-wrap">
-                      <Button size="sm" onClick={pickNextFace}>
-                        Sumar cara
-                      </Button>
-                      <Button size="sm" variant="primary" disabled={p().faces.length === 0} onClick={confirmFaces}>
-                        Aplicar
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => (ui.cancelPick(), setFacePick(undefined))}>
-                        Cancelar
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </Show>
-
-              <Show when={selectedFeature()}>
-                {(f) => (
+              {/* Por id: el editor no se rehace con cada cambio del documento */}
+              <For each={selectedFeature() ? [selectedFeature()!.id] : []}>
+                {(id) => (
                   <FeatureEditor
-                    feature={f()}
+                    featureId={id}
                     store={store}
                     ui={ui}
                     sketches={sketches()}
                     tools={toolFeatures()}
-                    onEdges={(kind) => startEdges(kind, f().id)}
-                    onFaces={(kind) => startFaces(kind, f().id)}
                   />
                 )}
-              </Show>
+              </For>
 
               <ParametersSection store={store} />
 
@@ -870,15 +776,15 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
 // ─── Edición de una operación ─────────────────────────────────────────────
 
 const FeatureEditor: Component<{
-  feature: Feature;
+  featureId: number;
   store: CadStore;
   ui: CadUi;
   sketches: Feature[];
   tools: Feature[];
-  onEdges: (kind: "fillet" | "chamfer") => void;
-  onFaces: (kind: "shell" | "draft") => void;
 }> = (props) => {
-  const f = () => props.feature;
+  // Al cerrarse el diálogo la operación puede desaparecer antes que el editor:
+  // se queda con la última
+  const f = createMemo<Feature>((prev) => props.store.doc()?.features.find((x) => x.id === props.featureId) ?? prev!);
   const update = (mutate: (k: FeatureKind) => void) => void props.store.updateFeature(f().id, (x) => mutate(x.kind));
   /** Campo numérico vinculable: `path` relativo a la operación (p. ej. "kind.radius") */
   const field = (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => {
@@ -965,7 +871,9 @@ const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "extrude" && (f().kind as Extract<FeatureKind, { type: "extrude" }>)}>
             {(k) => {
-              const extentType = () => k().extent.type;
+              // "Hasta una cara" elegido y todavía sin cara
+              const [upTo, setUpTo] = createSignal(false);
+              const extentType = () => (upTo() ? "up_to_face" : k().extent.type);
               const setExtent = (e: Extent) => update((x) => x.type === "extrude" && (x.extent = e));
               return (
                 <>
@@ -986,15 +894,24 @@ const FeatureEditor: Component<{
                         const d = "distance" in k().extent ? (k().extent as { distance: number }).distance : 10;
                         if (v === "blind" || v === "symmetric") setExtent({ type: v, distance: d });
                         else if (v === "through_all") setExtent({ type: "through_all" });
-                        else
-                          props.ui.setPick({
-                            kind: "face",
-                            prompt: "Elegir la cara hasta donde llega la extrusión",
-                            done: (face) => setExtent({ type: "up_to_face", face }),
-                          });
+                        else setUpTo(true);
                       }}
                     />
                   </Row>
+                  <Show when={k().extent.type === "up_to_face" || upTo()}>
+                    <SelectionBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:hasta`}
+                      kind="face"
+                      label="Hasta la cara"
+                      refs={k().extent.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
+                      onChange={(refs) => {
+                        if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef });
+                        setUpTo(false);
+                      }}
+                    />
+                  </Show>
                   <Show when={k().extent.type === "blind" || k().extent.type === "symmetric"}>
                     {field(
                       "Distancia",
@@ -1004,9 +921,10 @@ const FeatureEditor: Component<{
                       "mm",
                     )}
                   </Show>
-                  <RegionPicker
+                  <RegionBox
                     ui={props.ui}
                     store={props.store}
+                    owner={`${f().id}:regiones`}
                     sketch={k().sketch}
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "extrude" && (x.regions = r))}
@@ -1047,9 +965,10 @@ const FeatureEditor: Component<{
                       }
                     />
                   </Row>
-                  <RegionPicker
+                  <RegionBox
                     ui={props.ui}
                     store={props.store}
+                    owner={`${f().id}:regiones`}
                     sketch={k().sketch}
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
@@ -1114,10 +1033,19 @@ const FeatureEditor: Component<{
                     if (x.type === "fillet") x.radius = v;
                     else if (x.type === "chamfer") x.distance = v;
                   }, "mm")}
-                  <p class="text-[11px] text-text-dim">{kind.edges.length} aristas</p>
-                  <Button size="sm" fullWidth onClick={() => props.onEdges(kind.type)}>
-                    Elegir aristas de nuevo
-                  </Button>
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:aristas`}
+                    kind="edges"
+                    label="Aristas"
+                    refs={(k() as { edges: EdgeRef[] }).edges}
+                    onChange={(refs) =>
+                      update((x) => {
+                        if (x.type === "fillet" || x.type === "chamfer") x.edges = refs as EdgeRef[];
+                      })
+                    }
+                  />
                 </>
               );
             }}
@@ -1140,10 +1068,19 @@ const FeatureEditor: Component<{
                       </>
                     )}
                   </Show>
-                  <p class="text-[11px] text-text-dim">{kind.faces.length} caras</p>
-                  <Button size="sm" fullWidth onClick={() => props.onFaces(kind.type)}>
-                    Elegir caras de nuevo
-                  </Button>
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:caras`}
+                    kind="faces"
+                    label={kind.type === "shell" ? "Caras abiertas" : "Caras"}
+                    refs={(k() as { faces: FaceRef[] }).faces}
+                    onChange={(refs) =>
+                      update((x) => {
+                        if (x.type === "shell" || x.type === "draft") x.faces = refs as FaceRef[];
+                      })
+                    }
+                  />
                 </>
               );
             }}
@@ -1241,66 +1178,195 @@ function planeLabelFor(f: Feature): string {
 }
 
 /** Qué regiones del sketch usar: todas o las elegidas con clic en el visor */
-const RegionPicker: Component<{ ui: CadUi; store: CadStore; sketch: number; value: RegionSelection; onChange: (r: RegionSelection) => void }> = (props) => {
-  const [draft, setDraft] = createSignal<P2[]>();
-  const picking = () => draft() !== undefined;
-  const start = () => {
-    const initial = props.value.type === "points" ? [...props.value.points] : [];
-    setDraft(initial);
-    props.ui.setPick({
+// ─── Cajas de selección ───────────────────────────────────────────────────
+
+const NOUNS = { edges: "Arista", faces: "Cara", face: "Cara" } as const;
+const PROMPTS = {
+  edges: "Clic en las aristas (otra vez para quitarla)",
+  faces: "Clic en las caras (otra vez para quitarla)",
+  face: "Clic en la cara",
+};
+
+/**
+ * Caja de un campo de referencias, como en Onshape: activa, lo que se elige en
+ * el visor va ahí (y se ve el sólido de antes de la operación); la lista
+ * resalta cada ítem al pasar el mouse y lo quita con ✗.
+ */
+const SelectionBox: Component<{
+  store: CadStore;
+  ui: CadUi;
+  /** Identifica la caja (operación y campo) */
+  owner: string;
+  kind: "edges" | "faces" | "face";
+  label: string;
+  refs: (EdgeRef | FaceRef)[];
+  onChange: (refs: (EdgeRef | FaceRef)[]) => void;
+}> = (props) => {
+  const ui = props.ui;
+  const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
+  const [hover, setHover] = createSignal<number>();
+  // Índice en el sólido mostrado de cada referencia (solo con la caja activa:
+  // es el sólido de antes de la operación)
+  const [resolved, setResolved] = createSignal<(number | null)[]>([]);
+  let seq = 0;
+  createEffect(() => {
+    const refs = props.refs;
+    const version = props.store.result()?.version;
+    if (!active() || version === undefined) return setResolved([]);
+    const n = ++seq;
+    const edges = props.kind === "edges";
+    void props.store.resolveRefs(edges ? [] : (refs as FaceRef[]), edges ? (refs as EdgeRef[]) : []).then((r) => {
+      if (n === seq) setResolved(edges ? r.edges : r.faces);
+    });
+  });
+  // Resaltado: todo lo de la caja activa, o el ítem bajo el mouse
+  createEffect(() => {
+    if (!active()) return;
+    const h = hover();
+    const list = resolved().filter((x, i): x is number => x !== null && (h === undefined || i === h));
+    ui.setHighlight(props.kind === "edges" ? { faces: [], edges: list } : { faces: list, edges: [] });
+  });
+  createEffect(
+    on(active, (now, before) => {
+      if (now || !before) return;
+      ui.setHighlight({ faces: [], edges: [] });
+      if (ui.pick().kind === "none") void props.store.setSelecting(false);
+    }),
+  );
+
+  const toggleRef = (ref: EdgeRef | FaceRef, index: number) => {
+    const at = resolved().indexOf(index);
+    props.onChange(at >= 0 ? props.refs.filter((_, i) => i !== at) : [...props.refs, ref]);
+  };
+  const activate = () => {
+    void props.store.setSelecting(true);
+    const base = { prompt: PROMPTS[props.kind], owner: props.owner };
+    if (props.kind === "edges") ui.setPick({ ...base, kind: "edges", toggle: (r, i) => toggleRef(r, i) });
+    else if (props.kind === "faces") ui.setPick({ ...base, kind: "faces", toggle: (r, i) => toggleRef(r, i) });
+    else ui.setPick({ ...base, kind: "face", done: (r) => props.onChange([r]) });
+  };
+  // Vacía al abrirse el diálogo: se empieza eligiendo
+  onMount(() => {
+    if (props.refs.length === 0 && props.store.draft()) activate();
+  });
+  onCleanup(() => {
+    if (active()) ui.cancelPick();
+  });
+
+  return (
+    <div class="space-y-1">
+      <span class="text-xs text-text-muted">{props.label}</span>
+      <div
+        aria-label={props.label}
+        data-selection-box
+        class={clsx(
+          "min-h-[2rem] rounded border px-1.5 py-1 cursor-pointer text-xs",
+          active() ? "border-accent bg-accent/10" : "border-border bg-surface/40 hover:border-border-hover",
+        )}
+        onClick={() => (active() ? ui.cancelPick() : activate())}
+      >
+        <Show
+          when={props.refs.length > 0}
+          fallback={<span class="text-text-dim">{active() ? PROMPTS[props.kind] : "Nada elegido: clic para elegir"}</span>}
+        >
+          <For each={props.refs}>
+            {(_, i) => (
+              <div
+                class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface"
+                onMouseEnter={() => setHover(i())}
+                onMouseLeave={() => setHover(undefined)}
+              >
+                <span class={clsx(active() && resolved()[i()] === null ? "text-error" : "text-text")}>
+                  {NOUNS[props.kind]} {i() + 1}
+                  {active() && resolved()[i()] === null ? " · no encontrada" : ""}
+                </span>
+                <button
+                  class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
+                  aria-label={`Quitar ${NOUNS[props.kind].toLowerCase()} ${i() + 1}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setHover(undefined);
+                    props.onChange(props.refs.filter((_, j) => j !== i()));
+                  }}
+                >
+                  <Icons.X size={10} />
+                </button>
+              </div>
+            )}
+          </For>
+        </Show>
+      </div>
+    </div>
+  );
+};
+
+/** Caja de regiones de un sketch: clic dentro de una región la suma o la quita */
+const RegionBox: Component<{ ui: CadUi; store: CadStore; owner: string; sketch: number; value: RegionSelection; onChange: (r: RegionSelection) => void }> = (props) => {
+  const ui = props.ui;
+  const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
+  const points = () => (props.value.type === "points" ? props.value.points : []);
+  createEffect(
+    on(active, (now, before) => {
+      if (!now && before && ui.pick().kind === "none") void props.store.setSelecting(false);
+    }),
+  );
+  onCleanup(() => {
+    if (active()) ui.cancelPick();
+  });
+  const activate = () => {
+    void props.store.setSelecting(true);
+    ui.setPick({
       kind: "region",
+      owner: props.owner,
       sketch: props.sketch,
-      prompt: "Clic dentro de las regiones a usar (otra vez para quitarla); confirmar en el panel",
-      chosen: () => draft() ?? [],
+      prompt: "Clic dentro de las regiones a usar (otra vez para quitarla)",
+      chosen: points,
       toggle: (p) => {
         const view = props.store.sketchView(props.sketch);
         if (!view) return;
         // Región más interna bajo el clic; si ya había un punto en ella, se quita
         const hit = [...view.regions].filter((r) => regionContains(r, p)).sort((a, b) => b.depth - a.depth)[0];
         if (!hit) return;
-        setDraft((d) => {
-          const list = d ?? [];
-          const inside = list.filter((q) => regionContains(hit, q) && !view.regions.some((o) => o.depth > hit.depth && regionContains(o, q)));
-          return inside.length ? list.filter((q) => !inside.includes(q)) : [...list, hit.sample];
-        });
+        const list = points();
+        const inside = list.filter((q) => regionContains(hit, q) && !view.regions.some((o) => o.depth > hit.depth && regionContains(o, q)));
+        const next = inside.length ? list.filter((q) => !inside.includes(q)) : [...list, hit.sample];
+        props.onChange(next.length ? { type: "points", points: next } : { type: "all" });
       },
     });
   };
-  const confirm = () => {
-    const d = draft() ?? [];
-    props.ui.cancelPick();
-    setDraft(undefined);
-    props.onChange(d.length ? { type: "points", points: d } : { type: "all" });
-  };
   return (
-    <div class="space-y-1.5">
-      <Row label="Regiones">
-        <span class="text-xs text-text">{props.value.type === "all" ? "Todas" : `${props.value.points.length} elegidas`}</span>
-      </Row>
-      <Show
-        when={picking()}
-        fallback={
-          <div class="flex gap-1.5">
-            <Button size="sm" onClick={start}>
-              Elegir en el visor
-            </Button>
-            <Show when={props.value.type === "points"}>
-              <Button size="sm" variant="ghost" onClick={() => props.onChange({ type: "all" })}>
-                Usar todas
-              </Button>
-            </Show>
-          </div>
-        }
+    <div class="space-y-1">
+      <span class="text-xs text-text-muted">Regiones</span>
+      <div
+        aria-label="Regiones"
+        data-selection-box
+        class={clsx(
+          "min-h-[2rem] rounded border px-1.5 py-1 cursor-pointer text-xs",
+          active() ? "border-accent bg-accent/10" : "border-border bg-surface/40 hover:border-border-hover",
+        )}
+        onClick={() => (active() ? ui.cancelPick() : activate())}
       >
-        <div class="flex gap-1.5">
-          <Button size="sm" variant="primary" onClick={confirm}>
-            Listo ({draft()?.length ?? 0})
-          </Button>
-          <Button size="sm" variant="ghost" onClick={() => (props.ui.cancelPick(), setDraft(undefined))}>
-            Cancelar
-          </Button>
-        </div>
-      </Show>
+        <Show when={points().length > 0} fallback={<span class="text-text-dim">Todas{active() ? " · clic en las regiones a usar" : ""}</span>}>
+          <For each={points()}>
+            {(_, i) => (
+              <div class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface">
+                <span class="text-text">Región {i() + 1}</span>
+                <button
+                  class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
+                  aria-label={`Quitar región ${i() + 1}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const next = points().filter((_, j) => j !== i());
+                    props.onChange(next.length ? { type: "points", points: next } : { type: "all" });
+                  }}
+                >
+                  <Icons.X size={10} />
+                </button>
+              </div>
+            )}
+          </For>
+        </Show>
+      </div>
     </div>
   );
 };

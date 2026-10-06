@@ -90,6 +90,66 @@ impl Evaluation {
         let sides = if sides.iter().all(|s| !s.is_empty()) { sides } else { vec![] };
         Some(EdgeRef { point: info.mid, direction: info.tangent, sides })
     }
+
+    fn diag(&self) -> f64 {
+        self.body.as_ref().and_then(|b| b.mass().ok()).map_or(1.0, |m| norm(sub(m.bbox_max, m.bbox_min)).max(1.0))
+    }
+
+    /// Índice de la cara del cuerpo que corresponde a la referencia.
+    pub fn resolve_face(&self, r: &FaceRef) -> R<usize> {
+        let body = self.body.as_ref().ok_or("todavía no hay un sólido")?;
+        // Por origen: las caras que lo conservan (la primera etiqueta es la
+        // principal); entre ellas, la más cercana al punto guardado
+        for wanted in [&r.tags[..r.tags.len().min(1)], &r.tags[..]] {
+            let candidates: Vec<usize> = (0..self.face_tags.len())
+                .filter(|&f| self.face_tags[f].iter().any(|t| wanted.contains(t)))
+                .collect();
+            if let Some(best) = candidates
+                .iter()
+                .map(|&f| (f, body.face_distance(f, r.point).unwrap_or(f64::MAX)))
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+            {
+                return Ok(best.0);
+            }
+        }
+        let (i, d) = body
+            .closest_face(r.point, Some(r.normal), 0.9)
+            .ok_or("la cara de referencia ya no existe")?;
+        if d > self.diag() * 0.5 {
+            return Err("la cara de referencia ya no existe".into());
+        }
+        Ok(i)
+    }
+
+    /// Índice de la arista del cuerpo que corresponde a la referencia.
+    pub fn resolve_edge(&self, r: &EdgeRef) -> R<usize> {
+        let body = self.body.as_ref().ok_or("todavía no hay un sólido")?;
+        // Por origen: la arista entre una cara de cada lado
+        if r.sides.len() == 2 && r.sides.iter().all(|s| !s.is_empty()) {
+            let has = |f: Option<usize>, side: &[FaceTag]| {
+                f.and_then(|f| self.face_tags.get(f)).is_some_and(|ts| ts.iter().any(|t| side.contains(t)))
+            };
+            let pairs = body.edge_face_pairs().map_err(err)?;
+            let best = pairs
+                .iter()
+                .enumerate()
+                .filter(|(_, [a, b])| {
+                    (has(*a, &r.sides[0]) && has(*b, &r.sides[1])) || (has(*a, &r.sides[1]) && has(*b, &r.sides[0]))
+                })
+                .map(|(e, _)| (e, body.edge_distance(e, r.point).unwrap_or(f64::MAX)))
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((e, _)) = best {
+                return Ok(e);
+            }
+        }
+        let (i, d) = body
+            .closest_edge(r.point, Some(r.direction), 0.9)
+            .ok_or("la arista de referencia ya no existe")?;
+        if d > self.diag() * 0.5 {
+            return Err("la arista de referencia ya no existe".into());
+        }
+        Ok(i)
+    }
 }
 
 type R<T> = Result<T, String>;
@@ -213,61 +273,15 @@ impl Ctx<'_> {
     }
 
     fn diag(&self) -> f64 {
-        self.ev.body.as_ref().and_then(|b| b.mass().ok()).map_or(1.0, |m| norm(sub(m.bbox_max, m.bbox_min)).max(1.0))
+        self.ev.diag()
     }
 
     fn face(&self, r: &FaceRef) -> R<usize> {
-        let body = self.body()?;
-        // Por origen: las caras que lo conservan (la primera etiqueta es la
-        // principal); entre ellas, la más cercana al punto guardado
-        for wanted in [&r.tags[..r.tags.len().min(1)], &r.tags[..]] {
-            let candidates: Vec<usize> = (0..self.ev.face_tags.len())
-                .filter(|&f| self.ev.face_tags[f].iter().any(|t| wanted.contains(t)))
-                .collect();
-            if let Some(best) = candidates
-                .iter()
-                .map(|&f| (f, body.face_distance(f, r.point).unwrap_or(f64::MAX)))
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-            {
-                return Ok(best.0);
-            }
-        }
-        let (i, d) = body
-            .closest_face(r.point, Some(r.normal), 0.9)
-            .ok_or("la cara de referencia ya no existe")?;
-        if d > self.diag() * 0.5 {
-            return Err("la cara de referencia ya no existe".into());
-        }
-        Ok(i)
+        self.ev.resolve_face(r)
     }
 
     fn edge(&self, r: &EdgeRef) -> R<usize> {
-        let body = self.body()?;
-        // Por origen: la arista entre una cara de cada lado
-        if r.sides.len() == 2 && r.sides.iter().all(|s| !s.is_empty()) {
-            let has = |f: Option<usize>, side: &[FaceTag]| {
-                f.and_then(|f| self.ev.face_tags.get(f)).is_some_and(|ts| ts.iter().any(|t| side.contains(t)))
-            };
-            let pairs = body.edge_face_pairs().map_err(err)?;
-            let best = pairs
-                .iter()
-                .enumerate()
-                .filter(|(_, [a, b])| {
-                    (has(*a, &r.sides[0]) && has(*b, &r.sides[1])) || (has(*a, &r.sides[1]) && has(*b, &r.sides[0]))
-                })
-                .map(|(e, _)| (e, body.edge_distance(e, r.point).unwrap_or(f64::MAX)))
-                .min_by(|a, b| a.1.total_cmp(&b.1));
-            if let Some((e, _)) = best {
-                return Ok(e);
-            }
-        }
-        let (i, d) = body
-            .closest_edge(r.point, Some(r.direction), 0.9)
-            .ok_or("la arista de referencia ya no existe")?;
-        if d > self.diag() * 0.5 {
-            return Err("la arista de referencia ya no existe".into());
-        }
-        Ok(i)
+        self.ev.resolve_edge(r)
     }
 
     fn plane(&self, spec: &PlaneSpec) -> R<Plane> {
@@ -388,6 +402,9 @@ impl Ctx<'_> {
                 self.apply(tool, *op)
             }
             FeatureKind::Fillet { edges, radius } => {
+                if edges.is_empty() {
+                    return Err("elegir al menos una arista".into());
+                }
                 let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.fillet(&idx, *radius)).map_err(err)?;
@@ -395,6 +412,9 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Chamfer { edges, distance } => {
+                if edges.is_empty() {
+                    return Err("elegir al menos una arista".into());
+                }
                 let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.chamfer(&idx, *distance)).map_err(err)?;
@@ -409,6 +429,9 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Draft { faces, neutral, angle } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
                 let idx = faces.iter().map(|r| self.face(r)).collect::<R<Vec<_>>>()?;
                 let p = self.plane(neutral)?;
                 let body = self.body()?.clone();

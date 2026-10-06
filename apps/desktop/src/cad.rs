@@ -337,6 +337,30 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
+/// Qué cara o arista del sólido mostrado es cada referencia (`None` = no se encontró).
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ResolvedRefs {
+    pub faces: Vec<Option<usize>>,
+    pub edges: Vec<Option<usize>>,
+}
+
+/// Resuelve referencias contra el sólido que se ve (el borrador, si hay): para
+/// resaltar lo elegido en una caja de selección y marcar lo que ya no está.
+#[tauri::command]
+pub async fn cad_resolve_refs(app: AppHandle, faces: Vec<FaceRef>, edges: Vec<EdgeRef>) -> Result<ResolvedRefs, String> {
+    in_background(app, move |state| resolve_refs_impl(state, &faces, &edges)).await
+}
+
+fn resolve_refs_impl(state: &AppState, faces: &[FaceRef], edges: &[EdgeRef]) -> Result<ResolvedRefs, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let Some(c) = cache.as_ref() else { return Ok(ResolvedRefs::default()) };
+    Ok(ResolvedRefs {
+        faces: faces.iter().map(|r| c.eval.resolve_face(r).ok()).collect(),
+        edges: edges.iter().map(|r| c.eval.resolve_edge(r).ok()).collect(),
+    })
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct FaceDescription {
     pub surface: String,
@@ -730,6 +754,10 @@ pub mod bridge {
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_resolve_refs" => {
+                let (faces, edges): (Vec<FaceRef>, Vec<EdgeRef>) = (arg(args, "faces")?, arg(args, "edges")?);
+                ok(resolve_refs_impl(state, &faces, &edges)?)
+            }
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
@@ -819,6 +847,21 @@ mod tests {
         preview_impl(&state, Some(Document::new())).unwrap();
         set_document_impl(&state, box_doc()).unwrap();
         assert!(state.cad_preview.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn resolve_refs_finds_and_misses() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(box_doc());
+        evaluate(&state).unwrap();
+        let (face, edge) = (face_ref_impl(&state, 2).unwrap(), edge_ref_impl(&state, 5).unwrap());
+        let far = FaceRef { point: [500.0, 500.0, 500.0], normal: [0.3, 0.3, 0.9], ..Default::default() };
+        let r = resolve_refs_impl(&state, &[face, far], &[edge]).unwrap();
+        assert_eq!(r.faces, vec![Some(2), None]);
+        assert_eq!(r.edges, vec![Some(5)]);
     }
 
     #[test]

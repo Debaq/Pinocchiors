@@ -90,13 +90,15 @@ const scenarios = {
     await b.clickText("Caja");
     await sleep(2000);
     await accept(b);
+    // Sin aristas elegidas: el diálogo abre con la caja de aristas activa
     await b.clickText("Redondeo");
-    await sleep(400);
+    await sleep(1500);
     for (const p of [[0, -10, 20], [10, 0, 20]]) {
       const [x, y] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
-      await b.click(x, y, { wait: 800 });
+      await b.click(x, y, { wait: 1000 });
     }
-    await b.clickText("Aplicar");
+    // Esc deja de elegir: la vista previa muestra el redondeo
+    await b.key("Escape", "Escape", 27);
     await sleep(2000);
     // Dos redondeos a lo largo de 20 mm; comparten un vértice y el empalme de
     // esquina cambia el volumen en ~0,1 mm³ respecto a la suma de los dos
@@ -104,6 +106,85 @@ const scenarios = {
     await setInput(b, "Radio", 3);
     await sleep(2000);
     if ((await body()).faces !== 8) throw new Error("caras tras r=3");
+  },
+
+  async "cajas de selección: sumar, quitar y volver a elegir"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].map((s) => s.textContent)`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    const A = await at([0, -10, 20]);
+    const B = await at([10, 0, 20]);
+    await b.click(...A, { wait: 1200 });
+    await b.click(...B, { wait: 1200 });
+    if ((await items()).length !== 2) throw new Error(`ítems: ${await items()}`);
+    // Clic otra vez en una elegida: se quita
+    await b.click(...A, { wait: 1200 });
+    if ((await items()).length !== 1) throw new Error(`tras quitar con clic: ${await items()}`);
+    // ✗ en la lista
+    await b.eval(`document.querySelector('[aria-label="Quitar arista 1"]').click()`);
+    await sleep(1200);
+    if (!(await b.eval(`document.querySelector('[aria-label="Aristas"]').textContent.includes("Clic en las aristas")`))) throw new Error("la caja no quedó vacía");
+    // Con la caja activa se ve el sólido de antes: elegir la arista de adelante
+    near((await body()).volume, 8000, 1e-6, "sólido de antes al elegir");
+    await b.click(...A, { wait: 1200 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(1500);
+    near((await body()).volume, 8000 - (1 - Math.PI / 4) * 20, 0.05, "un redondeo");
+    await b.key("Enter", "Enter", 13);
+    await sleep(1500);
+    const doc = await call("cad_get_document");
+    if (doc.features[1]?.kind.edges.length !== 1) throw new Error("no quedó una arista");
+    // Editar: la caja se activa con clic y vuelve a mostrar el sólido de antes
+    await clickRow(b, "Redondeo 1");
+    await sleep(1000);
+    await b.eval(`document.querySelector('[aria-label="Aristas"]').click()`);
+    await sleep(2000);
+    near((await body()).volume, 8000, 1e-6, "editar: sólido de antes");
+    await b.click(...B, { wait: 1200 });
+    if ((await items()).length !== 2) throw new Error(`editar: ${await items()}`);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    await b.key("Enter", "Enter", 13);
+    await sleep(2000);
+    near((await body()).volume, 8000 - 2 * (1 - Math.PI / 4) * 20, 0.2, "dos redondeos");
+    if ((await call("cad_get_document")).features[1].kind.edges.length !== 2) throw new Error("no quedaron dos aristas");
+  },
+
+  async "caja de regiones al editar una extrusión"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Círculo");
+    for (const y of [-15, 15]) {
+      await b.click(...(await at([-15, y, 0])));
+      await b.click(...(await at([-10, y, 0])), { wait: 600 });
+      await b.key("Escape", "Escape", 27);
+    }
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    await accept(b);
+    near((await body()).volume, 2 * Math.PI * 25 * 10, 0.5, "dos cilindros");
+    await clickRow(b, "Extrusión 1");
+    await b.eval(`document.querySelector('[aria-label="Regiones"]').click()`);
+    await sleep(1500);
+    await b.click(...(await at([-15, -15, 0])), { wait: 1200 });
+    await b.shot("caja_de_regiones");
+    const text = await b.eval(`document.querySelector('[aria-label="Regiones"]').textContent`);
+    if (!text.includes("Región 1")) throw new Error(`caja: ${text}`);
+    await b.key("Escape", "Escape", 27);
+    await sleep(1500);
+    near((await body()).volume, Math.PI * 25 * 10, 0.5, "solo la región elegida");
+    await b.key("Enter", "Enter", 13);
+    await sleep(1500);
+    const ext = (await call("cad_get_document")).features[1].kind;
+    if (ext.regions.type !== "points" || ext.regions.points.length !== 1) throw new Error(JSON.stringify(ext.regions));
   },
 
   async "diálogo de operación: cancelar y aceptar"(b) {

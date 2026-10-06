@@ -85,7 +85,11 @@ nuevo.
    (`Draft`); el backend lo recibe con `cad_preview` y lo evalúa sin tocar el documento guardado
    (ni el `.pinocchio`); la vista previa se calcula hasta la operación en edición. Los sketches
    siguen entrando directo (tienen su propia edición).*
-2. **Cajas de selección** en el diálogo (regiones, caras, aristas, sketch).
+2. **Cajas de selección** en el diálogo (regiones, caras, aristas, sketch). *Hecha el 2026-10-06: `SelectionBox`
+   (aristas, caras, una cara para "hasta una cara") y `RegionBox`; activa, la vista previa
+   muestra el sólido de antes de la operación (`Draft.selecting`) y `cad_resolve_refs` dice
+   qué arista o cara es cada referencia para resaltarla, quitarla con otro clic o marcarla "no
+   encontrada". El sketch sigue en una lista (no hay nada que elegir en el visor).*
 3. **Herramienta transparente** (verde/roja) en la vista previa.
 4. **Referencias rotas**: reporte por referencia, marcado y reemplazo.
 5. **Árbol**: doble clic, editar desde la cara, barra arrastrable, reordenar.

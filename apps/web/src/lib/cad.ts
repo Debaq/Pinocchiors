@@ -7,7 +7,7 @@
 // Coordenadas del documento: mm, Z arriba. El visor recibe la malla del
 // sólido ya en Y arriba y en las unidades de la escena.
 
-import { createSignal } from "solid-js";
+import { batch, createSignal } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import type { Snap } from "./sketchSnap";
 import type { Contour } from "./sketchText";
@@ -1410,14 +1410,23 @@ export interface Draft {
   isNew: boolean;
   base: CadDocument;
   doc: CadDocument;
+  /** Eligiendo en una caja de selección: se ve el sólido de antes de la operación */
+  selecting?: boolean;
 }
 
 /** Lo que se evalúa para la vista previa: hasta la operación en edición, como Onshape */
 export function previewDocument(d: Draft): CadDocument {
   const doc = clone(d.doc);
   const i = doc.features.findIndex((f) => f.id === d.feature);
-  doc.rollback = i < 0 || i + 1 >= doc.features.length ? null : i + 1;
+  const end = d.selecting ? i : i + 1;
+  doc.rollback = i < 0 || end >= doc.features.length ? null : end;
   return doc;
+}
+
+/** Qué cara o arista del sólido mostrado es cada referencia (`null` = no está) */
+export interface ResolvedRefs {
+  faces: (number | null)[];
+  edges: (number | null)[];
 }
 
 export function createCadStore() {
@@ -1493,8 +1502,10 @@ export function createCadStore() {
   };
 
   const openDraft = (d: Draft) => {
-    setDraft(d);
-    setSelected(d.feature);
+    batch(() => {
+      setDraft(d);
+      setSelected(d.feature);
+    });
     return send(previewDocument(d), true);
   };
 
@@ -1502,22 +1513,31 @@ export function createCadStore() {
   const acceptDraft = () => {
     const d = draft();
     if (!d) return lastSend;
-    setDraft(undefined);
-    setSelected(undefined);
-    if (!d.isNew && JSON.stringify(d.doc) === JSON.stringify(d.base)) return send(null, true);
-    undoStack.push(d.base);
-    if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
-    redoStack.length = 0;
-    setHistoryVersion((v) => v + 1);
-    setDoc(d.doc);
-    return send(d.doc);
+    const unchanged = !d.isNew && JSON.stringify(d.doc) === JSON.stringify(d.base);
+    if (!unchanged) {
+      undoStack.push(d.base);
+      if (undoStack.length > HISTORY_LIMIT) undoStack.shift();
+      redoStack.length = 0;
+    }
+    // Todo junto: el panel nunca ve el diálogo cerrado con el documento viejo
+    batch(() => {
+      setDraft(undefined);
+      setSelected(undefined);
+      if (!unchanged) {
+        setHistoryVersion((v) => v + 1);
+        setDoc(d.doc);
+      }
+    });
+    return unchanged ? send(null, true) : send(d.doc);
   };
 
   /** Cierra el diálogo sin cambiar el documento */
   const cancelDraft = () => {
     if (!draft()) return lastSend;
-    setDraft(undefined);
-    setSelected(undefined);
+    batch(() => {
+      setDraft(undefined);
+      setSelected(undefined);
+    });
     return send(null, true);
   };
 
@@ -1531,6 +1551,15 @@ export function createCadStore() {
     cancelDraft,
     /** Espera a que termine el último recálculo pedido */
     settled: () => lastSend,
+    /** Con una caja de selección activa, la vista previa muestra el sólido de antes de la operación */
+    setSelecting(on: boolean) {
+      const d = draft();
+      if (!d || !!d.selecting === on) return lastSend;
+      const nd = { ...d, selecting: on };
+      setDraft(nd);
+      return send(previewDocument(nd), true);
+    },
+    resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
     result,
     mesh,
     busy,

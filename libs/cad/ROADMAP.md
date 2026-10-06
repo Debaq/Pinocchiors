@@ -301,3 +301,15 @@ cargo test -p cad-model
   desde la esquina). El botón Exportar del encabezado se habilita con un diseño y, abierto desde
   Diseñar o sin modelo, exporta el sólido (STEP, STL, 3MF, OBJ, PLY, GLB) con el visor del
   diseño a la vista; `cad_export` también en el puente HTTP para el e2e.
+- **2026-10-06 Cajas de selección** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 2): los campos
+  de referencia del diálogo (aristas del redondeo y el chaflán, caras del vaciado y el
+  desmolde, cara de "hasta una cara", regiones) son cajas como en Onshape: con clic se activan
+  (borde de acento) y lo que se elige en el visor entra o sale; la lista resalta cada ítem al
+  pasar el mouse y lo quita con ✗. Activa, la vista previa se evalúa sin la operación
+  (`Draft.selecting`), así se eligen las aristas originales y no las ya redondeadas. Para
+  resaltar y alternar, `cad_resolve_refs` resuelve las referencias contra el sólido mostrado
+  (`Evaluation::resolve_face`/`resolve_edge`, la misma resolución del recálculo); las que no
+  aparecen salen en rojo. Una caja vacía se activa al abrir el diálogo, y los paneles sueltos
+  de "Aplicar" se fueron. Redondeo, chaflán y desmolde sin nada elegido dicen qué falta. El
+  editor del panel se monta por id y aceptar o cancelar cambian todo en un `batch` (antes,
+  cerrar el diálogo podía leer una operación ya desmontada y cortar el guardado).

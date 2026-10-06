@@ -58,13 +58,15 @@ export type SketchTool =
 export type PickMode =
   | { kind: "none" }
   /** Elegir una cara del sólido: se avisa a `done` */
-  | { kind: "face"; prompt: string; done: (face: FaceRef, index: number) => void }
+  | { kind: "face"; prompt: string; owner?: string; done: (face: FaceRef, index: number) => void }
   /** Marcar/desmarcar aristas: `toggle` con cada clic */
-  | { kind: "edges"; prompt: string; toggle: (edge: EdgeRef, index: number) => void }
+  | { kind: "edges"; prompt: string; owner?: string; toggle: (edge: EdgeRef, index: number) => void }
+  /** Marcar/desmarcar caras: `toggle` con cada clic */
+  | { kind: "faces"; prompt: string; owner?: string; toggle: (face: FaceRef, index: number) => void }
   /** Elegir una zona del escaneo */
   | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void }
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
-  | { kind: "region"; prompt: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
+  | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
   /** Dónde va un sketch nuevo: un plano base o una cara plana */
   | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void };
 

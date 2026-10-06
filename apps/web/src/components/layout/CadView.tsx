@@ -199,7 +199,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer = new CadViewer(container);
     viewer.onRender = () => setViewTick((t) => t + 1);
     // Para las pruebas en navegador (scratch de desarrollo)
-    if (import.meta.env.DEV) (window as unknown as { __cadViewer?: CadViewer }).__cadViewer = viewer;
+    if (import.meta.env.DEV) Object.assign(window, { __cadViewer: viewer, __cadStore: store, __cadUi: ui });
     try {
       viewer.mmPerUnit = await invoke<number>("cad_mm_per_unit");
     } catch {
@@ -769,17 +769,19 @@ export const CadView: Component<CadViewProps> = (props) => {
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
         if (hit?.kind !== "face") return;
         const ref = await store.faceRef(hit.face);
-        ui.setHighlight({ faces: [hit.face], edges: [] });
+        // Las cajas de selección resaltan lo suyo
+        if (!mode.owner) ui.setHighlight({ faces: [hit.face], edges: [] });
         ui.setPick({ kind: "none" });
         mode.done(ref, hit.face);
       } else if (mode.kind === "edges") {
+        // La caja de selección resalta lo que tiene
         const hit = viewer.pick(e.clientX, e.clientY, { edges: true });
         if (hit?.kind !== "edge") return;
-        const ref = await store.edgeRef(hit.edge);
-        const h = ui.highlight();
-        const edges = h.edges.includes(hit.edge) ? h.edges.filter((x) => x !== hit.edge) : [...h.edges, hit.edge];
-        ui.setHighlight({ faces: [], edges });
-        mode.toggle(ref, hit.edge);
+        mode.toggle(await store.edgeRef(hit.edge), hit.edge);
+      } else if (mode.kind === "faces") {
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        if (hit?.kind !== "face") return;
+        mode.toggle(await store.faceRef(hit.face), hit.face);
       } else if (mode.kind === "region") {
         const view = store.sketchView(mode.sketch);
         const p = view && viewer.planePoint(e.clientX, e.clientY, view.plane);
@@ -896,9 +898,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else if (e.key === "Escape" && ui.picks().length) {
       ui.clearPicks();
       e.stopPropagation();
-    } else if (store.draft() && (e.key === "Escape" || e.key === "Enter") && !target.closest("button, a, [role=listbox], [role=option], [role=combobox], [role=dialog]")) {
+    } else if (store.draft() && (e.key === "Escape" || e.key === "Enter") && !target.closest("a, [aria-haspopup], [role=listbox], [role=option], [role=combobox], [role=dialog]")) {
       // Diálogo de la operación abierta: Enter acepta, Esc cancela (salvo en
-      // un botón o una lista desplegada, que usan esas teclas)
+      // una lista desplegable o un menú, que usan esas teclas). En un botón
+      // también: el foco suele quedar en el que abrió la operación
       void (e.key === "Enter" ? store.acceptDraft() : store.cancelDraft());
       e.preventDefault();
       e.stopPropagation();
