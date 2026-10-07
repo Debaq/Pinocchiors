@@ -154,13 +154,20 @@ export type FeatureKind =
   | { type: "pattern"; features: number[]; pattern: PatternKind }
   | { type: "mirror"; features: number[]; plane: PlaneSpec }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
-  | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp };
+  | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
+  /** Entre piezas: unir todas en la primera, restar `tools` de `targets` o dejar lo común */
+  | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
+  /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
+  | { type: "split_parts"; parts: PartId[] }
+  | { type: "delete_parts"; parts: PartId[] };
 
 export interface Feature {
   id: number;
   name: string;
   suppressed?: boolean;
   kind: FeatureKind;
+  /** Con qué piezas une, resta o interseca (vacío = las que toca) */
+  scope?: PartId[];
 }
 
 /** Parámetro con nombre: `ancho = 40`, `alto = ancho / 2` */
@@ -293,7 +300,7 @@ export interface ResolvedValue {
 
 /** Referencia que no se encontró: campo de la operación y posición en su lista */
 export interface MissingRef {
-  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent";
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope";
   index: number;
 }
 
@@ -493,6 +500,9 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   mirror: "Simetría",
   split: "Corte",
   import: "Importado",
+  boolean: "Booleana",
+  split_parts: "Separar piezas",
+  delete_parts: "Borrar pieza",
 };
 
 export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
@@ -546,9 +556,19 @@ export function dependencies(kind: FeatureKind): number[] {
       return [...kind.features, ...(kind.pattern.type === "circular" ? axis(kind.pattern.axis) : [])];
     case "mirror":
       return kind.features;
+    case "boolean":
+      return [...kind.targets, ...kind.tools].map((p) => p.feature);
+    case "split_parts":
+    case "delete_parts":
+      return kind.parts.map((p) => p.feature);
     default:
       return [];
   }
+}
+
+/** Dependencias de una operación, incluidas las piezas de su alcance */
+export function featureDeps(f: Feature): number[] {
+  return [...dependencies(f.kind), ...(f.scope ?? []).map((p) => p.feature)];
 }
 
 export function emptySketch(): Sketch {
@@ -1612,7 +1632,7 @@ export function createCadStore() {
   const refreshTool = async (seq: number) => {
     const d = draft();
     const f = d && !d.selecting ? d.doc.features.find((x) => x.id === d.feature) : undefined;
-    const op = f && "op" in f.kind ? f.kind.op : undefined;
+    const op = f && "op" in f.kind && f.kind.type !== "boolean" ? f.kind.op : undefined;
     if (!d || !op) return setTool(null);
     const mesh = decodeCadMesh(await invoke<ArrayBuffer>("cad_tool_mesh", { feature: d.feature }));
     if (seq === sendSeq) setTool(mesh ? { mesh, op } : null);
@@ -1858,7 +1878,7 @@ export function createCadStore() {
       if (open) void acceptDraft();
       const d = committed();
       if (!d) return false;
-      if (d.features.some((f) => dependencies(f.kind).includes(id))) return false;
+      if (d.features.some((f) => featureDeps(f).includes(id))) return false;
       void commit((n) => {
         const i = n.features.findIndex((f) => f.id === id);
         if (i < 0) return;
@@ -1895,7 +1915,7 @@ export function createCadStore() {
       const [moved] = order.splice(i, 1);
       order.splice(to > i ? to - 1 : to, 0, moved);
       const pos = (x: number) => order.findIndex((f) => f.id === x);
-      const broken = order.some((f, k) => dependencies(f.kind).some((dep) => pos(dep) < 0 || pos(dep) > k));
+      const broken = order.some((f, k) => featureDeps(f).some((dep) => pos(dep) < 0 || pos(dep) > k));
       if (broken) return false;
       void commit((n) => {
         if (n.folders?.length) n.folders = fixFolders(n, id, order.map((f) => f.id));
@@ -2039,6 +2059,14 @@ export function createCadStore() {
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
     exportDesign: (path: string, format: string, part?: PartId) => invoke<number>("cad_export", { path, format, part: part ?? null }),
+
+    /** Piezas que hay justo antes de la operación (para elegirlas en su diálogo) */
+    partsBefore(featureId: number): Promise<PartView[]> {
+      const d = doc();
+      const index = d?.features.findIndex((f) => f.id === featureId) ?? -1;
+      if (!d || index < 0) return Promise.resolve([]);
+      return invoke<PartView[]>("cad_parts_at", { document: d, index });
+    },
 
     /** Cambia nombre, color o visibilidad de una pieza (deshacible; no recalcula) */
     setPartProps(id: PartId, change: Omit<Partial<PartProps>, "part">) {

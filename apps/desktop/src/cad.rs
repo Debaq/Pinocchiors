@@ -191,24 +191,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
             axes: m.axes,
         })
     });
-    let parts = eval
-        .part_ranges()
-        .into_iter()
-        .zip(&eval.parts)
-        .enumerate()
-        .map(|(i, ((id, f, e), p))| {
-            let m = p.shape.mass().ok();
-            PartView {
-                id,
-                name: part_name(doc, id, i + 1),
-                faces: [f.start, f.end],
-                edges: [e.start, e.end],
-                volume: m.map_or(0.0, |m| m.volume),
-                area: m.map_or(0.0, |m| m.area),
-                center: m.map_or([0.0; 3], |m| m.center),
-            }
-        })
-        .collect();
+    let parts = part_views(doc, eval);
     Ok(CadResult {
         parts,
         status: eval.status.clone(),
@@ -465,6 +448,40 @@ fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, Stri
             radius: f.radius,
         })
     }
+}
+
+/// Piezas que hay justo antes de la operación `index` de `document` (para
+/// elegirlas en su diálogo: la vista previa ya las muestra cambiadas).
+#[tauri::command]
+pub async fn cad_parts_at(app: AppHandle, document: Document, index: usize) -> Result<Vec<PartView>, String> {
+    in_background(app, move |state| parts_at_impl(state, document, index)).await
+}
+
+fn parts_at_impl(state: &AppState, mut doc: Document, index: usize) -> Result<Vec<PartView>, String> {
+    require_occt()?;
+    doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
+    let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+    Ok(part_views(&doc, &eval))
+}
+
+fn part_views(doc: &Document, eval: &cad_model::Evaluation) -> Vec<PartView> {
+    eval.part_ranges()
+        .into_iter()
+        .zip(&eval.parts)
+        .enumerate()
+        .map(|(i, ((id, f, e), p))| {
+            let m = p.shape.mass().ok();
+            PartView {
+                id,
+                name: part_name(doc, id, i + 1),
+                faces: [f.start, f.end],
+                edges: [e.start, e.end],
+                volume: m.map_or(0.0, |m| m.volume),
+                area: m.map_or(0.0, |m| m.area),
+                center: m.map_or([0.0; 3], |m| m.center),
+            }
+        })
+        .collect()
 }
 
 /// Medidas de una o dos cosas elegidas en el sólido que se ve.
@@ -869,6 +886,7 @@ pub mod bridge {
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_parts_at" => ok(parts_at_impl(state, arg(args, "document")?, arg(args, "index")?)?),
             "cad_measure" => ok(measure_impl(state, &arg::<Vec<cad_model::MeasureItem>>(args, "items")?)?),
             "cad_resolve_refs" => {
                 let (faces, edges): (Vec<FaceRef>, Vec<EdgeRef>) = (arg(args, "faces")?, arg(args, "edges")?);

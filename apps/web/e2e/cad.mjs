@@ -231,13 +231,25 @@ const scenarios = {
     await sleep(2000);
     const holeVol = Math.PI * 9 * 20;
     near((await body()).volume, 16000 - holeVol, 0.5, "todo");
-    const rows = () => b.eval(`[...document.querySelectorAll("[data-feature-row]")].map((r) => { const b = r.getBoundingClientRect(); return [b.x + b.width / 2, b.top, b.bottom]; })`);
+    // El árbol puede quedar abajo del panel: centrarlo antes de medir
+    const rows = () =>
+      b.eval(`(() => {
+        const all = [...document.querySelectorAll("[data-feature-row]")];
+        all[Math.floor(all.length / 2)]?.scrollIntoView({ block: "center" });
+        return all.map((r) => { const b = r.getBoundingClientRect(); return [b.x + b.width / 2, b.top, b.bottom]; });
+      })()`);
     /** Punto del hueco k del árbol (0 = antes de la primera fila) */
     const gap = async (k) => {
       const r = await rows();
       return k < r.length ? [r[k][0], r[k][1] + 2] : [r[r.length - 1][0], r[r.length - 1][2] + 6];
     };
-    const bar = () => b.eval(`(() => { const r = document.querySelector("[data-rollback-bar]").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const bar = () =>
+      b.eval(`(() => {
+        const all = [...document.querySelectorAll("[data-feature-row]")];
+        all[Math.floor(all.length / 2)]?.scrollIntoView({ block: "center" });
+        const r = document.querySelector("[data-rollback-bar]").getBoundingClientRect();
+        return [r.x + r.width / 2, r.y + r.height / 2];
+      })()`);
     const rollback = async () => (await call("cad_get_document")).rollback ?? null;
     // La barra al final; llevarla debajo de la primera caja
     await b.drag(...(await bar()), ...(await gap(1)));
@@ -670,6 +682,65 @@ const scenarios = {
     rmSync(one, { force: true });
     await call("cad_export", { path: one, format: "stl", part: ps[1].id });
     if (!existsSync(one)) throw new Error("no se exportó la pieza sola");
+  },
+
+  async "piezas: booleana, separar y borrar"(b) {
+    const parts = async () => (await evaluate()).parts;
+    /** Tilda una pieza dentro de la lista con ese título */
+    const tick = (list, name) =>
+      b.eval(`(() => {
+        const box = document.querySelector('[aria-label=${JSON.stringify(list)}]');
+        const l = [...box.querySelectorAll("label")].find((x) => x.textContent.trim() === ${JSON.stringify(name)});
+        l.click();
+        return !!l;
+      })()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un cilindro como pieza aparte que se mete en la caja
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    doc.features.push({ id: box.id + 1, name: "Cilindro 1", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 4, height: 40 }, origin: [10, 0, -20], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.next_id = box.id + 2;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    if ((await parts()).length !== 2) throw new Error("no hay dos piezas");
+    // Booleana: restar el cilindro de la caja
+    await b.clickText("Booleana");
+    await sleep(1500);
+    await tick("Piezas que quedan", "Pieza 1");
+    await sleep(800);
+    await tick("Piezas que restan", "Pieza 2");
+    await sleep(1500);
+    await accept(b);
+    let ps = await parts();
+    if (ps.length !== 1) throw new Error(`booleana: ${ps.length} piezas`);
+    near(ps[0].volume, 8000 - (Math.PI * 16 * 20) / 2, 0.5, "caja menos medio cilindro");
+    // Un corte fino por el medio deja dos sólidos sueltos en una pieza: separarlos
+    const d2 = await call("cad_get_document");
+    d2.features.push({ id: d2.next_id, name: "Ranura", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 2, dy: 30, dz: 30, centered: true, centered_z: true }, origin: [-3, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } });
+    d2.next_id += 1;
+    await call("cad_set_document", { document: d2 });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    if ((await parts()).length !== 1) throw new Error("la ranura separó piezas sola");
+    await b.clickText("Separar");
+    await sleep(1500);
+    await accept(b);
+    ps = await parts();
+    if (ps.length !== 2) throw new Error(`separar: ${ps.length} piezas`);
+    // Borrar la segunda desde la lista de piezas
+    const total = ps[0].volume + ps[1].volume;
+    await b.eval(`document.querySelector('[aria-label="Borrar Pieza 2"]').click()`);
+    await sleep(1500);
+    await accept(b);
+    ps = await parts();
+    if (ps.length !== 1) throw new Error(`borrar: ${ps.length} piezas`);
+    if (!(ps[0].volume < total)) throw new Error("no se borró");
+    const kinds = (await call("cad_get_document")).features.map((f) => f.kind.type);
+    if (kinds.join(",") !== "primitive,primitive,boolean,primitive,split_parts,delete_parts") throw new Error(`historial: ${kinds}`);
   },
 
   async "caja de regiones al editar una extrusión"(b) {

@@ -8,6 +8,7 @@ import {
   MATERIALS,
   partColor,
   partHidden,
+  samePart,
   OP_LABELS,
   PLANE_LABELS,
   constraintIds,
@@ -37,6 +38,7 @@ import {
   type MissingRef,
   type P2,
   type P3,
+  type PartId,
   type PartView,
   type PatternKind,
   type PrimitiveShape,
@@ -317,6 +319,26 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     });
   };
 
+  /** Piezas de las caras, aristas o vértices elegidos en el visor (en orden) */
+  const pickedParts = (): PartId[] => {
+    const parts = store.result()?.parts ?? [];
+    const out: PartId[] = [];
+    for (const p of ui.picks()) {
+      const face = p.kind === "face" ? p.face : undefined;
+      const edge = p.kind === "edge" ? p.edge : undefined;
+      const part = parts.find((x) => (face !== undefined && x.faces[0] <= face && face < x.faces[1]) || (edge !== undefined && x.edges[0] <= edge && edge < x.edges[1]));
+      if (part && !out.some((o) => samePart(o, part.id))) out.push(part.id);
+    }
+    return out;
+  };
+
+  /** Booleana: con piezas elegidas, la primera es la que queda y las demás, las que restan */
+  const addBoolean = () => {
+    const [first, ...rest] = pickedParts();
+    ui.clearPicks();
+    void store.addFeature({ type: "boolean", op: "subtract", targets: first ? [first] : [], tools: rest, keep_tools: false });
+  };
+
   const addMirror = () => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
@@ -426,6 +448,9 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onMirror={addMirror}
                 onSplit={() => void store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false })}
                 onImport={() => void importStep()}
+                onBoolean={addBoolean}
+                onSplitParts={() => void store.addFeature({ type: "split_parts", parts: pickedParts() })}
+                onDeleteParts={() => void store.addFeature({ type: "delete_parts", parts: pickedParts() })}
                 hasBody={!!store.result()?.body}
               />
 
@@ -565,6 +590,9 @@ const AddSection: Component<{
   onMirror: () => void;
   onSplit: () => void;
   onImport: () => void;
+  onBoolean: () => void;
+  onSplitParts: () => void;
+  onDeleteParts: () => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -602,6 +630,11 @@ const AddSection: Component<{
           <B label="Patrón circular" onClick={() => props.onPattern("circular")} disabled={!props.hasBody} />
           <B label="Simetría" onClick={props.onMirror} disabled={!props.hasBody} />
           <B label="Cortar por plano" onClick={props.onSplit} disabled={!props.hasBody} />
+        </div>
+        <div class="grid grid-cols-3 gap-1.5">
+          <B label="Booleana" onClick={props.onBoolean} disabled={!props.hasBody} title="Unir, restar o intersecar piezas entre sí" />
+          <B label="Separar" onClick={props.onSplitParts} disabled={!props.hasBody} title="Cada sólido suelto de una pieza pasa a ser una pieza" />
+          <B label="Borrar pieza" onClick={props.onDeleteParts} disabled={!props.hasBody} />
         </div>
       </div>
     </Section>
@@ -1428,7 +1461,75 @@ const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "boolean" && (f().kind as Extract<FeatureKind, { type: "boolean" }>)}>
+            {(k) => (
+              <>
+                <Row label="Operación">
+                  <Select
+                    options={[
+                      { value: "union", label: "Unir" },
+                      { value: "subtract", label: "Restar" },
+                      { value: "intersect", label: "Intersecar" },
+                    ]}
+                    value={k().op}
+                    onChange={(v) => update((x) => x.type === "boolean" && (x.op = v as "union" | "subtract" | "intersect"))}
+                  />
+                </Row>
+                <PartChecklist
+                  store={props.store}
+                  featureId={f().id}
+                  label={k().op === "subtract" ? "Piezas que quedan" : "Piezas"}
+                  empty="Elegir las piezas"
+                  value={k().targets}
+                  missing={lost("targets")}
+                  onChange={(v) => update((x) => x.type === "boolean" && (x.targets = v))}
+                />
+                <Show when={k().op !== "union" || k().tools.length > 0}>
+                  <PartChecklist
+                    store={props.store}
+                    featureId={f().id}
+                    label={k().op === "subtract" ? "Piezas que restan" : "Con"}
+                    empty={k().op === "subtract" ? "Elegir con qué restar" : "Ninguna más"}
+                    value={k().tools}
+                    missing={lost("tools")}
+                    onChange={(v) => update((x) => x.type === "boolean" && (x.tools = v))}
+                  />
+                </Show>
+                <Show when={k().op === "subtract"}>
+                  <Checkbox small label="Conservar las que restan" checked={k().keep_tools} onChange={(c) => update((x) => x.type === "boolean" && (x.keep_tools = c))} />
+                </Show>
+              </>
+            )}
+          </Match>
+          <Match when={(f().kind.type === "split_parts" || f().kind.type === "delete_parts") && f().kind}>
+            {(k) => {
+              const kind = k() as Extract<FeatureKind, { type: "split_parts" | "delete_parts" }>;
+              return (
+                <PartChecklist
+                  store={props.store}
+                  featureId={f().id}
+                  label={kind.type === "split_parts" ? "Piezas a separar" : "Piezas a borrar"}
+                  empty={kind.type === "split_parts" ? "Todas" : "Elegir las piezas"}
+                  value={kind.parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => (x.type === "split_parts" || x.type === "delete_parts") && (x.parts = v))}
+                />
+              );
+            }}
+          </Match>
         </Switch>
+        {/* Unir, restar o intersecar: con qué piezas (sin elegir, las que toca) */}
+        <Show when={"op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new"}>
+          <PartChecklist
+            store={props.store}
+            featureId={f().id}
+            label="Con las piezas"
+            empty="Las que toca"
+            value={f().scope ?? []}
+            missing={lost("scope")}
+            onChange={(v) => void props.store.updateFeature(f().id, (x) => (x.scope = v.length ? v : undefined))}
+          />
+        </Show>
         <p class="text-[11px] text-text-dim">{planeLabelFor(f())}</p>
       </div>
     </Section>
@@ -1438,6 +1539,61 @@ const FeatureEditor: Component<{
 function planeLabelFor(f: Feature): string {
   return f.kind.type === "sketch" ? `Sobre: ${planeLabel(f.kind.plane)}` : "";
 }
+
+// ─── Piezas en los diálogos ───────────────────────────────────────────────
+
+/** Lista de piezas que hay antes de la operación para tildar; las perdidas en rojo */
+const PartChecklist: Component<{
+  store: CadStore;
+  featureId: number;
+  label: string;
+  /** Qué significa no elegir ninguna */
+  empty: string;
+  value: PartId[];
+  /** Posiciones de `value` que el último cálculo no encontró */
+  missing?: number[];
+  onChange: (v: PartId[]) => void;
+}> = (props) => {
+  const [parts, setParts] = createSignal<PartView[]>([]);
+  let seq = 0;
+  createEffect(() => {
+    props.store.doc();
+    const n = ++seq;
+    void props.store.partsBefore(props.featureId).then((p) => n === seq && setParts(p));
+  });
+  const has = (id: PartId) => props.value.some((x) => samePart(x, id));
+  const gone = () => props.value.filter((v, i) => (props.missing ?? []).includes(i) || (parts().length > 0 && !parts().some((p) => samePart(p.id, v))));
+  return (
+    <div class="space-y-1" aria-label={props.label}>
+      <span class="text-xs text-text-muted">{props.label}</span>
+      <Show when={parts().length > 0} fallback={<p class="text-[11px] text-text-dim">Todavía no hay piezas</p>}>
+        <For each={parts()}>
+          {(p) => (
+            <Checkbox
+              small
+              label={p.name}
+              checked={has(p.id)}
+              onChange={(c) => props.onChange(c ? [...props.value, p.id] : props.value.filter((x) => !samePart(x, p.id)))}
+            />
+          )}
+        </For>
+      </Show>
+      <For each={gone()}>
+        {(g) => (
+          <div class="flex items-center justify-between text-[11px] text-error">
+            <span>Pieza no encontrada</span>
+            <button aria-label="Quitar la pieza no encontrada" onClick={() => props.onChange(props.value.filter((x) => !samePart(x, g)))}>
+              <Icons.X size={10} />
+            </button>
+          </div>
+        )}
+      </For>
+      <Show when={props.value.length === 0}>
+        <p class="text-[11px] text-text-dim">{props.empty}</p>
+      </Show>
+    </div>
+  );
+};
 
 /** Qué regiones del sketch usar: todas o las elegidas con clic en el visor */
 // ─── Cajas de selección ───────────────────────────────────────────────────
@@ -1792,6 +1948,16 @@ const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | 
                         </button>
                       )}
                     </For>
+                  </span>
+                  <span class="hidden group-hover:flex">
+                    <IconButton
+                      aria-label={`Borrar ${p.name}`}
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => void props.store.addFeature({ type: "delete_parts", parts: [p.id] })}
+                    >
+                      <Icons.Trash size={11} />
+                    </IconButton>
                   </span>
                   <IconButton
                     aria-label={hidden() ? `Mostrar ${p.name}` : `Ocultar ${p.name}`}

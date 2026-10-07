@@ -136,6 +136,8 @@ unsafe extern "C" {
     pub fn cad_edge_face_pairs(s: *const CadShape, out: *mut i32) -> i32;
     pub fn cad_sub_shape(s: *const CadShape, kind: i32, index: i32) -> *mut CadShape;
     pub fn cad_count_vertices(s: *const CadShape) -> i32;
+    pub fn cad_count_solids(s: *const CadShape) -> i32;
+    pub fn cad_face_indices_in(parent: *const CadShape, child: *const CadShape, out: *mut i32) -> i32;
     pub fn cad_vertex_point(s: *const CadShape, index: i32, out: *mut f64) -> i32;
     pub fn cad_make_vertex(p: *const f64) -> *mut CadShape;
     pub fn cad_min_distance(a: *const CadShape, b: *const CadShape, pa: *mut f64, pb: *mut f64) -> f64;

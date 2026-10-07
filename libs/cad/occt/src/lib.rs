@@ -616,6 +616,21 @@ impl Shape {
         wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 1, index as i32) })
     }
 
+    /// Los sólidos de la forma, cada uno como forma propia.
+    pub fn solids(&self) -> Result<Vec<Shape>> {
+        let n = unsafe { ffi::cad_count_solids(self.ptr()) }.max(0) as usize;
+        (0..n).map(|i| wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 3, i as i32) })).collect()
+    }
+
+    /// Para cada cara de `part` (que salió de esta forma), su índice acá.
+    pub fn face_indices_of(&self, part: &Shape) -> Result<Vec<Option<usize>>> {
+        let mut out = vec![-1i32; part.face_count()];
+        if !out.is_empty() && unsafe { ffi::cad_face_indices_in(self.ptr(), part.ptr(), out.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        Ok(out.into_iter().map(|i| (i >= 0).then_some(i as usize)).collect())
+    }
+
     pub fn vertex_count(&self) -> usize {
         unsafe { ffi::cad_count_vertices(self.ptr()) }.max(0) as usize
     }

@@ -92,8 +92,18 @@ se pueden combinar piezas entre sí. Es la base de los ensambles
    renombrar con doble clic, ojo y exportar STL/3MF/STEP por pieza; el visor colorea por pieza
    (paleta si no se eligió) y saca del dibujo y de la selección las ocultas. `cad_export`
    acepta `part`; sin ella, 3MF/STL/OBJ llevan un objeto por pieza con su nombre.*
-3. **Alcance explícito** ("Con") y operación **Booleana** entre piezas.
-4. **Separar y borrar** piezas.
+3. **Alcance explícito** ("Con") y operación **Booleana** entre piezas. *Hecha el
+   2026-10-07: `Feature.scope: Vec<PartId>` (en la operación y no en cada struct: vale para
+   toda la que tenga `op`; entra en la huella de la caché); con alcance, unir funde aunque no
+   se toquen y restar o intersectar solo cambian esas piezas. `FeatureKind::Boolean { op:
+   Union | Subtract | Intersect, targets, tools, keep_tools }`. Las piezas perdidas son
+   referencias perdidas (`scope`, `targets`, `tools`, `parts`). El diálogo lista las piezas
+   que hay justo antes de la operación (`cad_parts_at`, con la barra de retroceso y la caché)
+   para tildarlas; "Booleana" con piezas elegidas en el visor arma una resta.*
+4. **Separar y borrar** piezas. *Hecha el 2026-10-07: `SplitParts { parts }` (vacío = todas;
+   cada sólido suelto es una pieza nueva con id de la operación; las caras conservan su
+   origen por `face_indices_of`) y `DeleteParts { parts }`, también desde el tacho de la
+   lista de piezas.*
 5. **Material por pieza** (masa por pieza, enlaza con [PLAN_INSPECCION.md](PLAN_INSPECCION.md)).
 6. **STEP con nombres y colores** (XCAF).
 

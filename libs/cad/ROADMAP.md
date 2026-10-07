@@ -385,3 +385,7 @@ cargo test -p cad-model
   tener varias piezas ("Nueva pieza" en el selector de operación; unir algo que no toca nada
   también la crea). Cada operación actúa sobre las piezas que corresponden; la sección
   "Piezas" da color, nombre, visibilidad y exportación por pieza.
+- **2026-10-07 Booleanas entre piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fases 3 y 4): "Con las
+  piezas" en unir/restar/intersecar, operación Booleana (unir, restar conservando o no,
+  intersecar), Separar sólidos sueltos en piezas y Borrar pieza. Las dependencias por pieza
+  impiden reordenar una booleana antes de lo que creó sus piezas.

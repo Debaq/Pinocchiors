@@ -145,7 +145,11 @@ int32_t cad_closest_edge(const CadShape* s, const double* point, const double* d
 double cad_face_distance(const CadShape* s, int32_t index, const double* point);
 double cad_edge_distance(const CadShape* s, int32_t index, const double* point);
 
-// Cara (kind 0), arista (1) o vértice (2) `index` de la forma, como forma propia.
+// Sólidos de la forma (un sólido suelto, o los de un compuesto).
+int32_t cad_count_solids(const CadShape* s);
+// Para cada cara de `child` (que salió de `parent`), su índice en `parent` (−1 si no está).
+int32_t cad_face_indices_in(const CadShape* parent, const CadShape* child, int32_t* out);
+// Cara (kind 0), arista (1), vértice (2) o sólido (3) `index` de la forma, como forma propia.
 CadShape* cad_sub_shape(const CadShape* s, int32_t kind, int32_t index);
 int32_t cad_count_vertices(const CadShape* s);
 // Coordenadas del vértice `index` (0 si no existe).

@@ -454,3 +454,25 @@ fn principal_moments_of_a_box() {
     }
     assert!((m.center[2] - 15.0).abs() < 1e-9);
 }
+
+#[test]
+fn solids_of_a_compound_keep_their_faces() {
+    if !cad_occt::available() {
+        return;
+    }
+    let a = Shape::make_box(Frame::at([0.0; 3]), 10.0, 10.0, 10.0).unwrap();
+    let b = Shape::make_box(Frame::at([20.0, 0.0, 0.0]), 10.0, 10.0, 10.0).unwrap();
+    let both = a.union(&b).unwrap();
+    let solids = both.solids().unwrap();
+    assert_eq!(solids.len(), 2);
+    let mut seen = vec![false; both.face_count()];
+    for s in &solids {
+        assert_eq!(s.face_count(), 6);
+        for i in both.face_indices_of(s).unwrap() {
+            let i = i.expect("cada cara del sólido está en el compuesto");
+            assert!(!seen[i]);
+            seen[i] = true;
+        }
+    }
+    assert!(seen.iter().all(|&x| x));
+}

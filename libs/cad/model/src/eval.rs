@@ -173,6 +173,7 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
     f.suppressed.hash(&mut h);
     rolled_back.hash(&mut h);
     serde_json::to_string(&f.kind).unwrap_or_default().hash(&mut h);
+    serde_json::to_string(&f.scope).unwrap_or_default().hash(&mut h);
     h.finish()
 }
 
@@ -349,6 +350,8 @@ struct Ctx<'a> {
     /// Referencias no encontradas y avisos de la operación en curso.
     missing: RefCell<Vec<MissingRef>>,
     warnings: RefCell<Vec<String>>,
+    /// Alcance de la operación en curso (vacío = las piezas que toca).
+    scope: Vec<PartId>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -365,6 +368,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         ev: Evaluation { parameters: res.parameters, bindings: res.bindings, ..Default::default() },
         missing: RefCell::default(),
         warnings: RefCell::default(),
+        scope: Vec::new(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     let mut key = 0u64;
@@ -390,6 +394,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             FeatureState::Suppressed
         } else {
             ctx.ev.recomputed += 1;
+            ctx.scope = f.scope.clone();
             let result = ctx.feature(f);
             let missing = ctx.missing.take();
             let warnings = ctx.warnings.take();
@@ -492,6 +497,36 @@ impl Ctx<'_> {
         p.tags = tags;
     }
 
+    /// Posiciones en `parts` de las piezas pedidas; las que no están se anotan
+    /// como referencias perdidas del campo `field` (falla si no queda ninguna).
+    fn find_parts(&self, field: &str, ids: &[PartId]) -> R<Vec<usize>> {
+        let mut out = Vec::new();
+        for (k, id) in ids.iter().enumerate() {
+            match self.ev.parts.iter().position(|p| p.id == *id) {
+                Some(i) if !out.contains(&i) => out.push(i),
+                Some(_) => {}
+                None => self.miss(field, k),
+            }
+        }
+        if out.is_empty() && !ids.is_empty() {
+            return Err("no se encontró ninguna de las piezas elegidas".into());
+        }
+        if out.len() < ids.len() {
+            self.warn(format!("faltan {} de {} piezas", ids.len() - out.len(), ids.len()));
+        }
+        Ok(out)
+    }
+
+    /// Piezas sobre las que actúa la operación: las del alcance o las que toca.
+    fn targets(&self, tool: &Shape) -> R<Vec<usize>> {
+        if self.scope.is_empty() {
+            return Ok(self.touching(tool));
+        }
+        let mut v = self.find_parts("scope", &self.scope)?;
+        v.sort_unstable();
+        Ok(v)
+    }
+
     fn apply(&mut self, feature: FeatureId, tool: Tagged, op: BodyOp) -> R<()> {
         if self.ev.parts.is_empty() && matches!(op, BodyOp::Cut | BodyOp::Intersect) {
             return Err("no hay sólido que cortar".into());
@@ -499,7 +534,7 @@ impl Ctx<'_> {
         match op {
             BodyOp::New => self.new_part(feature, tool),
             BodyOp::Join => {
-                let touched = self.touching(&tool.shape);
+                let touched = self.targets(&tool.shape)?;
                 if touched.is_empty() {
                     self.new_part(feature, tool);
                 } else {
@@ -523,7 +558,7 @@ impl Ctx<'_> {
                 }
             }
             BodyOp::Cut => {
-                for i in self.touching(&tool.shape).into_iter().rev() {
+                for i in self.targets(&tool.shape)?.into_iter().rev() {
                     let part = self.ev.parts[i].shape.clone();
                     let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
                     let n = new.face_count();
@@ -538,11 +573,15 @@ impl Ctx<'_> {
                 }
             }
             BodyOp::Intersect => {
-                // Lo que la herramienta no toca desaparece
-                let touched = self.touching(&tool.shape);
+                // Automático: lo que la herramienta no toca desaparece; con
+                // alcance, solo cambian las piezas elegidas
+                let explicit = !self.scope.is_empty();
+                let touched = self.targets(&tool.shape)?;
                 for i in (0..self.ev.parts.len()).rev() {
                     if !touched.contains(&i) {
-                        self.ev.parts.remove(i);
+                        if !explicit {
+                            self.ev.parts.remove(i);
+                        }
                         continue;
                     }
                     let part = self.ev.parts[i].shape.clone();
@@ -605,6 +644,93 @@ impl Ctx<'_> {
             let part = self.ev.parts[pi].shape.clone();
             let (new, h) = with_history(|| op(&part, &local)).map_err(err)?;
             self.replace_part(pi, new, &h, |k| extra(k + offset));
+        }
+        self.sync();
+        Ok(())
+    }
+
+    /// Booleana entre piezas ya hechas.
+    fn boolean(&mut self, op: PartBoolean, targets: &[PartId], tools: &[PartId], keep_tools: bool) -> R<()> {
+        if targets.is_empty() {
+            return Err("elegir las piezas".into());
+        }
+        let t = self.find_parts("targets", targets)?;
+        let tl = self.find_parts("tools", tools)?;
+        let tagged = |i: usize| Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() };
+        let mut remove: Vec<usize> = Vec::new();
+        match op {
+            PartBoolean::Union => {
+                // Todas en la primera
+                let all: Vec<usize> = t.iter().chain(tl.iter()).copied().fold(Vec::new(), |mut v, i| {
+                    if !v.contains(&i) {
+                        v.push(i);
+                    }
+                    v
+                });
+                if all.len() < 2 {
+                    return Err("hacen falta al menos dos piezas para unir".into());
+                }
+                let fused = fuse_tagged(all.iter().map(|&i| tagged(i)).collect())?;
+                let p = &mut self.ev.parts[all[0]];
+                p.shape = fused.shape;
+                p.tags = fused.tags;
+                remove.extend(&all[1..]);
+            }
+            PartBoolean::Subtract => {
+                let tl: Vec<usize> = tl.into_iter().filter(|i| !t.contains(i)).collect();
+                if tl.is_empty() {
+                    return Err("elegir las piezas que restan".into());
+                }
+                let tool = fuse_tagged(tl.iter().map(|&i| tagged(i)).collect())?;
+                for &i in &t {
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
+                    let n = new.face_count();
+                    if n == 0 {
+                        remove.push(i);
+                        continue;
+                    }
+                    let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
+                    let p = &mut self.ev.parts[i];
+                    p.shape = new;
+                    p.tags = tags;
+                }
+                if !keep_tools {
+                    remove.extend(tl);
+                }
+            }
+            PartBoolean::Intersect => {
+                // Lo común a todas, en la primera
+                let all: Vec<usize> = t.iter().chain(tl.iter()).copied().fold(Vec::new(), |mut v, i| {
+                    if !v.contains(&i) {
+                        v.push(i);
+                    }
+                    v
+                });
+                if all.len() < 2 {
+                    return Err("hacen falta al menos dos piezas para intersecar".into());
+                }
+                let mut acc = tagged(all[0]);
+                for &i in &all[1..] {
+                    let other = tagged(i);
+                    let (new, h) = with_history(|| acc.shape.intersect(&other.shape)).map_err(err)?;
+                    let tags = propagate(&[&acc.tags, &other.tags], &h, new.face_count()).0;
+                    acc = Tagged { shape: new, tags };
+                }
+                remove.extend(&all[1..]);
+                if acc.shape.face_count() == 0 {
+                    remove.push(all[0]);
+                } else {
+                    let p = &mut self.ev.parts[all[0]];
+                    p.shape = acc.shape;
+                    p.tags = acc.tags;
+                }
+            }
+        }
+        remove.sort_unstable();
+        remove.dedup();
+        for i in remove.into_iter().rev() {
+            self.ev.parts.remove(i);
         }
         self.sync();
         Ok(())
@@ -889,6 +1015,50 @@ impl Ctx<'_> {
                     let m = mirrored(&tool)?;
                     self.apply(f.id, m, op)?;
                 }
+                Ok(())
+            }
+            FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(*op, targets, tools, *keep_tools),
+            FeatureKind::SplitParts { parts } => {
+                self.body()?;
+                let which = if parts.is_empty() { (0..self.ev.parts.len()).collect() } else { self.find_parts("parts", parts)? };
+                // De atrás para adelante: las piezas nuevas van al final
+                let mut added = 0u32;
+                for &i in which.iter().rev() {
+                    let whole = self.ev.parts[i].shape.clone();
+                    let solids = whole.solids().map_err(err)?;
+                    if solids.len() < 2 {
+                        continue;
+                    }
+                    let tags_of = |s: &Shape| -> R<Vec<Vec<FaceTag>>> {
+                        let idx = whole.face_indices_of(s).map_err(err)?;
+                        Ok(idx.iter().map(|k| k.and_then(|k| self.ev.parts[i].tags.get(k).cloned()).unwrap_or_default()).collect())
+                    };
+                    let pieces: Vec<Tagged> = solids.iter().map(|s| Ok(Tagged { tags: tags_of(s)?, shape: s.clone() })).collect::<R<_>>()?;
+                    let mut it = pieces.into_iter();
+                    let first = it.next().unwrap();
+                    self.ev.parts[i].shape = first.shape;
+                    self.ev.parts[i].tags = first.tags;
+                    for t in it {
+                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags });
+                        added += 1;
+                    }
+                }
+                if added == 0 {
+                    self.warn("no había sólidos sueltos para separar".into());
+                }
+                self.sync();
+                Ok(())
+            }
+            FeatureKind::DeleteParts { parts } => {
+                if parts.is_empty() {
+                    return Err("elegir al menos una pieza".into());
+                }
+                let mut which = self.find_parts("parts", parts)?;
+                which.sort_unstable();
+                for i in which.into_iter().rev() {
+                    self.ev.parts.remove(i);
+                }
+                self.sync();
                 Ok(())
             }
             FeatureKind::Split { plane, flip } => {

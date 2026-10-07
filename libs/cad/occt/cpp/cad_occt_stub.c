@@ -55,6 +55,8 @@ void cad_history_free(CadHistory* h) { (void)h; }
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* o) { (void)s; (void)o; return 0; }
 CadShape* cad_sub_shape(const CadShape* s, int32_t k, int32_t i) { (void)s; (void)k; (void)i; FAIL_PTR; }
 int32_t cad_count_vertices(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_count_solids(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_face_indices_in(const CadShape* p, const CadShape* c, int32_t* o) { (void)p; (void)c; (void)o; FAIL_INT; }
 int32_t cad_vertex_point(const CadShape* s, int32_t i, double* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 CadShape* cad_make_vertex(const double* p) { (void)p; FAIL_PTR; }
 double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb) { (void)a; (void)b; (void)pa; (void)pb; return -1.0; }

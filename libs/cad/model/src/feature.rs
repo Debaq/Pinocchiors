@@ -230,6 +230,31 @@ pub enum FeatureKind {
         #[serde(default)]
         op: BodyOp,
     },
+    /// Booleana entre piezas: unir todas en la primera de `targets`, restar
+    /// `tools` de cada una de `targets` (conservándolas o no) o dejar lo común.
+    Boolean {
+        op: PartBoolean,
+        targets: Vec<PartId>,
+        #[serde(default)]
+        tools: Vec<PartId>,
+        #[serde(default)]
+        keep_tools: bool,
+    },
+    /// Separa en piezas los sólidos sueltos de cada pieza (vacío = todas).
+    SplitParts {
+        #[serde(default)]
+        parts: Vec<PartId>,
+    },
+    /// Saca piezas del diseño (desde acá en adelante).
+    DeleteParts { parts: Vec<PartId> },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PartBoolean {
+    Union,
+    Subtract,
+    Intersect,
 }
 
 impl FeatureKind {
@@ -254,6 +279,9 @@ impl FeatureKind {
                 d
             }
             FeatureKind::Mirror { features, .. } => features.clone(),
+            // Las operaciones que crearon las piezas que usa
+            FeatureKind::Boolean { targets, tools, .. } => targets.iter().chain(tools).map(|p| p.feature).collect(),
+            FeatureKind::SplitParts { parts } | FeatureKind::DeleteParts { parts } => parts.iter().map(|p| p.feature).collect(),
             _ => vec![],
         }
     }
@@ -279,6 +307,9 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "Simetría",
             FeatureKind::Split { .. } => "Corte",
             FeatureKind::Import { .. } => "Importado",
+            FeatureKind::Boolean { .. } => "Booleana",
+            FeatureKind::SplitParts { .. } => "Separar piezas",
+            FeatureKind::DeleteParts { .. } => "Borrar pieza",
         }
     }
 }
@@ -290,4 +321,7 @@ pub struct Feature {
     #[serde(default)]
     pub suppressed: bool,
     pub kind: FeatureKind,
+    /// Con qué piezas une, resta o interseca (vacío = las que toca).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scope: Vec<PartId>,
 }

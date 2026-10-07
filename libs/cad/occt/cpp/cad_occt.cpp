@@ -895,10 +895,23 @@ double cad_edge_distance(const CadShape* s, int32_t index, const double* point) 
 
 CadShape* cad_sub_shape(const CadShape* s, int32_t kind, int32_t index) {
     return guard("elemento", (CadShape*)nullptr, [&] {
-        TopAbs_ShapeEnum t = kind == 0 ? TopAbs_FACE : kind == 1 ? TopAbs_EDGE : TopAbs_VERTEX;
+        TopAbs_ShapeEnum t = kind == 0 ? TopAbs_FACE : kind == 1 ? TopAbs_EDGE : kind == 2 ? TopAbs_VERTEX : TopAbs_SOLID;
         auto m = map_of(s->s, t);
         if (index < 0 || index >= m.Extent()) throw Standard_Failure("elemento inexistente");
         return new CadShape{m(index + 1)};
+    });
+}
+
+int32_t cad_count_solids(const CadShape* s) {
+    return guard("sólidos", 0, [&] { return (int32_t)map_of(s->s, TopAbs_SOLID).Extent(); });
+}
+
+int32_t cad_face_indices_in(const CadShape* parent, const CadShape* child, int32_t* out) {
+    return guard("caras", 0, [&] {
+        auto pm = map_of(parent->s, TopAbs_FACE);
+        auto cm = map_of(child->s, TopAbs_FACE);
+        for (int i = 1; i <= cm.Extent(); i++) out[i - 1] = pm.FindIndex(cm(i)) - 1;
+        return 1;
     });
 }
 

@@ -158,3 +158,103 @@ fn cutting_a_whole_part_removes_it_and_intersect_drops_untouched() {
     assert_eq!(ev.parts.len(), 1);
     assert_relative_eq!(volumes(&ev)[0], 125.0, max_relative = 1e-9);
 }
+
+fn part(feature: FeatureId) -> PartId {
+    PartId { feature, index: 0 }
+}
+
+#[test]
+fn explicit_scope_limits_join_cut_and_intersect() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let a = doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let b = doc.add(cube(30.0, 10.0, BodyOp::New));
+    // Un agujero que atraviesa las dos, pero solo para la primera
+    let h = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 40.0, dy: 2.0, dz: 2.0, centered: false, centered_z: false },
+        origin: [-1.0, 4.0, 4.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Cut,
+    }));
+    doc.get_mut(h).unwrap().scope = vec![part(a)];
+    let ev = doc.evaluate();
+    let v = volumes(&ev);
+    assert_relative_eq!(v[0], 1000.0 - 40.0, max_relative = 1e-9);
+    assert_relative_eq!(v[1], 1000.0, max_relative = 1e-9);
+    // Unir con alcance: funde aunque no se toquen
+    let j = doc.add(cube(60.0, 5.0, BodyOp::Join));
+    doc.get_mut(j).unwrap().scope = vec![part(b)];
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 2);
+    assert_relative_eq!(volumes(&ev)[1], 1125.0, max_relative = 1e-9);
+    // Un alcance que ya no existe: advertencia y referencia perdida
+    doc.get_mut(j).unwrap().scope = vec![part(b), PartId { feature: b, index: 7 }];
+    let ev = doc.evaluate();
+    assert!(matches!(ev.state(j), Some(FeatureState::Warning { missing, .. }) if missing[0].field == "scope" && missing[0].index == 1));
+}
+
+#[test]
+fn boolean_split_and_delete_parts() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let a = doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let b = doc.add(cube(5.0, 10.0, BodyOp::New));
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 2, "nueva pieza aunque se cruce");
+    // Restar conservando la herramienta
+    let s = doc.add(FeatureKind::Boolean { op: PartBoolean::Subtract, targets: vec![part(a)], tools: vec![part(b)], keep_tools: true });
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 2);
+    assert_relative_eq!(volumes(&ev)[0], 500.0, max_relative = 1e-9);
+    // Sin conservar: queda una
+    if let FeatureKind::Boolean { keep_tools, .. } = &mut doc.get_mut(s).unwrap().kind {
+        *keep_tools = false;
+    }
+    assert_eq!(doc.evaluate().parts.len(), 1);
+    // Unir
+    if let FeatureKind::Boolean { op, .. } = &mut doc.get_mut(s).unwrap().kind {
+        *op = PartBoolean::Union;
+    }
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 1);
+    assert_relative_eq!(volumes(&ev)[0], 1500.0, max_relative = 1e-9);
+    // Intersecar
+    if let FeatureKind::Boolean { op, .. } = &mut doc.get_mut(s).unwrap().kind {
+        *op = PartBoolean::Intersect;
+    }
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 1);
+    assert_relative_eq!(volumes(&ev)[0], 500.0, max_relative = 1e-9);
+    assert!(doc.get(s).unwrap().kind.dependencies().contains(&b));
+
+    // Separar: una pieza con dos sólidos sueltos (un corte por el medio)
+    let mut doc = Document::new();
+    let a = doc.add(cube(0.0, 10.0, BodyOp::Join));
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 2.0, dy: 20.0, dz: 20.0, centered: false, centered_z: false },
+        origin: [4.0, -5.0, -5.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Cut,
+    }));
+    assert_eq!(doc.evaluate().parts.len(), 1);
+    let sp = doc.add(FeatureKind::SplitParts { parts: vec![] });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 2);
+    assert_eq!(ev.parts[0].id, part(a));
+    assert_eq!(ev.parts[1].id, PartId { feature: sp, index: 0 });
+    assert_relative_eq!(volumes(&ev).iter().sum::<f64>(), 800.0, max_relative = 1e-9);
+    // Las caras conservan su origen (la de abajo de la caja original)
+    assert!(ev.parts[1].tags.iter().any(|t| t.iter().any(|t| t.feature == a)));
+    // Borrar la nueva
+    doc.add(FeatureKind::DeleteParts { parts: vec![PartId { feature: sp, index: 0 }] });
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 1);
+    assert_relative_eq!(volumes(&ev)[0], 400.0, max_relative = 1e-9);
+}

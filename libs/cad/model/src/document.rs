@@ -131,7 +131,7 @@ impl Document {
     pub fn insert(&mut self, index: usize, kind: FeatureKind) -> FeatureId {
         let id = self.fresh_id();
         let name = self.default_name(&kind);
-        self.features.insert(index.min(self.features.len()), Feature { id, name, suppressed: false, kind });
+        self.features.insert(index.min(self.features.len()), Feature { id, name, suppressed: false, kind, scope: Vec::new() });
         id
     }
 
