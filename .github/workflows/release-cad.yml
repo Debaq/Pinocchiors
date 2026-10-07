@@ -81,9 +81,15 @@ jobs:
         if: matrix.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      # En bash el link.exe de Git (coreutils) tapa al linker de MSVC.
+      - name: Quitar link.exe de Git (Windows)
+        if: matrix.platform == 'windows'
+        run: rm -f /usr/bin/link.exe
+
+      # restore/save por separado: si después falla el job, OCCT ya quedó guardado.
       - name: OCCT en caché
         id: occt-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: occt-static
           key: occt-${{ env.OCCT_VERSION }}-${{ matrix.os }}-${{ hashFiles('scripts/build-occt.sh') }}
@@ -97,12 +103,22 @@ jobs:
           if [[ "${{ matrix.platform }}" == macos ]]; then brew install ninja; fi
           OCCT_WORK_DIR="$RUNNER_TEMP/occt" scripts/build-occt.sh "$PWD/occt-static" "$OCCT_VERSION"
 
+      - name: Guardar OCCT en caché
+        if: steps.occt-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: occt-static
+          key: ${{ steps.occt-cache.outputs.cache-primary-key }}
+
       - name: Rutas de OCCT
         run: |
+          # En Windows, ruta nativa (C:/...) y no la de MSYS (/c/...)
+          root=$PWD
+          if [[ "${{ matrix.platform }}" == windows ]]; then root=$(cygpath -m "$PWD"); fi
           echo "OCCT_STATIC=1" >> "$GITHUB_ENV"
           echo "CAD_REQUIRE_OCCT=1" >> "$GITHUB_ENV"
-          echo "OCCT_INCLUDE_DIR=$PWD/occt-static/include/opencascade" >> "$GITHUB_ENV"
-          echo "OCCT_LIB_DIR=$PWD/occt-static/lib" >> "$GITHUB_ENV"
+          echo "OCCT_INCLUDE_DIR=$root/occt-static/include/opencascade" >> "$GITHUB_ENV"
+          echo "OCCT_LIB_DIR=$root/occt-static/lib" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
