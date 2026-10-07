@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { layout, sheetSvg, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { layout, sheetSvg, sheetDxf, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -55,4 +55,22 @@ test("SVG: una polilínea por línea, ocultas solo si se piden, y cajetín", () 
   const xs = pts.map((p) => p[0]);
   assert.ok(Math.abs(Math.max(...xs) - Math.min(...xs) - 40 * scale) < 1e-6);
   assert.deepEqual(bounds(views.front).max, [40, 10]);
+});
+
+test("DXF: capas, líneas por tramo y una vista sola a 1:1", () => {
+  const views = { front: [...rect(40, 10), { kind: "hidden", points: [[10, 0], [10, 10]] }], top: rect(40, 20) };
+  const { placed } = layout(views, SHEETS[0], "first");
+  const dxf = sheetDxf(placed, SHEETS[0], { hidden: true, smooth: false });
+  const lines = dxf.split("\n");
+  assert.equal(lines.at(-2), "EOF");
+  // 4 + 1 + 4 tramos de las vistas y 4 del recuadro
+  assert.equal(lines.filter((l) => l === "LINE").length, 13);
+  assert.ok(dxf.includes("OCULTA") && dxf.includes("DASHED"));
+  // Solo el frente, 1:1: coordenadas de la pieza
+  const one = sheetDxf(placed, SHEETS[0], { hidden: false, smooth: false, view: "front" });
+  assert.equal(one.split("\n").filter((l) => l === "LINE").length, 4);
+  const xs = [];
+  const ls = one.split("\n");
+  for (let i = 0; i < ls.length - 1; i++) if (ls[i] === "10" || ls[i] === "11") xs.push(Number(ls[i + 1]));
+  assert.equal(Math.max(...xs) - Math.min(...xs), 40);
 });

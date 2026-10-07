@@ -1020,6 +1020,14 @@ const scenarios = {
     await b.clickText("Exportar SVG");
     await sleep(1500);
     if (!existsSync(path) || !readFileSync(path, "utf8").startsWith("<svg")) throw new Error("no se exportó el SVG");
+    // DXF de la hoja (capas VISIBLE y OCULTA)
+    const dxf = `${out}/plano.dxf`;
+    rmSync(dxf, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(dxf)}`);
+    await b.clickText("Exportar DXF");
+    await sleep(1500);
+    const text = existsSync(dxf) ? readFileSync(dxf, "utf8") : "";
+    if (!text.includes("OCULTA") || !text.trimEnd().endsWith("EOF")) throw new Error("DXF raro");
     await b.clickText("Cerrar");
     await sleep(500);
     if (await b.eval(`!!document.querySelector('[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");

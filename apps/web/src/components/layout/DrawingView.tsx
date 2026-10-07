@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { CadStore } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
-import { SCALES, SHEETS, layout, scaleLabel, sheetSvg, viewSpec, type DrawingLine, type Projection, type ViewName } from "../../lib/drawing";
+import { SCALES, SHEETS, layout, scaleLabel, sheetDxf, sheetSvg, viewSpec, type DrawingLine, type Projection, type ViewName } from "../../lib/drawing";
 import { Button, Select } from "../ui";
 
 /**
@@ -81,6 +81,24 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     }
   };
 
+  // DXF: la hoja entera o una vista sola a 1:1 (para corte láser o CNC)
+  const [dxfWhat, setDxfWhat] = createSignal<"sheet" | ViewName>("sheet");
+  const exportDxf = async () => {
+    const r = result();
+    if (!r) return;
+    const what = dxfWhat();
+    const name = `${title().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "plano"}${what === "sheet" ? "" : `_${what}_1a1`}.dxf`;
+    const path = await save({ filters: [{ name: "DXF", extensions: ["dxf"] }], defaultPath: name });
+    if (!path) return;
+    try {
+      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), view: what === "sheet" ? undefined : what });
+      const bytes = await invoke<number>("cad_write_text", { path, content });
+      setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
+
   const check = (label: string, value: () => boolean, set: (v: boolean) => void) => (
     <label class="flex items-center gap-1 text-xs text-text-muted cursor-pointer">
       <input type="checkbox" checked={value()} onChange={(e) => set(e.currentTarget.checked)} />
@@ -134,6 +152,21 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         </Show>
         <Button size="sm" variant="primary" disabled={!svg()} onClick={() => void exportSvg()}>
           Exportar SVG
+        </Button>
+        <div class="w-36">
+          <Select
+            options={[
+              { value: "sheet", label: "DXF: hoja entera" },
+              { value: "front", label: "DXF: frente 1:1" },
+              { value: "top", label: "DXF: planta 1:1" },
+              { value: "side", label: "DXF: lateral 1:1" },
+            ]}
+            value={dxfWhat()}
+            onChange={(v) => setDxfWhat(v as "sheet" | ViewName)}
+          />
+        </div>
+        <Button size="sm" disabled={!svg()} onClick={() => void exportDxf()}>
+          Exportar DXF
         </Button>
         <Button size="sm" variant="ghost" onClick={() => props.ui.setDrawingOpen(false)}>
           Cerrar

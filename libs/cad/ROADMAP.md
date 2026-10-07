@@ -411,3 +411,5 @@ cargo test -p cad-model
 - **2026-10-07 Plano 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 1 y parte de la 2):
   frente, planta, lateral e isométrica con líneas ocultas exactas, primer o tercer diedro,
   escala normalizada automática, cajetín y exportación a SVG.
+- **2026-10-07 Plano a DXF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 5): la hoja o una
+  vista sola a 1:1 para corte láser o CNC.

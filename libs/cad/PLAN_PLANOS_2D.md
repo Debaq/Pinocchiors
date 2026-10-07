@@ -76,7 +76,10 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    elegida, cajetín fijo. Faltan plantilla propia, mover vistas y PDF.*
 3. **Cotas** asociativas (largo, distancia, radio, diámetro, ángulo) y notas.
 4. **Cortes** con rayado y línea de corte A-A; **detalles**.
-5. **DXF** (vista 1:1 para láser primero, hoja completa después).
+5. **DXF** (vista 1:1 para láser primero, hoja completa después). *Hecha el 2026-10-07: `sheetDxf` en `lib/drawing.ts` (R12
+   de texto, mm, capas VISIBLE, OCULTA con línea punteada y TANGENTE, cada tramo como LINE);
+   la hoja entera o una vista sola a 1:1 con sus coordenadas. Validado con ezdxf (0 errores
+   en la auditoría).*
 6. **Varias hojas**, ejes y marcas de centro automáticos, lista de piezas (cuando haya
    [PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md)).
 

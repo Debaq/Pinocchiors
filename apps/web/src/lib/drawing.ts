@@ -192,3 +192,98 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
   out.push("</svg>");
   return out.join("\n");
 }
+
+// ─── DXF ────────────────────────────────────────────────────────────────────
+
+/**
+ * DXF (R12, texto) en mm, Y hacia arriba: capas VISIBLE, OCULTA (punteada) y
+ * TANGENTE; cada tramo de polilínea como LINE (lo leen todos los programas de
+ * corte). `view` exporta solo esa vista a escala 1:1 con sus coordenadas
+ * (para láser o CNC); sin ella, la hoja entera con el recuadro.
+ */
+export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName }): string {
+  const out: string[] = [];
+  const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
+  const section = (name: string, body: () => void) => {
+    pair(0, "SECTION");
+    pair(2, name);
+    body();
+    pair(0, "ENDSEC");
+  };
+  section("HEADER", () => {
+    pair(9, "$ACADVER");
+    pair(1, "AC1009");
+    pair(9, "$INSUNITS");
+    pair(70, 4);
+  });
+  section("TABLES", () => {
+    pair(0, "TABLE");
+    pair(2, "LTYPE");
+    pair(70, 2);
+    pair(0, "LTYPE");
+    pair(2, "CONTINUOUS");
+    pair(70, 0);
+    pair(3, "Continua");
+    pair(72, 65);
+    pair(73, 0);
+    pair(40, 0);
+    pair(0, "LTYPE");
+    pair(2, "DASHED");
+    pair(70, 0);
+    pair(3, "Punteada __ __ __");
+    pair(72, 65);
+    pair(73, 2);
+    pair(40, 4.5);
+    pair(49, 3);
+    pair(49, -1.5);
+    pair(0, "ENDTAB");
+    pair(0, "TABLE");
+    pair(2, "LAYER");
+    pair(70, 3);
+    for (const [name, color, ltype] of [
+      ["VISIBLE", 7, "CONTINUOUS"],
+      ["OCULTA", 8, "DASHED"],
+      ["TANGENTE", 9, "CONTINUOUS"],
+    ] as const) {
+      pair(0, "LAYER");
+      pair(2, name);
+      pair(70, 0);
+      pair(62, color);
+      pair(6, ltype);
+    }
+    pair(0, "ENDTAB");
+  });
+  const line = (layer: string, a: P2, b: P2) => {
+    pair(0, "LINE");
+    pair(8, layer);
+    pair(10, a[0]);
+    pair(20, a[1]);
+    pair(30, 0);
+    pair(11, b[0]);
+    pair(21, b[1]);
+    pair(31, 0);
+  };
+  section("ENTITIES", () => {
+    const only = opts.view ? placed.filter((v) => v.name === opts.view) : placed;
+    for (const v of only) {
+      // 1:1 con las coordenadas de la vista, o en la hoja (Y hacia arriba)
+      const at = (p: P2): P2 => (opts.view ? p : [v.x + p[0] * v.scale, sheet.height - (v.y - p[1] * v.scale)]);
+      for (const l of v.lines) {
+        const hidden = l.kind === "hidden" || l.kind === "hidden_outline";
+        if (hidden && (!opts.hidden || v.name === "iso")) continue;
+        if (l.kind === "smooth" && !opts.smooth) continue;
+        const layer = hidden ? "OCULTA" : l.kind === "smooth" ? "TANGENTE" : "VISIBLE";
+        for (let i = 0; i + 1 < l.points.length; i++) line(layer, at(l.points[i]), at(l.points[i + 1]));
+      }
+    }
+    if (!opts.view) {
+      const [x0, y0, x1, y1] = [MARGIN, MARGIN, sheet.width - MARGIN, sheet.height - MARGIN];
+      line("VISIBLE", [x0, y0], [x1, y0]);
+      line("VISIBLE", [x1, y0], [x1, y1]);
+      line("VISIBLE", [x1, y1], [x0, y1]);
+      line("VISIBLE", [x0, y1], [x0, y0]);
+    }
+  });
+  pair(0, "EOF");
+  return out.join("\n") + "\n";
+}
