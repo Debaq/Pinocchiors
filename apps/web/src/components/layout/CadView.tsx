@@ -865,11 +865,13 @@ export const CadView: Component<CadViewProps> = (props) => {
   const onPointerDown = (e: PointerEvent) => {
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
+    if (viewer?.cubeDown(e.clientX, e.clientY)) return;
     if (ui.session()) sketchClick(e);
     else void pickClick(e);
   };
 
   const onPointerMove = (e: PointerEvent) => {
+    if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
     const s = ui.session();
     if (!s) return;
     const hit = snapped(e);
@@ -892,6 +894,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
 
+  const [overCube, setOverCube] = createSignal(false);
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
@@ -902,6 +905,23 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (e.button !== 2 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
     if (ui.session() || ui.pick().kind !== "none" || !viewer) return;
     void openFaceMenu(e.clientX, e.clientY);
+  };
+
+  /** F: acercar a lo elegido (o a todo si no hay nada) */
+  const frameSelection = () => {
+    const picks = ui.picks();
+    viewer?.frameSelection(
+      picks.flatMap((p) => (p.kind === "face" ? [p.face] : [])),
+      picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : [])),
+      picks.flatMap((p) => (p.kind === "vertex" ? [p.at] : [])),
+    );
+  };
+
+  /** Mirar de frente una cara plana */
+  const normalToFace = async (face: number) => {
+    const info = await invoke<{ surface: string; normal: P3 }>("cad_face_info", { face });
+    if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana");
+    viewer?.lookFrom(info.normal);
   };
 
   /** Operaciones que dieron origen a la cara bajo el puntero, para editarlas */
@@ -919,7 +939,6 @@ export const CadView: Component<CadViewProps> = (props) => {
       // El sketch de una extrusión o revolución también se puede editar desde acá
       if ((f.kind.type === "extrude" || f.kind.type === "revolve") && byId(f.kind.sketch) && !ids.includes(f.kind.sketch)) ids.push(f.kind.sketch);
     }
-    if (!ids.length) return;
     // Lo más reciente primero, como queda en el árbol de abajo hacia arriba
     ids.sort((a, b) => features.findIndex((f) => f.id === b) - features.findIndex((f) => f.id === a));
     setMenu({
@@ -935,6 +954,13 @@ export const CadView: Component<CadViewProps> = (props) => {
             onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),
           };
         }),
+        ...(ids.length ? [{ separator: true } as MenuEntry] : []),
+        { label: "Mirar de frente", onSelect: () => void normalToFace(hit.face) },
+        {
+          label: "Acercar a la cara",
+          shortcut: "F",
+          onSelect: () => viewer?.frameSelection([hit.face], []),
+        },
       ],
     });
   };
@@ -942,6 +968,22 @@ export const CadView: Component<CadViewProps> = (props) => {
   const onKey = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+    // Vistas estándar, también dibujando: Mayús + 1…7 como Onshape, y 1/3/7
+    // (con Ctrl la opuesta) como en el resto de la app
+    const view = viewForKey(e);
+    if (view) {
+      viewer?.lookFrom(view);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!ui.session() && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && ui.pick().kind === "none" && (e.key.toLowerCase() === "f" || e.key === ".")) {
+      // Acercar a lo elegido (sin nada, a todo)
+      frameSelection();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     if (ui.session()) {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
@@ -1106,7 +1148,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     <div class="absolute inset-0 z-[5] bg-viewport">
       <div
         ref={container}
-        class={clsx("absolute inset-0", (ui.session() && ui.tool() !== "select") || ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default")}
+        class={clsx(
+          "absolute inset-0",
+          overCube() ? "cursor-pointer" : (ui.session() && ui.tool() !== "select") || ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
+        )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
@@ -1385,6 +1430,27 @@ export const CadView: Component<CadViewProps> = (props) => {
     </div>
   );
 };
+
+/** Vistas estándar de Onshape: Mayús + número, dirección desde donde se mira (Z arriba) */
+const STANDARD_VIEWS: Record<string, P3> = {
+  Digit1: [0, -1, 0], // frente
+  Digit2: [0, 1, 0], // atrás
+  Digit3: [-1, 0, 0], // izquierda
+  Digit4: [1, 0, 0], // derecha
+  Digit5: [0, 0, 1], // arriba
+  Digit6: [0, 0, -1], // abajo
+  Digit7: [1, -1, 1], // isométrica
+};
+/** Las del resto de la app (teclado numérico de Blender): 1 frente, 3 derecha, 7 arriba; Ctrl, la opuesta */
+const BLENDER_VIEWS: Record<string, P3> = { "1": [0, -1, 0], "3": [1, 0, 0], "7": [0, 0, 1] };
+
+function viewForKey(e: KeyboardEvent): P3 | undefined {
+  if (e.metaKey || e.altKey) return undefined;
+  if (e.shiftKey && !e.ctrlKey) return STANDARD_VIEWS[e.code];
+  if (e.shiftKey) return undefined;
+  const d = BLENDER_VIEWS[e.key];
+  return d && (e.ctrlKey ? (d.map((c) => -c) as P3) : d);
+}
 
 // ─── Medidas ──────────────────────────────────────────────────────────────
 

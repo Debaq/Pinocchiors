@@ -93,7 +93,12 @@ selección y menú contextual.
    y ejes (`GProp_PrincipalProps`, con densidad 1), la sección Sólido muestra masa, centro de
    masa e inercia en kg·mm² con 10 materiales comunes o densidad propia, y el centro de masa
    se dibuja como una cruz con los colores de los ejes.*
-3. **Vistas estándar, normal a, ajustar a lo elegido**, cubo de vistas.
+3. **Vistas estándar, normal a, ajustar a lo elegido**, cubo de vistas. *Hecha el 2026-10-07:
+   el `ViewCube` del visor de mallas también en `CadViewer` (clic en cara, arista o vértice,
+   giro animado que endereza la cámara si venía inclinada de un sketch); Mayús+1…7 como
+   Onshape y 1/3/7 (Ctrl: la opuesta) como el resto de la app; F o «.» acerca a lo elegido
+   (caras, aristas, vértices) o a todo; "Mirar de frente" y "Acercar a la cara" en el menú del
+   clic derecho. N no se tomó: en la app muestra y oculta el panel.*
 4. **Menú contextual y atajos.**
 5. **Filtros y selección por caja.**
 6. **Vista de corte** con tapa.

@@ -347,6 +347,61 @@ const scenarios = {
     await b.shot("centro_de_masa");
   },
 
+  async "vistas: atajos, cubo, acercar y mirar de frente"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    // Dirección de la cámara en el visor (Y arriba; el frente del CAD, −Y, es +Z)
+    const dir = () => b.eval(`window.__cadViewer.camera.position.clone().sub(window.__cadViewer.controls.target).normalize().toArray()`);
+    const along = async (want, what) => {
+      const d = await dir();
+      const dot = d[0] * want[0] + d[1] * want[1] + d[2] * want[2];
+      if (!(dot > 0.999)) throw new Error(`${what}: ${d.map((x) => x.toFixed(3))}`);
+    };
+    const press = (code, shift) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { code: ${JSON.stringify(code)}, key: ${JSON.stringify(code.replace("Key", "").replace("Digit", "").toLowerCase())}, shiftKey: ${shift}, bubbles: true }))`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await press("Digit1", true);
+    await sleep(700);
+    await along([0, 0, 1], "frente");
+    await press("Digit5", true);
+    await sleep(700);
+    await along([0, 1, 0], "arriba");
+    // Isométrica y clic en la parte de arriba del cubo de vistas: vista superior
+    await press("Digit7", true);
+    await sleep(700);
+    const iso = [1, 1, 1].map((x) => x / Math.sqrt(3));
+    await along(iso, "isométrica");
+    const cube = await b.eval(`(() => { const r = window.__cadViewer.canvas.getBoundingClientRect(); return [r.right - 8 - 65, r.top + 8 + 65]; })()`);
+    // La cara de arriba en isométrica: ~0,82 de medio lado (28 px) sobre el centro
+    await b.click(cube[0], cube[1] - 23, { wait: 800 });
+    await along([0, 1, 0], "cubo: arriba");
+    // F con la cara de adelante elegida: el centro de la vista va a esa cara
+    await press("Digit7", true);
+    await sleep(700);
+    await b.click(...(await at([3, -10, -3])), { wait: 1200 });
+    await press("KeyF", false);
+    await sleep(500);
+    const t = await b.eval(`window.__cadViewer.controls.target.toArray()`);
+    near(t[2], 10, 1e-3, "centro de la vista en la cara de adelante (z del visor)");
+    // Mirarla de frente desde el menú del clic derecho
+    const [fx, fy] = await at([3, -10, -3]);
+    await b.click(fx, fy, { button: "right", buttons: 2, wait: 1200 });
+    const item = await b.eval(`(() => { const e = [...document.querySelectorAll("[role=menuitem]")].find((e) => e.textContent.includes("Mirar de frente")); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.click(...item, { wait: 800 });
+    await along([0, 0, 1], "mirar de frente");
+    // 3 (como en el resto de la app): derecha; Ctrl+3: izquierda
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "3", code: "Digit3", bubbles: true }))`);
+    await sleep(700);
+    await along([1, 0, 0], "derecha");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "3", code: "Digit3", ctrlKey: true, bubbles: true }))`);
+    await sleep(700);
+    await along([-1, 0, 0], "izquierda");
+    // El panel lateral no se tocó
+    if (!(await b.eval(`document.body.innerText.includes("Operaciones") || document.body.innerText.includes("OPERACIONES")`))) throw new Error("se plegó el panel");
+    await b.shot("vista_normal");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

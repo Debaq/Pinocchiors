@@ -355,3 +355,7 @@ cargo test -p cad-model
   el centro de masa" lo marca en el visor. Cambiar el material es un paso de deshacer y no
   recalcula el árbol (el hash del documento lo ignora). El puente devuelve los momentos
   principales con sus ejes.
+- **2026-10-07 Vistas** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 3): cubo de vistas en
+  el visor del diseño, vistas estándar con Mayús+1…7 (Onshape) y 1/3/7 con o sin Ctrl (como el
+  visor de mallas), F o «.» para acercar a lo elegido, y en el menú de la cara "Mirar de frente"
+  y "Acercar a la cara". Los giros duran 0,3 s con frenado.

@@ -9,6 +9,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
 import { ellipsePolyline, splineOf, type BodyOp, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
+import { ViewCube } from "./ViewCube";
 
 export type BasePlane = "xy" | "xz" | "yz";
 
@@ -136,6 +137,10 @@ export class CadViewer {
   private bodyVertices: THREE.Vector3[] = [];
   /** Vértices elegidos y la línea de la distancia medida */
   private marks = new THREE.Group();
+  /** Cubo de vistas en la esquina superior derecha */
+  private viewCube = new ViewCube();
+  /** Giro de cámara en curso hacia una vista (ver `lookFrom`) */
+  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; up: THREE.Vector3; start: number } | null = null;
   /** Centro de masa: tres trazos con los colores de los ejes */
   private centerMark?: THREE.LineSegments;
 
@@ -192,6 +197,7 @@ export class CadViewer {
 
   private onTheme = () => {
     this.applyTheme();
+    this.viewCube.applyTheme();
     this.requestRender();
   };
 
@@ -219,7 +225,9 @@ export class CadViewer {
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
+      this.stepViewTransition();
       this.renderer.render(this.scene, this.camera);
+      this.viewCube.render(this.renderer, this.camera, this.controls.target);
       this.onRender?.();
     });
   }
@@ -844,6 +852,96 @@ export class CadViewer {
     this.requestRender();
   }
 
+  // ─── Vistas ─────────────────────────────────────────────────────────────
+
+  /**
+   * Lleva la cámara (con un giro corto) a mirar hacia el centro de la vista
+   * desde `direction` (en el visor, Y arriba); Z del CAD queda arriba en pantalla.
+   */
+  private lookFromView(direction: THREE.Vector3) {
+    const dir = direction.clone().normalize();
+    // Vista cenital o desde abajo: un pelo hacia el frente para que +Y del CAD quede arriba
+    if (Math.abs(dir.x) < 1e-9 && Math.abs(dir.z) < 1e-9) dir.z = 1e-3 * Math.sign(dir.y || 1);
+    dir.normalize();
+    const from = this.camera.position.clone().sub(this.controls.target);
+    const turn = new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), dir);
+    this.viewTransition = { from, turn, up: this.camera.up.clone(), start: performance.now() };
+    this.requestRender();
+  }
+
+  /** Mira desde una dirección del CAD (mm, Z arriba): [0, −1, 0] = de frente */
+  lookFrom(direction: P3) {
+    this.lookFromView(this.dirToView(direction));
+  }
+
+  /** Avanza el giro hacia la vista elegida (~0,3 s, con frenado) */
+  private stepViewTransition() {
+    const t0 = this.viewTransition;
+    if (!t0) return;
+    const t = Math.min(1, (performance.now() - t0.start) / 300);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const turn = new THREE.Quaternion().slerp(t0.turn, eased);
+    this.camera.position.copy(this.controls.target).add(t0.from.clone().applyQuaternion(turn));
+    // De un sketch se puede venir con la cámara inclinada: vuelve a Y arriba
+    this.camera.up.copy(t0.up).lerp(new THREE.Vector3(0, 1, 0), eased).normalize();
+    this.camera.lookAt(this.controls.target);
+    this.controls.update();
+    // Se llama dentro del cuadro (con `frame` ya en 0): pide el siguiente
+    if (t < 1) this.requestRender();
+    else this.viewTransition = null;
+  }
+
+  /** Clic en el cubo de vistas: gira hacia esa cara, arista o vértice. `true` si lo usó */
+  cubeDown(clientX: number, clientY: number): boolean {
+    if (!this.viewCube.contains(this.renderer.domElement, clientX, clientY)) return false;
+    const dir = this.viewCube.pick(this.renderer.domElement, clientX, clientY);
+    if (!dir) return false;
+    this.lookFromView(dir);
+    return true;
+  }
+
+  /** Resalta la zona del cubo bajo el puntero; `true` si está sobre él */
+  cubeHover(clientX: number, clientY: number): boolean {
+    const dir = this.viewCube.pick(this.renderer.domElement, clientX, clientY);
+    if (this.viewCube.setHover(dir)) this.requestRender();
+    return dir !== null;
+  }
+
+  /** Acerca la cámara a lo elegido: caras y aristas del sólido y puntos (mm); vacío = todo */
+  frameSelection(faces: number[], edges: number[], points: P3[] = []) {
+    const box = new THREE.Box3();
+    const d = this.bodyData;
+    if (d) {
+      const fs = new Set(faces);
+      for (let t = 0; t < d.triangleFace.length; t++) {
+        if (!fs.has(d.triangleFace[t])) continue;
+        for (let k = 0; k < 3; k++) {
+          const i = d.indices[t * 3 + k];
+          box.expandByPoint(new THREE.Vector3(d.positions[i * 3], d.positions[i * 3 + 1], d.positions[i * 3 + 2]));
+        }
+      }
+      const es = new Set(edges);
+      let start = 0;
+      d.edgeEnds.forEach((end, e) => {
+        if (es.has(e)) for (let i = start; i < end; i++) box.expandByPoint(new THREE.Vector3(d.edgePoints[i * 3], d.edgePoints[i * 3 + 1], d.edgePoints[i * 3 + 2]));
+        start = end;
+      });
+    }
+    for (const p of points) box.expandByPoint(this.toView(p));
+    if (box.isEmpty()) return this.frameAll();
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    // Un punto solo no tiene tamaño: un entorno de 10 mm
+    sphere.radius = Math.max(sphere.radius, 5 / this.mmPerUnit);
+    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
+    const dist = (sphere.radius / Math.sin((this.camera.fov * Math.PI) / 360)) * 1.3;
+    this.controls.target.copy(sphere.center);
+    this.camera.position.copy(sphere.center).addScaledVector(dir, dist);
+    this.camera.near = Math.min(this.camera.near, dist / 1000);
+    this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.requestRender();
+  }
+
   /** Encuadra todo lo visible */
   frameAll() {
     const box = new THREE.Box3();
@@ -990,6 +1088,7 @@ export class CadViewer {
     this.setTool(null);
     this.setScan(null);
     this.setSketch(null);
+    this.viewCube.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
