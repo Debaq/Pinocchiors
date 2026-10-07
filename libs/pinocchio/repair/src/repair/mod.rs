@@ -4,5 +4,6 @@
 
 pub mod cleanup;
 pub mod holes;
+pub mod intersect;
 pub mod manifold;
 pub mod orient;

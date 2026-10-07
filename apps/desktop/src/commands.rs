@@ -2980,6 +2980,8 @@ pub struct RepairConfigInput {
     pub max_hole_edges: Option<usize>,
     /// Refinar y suavizar los parches de relleno
     pub refine_fill: Option<bool>,
+    /// Unir cuerpos solapados (cortar por las auto-intersecciones)
+    pub resolve_intersections: Option<bool>,
 }
 
 impl RepairConfigInput {
@@ -2995,6 +2997,7 @@ impl RepairConfigInput {
             orient_outward: self.orient_outward.unwrap_or(defaults.orient_outward),
             remove_small_components: self.remove_small_components.unwrap_or(false),
             fill_holes: self.fill_holes.unwrap_or(true),
+            resolve_intersections: self.resolve_intersections.unwrap_or(false),
             hole_fill_config: HoleFillConfig {
                 max_hole_edges: self.max_hole_edges.unwrap_or(0),
                 refine,
@@ -3130,7 +3133,12 @@ pub async fn repair_mesh(
             }
         })?;
         report(&progress, "analyze", 92, "Analizando resultado...");
-        let diagnostics = pinocchio_repair::analyze(&mesh, &RepairAnalysisConfig::default());
+        // Tras unir, comprobar que no quedaron cruces
+        let analysis = RepairAnalysisConfig {
+            check_self_intersections: repair_config.resolve_intersections,
+            ..RepairAnalysisConfig::default()
+        };
+        let diagnostics = pinocchio_repair::analyze(&mesh, &analysis);
         Ok::<_, pinocchio_repair::RepairError>((mesh, summary, diagnostics))
     })
     .await

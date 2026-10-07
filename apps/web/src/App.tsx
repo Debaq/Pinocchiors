@@ -1054,6 +1054,7 @@ export const App: Component = () => {
     fillHoles: true,
     maxHoleEdges: 0,
     refineFill: true,
+    resolveIntersections: false,
   });
   const [diagnostics, setDiagnostics] = createSignal<MeshDiagnostics | undefined>();
   const [repairResult, setRepairResult] = createSignal<RepairResult | undefined>();
@@ -4494,6 +4495,7 @@ export const App: Component = () => {
             fill_holes: opts.fillHoles,
             max_hole_edges: opts.maxHoleEdges,
             refine_fill: opts.refineFill,
+            resolve_intersections: opts.resolveIntersections,
           },
         }));
         done("Reparar malla");

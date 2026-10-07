@@ -1,13 +1,15 @@
 //! Banco de reparación: analiza, repara y vuelve a analizar un modelo.
 //!
 //! ```text
-//! cargo run --release -p pinocchio-repair --example repair_report -- modelo.stl [--no-fill] [--brief] [--punch N] [--obj salida.obj]
+//! cargo run --release -p pinocchio-repair --example repair_report -- modelo.stl [--no-fill] [--union] [--brief] [--punch N] [--obj salida.obj]
 //! ```
 //!
 //! `--punch N` abre N agujeros en el modelo antes de repararlo (para probar el
 //! relleno); con `--obj` también guarda `<salida>.agujereado.obj`.
 //!
-//! Con `--brief` imprime una sola línea: defectos antes → después.
+//! Con `--brief` imprime una sola línea: defectos antes → después. `--union`
+//! une los cuerpos solapados (corta por las auto-intersecciones); `--cruces`
+//! cuenta las auto-intersecciones sin unir.
 
 use pinocchio_repair::{analyze, repair_all, AnalysisConfig, MeshDiagnostics, RepairConfig, TriMesh};
 use std::time::Instant;
@@ -28,17 +30,33 @@ fn main() {
         }
     }
     let brief = args.iter().any(|a| a == "--brief");
-    let analysis = AnalysisConfig { check_self_intersections: !brief, ..Default::default() };
+    let union = args.iter().any(|a| a == "--union");
+    let crossings = !brief || union || args.iter().any(|a| a == "--cruces");
+    let analysis = AnalysisConfig { check_self_intersections: crossings, ..Default::default() };
     if brief {
         let before = analyze(&mesh, &analysis);
-        let config = RepairConfig { fill_holes: !args.iter().any(|a| a == "--no-fill"), ..Default::default() };
+        let config = RepairConfig {
+            fill_holes: !args.iter().any(|a| a == "--no-fill"),
+            resolve_intersections: union,
+            ..Default::default()
+        };
         let t = Instant::now();
         let summary = repair_all(&mut mesh, &config).expect("reparación");
         let secs = t.elapsed().as_secs_f64();
         let after = analyze(&mesh, &analysis);
         println!(
-            "{:>7} caras {:6.2}s | {} → {} | rellenos {} omitidos {} | vol {:.4e} → {:.4e}",
-            before.num_faces, secs, line(&before), line(&after), summary.holes_filled, summary.holes_skipped, before.volume, after.volume
+            "{:>7} caras {:6.2}s | {} → {} | rellenos {} omitidos {} | cortes {} (omitidos {}) parches {} | vol {:.4e} → {:.4e}",
+            before.num_faces,
+            secs,
+            line(&before),
+            line(&after),
+            summary.holes_filled,
+            summary.holes_skipped,
+            summary.intersections_cut,
+            summary.intersections_skipped,
+            summary.inner_patches_removed,
+            before.volume,
+            after.volume
         );
         if let Some(out) = obj_out {
             pinocchio_mesh::io::save_obj(&mesh, out).expect("no se pudo guardar el OBJ");
@@ -51,7 +69,11 @@ fn main() {
     println!("ANTES   ({:.2}s) v={} f={}", t.elapsed().as_secs_f64(), mesh.num_vertices(), mesh.num_faces());
     println!("{before:#?}");
 
-    let config = RepairConfig { fill_holes: !args.iter().any(|a| a == "--no-fill"), ..Default::default() };
+    let config = RepairConfig {
+            fill_holes: !args.iter().any(|a| a == "--no-fill"),
+            resolve_intersections: union,
+            ..Default::default()
+        };
     let t = Instant::now();
     match repair_all(&mut mesh, &config) {
         Ok(summary) => println!("REPARACIÓN ({:.2}s): {summary:#?}", t.elapsed().as_secs_f64()),
@@ -69,10 +91,17 @@ fn main() {
 
 fn line(d: &MeshDiagnostics) -> String {
     format!(
-        "{}{} huecos {} dup {} deg {} nmE {} nmV {} inc {} piezas {}",
+        "{}{} huecos {} dup {} deg {} nmE {} nmV {} inc {} piezas {} cruces {}",
         if d.is_healthy() { "SANA " } else { "" },
         if d.normals_outward == Some(false) { "INV " } else { "" },
-        d.boundary_loops, d.duplicate_vertices, d.degenerate_faces, d.non_manifold_edges, d.non_manifold_vertices, d.inconsistent_edges, d.connected_components
+        d.boundary_loops,
+        d.duplicate_vertices,
+        d.degenerate_faces,
+        d.non_manifold_edges,
+        d.non_manifold_vertices,
+        d.inconsistent_edges,
+        d.connected_components,
+        d.self_intersections
     )
 }
 

@@ -80,6 +80,10 @@ zip = { version = "4", default-features = false }
 
 # Paralelismo
 rayon = "1.10"
+
+# Triangulación restringida y predicados exactos (reparación de intersecciones)
+spade = "2.15"
+robust = "1.2"
 bevy_mikktspace = "1"
 
 # Serialización

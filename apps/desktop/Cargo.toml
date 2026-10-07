@@ -31,7 +31,7 @@ converter-ply = { workspace = true }
 converter-3mf = { workspace = true }
 
 # Repair & Print3D
-pinocchio-repair = { workspace = true }
+pinocchio-repair = { workspace = true, features = ["parallel"] }
 pinocchio-print3d = { workspace = true }
 
 # QuadriFlow - Retopology

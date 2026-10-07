@@ -70,6 +70,10 @@ pub struct RepairConfig {
     pub fill_holes: bool,
     /// Opciones del relleno de agujeros
     pub hole_fill_config: HoleFillConfig,
+    /// Corta la malla por sus auto-intersecciones y elimina la superficie que
+    /// queda dentro de otro cuerpo (une los cuerpos solapados). Desactivado
+    /// por defecto: también borra las piezas internas puestas a propósito.
+    pub resolve_intersections: bool,
 }
 
 impl Default for RepairConfig {
@@ -87,6 +91,7 @@ impl Default for RepairConfig {
             small_component_ratio: 0.001,
             fill_holes: false,
             hole_fill_config: HoleFillConfig::default(),
+            resolve_intersections: false,
         }
     }
 }
@@ -173,6 +178,7 @@ impl MeshDiagnostics {
             || !self.normals_consistent
             || self.normals_outward == Some(false)
             || self.boundary_loops > 0
+            || self.self_intersections > 0
     }
 
     /// Cerrada, manifold, bien orientada y sin defectos
@@ -216,6 +222,15 @@ pub struct RepairSummary {
     pub faces_added: usize,
     /// Vértices añadidos por el relleno
     pub vertices_added: usize,
+    /// Pares de triángulos cortados por su curva de cruce
+    pub intersections_cut: usize,
+    /// Pares que se cruzan de forma degenerada y quedaron sin cortar
+    pub intersections_skipped: usize,
+    /// Parches de superficie eliminados por quedar dentro de otro cuerpo
+    pub inner_patches_removed: usize,
+    /// La unión se descartó porque dejaba la malla con más bordes o aristas
+    /// non-manifold (superficies abiertas)
+    pub intersections_reverted: bool,
 }
 
 impl RepairSummary {
@@ -230,5 +245,7 @@ impl RepairSummary {
             || self.non_manifold_fixed > 0
             || self.components_removed > 0
             || self.holes_filled > 0
+            || self.intersections_cut > 0
+            || self.inner_patches_removed > 0
     }
 }

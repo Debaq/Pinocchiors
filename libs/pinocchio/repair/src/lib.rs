@@ -47,7 +47,7 @@ pub use error::{RepairError, RepairResult};
 pub use trimesh::TriMesh;
 
 use pinocchio_mesh::Mesh;
-use repair::{cleanup, holes, manifold, orient};
+use repair::{cleanup, holes, intersect, manifold, orient};
 
 /// Analiza una malla. Ver [`analyze_trimesh`].
 pub fn analyze(mesh: &Mesh, config: &AnalysisConfig) -> MeshDiagnostics {
@@ -85,7 +85,9 @@ pub fn repair_all_with_progress(
 /// 6. Eliminar piezas sueltas pequeñas
 /// 7. Rellenar agujeros
 /// 8. Orientar cada cáscara cerrada hacia afuera
-/// 9. Eliminar vértices sin usar
+/// 9. Unir cuerpos solapados (cortar por las auto-intersecciones y quitar la
+///    superficie interior), si está habilitado
+/// 10. Eliminar vértices sin usar
 ///
 /// # Errores
 ///
@@ -168,6 +170,28 @@ pub fn repair_trimesh_with_progress(
     if config.orient_outward {
         progress(0.90, "Orientando normales hacia afuera");
         summary.faces_flipped += orient::orient_outward(mesh);
+    }
+
+    if config.resolve_intersections {
+        progress(0.92, "Uniendo cuerpos solapados");
+        let before = mesh.num_faces();
+        let report = intersect::resolve_self_intersections(mesh);
+        summary.intersections_cut = if report.reverted { 0 } else { report.pairs_cut };
+        summary.intersections_skipped = report.pairs_skipped;
+        summary.inner_patches_removed = if report.reverted { 0 } else { report.patches_removed };
+        summary.intersections_reverted = report.reverted;
+        if report.changed() {
+            // Los cortes dejan astillas y, donde dos cuerpos solo se tocan,
+            // aristas non-manifold
+            progress(0.97, "Limpiando cortes");
+            cleanup::fix_degenerate_faces(mesh, config.degenerate_tolerance * diagonal);
+            cleanup::remove_duplicate_faces(mesh);
+            manifold::orient_and_split(mesh, true, true);
+            orient::orient_outward(mesh);
+            let after = mesh.num_faces();
+            summary.faces_added += after.saturating_sub(before);
+            summary.faces_removed += before.saturating_sub(after);
+        }
     }
 
     mesh.remove_unreferenced_vertices();

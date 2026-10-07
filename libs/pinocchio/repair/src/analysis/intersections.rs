@@ -128,6 +128,32 @@ pub fn find_self_intersections(mesh: &TriMesh, tolerance: Real) -> IntersectionA
     analysis
 }
 
+/// Pares de triángulos cuyas cajas se solapan y que no comparten una arista:
+/// candidatos para cortar las auto-intersecciones (incluye los que comparten
+/// un vértice, que [`find_self_intersections`] omite).
+pub(crate) fn candidate_pairs(mesh: &TriMesh) -> Vec<(usize, usize)> {
+    let triangles: Vec<TriangleData> = (0..mesh.num_faces())
+        .map(|i| {
+            let [p0, p1, p2] = mesh.corners(i);
+            TriangleData { vertices: mesh.triangles[i], positions: [p0, p1, p2], bounds: compute_triangle_bounds(p0, p1, p2, 0.0) }
+        })
+        .collect();
+    let bvh = SimpleBvh::build(&triangles);
+    let mut pairs = Vec::new();
+    for (i, a) in triangles.iter().enumerate() {
+        for j in bvh.query_overlapping(&a.bounds) {
+            if j <= i {
+                continue;
+            }
+            let shared = a.vertices.iter().filter(|v| triangles[j].vertices.contains(v)).count();
+            if shared < 2 {
+                pairs.push((i, j));
+            }
+        }
+    }
+    pairs
+}
+
 /// Datos precalculados de un triángulo
 struct TriangleData {
     vertices: [usize; 3],
@@ -150,11 +176,13 @@ fn compute_triangle_bounds(p0: Vector3, p1: Vector3, p2: Vector3, tolerance: Rea
     Rect::new(min, max)
 }
 
-/// Verifica si dos triángulos comparten al menos un vértice
+/// Verifica si dos triángulos comparten al menos un vértice (por índice o por
+/// posición exacta: los vértices separados de un punto non-manifold siguen
+/// tocándose ahí sin cruzarse)
 fn triangles_share_vertex(a: &TriangleData, b: &TriangleData) -> bool {
-    for va in &a.vertices {
-        for vb in &b.vertices {
-            if va == vb {
+    for (va, pa) in a.vertices.iter().zip(&a.positions) {
+        for (vb, pb) in b.vertices.iter().zip(&b.positions) {
+            if va == vb || pa == pb {
                 return true;
             }
         }
@@ -357,6 +385,13 @@ fn triangles_intersect(
         return triangles_intersect_coplanar(a0, a1, a2, b0, b1, b2, n1, tolerance);
     }
 
+    // Planos no paralelos: se decide con predicados exactos (las distancias
+    // en coma flotante dan falsos positivos con planos casi paralelos). Solo
+    // los contactos exactos (una arista justo sobre otra) usan los intervalos.
+    if let Some(cross) = triangles_cross_exact([a0, a1, a2], [b0, b1, b2]) {
+        return cross;
+    }
+
     // Proyectar al eje dominante de la línea de intersección
     let axis = if dir.x().abs() >= dir.y().abs() && dir.x().abs() >= dir.z().abs() {
         0
@@ -385,6 +420,40 @@ fn triangles_intersect(
 
     // Verificar si los intervalos se solapan
     intervals_overlap(t_a_min, t_a_max, t_b_min, t_b_max, tolerance)
+}
+
+/// Si los triángulos se atraviesan: alguna arista de uno cruza el interior
+/// del otro, con predicados exactos. `None` si algún predicado da cero
+/// (contacto exacto) y no hubo un cruce claro.
+fn triangles_cross_exact(a: [Vector3; 3], b: [Vector3; 3]) -> Option<bool> {
+    use robust::{orient3d, Coord3D};
+    let c = |v: Vector3| Coord3D { x: v.x(), y: v.y(), z: v.z() };
+    let mut exact = true;
+    let mut edge_crosses = |p: Vector3, q: Vector3, t: [Vector3; 3]| {
+        let op = orient3d(c(t[0]), c(t[1]), c(t[2]), c(p));
+        let oq = orient3d(c(t[0]), c(t[1]), c(t[2]), c(q));
+        if op == 0.0 || oq == 0.0 {
+            exact = false;
+        }
+        if op * oq >= 0.0 {
+            return false;
+        }
+        let s = [
+            orient3d(c(p), c(q), c(t[0]), c(t[1])),
+            orient3d(c(p), c(q), c(t[1]), c(t[2])),
+            orient3d(c(p), c(q), c(t[2]), c(t[0])),
+        ];
+        if s.contains(&0.0) {
+            exact = false;
+        }
+        s.iter().all(|&x| x > 0.0) || s.iter().all(|&x| x < 0.0)
+    };
+    for k in 0..3 {
+        if edge_crosses(a[k], a[(k + 1) % 3], b) || edge_crosses(b[k], b[(k + 1) % 3], a) {
+            return Some(true);
+        }
+    }
+    exact.then_some(false)
 }
 
 /// Calcula el intervalo de un triángulo en la línea de intersección

@@ -23,6 +23,8 @@ export interface RepairOptions {
   maxHoleEdges: number;
   /** Refinar y suavizar los parches de relleno */
   refineFill: boolean;
+  /** Unir cuerpos solapados: cortar por las auto-intersecciones y quitar la superficie interior */
+  resolveIntersections: boolean;
 }
 
 /** Espejo de `pinocchio_repair::MeshDiagnostics` + veredictos */
@@ -67,6 +69,10 @@ export interface RepairResult {
   holes_skipped: number;
   faces_added: number;
   vertices_added: number;
+  intersections_cut: number;
+  intersections_skipped: number;
+  inner_patches_removed: number;
+  intersections_reverted: boolean;
 }
 
 export interface RepairPanelProps {
@@ -129,6 +135,8 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
       [r.non_manifold_fixed, "vértices separados (non-manifold)"],
       [r.faces_flipped, "caras reorientadas"],
       [r.components_removed, "piezas sueltas eliminadas"],
+      [r.intersections_cut, "cruces cortados"],
+      [r.inner_patches_removed, "superficies internas eliminadas"],
     ].filter(([n]) => (n as number) > 0) as [number, string][];
   };
 
@@ -236,8 +244,8 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
             </Show>
             <Show when={d()!.self_intersections > 0}>
               <p class="text-xs text-text-muted leading-relaxed pt-1">
-                Las auto-intersecciones (cuerpos solapados) no se corrigen aquí; la mayoría de los
-                laminadores las toleran.
+                Para corregir las auto-intersecciones, activa «Unir cuerpos solapados». La mayoría
+                de los laminadores las toleran.
               </p>
             </Show>
           </div>
@@ -285,6 +293,13 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
               onChange={(v) => set({ fillHoles: v })}
               label="Rellenar agujeros"
             />
+            <div title="Corta la malla donde se atraviesa a sí misma y borra la superficie que queda dentro de otro cuerpo. También borra las piezas internas puestas a propósito (por ejemplo, ojos dentro de una cabeza).">
+              <Checkbox
+                checked={props.repairOptions.resolveIntersections}
+                onChange={(v) => set({ resolveIntersections: v })}
+                label="Unir cuerpos solapados"
+              />
+            </div>
           </div>
 
           <Show when={props.repairOptions.fillHoles}>
@@ -340,6 +355,17 @@ export const RepairPanel: Component<RepairPanelProps> = (props) => {
               <p class="text-xs text-yellow">
                 {props.repairResult!.holes_skipped} bordes sin rellenar (láminas abiertas, rendijas o
                 agujeros sobre el tamaño máximo)
+              </p>
+            </Show>
+            <Show when={props.repairResult!.intersections_reverted}>
+              <p class="text-xs text-yellow">
+                No se unieron los cuerpos: la malla tiene superficies abiertas y el resultado quedaba
+                con más bordes. Rellena los agujeros primero.
+              </p>
+            </Show>
+            <Show when={props.repairResult!.intersections_skipped > 0}>
+              <p class="text-xs text-yellow">
+                {props.repairResult!.intersections_skipped} cruces degenerados sin cortar
               </p>
             </Show>
             <Show when={resultLines().length === 0 && props.repairResult!.holes_filled === 0}>
