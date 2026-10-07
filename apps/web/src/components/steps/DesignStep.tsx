@@ -41,7 +41,10 @@ import {
   type MissingRef,
   type P2,
   type P3,
+  type AxisDef,
   type PartId,
+  type PlaneDef,
+  type PointSpec,
   type PartView,
   type PatternKind,
   type PrimitiveShape,
@@ -170,7 +173,7 @@ function pickSummary(picks: { kind: string }[]): string {
     [count("face"), "cara", "caras"],
     [count("edge"), "arista", "aristas"],
     [count("vertex"), "vértice", "vértices"],
-    [count("plane"), "plano", "planos"],
+    [count("plane") + count("refplane"), "plano", "planos"],
   ];
   return parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(", ");
 }
@@ -178,6 +181,7 @@ function pickSummary(picks: { kind: string }[]): string {
 function planeLabel(p: PlaneSpec): string {
   if (p.type === "face") return "Cara del sólido";
   if (p.type === "custom") return "Plano propio";
+  if (p.type === "reference") return "Plano de referencia";
   return PLANE_LABELS[p.type];
 }
 
@@ -216,6 +220,11 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     if (plane?.kind === "plane") {
       ui.clearPicks();
       return newSketch({ type: plane.plane });
+    }
+    const ref = picks.find((p) => p.kind === "refplane");
+    if (ref?.kind === "refplane") {
+      ui.clearPicks();
+      return newSketch({ type: "reference", feature: ref.feature });
     }
     const face = picks.find((p) => p.kind === "face");
     if (face?.kind === "face") {
@@ -333,6 +342,35 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
       if (part && !out.some((o) => samePart(o, part.id))) out.push(part.id);
     }
     return out;
+  };
+
+  /**
+   * Referencia nueva a partir de lo elegido: plano desplazado de la cara o el
+   * plano elegido; eje de la arista o del cilindro; punto en el vértice o el
+   * centro de la arista. Sin nada elegido, valores que se ajustan en el diálogo.
+   */
+  const addReference = async (kind: "plane" | "axis" | "point") => {
+    const picks = ui.picks();
+    const face = picks.find((p) => p.kind === "face");
+    const edge = picks.find((p) => p.kind === "edge");
+    const vertex = picks.find((p) => p.kind === "vertex");
+    const plane = picks.find((p) => p.kind === "plane" || p.kind === "refplane");
+    ui.clearPicks();
+    if (kind === "plane") {
+      let base: PlaneSpec = { type: "xy" };
+      if (plane?.kind === "plane") base = { type: plane.plane };
+      else if (plane?.kind === "refplane") base = { type: "reference", feature: plane.feature };
+      else if (face?.kind === "face") base = { type: "face", face: await store.faceRef(face.face) };
+      return void store.addFeature({ type: "plane", def: { type: "offset", base, distance: 10 } });
+    }
+    if (kind === "axis") {
+      if (edge?.kind === "edge") return void store.addFeature({ type: "axis", def: { type: "edge", edge: await store.edgeRef(edge.edge) } });
+      if (face?.kind === "face") return void store.addFeature({ type: "axis", def: { type: "face", face: await store.faceRef(face.face) } });
+      return void store.addFeature({ type: "axis", def: { type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } } });
+    }
+    if (vertex?.kind === "vertex") return void store.addFeature({ type: "point", def: { type: "at", point: vertex.at } });
+    if (edge?.kind === "edge") return void store.addFeature({ type: "point", def: { type: "center", edge: await store.edgeRef(edge.edge) } });
+    void store.addFeature({ type: "point", def: { type: "at", point: [0, 0, 0] } });
   };
 
   /** Booleana: con piezas elegidas, la primera es la que queda y las demás, las que restan */
@@ -454,6 +492,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onBoolean={addBoolean}
                 onSplitParts={() => void store.addFeature({ type: "split_parts", parts: pickedParts() })}
                 onDeleteParts={() => void store.addFeature({ type: "delete_parts", parts: pickedParts() })}
+                onReference={(k) => void addReference(k)}
                 hasBody={!!store.result()?.body}
               />
 
@@ -596,6 +635,7 @@ const AddSection: Component<{
   onBoolean: () => void;
   onSplitParts: () => void;
   onDeleteParts: () => void;
+  onReference: (kind: "plane" | "axis" | "point") => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -638,6 +678,11 @@ const AddSection: Component<{
           <B label="Booleana" onClick={props.onBoolean} disabled={!props.hasBody} title="Unir, restar o intersecar piezas entre sí" />
           <B label="Separar" onClick={props.onSplitParts} disabled={!props.hasBody} title="Cada sólido suelto de una pieza pasa a ser una pieza" />
           <B label="Borrar pieza" onClick={props.onDeleteParts} disabled={!props.hasBody} />
+        </div>
+        <div class="grid grid-cols-3 gap-1.5">
+          <B label="Plano" onClick={() => props.onReference("plane")} title="Plano de referencia: desplazado, en ángulo, medio o por tres puntos" />
+          <B label="Eje" onClick={() => props.onReference("axis")} title="Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" />
+          <B label="Punto" onClick={() => props.onReference("point")} title="Punto de referencia" />
         </div>
       </div>
     </Section>
@@ -965,7 +1010,7 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                         <Icons.CaretDown size={10} />
                       </IconButton>
                       <Show
-                        when={f().kind.type === "sketch"}
+                        when={["sketch", "plane", "axis", "point"].includes(f().kind.type)}
                         fallback={
                           <IconButton
                             aria-label={f().suppressed ? "Activar" : "Suprimir"}
@@ -1075,17 +1120,25 @@ const FeatureEditor: Component<{
     return st?.state === "error" || st?.state === "warning" ? (st.missing ?? []).filter((m) => m.field === field).map((m) => m.index) : [];
   };
   const sketchOptions = () => props.sketches.map((s) => ({ value: String(s.id), label: s.name }));
-  const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void, lostFace = false) => (
-    <Select
-      options={[
-        ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
-        ...(value.type === "face" ? [{ value: "face", label: lostFace ? "Cara del sólido · no encontrada" : "Cara del sólido" }] : []),
-        ...(value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
-      ]}
-      value={value.type}
-      onChange={(v) => v !== value.type && (v === "xy" || v === "xz" || v === "yz") && set({ type: v })}
-    />
-  );
+  const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void, lostFace = false) => {
+    const current = value.type === "reference" ? `ref:${value.feature}` : value.type;
+    return (
+      <Select
+        options={[
+          ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
+          ...refOptions(props.store, "plane", f().id),
+          ...(value.type === "face" ? [{ value: "face", label: lostFace ? "Cara del sólido · no encontrada" : "Cara del sólido" }] : []),
+          ...(value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
+        ]}
+        value={current}
+        onChange={(v) => {
+          if (v === current) return;
+          if (v === "xy" || v === "xz" || v === "yz") set({ type: v });
+          else if (v.startsWith("ref:")) set({ type: "reference", feature: +v.slice(4) });
+        }}
+      />
+    );
+  };
   const opSelect = (value: BodyOp, set: (o: BodyOp) => void) => <Select options={OP_OPTIONS} value={value} onChange={(v) => set(v as BodyOp)} />;
   // Diálogo abierto: los cambios se ven en el visor y quedan al aceptar
   const open = () => props.store.draft()?.feature === f().id;
@@ -1216,7 +1269,10 @@ const FeatureEditor: Component<{
                 const s = sketch();
                 return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => e.geometry.type === "line") : [];
               };
-              const axisValue = () => (k().axis.type === "sketch_line" ? `line:${(k().axis as { line: number }).line}` : k().axis.type);
+              const axisValue = () => {
+                const a = k().axis;
+                return a.type === "sketch_line" ? `line:${a.line}` : a.type === "reference" ? `ref:${a.feature}` : a.type;
+              };
               return (
                 <>
                   <Row label="Sketch">
@@ -1229,12 +1285,17 @@ const FeatureEditor: Component<{
                         { value: "y", label: "Y" },
                         { value: "z", label: "Z" },
                         ...lines().map((l) => ({ value: `line:${l.id}`, label: `Línea ${l.id}${l.construction ? " (construcción)" : ""}` })),
+                        ...refOptions(props.store, "axis"),
                       ]}
                       value={axisValue()}
                       onChange={(v) =>
                         update((x) => {
                           if (x.type !== "revolve") return;
-                          x.axis = v.startsWith("line:") ? { type: "sketch_line", sketch: x.sketch, line: +v.slice(5) } : { type: v as "x" | "y" | "z" };
+                          x.axis = v.startsWith("line:")
+                            ? { type: "sketch_line", sketch: x.sketch, line: +v.slice(5) }
+                            : v.startsWith("ref:")
+                              ? { type: "reference", feature: +v.slice(4) }
+                              : { type: v as "x" | "y" | "z" };
                         })
                       }
                     />
@@ -1393,9 +1454,19 @@ const FeatureEditor: Component<{
                     <>
                       <Row label="Eje">
                         <Select
-                          options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
-                          value={(k().pattern as { axis: AxisSpec }).axis.type}
-                          onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.axis = { type: v as "x" | "y" | "z" }))}
+                          options={[...["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() })), ...refOptions(props.store, "axis")]}
+                          value={(() => {
+                            const a = (k().pattern as { axis: AxisSpec }).axis;
+                            return a.type === "reference" ? `ref:${a.feature}` : a.type;
+                          })()}
+                          onChange={(v) =>
+                            update(
+                              (x) =>
+                                x.type === "pattern" &&
+                                x.pattern.type === "circular" &&
+                                (x.pattern.axis = v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" }),
+                            )
+                          }
                         />
                       </Row>
                       {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
@@ -1436,7 +1507,7 @@ const FeatureEditor: Component<{
                   const n = p.plane.normal;
                   return Math.abs(n[2]) > 0.9 ? "xy" : Math.abs(n[1]) > 0.9 ? "xz" : "yz";
                 }
-                return p.type === "face" ? "xy" : p.type;
+                return p.type === "face" || p.type === "reference" ? "xy" : p.type;
               };
               const offset = () => {
                 const p = k().plane;
@@ -1520,6 +1591,174 @@ const FeatureEditor: Component<{
               );
             }}
           </Match>
+          <Match when={f().kind.type === "plane" && (f().kind as Extract<FeatureKind, { type: "plane" }>)}>
+            {(k) => {
+              const def = () => k().def;
+              const setDef = (d: PlaneDef) => update((x) => x.type === "plane" && (x.def = d));
+              const base = (): PlaneSpec => (def().type === "offset" || def().type === "angle" ? (def() as { base: PlaneSpec }).base : { type: "xy" });
+              return (
+                <>
+                  <Row label="Tipo">
+                    <Select
+                      options={[
+                        { value: "offset", label: "Desplazado" },
+                        { value: "angle", label: "En ángulo" },
+                        { value: "midplane", label: "Plano medio" },
+                        { value: "three_points", label: "Por tres puntos" },
+                      ]}
+                      value={def().type}
+                      onChange={(v) => {
+                        if (v === def().type) return;
+                        if (v === "offset") setDef({ type: "offset", base: base(), distance: 10 });
+                        else if (v === "angle") setDef({ type: "angle", base: base(), axis: { type: "x" }, angle: 45 });
+                        else if (v === "midplane") setDef({ type: "midplane", a: base(), b: { type: "xy" } });
+                        else
+                          setDef({
+                            type: "three_points",
+                            points: [
+                              { type: "at", point: [0, 0, 0] },
+                              { type: "at", point: [10, 0, 0] },
+                              { type: "at", point: [0, 10, 0] },
+                            ],
+                          });
+                      }}
+                    />
+                  </Row>
+                  <Switch>
+                    <Match when={def().type === "offset" && (def() as Extract<PlaneDef, { type: "offset" }>)}>
+                      {(d) => (
+                        <>
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label="Desde" value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
+                          {field("Distancia", "kind.def.distance", d().distance, (x, v) => x.type === "plane" && x.def.type === "offset" && (x.def.distance = v), "mm")}
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "angle" && (def() as Extract<PlaneDef, { type: "angle" }>)}>
+                      {(d) => (
+                        <>
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:base`} label="Desde" value={d().base} except={f().id} lost={lost("base").length > 0} onChange={(p) => setDef({ ...d(), base: p })} />
+                          <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Alrededor de" value={d().axis} except={f().id} onChange={(a) => setDef({ ...d(), axis: a })} />
+                          {field("Ángulo", "kind.def.angle", d().angle, (x, v) => x.type === "plane" && x.def.type === "angle" && (x.def.angle = v), "°")}
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "midplane" && (def() as Extract<PlaneDef, { type: "midplane" }>)}>
+                      {(d) => (
+                        <>
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Entre" value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Y" value={d().b} except={f().id} lost={lost("b").length > 0} onChange={(p) => setDef({ ...d(), b: p })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "three_points" && (def() as Extract<PlaneDef, { type: "three_points" }>)}>
+                      {(d) => (
+                        <For each={[0, 1, 2] as const}>
+                          {(k) => (
+                            <PointField
+                              store={props.store}
+                              ui={props.ui}
+                              owner={`${f().id}:p${k}`}
+                              label={`Punto ${k + 1}`}
+                              value={d().points[k]}
+                              except={f().id}
+                              onChange={(p) => setDef({ ...d(), points: d().points.map((q, i) => (i === k ? p : q)) as [PointSpec, PointSpec, PointSpec] })}
+                            />
+                          )}
+                        </For>
+                      )}
+                    </Match>
+                  </Switch>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "axis" && (f().kind as Extract<FeatureKind, { type: "axis" }>)}>
+            {(k) => {
+              const def = () => k().def;
+              const setDef = (d: AxisDef) => update((x) => x.type === "axis" && (x.def = d));
+              return (
+                <>
+                  <Row label="Tipo">
+                    <Select
+                      options={[
+                        { value: "two_points", label: "Por dos puntos" },
+                        { value: "edge", label: "Arista" },
+                        { value: "face", label: "Eje de un cilindro" },
+                        { value: "planes", label: "Cruce de dos planos" },
+                      ]}
+                      value={def().type}
+                      onChange={(v) => {
+                        if (v === def().type) return;
+                        if (v === "two_points") setDef({ type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } });
+                        else if (v === "planes") setDef({ type: "planes", a: { type: "xz" }, b: { type: "yz" } });
+                        else if (v === "edge") setDef({ type: "edge", edge: undefined as unknown as EdgeRef });
+                        else setDef({ type: "face", face: undefined as unknown as FaceRef });
+                      }}
+                    />
+                  </Row>
+                  <Switch>
+                    <Match when={def().type === "two_points" && (def() as Extract<AxisDef, { type: "two_points" }>)}>
+                      {(d) => (
+                        <>
+                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Desde" value={d().a} except={f().id} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PointField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Hasta" value={d().b} except={f().id} onChange={(p) => setDef({ ...d(), b: p })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "edge" && (def() as Extract<AxisDef, { type: "edge" }>)}>
+                      {(d) => (
+                        <SelectionBox
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:arista`}
+                          kind="edges"
+                          label="Arista"
+                          refs={d().edge ? [d().edge] : []}
+                          lost={lost("edge")}
+                          onChange={(refs) => refs.length && setDef({ type: "edge", edge: refs[refs.length - 1] as EdgeRef })}
+                        />
+                      )}
+                    </Match>
+                    <Match when={def().type === "face" && (def() as Extract<AxisDef, { type: "face" }>)}>
+                      {(d) => (
+                        <SelectionBox
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:cara`}
+                          kind="face"
+                          label="Cara cilíndrica o cónica"
+                          refs={d().face ? [d().face] : []}
+                          lost={lost("face")}
+                          onChange={(refs) => refs[0] && setDef({ type: "face", face: refs[0] as FaceRef })}
+                        />
+                      )}
+                    </Match>
+                    <Match when={def().type === "planes" && (def() as Extract<AxisDef, { type: "planes" }>)}>
+                      {(d) => (
+                        <>
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:a`} label="Plano" value={d().a} except={f().id} lost={lost("a").length > 0} onChange={(p) => setDef({ ...d(), a: p })} />
+                          <PlaneField store={props.store} ui={props.ui} owner={`${f().id}:b`} label="Con" value={d().b} except={f().id} lost={lost("b").length > 0} onChange={(p) => setDef({ ...d(), b: p })} />
+                        </>
+                      )}
+                    </Match>
+                  </Switch>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "point" && (f().kind as Extract<FeatureKind, { type: "point" }>)}>
+            {(k) => (
+              <PointField
+                store={props.store}
+                ui={props.ui}
+                owner={`${f().id}:punto`}
+                label="Punto"
+                value={k().def}
+                except={f().id}
+                onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
+              />
+            )}
+          </Match>
         </Switch>
         {/* Unir, restar o intersecar: con qué piezas (sin elegir, las que toca) */}
         <Show when={"op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new"}>
@@ -1542,6 +1781,163 @@ const FeatureEditor: Component<{
 function planeLabelFor(f: Feature): string {
   return f.kind.type === "sketch" ? `Sobre: ${planeLabel(f.kind.plane)}` : "";
 }
+
+// ─── Geometría de referencia en los diálogos ──────────────────────────────
+
+/** Referencias calculadas de un tipo, con el nombre de su operación (sin `except`) */
+function refOptions(store: CadStore, kind: "plane" | "axis" | "point", except?: number): { value: string; label: string }[] {
+  const names = new Map((store.doc()?.features ?? []).map((f) => [f.id, f.name]));
+  return (store.result()?.references ?? [])
+    .filter((r) => r.kind === kind && r.id !== except)
+    .map((r) => ({ value: `ref:${r.id}`, label: names.get(r.id) ?? `Referencia ${r.id}` }));
+}
+
+/** Plano: base, de referencia o una cara plana elegida en el visor */
+const PlaneField: Component<{ store: CadStore; ui: CadUi; owner: string; label: string; value: PlaneSpec; except?: number; lost?: boolean; onChange: (p: PlaneSpec) => void }> = (props) => {
+  const [wantFace, setWantFace] = createSignal(false);
+  const current = () => (wantFace() ? "face" : props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
+  return (
+    <>
+      <Row label={props.label}>
+        <Select
+          options={[
+            ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
+            ...refOptions(props.store, "plane", props.except),
+            { value: "face", label: props.lost ? "Cara del sólido · no encontrada" : "Cara del sólido" },
+            ...(props.value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
+          ]}
+          value={current()}
+          onChange={(v) => {
+            if (v === current()) return;
+            setWantFace(v === "face");
+            if (v === "xy" || v === "xz" || v === "yz") props.onChange({ type: v });
+            else if (v.startsWith("ref:")) props.onChange({ type: "reference", feature: +v.slice(4) });
+          }}
+        />
+      </Row>
+      <Show when={wantFace() || props.value.type === "face"}>
+        <SelectionBox
+          store={props.store}
+          ui={props.ui}
+          owner={props.owner}
+          kind="face"
+          label={`${props.label}: cara`}
+          refs={props.value.type === "face" ? [props.value.face] : []}
+          lost={props.lost ? [0] : []}
+          onChange={(refs) => {
+            if (refs[0]) props.onChange({ type: "face", face: refs[0] as FaceRef });
+            setWantFace(false);
+          }}
+        />
+      </Show>
+    </>
+  );
+};
+
+/** Eje: X/Y/Z, de referencia o una arista elegida */
+const AxisField: Component<{ store: CadStore; ui: CadUi; owner: string; label: string; value: AxisSpec; except?: number; onChange: (a: AxisSpec) => void }> = (props) => {
+  const [wantEdge, setWantEdge] = createSignal(false);
+  const current = () => (wantEdge() ? "edge" : props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
+  return (
+    <>
+      <Row label={props.label}>
+        <Select
+          options={[
+            ...(["x", "y", "z"] as const).map((k) => ({ value: k, label: k.toUpperCase() })),
+            ...refOptions(props.store, "axis", props.except),
+            { value: "edge", label: "Arista del sólido" },
+            ...(props.value.type === "sketch_line" ? [{ value: "sketch_line", label: "Línea del sketch" }] : []),
+            ...(props.value.type === "custom" ? [{ value: "custom", label: "Eje propio" }] : []),
+          ]}
+          value={current()}
+          onChange={(v) => {
+            if (v === current()) return;
+            setWantEdge(v === "edge");
+            if (v === "x" || v === "y" || v === "z") props.onChange({ type: v });
+            else if (v.startsWith("ref:")) props.onChange({ type: "reference", feature: +v.slice(4) });
+          }}
+        />
+      </Row>
+      <Show when={wantEdge() || props.value.type === "edge"}>
+        <SelectionBox
+          store={props.store}
+          ui={props.ui}
+          owner={props.owner}
+          kind="edges"
+          label={`${props.label}: arista`}
+          refs={props.value.type === "edge" ? [props.value.edge] : []}
+          onChange={(refs) => {
+            const last = refs[refs.length - 1];
+            if (last) props.onChange({ type: "edge", edge: last as EdgeRef });
+            setWantEdge(false);
+          }}
+        />
+      </Show>
+    </>
+  );
+};
+
+/** Punto: coordenadas, centro o punto de una arista, o de referencia */
+const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: string; value: PointSpec; except?: number; onChange: (p: PointSpec) => void }> = (props) => {
+  const current = () => (props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
+  const edgeOf = () => (props.value.type === "center" || props.value.type === "on_edge" ? [props.value.edge] : []);
+  return (
+    <div class="space-y-1">
+      <Row label={props.label}>
+        <Select
+          options={[
+            { value: "at", label: "Coordenadas" },
+            { value: "center", label: "Centro de una arista" },
+            { value: "on_edge", label: "Sobre una arista recta" },
+            ...refOptions(props.store, "point", props.except),
+          ]}
+          value={current()}
+          onChange={(v) => {
+            if (v === current()) return;
+            const edge = edgeOf()[0];
+            if (v === "at") props.onChange({ type: "at", point: [0, 0, 0] });
+            else if (v.startsWith("ref:")) props.onChange({ type: "reference", feature: +v.slice(4) });
+            else if (edge) props.onChange(v === "center" ? { type: "center", edge } : { type: "on_edge", edge, at: 0.5 });
+            else props.onChange(v === "center" ? { type: "center", edge: undefined as unknown as EdgeRef } : { type: "on_edge", edge: undefined as unknown as EdgeRef, at: 0.5 });
+          }}
+        />
+      </Row>
+      <Show when={props.value.type === "at" && props.value}>
+        {(p) => (
+          <div class="grid grid-cols-3 gap-1">
+            <For each={["X", "Y", "Z"]}>
+              {(axis, i) => (
+                <Num
+                  label={axis}
+                  value={p().point[i()]}
+                  onCommit={(v) => props.onChange({ type: "at", point: p().point.map((c, k) => (k === i() ? v : c)) as P3 })}
+                />
+              )}
+            </For>
+          </div>
+        )}
+      </Show>
+      <Show when={props.value.type === "center" || props.value.type === "on_edge"}>
+        <SelectionBox
+          store={props.store}
+          ui={props.ui}
+          owner={props.owner}
+          kind="edges"
+          label={`${props.label}: arista`}
+          refs={edgeOf().filter(Boolean)}
+          onChange={(refs) => {
+            const edge = refs[refs.length - 1] as EdgeRef | undefined;
+            if (!edge) return;
+            props.onChange(props.value.type === "on_edge" ? { ...props.value, edge } : { type: "center", edge });
+          }}
+        />
+      </Show>
+      <Show when={props.value.type === "on_edge" && props.value}>
+        {(p) => <Num label="Fracción del largo" step={0.05} value={p().at} onCommit={(v) => props.onChange({ ...p(), at: Math.min(1, Math.max(0, v)) })} />}
+      </Show>
+    </div>
+  );
+};
 
 // ─── Piezas en los diálogos ───────────────────────────────────────────────
 

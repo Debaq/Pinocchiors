@@ -64,6 +64,15 @@ struct Tagged {
     tags: Vec<Vec<FaceTag>>,
 }
 
+/// Geometría de referencia calculada (mm, Z arriba).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RefGeom {
+    Plane { plane: Plane },
+    Axis { origin: P3, dir: P3 },
+    Point { point: P3 },
+}
+
 /// Pieza calculada.
 #[derive(Debug, Clone)]
 pub struct Part {
@@ -84,6 +93,8 @@ pub struct Evaluation {
     pub parts: Vec<Part>,
     pub status: Vec<FeatureStatus>,
     pub sketches: HashMap<FeatureId, SketchResult>,
+    /// Planos, ejes y puntos de referencia.
+    pub references: HashMap<FeatureId, RefGeom>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
     tools: HashMap<FeatureId, (Tagged, BodyOp)>,
     /// Parámetros y campos vinculados, ya calculados.
@@ -103,6 +114,7 @@ struct CacheEntry {
     state: FeatureState,
     ms: f64,
     sketch: Option<SketchResult>,
+    reference: Option<RefGeom>,
     tool: Option<(Tagged, BodyOp)>,
     /// Para descartar las menos usadas.
     used: u64,
@@ -381,6 +393,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(s) = &e.sketch {
                 ctx.ev.sketches.insert(f.id, s.clone());
             }
+            if let Some(r) = &e.reference {
+                ctx.ev.references.insert(f.id, r.clone());
+            }
             if let Some(t) = &e.tool {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
@@ -415,6 +430,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 state: state.clone(),
                 ms,
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
+                reference: ctx.ev.references.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 used: 0,
             },
@@ -811,6 +827,13 @@ impl Ctx<'_> {
             PlaneSpec::Xz => Plane::XZ,
             PlaneSpec::Yz => Plane::YZ,
             PlaneSpec::Custom { plane } => *plane,
+            PlaneSpec::Reference { feature } => match self.ev.references.get(feature) {
+                Some(RefGeom::Plane { plane }) => *plane,
+                _ => {
+                    self.miss(field, 0);
+                    return Err("el plano de referencia no está calculado".into());
+                }
+            },
             PlaneSpec::Face { face } => {
                 let i = self.face(field, face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
@@ -831,6 +854,13 @@ impl Ctx<'_> {
             AxisSpec::Y => Axis { origin: [0.0; 3], dir: [0.0, 1.0, 0.0] },
             AxisSpec::Z => Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] },
             AxisSpec::Custom { origin, direction } => Axis { origin: *origin, dir: *direction },
+            AxisSpec::Reference { feature } => match self.ev.references.get(feature) {
+                Some(RefGeom::Axis { origin, dir }) => Axis { origin: *origin, dir: *dir },
+                _ => {
+                    self.miss(field, 0);
+                    return Err("el eje de referencia no está calculado".into());
+                }
+            },
             AxisSpec::SketchLine { sketch, line } => {
                 let s = self.ev.sketches.get(sketch).ok_or("el sketch del eje no está calculado")?;
                 let Geometry::Line { start, end } = s.sketch.entity(*line).map_err(err)?.geometry else {
@@ -847,6 +877,96 @@ impl Ctx<'_> {
                     Some((center, axis, _)) => Axis { origin: center, dir: axis },
                     None => Axis { origin: info.start, dir: normalize(sub(info.end, info.start)) },
                 }
+            }
+        })
+    }
+
+    fn point(&self, field: &str, spec: &PointSpec) -> R<P3> {
+        Ok(match spec {
+            PointSpec::At { point } => *point,
+            PointSpec::Center { edge } => {
+                let i = self.edge(field, edge)?;
+                let info = self.body()?.edge_info(i).map_err(err)?;
+                info.circle.map_or(info.mid, |c| c.0)
+            }
+            PointSpec::OnEdge { edge, at } => {
+                let i = self.edge(field, edge)?;
+                let info = self.body()?.edge_info(i).map_err(err)?;
+                if info.circle.is_some() || norm(sub(info.end, info.start)) < 1e-12 {
+                    return Err("un punto sobre la arista necesita una arista recta".into());
+                }
+                add(info.start, scale(sub(info.end, info.start), *at))
+            }
+            PointSpec::Reference { feature } => match self.ev.references.get(feature) {
+                Some(RefGeom::Point { point }) => *point,
+                _ => {
+                    self.miss(field, 0);
+                    return Err("el punto de referencia no está calculado".into());
+                }
+            },
+        })
+    }
+
+    fn reference_plane(&self, def: &PlaneDef) -> R<Plane> {
+        Ok(match def {
+            PlaneDef::Offset { base, distance } => self.plane("base", base)?.offset(*distance),
+            PlaneDef::Angle { base, axis, angle } => {
+                let p = self.plane("base", base)?;
+                let ax = self.axis("axis", axis)?;
+                let m = cad_occt::rotation_matrix(ax, angle.to_radians());
+                let dir = |v: P3| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2]);
+                let pt = |v: P3| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] + m[i][3]);
+                Plane { origin: pt(p.origin), normal: normalize(dir(p.normal)), x_dir: normalize(dir(p.x_dir)) }
+            }
+            PlaneDef::Midplane { a, b } => {
+                let (pa, pb) = (self.plane("a", a)?, self.plane("b", b)?);
+                if dot(normalize(pa.normal), normalize(pb.normal)).abs() < 1.0 - 1e-6 {
+                    return Err("los planos no son paralelos".into());
+                }
+                // A mitad de camino a lo largo de la normal del primero
+                let n = normalize(pa.normal);
+                let d = dot(sub(pb.origin, pa.origin), n);
+                Plane { origin: add(pa.origin, scale(n, d / 2.0)), ..pa }
+            }
+            PlaneDef::ThreePoints { points } => {
+                let [a, b, c] = [0, 1, 2].map(|k| self.point("points", &points[k]));
+                let (a, b, c) = (a?, b?, c?);
+                let n = cross(sub(b, a), sub(c, a));
+                if norm(n) < 1e-9 * norm(sub(b, a)).max(1.0).powi(2) {
+                    return Err("los tres puntos están alineados".into());
+                }
+                Plane { origin: a, normal: normalize(n), x_dir: normalize(sub(b, a)) }
+            }
+        })
+    }
+
+    fn reference_axis(&self, def: &AxisDef) -> R<Axis> {
+        Ok(match def {
+            AxisDef::TwoPoints { a, b } => {
+                let (a, b) = (self.point("a", a)?, self.point("b", b)?);
+                if norm(sub(b, a)) < 1e-9 {
+                    return Err("los dos puntos coinciden".into());
+                }
+                Axis { origin: a, dir: normalize(sub(b, a)) }
+            }
+            AxisDef::Edge { edge } => self.axis("edge", &AxisSpec::Edge { edge: edge.clone() })?,
+            AxisDef::Face { face } => {
+                let i = self.face("face", face)?;
+                let info = self.body()?.face_info(i).map_err(err)?;
+                info.axis.ok_or("la cara no es cilíndrica ni cónica")?
+            }
+            AxisDef::Planes { a, b } => {
+                let (pa, pb) = (self.plane("a", a)?, self.plane("b", b)?);
+                let (n1, n2) = (normalize(pa.normal), normalize(pb.normal));
+                let dir = cross(n1, n2);
+                let l2 = dot(dir, dir);
+                if l2 < 1e-12 {
+                    return Err("los planos son paralelos".into());
+                }
+                // Un punto de los dos: (d1 (n2 × dir) + d2 (dir × n1)) / |dir|²
+                let (d1, d2) = (dot(n1, pa.origin), dot(n2, pb.origin));
+                let p = scale(add(scale(cross(n2, dir), d1), scale(cross(dir, n1), d2)), 1.0 / l2);
+                Axis { origin: p, dir: normalize(dir) }
             }
         })
     }
@@ -1018,6 +1138,21 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(*op, targets, tools, *keep_tools),
+            FeatureKind::Plane { def } => {
+                let plane = self.reference_plane(def)?;
+                self.ev.references.insert(f.id, RefGeom::Plane { plane });
+                Ok(())
+            }
+            FeatureKind::Axis { def } => {
+                let a = self.reference_axis(def)?;
+                self.ev.references.insert(f.id, RefGeom::Axis { origin: a.origin, dir: a.dir });
+                Ok(())
+            }
+            FeatureKind::Point { def } => {
+                let point = self.point("def", def)?;
+                self.ev.references.insert(f.id, RefGeom::Point { point });
+                Ok(())
+            }
             FeatureKind::SplitParts { parts } => {
                 self.body()?;
                 let which = if parts.is_empty() { (0..self.ev.parts.len()).collect() } else { self.find_parts("parts", parts)? };

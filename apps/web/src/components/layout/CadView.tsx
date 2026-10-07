@@ -253,6 +253,13 @@ export const CadView: Component<CadViewProps> = (props) => {
     const c = designMass(store.doc(), store.result()).center ?? body?.center;
     viewer?.setCenterOfMass(ui.showCenterOfMass() && c ? c : null);
   });
+  // Planos, ejes y puntos de referencia (el ojo del árbol los oculta)
+  createEffect(() => {
+    const hidden = ui.hiddenSketches();
+    const refs = (store.result()?.references ?? []).filter((r) => !hidden.includes(r.id) && r.id !== ui.session()?.feature);
+    const chosen = ui.picks().flatMap((p) => (p.kind === "refplane" ? [p.feature] : []));
+    viewer?.setReferences(refs, chosen);
+  });
   // Color y visibilidad de cada pieza (con una sola, el color de siempre)
   createEffect(() => {
     store.mesh();
@@ -859,10 +866,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         mode.done(result, hit.triangle);
       } else if (mode.kind === "place") {
         // Dónde va el sketch: un plano base o una cara plana
-        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true });
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true, refPlanes: true });
         if (hit?.kind === "plane") {
           ui.setPick({ kind: "none" });
           mode.done({ type: hit.plane });
+        } else if (hit?.kind === "refplane") {
+          ui.setPick({ kind: "none" });
+          mode.done({ type: "reference", feature: hit.feature });
         } else if (hit?.kind === "face") {
           const info = await invoke<{ surface: string }>("cad_face_info", { face: hit.face });
           if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana: elegir una cara plana o un plano base");
@@ -885,6 +895,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         else if (hit.kind === "edge") ui.pickToggle({ kind: "edge", edge: hit.edge }, additive);
         else if (hit.kind === "vertex") ui.pickToggle({ kind: "vertex", at: hit.at }, additive);
         else if (hit.kind === "region") ui.pickToggle({ kind: "region", sketch: hit.sketch, region: hit.region }, additive);
+        else if (hit.kind === "refplane") ui.pickToggle({ kind: "refplane", feature: hit.feature }, additive);
         else ui.pickToggle({ kind: "plane", plane: hit.plane }, additive);
         ui.setMessage(undefined);
       }
@@ -1647,11 +1658,11 @@ const FILTERS: { id: PickFilter; label: string; tip: string }[] = [
   { id: "sketches", label: "Sketches", tip: "Elegir solo regiones de sketches y planos" },
 ];
 const FILTER_WANT: Record<PickFilter, Parameters<CadViewer["pick"]>[2]> = {
-  all: { faces: true, edges: true, vertices: true, regions: true, planes: true },
+  all: { faces: true, edges: true, vertices: true, regions: true, planes: true, refPlanes: true },
   faces: { faces: true },
   edges: { edges: true },
   vertices: { vertices: true },
-  sketches: { regions: true, planes: true },
+  sketches: { regions: true, planes: true, refPlanes: true },
 };
 /** Por caja, "Todo" elige caras y aristas (los vértices, con su filtro) */
 const BOX_WANT: Record<PickFilter, Parameters<CadViewer["boxSelect"]>[4]> = {

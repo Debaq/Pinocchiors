@@ -7,7 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
-import { ellipsePolyline, splineOf, type BodyOp, type CadMesh, type P2, type P3, type Plane, type Region, type Sketch } from "./cad";
+import { ellipsePolyline, splineOf, type BodyOp, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 import { ViewCube } from "./ViewCube";
 
@@ -30,7 +30,9 @@ export type CadPick =
   /** Región cerrada de un sketch visible (índice en `regions`) */
   | { kind: "region"; sketch: number; region: number; point: THREE.Vector3 }
   /** Uno de los planos base */
-  | { kind: "plane"; plane: BasePlane; point: THREE.Vector3 };
+  | { kind: "plane"; plane: BasePlane; point: THREE.Vector3 }
+  /** Un plano de referencia del historial */
+  | { kind: "refplane"; feature: number; point: THREE.Vector3 };
 
 /** Sketch visible fuera de la edición: líneas y regiones elegibles */
 export interface VisibleSketch {
@@ -135,6 +137,8 @@ export class CadViewer {
   private sketchGroup = new THREE.Group();
   private sketchesGroup = new THREE.Group();
   private planesGroup = new THREE.Group();
+  /** Planos, ejes y puntos de referencia */
+  private refsGroup = new THREE.Group();
   private selectedPlanes = new Set<BasePlane>();
   /** Lado de los planos base (mm): acompaña el tamaño del modelo */
   planeSize = 60;
@@ -202,6 +206,7 @@ export class CadViewer {
     this.scene.add(this.sketchGroup);
     this.scene.add(this.sketchesGroup);
     this.scene.add(this.planesGroup);
+    this.scene.add(this.refsGroup);
     this.marks.renderOrder = 6;
     this.scene.add(this.marks);
     this.scene.add(this.sectionGroup);
@@ -809,6 +814,50 @@ export class CadViewer {
     this.requestRender();
   }
 
+  /**
+   * Geometría de referencia: planos como cuadros ámbar translúcidos (elegibles),
+   * ejes como líneas punteadas y puntos. `chosen`: planos resaltados.
+   */
+  setReferences(list: RefView[], chosen: number[] = []) {
+    this.clearGroup(this.refsGroup);
+    const size = Math.max(this.planeSize * 0.6, 10 / this.mmPerUnit);
+    const color = themeHex("warning");
+    for (const r of list) {
+      if (r.kind === "plane") {
+        const n = this.dirToView(r.plane.normal);
+        const x = this.dirToView(r.plane.x_dir);
+        const y = new THREE.Vector3().crossVectors(n, x).normalize();
+        const basis = new THREE.Matrix4().makeBasis(x, y, n).setPosition(this.toView(r.plane.origin));
+        const g = new THREE.PlaneGeometry(size, size);
+        const picked = chosen.includes(r.id);
+        const mesh = new THREE.Mesh(
+          g,
+          new THREE.MeshBasicMaterial({ color: picked ? themeHex("cyan") : color, transparent: true, opacity: picked ? 0.3 : 0.1, side: THREE.DoubleSide, depthWrite: false }),
+        );
+        mesh.applyMatrix4(basis);
+        mesh.userData = { refPlane: r.id };
+        mesh.renderOrder = 2;
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: picked ? themeHex("cyan") : color, transparent: true, opacity: 0.7 }));
+        edges.applyMatrix4(basis);
+        this.refsGroup.add(mesh, edges);
+      } else if (r.kind === "axis") {
+        const o = this.toView(r.origin);
+        const d = this.dirToView(r.dir).multiplyScalar(size);
+        const g = new THREE.BufferGeometry().setFromPoints([o.clone().sub(d), o.clone().add(d)]);
+        const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color, dashSize: size / 20, gapSize: size / 40 }));
+        line.computeLineDistances();
+        line.renderOrder = 5;
+        this.refsGroup.add(line);
+      } else {
+        const g = new THREE.BufferGeometry().setFromPoints([this.toView(r.point)]);
+        const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: 8, sizeAttenuation: false, depthTest: false }));
+        pts.renderOrder = 6;
+        this.refsGroup.add(pts);
+      }
+    }
+    this.requestRender();
+  }
+
   /** Planos base (planta, frente, lateral), como cuadros translúcidos elegibles */
   private buildPlanes() {
     this.clearGroup(this.planesGroup);
@@ -1267,7 +1316,7 @@ export class CadViewer {
   pick(
     clientX: number,
     clientY: number,
-    want: { faces?: boolean; edges?: boolean; vertices?: boolean; scan?: boolean; regions?: boolean; planes?: boolean },
+    want: { faces?: boolean; edges?: boolean; vertices?: boolean; scan?: boolean; regions?: boolean; planes?: boolean; refPlanes?: boolean },
   ): CadPick | null {
     this.setRay(clientX, clientY);
     const dist = this.camera.position.distanceTo(this.controls.target);
@@ -1309,6 +1358,10 @@ export class CadViewer {
         candidates.push({ d: hit.distance, rank: 1, pick: { kind: "face", face: this.visibleTriFace[hit.faceIndex], point: hit.point } });
       }
     }
+    if (want.refPlanes) {
+      const hit = this.raycaster.intersectObjects(this.refsGroup.children.filter((o) => (o as THREE.Mesh).isMesh && o.userData.refPlane !== undefined))[0];
+      if (hit) candidates.push({ d: hit.distance, rank: 2, pick: { kind: "refplane", feature: hit.object.userData.refPlane, point: hit.point } });
+    }
     if (want.planes && this.planesGroup.visible) {
       const hit = this.raycaster.intersectObjects(this.planesGroup.children.filter((o) => (o as THREE.Mesh).isMesh))[0];
       if (hit) candidates.push({ d: hit.distance, rank: 2, pick: { kind: "plane", plane: hit.object.userData.plane, point: hit.point } });
@@ -1316,7 +1369,7 @@ export class CadViewer {
     if (candidates.length) {
       // Los planos base son translúcidos y pasan por delante del modelo: solo
       // se eligen si bajo el puntero no hay caras ni regiones
-      const solid = candidates.filter((c) => c.pick.kind !== "plane");
+      const solid = candidates.filter((c) => c.pick.kind !== "plane" && c.pick.kind !== "refplane");
       const pool = solid.length ? solid : candidates;
       pool.sort((a, b) => a.d - b.d || a.rank - b.rank);
       return pool[0].pick;

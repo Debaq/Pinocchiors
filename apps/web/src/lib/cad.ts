@@ -48,7 +48,9 @@ export type PlaneSpec =
   | { type: "xz" }
   | { type: "yz" }
   | { type: "face"; face: FaceRef }
-  | { type: "custom"; plane: Plane };
+  | { type: "custom"; plane: Plane }
+  /** Un plano de referencia del historial */
+  | { type: "reference"; feature: number };
 
 export type AxisSpec =
   | { type: "x" }
@@ -56,7 +58,35 @@ export type AxisSpec =
   | { type: "z" }
   | { type: "sketch_line"; sketch: number; line: number }
   | { type: "edge"; edge: EdgeRef }
-  | { type: "custom"; origin: P3; direction: P3 };
+  | { type: "custom"; origin: P3; direction: P3 }
+  /** Un eje de referencia del historial */
+  | { type: "reference"; feature: number };
+
+/** Punto: coordenadas, centro de una arista, sobre una arista recta o de referencia */
+export type PointSpec =
+  | { type: "at"; point: P3 }
+  | { type: "center"; edge: EdgeRef }
+  | { type: "on_edge"; edge: EdgeRef; at: number }
+  | { type: "reference"; feature: number };
+
+export type PlaneDef =
+  | { type: "offset"; base: PlaneSpec; distance: number }
+  | { type: "angle"; base: PlaneSpec; axis: AxisSpec; angle: number }
+  | { type: "midplane"; a: PlaneSpec; b: PlaneSpec }
+  | { type: "three_points"; points: [PointSpec, PointSpec, PointSpec] };
+
+export type AxisDef =
+  | { type: "two_points"; a: PointSpec; b: PointSpec }
+  | { type: "edge"; edge: EdgeRef }
+  | { type: "face"; face: FaceRef }
+  | { type: "planes"; a: PlaneSpec; b: PlaneSpec };
+
+/** Geometría de referencia calculada */
+export type RefView = { id: number } & (
+  | { kind: "plane"; plane: Plane }
+  | { kind: "axis"; origin: P3; dir: P3 }
+  | { kind: "point"; point: P3 }
+);
 
 /** Unir funde con lo que toca (o crea pieza si no toca nada); `new` siempre crea pieza aparte */
 export type BodyOp = "join" | "cut" | "intersect" | "new";
@@ -159,7 +189,10 @@ export type FeatureKind =
   | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
   /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
   | { type: "split_parts"; parts: PartId[] }
-  | { type: "delete_parts"; parts: PartId[] };
+  | { type: "delete_parts"; parts: PartId[] }
+  | { type: "plane"; def: PlaneDef }
+  | { type: "axis"; def: AxisDef }
+  | { type: "point"; def: PointSpec };
 
 export interface Feature {
   id: number;
@@ -332,7 +365,7 @@ export interface ResolvedValue {
 
 /** Referencia que no se encontró: campo de la operación y posición en su lista */
 export interface MissingRef {
-  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope";
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def";
   index: number;
 }
 
@@ -403,6 +436,7 @@ export interface CadResult {
   /** Operaciones calculadas en este recálculo (las demás salieron de la caché) */
   recomputed: number;
   parts: PartView[];
+  references: RefView[];
 }
 
 export interface CadStatus {
@@ -535,6 +569,9 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   boolean: "Booleana",
   split_parts: "Separar piezas",
   delete_parts: "Borrar pieza",
+  plane: "Plano",
+  axis: "Eje",
+  point: "Punto",
 };
 
 export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
@@ -578,8 +615,29 @@ function defaultName(doc: CadDocument, kind: FeatureKind): string {
 
 /** Operaciones de las que depende `kind` (mismo criterio que el backend) */
 export function dependencies(kind: FeatureKind): number[] {
-  const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : []);
+  const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" ? [a.feature] : []);
+  const plane = (p: PlaneSpec) => (p.type === "reference" ? [p.feature] : []);
+  const point = (p: PointSpec) => (p.type === "reference" ? [p.feature] : []);
   switch (kind.type) {
+    case "sketch":
+      return plane(kind.plane);
+    case "draft":
+      return plane(kind.neutral);
+    case "plane": {
+      const d = kind.def;
+      if (d.type === "offset") return plane(d.base);
+      if (d.type === "angle") return [...plane(d.base), ...axis(d.axis)];
+      if (d.type === "midplane") return [...plane(d.a), ...plane(d.b)];
+      return d.points.flatMap(point);
+    }
+    case "axis": {
+      const d = kind.def;
+      if (d.type === "two_points") return [...point(d.a), ...point(d.b)];
+      if (d.type === "planes") return [...plane(d.a), ...plane(d.b)];
+      return [];
+    }
+    case "point":
+      return point(kind.def);
     case "extrude":
       return [kind.sketch];
     case "revolve":
@@ -587,7 +645,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "pattern":
       return [...kind.features, ...(kind.pattern.type === "circular" ? axis(kind.pattern.axis) : [])];
     case "mirror":
-      return kind.features;
+      return [...kind.features, ...plane(kind.plane)];
     case "boolean":
       return [...kind.targets, ...kind.tools].map((p) => p.feature);
     case "split_parts":

@@ -67,7 +67,16 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
 ## Fases
 
 1. **Planos, ejes y puntos de referencia** (las formas más comunes: desplazado, en ángulo,
-   medio, 3 puntos; eje por 2 puntos y de cilindro).
+   medio, 3 puntos; eje por 2 puntos y de cilindro). *Hecha el 2026-10-07: `FeatureKind::Plane { def: PlaneDef }`
+   (desplazado, en ángulo alrededor de un eje, medio entre dos paralelos, por tres puntos),
+   `Axis { def: AxisDef }` (dos puntos, arista, eje de cilindro o cono, cruce de dos planos) y
+   `Point { def: PointSpec }` (coordenadas, centro de arista, sobre arista recta, otro punto).
+   `PlaneSpec::Reference` y `AxisSpec::Reference` los usan sketches, simetrías, desmoldes,
+   revoluciones y patrones circulares; dependencias por referencia. `Evaluation.references` (y
+   la caché las guarda), `CadResult.references`. Visor: planos ámbar translúcidos elegibles
+   (para el sketch, en el modo de elegir lugar y en la selección), ejes punteados y puntos; se
+   ocultan con el ojo del árbol. Diálogos con `PlaneField`/`AxisField`/`PointField`; "Plano",
+   "Eje" y "Punto" en Agregar arrancan de lo elegido.*
 2. **Extrusión completa**: dos direcciones, hasta la siguiente, desmoldeo, delgada.
 3. **Barrido y transición** con interfaz (el puente ya existe).
 4. **Agujero** con tamaños estándar.

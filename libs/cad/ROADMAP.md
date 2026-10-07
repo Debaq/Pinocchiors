@@ -394,3 +394,6 @@ cargo test -p cad-model
 - **2026-10-07 STEP con piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 6, con lo que el plan 5
   queda completo): el STEP lleva cada pieza con su nombre y su color; cuesta +6,7 MB en el
   binario estático (XCAF).
+- **2026-10-07 Geometría de referencia** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 1):
+  planos, ejes y puntos de referencia como operaciones del historial, visibles y elegibles en
+  el visor, usables como plano de sketch, eje de revolución o de patrón y plano de simetría.

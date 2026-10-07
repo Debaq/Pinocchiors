@@ -53,6 +53,8 @@ pub enum PlaneSpec {
     /// Plano de una cara plana del sólido (sigue a la cara si esta se mueve).
     Face { face: FaceRef },
     Custom { plane: Plane },
+    /// Un plano de referencia del historial.
+    Reference { feature: FeatureId },
 }
 
 
@@ -67,6 +69,71 @@ pub enum AxisSpec {
     /// Una arista recta o el eje de una arista circular.
     Edge { edge: EdgeRef },
     Custom { origin: P3, direction: P3 },
+    /// Un eje de referencia del historial.
+    Reference { feature: FeatureId },
+}
+
+/// Un punto: fijo, en una arista o de referencia.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PointSpec {
+    /// Coordenadas (mm).
+    At { point: P3 },
+    /// Centro de una arista circular (o el medio de una recta).
+    Center { edge: EdgeRef },
+    /// Sobre una arista recta, a una fracción de su largo (0 = inicio, 1 = fin).
+    OnEdge { edge: EdgeRef, at: f64 },
+    /// Un punto de referencia del historial.
+    Reference { feature: FeatureId },
+}
+
+/// Cómo se define un plano de referencia.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PlaneDef {
+    /// Paralelo a otro, a una distancia.
+    Offset { base: PlaneSpec, distance: f64 },
+    /// Otro plano girado alrededor de un eje (grados).
+    Angle { base: PlaneSpec, axis: AxisSpec, angle: f64 },
+    /// A mitad de camino entre dos planos paralelos.
+    Midplane { a: PlaneSpec, b: PlaneSpec },
+    /// Por tres puntos.
+    ThreePoints { points: [PointSpec; 3] },
+}
+
+/// Cómo se define un eje de referencia.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AxisDef {
+    TwoPoints { a: PointSpec, b: PointSpec },
+    /// Arista recta, o el eje de una circular.
+    Edge { edge: EdgeRef },
+    /// Eje de una cara cilíndrica o cónica.
+    Face { face: FaceRef },
+    /// Intersección de dos planos.
+    Planes { a: PlaneSpec, b: PlaneSpec },
+}
+
+fn plane_deps(p: &PlaneSpec) -> Vec<FeatureId> {
+    match p {
+        PlaneSpec::Reference { feature } => vec![*feature],
+        _ => vec![],
+    }
+}
+
+fn axis_deps(a: &AxisSpec) -> Vec<FeatureId> {
+    match a {
+        AxisSpec::SketchLine { sketch, .. } => vec![*sketch],
+        AxisSpec::Reference { feature } => vec![*feature],
+        _ => vec![],
+    }
+}
+
+fn point_deps(p: &PointSpec) -> Vec<FeatureId> {
+    match p {
+        PointSpec::Reference { feature } => vec![*feature],
+        _ => vec![],
+    }
 }
 
 /// Qué hace la herramienta con las piezas. Unir funde la herramienta con las
@@ -247,6 +314,11 @@ pub enum FeatureKind {
     },
     /// Saca piezas del diseño (desde acá en adelante).
     DeleteParts { parts: Vec<PartId> },
+    /// Geometría de referencia: no cambia el sólido; sirve para sketches,
+    /// revoluciones, patrones y simetrías.
+    Plane { def: PlaneDef },
+    Axis { def: AxisDef },
+    Point { def: PointSpec },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -260,11 +332,23 @@ pub enum PartBoolean {
 impl FeatureKind {
     /// Operaciones de las que depende explícitamente.
     pub fn dependencies(&self) -> Vec<FeatureId> {
-        let axis_dep = |a: &AxisSpec| match a {
-            AxisSpec::SketchLine { sketch, .. } => vec![*sketch],
-            _ => vec![],
-        };
+        let axis_dep = axis_deps;
         match self {
+            FeatureKind::Sketch { plane, .. } => plane_deps(plane),
+            FeatureKind::Draft { neutral, .. } => plane_deps(neutral),
+            FeatureKind::Split { plane, .. } => plane_deps(plane),
+            FeatureKind::Plane { def } => match def {
+                PlaneDef::Offset { base, .. } => plane_deps(base),
+                PlaneDef::Angle { base, axis, .. } => [plane_deps(base), axis_deps(axis)].concat(),
+                PlaneDef::Midplane { a, b } => [plane_deps(a), plane_deps(b)].concat(),
+                PlaneDef::ThreePoints { points } => points.iter().flat_map(point_deps).collect(),
+            },
+            FeatureKind::Axis { def } => match def {
+                AxisDef::TwoPoints { a, b } => [point_deps(a), point_deps(b)].concat(),
+                AxisDef::Planes { a, b } => [plane_deps(a), plane_deps(b)].concat(),
+                _ => vec![],
+            },
+            FeatureKind::Point { def } => point_deps(def),
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
@@ -278,7 +362,7 @@ impl FeatureKind {
                 }
                 d
             }
-            FeatureKind::Mirror { features, .. } => features.clone(),
+            FeatureKind::Mirror { features, plane } => [features.clone(), plane_deps(plane)].concat(),
             // Las operaciones que crearon las piezas que usa
             FeatureKind::Boolean { targets, tools, .. } => targets.iter().chain(tools).map(|p| p.feature).collect(),
             FeatureKind::SplitParts { parts } | FeatureKind::DeleteParts { parts } => parts.iter().map(|p| p.feature).collect(),
@@ -310,6 +394,9 @@ impl FeatureKind {
             FeatureKind::Boolean { .. } => "Booleana",
             FeatureKind::SplitParts { .. } => "Separar piezas",
             FeatureKind::DeleteParts { .. } => "Borrar pieza",
+            FeatureKind::Plane { .. } => "Plano",
+            FeatureKind::Axis { .. } => "Eje",
+            FeatureKind::Point { .. } => "Punto",
         }
     }
 }

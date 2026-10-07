@@ -96,6 +96,15 @@ pub struct CadResult {
     pub recomputed: usize,
     /// Piezas, con sus caras y aristas dentro del cuerpo
     pub parts: Vec<PartView>,
+    /// Planos, ejes y puntos de referencia, en el orden del árbol
+    pub references: Vec<RefView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct RefView {
+    pub id: cad_model::FeatureId,
+    #[serde(flatten)]
+    pub geom: cad_model::RefGeom,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,8 +211,11 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         })
     });
     let parts = part_views(doc, eval);
+    let mut references: Vec<RefView> = eval.references.iter().map(|(id, g)| RefView { id: *id, geom: g.clone() }).collect();
+    references.sort_by_key(|r| doc.index_of(r.id));
     Ok(CadResult {
         parts,
+        references,
         status: eval.status.clone(),
         sketches,
         body,

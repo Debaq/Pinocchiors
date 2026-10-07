@@ -786,6 +786,45 @@ const scenarios = {
     if (!c?.startsWith("17,67")) throw new Error(`centro: ${c}`);
   },
 
+  async "plano de referencia: sketch encima y extrusión"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Plano");
+    await sleep(1500);
+    await setInput(b, "Distancia", 15);
+    await sleep(1200);
+    await accept(b);
+    const refs = (await evaluate()).references;
+    if (refs.length !== 1 || refs[0].kind !== "plane") throw new Error(`referencias: ${JSON.stringify(refs)}`);
+    near(refs[0].plane.origin[2], 15, 1e-9, "altura del plano");
+    // Sketch: clic sobre el plano de referencia (está por encima de los base)
+    await b.clickText("Sketch");
+    await sleep(500);
+    const S = await b.eval(`window.__cadViewer.planeSize`);
+    await b.click(...(await at([0.15 * S, -0.15 * S, 15])), { wait: 2000 });
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error("no empezó el sketch");
+    const doc = await call("cad_get_document");
+    const sk = doc.features.find((f) => f.kind.type === "sketch");
+    if (sk?.kind.plane.type !== "reference") throw new Error(`plano del sketch: ${JSON.stringify(sk?.kind.plane)}`);
+    await b.clickText("Rectángulo");
+    await b.click(...(await at([-5, -5, 15])));
+    await b.click(...(await at([5, 5, 15])), { wait: 1000 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    await accept(b);
+    const r = await body();
+    near(r.bbox_min[2], 15, 1e-6, "la pieza empieza en el plano");
+    // Ocultar el plano con el ojo del árbol
+    await b.eval(`(() => { const s = [...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === "Plano 1"); s.closest("[data-feature-row]").querySelector('[aria-label="Ocultar en el visor"]').click(); })()`);
+    await sleep(800);
+    const [x, y] = await at([0.4 * S, 0.4 * S, 15]);
+    const hit = await b.eval(`window.__cadViewer.pick(${x}, ${y}, { refPlanes: true })?.kind ?? null`);
+    if (hit === "refplane") throw new Error("el plano oculto se sigue eligiendo");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);
