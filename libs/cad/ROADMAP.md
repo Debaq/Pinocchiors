@@ -422,3 +422,6 @@ cargo test -p cad-model
 - **2026-10-07 Desviación escaneo ↔ diseño** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 1): el
   escaneo se pinta según cuánto se aparta del sólido, con resumen (media, P95, máximo, % dentro
   de tolerancia).
+- **2026-10-07 Contornos del escaneo con relaciones** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 3):
+  los sketches de corte llegan con paralelas y perpendiculares inferidas y esquinas
+  redondeables a una grilla.

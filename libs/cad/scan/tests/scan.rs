@@ -167,3 +167,56 @@ fn simplify_and_circle_fit() {
     assert_eq!(simplify_closed(&sq, 0.01).len(), 4);
 }
 
+
+/// Lazo con puntos cada `step` a lo largo de los lados del polígono, con ruido chico.
+fn noisy_loop(corners: &[[f64; 2]], step: f64, noise: f64) -> Vec<[f64; 2]> {
+    let mut out = Vec::new();
+    let mut k = 0u32;
+    for i in 0..corners.len() {
+        let (a, b) = (corners[i], corners[(i + 1) % corners.len()]);
+        let len = ((b[0] - a[0]).powi(2) + (b[1] - a[1]).powi(2)).sqrt();
+        let n = (len / step).ceil() as usize;
+        for j in 0..n {
+            let t = j as f64 / n as f64;
+            // Ruido determinista
+            k = k.wrapping_mul(1103515245).wrapping_add(12345);
+            let r = ((k >> 16) & 0x7fff) as f64 / 32767.0 - 0.5;
+            out.push([a[0] + (b[0] - a[0]) * t + r * noise, a[1] + (b[1] - a[1]) * t - r * noise]);
+        }
+    }
+    out
+}
+
+#[test]
+fn outline_infers_parallel_and_perpendicular_without_conflicts() {
+    // Rectángulo de 40 × 20 girado 30°
+    let (c, s) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+    let rot = |p: [f64; 2]| [p[0] * c - p[1] * s, p[0] * s + p[1] * c];
+    let corners = [[0.0, 0.0], [40.0, 0.0], [40.0, 20.0], [0.0, 20.0]].map(rot);
+    let lp = noisy_loop(&corners, 0.5, 0.02);
+    let mut sk = outline_sketch(&[lp], &OutlineOptions { tolerance: 0.1, ..Default::default() });
+    let count = |f: &dyn Fn(&SketchConstraint) -> bool| sk.constraints.iter().filter(|c| f(c)).count();
+    assert_eq!(count(&|c| matches!(c, SketchConstraint::Parallel { .. })), 2, "{:?}", sk.constraints);
+    assert_eq!(count(&|c| matches!(c, SketchConstraint::Perpendicular { .. })), 1);
+    assert_eq!(count(&|c| matches!(c, SketchConstraint::Horizontal { .. } | SketchConstraint::Vertical { .. })), 0);
+    let report = sk.solve().unwrap();
+    assert!(!matches!(report.status, SketchStatus::OverConstrained | SketchStatus::Failed), "{:?}", report.status);
+    // Ya resuelto: ángulo recto exacto entre los dos primeros lados
+    let lines: Vec<_> = sk.entities.iter().filter_map(|e| match e.geometry { Geometry::Line { start, end } => Some((start, end)), _ => None }).collect();
+    let dir = |(a, b): (u32, u32)| {
+        let (p, q) = (sk.point(a).unwrap(), sk.point(b).unwrap());
+        [q[0] - p[0], q[1] - p[1]]
+    };
+    let (u, v) = (dir(lines[0]), dir(lines[1]));
+    let cos = (u[0] * v[0] + u[1] * v[1]) / ((u[0] * u[0] + u[1] * u[1]).sqrt() * (v[0] * v[0] + v[1] * v[1]).sqrt());
+    assert!(cos.abs() < 1e-9, "{cos}");
+
+    // Una L alineada a los ejes: solo horizontales y verticales
+    let l = noisy_loop(&[[0.0, 0.0], [30.0, 0.0], [30.0, 10.0], [10.0, 10.0], [10.0, 25.0], [0.0, 25.0]], 0.5, 0.02);
+    let sk = outline_sketch(&[l], &OutlineOptions { tolerance: 0.1, round_to: 0.5, ..Default::default() });
+    assert_eq!(sk.constraints.iter().filter(|c| matches!(c, SketchConstraint::Horizontal { .. })).count(), 3);
+    assert_eq!(sk.constraints.iter().filter(|c| matches!(c, SketchConstraint::Vertical { .. })).count(), 3);
+    assert!(!sk.constraints.iter().any(|c| matches!(c, SketchConstraint::Parallel { .. } | SketchConstraint::Perpendicular { .. })));
+    // Redondeado a 0,5: las esquinas quedan en la grilla
+    assert!(sk.points.iter().filter(|p| Some(p.id) != sk.origin).all(|p| (p.x * 2.0).fract().abs() < 1e-9 && (p.y * 2.0).fract().abs() < 1e-9));
+}

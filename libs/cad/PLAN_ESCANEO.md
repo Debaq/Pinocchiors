@@ -72,7 +72,12 @@ cuánto se parece el sólido al escaneo.
    amarillo a rojo hacia afuera (hasta el P95 o 3 tolerancias). Se borra si cambia el diseño.
    E2E con el espéculo real: el cilindro ajustado deja 58 % dentro de ±0,2 mm.*
 2. **Detección mejorada**: unir y separar planos; prueba con las piezas reales de `~/Descargas`.
-3. **Restricciones inferidas** en los sketches de corte y redondeo de cotas.
+3. **Restricciones inferidas** en los sketches de corte y redondeo de cotas. *Hecha el 2026-10-07: además de
+   horizontales y verticales, `outline_sketch` agrupa las líneas por dirección (±2°) y las ata
+   con paralelas a la primera del grupo, y une grupos a 90° con perpendiculares armadas como
+   árbol (unión de conjuntos: sin ciclos que se contradigan). `round_to` lleva las esquinas a
+   una grilla. Prueba: rectángulo girado 30° con ruido → 2 paralelas, 1 perpendicular, se
+   resuelve sin conflicto y queda en ángulo recto exacto.*
 4. **Alinear el escaneo** y **cortes propuestos**.
 5. **Conos, esferas y redondeos** detectados.
 

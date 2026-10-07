@@ -127,17 +127,22 @@ pub struct OutlineOptions {
     /// Líneas casi horizontales/verticales (±`snap_angle`°) se restringen como tales.
     pub snap_axes: bool,
     pub snap_angle: f64,
+    /// Paralelas y perpendiculares entre líneas (±`snap_angle`°), sin contradecirse.
+    pub infer_relations: bool,
+    /// Redondear las coordenadas a este paso (mm; 0 = sin redondear).
+    pub round_to: f64,
 }
 
 impl Default for OutlineOptions {
     fn default() -> Self {
-        Self { tolerance: 0.1, detect_circles: true, snap_axes: true, snap_angle: 2.0 }
+        Self { tolerance: 0.1, detect_circles: true, snap_axes: true, snap_angle: 2.0, infer_relations: true, round_to: 0.0 }
     }
 }
 
 /// Arma un sketch con lazos cerrados (coordenadas del plano).
 pub fn outline_sketch(loops: &[Vec<P2>], opts: &OutlineOptions) -> Sketch {
     let mut s = Sketch::new();
+    let mut lines: Vec<(u32, f64)> = Vec::new();
     for l in loops {
         if l.len() < 3 {
             continue;
@@ -150,27 +155,87 @@ pub fn outline_sketch(loops: &[Vec<P2>], opts: &OutlineOptions) -> Sketch {
             s.circle(c, r);
             continue;
         }
-        let pts = simplify_closed(l, opts.tolerance);
+        let mut pts = simplify_closed(l, opts.tolerance);
+        if opts.round_to > 0.0 {
+            let r = opts.round_to;
+            pts = pts.iter().map(|p| [(p[0] / r).round() * r, (p[1] / r).round() * r]).collect();
+            pts.dedup();
+            if pts.first() == pts.last() && pts.len() > 1 {
+                pts.pop();
+            }
+        }
         if pts.len() < 3 {
             continue;
         }
-        let lines = s.polyline(&pts);
-        if opts.snap_axes {
-            let lim = opts.snap_angle.to_radians();
-            for (i, &id) in lines.iter().enumerate() {
-                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
-                let ang = (b[1] - a[1]).atan2(b[0] - a[0]).abs();
-                let h = ang.min(std::f64::consts::PI - ang);
-                let v = (ang - std::f64::consts::FRAC_PI_2).abs();
-                if h <= lim {
-                    s.constrain(SketchConstraint::Horizontal { line: id });
-                } else if v <= lim {
-                    s.constrain(SketchConstraint::Vertical { line: id });
+        let ids = s.polyline(&pts);
+        for (i, &id) in ids.iter().enumerate() {
+            let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+            // Dirección sin sentido, en [0, π)
+            lines.push((id, (b[1] - a[1]).atan2(b[0] - a[0]).rem_euclid(std::f64::consts::PI)));
+        }
+    }
+    infer_relations(&mut s, &lines, opts);
+    s
+}
+
+/// Horizontales y verticales; paralelas por grupos de dirección (todas atadas a
+/// la primera del grupo) y perpendiculares entre grupos armadas como árbol (dos
+/// caminos entre los mismos grupos se contradirían con las tolerancias).
+fn infer_relations(s: &mut Sketch, lines: &[(u32, f64)], opts: &OutlineOptions) {
+    use std::f64::consts::{FRAC_PI_2, PI};
+    let lim = opts.snap_angle.to_radians();
+    // Diferencia de direcciones sin sentido, en [0, π/2]
+    let diff = |a: f64, b: f64| {
+        let d = (a - b).rem_euclid(PI);
+        d.min(PI - d)
+    };
+    let mut free: Vec<(u32, f64)> = Vec::new();
+    for &(id, ang) in lines {
+        if opts.snap_axes && diff(ang, 0.0) <= lim {
+            s.constrain(SketchConstraint::Horizontal { line: id });
+        } else if opts.snap_axes && diff(ang, FRAC_PI_2) <= lim {
+            s.constrain(SketchConstraint::Vertical { line: id });
+        } else {
+            free.push((id, ang));
+        }
+    }
+    if !opts.infer_relations || free.is_empty() {
+        return;
+    }
+    // Grupos de dirección: cada línea entra al primero que le queda cerca
+    let mut groups: Vec<(f64, Vec<u32>)> = Vec::new();
+    for &(id, ang) in &free {
+        match groups.iter_mut().find(|(g, _)| diff(*g, ang) <= lim) {
+            Some((_, v)) => v.push(id),
+            None => groups.push((ang, vec![id])),
+        }
+    }
+    for (_, ids) in &groups {
+        for &other in &ids[1..] {
+            s.constrain(SketchConstraint::Parallel { a: ids[0], b: other });
+        }
+    }
+    // Perpendiculares: unión de conjuntos para no cerrar ciclos
+    let mut parent: Vec<usize> = (0..groups.len()).collect();
+    fn root(p: &mut [usize], i: usize) -> usize {
+        let mut r = i;
+        while p[r] != r {
+            r = p[r];
+        }
+        p[i] = r;
+        r
+    }
+    for i in 0..groups.len() {
+        for j in i + 1..groups.len() {
+            if (diff(groups[i].0, groups[j].0) - FRAC_PI_2).abs() <= lim {
+                let (ri, rj) = (root(&mut parent, i), root(&mut parent, j));
+                if ri != rj {
+                    parent[ri] = rj;
+                    s.constrain(SketchConstraint::Perpendicular { a: groups[i].1[0], b: groups[j].1[0] });
                 }
             }
         }
     }
-    s
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
