@@ -113,6 +113,8 @@ export function createCadUi(store: CadStore) {
   const [actions, setActions] = createSignal<Partial<Record<CadAction, () => void>>>({});
   const [pickFilter, setPickFilter] = createSignal<PickFilter>("all");
   const [section, setSection] = createSignal<SectionView | null>(null);
+  // Plano 2D abierto sobre el visor
+  const [drawingOpen, setDrawingOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
@@ -184,6 +186,8 @@ export function createCadUi(store: CadStore) {
     /** Vista de corte (solo visual; no cambia el modelo) */
     section,
     setSection,
+    drawingOpen,
+    setDrawingOpen,
     /** Acciones del panel con lo elegido (las registra DesignStep) */
     actions,
     setActions,

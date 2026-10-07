@@ -183,6 +183,12 @@ CadShape* cad_thicken(const CadShape* faces, double thickness);
 // tangente en cada uno: out_p y out_t tienen 3n valores.
 int32_t cad_wire_sample(const CadShape* wire, int32_t n, double* out_p, double* out_t);
 
+// Líneas de una vista (algoritmo exacto de líneas ocultas): `eye` apunta hacia quien
+// mira y `xdir` es la derecha de la hoja. Salida en dobles: cantidad de líneas y, por
+// línea, tipo (0 arista visible, 1 contorno visible, 2 arista oculta, 3 contorno oculto,
+// 4 arista suave visible), cantidad de puntos y sus (x, y).
+int32_t cad_hlr(const CadShape* s, const double* eye, const double* xdir, double deflection, uint8_t** out, size_t* len);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

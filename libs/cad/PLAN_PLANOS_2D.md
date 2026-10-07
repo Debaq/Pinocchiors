@@ -62,8 +62,18 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
 ## Fases
 
 1. **Proyección**: agregar TKHLR al enlace (medir tamaño), `cad_hlr` con visibles y ocultas,
-   tres vistas estándar + isométrica en una hoja, exportar SVG.
-2. **Hoja y cajetín**: tamaños, escala, plantilla, mover vistas, PDF.
+   tres vistas estándar + isométrica en una hoja, exportar SVG. *Hecha el 2026-10-07: TKHLR ya entraba
+   por XCAF (sin costo extra). `cad_hlr` con `HLRBRep_Algo` exacto: aristas y contornos
+   visibles y ocultos, aristas tangentes; las ocultas que caen sobre una visible se descartan
+   (las de atrás de una caja vista de frente). `cad_drawing` proyecta las vistas pedidas;
+   `lib/drawing.ts` (puro, `node --test apps/web/e2e/drawing.test.mjs`) acomoda frente,
+   planta y lateral según el diedro (primero ISO por defecto, tercero ANSI) más la
+   isométrica (sin ocultas), elige la escala normalizada más grande que entra y arma el SVG
+   con recuadro y cajetín (título, autor, material, hoja, fecha, escala, proyección). La hoja
+   se abre sobre el visor ("Plano 2D" en la sección Sólido) y se exporta con
+   `cad_write_text`.*
+2. **Hoja y cajetín**: tamaños, escala, plantilla, mover vistas, PDF. *En parte: tamaños A4–A2 y Carta, escala automática o
+   elegida, cajetín fijo. Faltan plantilla propia, mover vistas y PDF.*
 3. **Cotas** asociativas (largo, distancia, radio, diámetro, ángulo) y notas.
 4. **Cortes** con rayado y línea de corte A-A; **detalles**.
 5. **DXF** (vista 1:1 para láser primero, hoja completa después).

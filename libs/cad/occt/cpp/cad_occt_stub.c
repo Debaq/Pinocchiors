@@ -50,6 +50,7 @@ CadShape* cad_read_step(const uint8_t* d, size_t l) { (void)d; (void)l; FAIL_PTR
 int32_t cad_write_brep(const CadShape* s, uint8_t** o, size_t* l) { (void)s; (void)o; (void)l; FAIL_INT; }
 CadShape* cad_read_brep(const uint8_t* d, size_t l) { (void)d; (void)l; FAIL_PTR; }
 void cad_bytes_free(uint8_t* p) { (void)p; }
+int32_t cad_hlr(const CadShape* s, const double* e, const double* x, double d, uint8_t** o, size_t* l) { (void)s; (void)e; (void)x; (void)d; (void)o; (void)l; FAIL_INT; }
 int32_t cad_take_history(CadHistory* o) { memset(o, 0, sizeof(*o)); return 0; }
 void cad_history_free(CadHistory* h) { (void)h; }
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* o) { (void)s; (void)o; return 0; }

@@ -408,3 +408,6 @@ cargo test -p cad-model
   nervio): hélice de referencia que sirve de camino de barrido (resortes) y engrosar caras.
 - **2026-10-07 Mover cara, escala y patrón en curva** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md),
   fase 6): se arregló también la transformación no uniforme del puente (perdía la escala).
+- **2026-10-07 Plano 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 1 y parte de la 2):
+  frente, planta, lateral e isométrica con líneas ocultas exactas, primer o tercer diedro,
+  escala normalizada automática, cajetín y exportación a SVG.

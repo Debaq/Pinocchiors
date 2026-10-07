@@ -987,6 +987,44 @@ const scenarios = {
     near(r.bbox_max[2], 30, 1e-5, "alto escalado");
   },
 
+  async "plano 2D con vistas, ocultas y exportar SVG"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Agujero pasante vertical: en el frente y el lateral aparece como líneas ocultas
+    const doc = await call("cad_get_document");
+    doc.features.push({ id: doc.next_id, name: "Agujero", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 3, height: 40 }, origin: [0, 0, -20], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Plano 2D (vistas, ocultas, cajetín)");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    const info = await b.eval(`(() => {
+      const svg = document.querySelector("[data-sheet] svg");
+      const views = [...svg.querySelectorAll("[data-view]")].map((g) => g.dataset.view);
+      const hidden = svg.querySelectorAll('[data-view="front"] [data-kind="hidden"], [data-view="front"] [data-kind="hidden_outline"]').length;
+      return { views, hidden, text: svg.textContent };
+    })()`);
+    if (info.views.join(",") !== "front,top,side,iso") throw new Error(`vistas: ${info.views}`);
+    if (info.hidden !== 2) throw new Error(`ocultas del frente: ${info.hidden}`);
+    // 20 mm en A4: escala 2:1 (o mayor)
+    if (!/[25]:1/.test(info.text)) throw new Error(`escala: ${info.text}`);
+    await b.shot("plano_2d");
+    // Exportar: el mismo SVG a un archivo
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const path = `${out}/plano.svg`;
+    rmSync(path, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.clickText("Exportar SVG");
+    await sleep(1500);
+    if (!existsSync(path) || !readFileSync(path, "utf8").startsWith("<svg")) throw new Error("no se exportó el SVG");
+    await b.clickText("Cerrar");
+    await sleep(500);
+    if (await b.eval(`!!document.querySelector('[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

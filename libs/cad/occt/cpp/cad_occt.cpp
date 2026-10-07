@@ -3,6 +3,11 @@
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
+#include <HLRBRep_Algo.hxx>
+#include <HLRBRep_HLRToShape.hxx>
+#include <HLRAlgo_Projector.hxx>
+#include <GCPnts_TangentialDeflection.hxx>
+#include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_CompCurve.hxx>
 #include <GCPnts_UniformAbscissa.hxx>
 #include <Geom_CylindricalSurface.hxx>
@@ -1303,6 +1308,45 @@ int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* n
         if (w.WriteStream(os) != IFSelect_RetDone) throw Standard_Failure("no se pudo escribir STEP");
         app->Close(doc);
         return give_bytes(os.str(), out, len);
+    });
+}
+
+int32_t cad_hlr(const CadShape* s, const double* eye, const double* xdir, double deflection, uint8_t** out, size_t* len) {
+    return guard("proyectar vista", 0, [&] {
+        gp_Ax2 cs(gp::Origin(), gp_Dir(eye[0], eye[1], eye[2]), gp_Dir(xdir[0], xdir[1], xdir[2]));
+        HLRAlgo_Projector projector(cs);
+        Handle(HLRBRep_Algo) algo = new HLRBRep_Algo();
+        algo->Add(s->s);
+        algo->Projector(projector);
+        algo->Update();
+        algo->Hide();
+        HLRBRep_HLRToShape hts(algo);
+        std::vector<double> data{0.0};
+        double lines = 0;
+        auto put_kind = [&](const TopoDS_Shape& comp, int kind) {
+            if (comp.IsNull()) return;
+            for (TopExp_Explorer ex(comp, TopAbs_EDGE); ex.More(); ex.Next()) {
+                BRepAdaptor_Curve c(TopoDS::Edge(ex.Current()));
+                GCPnts_TangentialDeflection td(c, 0.1, deflection, 2);
+                if (td.NbPoints() < 2) continue;
+                data.push_back(kind);
+                data.push_back(td.NbPoints());
+                for (int i = 1; i <= td.NbPoints(); i++) {
+                    gp_Pnt p = td.Value(i);
+                    data.push_back(p.X());
+                    data.push_back(p.Y());
+                }
+                lines += 1;
+            }
+        };
+        put_kind(hts.VCompound(), 0);
+        put_kind(hts.OutLineVCompound(), 1);
+        put_kind(hts.HCompound(), 2);
+        put_kind(hts.OutLineHCompound(), 3);
+        put_kind(hts.Rg1LineVCompound(), 4);
+        data[0] = lines;
+        std::string bytes(reinterpret_cast<const char*>(data.data()), data.size() * sizeof(double));
+        return give_bytes(bytes, out, len);
     });
 }
 

@@ -506,6 +506,61 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation) -> Vec<PartView> {
         .collect()
 }
 
+/// Una vista de un plano: desde dónde se mira (hacia quien mira) y la derecha de la hoja.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DrawingViewSpec {
+    pub eye: [f64; 3],
+    pub xdir: [f64; 3],
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DrawingLine {
+    /// "visible", "outline", "hidden", "hidden_outline" o "smooth"
+    pub kind: &'static str,
+    pub points: Vec<[f64; 2]>,
+}
+
+/// Líneas de cada vista del diseño guardado (líneas ocultas exactas), en mm.
+#[tauri::command]
+pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>) -> Result<Vec<Vec<DrawingLine>>, String> {
+    in_background(app, move |state| drawing_impl(state, &views)).await
+}
+
+fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Vec<DrawingLine>>, String> {
+    require_occt()?;
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
+    let m = body.mass().map_err(|e| e.to_string())?;
+    let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
+    views
+        .iter()
+        .map(|v| {
+            let lines = body.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
+            Ok(lines
+                .into_iter()
+                .map(|l| DrawingLine {
+                    kind: match l.kind {
+                        cad_model::occt::HlrKind::Visible => "visible",
+                        cad_model::occt::HlrKind::VisibleOutline => "outline",
+                        cad_model::occt::HlrKind::Hidden => "hidden",
+                        cad_model::occt::HlrKind::HiddenOutline => "hidden_outline",
+                        cad_model::occt::HlrKind::Smooth => "smooth",
+                    },
+                    points: l.points,
+                })
+                .collect())
+        })
+        .collect()
+}
+
+/// Escribe un archivo de texto (planos SVG o DXF hechos en la interfaz).
+#[tauri::command]
+pub async fn cad_write_text(path: String, content: String) -> Result<u64, String> {
+    std::fs::write(&path, content.as_bytes()).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    Ok(content.len() as u64)
+}
+
 /// Medidas de una o dos cosas elegidas en el sólido que se ve.
 #[tauri::command]
 pub async fn cad_measure(app: AppHandle, items: Vec<cad_model::MeasureItem>) -> Result<cad_model::Measurement, String> {
@@ -920,6 +975,12 @@ pub mod bridge {
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
+            "cad_write_text" => {
+                let (path, content): (String, String) = (arg(args, "path")?, arg(args, "content")?);
+                std::fs::write(&path, content.as_bytes()).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+                ok(content.len() as u64)
+            }
             "cad_parts_at" => ok(parts_at_impl(state, arg(args, "document")?, arg(args, "index")?)?),
             "cad_measure" => ok(measure_impl(state, &arg::<Vec<cad_model::MeasureItem>>(args, "items")?)?),
             "cad_resolve_refs" => {

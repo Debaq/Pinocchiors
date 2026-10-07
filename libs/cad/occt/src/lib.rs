@@ -259,6 +259,24 @@ pub struct MassInfo {
     pub axes: [P3; 3],
 }
 
+/// Qué es una línea de una vista proyectada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HlrKind {
+    Visible,
+    /// Contorno (silueta) de una superficie curva, visible.
+    VisibleOutline,
+    Hidden,
+    HiddenOutline,
+    /// Arista entre caras tangentes (se suele dibujar fina o no dibujar).
+    Smooth,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct HlrLine {
+    pub kind: HlrKind,
+    pub points: Vec<[f64; 2]>,
+}
+
 /// Malla de visualización de una forma.
 #[derive(Debug, Clone, Default)]
 pub struct Tessellation {
@@ -790,6 +808,42 @@ impl Shape {
         })
     }
 
+    /// Líneas de la vista desde `eye` (hacia quien mira) con `xdir` a la derecha:
+    /// aristas y contornos visibles y ocultos, como polilíneas en el plano de la vista.
+    pub fn hlr(&self, eye: P3, xdir: P3, deflection: f64) -> Result<Vec<HlrLine>> {
+        let bytes = take_bytes(|out, len| unsafe { ffi::cad_hlr(self.ptr(), eye.as_ptr(), xdir.as_ptr(), deflection, out, len) })?;
+        let v: Vec<f64> = bytes.chunks_exact(8).map(|c| f64::from_ne_bytes(c.try_into().unwrap())).collect();
+        let mut out = Vec::new();
+        let mut k = 1;
+        for _ in 0..v.first().copied().unwrap_or(0.0) as usize {
+            let kind = match v[k] as u8 {
+                0 => HlrKind::Visible,
+                1 => HlrKind::VisibleOutline,
+                2 => HlrKind::Hidden,
+                3 => HlrKind::HiddenOutline,
+                _ => HlrKind::Smooth,
+            };
+            let n = v[k + 1] as usize;
+            let points = (0..n).map(|i| [v[k + 2 + 2 * i], v[k + 3 + 2 * i]]).collect();
+            out.push(HlrLine { kind, points });
+            k += 2 + 2 * n;
+        }
+        // Una oculta que cae entera sobre una visible no se dibuja (las aristas de
+        // atrás de una caja vista de frente coinciden con las de adelante)
+        let visible: Vec<[[f64; 2]; 2]> = out
+            .iter()
+            .filter(|l| matches!(l.kind, HlrKind::Visible | HlrKind::VisibleOutline | HlrKind::Smooth))
+            .flat_map(|l| l.points.windows(2).map(|w| [w[0], w[1]]).collect::<Vec<_>>())
+            .collect();
+        let tol = deflection.max(1e-9) * 2.0;
+        let on_visible = |p: &[f64; 2]| visible.iter().any(|seg| point_segment_distance(*p, seg[0], seg[1]) <= tol);
+        out.retain(|l| {
+            !matches!(l.kind, HlrKind::Hidden | HlrKind::HiddenOutline)
+                || !(l.points.iter().all(on_visible) && l.points.windows(2).all(|w| on_visible(&[(w[0][0] + w[1][0]) / 2.0, (w[0][1] + w[1][1]) / 2.0])))
+        });
+        Ok(out)
+    }
+
     pub fn from_step(data: &[u8]) -> Result<Shape> {
         wrap(unsafe { ffi::cad_read_step(data.as_ptr(), data.len()) })
     }
@@ -813,6 +867,13 @@ fn take_bytes(f: impl FnOnce(*mut *mut u8, *mut usize) -> i32) -> Result<Vec<u8>
     let v = unsafe { std::slice::from_raw_parts(p, len) }.to_vec();
     unsafe { ffi::cad_bytes_free(p) };
     Ok(v)
+}
+
+fn point_segment_distance(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 < 1e-24 { 0.0 } else { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) };
+    ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
 }
 
 /// Matriz 3×4 de rotación de `angle` alrededor de `axis`.

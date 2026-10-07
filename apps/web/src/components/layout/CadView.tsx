@@ -10,6 +10,7 @@ import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
+import { DrawingView } from "./DrawingView";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 
@@ -1622,6 +1623,11 @@ export const CadView: Component<CadViewProps> = (props) => {
             }}
           />
         )}
+      </Show>
+
+      {/* Plano 2D encima del visor */}
+      <Show when={ui.drawingOpen()}>
+        <DrawingView store={store} ui={ui} />
       </Show>
 
       {/* Medidas de lo elegido */}

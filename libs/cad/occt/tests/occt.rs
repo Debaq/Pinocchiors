@@ -561,3 +561,29 @@ fn sample_a_wire_evenly() {
     }
     assert!((s[0].1[0] - 1.0).abs() < 1e-9);
 }
+
+#[test]
+fn hidden_lines_of_a_box_with_a_hole() {
+    if !cad_occt::available() {
+        return;
+    }
+    // Caja 20 × 10 × 10 vista de frente (desde −Y): un rectángulo de 4 lados visibles
+    let b = Shape::make_box(Frame::at([0.0; 3]), 20.0, 10.0, 10.0).unwrap();
+    let lines = b.hlr([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], 0.01).unwrap();
+    let vis = lines.iter().filter(|l| l.kind == HlrKind::Visible).count();
+    let hid = lines.iter().filter(|l| matches!(l.kind, HlrKind::Hidden | HlrKind::HiddenOutline)).count();
+    assert_eq!((vis, hid), (4, 0), "{lines:?}");
+    // Ancho 20 y alto 10 en la hoja
+    let xs: Vec<f64> = lines.iter().flat_map(|l| l.points.iter().map(|p| p[0])).collect();
+    let ys: Vec<f64> = lines.iter().flat_map(|l| l.points.iter().map(|p| p[1])).collect();
+    let w = xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
+    let h = ys.iter().cloned().fold(f64::MIN, f64::max) - ys.iter().cloned().fold(f64::MAX, f64::min);
+    assert!((w - 20.0).abs() < 1e-6 && (h - 10.0).abs() < 1e-6, "{w} × {h}");
+    // Con un agujero pasante de arriba a abajo: desde el frente, dos líneas ocultas (los
+    // contornos del cilindro)
+    let hole = Shape::cylinder(Frame::at([10.0, 5.0, -1.0]), 2.0, 12.0).unwrap();
+    let holed = b.cut(&hole).unwrap();
+    let lines = holed.hlr([0.0, -1.0, 0.0], [1.0, 0.0, 0.0], 0.01).unwrap();
+    let hid = lines.iter().filter(|l| matches!(l.kind, HlrKind::Hidden | HlrKind::HiddenOutline)).count();
+    assert_eq!(hid, 2, "{lines:?}");
+}

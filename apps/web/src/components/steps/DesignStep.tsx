@@ -165,7 +165,8 @@ const Section: Component<{ title: string; children: JSX.Element; right?: JSX.Ele
 const OP_OPTIONS = (Object.keys(OP_LABELS) as BodyOp[]).map((v) => ({ value: v, label: OP_LABELS[v] }));
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
-const fmt = (v: number, d = 2) => v.toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
+/** Número con `d` decimales; lo que redondea a cero se muestra sin signo (no "-0,00") */
+const fmt = (v: number, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
 
 function pickSummary(picks: { kind: string }[]): string {
   const count = (k: string) => picks.filter((p) => p.kind === k).length;
@@ -2919,6 +2920,9 @@ const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" 
             </Show>
           </div>
           <Checkbox small label="Ver el centro de masa" checked={props.ui.showCenterOfMass()} onChange={(c) => props.ui.setShowCenterOfMass(c)} />
+          <Button size="sm" fullWidth onClick={() => props.ui.setDrawingOpen(true)}>
+            Plano 2D (vistas, ocultas, cajetín)
+          </Button>
           <div class="grid grid-cols-3 gap-1.5">
             <Button size="sm" onClick={() => props.onExport("step")}>
               STEP

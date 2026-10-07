@@ -165,4 +165,5 @@ unsafe extern "C" {
     pub fn cad_write_brep(s: *const CadShape, out: *mut *mut u8, len: *mut usize) -> i32;
     pub fn cad_read_brep(data: *const u8, len: usize) -> *mut CadShape;
     pub fn cad_bytes_free(p: *mut u8);
+    pub fn cad_hlr(s: *const CadShape, eye: *const f64, xdir: *const f64, deflection: f64, out: *mut *mut u8, len: *mut usize) -> i32;
 }
