@@ -1020,6 +1020,26 @@ const scenarios = {
     await b.clickText("Exportar SVG");
     await sleep(1500);
     if (!existsSync(path) || !readFileSync(path, "utf8").startsWith("<svg")) throw new Error("no se exportó el SVG");
+    // Cotas a mano: el diámetro del agujero en la planta y el largo de una arista del frente
+    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
+    await sleep(300);
+    const at = (sel, pick) =>
+      b.eval(`(() => {
+        const svg = document.querySelector("[data-sheet] svg");
+        const lines = [...svg.querySelectorAll(${JSON.stringify(sel)})].map((l) => l.getAttribute("points").split(" ").map((p) => p.split(",").map(Number)));
+        const pts = (${pick})(lines);
+        const m = svg.getScreenCTM();
+        const p = new DOMPoint(pts[0], pts[1]).matrixTransform(m);
+        return [p.x, p.y];
+      })()`);
+    // El círculo más largo de la planta (muchos puntos)
+    await b.click(...(await at('[data-view="top"] polyline[data-kind="visible"]', "(ls) => ls.sort((a, b) => b.length - a.length)[0][0]")), { wait: 1000 });
+    // Una recta del frente: el medio de su primer tramo
+    await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', "(ls) => { const l = ls.find((x) => x.length === 2); return [(l[0][0] + l[1][0]) / 2, (l[0][1] + l[1][1]) / 2]; }")), { wait: 1000 });
+    const texts = await b.eval(`[...document.querySelectorAll("[data-sheet] [data-user-dim] text")].map((t) => t.textContent)`);
+    if (!texts.includes("Ø6") || !texts.includes("20")) throw new Error(`cotas a mano: ${texts}`);
+    if ((await call("cad_get_document")).drawing?.dims?.length !== 2) throw new Error("no se guardaron las cotas");
+    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
     // Corte A-A: el frente rayado y la línea en la planta
     await b.eval(`[...document.querySelectorAll('[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-hatch="front"] polygon')`)); t++) await sleep(500);

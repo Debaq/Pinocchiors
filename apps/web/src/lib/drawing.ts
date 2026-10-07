@@ -175,6 +175,124 @@ export interface Dimension {
   /** Hacia dónde se corre la línea de cota (perpendicular, en mm de hoja) */
   offset: P2;
   value: number;
+  /** "Ø" en diámetros */
+  prefix?: string;
+}
+
+/**
+ * Cota puesta por el usuario sobre líneas de una vista. Las líneas se
+ * recuerdan por un punto sobre ellas (coordenadas de la vista, mm de la
+ * pieza): al cambiar el modelo se vuelve a buscar la línea más cercana y el
+ * valor se actualiza.
+ */
+export interface UserDim {
+  view: ViewName;
+  /** "length": largo de una recta; "diameter": de un círculo; "distance": entre dos rectas paralelas */
+  kind: "length" | "diameter" | "distance";
+  refs: P2[];
+}
+
+const SOLID_KINDS: LineKind[] = ["visible", "outline"];
+
+function distToPolyline(p: P2, pts: P2[]): number {
+  let best = Infinity;
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [a, b] = [pts[i], pts[i + 1]];
+    const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+    const l2 = dx * dx + dy * dy;
+    const t = l2 < 1e-18 ? 0 : Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2));
+    best = Math.min(best, Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy));
+  }
+  return best;
+}
+
+/** Línea visible de la vista más cercana a `p` (coordenadas de la vista), si está a menos de `tol` */
+export function lineNear(v: Placed, p: P2, tol: number, accept: (l: DrawingLine) => boolean = () => true): DrawingLine | undefined {
+  let best: { d: number; l: DrawingLine } | undefined;
+  for (const l of v.lines) {
+    if (!SOLID_KINDS.includes(l.kind) || !accept(l)) continue;
+    const d = distToPolyline(p, l.points);
+    if (d <= tol && (!best || d < best.d)) best = { d, l };
+  }
+  return best?.l;
+}
+
+/** ¿Es una circunferencia cerrada? Centro y radio (ajuste por promedio) */
+export function asCircle(l: DrawingLine): { c: P2; r: number } | null {
+  const pts = l.points;
+  if (pts.length < 8) return null;
+  const [f, z] = [pts[0], pts[pts.length - 1]];
+  const span = Math.max(...pts.map((p) => Math.hypot(p[0] - f[0], p[1] - f[1])));
+  if (Math.hypot(f[0] - z[0], f[1] - z[1]) > span * 0.02) return null;
+  // Sin el último punto (repite el primero) para no sesgar el centro
+  const ring = pts.slice(0, -1);
+  const c: P2 = [ring.reduce((a, p) => a + p[0], 0) / ring.length, ring.reduce((a, p) => a + p[1], 0) / ring.length];
+  const rs = ring.map((p) => Math.hypot(p[0] - c[0], p[1] - c[1]));
+  const r = rs.reduce((a, x) => a + x, 0) / rs.length;
+  return rs.every((x) => Math.abs(x - r) < r * 0.03) ? { c, r } : null;
+}
+
+/** ¿Es una recta? Sus extremos */
+export function asSegment(l: DrawingLine): [P2, P2] | null {
+  const pts = l.points;
+  const [a, b] = [pts[0], pts[pts.length - 1]];
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  if (len < 1e-9) return null;
+  return distToPolyline(a, [a, b]) <= len * 1e-3 && pts.every((p) => distToPolyline(p, [a, b]) <= len * 1e-3) ? [a, b] : null;
+}
+
+/** Cotas del usuario resueltas contra las vistas actuales (las que ya no encuentran su línea se omiten) */
+export function userDimensions(placed: Placed[], dims: UserDim[]): Dimension[] {
+  const out: Dimension[] = [];
+  for (const d of dims) {
+    const v = placed.find((x) => x.name === d.view);
+    if (!v) continue;
+    const tol = 3 / v.scale;
+    const sheet = (p: P2): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale];
+    const b = bounds(v.lines);
+    const center: P2 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2];
+    // Primero donde se hizo clic; si el modelo cambió, la más cercana a una
+    // distancia razonable (la arista se movió)
+    const far = Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.15;
+    const shape = d.kind === "diameter" ? (l: DrawingLine) => !!asCircle(l) : (l: DrawingLine) => !!asSegment(l);
+    const lines = d.refs.map((r) => lineNear(v, r, tol, shape) ?? lineNear(v, r, far, shape));
+    if (lines.some((l) => !l)) continue;
+    if (d.kind === "diameter") {
+      const circ = asCircle(lines[0]!);
+      if (!circ) continue;
+      out.push({ a: sheet([circ.c[0] - circ.r, circ.c[1]]), b: sheet([circ.c[0] + circ.r, circ.c[1]]), offset: [0, 0], value: 2 * circ.r, prefix: "Ø" });
+    } else if (d.kind === "length") {
+      const seg = asSegment(lines[0]!);
+      if (!seg) continue;
+      const [p, q] = seg;
+      // Hacia afuera de la vista: del lado opuesto al centro
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      let n: P2 = [-(q[1] - p[1]) / len, (q[0] - p[0]) / len];
+      const mid: P2 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
+      if ((mid[0] - center[0]) * n[0] + (mid[1] - center[1]) * n[1] < 0) n = [-n[0], -n[1]];
+      // En la hoja Y va hacia abajo
+      out.push({ a: sheet(p), b: sheet(q), offset: [n[0] * 7, -n[1] * 7], value: len });
+    } else {
+      const [s1, s2] = [asSegment(lines[0]!), asSegment(lines[1]!)];
+      if (!s1 || !s2) continue;
+      const [p, q] = s1;
+      const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      const u: P2 = [(q[0] - p[0]) / len, (q[1] - p[1]) / len];
+      const n: P2 = [-u[1], u[0]];
+      // Paralelas: la distancia es la del medio de la segunda a la recta de la primera
+      const m2: P2 = [(s2[0][0] + s2[1][0]) / 2, (s2[0][1] + s2[1][1]) / 2];
+      const off = (m2[0] - p[0]) * n[0] + (m2[1] - p[1]) * n[1];
+      const along = (m2[0] - p[0]) * u[0] + (m2[1] - p[1]) * u[1];
+      const foot: P2 = [p[0] + u[0] * along, p[1] + u[1] * along];
+      const v2 = s2[1];
+      const cross = Math.abs((v2[0] - s2[0][0]) * u[1] - (v2[1] - s2[0][1]) * u[0]) / Math.hypot(v2[0] - s2[0][0], v2[1] - s2[0][1]);
+      if (cross > 0.02) continue;
+      // La línea de cota corrida hacia afuera a lo largo de las rectas
+      const sideSign = (foot[0] - center[0]) * u[0] + (foot[1] - center[1]) * u[1] >= 0 ? 1 : -1;
+      out.push({ a: sheet(foot), b: sheet(m2), offset: [u[0] * 7 * sideSign, -u[1] * 7 * sideSign], value: Math.abs(off) });
+    }
+  }
+  return out;
 }
 
 /**
@@ -217,8 +335,8 @@ function dimensionSvg(d: Dimension): string {
   const mid: P2 = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
   const vertical = Math.abs(uy) > Math.abs(ux);
   const text = vertical
-    ? `<text x="${n(mid[0] - 1)}" y="${n(mid[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(mid[0] - 1)} ${n(mid[1])})" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`
-    : `<text x="${n(mid[0])}" y="${n(mid[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`;
+    ? `<text x="${n(mid[0] - 1)}" y="${n(mid[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(mid[0] - 1)} ${n(mid[1])})" stroke="none" fill="#000">${esc((d.prefix ?? "") + dimText(d.value))}</text>`
+    : `<text x="${n(mid[0])}" y="${n(mid[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc((d.prefix ?? "") + dimText(d.value))}</text>`;
   return (
     `<g data-dimension="" stroke="#000" stroke-width="0.18">` +
     ext(d.a, a2) +
@@ -232,7 +350,12 @@ function dimensionSvg(d: Dimension): string {
 }
 
 /** La hoja completa en SVG (unidades en mm) */
-export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo }): string {
+export function sheetSvg(
+  placed: Placed[],
+  sheet: SheetSize,
+  info: TitleBlock,
+  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[] },
+): string {
   const out: string[] = [];
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.width}mm" height="${sheet.height}mm" viewBox="0 0 ${sheet.width} ${sheet.height}" font-family="sans-serif">`,
@@ -260,6 +383,7 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
     out.push("</g>");
   }
   if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
+  for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", 'data-dimension="" data-user-dim=""'));
   // Corte: rótulo bajo el frente y la línea de corte con sus letras en la planta
   const front = placed.find((v) => v.name === "front");
   const top = placed.find((v) => v.name === "top");
@@ -310,7 +434,7 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
  * corte). `view` exporta solo esa vista a escala 1:1 con sus coordenadas
  * (para láser o CNC); sin ella, la hoja entera con el recuadro.
  */
-export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName; dimensions?: boolean }): string {
+export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName; dimensions?: boolean; userDims?: UserDim[] }): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
   const section = (name: string, body: () => void) => {
@@ -386,10 +510,10 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
         for (let i = 0; i + 1 < l.points.length; i++) line(layer, at(l.points[i]), at(l.points[i + 1]));
       }
     }
-    if (!opts.view && opts.dimensions) {
+    if (!opts.view && (opts.dimensions || (opts.userDims ?? []).length)) {
       // Cotas generales como líneas y texto (Y hacia arriba)
       const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
-      for (const d of overallDimensions(placed)) {
+      for (const d of [...overallDimensions(placed), ...userDimensions(placed, opts.userDims ?? [])]) {
         const a2: P2 = [d.a[0] + d.offset[0], d.a[1] + d.offset[1]];
         const b2: P2 = [d.b[0] + d.offset[0], d.b[1] + d.offset[1]];
         line("COTAS", up(d.a), up(a2));
@@ -402,7 +526,7 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
         pair(20, mid[1] + 1);
         pair(30, 0);
         pair(40, 3);
-        pair(1, dimText(d.value));
+        pair(1, (d.prefix ?? "") + dimText(d.value));
         if (Math.abs(d.offset[0]) > Math.abs(d.offset[1])) pair(50, 90);
       }
     }

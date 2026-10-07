@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { layout, sheetSvg, sheetDxf, overallDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { layout, sheetSvg, sheetDxf, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -104,4 +104,23 @@ test("el SVG es XML válido (atributos con valor)", () => {
     const attrs = tag.replace(/^<[a-z]+/, "").replace(/\/?>$/, "").replace(/[A-Za-z0-9:-]+="[^"]*"/g, "").trim();
     assert.equal(attrs, "", tag);
   }
+});
+
+test("cotas del usuario: largo, diámetro y distancia entre paralelas, y siguen al modelo", () => {
+  const circle = { kind: "visible", points: Array.from({ length: 33 }, (_, i) => [20 + 4 * Math.cos((i / 32) * 2 * Math.PI), 5 + 4 * Math.sin((i / 32) * 2 * Math.PI)]) };
+  const dims = [
+    { view: "front", kind: "length", refs: [[20, 0]] },
+    { view: "front", kind: "diameter", refs: [[24, 5]] },
+    { view: "front", kind: "distance", refs: [[20, 0], [20, 10]] },
+  ];
+  let { placed } = layout({ front: [...rect(40, 10), circle] }, SHEETS[0], "first");
+  assert.deepEqual(userDimensions(placed, dims).map((d) => [d.prefix ?? "", Math.round(d.value * 100) / 100]), [["", 40], ["Ø", 8], ["", 10]]);
+  // El modelo cambia (más ancho y alto): las mismas cotas dan los valores nuevos
+  ({ placed } = layout({ front: [...rect(50, 12), circle] }, SHEETS[0], "first"));
+  assert.deepEqual(userDimensions(placed, dims).map((d) => Math.round(d.value * 100) / 100), [50, 8, 12]);
+  // Una referencia que ya no encuentra línea se omite
+  assert.equal(userDimensions(placed, [{ view: "front", kind: "length", refs: [[200, 200]] }]).length, 0);
+  const svg = sheetSvg(placed, SHEETS[0], { title: "x", date: "", scale: "", projection: "first", sheet: "A4" }, { hidden: true, smooth: false, userDims: dims });
+  assert.equal((svg.match(/data-user-dim/g) ?? []).length, 3);
+  assert.ok(svg.includes(">Ø8<"));
 });

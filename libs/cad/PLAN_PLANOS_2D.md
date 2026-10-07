@@ -81,7 +81,13 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    alto de cada vista, sin la isométrica) en SVG y en DXF (capa COTAS, líneas y texto); se
    recalculan con el modelo. Falta acotar aristas elegidas: el HLR de OCCT no dice de qué
    arista 3D sale cada línea; habría que proyectar las aristas del modelo una por una (o
-   cruzar por geometría) para poder elegirlas en la hoja.*
+   cruzar por geometría) para poder elegirlas en la hoja. Cotas a mano también, el mismo
+   día: herramientas "Cota" (clic en una recta: largo; en un círculo: Ø) y "Distancia" (dos
+   rectas paralelas). Se asocian por geometría: guardan un punto de la línea en coordenadas
+   de la vista y al cambiar el modelo buscan la línea de la misma forma más cercana (primero
+   a 3 mm de hoja, si no dentro del 15 % de la vista), así siguen a la arista y el valor se
+   actualiza. Se guardan en `Document.drawing` (fuera del hash del recálculo), salen en el
+   SVG, el PDF y el DXF. Faltan ángulos y radios de arcos.*
 4. **Cortes** con rayado y línea de corte A-A; **detalles**. *Corte hecho el 2026-10-07: "Corte A-A" muestra el frente
    cortado por el plano medio paralelo a él (`split_keep` en el backend, se proyecta la mitad
    de atrás); las caras del sólido sobre el plano se devuelven como triángulos proyectados y

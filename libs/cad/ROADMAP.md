@@ -430,3 +430,9 @@ cargo test -p cad-model
   solver 3D, grados libres y revisión de choques.
 - **2026-10-07 Lista de materiales** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fase 4): piezas,
   cantidades, material y masa del ensamble, exportable a CSV.
+- **2026-10-07 Cotas a mano en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 3): largo,
+  diámetro y distancia entre paralelas eligiendo líneas de la hoja; siguen al modelo.
+- **Pendiente pedido por el usuario (2026-10-07):** lo que se crea en Diseñar (cajas, piezas)
+  queda separado del resto del programa: las piezas del CAD no aparecen en el Outliner. Hoy
+  solo se pasan con "Usar como modelo". Hay que integrarlas (cada pieza como objeto del
+  outliner, actualizado al recalcular).

@@ -1,9 +1,26 @@
-import { Component, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { CadStore } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
-import { SCALES, SHEETS, layout, scaleLabel, sheetDxf, sheetSvg, viewSpec, type DrawingLine, type P2, type Projection, type ViewName } from "../../lib/drawing";
+import {
+  SCALES,
+  SHEETS,
+  asCircle,
+  asSegment,
+  layout,
+  lineNear,
+  scaleLabel,
+  sheetDxf,
+  sheetSvg,
+  viewSpec,
+  type DrawingLine,
+  type P2,
+  type Projection,
+  type UserDim,
+  type ViewName,
+} from "../../lib/drawing";
 import { Button, Select } from "../ui";
 
 /**
@@ -19,6 +36,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [smooth, setSmooth] = createSignal(false);
   const [iso, setIso] = createSignal(true);
   const [dimensions, setDimensions] = createSignal(true);
+  // Cotas del usuario (guardadas en el documento) y herramienta activa
+  const userDims = () => props.store.doc()?.drawing?.dims ?? [];
+  const setUserDims = (dims: UserDim[]) => void props.store.commit((d) => (d.drawing = { ...(d.drawing ?? {}), dims }));
+  const [tool, setTool] = createSignal<"" | "dim" | "distance">("");
+  let firstLine: { view: ViewName; ref: P2 } | null = null;
   // Frente en corte por el plano medio (A-A), marcado en la planta
   const [section, setSection] = createSignal(false);
   const [title, setTitle] = createSignal("Diseño");
@@ -80,7 +102,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         projection: projection(),
         sheet: sheet().name,
       },
-      { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), section: section() ? { label: "A", at: sectionAt() } : undefined },
+      { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), section: section() ? { label: "A", at: sectionAt() } : undefined, userDims: userDims() },
     );
   });
 
@@ -116,11 +138,47 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const path = await save({ filters: [{ name: "DXF", extensions: ["dxf"] }], defaultPath: name });
     if (!path) return;
     try {
-      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), view: what === "sheet" ? undefined : what });
+      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), userDims: userDims(), view: what === "sheet" ? undefined : what });
       const bytes = await invoke<number>("cad_write_text", { path, content });
       setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
     } catch (e) {
       setMessage(String(e));
+    }
+  };
+
+  /**
+   * Clic en la hoja con una herramienta de cota: busca la línea de la vista bajo
+   * el puntero. "Cota": largo de una recta o diámetro de un círculo;
+   * "Distancia": dos rectas paralelas, una después de la otra.
+   */
+  const onSheetClick = (e: MouseEvent) => {
+    const r = result();
+    const t = tool();
+    if (!r || !t) return;
+    const svgEl = (e.currentTarget as HTMLElement).querySelector("svg");
+    const m = svgEl?.getScreenCTM();
+    if (!svgEl || !m) return;
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
+    for (const v of r.placed) {
+      if (v.name === "iso") continue;
+      const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
+      const line = lineNear(v, p, 3 / v.scale);
+      if (!line) continue;
+      if (t === "dim") {
+        if (asCircle(line)) setUserDims([...userDims(), { view: v.name, kind: "diameter", refs: [p] }]);
+        else if (asSegment(line)) setUserDims([...userDims(), { view: v.name, kind: "length", refs: [p] }]);
+        else setMessage("Esa línea no es recta ni un círculo");
+        return;
+      }
+      if (!asSegment(line)) return setMessage("Elegir rectas para la distancia");
+      if (!firstLine || firstLine.view !== v.name) {
+        firstLine = { view: v.name, ref: p };
+        return setMessage("Ahora la recta paralela");
+      }
+      setUserDims([...userDims(), { view: v.name, kind: "distance", refs: [firstLine.ref, p] }]);
+      firstLine = null;
+      setMessage(undefined);
+      return;
     }
   };
 
@@ -160,6 +218,29 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         {check("Isométrica", iso, setIso)}
         {check("Cotas", dimensions, setDimensions)}
         {check("Corte A-A", section, setSection)}
+        <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Herramienta de cotas">
+          <For each={[["dim", "Cota"], ["distance", "Distancia"]] as const}>
+            {([id, label]) => (
+              <button
+                role="radio"
+                aria-checked={tool() === id}
+                class={clsx("px-1.5 py-0.5 rounded text-[11px]", tool() === id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
+                title={id === "dim" ? "Clic en una recta (largo) o un círculo (diámetro)" : "Clic en dos rectas paralelas"}
+                onClick={() => {
+                  firstLine = null;
+                  setTool(tool() === id ? "" : id);
+                }}
+              >
+                {label}
+              </button>
+            )}
+          </For>
+          <Show when={userDims().length > 0}>
+            <button class="px-1.5 py-0.5 rounded text-[11px] text-text-muted hover:text-text" onClick={() => setUserDims(userDims().slice(0, -1))} title="Quitar la última cota">
+              Quitar última
+            </button>
+          </Show>
+        </div>
         <input
           aria-label="Título del plano"
           class="w-36 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
@@ -207,7 +288,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       </Show>
       <div class="flex-1 overflow-auto p-4">
         {/* La hoja ocupa el ancho disponible, con su proporción */}
-        <div data-sheet class="mx-auto max-w-[1400px] shadow-lg [&>svg]:block [&>svg]:h-auto [&>svg]:w-full" innerHTML={svg()} />
+        <div
+          data-sheet
+          class={clsx("mx-auto max-w-[1400px] shadow-lg [&>svg]:block [&>svg]:h-auto [&>svg]:w-full", tool() && "cursor-crosshair")}
+          innerHTML={svg()}
+          onClick={onSheetClick}
+        />
       </div>
     </div>
   );

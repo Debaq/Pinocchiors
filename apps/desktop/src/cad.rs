@@ -147,7 +147,7 @@ fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // El JSON es estable y cubre todo el documento; el material, las carpetas
     // y los nombres y colores de piezas no cambian la geometría: no recalculan
-    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, ..doc.clone() };
+    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, ..doc.clone() };
     serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }

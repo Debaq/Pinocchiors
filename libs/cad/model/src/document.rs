@@ -69,6 +69,9 @@ pub struct Document {
     /// Ensamble de las piezas (instancias y relaciones); no cambia el diseño.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assembly: Option<crate::assembly::Assembly>,
+    /// Ajustes y cotas del plano 2D (los maneja la interfaz; no cambian el diseño).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drawing: Option<serde_json::Value>,
 }
 
 /// Lo que el usuario le cambió a una pieza.

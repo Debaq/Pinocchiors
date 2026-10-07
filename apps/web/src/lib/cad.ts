@@ -271,6 +271,8 @@ export interface CadDocument {
   parts?: PartProps[];
   /** Ensamble de las piezas */
   assembly?: Assembly | null;
+  /** Cotas del plano 2D (ver lib/drawing.ts) */
+  drawing?: { dims?: import("./drawing").UserDim[] } | null;
 }
 
 // ─── Ensamble ─────────────────────────────────────────────────────────────
