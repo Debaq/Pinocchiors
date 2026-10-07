@@ -84,3 +84,13 @@ test("cotas generales: ancho y alto de cada vista, en mm de la pieza", () => {
   assert.equal((svg.match(/data-dimension/g) ?? []).length, 4);
   assert.ok(svg.includes(">40<") && svg.includes(">20<"));
 });
+
+test("corte A-A: rayado en el frente, rótulo y línea en la planta", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20) };
+  const hatch = { front: [[[0, 0], [40, 0], [40, 10]], [[0, 0], [40, 10], [0, 10]]] };
+  const { placed } = layout(views, SHEETS[0], "first", undefined, hatch);
+  const svg = sheetSvg(placed, SHEETS[0], { title: "x", date: "", scale: "", projection: "first", sheet: "A4" }, { hidden: true, smooth: false, section: { label: "A", at: 10 } });
+  assert.equal((svg.match(/<polygon points/g) ?? []).length >= 2, true);
+  assert.ok(svg.includes('data-hatch="front"') && svg.includes("url(#rayado)"));
+  assert.ok(svg.includes("Corte A-A") && svg.includes("data-section-line"));
+});

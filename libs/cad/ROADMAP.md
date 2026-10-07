@@ -415,3 +415,5 @@ cargo test -p cad-model
   vista sola a 1:1 para corte láser o CNC.
 - **2026-10-07 Cotas generales en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), parte de la
   fase 3): ancho y alto de cada vista con flechas y texto, también en el DXF.
+- **2026-10-07 Corte A-A en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 4): el
+  frente en corte por el plano medio, rayado, con la línea de corte en la planta.

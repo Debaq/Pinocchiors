@@ -1020,6 +1020,15 @@ const scenarios = {
     await b.clickText("Exportar SVG");
     await sleep(1500);
     if (!existsSync(path) || !readFileSync(path, "utf8").startsWith("<svg")) throw new Error("no se exportó el SVG");
+    // Corte A-A: el frente rayado y la línea en la planta
+    await b.eval(`[...document.querySelectorAll('[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-hatch="front"] polygon')`)); t++) await sleep(500);
+    const cut = await b.eval(`(() => {
+      const svg = document.querySelector("[data-sheet] svg");
+      return { tris: svg.querySelectorAll('[data-hatch="front"] polygon').length, label: !!svg.querySelector("[data-section-label]"), line: !!svg.querySelector("[data-section-line]") };
+    })()`);
+    if (!(cut.tris > 0) || !cut.label || !cut.line) throw new Error(`corte: ${JSON.stringify(cut)}`);
+    await b.shot("plano_corte");
     // DXF de la hoja (capas VISIBLE y OCULTA)
     const dxf = `${out}/plano.dxf`;
     rmSync(dxf, { force: true });

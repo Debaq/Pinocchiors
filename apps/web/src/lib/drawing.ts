@@ -91,6 +91,14 @@ export interface Placed {
   y: number;
   scale: number;
   lines: DrawingLine[];
+  /** Triángulos de la cara cortada (vista en corte), para rayar */
+  hatch?: [P2, P2, P2][];
+}
+
+/** Corte A-A: el frente cortado por un plano paralelo a él; `at` es la Y del plano (mm del modelo) */
+export interface SectionInfo {
+  label: string;
+  at: number;
 }
 
 /**
@@ -99,7 +107,13 @@ export interface Placed {
  * derecha. Elige la escala normalizada más grande con la que todo entra.
  * Coordenadas de hoja: x a la derecha, y hacia abajo (como SVG).
  */
-export function layout(views: Partial<Record<ViewName, DrawingLine[]>>, sheet: SheetSize, projection: Projection, fixedScale?: number): { placed: Placed[]; scale: number } {
+export function layout(
+  views: Partial<Record<ViewName, DrawingLine[]>>,
+  sheet: SheetSize,
+  projection: Projection,
+  fixedScale?: number,
+  hatch?: Partial<Record<ViewName, [P2, P2, P2][]>>,
+): { placed: Placed[]; scale: number } {
   const b = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, bounds(v!)])) as Record<ViewName, Bounds>;
   const sz = (n: ViewName): P2 => (views[n] ? size(b[n]) : [0, 0]);
   const [fw, fh] = sz("front");
@@ -124,7 +138,7 @@ export function layout(views: Partial<Record<ViewName, DrawingLine[]>>, sheet: S
   // En la hoja y crece hacia abajo: el punto (u, v) de la vista va a (x + u·s, y − v·s)
   const put = (name: ViewName, x0: number, y0: number, w: number) => {
     const bb = b[name];
-    placed.push({ name, scale, lines: views[name]!, x: x0 + (w - (bb.max[0] - bb.min[0]) * scale) / 2 - bb.min[0] * scale, y: y0 + bb.max[1] * scale });
+    placed.push({ name, scale, lines: views[name]!, hatch: hatch?.[name], x: x0 + (w - (bb.max[0] - bb.min[0]) * scale) / 2 - bb.min[0] * scale, y: y0 + bb.max[1] * scale });
   };
   if (views.front) put("front", left, frontY, colW);
   if (views.top) put("top", left, topY, colW);
@@ -218,14 +232,23 @@ function dimensionSvg(d: Dimension): string {
 }
 
 /** La hoja completa en SVG (unidades en mm) */
-export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, opts: { hidden: boolean; smooth: boolean; dimensions?: boolean }): string {
+export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo }): string {
   const out: string[] = [];
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.width}mm" height="${sheet.height}mm" viewBox="0 0 ${sheet.width} ${sheet.height}" font-family="sans-serif">`,
   );
   out.push(`<rect width="${sheet.width}" height="${sheet.height}" fill="#fff"/>`);
+  // Rayado a 45° para las caras cortadas
+  out.push(
+    `<defs><pattern id="rayado" patternUnits="userSpaceOnUse" width="2" height="2" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="2" stroke="#000" stroke-width="0.25"/></pattern></defs>`,
+  );
   out.push(`<rect x="${MARGIN}" y="${MARGIN}" width="${n(sheet.width - 2 * MARGIN)}" height="${n(sheet.height - 2 * MARGIN)}" fill="none" stroke="#000" stroke-width="0.7"/>`);
   for (const v of placed) {
+    if (v.hatch?.length) {
+      out.push(`<g data-hatch="${v.name}" fill="url(#rayado)" stroke="none">`);
+      for (const t of v.hatch) out.push(`<polygon points="${t.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}"/>`);
+      out.push("</g>");
+    }
     out.push(`<g data-view="${v.name}" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
     for (const l of v.lines) {
       // La isométrica va sin ocultas (como se acostumbra)
@@ -237,6 +260,28 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
     out.push("</g>");
   }
   if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
+  // Corte: rótulo bajo el frente y la línea de corte con sus letras en la planta
+  const front = placed.find((v) => v.name === "front");
+  const top = placed.find((v) => v.name === "top");
+  if (opts.section && front) {
+    const b = bounds(front.lines);
+    const cx = front.x + ((b.min[0] + b.max[0]) / 2) * front.scale;
+    const below = front.y - b.min[1] * front.scale + (opts.dimensions ? 14 : 6);
+    out.push(`<text data-section-label x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}</text>`);
+  }
+  if (opts.section && top) {
+    const b = bounds(top.lines);
+    const y = top.y - opts.section.at * top.scale;
+    const [x0, x1] = [top.x + b.min[0] * top.scale - 6, top.x + b.max[0] * top.scale + 6];
+    out.push(
+      `<g data-section-line stroke="#000" fill="#000"><line x1="${n(x0)}" y1="${n(y)}" x2="${n(x1)}" y2="${n(y)}" stroke-width="0.35" stroke-dasharray="8 1.5 1.5 1.5"/>` +
+        // Flechas hacia donde se mira (hacia arriba en la planta: desde el frente)
+        [x0 + 2, x1 - 2].map((x) => `<polygon points="${n(x)},${n(y - 4)} ${n(x - 1)},${n(y - 1.5)} ${n(x + 1)},${n(y - 1.5)}" stroke="none"/><line x1="${n(x)}" y1="${n(y)}" x2="${n(x)}" y2="${n(y - 2)}" stroke-width="0.35"/>`).join("") +
+        // Las letras sobre las flechas (al costado pisarían las cotas)
+        [x0 + 2, x1 - 2].map((x) => `<text x="${n(x)}" y="${n(y - 5)}" font-size="4" text-anchor="middle" stroke="none">${esc(opts.section!.label)}</text>`).join("") +
+        `</g>`,
+    );
+  }
   // Cajetín abajo a la derecha
   const x0 = sheet.width - MARGIN - TITLE_W;
   const y0 = sheet.height - MARGIN - TITLE_H;

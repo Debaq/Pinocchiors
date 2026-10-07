@@ -511,6 +511,22 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation) -> Vec<PartView> {
 pub struct DrawingViewSpec {
     pub eye: [f64; 3],
     pub xdir: [f64; 3],
+    /// Vista en corte: se conserva el lado de `normal` del plano por `origin`
+    #[serde(default)]
+    pub section: Option<DrawingSection>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DrawingSection {
+    pub origin: [f64; 3],
+    pub normal: [f64; 3],
+}
+
+/// Una vista: sus líneas y, si es un corte, los triángulos de la cara cortada (para rayar).
+#[derive(Debug, Clone, Serialize)]
+pub struct DrawingViewResult {
+    pub lines: Vec<DrawingLine>,
+    pub hatch: Vec<[[f64; 2]; 3]>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -522,11 +538,11 @@ pub struct DrawingLine {
 
 /// Líneas de cada vista del diseño guardado (líneas ocultas exactas), en mm.
 #[tauri::command]
-pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>) -> Result<Vec<Vec<DrawingLine>>, String> {
+pub async fn cad_drawing(app: AppHandle, views: Vec<DrawingViewSpec>) -> Result<Vec<DrawingViewResult>, String> {
     in_background(app, move |state| drawing_impl(state, &views)).await
 }
 
-fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Vec<DrawingLine>>, String> {
+fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<DrawingViewResult>, String> {
     require_occt()?;
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -536,8 +552,18 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Vec<D
     views
         .iter()
         .map(|v| {
-            let lines = body.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
-            Ok(lines
+            // Corte: la mitad del lado de la normal; sus caras sobre el plano se rayan
+            let cut = match &v.section {
+                Some(s) => Some(body.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?),
+                None => None,
+            };
+            let shape = cut.as_ref().unwrap_or(body);
+            let hatch = match (&v.section, &cut) {
+                (Some(s), Some(c)) => section_hatch(c, s, v, size),
+                _ => Vec::new(),
+            };
+            let lines = shape.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
+            let lines = lines
                 .into_iter()
                 .map(|l| DrawingLine {
                     kind: match l.kind {
@@ -549,8 +575,37 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Vec<D
                     },
                     points: l.points,
                 })
-                .collect())
+                .collect();
+            Ok(DrawingViewResult { lines, hatch })
         })
+        .collect()
+}
+
+/// Triángulos (en la vista) de las caras de `cut` que quedaron sobre el plano de corte.
+fn section_hatch(cut: &cad_model::Shape, s: &DrawingSection, v: &DrawingViewSpec, size: f64) -> Vec<[[f64; 2]; 3]> {
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let len = dot(s.normal, s.normal).sqrt().max(1e-12);
+    let n = s.normal.map(|c| c / len);
+    let on_plane: Vec<bool> = (0..cut.face_count())
+        .map(|i| {
+            cut.face_info(i).is_ok_and(|f| {
+                f.surface == cad_model::occt::SurfaceKind::Plane
+                    && dot(f.normal, n).abs() > 0.999
+                    && (dot(f.point, n) - dot(s.origin, n)).abs() < size * 1e-6
+            })
+        })
+        .collect();
+    let Ok(t) = cut.tessellate(size * 1e-3, 0.3) else { return Vec::new() };
+    // Coordenadas de la vista: x = derecha de la hoja, y = eye × x
+    let e = v.eye;
+    let x = v.xdir;
+    let y = [e[1] * x[2] - e[2] * x[1], e[2] * x[0] - e[0] * x[2], e[0] * x[1] - e[1] * x[0]];
+    let proj = |p: [f64; 3]| [dot(p, x), dot(p, y)];
+    t.triangles
+        .iter()
+        .zip(&t.triangle_face)
+        .filter(|(_, f)| on_plane.get(**f as usize).copied().unwrap_or(false))
+        .map(|(tri, _)| tri.map(|k| proj(t.positions[k as usize])))
         .collect()
 }
 

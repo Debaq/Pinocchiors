@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { CadStore } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
-import { SCALES, SHEETS, layout, scaleLabel, sheetDxf, sheetSvg, viewSpec, type DrawingLine, type Projection, type ViewName } from "../../lib/drawing";
+import { SCALES, SHEETS, layout, scaleLabel, sheetDxf, sheetSvg, viewSpec, type DrawingLine, type P2, type Projection, type ViewName } from "../../lib/drawing";
 import { Button, Select } from "../ui";
 
 /**
@@ -19,22 +19,35 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [smooth, setSmooth] = createSignal(false);
   const [iso, setIso] = createSignal(true);
   const [dimensions, setDimensions] = createSignal(true);
+  // Frente en corte por el plano medio (A-A), marcado en la planta
+  const [section, setSection] = createSignal(false);
   const [title, setTitle] = createSignal("Diseño");
   const [author, setAuthor] = createSignal("");
   const [views, setViews] = createSignal<Partial<Record<ViewName, DrawingLine[]>>>();
+  const [hatch, setHatch] = createSignal<Partial<Record<ViewName, [P2, P2, P2][]>>>({});
+  const [sectionAt, setSectionAt] = createSignal(0);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal<string>();
   let seq = 0;
 
   createEffect(
-    on([() => props.store.result()?.version, projection, iso], async () => {
+    on([() => props.store.result()?.version, projection, iso, section], async () => {
       const names: ViewName[] = ["front", "top", "side", ...(iso() ? (["iso"] as const) : [])];
       const n = ++seq;
       setBusy(true);
       try {
-        const lines = await invoke<DrawingLine[][]>("cad_drawing", { views: names.map((v) => viewSpec(v, projection())) });
+        // El corte va por el medio del sólido, paralelo al frente: se queda la mitad de atrás
+        const body = props.store.result()?.body;
+        const at = body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0;
+        const specs = names.map((v) => {
+          const spec = viewSpec(v, projection());
+          return v === "front" && section() ? { ...spec, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : spec;
+        });
+        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][] }[]>("cad_drawing", { views: specs });
         if (n === seq) {
-          setViews(Object.fromEntries(names.map((v, i) => [v, lines[i]])));
+          setViews(Object.fromEntries(names.map((v, i) => [v, res[i].lines])));
+          setHatch(Object.fromEntries(names.map((v, i) => [v, res[i].hatch])));
+          setSectionAt(at);
           setMessage(undefined);
         }
       } catch (e) {
@@ -49,7 +62,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const result = createMemo(() => {
     const v = views();
     if (!v) return null;
-    return layout(v, sheet(), projection(), scaleChoice() === "auto" ? undefined : Number(scaleChoice()));
+    return layout(v, sheet(), projection(), scaleChoice() === "auto" ? undefined : Number(scaleChoice()), hatch());
   });
   const svg = createMemo(() => {
     const r = result();
@@ -67,7 +80,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         projection: projection(),
         sheet: sheet().name,
       },
-      { hidden: hidden(), smooth: smooth(), dimensions: dimensions() },
+      { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), section: section() ? { label: "A", at: sectionAt() } : undefined },
     );
   });
 
@@ -135,6 +148,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         {check("Tangentes", smooth, setSmooth)}
         {check("Isométrica", iso, setIso)}
         {check("Cotas", dimensions, setDimensions)}
+        {check("Corte A-A", section, setSection)}
         <input
           aria-label="Título del plano"
           class="w-36 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"

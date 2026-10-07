@@ -79,7 +79,11 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    recalculan con el modelo. Falta acotar aristas elegidas: el HLR de OCCT no dice de qué
    arista 3D sale cada línea; habría que proyectar las aristas del modelo una por una (o
    cruzar por geometría) para poder elegirlas en la hoja.*
-4. **Cortes** con rayado y línea de corte A-A; **detalles**.
+4. **Cortes** con rayado y línea de corte A-A; **detalles**. *Corte hecho el 2026-10-07: "Corte A-A" muestra el frente
+   cortado por el plano medio paralelo a él (`split_keep` en el backend, se proyecta la mitad
+   de atrás); las caras del sólido sobre el plano se devuelven como triángulos proyectados y
+   se rayan a 45° (patrón SVG); rótulo "Corte A-A" bajo la vista y la línea de corte con
+   flechas y letras en la planta. Faltan los detalles y elegir otro plano de corte.*
 5. **DXF** (vista 1:1 para láser primero, hoja completa después). *Hecha el 2026-10-07: `sheetDxf` en `lib/drawing.ts` (R12
    de texto, mm, capas VISIBLE, OCULTA con línea punteada y TANGENTE, cada tramo como LINE);
    la hoja entera o una vista sola a 1:1 con sus coordenadas. Validado con ezdxf (0 errores
