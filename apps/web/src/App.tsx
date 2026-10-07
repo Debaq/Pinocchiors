@@ -267,6 +267,8 @@ import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
 import { BodyBuilder } from "./components/layout/BodyBuilder";
 import { recordTemplateUse } from "./lib/templateUsage";
+import { TemplateGallery } from "./components/layout/TemplateGallery";
+import type { TemplateShape } from "./lib/skeletonThumb";
 import { SkeletonEditor, type SkeletonEditorTab } from "./components/layout/SkeletonEditor";
 import { SkeletonFitTab, SkeletonWeightsTab, type SkeletonStepProps } from "./components/steps/SkeletonStep";
 import { JointTunePanel, type TuneDirection, type TuneRotation } from "./components/panels/JointTunePanel";
@@ -612,6 +614,7 @@ export const App: Component = () => {
 
   // Skeleton presets (loaded from Tauri)
   const [skeletonPresets, setSkeletonPresets] = createSignal<SkeletonPreset[]>([]);
+  const [templateShapes, setTemplateShapes] = createSignal(new Map<string, TemplateShape>());
   const [supportedFormats, setSupportedFormats] = createSignal<SupportedFormats | null>(null);
 
   // Mesh state
@@ -1407,6 +1410,11 @@ export const App: Component = () => {
           shape: p.shape ?? undefined,
         }))
       );
+
+      // Huesos de cada plantilla, para las miniaturas de la galería
+      invoke<TemplateShape[]>("list_template_shapes")
+        .then((shapes) => setTemplateShapes(new Map(shapes.map((s) => [s.id, s]))))
+        .catch((e) => console.error("Template shapes error:", e));
 
       const formats = await invoke<SupportedFormats>("get_supported_formats");
       setSupportedFormats(formats);
@@ -3992,7 +4000,7 @@ export const App: Component = () => {
   // Editor de esqueleto al costado del visor, en la sección Esqueleto:
   // crear → ajustar → pesos, y los ayudantes del rig
   const [skeletonEditorOpen, setSkeletonEditorOpen] = createPersisted("skeletonEditor.open", false);
-  const [skeletonEditorTab, setSkeletonEditorTab] = createPersisted<SkeletonEditorTab>("skeletonEditor.tab", "create");
+  const [skeletonEditorTab, setSkeletonEditorTab] = createPersisted<SkeletonEditorTab>("skeletonEditor.tab", "templates");
   const [skeletonEditorFraction, setSkeletonEditorFraction] = createPersisted("skeletonEditor.fraction", 0.42);
   const inSkeletonStep = () => pipeline.activeStep() === "skeleton";
   const skeletonEditorVisible = () => skeletonEditorOpen() && inSkeletonStep() && !textureEditor();
@@ -4186,17 +4194,19 @@ export const App: Component = () => {
 
   /** Pestañas del editor de esqueleto */
   const skeletonEditorPanels: Record<SkeletonEditorTab, () => JSX.Element> = {
+    templates: () => (
+      <TemplateGallery
+        presets={skeletonPresets()}
+        shapes={templateShapes()}
+        selected={selectedSkeleton()}
+        onPick={(id) => void handleSkeletonChange(id)}
+        onCustomize={() => setSkeletonEditorTab("create")}
+        disabled={isProcessing()}
+      />
+    ),
     create: () => (
       <>
-        <BodyBuilder
-          plan={bodyPlan()}
-          onChange={handleBodyPlanChange}
-          onShape={handleBodyShape}
-          presets={skeletonPresets()}
-          selectedPreset={selectedSkeleton()}
-          onPreset={handleSkeletonChange}
-          disabled={isProcessing()}
-        />
+        <BodyBuilder plan={bodyPlan()} onChange={handleBodyPlanChange} onShape={handleBodyShape} disabled={isProcessing()} />
         <div>{skeletonEditPanel}</div>
       </>
     ),

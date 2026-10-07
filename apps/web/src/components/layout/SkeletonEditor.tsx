@@ -3,15 +3,22 @@ import { clsx } from "clsx";
 import { IconButton } from "../ui";
 import * as Icons from "../icons";
 
-export type SkeletonEditorTab = "create" | "fit" | "weights" | "controls";
+export type SkeletonEditorTab = "templates" | "create" | "fit" | "weights" | "controls";
 
 export const SKELETON_TABS: { id: SkeletonEditorTab; label: string; title: string; intro: string }[] = [
   {
-    id: "create",
-    label: "Crear",
-    title: "Forma del cuerpo, plantillas y estructura de huesos",
+    id: "templates",
+    label: "Plantillas",
+    title: "Elegir un cuerpo de partida entre las plantillas",
     intro:
-      "Arma el esqueleto: elige una forma base o parte de una plantilla y prende o apaga partes. Pasa el mouse sobre cada dibujo para ver ejemplos. Estructura agrega, borra o renombra huesos sueltos.",
+      "Elige un cuerpo de partida: busca por nombre o ejemplo (\"tigre\", \"alas\", \"cuernos\"), filtra por grupo y marca tus favoritas con la estrella. Después ajusta sus partes en Personalizar.",
+  },
+  {
+    id: "create",
+    label: "Personalizar",
+    title: "Cambiar las partes del cuerpo y la estructura de huesos",
+    intro:
+      "Cambia el cuerpo por partes: forma base, patas, cuello, cola, cabezas… Pasa el mouse sobre cada dibujo para ver ejemplos. Estructura agrega, borra o renombra huesos sueltos.",
   },
   {
     id: "fit",
@@ -80,8 +87,15 @@ export const SkeletonEditor: Component<SkeletonEditorProps> = (props) => {
       </header>
       <div class="flex-1 min-h-0 overflow-y-auto px-3 py-2">
         <p class="text-xs text-text-muted leading-relaxed mb-2 max-w-3xl">{current().intro}</p>
-        {/* Las tarjetas de cada pestaña fluyen en columnas de ~320 px sin partirse */}
-        <div class="[column-width:320px] [column-gap:1.25rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-1">
+        {/* Las tarjetas de cada pestaña fluyen en columnas de ~320 px sin
+            partirse; la galería de plantillas usa todo el ancho */}
+        <div
+          class={
+            props.tab === "templates"
+              ? undefined
+              : "[column-width:320px] [column-gap:1.25rem] [&>div>div]:break-inside-avoid [&>div>div]:mb-1"
+          }
+        >
           {(() => {
             const tab = props.tab;
             return untrack(() => props.panels[tab]());

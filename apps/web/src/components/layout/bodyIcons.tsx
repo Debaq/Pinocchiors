@@ -300,6 +300,11 @@ export const PART_ICONS: Record<string, Component> = {
       <Chain points={[[37, 13], [36, 7], [40, 3]]} />
     </OnQuad>
   ),
+  centerHorn: () => (
+    <OnQuad>
+      <Chain points={[[40, 14], [43, 9], [46, 4]]} />
+    </OnQuad>
+  ),
   tusks: () => (
     <OnQuad>
       <Chain points={[[40, 17], [44, 21], [46, 19]]} />

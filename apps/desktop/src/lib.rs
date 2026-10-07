@@ -75,6 +75,7 @@ pub fn run() {
             project::drop_snapshot,
             project::clear_snapshots,
             commands::get_body_plan,
+            commands::list_template_shapes,
             commands::new_body_plan,
             commands::select_body_plan,
             commands::get_skeleton_data,

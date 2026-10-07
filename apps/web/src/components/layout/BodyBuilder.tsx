@@ -14,8 +14,6 @@ import {
   SHAPE_ICONS,
 } from "./bodyIcons";
 import type { BodyPlan, BodyShape } from "../../lib/bodyPlan";
-import type { SkeletonPreset } from "../panels/SkeletonPanel";
-import { TemplatePicker } from "./TemplatePicker";
 
 type CountField =
   | "neck"
@@ -30,7 +28,8 @@ type CountField =
   | "tusks"
   | "tentacles"
   | "abdomen"
-  | "mantle";
+  | "mantle"
+  | "center_horn";
 type FlagField = "fins" | "pincers" | "jaw" | "flukes" | "fangs" | "palps" | "eye_stalks" | "segmented";
 
 const SHAPES: { id: BodyShape; label: string; hint: string }[] = [
@@ -83,10 +82,6 @@ export interface BodyBuilderProps {
   onChange?: (plan: BodyPlan) => void;
   /** Empezar un cuerpo desde cero con esta forma */
   onShape?: (shape: BodyShape) => void;
-  /** Plantillas con plan (`plan:<id>`) para partir de una */
-  presets: SkeletonPreset[];
-  selectedPreset?: string;
-  onPreset?: (presetId: string) => void;
   disabled?: boolean;
 }
 
@@ -236,14 +231,9 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
     <CountRow label="Segmentos del cuello" value={Math.max(count("neck"), 1)} min={1} max={10} onChange={(neck) => update({ neck })} disabled={props.disabled} />
   );
 
-  const templates = () => props.presets.filter((p) => p.id.startsWith("plan:"));
 
   return (
     <div>
-
-        <Section title="Partir de una plantilla">
-          <TemplatePicker presets={templates()} selected={props.selectedPreset} onPick={props.onPreset} disabled={props.disabled} />
-        </Section>
 
         <Section title="Forma base">
           <div class={GRID}>
@@ -356,6 +346,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
             <div class={GRID}>
               <Part field="ears" icon="ears" label="Orejas" hint="Orejas que se mueven" max={3} />
               <Part field="horns" icon="horns" label="Cuernos" hint="Par de cuernos o astas sobre la cabeza" max={5} />
+              <Part field="center_horn" icon="centerHorn" label="Cuerno central" hint="Un cuerno al medio de la frente: unicornio, rinoceronte" max={5} />
               <Part field="tusks" icon="tusks" label="Colmillos" hint="Colmillos hacia adelante y abajo" max={4} />
               <Part field="trunk" icon="trunk" label="Trompa" hint="Trompa: más segmentos la doblan más suave" max={12} />
               <Flag field="jaw" icon="jaw" label="Mandíbula" hint="Un hueso que abre la boca" />

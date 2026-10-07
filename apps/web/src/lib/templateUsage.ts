@@ -6,14 +6,44 @@
 import { createPersisted } from "./ui-state";
 
 const [usage, setUsage] = createPersisted<Record<string, number>>("templates.usage", {});
+const [recent, setRecent] = createPersisted<string[]>("templates.recent", []);
 
 /** Veces que se eligió cada plantilla */
 export const templateUsage = usage;
 
-/** Suma un uso a la plantilla `id` */
+/** Suma un uso a la plantilla `id` y la deja como la más reciente */
 export function recordTemplateUse(id: string): void {
   const current = usage();
   setUsage({ ...current, [id]: (current[id] ?? 0) + 1 });
+  setRecent([id, ...recent().filter((r) => r !== id)].slice(0, 50));
+}
+
+/**
+ * Las `n` más usadas (solo las que se eligieron alguna vez); a igual uso,
+ * la más reciente primero
+ */
+export function mostUsed<T extends { id: string }>(items: T[], n: number): T[] {
+  const uses = usage();
+  const order = recent();
+  const when = (id: string) => {
+    const i = order.indexOf(id);
+    return i < 0 ? order.length : i;
+  };
+  return items
+    .filter((item) => (uses[item.id] ?? 0) > 0)
+    .sort((a, b) => (uses[b.id] ?? 0) - (uses[a.id] ?? 0) || when(a.id) - when(b.id))
+    .slice(0, n);
+}
+
+const [favorites, setFavorites] = createPersisted<string[]>("templates.favorites", []);
+
+/** Plantillas marcadas con estrella */
+export const templateFavorites = favorites;
+
+/** Marca o desmarca una plantilla como favorita */
+export function toggleFavorite(id: string): void {
+  const current = favorites();
+  setFavorites(current.includes(id) ? current.filter((f) => f !== id) : [...current, id]);
 }
 
 /** Las más comunes, para ordenar mientras no hay uso propio */

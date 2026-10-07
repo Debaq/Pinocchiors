@@ -1421,20 +1421,7 @@ pub fn list_skeleton_presets() -> Vec<SkeletonPreset> {
 /// Selecciona un preset de esqueleto
 #[tauri::command]
 pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<SkeletonData, String> {
-    let skeleton_type = match preset_id.as_str() {
-        "human" => SkeletonType::Human,
-        "quad" => SkeletonType::Quad,
-        "horse" => SkeletonType::Horse,
-        "centaur" => SkeletonType::Centaur,
-        "bird" => SkeletonType::Bird,
-        "spider" => SkeletonType::Spider,
-        "serpent" => SkeletonType::Serpent,
-        "mech" => SkeletonType::Mech,
-        other => match other.strip_prefix("plan:").and_then(pinocchio_skeleton::BodyPlan::variant) {
-            Some(plan) => SkeletonType::Template(plan.build()),
-            None => return Err(format!("Preset desconocido: {}", preset_id)),
-        },
-    };
+    let skeleton_type = skeleton_type_for(&preset_id).ok_or_else(|| format!("Preset desconocido: {}", preset_id))?;
 
     let data = get_skeleton_data_for_type(&skeleton_type);
 
@@ -1446,6 +1433,47 @@ pub fn select_skeleton(preset_id: String, state: State<'_, AppState>) -> Result<
     *state.result.lock().unwrap() = None;
 
     Ok(data)
+}
+
+/// Esqueleto de una plantilla de la lista (`human`, `plan:dog`…)
+fn skeleton_type_for(preset_id: &str) -> Option<SkeletonType> {
+    Some(match preset_id {
+        "human" => SkeletonType::Human,
+        "quad" => SkeletonType::Quad,
+        "horse" => SkeletonType::Horse,
+        "centaur" => SkeletonType::Centaur,
+        "bird" => SkeletonType::Bird,
+        "spider" => SkeletonType::Spider,
+        "serpent" => SkeletonType::Serpent,
+        "mech" => SkeletonType::Mech,
+        other => SkeletonType::Template(other.strip_prefix("plan:").and_then(pinocchio_skeleton::BodyPlan::variant)?.build()),
+    })
+}
+
+/// Huesos de una plantilla para dibujar su miniatura: posiciones (Y arriba,
+/// mirando a +Z) y el padre de cada uno (−1 en la raíz)
+#[derive(Debug, Clone, Serialize)]
+pub struct TemplateShape {
+    pub id: String,
+    pub points: Vec<[f32; 3]>,
+    pub parents: Vec<i32>,
+}
+
+/// Huesos de todas las plantillas de la lista, para la galería
+#[tauri::command]
+pub fn list_template_shapes() -> Vec<TemplateShape> {
+    list_skeleton_presets()
+        .into_iter()
+        .filter_map(|preset| {
+            let data = get_skeleton_data_for_type(&skeleton_type_for(&preset.id)?);
+            let round = |x: f64| (x * 1000.0).round() as f32 / 1000.0;
+            Some(TemplateShape {
+                id: preset.id,
+                points: data.bones.iter().map(|b| b.position.map(round)).collect(),
+                parents: data.bones.iter().map(|b| b.parent.map_or(-1, |p| p as i32)).collect(),
+            })
+        })
+        .collect()
 }
 
 /// Borra un objeto de la escena desde el Outliner: "skeleton" (esqueleto y
@@ -1628,6 +1656,8 @@ pub struct BodyPlanDto {
     pub mantle: usize,
     #[serde(default)]
     pub jumper: bool,
+    #[serde(default)]
+    pub center_horn: usize,
 }
 
 fn default_radial_pose() -> String {
@@ -1723,6 +1753,7 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             radial_pose: RADIAL_POSES.iter().find(|(_, r)| *r == p.radial_pose).map_or("spread", |(id, _)| id).to_string(),
             mantle: p.mantle,
             jumper: p.jumper,
+            center_horn: p.center_horn,
         }
     }
 }
@@ -1776,6 +1807,7 @@ impl BodyPlanDto {
             radial_pose: RADIAL_POSES.iter().find(|(id, _)| *id == self.radial_pose).map_or_else(Default::default, |(_, r)| *r),
             mantle: clamp(self.mantle, 6),
             jumper: self.jumper,
+            center_horn: clamp(self.center_horn, 6),
         })
     }
 }
@@ -4481,6 +4513,9 @@ mod tests {
         assert!(get_body_plan("human".into()).is_none());
         let presets = list_skeleton_presets();
         assert!(presets.iter().any(|p| p.id == "plan:elephant" && p.num_bones > 20));
+        let shapes = list_template_shapes();
+        assert_eq!(shapes.len(), presets.len(), "todas las plantillas tienen miniatura");
+        assert!(shapes.iter().all(|s| s.points.len() == s.parents.len() && s.parents.iter().filter(|&&p| p < 0).count() == 1));
         let bad = BodyPlanDto { shape: "blob".into(), ..get_body_plan("plan:fish".into()).unwrap() };
         assert!(bad.to_plan().is_err());
         // Un proyecto de antes de los tipos de pata abre con las patas básicas

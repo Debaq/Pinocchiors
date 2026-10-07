@@ -51,4 +51,6 @@ export interface BodyPlan {
   mantle?: number;
   /** Cuadrúpedo: patas traseras de salto plegadas en Z (rana, conejo) */
   jumper?: boolean;
+  /** Segmentos del cuerno al medio de la frente (unicornio, rinoceronte) */
+  center_horn?: number;
 }

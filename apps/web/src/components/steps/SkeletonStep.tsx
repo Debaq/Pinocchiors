@@ -78,7 +78,13 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
   const ownSkeleton = () => props.skeletonLoaded && !props.selectedPreset;
   const hasSkeleton = () => Boolean(props.skeletonLoaded && props.skeletonTransform);
   const done = (tab: SkeletonEditorTab) =>
-    tab === "create" ? hasSkeleton() : tab === "fit" ? !!props.fitInfo : tab === "weights" ? !!props.autorigComplete : false;
+    tab === "templates" || tab === "create"
+      ? hasSkeleton()
+      : tab === "fit"
+        ? !!props.fitInfo
+        : tab === "weights"
+          ? !!props.autorigComplete
+          : false;
 
   return (
     <div class="space-y-5">
@@ -104,7 +110,7 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
 
       {/* Avance */}
       <div class="space-y-1 text-xs">
-        <For each={SKELETON_TABS.filter((t) => t.id !== "controls")}>
+        <For each={SKELETON_TABS.filter((t) => t.id !== "controls" && t.id !== "create")}>
           {(t) => (
             <div class="flex items-center gap-2">
               <span class={done(t.id) ? "text-green" : "text-text-dim"}>
