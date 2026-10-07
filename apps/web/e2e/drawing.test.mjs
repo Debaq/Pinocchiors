@@ -94,3 +94,14 @@ test("corte A-A: rayado en el frente, rótulo y línea en la planta", () => {
   assert.ok(svg.includes('data-hatch="front"') && svg.includes("url(#rayado)"));
   assert.ok(svg.includes("Corte A-A") && svg.includes("data-section-line"));
 });
+
+test("el SVG es XML válido (atributos con valor)", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20) };
+  const { placed } = layout(views, SHEETS[0], "first");
+  const svg = sheetSvg(placed, SHEETS[0], { title: "x", date: "", scale: "", projection: "first", sheet: "A4" }, { hidden: true, smooth: false, dimensions: true, section: { label: "A", at: 5 } });
+  // Ningún atributo suelto: cada nombre=valor
+  for (const tag of svg.match(/<[a-z][^>]*>/g)) {
+    const attrs = tag.replace(/^<[a-z]+/, "").replace(/\/?>$/, "").replace(/[A-Za-z0-9:-]+="[^"]*"/g, "").trim();
+    assert.equal(attrs, "", tag);
+  }
+});

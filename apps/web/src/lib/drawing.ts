@@ -220,7 +220,7 @@ function dimensionSvg(d: Dimension): string {
     ? `<text x="${n(mid[0] - 1)}" y="${n(mid[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(mid[0] - 1)} ${n(mid[1])})" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`
     : `<text x="${n(mid[0])}" y="${n(mid[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`;
   return (
-    `<g data-dimension stroke="#000" stroke-width="0.18">` +
+    `<g data-dimension="" stroke="#000" stroke-width="0.18">` +
     ext(d.a, a2) +
     ext(d.b, b2) +
     `<line x1="${n(a2[0])}" y1="${n(a2[1])}" x2="${n(b2[0])}" y2="${n(b2[1])}"/>` +
@@ -267,14 +267,14 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
     const b = bounds(front.lines);
     const cx = front.x + ((b.min[0] + b.max[0]) / 2) * front.scale;
     const below = front.y - b.min[1] * front.scale + (opts.dimensions ? 14 : 6);
-    out.push(`<text data-section-label x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}</text>`);
+    out.push(`<text data-section-label="" x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}</text>`);
   }
   if (opts.section && top) {
     const b = bounds(top.lines);
     const y = top.y - opts.section.at * top.scale;
     const [x0, x1] = [top.x + b.min[0] * top.scale - 6, top.x + b.max[0] * top.scale + 6];
     out.push(
-      `<g data-section-line stroke="#000" fill="#000"><line x1="${n(x0)}" y1="${n(y)}" x2="${n(x1)}" y2="${n(y)}" stroke-width="0.35" stroke-dasharray="8 1.5 1.5 1.5"/>` +
+      `<g data-section-line="" stroke="#000" fill="#000"><line x1="${n(x0)}" y1="${n(y)}" x2="${n(x1)}" y2="${n(y)}" stroke-width="0.35" stroke-dasharray="8 1.5 1.5 1.5"/>` +
         // Flechas hacia donde se mira (hacia arriba en la planta: desde el frente)
         [x0 + 2, x1 - 2].map((x) => `<polygon points="${n(x)},${n(y - 4)} ${n(x - 1)},${n(y - 1.5)} ${n(x + 1)},${n(y - 1.5)}" stroke="none"/><line x1="${n(x)}" y1="${n(y)}" x2="${n(x)}" y2="${n(y - 2)}" stroke-width="0.35"/>`).join("") +
         // Las letras sobre las flechas (al costado pisarían las cotas)
@@ -289,7 +289,7 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
     `<rect x="${n(x)}" y="${n(y)}" width="${n(w)}" height="${n(h)}" fill="none" stroke="#000" stroke-width="0.35"/>` +
     `<text x="${n(x + 1.5)}" y="${n(y + 3)}" font-size="2" fill="#555">${esc(label)}</text>` +
     `<text x="${n(x + 1.5)}" y="${n(y + h - 2)}" font-size="${size}" fill="#000">${esc(value)}</text>`;
-  out.push(`<g data-title-block>`);
+  out.push(`<g data-title-block="">`);
   out.push(cell(x0, y0, TITLE_W, 12, "Título", info.title, 5));
   out.push(cell(x0, y0 + 12, 50, 8, "Autor", info.author ?? ""));
   out.push(cell(x0 + 50, y0 + 12, 50, 8, "Material", info.material ?? ""));

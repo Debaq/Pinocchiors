@@ -417,3 +417,5 @@ cargo test -p cad-model
   fase 3): ancho y alto de cada vista con flechas y texto, también en el DXF.
 - **2026-10-07 Corte A-A en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 4): el
   frente en corte por el plano medio, rayado, con la línea de corte en la planta.
+- **2026-10-07 Plano a PDF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 2): con `svg2pdf` en
+  Rust, a tamaño real de hoja; el SVG pasó a ser XML válido.

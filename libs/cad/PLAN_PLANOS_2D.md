@@ -73,7 +73,10 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    se abre sobre el visor ("Plano 2D" en la sección Sólido) y se exporta con
    `cad_write_text`.*
 2. **Hoja y cajetín**: tamaños, escala, plantilla, mover vistas, PDF. *En parte: tamaños A4–A2 y Carta, escala automática o
-   elegida, cajetín fijo. Faltan plantilla propia, mover vistas y PDF.*
+   elegida, cajetín fijo. PDF hecho el mismo día: `svg2pdf` 0.13 en la app (Rust puro; fuentes
+   del sistema para los textos; `dpi: 96` para que la página tenga el tamaño real, A4 =
+   841,89 × 595,28 pt según pdfinfo). El SVG ahora es XML válido (los atributos `data-*` sin
+   valor rompían el parser). Faltan plantilla propia y mover vistas.*
 3. **Cotas** asociativas (largo, distancia, radio, diámetro, ángulo) y notas. *En parte, 2026-10-07: cotas generales automáticas (ancho y
    alto de cada vista, sin la isométrica) en SVG y en DXF (capa COTAS, líneas y texto); se
    recalculan con el modelo. Falta acotar aristas elegidas: el HLR de OCCT no dice de qué

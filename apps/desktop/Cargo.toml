@@ -14,6 +14,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# Planos del CAD a PDF (Rust puro, sin dependencias del sistema)
+svg2pdf = "0.13"
 # Pinocchio - Auto rigging
 pinocchio-core = { workspace = true }
 pinocchio-mesh = { workspace = true, features = ["converter"] }

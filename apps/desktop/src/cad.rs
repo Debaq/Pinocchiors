@@ -609,6 +609,25 @@ fn section_hatch(cut: &cad_model::Shape, s: &DrawingSection, v: &DrawingViewSpec
         .collect()
 }
 
+/// SVG (de un plano) a PDF del mismo tamaño, con las fuentes del sistema para los textos.
+fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
+    use svg2pdf::usvg;
+    let mut opt = usvg::Options::default();
+    opt.fontdb_mut().load_system_fonts();
+    let tree = usvg::Tree::from_str(svg, &opt).map_err(|e| format!("SVG inválido: {e}"))?;
+    // usvg pasa los mm a px de 96 por pulgada: con 96 la página queda del tamaño real
+    let page = svg2pdf::PageOptions { dpi: 96.0 };
+    svg2pdf::to_pdf(&tree, svg2pdf::ConversionOptions::default(), page).map_err(|e| format!("No se pudo armar el PDF: {e:?}"))
+}
+
+/// Guarda un plano (SVG) como PDF.
+#[tauri::command]
+pub async fn cad_write_pdf(path: String, svg: String) -> Result<u64, String> {
+    let bytes = svg_to_pdf(&svg)?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    Ok(bytes.len() as u64)
+}
+
 /// Escribe un archivo de texto (planos SVG o DXF hechos en la interfaz).
 #[tauri::command]
 pub async fn cad_write_text(path: String, content: String) -> Result<u64, String> {
@@ -1031,6 +1050,12 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
+            "cad_write_pdf" => {
+                let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);
+                let bytes = svg_to_pdf(&svg)?;
+                std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+                ok(bytes.len() as u64)
+            }
             "cad_write_text" => {
                 let (path, content): (String, String) = (arg(args, "path")?, arg(args, "content")?);
                 std::fs::write(&path, content.as_bytes()).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
@@ -1101,6 +1126,17 @@ mod tests {
         // Sin cambios: misma versión (caché)
         assert_eq!(evaluate(&state).unwrap().version, v);
         assert!(errors_text(&evaluate(&state).unwrap(), &box_doc()).is_empty());
+    }
+
+    #[test]
+    fn drawing_svg_to_pdf() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" width="297mm" height="210mm" viewBox="0 0 297 210"><rect x="10" y="10" width="277" height="190" fill="none" stroke="#000"/><text x="20" y="30" font-size="5">Plano ñandú</text></svg>"##;
+        let pdf = svg_to_pdf(svg).unwrap();
+        assert!(pdf.starts_with(b"%PDF-"));
+        // A4 apaisada: 297 × 210 mm = 841,89 × 595,28 pt
+        let text = String::from_utf8_lossy(&pdf);
+        let mb = text.find("MediaBox").map(|i| text[i..i + 60].to_string());
+        assert!(text.contains("841.8") && text.contains("595.2"), "tamaño de página: {mb:?}");
     }
 
     #[test]

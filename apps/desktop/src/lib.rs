@@ -162,6 +162,7 @@ pub fn run() {
             cad::cad_parts_at,
             cad::cad_drawing,
             cad::cad_write_text,
+            cad::cad_write_pdf,
             cad::cad_export,
             cad::cad_import_step,
             cad::cad_to_model,

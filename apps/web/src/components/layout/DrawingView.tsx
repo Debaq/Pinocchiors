@@ -95,6 +95,17 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     }
   };
 
+  const exportPdf = async () => {
+    const path = await save({ filters: [{ name: "PDF", extensions: ["pdf"] }], defaultPath: `${title().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "plano"}.pdf` });
+    if (!path) return;
+    try {
+      const bytes = await invoke<number>("cad_write_pdf", { path, svg: svg() });
+      setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
+
   // DXF: la hoja entera o una vista sola a 1:1 (para corte láser o CNC)
   const [dxfWhat, setDxfWhat] = createSignal<"sheet" | ViewName>("sheet");
   const exportDxf = async () => {
@@ -166,7 +177,10 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         <Show when={busy()}>
           <span class="text-[11px] text-text-dim">Proyectando…</span>
         </Show>
-        <Button size="sm" variant="primary" disabled={!svg()} onClick={() => void exportSvg()}>
+        <Button size="sm" variant="primary" disabled={!svg()} onClick={() => void exportPdf()}>
+          Exportar PDF
+        </Button>
+        <Button size="sm" disabled={!svg()} onClick={() => void exportSvg()}>
           Exportar SVG
         </Button>
         <div class="w-36">

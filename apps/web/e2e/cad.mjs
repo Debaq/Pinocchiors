@@ -1029,6 +1029,20 @@ const scenarios = {
     })()`);
     if (!(cut.tris > 0) || !cut.label || !cut.line) throw new Error(`corte: ${JSON.stringify(cut)}`);
     await b.shot("plano_corte");
+    // PDF del mismo tamaño que la hoja (A4: 841,89 × 595,28 pt)
+    const pdf = `${out}/plano.pdf`;
+    rmSync(pdf, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(pdf)}`);
+    await b.clickText("Exportar PDF");
+    await sleep(3000);
+    if (!existsSync(pdf) || !readFileSync(pdf).subarray(0, 5).toString() === "%PDF-") throw new Error("no se exportó el PDF");
+    const { execSync } = await import("node:child_process");
+    try {
+      const info = execSync(`pdfinfo ${pdf}`).toString();
+      if (!/Page size:\s+841\.\d+ x 595\.\d+/.test(info)) throw new Error(`tamaño del PDF: ${info}`);
+    } catch (e) {
+      if (String(e).includes("tamaño")) throw e;
+    }
     // DXF de la hoja (capas VISIBLE y OCULTA)
     const dxf = `${out}/plano.dxf`;
     rmSync(dxf, { force: true });
