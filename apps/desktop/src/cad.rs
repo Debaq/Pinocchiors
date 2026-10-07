@@ -72,6 +72,11 @@ pub struct BodyInfo {
     pub faces: usize,
     pub edges: usize,
     pub valid: bool,
+    /// Centro de masa (mm) y momentos principales de inercia con densidad 1
+    /// (mm⁵; × densidad en kg/mm³ = kg·mm²) con sus ejes.
+    pub center: [f64; 3],
+    pub inertia: [f64; 3],
+    pub axes: [[f64; 3]; 3],
 }
 
 /// Resultado de recalcular: estado de cada operación, sketches resueltos y
@@ -91,8 +96,10 @@ pub struct CadResult {
 
 fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // El JSON es estable y cubre todo el documento
-    serde_json::to_string(doc).unwrap_or_default().hash(&mut h);
+    // El JSON es estable y cubre todo el documento; el material no cambia la
+    // geometría (la masa la calcula la interfaz): cambiarlo no recalcula
+    let doc = Document { material: None, ..doc.clone() };
+    serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }
 
@@ -157,6 +164,9 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
             faces: b.face_count(),
             edges: b.edge_count(),
             valid: b.is_valid(),
+            center: m.center,
+            inertia: m.inertia,
+            axes: m.axes,
         })
     });
     Ok(CadResult {

@@ -18,7 +18,7 @@ pub mod regions;
 pub mod sketch;
 
 pub use cad_occt::{self as occt, Shape};
-pub use document::{Document, ModelError, Parameter, Resolution, ResolvedValue};
+pub use document::{Document, Material, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{Evaluation, FeatureState, FeatureStatus, MissingRef, SketchResult};
 pub use feature::*;
 pub use geom::{P2, P3, Plane};

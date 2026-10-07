@@ -246,6 +246,12 @@ export const CadView: Component<CadViewProps> = (props) => {
     const edges = [...h.edges, ...picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : []))];
     viewer?.setHighlight(faces, edges);
   });
+  createEffect(() => {
+    store.mesh();
+    const body = store.result()?.body;
+    viewer?.setCenterOfMass(ui.showCenterOfMass() && body ? body.center : null);
+  });
+
   // Medidas de lo elegido en el sólido (una o dos cosas), como en Onshape
   const [measurement, setMeasurement] = createSignal<Measurement>();
   let measureSeq = 0;

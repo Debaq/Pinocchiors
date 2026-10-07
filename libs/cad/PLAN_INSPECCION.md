@@ -88,7 +88,11 @@ selección y menú contextual.
    `cad_min_distance`, `cad_count_vertices`/`cad_vertex_point`. Los vértices del visor salen de
    los extremos de las aristas (a 8 px, ocultos detrás de caras no cuentan); la distancia se
    dibuja punteada.*
-2. **Masa con material** y centro de masa visible.
+2. **Masa con material** y centro de masa visible. *Hecha el 2026-10-07: `Document.material`
+   (nombre y densidad; no entra en el hash del recálculo), `MassInfo` trae momentos principales
+   y ejes (`GProp_PrincipalProps`, con densidad 1), la sección Sólido muestra masa, centro de
+   masa e inercia en kg·mm² con 10 materiales comunes o densidad propia, y el centro de masa
+   se dibuja como una cruz con los colores de los ejes.*
 3. **Vistas estándar, normal a, ajustar a lo elegido**, cubo de vistas.
 4. **Menú contextual y atajos.**
 5. **Filtros y selección por caja.**

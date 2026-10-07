@@ -5,6 +5,7 @@ import {
   BASE_PLANES,
   CONSTRAINT_LABELS,
   FEATURE_LABELS,
+  MATERIALS,
   OP_LABELS,
   PLANE_LABELS,
   constraintIds,
@@ -29,6 +30,7 @@ import {
   type Feature,
   type FeatureKind,
   type FeatureState,
+  type Material,
   type MissingRef,
   type P2,
   type P3,
@@ -499,7 +501,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 </Section>
               </Show>
 
-              <BodySection store={store} onExport={(f) => void exportAs(f)} onUseAsModel={props.onUseAsModel} />
+              <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} onUseAsModel={props.onUseAsModel} />
 
               <div class="flex gap-2">
                 <Button size="sm" variant="ghost" icon={<Icons.ArrowCounterClockwise size={14} />} disabled={!store.canUndo()} onClick={() => store.undo()}>
@@ -1607,35 +1609,73 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
 
 // ─── Sólido ───────────────────────────────────────────────────────────────
 
-const BodySection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | "3mf") => void; onUseAsModel?: () => void }> = (props) => (
+const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void; onUseAsModel?: () => void }> = (props) => (
   <Show when={props.store.result()?.body}>
     {(b) => {
       const size = () => b().bbox_max.map((v, i) => v - b().bbox_min[i]);
+      const material = () => props.store.doc()?.material ?? null;
+      const setMaterial = (m: Material | null) => void props.store.commit((d) => (d.material = m));
+      // Gramos: mm³ × kg/m³ × 1e−6
+      const mass = () => (material() ? b().volume * material()!.density * 1e-6 : null);
+      const materialValue = () => {
+        const m = material();
+        if (!m) return "none";
+        return MATERIALS.some((x) => x.name === m.name && x.density === m.density) ? m.name : "custom";
+      };
+      const Line = (p: { label: string; children: JSX.Element }) => (
+        <div class="flex justify-between gap-2">
+          <span class="text-text-muted whitespace-nowrap">{p.label}</span>
+          <span class="font-mono text-text text-right">{p.children}</span>
+        </div>
+      );
       return (
         <Section title="Sólido">
           <div class="space-y-1 text-xs">
-            <div class="flex justify-between">
-              <span class="text-text-muted">Volumen</span>
-              <span class="font-mono text-text">{fmt(b().volume / 1000)} cm³</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-text-muted">Área</span>
-              <span class="font-mono text-text">{fmt(b().area / 100)} cm²</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-text-muted">Tamaño (X × Y × Z)</span>
-              <span class="font-mono text-text">{size().map((v) => fmt(v, 1)).join(" × ")} mm</span>
-            </div>
-            <div class="flex justify-between">
-              <span class="text-text-muted">Caras / aristas</span>
-              <span class="font-mono text-text">
-                {b().faces} / {b().edges}
-              </span>
-            </div>
+            <Line label="Volumen">{fmt(b().volume / 1000)} cm³</Line>
+            <Line label="Área">{fmt(b().area / 100)} cm²</Line>
+            <Line label="Tamaño X × Y × Z">{size().map((v) => fmt(v, 1)).join(" × ")} mm</Line>
+            <Line label="Caras / aristas">
+              {b().faces} / {b().edges}
+            </Line>
             <Show when={!b().valid}>
               <p class="text-warning">La forma tiene defectos: puede fallar al exportar o imprimir</p>
             </Show>
           </div>
+          <Row label="Material">
+            <Select
+              options={[
+                { value: "none", label: "Sin material" },
+                ...MATERIALS.map((m) => ({ value: m.name, label: `${m.name} (${m.density} kg/m³)` })),
+                { value: "custom", label: "Densidad propia" },
+              ]}
+              value={materialValue()}
+              onChange={(v) => {
+                if (v === materialValue()) return;
+                if (v === "none") setMaterial(null);
+                else if (v === "custom") setMaterial({ name: "Otro", density: material()?.density ?? 1000 });
+                else setMaterial(MATERIALS.find((m) => m.name === v)!);
+              }}
+            />
+          </Row>
+          <Show when={materialValue() === "custom"}>
+            <Num label="Densidad" suffix="kg/m³" step={10} value={material()!.density} onCommit={(v) => v > 0 && setMaterial({ name: material()!.name, density: v })} />
+          </Show>
+          <div class="space-y-1 text-xs">
+            <Show when={mass() !== null}>
+              <Line label="Masa">{mass()! >= 1000 ? `${fmt(mass()! / 1000, 3)} kg` : `${fmt(mass()!, 2)} g`}</Line>
+            </Show>
+            <Line label="Centro de masa">{b().center.map((v) => fmt(v, 2)).join(", ")} mm</Line>
+            <Show when={mass() !== null}>
+              {/* kg·mm² = mm⁵ × kg/m³ × 1e−9 */}
+              <Line label="Inercia">
+                {b()
+                  .inertia.map((v) => fmt(v * material()!.density * 1e-9, 3))
+                  .join(" · ")}{" "}
+                kg·mm²
+              </Line>
+            </Show>
+          </div>
+          <Checkbox small label="Ver el centro de masa" checked={props.ui.showCenterOfMass()} onChange={(c) => props.ui.setShowCenterOfMass(c)} />
           <div class="grid grid-cols-3 gap-1.5">
             <Button size="sm" onClick={() => props.onExport("step")}>
               STEP

@@ -164,6 +164,10 @@ typedef struct {
     double center[3];
     double bbox_min[3];
     double bbox_max[3];
+    // Momentos principales de inercia respecto al centro de masa, con densidad 1
+    // (mm⁵ si las medidas son mm), y sus ejes (3 × 3, uno por fila).
+    double inertia[3];
+    double axes[9];
 } CadMassInfo;
 
 int32_t cad_mass_info(const CadShape* s, CadMassInfo* out);

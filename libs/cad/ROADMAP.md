@@ -349,3 +349,9 @@ cargo test -p cad-model
   coordenadas; de dos, distancia mínima (dibujada punteada entre los puntos más cercanos),
   ΔX/ΔY/ΔZ, distancia entre centros y ángulo. El mensaje suelto de "Cara plana · área" se
   reemplazó por el panel. `cad_measure` en Tauri y en el puente HTTP.
+- **2026-10-07 Masa y material** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 2): material
+  del documento (PLA, PETG, ABS, nailon, resina, aluminio, acero, inoxidable, latón, pino o
+  densidad propia); la sección Sólido muestra masa, centro de masa e inercia principal, y "Ver
+  el centro de masa" lo marca en el visor. Cambiar el material es un paso de deshacer y no
+  recalcula el árbol (el hash del documento lo ignora). El puente devuelve los momentos
+  principales con sus ejes.

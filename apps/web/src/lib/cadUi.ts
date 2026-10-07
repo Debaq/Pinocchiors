@@ -95,6 +95,8 @@ export function createCadUi(store: CadStore) {
   // Selección en el visor (caras, aristas, regiones, planos), como en Onshape
   const [picks, setPicks] = createSignal<Pick3d[]>([]);
   const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
+  // Centro de masa dibujado en el visor
+  const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
   // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
   createEffect(on(() => store.result()?.version, () => setPicks((p) => p.filter((x) => x.kind === "plane")), { defer: true }));
@@ -157,6 +159,8 @@ export function createCadUi(store: CadStore) {
     },
     clearPicks: () => setPicks([]),
     hiddenSketches,
+    showCenterOfMass,
+    setShowCenterOfMass,
     toggleSketchVisible(id: number) {
       setHiddenSketches((h) => (h.includes(id) ? h.filter((x) => x !== id) : [...h, id]));
     },

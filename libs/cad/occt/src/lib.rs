@@ -253,6 +253,10 @@ pub struct MassInfo {
     pub center: P3,
     pub bbox_min: P3,
     pub bbox_max: P3,
+    /// Momentos principales de inercia respecto al centro de masa con densidad
+    /// 1 (mm⁵ con medidas en mm; × densidad = masa·largo²) y sus ejes.
+    pub inertia: P3,
+    pub axes: [P3; 3],
 }
 
 /// Malla de visualización de una forma.
@@ -675,7 +679,16 @@ impl Shape {
         if unsafe { ffi::cad_mass_info(self.ptr(), &mut r) } == 0 {
             return Err(last_error());
         }
-        Ok(MassInfo { volume: r.volume, area: r.area, center: r.center, bbox_min: r.bbox_min, bbox_max: r.bbox_max })
+        let a = r.axes;
+        Ok(MassInfo {
+            volume: r.volume,
+            area: r.area,
+            center: r.center,
+            bbox_min: r.bbox_min,
+            bbox_max: r.bbox_max,
+            inertia: r.inertia,
+            axes: [[a[0], a[1], a[2]], [a[3], a[4], a[5]], [a[6], a[7], a[8]]],
+        })
     }
 
     /// Malla para mostrar. `linear` en mm (error máximo a la superficie),

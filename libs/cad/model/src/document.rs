@@ -57,6 +57,16 @@ pub struct Document {
     /// `3.kind.extent.distance` o `0.kind.sketch.constraints.4.value`.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, String>,
+    /// Material del sólido (para la masa); no cambia la geometría.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<Material>,
+}
+
+/// Material con su densidad en kg/m³.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Material {
+    pub name: String,
+    pub density: f64,
 }
 
 impl Document {

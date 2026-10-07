@@ -175,7 +175,28 @@ export interface CadDocument {
   parameters?: Parameter[];
   /** Campos calculados por fórmula: ruta (`<id>.kind.…`) → expresión */
   bindings?: Record<string, string>;
+  /** Material del sólido (densidad en kg/m³), para la masa */
+  material?: Material | null;
 }
+
+export interface Material {
+  name: string;
+  density: number;
+}
+
+/** Materiales comunes (densidad típica en kg/m³) */
+export const MATERIALS: Material[] = [
+  { name: "PLA", density: 1240 },
+  { name: "PETG", density: 1270 },
+  { name: "ABS", density: 1040 },
+  { name: "Nailon", density: 1140 },
+  { name: "Resina", density: 1180 },
+  { name: "Aluminio", density: 2700 },
+  { name: "Acero", density: 7850 },
+  { name: "Acero inoxidable", density: 8000 },
+  { name: "Latón", density: 8500 },
+  { name: "Madera de pino", density: 500 },
+];
 
 /** Valor calculado de un parámetro (key = nombre) o de un campo vinculado (key = ruta) */
 export interface ResolvedValue {
@@ -241,6 +262,11 @@ export interface BodyInfo {
   faces: number;
   edges: number;
   valid: boolean;
+  /** Centro de masa (mm) */
+  center: P3;
+  /** Momentos principales de inercia con densidad 1 (mm⁵) y sus ejes */
+  inertia: P3;
+  axes: [P3, P3, P3];
 }
 
 export interface CadResult {

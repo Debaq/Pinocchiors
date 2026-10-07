@@ -43,6 +43,8 @@ pub struct CadMassInfo {
     pub center: [f64; 3],
     pub bbox_min: [f64; 3],
     pub bbox_max: [f64; 3],
+    pub inertia: [f64; 3],
+    pub axes: [f64; 9],
 }
 
 #[repr(C)]

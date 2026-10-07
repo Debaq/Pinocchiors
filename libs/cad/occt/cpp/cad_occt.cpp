@@ -46,6 +46,7 @@
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
+#include <GProp_PrincipalProps.hxx>
 #include <GeomAPI_Interpolate.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineCurve.hxx>
@@ -962,6 +963,13 @@ int32_t cad_mass_info(const CadShape* s, CadMassInfo* out) {
         out->area = surf.Mass();
         gp_Pnt c = std::fabs(vol.Mass()) > 1e-12 ? vol.CentreOfMass() : surf.CentreOfMass();
         put(out->center, c.XYZ());
+        if (std::fabs(vol.Mass()) > 1e-12) {
+            GProp_PrincipalProps pp = vol.PrincipalProperties();
+            pp.Moments(out->inertia[0], out->inertia[1], out->inertia[2]);
+            put(out->axes, pp.FirstAxisOfInertia().XYZ());
+            put(out->axes + 3, pp.SecondAxisOfInertia().XYZ());
+            put(out->axes + 6, pp.ThirdAxisOfInertia().XYZ());
+        }
         Bnd_Box box;
         BRepBndLib::AddOptimal(s->s, box, Standard_False, Standard_False);
         if (!box.IsVoid()) {

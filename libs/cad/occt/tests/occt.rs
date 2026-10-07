@@ -436,3 +436,21 @@ fn min_distance_between_faces_edges_and_points() {
     let e = b.edge_shape(0).unwrap();
     assert!(e.min_distance(&b).unwrap().0 < 1e-9);
 }
+
+#[test]
+fn principal_moments_of_a_box() {
+    if !cad_occt::available() {
+        return;
+    }
+    // Caja 10×20×30: I = V/12 (b² + c²) respecto a cada eje por el centro
+    let m = Shape::make_box(Frame::at([0.0; 3]), 10.0, 20.0, 30.0).unwrap().mass().unwrap();
+    let v = 6000.0;
+    let mut got = m.inertia.to_vec();
+    got.sort_by(f64::total_cmp);
+    let mut want = vec![v / 12.0 * (400.0 + 900.0), v / 12.0 * (100.0 + 900.0), v / 12.0 * (100.0 + 400.0)];
+    want.sort_by(f64::total_cmp);
+    for (g, w) in got.iter().zip(&want) {
+        assert!((g - w).abs() < 1e-6 * w, "{got:?} vs {want:?}");
+    }
+    assert!((m.center[2] - 15.0).abs() < 1e-9);
+}

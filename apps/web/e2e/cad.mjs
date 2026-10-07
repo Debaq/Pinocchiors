@@ -314,6 +314,39 @@ const scenarios = {
     if (await b.eval(`!!document.querySelector('[aria-label="Medidas"]')`)) throw new Error("el panel quedó");
   },
 
+  async "masa con material y centro de masa"(b) {
+    const line = (label) =>
+      b.eval(`(() => { const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)}); return e?.nextElementSibling?.textContent.trim(); })()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    if ((await line("Masa")) !== undefined) throw new Error("masa sin material");
+    if ((await line("Centro de masa")) !== "0,00, 0,00, 0,00 mm") throw new Error(`centro: ${await line("Centro de masa")}`);
+    // Acero: 8 cm³ × 7,85 g/cm³
+    await b.clickText("Sin material");
+    await sleep(500);
+    await b.clickText("Acero (7850 kg/m³)");
+    await sleep(1500);
+    if ((await line("Masa")) !== "62,80 g") throw new Error(`masa: ${await line("Masa")}`);
+    // I = m (a² + b²) / 12 = 62,8 g × 800 mm² / 12 = 4,187 kg·mm² en los tres ejes
+    if ((await line("Inercia")) !== "4,187 · 4,187 · 4,187 kg·mm²") throw new Error(`inercia: ${await line("Inercia")}`);
+    if ((await call("cad_get_document")).material?.density !== 7850) throw new Error("no quedó en el documento");
+    // Densidad propia
+    await b.clickText("Acero (7850 kg/m³)");
+    await sleep(500);
+    await b.clickText("Densidad propia");
+    await sleep(800);
+    await setInput(b, "Densidad", 1000);
+    await sleep(1500);
+    if ((await line("Masa")) !== "8,00 g") throw new Error(`masa propia: ${await line("Masa")}`);
+    // Centro de masa en el visor
+    await b.clickText("Ver el centro de masa");
+    await sleep(800);
+    if (!(await b.eval(`!!window.__cadViewer.centerMark`))) throw new Error("no se dibujó el centro de masa");
+    await b.shot("centro_de_masa");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

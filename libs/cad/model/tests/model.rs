@@ -925,3 +925,14 @@ fn measure_faces_edges_and_vertices() {
     let m = measure(body, &[MeasureItem::Edge { index: edge }, MeasureItem::Face { index: bottom }]).unwrap();
     assert_relative_eq!(m.angle.unwrap(), 90.0, epsilon = 1e-9);
 }
+
+#[test]
+fn material_is_optional_and_roundtrips() {
+    let mut doc = Document::new();
+    assert!(!serde_json::to_string(&doc).unwrap().contains("material"));
+    doc.material = Some(Material { name: "PLA".into(), density: 1240.0 });
+    let back: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(back.material, doc.material);
+    let old: Document = serde_json::from_str(r#"{"features":[]}"#).unwrap();
+    assert_eq!(old.material, None);
+}

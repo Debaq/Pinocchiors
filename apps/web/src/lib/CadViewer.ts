@@ -136,6 +136,8 @@ export class CadViewer {
   private bodyVertices: THREE.Vector3[] = [];
   /** Vértices elegidos y la línea de la distancia medida */
   private marks = new THREE.Group();
+  /** Centro de masa: tres trazos con los colores de los ejes */
+  private centerMark?: THREE.LineSegments;
 
   /** mm por unidad de la escena */
   mmPerUnit = 1;
@@ -462,6 +464,42 @@ export class CadViewer {
       const ends = new THREE.Points(g.clone(), new THREE.PointsMaterial({ color: themeHex("cyan"), size: 7, sizeAttenuation: false, depthTest: false }));
       ends.renderOrder = 6;
       this.marks.add(line, ends);
+    }
+    this.requestRender();
+  }
+
+  /** Centro de masa (mm) dibujado como una cruz 3D por encima de todo; `null` lo quita */
+  setCenterOfMass(p: P3 | null) {
+    if (this.centerMark) {
+      this.scene.remove(this.centerMark);
+      this.centerMark.geometry.dispose();
+      (this.centerMark.material as THREE.Material).dispose();
+      this.centerMark = undefined;
+    }
+    if (p) {
+      const c = this.toView(p);
+      // Del tamaño de un 6 % del modelo
+      const size = (this.body?.geometry.boundingSphere?.radius ?? 10) * 0.12;
+      const pts: number[] = [];
+      const cols: number[] = [];
+      const axes: [THREE.Vector3, number][] = [
+        [this.dirToView([1, 0, 0]), themeHex("axis-x")],
+        [this.dirToView([0, 1, 0]), themeHex("axis-y")],
+        [this.dirToView([0, 0, 1]), themeHex("axis-z")],
+      ];
+      for (const [d, color] of axes) {
+        const a = c.clone().addScaledVector(d, -size);
+        const b = c.clone().addScaledVector(d, size);
+        pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        const k = new THREE.Color(color);
+        cols.push(k.r, k.g, k.b, k.r, k.g, k.b);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(cols, 3));
+      this.centerMark = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, depthTest: false }));
+      this.centerMark.renderOrder = 7;
+      this.scene.add(this.centerMark);
     }
     this.requestRender();
   }
