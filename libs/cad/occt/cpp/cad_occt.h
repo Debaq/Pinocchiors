@@ -145,6 +145,16 @@ int32_t cad_closest_edge(const CadShape* s, const double* point, const double* d
 double cad_face_distance(const CadShape* s, int32_t index, const double* point);
 double cad_edge_distance(const CadShape* s, int32_t index, const double* point);
 
+// Cara (kind 0), arista (1) o vértice (2) `index` de la forma, como forma propia.
+CadShape* cad_sub_shape(const CadShape* s, int32_t kind, int32_t index);
+int32_t cad_count_vertices(const CadShape* s);
+// Coordenadas del vértice `index` (0 si no existe).
+int32_t cad_vertex_point(const CadShape* s, int32_t index, double* out3);
+// Vértice suelto en un punto.
+CadShape* cad_make_vertex(const double* p);
+// Distancia mínima entre dos formas y los puntos más cercanos de cada una (−1 si falla).
+double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

@@ -343,3 +343,9 @@ cargo test -p cad-model
   tiene "Origen en: el centro / el centro de la base / una esquina". El e2e se ajustó (la tapa
   de la caja de 20 queda en z = 10) y `sketchOn` pregunta al visor qué hay bajo el punto antes
   de hacer clic en la planta, porque ahora la caja la atraviesa.
+- **2026-10-07 Medir** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 1): con una o dos cosas
+  elegidas en el sólido (caras, aristas y ahora vértices) aparece abajo a la derecha del visor
+  el panel de medidas, como en Onshape: de una, tipo, área, largo, radio y diámetro o
+  coordenadas; de dos, distancia mínima (dibujada punteada entre los puntos más cercanos),
+  ΔX/ΔY/ΔZ, distancia entre centros y ángulo. El mensaje suelto de "Cara plana · área" se
+  reemplazó por el panel. `cad_measure` en Tauri y en el puente HTTP.

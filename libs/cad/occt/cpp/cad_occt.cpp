@@ -892,6 +892,46 @@ double cad_edge_distance(const CadShape* s, int32_t index, const double* point) 
     });
 }
 
+CadShape* cad_sub_shape(const CadShape* s, int32_t kind, int32_t index) {
+    return guard("elemento", (CadShape*)nullptr, [&] {
+        TopAbs_ShapeEnum t = kind == 0 ? TopAbs_FACE : kind == 1 ? TopAbs_EDGE : TopAbs_VERTEX;
+        auto m = map_of(s->s, t);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("elemento inexistente");
+        return new CadShape{m(index + 1)};
+    });
+}
+
+int32_t cad_count_vertices(const CadShape* s) {
+    return guard("vértices", 0, [&] { return (int32_t)map_of(s->s, TopAbs_VERTEX).Extent(); });
+}
+
+int32_t cad_vertex_point(const CadShape* s, int32_t index, double* out) {
+    return guard("vértice", 0, [&] {
+        auto m = map_of(s->s, TopAbs_VERTEX);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("vértice inexistente");
+        gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(m(index + 1)));
+        out[0] = p.X();
+        out[1] = p.Y();
+        out[2] = p.Z();
+        return 1;
+    });
+}
+
+CadShape* cad_make_vertex(const double* p) {
+    return guard("vértice", (CadShape*)nullptr, [&] { return new CadShape{BRepBuilderAPI_MakeVertex(pnt(p)).Vertex()}; });
+}
+
+double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb) {
+    return guard("distancia", -1.0, [&] {
+        BRepExtrema_DistShapeShape ext(a->s, b->s);
+        if (!ext.IsDone() || ext.NbSolution() == 0) return -1.0;
+        gp_Pnt p = ext.PointOnShape1(1), q = ext.PointOnShape2(1);
+        pa[0] = p.X(); pa[1] = p.Y(); pa[2] = p.Z();
+        pb[0] = q.X(); pb[1] = q.Y(); pb[2] = q.Z();
+        return ext.Value();
+    });
+}
+
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out) {
     return guard("aristas", 0, [&] {
         auto edges = map_of(s->s, TopAbs_EDGE);

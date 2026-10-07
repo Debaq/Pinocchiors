@@ -53,5 +53,10 @@ void cad_bytes_free(uint8_t* p) { (void)p; }
 int32_t cad_take_history(CadHistory* o) { memset(o, 0, sizeof(*o)); return 0; }
 void cad_history_free(CadHistory* h) { (void)h; }
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* o) { (void)s; (void)o; return 0; }
+CadShape* cad_sub_shape(const CadShape* s, int32_t k, int32_t i) { (void)s; (void)k; (void)i; FAIL_PTR; }
+int32_t cad_count_vertices(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_vertex_point(const CadShape* s, int32_t i, double* o) { (void)s; (void)i; (void)o; FAIL_INT; }
+CadShape* cad_make_vertex(const double* p) { (void)p; FAIL_PTR; }
+double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb) { (void)a; (void)b; (void)pa; (void)pb; return -1.0; }
 double cad_face_distance(const CadShape* s, int32_t i, const double* p) { (void)s; (void)i; (void)p; return -1.0; }
 double cad_edge_distance(const CadShape* s, int32_t i, const double* p) { (void)s; (void)i; (void)p; return -1.0; }

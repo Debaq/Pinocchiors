@@ -281,6 +281,39 @@ const scenarios = {
     if ((await b.eval(`window.__cadStore.draft()?.feature`)) !== id) throw new Error("no se abrió el diálogo de la caja");
   },
 
+  async "medir: cara, vértices y dos caras"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const panel = () => b.eval(`Object.fromEntries([...document.querySelectorAll("[data-measure]")].map((e) => [e.dataset.measure, e.textContent]))`);
+    const SHIFT = 8;
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Cara de arriba: tipo y área
+    await b.click(...(await at([3, 3, 10])), { wait: 1500 });
+    let p = await panel();
+    if (p[""] !== "Cara plana" || p["Área"] !== "400 mm²") throw new Error(`cara: ${JSON.stringify(p)}`);
+    // Más la cara de adelante: se tocan (0) y forman 90°
+    await b.click(...(await at([3, -10, -3])), { wait: 1500, modifiers: SHIFT });
+    p = await panel();
+    if (p["Distancia mínima"] !== "0 mm" || p["Ángulo"] !== "90°") throw new Error(`dos caras: ${JSON.stringify(p)}`);
+    // Un vértice (cerca de la esquina): sus coordenadas
+    const [cx, cy] = await at([10, -10, 10]);
+    await b.click(cx - 3, cy + 2, { wait: 1500 });
+    p = await panel();
+    if (p[""] !== "Vértice" || p["X"] !== "10 mm" || p["Y"] !== "-10 mm" || p["Z"] !== "10 mm") throw new Error(`vértice: ${JSON.stringify(p)}`);
+    // Y el de abajo: 20 mm, todo en Z
+    const [dx, dy] = await at([10, -10, -10]);
+    await b.click(dx - 3, dy - 2, { wait: 1500, modifiers: SHIFT });
+    p = await panel();
+    if (p["Distancia mínima"] !== "20 mm" || p["ΔZ"] !== "20 mm" || p["ΔX"] !== "0 mm") throw new Error(`dos vértices: ${JSON.stringify(p)}`);
+    await b.shot("medir_dos_vertices");
+    // Esc limpia la selección y el panel
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    if (await b.eval(`!!document.querySelector('[aria-label="Medidas"]')`)) throw new Error("el panel quedó");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

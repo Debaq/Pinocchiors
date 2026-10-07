@@ -408,3 +408,31 @@ fn spline_end_tangents_change_the_shape() {
     let (a0, a1) = (free.mass().unwrap().area, wide.mass().unwrap().area);
     assert!(a1 > a0 * 1.05, "{a0} → {a1}");
 }
+
+#[test]
+fn min_distance_between_faces_edges_and_points() {
+    if !cad_occt::available() {
+        return;
+    }
+    let b = Shape::make_box(Frame::at([0.0; 3]), 10.0, 20.0, 30.0).unwrap();
+    let face_with_normal = |n: [f64; 3]| {
+        (0..b.face_count()).find(|&i| {
+            let f = b.face_info(i).unwrap();
+            (0..3).all(|k| (f.normal[k] - n[k]).abs() < 1e-9)
+        })
+    };
+    let bottom = b.face_shape(face_with_normal([0.0, 0.0, -1.0]).unwrap()).unwrap();
+    let top = b.face_shape(face_with_normal([0.0, 0.0, 1.0]).unwrap()).unwrap();
+    let (d, p, q) = bottom.min_distance(&top).unwrap();
+    assert!((d - 30.0).abs() < 1e-9, "{d}");
+    assert!((p[2] - 0.0).abs() < 1e-9 && (q[2] - 30.0).abs() < 1e-9);
+    // Un punto afuera: distancia a la cara de arriba
+    let v = Shape::vertex([5.0, 10.0, 40.0]).unwrap();
+    assert!((v.min_distance(&top).unwrap().0 - 10.0).abs() < 1e-9);
+    // Vértices y aristas como formas propias
+    assert_eq!(b.vertex_count(), 8);
+    let vs = b.vertices().unwrap();
+    assert!(vs.iter().any(|p| p == &[10.0, 20.0, 30.0]));
+    let e = b.edge_shape(0).unwrap();
+    assert!(e.min_distance(&b).unwrap().0 < 1e-9);
+}

@@ -265,6 +265,27 @@ export interface SolvedSketch {
 }
 
 /** Malla del sólido para el visor (`cad_mesh`) */
+// ─── Medir ────────────────────────────────────────────────────────────────
+
+export type MeasureItem = { kind: "face"; index: number } | { kind: "edge"; index: number } | { kind: "vertex"; point: P3 };
+
+export interface ItemMeasure {
+  /** "plane", "cylinder"… (caras); "line", "circle"… (aristas); "vertex" */
+  kind: string;
+  area: number | null;
+  length: number | null;
+  radius: number | null;
+  center: P3;
+  direction: P3 | null;
+}
+
+export interface Measurement {
+  items: ItemMeasure[];
+  distance: { value: number; a: P3; b: P3; delta: P3 } | null;
+  center_distance: number | null;
+  angle: number | null;
+}
+
 export interface CadMesh {
   positions: Float32Array;
   normals: Float32Array;
@@ -1841,6 +1862,8 @@ export function createCadStore() {
     },
 
     faceRef: (face: number) => invoke<FaceRef>("cad_face_ref", { face }),
+    /** Medidas de una o dos cosas elegidas en el sólido mostrado */
+    measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
 

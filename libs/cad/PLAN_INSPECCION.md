@@ -81,7 +81,13 @@ selección y menú contextual.
 
 ## Fases
 
-1. **Medir** (1 y 2 entidades) con panel flotante; vértices elegibles.
+1. **Medir** (1 y 2 entidades) con panel flotante; vértices elegibles. *Hecha el 2026-10-07:
+   `cad_model::measure` (cara: tipo, área, radio; arista: largo, radio; vértice: coordenadas;
+   dos cosas: distancia mínima con sus puntos y ΔX/ΔY/ΔZ, entre centros, ángulo de 0 a 90°
+   entre caras planas y aristas rectas). Puente: `cad_sub_shape`, `cad_make_vertex`,
+   `cad_min_distance`, `cad_count_vertices`/`cad_vertex_point`. Los vértices del visor salen de
+   los extremos de las aristas (a 8 px, ocultos detrás de caras no cuentan); la distancia se
+   dibuja punteada.*
 2. **Masa con material** y centro de masa visible.
 3. **Vistas estándar, normal a, ajustar a lo elegido**, cubo de vistas.
 4. **Menú contextual y atajos.**

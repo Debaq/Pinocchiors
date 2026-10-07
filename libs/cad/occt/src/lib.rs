@@ -602,6 +602,45 @@ impl Shape {
         (d >= 0.0).then_some(d)
     }
 
+    /// La cara `index` como forma propia (para medir).
+    pub fn face_shape(&self, index: usize) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 0, index as i32) })
+    }
+
+    /// La arista `index` como forma propia.
+    pub fn edge_shape(&self, index: usize) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 1, index as i32) })
+    }
+
+    pub fn vertex_count(&self) -> usize {
+        unsafe { ffi::cad_count_vertices(self.ptr()) }.max(0) as usize
+    }
+
+    /// Coordenadas de los vértices (en el orden de sus índices).
+    pub fn vertices(&self) -> Result<Vec<P3>> {
+        (0..self.vertex_count())
+            .map(|i| {
+                let mut p = [0.0; 3];
+                if unsafe { ffi::cad_vertex_point(self.ptr(), i as i32, p.as_mut_ptr()) } == 0 {
+                    return Err(last_error());
+                }
+                Ok(p)
+            })
+            .collect()
+    }
+
+    /// Vértice suelto en un punto.
+    pub fn vertex(p: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_vertex(p.as_ptr()) })
+    }
+
+    /// Distancia mínima a otra forma y los puntos más cercanos (en `self` y en `other`).
+    pub fn min_distance(&self, other: &Shape) -> Option<(f64, P3, P3)> {
+        let (mut a, mut b) = ([0.0; 3], [0.0; 3]);
+        let d = unsafe { ffi::cad_min_distance(self.ptr(), other.ptr(), a.as_mut_ptr(), b.as_mut_ptr()) };
+        (d >= 0.0).then_some((d, a, b))
+    }
+
     /// Las caras a cada lado de cada arista (`None` si la arista es borde libre).
     pub fn edge_face_pairs(&self) -> Result<Vec<[Option<usize>; 2]>> {
         let n = self.edge_count();

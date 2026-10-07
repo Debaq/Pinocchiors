@@ -13,6 +13,7 @@ pub mod eval;
 pub mod expr;
 pub mod feature;
 pub mod geom;
+pub mod measure;
 pub mod regions;
 pub mod sketch;
 
@@ -21,5 +22,6 @@ pub use document::{Document, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{Evaluation, FeatureState, FeatureStatus, MissingRef, SketchResult};
 pub use feature::*;
 pub use geom::{P2, P3, Plane};
+pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};
 pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use sketch::{Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SolveReport};

@@ -15,6 +15,8 @@ export type BasePlane = "xy" | "xz" | "yz";
 export type CadPick =
   | { kind: "face"; face: number; point: THREE.Vector3 }
   | { kind: "edge"; edge: number; point: THREE.Vector3 }
+  /** Vértice del sólido (extremo de aristas); `at` en mm del CAD */
+  | { kind: "vertex"; at: P3; point: THREE.Vector3 }
   | { kind: "scan"; triangle: number; point: THREE.Vector3 }
   /** Región cerrada de un sketch visible (índice en `regions`) */
   | { kind: "region"; sketch: number; region: number; point: THREE.Vector3 }
@@ -130,6 +132,10 @@ export class CadViewer {
   private grid: THREE.GridHelper;
   private highlightedFaces = new Set<number>();
   private highlightedEdges = new Set<number>();
+  /** Vértices del sólido (extremos de aristas), en coordenadas del visor */
+  private bodyVertices: THREE.Vector3[] = [];
+  /** Vértices elegidos y la línea de la distancia medida */
+  private marks = new THREE.Group();
 
   /** mm por unidad de la escena */
   mmPerUnit = 1;
@@ -171,6 +177,8 @@ export class CadViewer {
     this.scene.add(this.sketchGroup);
     this.scene.add(this.sketchesGroup);
     this.scene.add(this.planesGroup);
+    this.marks.renderOrder = 6;
+    this.scene.add(this.marks);
     this.buildPlanes();
     this.applyTheme();
     window.addEventListener(THEME_EVENT, this.onTheme);
@@ -321,6 +329,7 @@ export class CadViewer {
       this.bodyEdges = undefined;
     }
     this.bodyData = data;
+    this.bodyVertices = [];
     this.fitPlanes(data?.positions);
     if (data) {
       const g = new THREE.BufferGeometry();
@@ -340,6 +349,20 @@ export class CadViewer {
       this.body = new THREE.Mesh(g, m);
       this.body.renderOrder = 1;
       this.scene.add(this.body);
+
+      // Vértices: extremos de las aristas, sin repetir
+      const ends: THREE.Vector3[] = [];
+      let first = 0;
+      for (const end of data.edgeEnds) {
+        if (end > first) {
+          for (const i of [first, end - 1]) {
+            const v = new THREE.Vector3(data.edgePoints[i * 3], data.edgePoints[i * 3 + 1], data.edgePoints[i * 3 + 2]);
+            if (!ends.some((w) => w.distanceToSquared(v) < 1e-12)) ends.push(v);
+          }
+        }
+        first = end;
+      }
+      this.bodyVertices = ends;
 
       // Aristas: cada polilínea en segmentos, con el índice de arista por segmento
       const segs: number[] = [];
@@ -404,6 +427,41 @@ export class CadViewer {
       this.tool = new THREE.Group();
       this.tool.add(mesh, lines);
       this.scene.add(this.tool);
+    }
+    this.requestRender();
+  }
+
+  /**
+   * Vértices elegidos (puntos) y, si se pasa, el segmento de la distancia
+   * mínima medida; todo en mm del CAD.
+   */
+  setMarks(vertices: P3[], segment?: [P3, P3]) {
+    for (const o of [...this.marks.children]) {
+      this.marks.remove(o);
+      const m = o as THREE.Points | THREE.Line;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    if (vertices.length) {
+      const g = new THREE.BufferGeometry().setFromPoints(vertices.map((p) => this.toView(p)));
+      const pts = new THREE.Points(g, new THREE.PointsMaterial({ color: themeHex("orange"), size: 9, sizeAttenuation: false, depthTest: false }));
+      pts.renderOrder = 6;
+      this.marks.add(pts);
+    }
+    if (segment) {
+      const [a, b] = segment.map((p) => this.toView(p));
+      const g = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const line = new THREE.Line(g, new THREE.LineDashedMaterial({ color: themeHex("cyan"), dashSize: 1, gapSize: 0.6, depthTest: false }));
+      line.computeLineDistances();
+      // Rayas proporcionales al largo, para que se vean a cualquier escala
+      const len = a.distanceTo(b) || 1;
+      const mat = line.material as THREE.LineDashedMaterial;
+      mat.dashSize = len / 20;
+      mat.gapSize = len / 30;
+      line.renderOrder = 6;
+      const ends = new THREE.Points(g.clone(), new THREE.PointsMaterial({ color: themeHex("cyan"), size: 7, sizeAttenuation: false, depthTest: false }));
+      ends.renderOrder = 6;
+      this.marks.add(line, ends);
     }
     this.requestRender();
   }
@@ -790,10 +848,25 @@ export class CadViewer {
   pick(
     clientX: number,
     clientY: number,
-    want: { faces?: boolean; edges?: boolean; scan?: boolean; regions?: boolean; planes?: boolean },
+    want: { faces?: boolean; edges?: boolean; vertices?: boolean; scan?: boolean; regions?: boolean; planes?: boolean },
   ): CadPick | null {
     this.setRay(clientX, clientY);
     const dist = this.camera.position.distanceTo(this.controls.target);
+    if (want.vertices && this.bodyVertices.length) {
+      const rect = this.renderer.domElement.getBoundingClientRect();
+      const front = this.body ? this.raycaster.intersectObject(this.body)[0]?.distance : undefined;
+      let best: { d: number; v: THREE.Vector3 } | undefined;
+      for (const v of this.bodyVertices) {
+        const s = v.clone().project(this.camera);
+        if (s.z > 1) continue;
+        const px = Math.hypot(rect.left + ((s.x + 1) / 2) * rect.width - clientX, rect.top + ((1 - s.y) / 2) * rect.height - clientY);
+        if (px > 8 || (best && px >= best.d)) continue;
+        // Tapado: hay una cara bastante más cerca que el vértice en ese rayo
+        if (front !== undefined && this.camera.position.distanceTo(v) > front + dist * 0.01) continue;
+        best = { d: px, v };
+      }
+      if (best) return { kind: "vertex", at: this.fromView(best.v), point: best.v };
+    }
     if (want.edges && this.bodyEdges) {
       this.raycaster.params.Line = { threshold: dist * 0.006 };
       const hit = this.raycaster.intersectObject(this.bodyEdges)[0];

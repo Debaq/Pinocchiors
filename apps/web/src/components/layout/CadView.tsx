@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -246,6 +246,28 @@ export const CadView: Component<CadViewProps> = (props) => {
     const edges = [...h.edges, ...picks.flatMap((p) => (p.kind === "edge" ? [p.edge] : []))];
     viewer?.setHighlight(faces, edges);
   });
+  // Medidas de lo elegido en el sólido (una o dos cosas), como en Onshape
+  const [measurement, setMeasurement] = createSignal<Measurement>();
+  let measureSeq = 0;
+  createEffect(() => {
+    const picks = ui.picks();
+    const version = store.result()?.version;
+    const items: MeasureItem[] = picks.flatMap((p): MeasureItem[] =>
+      p.kind === "face" ? [{ kind: "face", index: p.face }] : p.kind === "edge" ? [{ kind: "edge", index: p.edge }] : p.kind === "vertex" ? [{ kind: "vertex", point: p.at }] : [],
+    );
+    const n = ++measureSeq;
+    if (ui.session() || version === undefined || items.length === 0 || items.length > 2 || items.length !== picks.length) return setMeasurement(undefined);
+    store
+      .measure(items)
+      .then((m) => n === measureSeq && setMeasurement(m))
+      .catch(() => n === measureSeq && setMeasurement(undefined));
+  });
+  createEffect(() => {
+    const vertices = ui.picks().flatMap((p) => (p.kind === "vertex" ? [p.at] : []));
+    const d = measurement()?.distance;
+    viewer?.setMarks(vertices, d && d.value > 1e-9 ? [d.a, d.b] : undefined);
+  });
+
   // Sketches visibles (todos menos los ocultos y el que se edita), con sus regiones elegibles
   createEffect(() => {
     const editing = ui.session()?.feature;
@@ -816,7 +838,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       } else {
         // Sin herramienta: elegir caras, aristas, regiones de sketches y planos
         // (Mayús o Ctrl suma a la selección), como en Onshape
-        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, regions: true, planes: true });
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, vertices: true, regions: true, planes: true });
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (!hit || hit.kind === "scan") {
           if (!additive) ui.clearPicks();
@@ -824,14 +846,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         }
         if (hit.kind === "face") ui.pickToggle({ kind: "face", face: hit.face }, additive);
         else if (hit.kind === "edge") ui.pickToggle({ kind: "edge", edge: hit.edge }, additive);
+        else if (hit.kind === "vertex") ui.pickToggle({ kind: "vertex", at: hit.at }, additive);
         else if (hit.kind === "region") ui.pickToggle({ kind: "region", sketch: hit.sketch, region: hit.region }, additive);
         else ui.pickToggle({ kind: "plane", plane: hit.plane }, additive);
-        if (hit.kind === "face" && ui.picks().length === 1) {
-          const info = await invoke<{ surface: string; area: number; radius: number | null }>("cad_face_info", { face: hit.face });
-          const names: Record<string, string> = { plane: "plana", cylinder: "cilíndrica", cone: "cónica", sphere: "esférica", torus: "tórica" };
-          const radius = info.radius != null ? ` · radio ${info.radius.toFixed(3)} mm` : "";
-          ui.setMessage(`Cara ${names[info.surface] ?? info.surface} · área ${info.area.toFixed(2)} mm²${radius}`);
-        } else ui.setMessage(undefined);
+        ui.setMessage(undefined);
       }
     } catch (err) {
       ui.setMessage(String(err));
@@ -1337,6 +1355,9 @@ export const CadView: Component<CadViewProps> = (props) => {
         )}
       </Show>
 
+      {/* Medidas de lo elegido */}
+      <Show when={measurement()}>{(m) => <MeasurePanel m={m()} />}</Show>
+
       {/* Mensajes y errores */}
       <div class="absolute bottom-2 left-2 right-2 flex flex-col gap-1 items-start pointer-events-none">
         <Show when={store.busy()}>
@@ -1355,6 +1376,63 @@ export const CadView: Component<CadViewProps> = (props) => {
           </span>
         </Show>
       </div>
+    </div>
+  );
+};
+
+// ─── Medidas ──────────────────────────────────────────────────────────────
+
+const KIND_NAMES: Record<string, string> = {
+  plane: "Cara plana",
+  cylinder: "Cara cilíndrica",
+  cone: "Cara cónica",
+  sphere: "Cara esférica",
+  torus: "Cara tórica",
+  line: "Arista recta",
+  circle: "Arista circular",
+  ellipse: "Arista elíptica",
+  vertex: "Vértice",
+};
+const mm = (v: number) => `${v.toFixed(3).replace(/\.?0+$/, "")} mm`;
+
+/** Panel de medidas abajo a la derecha del visor (Z arriba, como lo ve el usuario) */
+const MeasurePanel: Component<{ m: Measurement }> = (props) => {
+  const rows = (): [string, string][] => {
+    const m = props.m;
+    const out: [string, string][] = [];
+    if (m.items.length === 1) {
+      const it = m.items[0];
+      out.push(["", KIND_NAMES[it.kind] ?? (it.kind.startsWith("b") ? "Superficie libre" : it.kind)]);
+      if (it.area != null) out.push(["Área", `${it.area.toFixed(3).replace(/\.?0+$/, "")} mm²`]);
+      if (it.length != null) out.push(["Largo", mm(it.length)]);
+      if (it.radius != null) out.push(["Radio", mm(it.radius)], ["Diámetro", mm(2 * it.radius)]);
+      if (it.kind === "vertex") out.push(["X", mm(it.center[0])], ["Y", mm(it.center[1])], ["Z", mm(it.center[2])]);
+      return out;
+    }
+    if (m.distance) {
+      out.push(["Distancia mínima", mm(m.distance.value)]);
+      const [dx, dy, dz] = m.distance.delta.map(Math.abs);
+      out.push(["ΔX", mm(dx)], ["ΔY", mm(dy)], ["ΔZ", mm(dz)]);
+    }
+    if (m.center_distance != null) out.push(["Entre centros", mm(m.center_distance)]);
+    if (m.angle != null) out.push(["Ángulo", `${m.angle.toFixed(2).replace(/\.?0+$/, "")}°`]);
+    return out;
+  };
+  return (
+    <div
+      aria-label="Medidas"
+      class="absolute bottom-2 right-2 min-w-44 rounded-md border border-border bg-bg-lighter/95 px-2.5 py-1.5 text-xs shadow"
+    >
+      <For each={rows()}>
+        {([k, v]) => (
+          <div class="flex justify-between gap-4">
+            <span class="text-text-muted">{k}</span>
+            <span class={clsx(k ? "font-mono text-text" : "text-text")} data-measure={k}>
+              {v}
+            </span>
+          </div>
+        )}
+      </For>
     </div>
   );
 };

@@ -158,6 +158,7 @@ pub fn run() {
             cad::cad_edge_ref,
             cad::cad_face_info,
             cad::cad_resolve_refs,
+            cad::cad_measure,
             cad::cad_export,
             cad::cad_import_step,
             cad::cad_to_model,

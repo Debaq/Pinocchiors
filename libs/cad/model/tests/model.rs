@@ -885,3 +885,43 @@ fn box_centered_on_all_axes() {
         assert_relative_eq!(*a, b, epsilon = 1e-6);
     }
 }
+
+#[test]
+fn measure_faces_edges_and_vertices() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    let ev = doc.evaluate();
+    let body = ev.body.as_ref().unwrap();
+    let face = |n: [f64; 3]| body.closest_face([5.0 + 5.0 * n[0], 10.0 + 10.0 * n[1], 15.0 + 15.0 * n[2]], Some(n), 0.99).unwrap().0;
+    let (top, bottom, side) = (face([0.0, 0.0, 1.0]), face([0.0, 0.0, -1.0]), face([1.0, 0.0, 0.0]));
+    // Una cara: área y tipo
+    let m = measure(body, &[MeasureItem::Face { index: top }]).unwrap();
+    assert_eq!(m.items[0].kind, "plane");
+    assert_relative_eq!(m.items[0].area.unwrap(), 200.0, epsilon = 1e-6);
+    // Caras opuestas: 30 mm, paralelas; adyacentes: 90°
+    let m = measure(body, &[MeasureItem::Face { index: top }, MeasureItem::Face { index: bottom }]).unwrap();
+    assert_relative_eq!(m.distance.as_ref().unwrap().value, 30.0, epsilon = 1e-9);
+    assert_relative_eq!(m.distance.as_ref().unwrap().delta[2].abs(), 30.0, epsilon = 1e-9);
+    assert_relative_eq!(m.angle.unwrap(), 0.0, epsilon = 1e-9);
+    let m = measure(body, &[MeasureItem::Face { index: top }, MeasureItem::Face { index: side }]).unwrap();
+    assert_relative_eq!(m.angle.unwrap(), 90.0, epsilon = 1e-9);
+    assert_relative_eq!(m.distance.unwrap().value, 0.0, epsilon = 1e-9);
+    // Arista vertical de 30 y vértice a la cara de abajo
+    let (edge, _) = body.closest_edge([10.0, 20.0, 15.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
+    let m = measure(body, &[MeasureItem::Edge { index: edge }]).unwrap();
+    assert_relative_eq!(m.items[0].length.unwrap(), 30.0, epsilon = 1e-9);
+    let m = measure(body, &[MeasureItem::Vertex { point: [10.0, 20.0, 30.0] }, MeasureItem::Face { index: bottom }]).unwrap();
+    assert_relative_eq!(m.distance.unwrap().value, 30.0, epsilon = 1e-9);
+    // Arista recta con cara: 90° si la atraviesa
+    let m = measure(body, &[MeasureItem::Edge { index: edge }, MeasureItem::Face { index: bottom }]).unwrap();
+    assert_relative_eq!(m.angle.unwrap(), 90.0, epsilon = 1e-9);
+}

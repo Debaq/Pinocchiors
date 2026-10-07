@@ -18,6 +18,7 @@ import {
   type EdgeRef,
   type FaceRef,
   type P2,
+  type P3,
   type Plane,
   type PlaneSpec,
   type Region,
@@ -31,6 +32,8 @@ import {
 export type Pick3d =
   | { kind: "face"; face: number }
   | { kind: "edge"; edge: number }
+  /** Vértice del sólido, por posición (mm) */
+  | { kind: "vertex"; at: P3 }
   | { kind: "region"; sketch: number; region: number }
   | { kind: "plane"; plane: BasePlane };
 

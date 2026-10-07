@@ -158,6 +158,7 @@ function pickSummary(picks: { kind: string }[]): string {
     [count("region"), "región", "regiones"],
     [count("face"), "cara", "caras"],
     [count("edge"), "arista", "aristas"],
+    [count("vertex"), "vértice", "vértices"],
     [count("plane"), "plano", "planos"],
   ];
   return parts.filter(([n]) => n > 0).map(([n, one, many]) => `${n} ${n === 1 ? one : many}`).join(", ");

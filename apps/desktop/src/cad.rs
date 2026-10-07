@@ -415,6 +415,19 @@ fn face_info_impl(state: &AppState, face: usize) -> Result<FaceDescription, Stri
     }
 }
 
+/// Medidas de una o dos cosas elegidas en el sólido que se ve.
+#[tauri::command]
+pub async fn cad_measure(app: AppHandle, items: Vec<cad_model::MeasureItem>) -> Result<cad_model::Measurement, String> {
+    in_background(app, move |state| measure_impl(state, &items)).await
+}
+
+fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<cad_model::Measurement, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
+    cad_model::measure(body, items)
+}
+
 fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
@@ -778,6 +791,7 @@ pub mod bridge {
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_measure" => ok(measure_impl(state, &arg::<Vec<cad_model::MeasureItem>>(args, "items")?)?),
             "cad_resolve_refs" => {
                 let (faces, edges): (Vec<FaceRef>, Vec<EdgeRef>) = (arg(args, "faces")?, arg(args, "edges")?);
                 ok(resolve_refs_impl(state, &faces, &edges)?)
