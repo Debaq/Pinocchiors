@@ -49,4 +49,6 @@ export interface BodyPlan {
   radial_pose?: "spread" | "hanging" | "flat" | "up";
   /** Radial: segmentos del manto o columna (0: sin cabeza) */
   mantle?: number;
+  /** Cuadrúpedo: patas traseras de salto plegadas en Z (rana, conejo) */
+  jumper?: boolean;
 }

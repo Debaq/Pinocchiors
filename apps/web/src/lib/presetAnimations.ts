@@ -3,7 +3,8 @@
  * correr, trotar o galopar, saltar, saludar, aplaudir, golpear, patear,
  * bailar, asentir, negar, comer, sacudirse, mover la cola, aletear, planear,
  * nadar, reptar, atacar, amenazar, arrastrarse con tentáculos, paso de
- * portante, echarse, flexiones, morder, caminar de lado y picar.
+ * portante, echarse, flexiones, morder, caminar de lado, picar, braquiar,
+ * colgarse de la cola y salto de rana.
  *
  * No depende de la plantilla elegida: parte el esqueleto en cadenas (tramos
  * sin ramificar) y reconoce patas, brazos, alas, cola, cabeza, trompa,
@@ -109,7 +110,10 @@ export type PresetAnimationId =
   | "pushUps"
   | "bite"
   | "sideWalk"
-  | "sting";
+  | "sting"
+  | "brachiate"
+  | "tailHang"
+  | "hop";
 
 export interface PresetAnimation {
   id: PresetAnimationId;
@@ -357,6 +361,9 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   pace: { name: "Paso de portante", description: "Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)" },
   bite: { name: "Morder", description: "Los colmillos o mandíbulas se abren y se cierran; la cabeza acompaña" },
   sideWalk: { name: "Caminar de lado", description: "Paso de cangrejo: las patas empujan y tiran hacia el costado" },
+  brachiate: { name: "Braquiar", description: "Avanza colgado de los brazos, una mano y después la otra, con el cuerpo como péndulo" },
+  tailHang: { name: "Colgarse de la cola", description: "Cabeza abajo, colgado de la cola prensil; se mece y estira los brazos" },
+  hop: { name: "Salto de rana", description: "Se agacha, estira las patas traseras de golpe, vuela y cae sobre las delanteras" },
   sting: { name: "Picar", description: "El abdomen se curva por debajo del cuerpo y pica dos veces" },
   pushUps: { name: "Flexiones", description: "Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza" },
   lieDown: {
@@ -366,6 +373,29 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
 };
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
+
+/** Largo de una cadena (suma de sus tramos) */
+const chainLength = (body: Body, c: Chain) =>
+  c.joints.slice(1).reduce((sum, j, i) => sum + length(sub(pos(body, j), pos(body, c.joints[i]))), 0);
+
+/** Dos brazos al menos un 20 % más largos que las piernas: gibón, mono araña */
+function longArms(body: Body): boolean {
+  const arms = limbs(body, "arm");
+  const legs = limbs(body, "leg").filter((l) => !l.sprawl);
+  if (arms.length !== 2 || legs.length !== 2) return false;
+  const arm = Math.min(...arms.map((a) => chainLength(body, a)));
+  const leg = Math.max(...legs.map((l) => chainLength(body, l)));
+  return arm > 1.2 * leg;
+}
+
+/** Patas traseras plegadas en Z: la rodilla adelante de la cadera y el tobillo detrás de la rodilla */
+function foldedHindLegs(body: Body): Chain[] {
+  const legs = chainsOf(body, "leg");
+  if (legs.length < 4) return [];
+  const middle = legs.reduce((sum, l) => sum + l.along, 0) / legs.length;
+  const fwd = (a: number, b: number) => dot(sub(pos(body, b), pos(body, a)), body.forward);
+  return legs.filter((l) => l.along < middle && l.joints.length >= 4 && fwd(l.joints[0], l.joints[1]) > 0 && fwd(l.joints[1], l.joints[2]) < 0);
+}
 
 /** Colas de verdad (no el abdomen de un artrópodo) */
 const wagging = (body: Body) =>
@@ -435,6 +465,9 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (count(body, "mouth") >= 2) ids.push("bite");
   if (count(body, "pincer") > 0 && legs.length >= 6 && legs.every((l) => l.sprawl)) ids.push("sideWalk");
   if (count(body, "wing") >= 2 && stingers(body).length > 0) ids.push("sting");
+  if (longArms(body)) ids.push("brachiate");
+  if (arms >= 2 && wagging(body).some((c) => c.rotating.length >= 6)) ids.push("tailHang");
+  if (foldedHindLegs(body).length >= 2) ids.push("hop");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }
 
@@ -1372,6 +1405,143 @@ function pushUps(body: Body, pose: PoseBuilder, t: number): void {
   appendages(body, pose, t, 1, 0.4);
 }
 
+/** `v` girado `angle` alrededor del eje unitario `axis` */
+function rotated(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  return rotate(axisAngle(axis, angle), v);
+}
+
+/** Endereza la cadena desde la articulación `from`: cada tramo sigue al anterior (en la fracción `amount`) */
+function straighten(body: Body, pose: PoseBuilder, chain: Chain, from: number, amount = 1): void {
+  for (let i = Math.max(from, 1); i < chain.rotating.length; i++) {
+    aim(pose, chain.rotating[i], segment(body, chain, i), segment(body, chain, i - 1), amount);
+  }
+}
+
+/** Sube el cuerpo lo justo para que nada quede bajo el suelo (cuerpos colgados) */
+function clearGround(body: Body, pose: PoseBuilder): void {
+  const lowest = Math.min(...jointPositions(body.bones, pose.rotations, pose.offset).map((p) => p[1]));
+  const floor = body.ground + 0.02 * body.height;
+  if (lowest < floor) pose.move([0, floor - lowest, 0]);
+}
+
+/**
+ * Braquiar en el lugar, como el paso de caminar: la mano que agarra corre
+ * de adelante hacia atrás mientras el cuerpo pasa por debajo como péndulo,
+ * y la otra da la vuelta por abajo y llega adelante justo cuando se
+ * cambian. Los dos brazos van rectos, así el ciclo no salta
+ */
+function brachiate(body: Body, pose: PoseBuilder, t: number): void {
+  const arms = limbs(body, "arm").sort((a, b) => a.side - b.side);
+  const half = t < 0.5 ? 0 : 1;
+  const u = (t - 0.5 * half) / 0.5;
+  const grip = arms[half];
+  const free = arms[1 - half];
+  const right = nodAxis(body);
+  const reachOf = (arm: Chain) => chainLength(body, arm);
+  const length_ = reachOf(grip);
+  // La mano que agarra: de adelante (+d) a atrás (−d)
+  const d = 0.6 * length_;
+  const x = d * (1 - 2 * u);
+  const gripDir = unit(add(scale(body.forward, x), scale(body.up, Math.sqrt(length_ * length_ - x * x))), body.up);
+  // La libre: de arriba-atrás, por abajo, a arriba-adelante (una vuelta)
+  const beta = Math.asin(0.6);
+  const gamma = -beta - (2 * Math.PI - 2 * beta) * smoothstep(u);
+  const freeDir = rotated(body.up, right, gamma);
+  // El cuerpo se mece: los pies adelante a mitad del vaivén
+  const tilt = -deg(25) * Math.sin(Math.PI * u);
+  pose.turn(body.root, right, tilt);
+  const inBody = (v: Vec3) => rotated(v, right, -tilt);
+  for (const [arm, dir] of [
+    [grip, gripDir],
+    [free, freeDir],
+  ] as const) {
+    straighten(body, pose, arm, 1);
+    aim(pose, arm.rotating[0], segment(body, arm, 0), inBody(dir));
+  }
+  // Piernas colgando, un poco recogidas
+  for (const leg of limbs(body, "leg")) {
+    pose.turn(leg.rotating[0], right, -0.4 * tilt - deg(15) * wave(t, 2));
+    const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+    if (k < leg.rotating.length) pose.turn(leg.rotating[k], right, -deg(30));
+  }
+  // La cabeza mira adelante; la cola se alza y se balancea
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, right, -tilt / Math.max(head.length, 1)));
+  for (const tail of wagging(body)) {
+    tail.rotating.forEach((j, i) => pose.turn(j, right, (deg(40) + deg(15) * wave(t, 2, 0.05 * i)) / tail.rotating.length));
+  }
+  // La mano que agarra queda en su lugar sobre la rama
+  const target = add(pos(body, grip.joints[0]), scale(gripDir, length_));
+  const at = jointPositions(body.bones, pose.rotations, pose.offset)[tipOf(grip)];
+  pose.move(sub(target, at));
+  clearGround(body, pose);
+}
+
+/**
+ * Colgado de la cola: cabeza abajo, la cola sube recta hasta la rama y se
+ * enrosca en la punta; los brazos cuelgan hacia el suelo y el cuerpo se mece
+ */
+function tailHang(body: Body, pose: PoseBuilder, t: number): void {
+  const right = nodAxis(body);
+  const sway = deg(10) * wave(t);
+  const tilt = Math.PI + sway;
+  pose.turn(body.root, right, tilt);
+  pose.turn(body.root, body.up, deg(8) * wave(t, 1, 0.25));
+  const inBody = (v: Vec3) => rotated(v, right, -tilt);
+  const tail = wagging(body).sort((a, b) => b.rotating.length - a.rotating.length)[0];
+  const n = tail.rotating.length;
+  aim(pose, tail.rotating[0], segment(body, tail, 0), inBody(body.up));
+  straighten(body, pose, tail, 1);
+  // La punta se enrosca en la rama
+  const curl = Math.max(1, Math.round(0.3 * n));
+  for (let i = n - curl; i < n; i++) pose.turn(tail.rotating[i], right, deg(70));
+  for (const arm of limbs(body, "arm")) {
+    aim(pose, arm.rotating[0], segment(body, arm, 0), inBody(scale(body.up, -1)));
+    straighten(body, pose, arm, 1);
+    pose.turn(arm.rotating[0], body.forward, arm.side * deg(12) * wave(t, 2));
+  }
+  for (const leg of limbs(body, "leg")) {
+    pose.turn(leg.rotating[0], right, deg(35));
+    const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+    if (k < leg.rotating.length) pose.turn(leg.rotating[k], right, -deg(60));
+  }
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, right, -deg(20) / Math.max(head.length, 1)));
+  // La punta de la cola queda fija arriba de la cadera
+  const target = add(pos(body, body.root), scale(body.up, 0.95 * chainLength(body, tail)));
+  const at = jointPositions(body.bones, pose.rotations, pose.offset)[tipOf(tail)];
+  pose.move(sub(target, at));
+  clearGround(body, pose);
+}
+
+/**
+ * Salto de rana: se agacha, estira las patas traseras de golpe hacia atrás,
+ * vuela con las delanteras adelante y cae sobre ellas
+ */
+function hop(body: Body, pose: PoseBuilder, t: number): void {
+  const hind = foldedHindLegs(body);
+  const front = chainsOf(body, "leg").filter((l) => !hind.includes(l));
+  const right = nodAxis(body);
+  const push = curve(t, [[0, 0], [0.15, 0], [0.3, 1], [0.6, 0.6], [0.75, 0], [1, 0]]);
+  const air = t > 0.28 && t < 0.72 ? Math.sin((Math.PI * (t - 0.28)) / 0.44) : 0;
+  const land = pulse(t, 0.68, 0.95, 0.3);
+  // Cuerpo: se levanta adelante al empujar y baja la nariz al caer
+  pose.turn(body.root, right, -deg(12) * push + deg(12) * land);
+  for (const leg of hind) {
+    const back = unit(add(add(scale(body.forward, -0.8), scale(body.up, -0.5)), scale(body.right, 0.35 * leg.side)), [0, -1, 0]);
+    aim(pose, leg.rotating[0], segment(body, leg, 0), back, push);
+    straighten(body, pose, leg, 1, push);
+  }
+  for (const leg of front) {
+    const ahead = unit(add(scale(body.forward, 0.7), scale(body.up, -0.7)), [0, -1, 0]);
+    aim(pose, leg.rotating[0], segment(body, leg, 0), ahead, 0.6 * air);
+  }
+  for (const j of headJoints(body)) pose.turn(j, right, deg(10) * push);
+  appendages(body, pose, t, 1, 0.4);
+  plant(body, pose, chainsOf(body, "leg").map(tipOf));
+  pose.move(scale(body.up, 0.45 * body.height * air));
+}
+
 /** Morder: colmillos o mandíbulas se cierran hacia el medio, tres veces */
 function bite(body: Body, pose: PoseBuilder, t: number): void {
   const close = 0.5 - 0.5 * Math.cos(TAU * 3 * t);
@@ -1544,6 +1714,12 @@ export function generateAnimation(
       return bake(name, body, { frames: 24, step: 1, grounded: true, fps }, (p, t) => sideWalk(body, p, t));
     case "sting":
       return bake(name, body, { frames: 36, step: 1, grounded: legs.length > 0, fps }, (p, t) => sting(body, p, t));
+    case "brachiate":
+      return bake(name, body, { frames: 48, step: 1, fps }, (p, t) => brachiate(body, p, t));
+    case "tailHang":
+      return bake(name, body, { frames: 72, step: 2, fps }, (p, t) => tailHang(body, p, t));
+    case "hop":
+      return bake(name, body, { frames: 36, step: 1, fps }, (p, t) => hop(body, p, t));
     case "pushUps":
       return bake(name, body, { frames: 48, step: 1, grounded: true, fps }, (p, t) => pushUps(body, p, t));
     case "trot":

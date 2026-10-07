@@ -4,6 +4,7 @@ import { Panel, Slider } from "../ui";
 import {
   ARTHROPOD_ICONS,
   FEET_ICONS,
+  JumperIcon,
   LIMB_BITS,
   LIMB_ICONS,
   NECK_ICONS,
@@ -298,6 +299,14 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
                 disabled={props.disabled}
                 // Abiertas solo hay simple o con planta (dedos y casco se arman como planta)
                 onClick={() => update({ sprawl: true, feet: (plan()?.feet ?? "simple") === "simple" ? "simple" : "plantigrade" })}
+              />
+              <Tile
+                icon={JumperIcon}
+                label="Patas de salto"
+                hint="Traseras plegadas en Z con el pie largo: rana y sapo (con patas al costado), conejo y liebre"
+                active={!!plan()?.jumper}
+                disabled={props.disabled}
+                onClick={() => update({ jumper: !plan()?.jumper })}
               />
             </div>
           </Section>

@@ -221,6 +221,19 @@ export const POSTURE_ICONS: Record<string, Component> = {
   ),
 };
 
+/** Pata trasera de salto, de costado: plegada en Z con el pie largo */
+export const JumperIcon: Component = () => (
+  <Frame>
+    <Ground />
+    <Faint>
+      <Chain points={[[14, 24], [30, 20], [40, 14]]} />
+    </Faint>
+    <Accent>
+      <Chain points={[[14, 24], [24, 33], [8, 38], [24, 43]]} />
+    </Accent>
+  </Frame>
+);
+
 // ─── Cuello ─────────────────────────────────────────────────────────────────
 
 const BODY_NO_NECK = () => (

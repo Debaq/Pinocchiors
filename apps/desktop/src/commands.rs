@@ -1600,6 +1600,8 @@ pub struct BodyPlanDto {
     pub radial_pose: String,
     #[serde(default = "one")]
     pub mantle: usize,
+    #[serde(default)]
+    pub jumper: bool,
 }
 
 fn default_radial_pose() -> String {
@@ -1694,6 +1696,7 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             segmented: p.segmented,
             radial_pose: RADIAL_POSES.iter().find(|(_, r)| *r == p.radial_pose).map_or("spread", |(id, _)| id).to_string(),
             mantle: p.mantle,
+            jumper: p.jumper,
         }
     }
 }
@@ -1746,6 +1749,7 @@ impl BodyPlanDto {
             segmented: self.segmented,
             radial_pose: RADIAL_POSES.iter().find(|(id, _)| *id == self.radial_pose).map_or_else(Default::default, |(_, r)| *r),
             mantle: clamp(self.mantle, 6),
+            jumper: self.jumper,
         })
     }
 }

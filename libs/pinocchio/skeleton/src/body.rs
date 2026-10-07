@@ -158,6 +158,9 @@ pub struct BodyPlan {
     /// Radial: segmentos del manto o de la columna (0: sin cabeza, como la
     /// estrella de mar).
     pub mantle: usize,
+    /// Cuadrúpedo: patas traseras de salto, plegadas en Z con el pie largo
+    /// (rana y sapo con las patas abiertas; conejo y liebre bajo el cuerpo).
+    pub jumper: bool,
 }
 
 /// Bit de cada extremidad en [`BodyPlan::missing`].
@@ -234,6 +237,7 @@ impl BodyPlan {
             segmented: false,
             radial_pose: RadialPose::Spread,
             mantle: 1,
+            jumper: false,
         }
     }
 
@@ -253,6 +257,8 @@ impl BodyPlan {
             ("lizard", "Lagarto / iguana", "Patas abiertas al costado, cuerpo bajo y cola larga (salamandra, geco)"),
             ("crocodile", "Cocodrilo / caimán", "Patas abiertas, mandíbula y cola larga y gruesa"),
             ("turtle", "Tortuga", "Patas abiertas y cortas, cuello que se estira y cola corta"),
+            ("frog", "Rana / sapo", "Patas traseras de salto plegadas, cuerpo bajo y sin cola"),
+            ("rabbit", "Conejo / liebre", "Patas traseras de salto con el pie largo y orejas largas"),
             ("spider_monkey", "Mono araña / gibón", "Bípedo de brazos largos con cola prensil"),
             ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
             ("octopus", "Pulpo", "Cuerpo radial con 8 brazos y manto"),
@@ -380,6 +386,21 @@ impl BodyPlan {
                 p.neck = 3;
                 p.tail = 1;
                 p.leg_length = 0.8;
+            }),
+            "frog" => with(Quadruped, |p| {
+                p.sprawl = true;
+                p.jumper = true;
+                p.feet = Feet::Plantigrade;
+                p.neck_shape = NeckShape::Level;
+                p.tail = 0;
+                p.jaw = true;
+            }),
+            "rabbit" => with(Quadruped, |p| {
+                p.jumper = true;
+                p.feet = Feet::Digitigrade;
+                p.ears = 2;
+                p.tail = 1;
+                p.leg_length = 0.9;
             }),
             "spider_monkey" => with(Biped, |p| {
                 p.arm_length = 1.6;
@@ -736,8 +757,10 @@ impl BodyPlan {
         let drop = if self.sprawl { 0.3 } else { 0.0 };
         let up = |p: Vector3| p - v(0.0, drop, 0.0);
         let hip = b.root("hip", up(v(0.0, 0.5, -0.3)));
-        let spine = b.bone("spine", up(v(0.0, 0.55, 0.0)), hip);
-        let chest = b.bone("chest", up(v(0.0, 0.55, 0.3)), spine);
+        // Con patas de salto el pecho va más alto que la cadera (sentado)
+        let lift = if self.jumper { 0.07 } else { 0.0 };
+        let spine = b.bone("spine", up(v(0.0, 0.55 + 0.5 * lift, 0.0)), hip);
+        let chest = b.bone("chest", up(v(0.0, 0.55 + lift, 0.3)), spine);
         let n = self.neck as Real;
         let (neck_tip, head, bend) = match self.neck_shape {
             // Cuello largo: sube más
@@ -762,7 +785,8 @@ impl BodyPlan {
                 (tip, tip + v(0.0, 0.0, 0.16), v(0.0, 0.55, 0.33 + 0.035 * n))
             }
         };
-        self.neck_and_head(b, chest, up(neck_tip), up(head), up(bend));
+        let raised = |p: Vector3| up(p) + v(0.0, lift, 0.0);
+        self.neck_and_head(b, chest, raised(neck_tip), raised(head), raised(bend));
         for (s, side) in SIDES {
             let (front, back) = if s < 0.0 { ("_fl", "_bl") } else { ("_fr", "_br") };
             let x = 0.15 * s;
@@ -827,6 +851,19 @@ impl BodyPlan {
                 (f, pf, bk, pb)
             } else {
                 (front_leg.to_vec(), paw_front, back_leg.to_vec(), paw_back)
+            };
+            // Patas de salto: la trasera se pliega en Z (rodilla adelante,
+            // tobillo atrás) y el pie largo apoya hacia adelante
+            let (back_leg, paw_back) = match (self.jumper, self.sprawl) {
+                (false, _) => (back_leg, paw_back),
+                (true, true) => (
+                    vec![("hip", v(0.1 * s, 0.16, -0.26)), ("knee", v(0.3 * s, 0.12, -0.08)), ("ankle", v(0.22 * s, 0.05, -0.36))],
+                    v(0.32 * s, 0.0, -0.1),
+                ),
+                (true, false) => (
+                    vec![("hip", v(x, 0.42, -0.28)), ("knee", v(x, 0.24, -0.1)), ("hock", v(x, 0.06, -0.42))],
+                    v(x, 0.0, -0.18),
+                ),
             };
             for (joints, paw, parent, suffix, is_front) in [(&front_leg, paw_front, chest, front, true), (&back_leg, paw_back, hip, back, false)] {
                 // Sin la pata queda solo el hombro o la cadera (el muñón)
@@ -1471,5 +1508,18 @@ mod tests {
         let jelly = BodyPlan::variant("jellyfish").unwrap().build();
         let body = jelly.bones().iter().find(|b| b.name == "body").unwrap().position.y();
         assert!(jelly.bones().iter().filter(|b| b.name.starts_with("arm")).all(|b| b.position.y() < body));
+    }
+
+    #[test]
+    fn jumpers_fold_their_hind_legs() {
+        for id in ["frog", "rabbit"] {
+            let skeleton = BodyPlan::variant(id).unwrap().build();
+            let at = |name: &str| skeleton.bones().iter().find(|b| b.name == name).unwrap().position;
+            let low = if id == "frog" { "ankle_l" } else { "hock_l" };
+            // En Z: la rodilla adelante de la cadera y el tobillo detrás de la rodilla
+            assert!(at("knee_l").z() > at("hip_l").z() && at(low).z() < at("knee_l").z(), "{id}");
+            assert!(at("paw_bl").y().abs() < 1e-9 && at("paw_bl").z() > at(low).z(), "{id}: pie largo hacia adelante");
+            assert!(at("chest").y() > at("hip").y(), "{id}: sentado");
+        }
     }
 }
