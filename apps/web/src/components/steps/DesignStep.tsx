@@ -676,27 +676,119 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
 /** Mensaje de error o advertencia de una operación (nada si está bien) */
 const problem = (st: FeatureState | undefined) => (st?.state === "error" || st?.state === "warning" ? st.message : undefined);
 
+/**
+ * Arrastre vertical dentro del árbol: devuelve el hueco bajo el puntero (0 =
+ * antes de la primera fila, n = después de la última). Un movimiento de menos
+ * de 4 px es un clic.
+ */
+type TreeDrag = { kind: "feature"; id: number; from: number; to: number } | { kind: "rollback"; to: number };
+
 const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const store = props.store;
   const doc = () => store.doc();
+  const count = () => doc()?.features.length ?? 0;
   const rollback = () => doc()?.rollback ?? null;
+  /** Hueco donde está la barra de retroceso (al final si no hay) */
+  const barAt = () => rollback() ?? count();
+  let list: HTMLDivElement | undefined;
+  const [drag, setDrag] = createSignal<TreeDrag>();
+  // Tras arrastrar una fila, el click que sigue no la abre
+  let swallowClick = false;
+  const gapAt = (y: number) => {
+    const rows = [...(list?.querySelectorAll<HTMLElement>("[data-feature-row]") ?? [])];
+    return rows.filter((r) => {
+      const b = r.getBoundingClientRect();
+      return b.top + b.height / 2 < y;
+    }).length;
+  };
+  /** Sigue el puntero hasta soltar; `start` decide qué se arrastra al pasar el umbral */
+  const track = (e: PointerEvent, start: () => TreeDrag, drop: (d: TreeDrag) => void) => {
+    if (e.button !== 0) return;
+    const y0 = e.clientY;
+    let moving = false;
+    const move = (ev: PointerEvent) => {
+      if (!moving && Math.abs(ev.clientY - y0) < 4) return;
+      moving = true;
+      setDrag({ ...start(), to: gapAt(ev.clientY) });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const d = drag();
+      setDrag(undefined);
+      if (moving && d) {
+        swallowClick = true;
+        setTimeout(() => (swallowClick = false), 0);
+        drop(d);
+      }
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const dropFeature = (d: TreeDrag) => {
+    if (d.kind !== "feature") return;
+    if (!store.moveFeatureTo(d.id, d.to)) props.ui.setMessage("No se puede: quedaría antes de lo que necesita o después de lo que la usa");
+  };
+  const dropBar = (d: TreeDrag) => void store.setRollback(d.to >= count() ? null : d.to);
+  /** Dónde se dibuja la línea del hueco mientras se arrastra */
+  const dropGap = () => {
+    const d = drag();
+    if (!d) return null;
+    if (d.kind === "feature" && (d.to === d.from || d.to === d.from + 1)) return null;
+    return d.to;
+  };
+  // La barra: en su hueco, o donde se la está llevando
+  const barGap = () => {
+    const d = drag();
+    return d?.kind === "rollback" ? d.to : barAt();
+  };
+  const Gap = (p: { index: number }) => (
+    <>
+      <Show when={dropGap() === p.index && drag()?.kind === "feature"}>
+        <div class="h-0.5 rounded bg-accent mx-1" />
+      </Show>
+      <Show when={barGap() === p.index}>
+        <div
+          aria-label="Barra de retroceso"
+          data-rollback-bar
+          class="group/bar relative py-1 cursor-ns-resize touch-none"
+          title={rollback() === null ? "Arrastrar hacia arriba para ver el diseño en un paso anterior" : "Barra de retroceso: lo de abajo no se calcula y lo nuevo se agrega acá"}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            track(e, () => ({ kind: "rollback", to: barAt() }), dropBar);
+          }}
+        >
+          <div
+            class={clsx(
+              "h-1 rounded mx-1 transition-colors",
+              rollback() !== null || drag()?.kind === "rollback" ? "bg-warning" : "bg-border group-hover/bar:bg-warning/60",
+            )}
+          />
+        </div>
+      </Show>
+    </>
+  );
   return (
     <Section title="Operaciones">
-      <Show when={(doc()?.features.length ?? 0) > 0} fallback={<p class="text-xs text-text-dim">Todavía no hay operaciones</p>}>
-        <div class="space-y-0.5">
+      <Show when={count() > 0} fallback={<p class="text-xs text-text-dim">Todavía no hay operaciones</p>}>
+        <div class="space-y-0.5" ref={list}>
           <For each={doc()?.features ?? []}>
             {(f, i) => {
               const state = () => store.stateOf(f.id);
               const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
               return (
                 <>
+                  <Gap index={i()} />
                   <div
+                    data-feature-row
                     class={clsx(
-                      "group flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer",
+                      "group flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer select-none",
                       store.selected() === f.id ? "bg-accent/20 text-text" : "hover:bg-surface text-text-muted",
                       (f.suppressed || rolled()) && "opacity-50",
+                      drag()?.kind === "feature" && (drag() as { id: number }).id === f.id && "ring-1 ring-accent",
                     )}
-                    onClick={() => store.select(store.selected() === f.id ? undefined : f.id)}
+                    onPointerDown={(e) => track(e, () => ({ kind: "feature", id: f.id, from: i(), to: i() }), dropFeature)}
+                    onClick={() => !swallowClick && store.select(store.selected() === f.id ? undefined : f.id)}
                     onDblClick={() => f.kind.type === "sketch" && void store.settled().then(() => props.ui.editSketch(f.id))}
                     title={problem(state())}
                   >
@@ -750,13 +842,11 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                       </IconButton>
                     </span>
                   </div>
-                  <Show when={rollback() === i() + 1}>
-                    <div class="h-0.5 rounded bg-warning mx-2" title="Barra de retroceso: lo de abajo no se calcula" />
-                  </Show>
                 </>
               );
             }}
           </For>
+          <Gap index={count()} />
         </div>
         <div class="flex gap-1.5">
           <Show when={store.selected() !== undefined}>

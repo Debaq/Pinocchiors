@@ -9,6 +9,7 @@ import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../l
 import type { CadUi, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
+import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 
@@ -838,6 +839,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   const onPointerDown = (e: PointerEvent) => {
+    if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
     if (ui.session()) sketchClick(e);
     else void pickClick(e);
@@ -866,8 +868,51 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
 
-  const onPointerUp = () => {
+  // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
+  let rightDown: { x: number; y: number } | undefined;
+  const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
+  const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
+    const down = rightDown;
+    rightDown = undefined;
+    if (e.button !== 2 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
+    if (ui.session() || ui.pick().kind !== "none" || !viewer) return;
+    void openFaceMenu(e.clientX, e.clientY);
+  };
+
+  /** Operaciones que dieron origen a la cara bajo el puntero, para editarlas */
+  const openFaceMenu = async (x: number, y: number) => {
+    const hit = viewer!.pick(x, y, { faces: true });
+    if (hit?.kind !== "face") return;
+    const ref = await store.faceRef(hit.face).catch(() => undefined);
+    const features = store.doc()?.features ?? [];
+    const byId = (id: number) => features.find((f) => f.id === id);
+    const ids: number[] = [];
+    for (const t of ref?.tags ?? []) {
+      const f = byId(t.feature);
+      if (!f || ids.includes(f.id)) continue;
+      ids.push(f.id);
+      // El sketch de una extrusión o revolución también se puede editar desde acá
+      if ((f.kind.type === "extrude" || f.kind.type === "revolve") && byId(f.kind.sketch) && !ids.includes(f.kind.sketch)) ids.push(f.kind.sketch);
+    }
+    if (!ids.length) return;
+    // Lo más reciente primero, como queda en el árbol de abajo hacia arriba
+    ids.sort((a, b) => features.findIndex((f) => f.id === b) - features.findIndex((f) => f.id === a));
+    setMenu({
+      x,
+      y,
+      items: [
+        { header: "Cara" },
+        ...ids.map((id): MenuEntry => {
+          const f = byId(id)!;
+          const sketch = f.kind.type === "sketch";
+          return {
+            label: `${sketch ? "Editar sketch" : "Editar"} «${f.name}»`,
+            onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),
+          };
+        }),
+      ],
+    });
   };
 
   const onKey = (e: KeyboardEvent) => {
@@ -1044,6 +1089,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerLeave={() => setSnapView(undefined)}
         onContextMenu={(e) => e.preventDefault()}
       />
+
+      <Show when={menu()}>{(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(undefined)} />}</Show>
 
       {/* A qué se pega el cursor (anclaje) */}
       <Show when={snapView()}>

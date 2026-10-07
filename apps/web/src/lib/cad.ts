@@ -1709,14 +1709,26 @@ export function createCadStore() {
 
     /** Mueve la operación una posición; `false` si rompe dependencias */
     moveFeature(id: number, delta: -1 | 1): boolean {
+      const i = committed()?.features.findIndex((f) => f.id === id) ?? -1;
+      if (i < 0) return false;
+      // Bajar una = insertarla después de la siguiente
+      return store.moveFeatureTo(id, delta < 0 ? i - 1 : i + 2);
+    },
+
+    /**
+     * Mueve la operación al hueco `to` (0 = antes de la primera, n = al final,
+     * contando con la lista de antes de moverla); `false` si rompe dependencias.
+     */
+    moveFeatureTo(id: number, to: number): boolean {
       if (draft()) void acceptDraft();
       const d = committed();
       if (!d) return false;
       const i = d.features.findIndex((f) => f.id === id);
-      const j = i + delta;
-      if (i < 0 || j < 0 || j >= d.features.length) return false;
+      if (i < 0 || to < 0 || to > d.features.length) return false;
+      if (to === i || to === i + 1) return true;
       const order = [...d.features];
-      [order[i], order[j]] = [order[j], order[i]];
+      const [moved] = order.splice(i, 1);
+      order.splice(to > i ? to - 1 : to, 0, moved);
       const pos = (x: number) => order.findIndex((f) => f.id === x);
       const broken = order.some((f, k) => dependencies(f.kind).some((dep) => pos(dep) < 0 || pos(dep) > k));
       if (broken) return false;

@@ -97,7 +97,13 @@ nuevo.
    `MissingRef` por campo y posición; en listas se sigue con lo que queda
    (`FeatureState::Warning`), con referencia única falla; la caja marca las perdidas, se activa
    sola al editar y lo elegido reemplaza a la primera perdida.*
-5. **Árbol**: doble clic, editar desde la cara, barra arrastrable, reordenar.
+5. **Árbol**: doble clic, editar desde la cara, barra arrastrable, reordenar. *Hecha el
+   2026-10-07: un clic en la fila ya abría el diálogo (doble clic en un sketch lo edita); clic
+   derecho sin arrastrar sobre una cara del sólido abre un menú "Editar «…»" con las
+   operaciones de sus orígenes (y el sketch de la extrusión o revolución), lo más reciente
+   primero; la barra de retroceso está siempre (gris al final, ámbar puesta) y se arrastra
+   entre filas; las filas se arrastran para reordenar (`moveFeatureTo`, valida dependencias por
+   id). Lo nuevo se inserta en la barra (ya pasaba; ahora lo dice su ayuda).*
 6. **Carpetas.**
 
 ## Pruebas

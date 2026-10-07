@@ -330,3 +330,10 @@ cargo test -p cad-model
   encontrada" aunque la caja no esté activa, la caja se activa sola al editar y lo que se elige
   ocupa el lugar de la primera perdida. Perfil y regiones se resuelven una sola vez
   (`selected_regions` ya no se repite en `profile_faces`).
+- **2026-10-07 Árbol de operaciones** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 5): barra de
+  retroceso siempre visible y arrastrable entre filas (al soltarla al final se calcula todo);
+  filas arrastrables para reordenar (`store.moveFeatureTo(id, hueco)`; subir y bajar usan lo
+  mismo); clic derecho sin arrastrar sobre una cara abre "Editar «operación»" con las
+  operaciones que la originaron según sus `FaceTag` y el sketch de extrusiones y revoluciones.
+  El arrastre usa eventos de puntero (no HTML5 drag & drop, que WebKitGTK con Tauri maneja
+  mal) y un umbral de 4 px para no confundirlo con el clic que abre el diálogo.

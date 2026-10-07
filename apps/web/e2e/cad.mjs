@@ -206,6 +206,75 @@ const scenarios = {
     near(edges[1].point[0], 10, 1e-6, "la arista nueva quedó en el lugar de la perdida");
   },
 
+  async "árbol: barra de retroceso y reordenar arrastrando"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Caja, agujero (cilindro que resta) y otra caja más arriba
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    const hole = { type: "primitive", shape: { type: "cylinder", radius: 3, height: 40 }, origin: [0, 0, -5], z: [0, 0, 1], x: [1, 0, 0], op: "cut" };
+    doc.features.push(
+      { id: box.id + 1, name: "Agujero", suppressed: false, kind: hole },
+      { ...structuredClone(box), id: box.id + 2, name: "Caja arriba", kind: { ...structuredClone(box.kind), origin: [0, 0, 30] } },
+    );
+    doc.next_id = box.id + 3;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const holeVol = Math.PI * 9 * 20;
+    near((await body()).volume, 16000 - holeVol, 0.5, "todo");
+    const rows = () => b.eval(`[...document.querySelectorAll("[data-feature-row]")].map((r) => { const b = r.getBoundingClientRect(); return [b.x + b.width / 2, b.top, b.bottom]; })`);
+    /** Punto del hueco k del árbol (0 = antes de la primera fila) */
+    const gap = async (k) => {
+      const r = await rows();
+      return k < r.length ? [r[k][0], r[k][1] + 2] : [r[r.length - 1][0], r[r.length - 1][2] + 6];
+    };
+    const bar = () => b.eval(`(() => { const r = document.querySelector("[data-rollback-bar]").getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const rollback = async () => (await call("cad_get_document")).rollback ?? null;
+    // La barra al final; llevarla debajo de la primera caja
+    await b.drag(...(await bar()), ...(await gap(1)));
+    await sleep(2000);
+    if ((await rollback()) !== 1) throw new Error(`retroceso: ${await rollback()}`);
+    near((await body()).volume, 8000, 1e-6, "solo la caja");
+    await b.drag(...(await bar()), ...(await gap(2)));
+    await sleep(2000);
+    near((await body()).volume, 8000 - holeVol, 0.5, "caja con agujero");
+    // De vuelta al final: se calcula todo
+    await b.drag(...(await bar()), ...(await gap(3)));
+    await sleep(2000);
+    if ((await rollback()) !== null) throw new Error(`retroceso al final: ${await rollback()}`);
+    near((await body()).volume, 16000 - holeVol, 0.5, "todo otra vez");
+    // Arrastrar "Caja arriba" al principio: ahora el agujero (z −5..35) también
+    // le saca 5 mm de abajo
+    const r = await rows();
+    await b.drag(r[2][0], (r[2][1] + r[2][2]) / 2, ...(await gap(0)));
+    await sleep(2000);
+    const names = (await call("cad_get_document")).features.map((f) => f.name);
+    if (names.join("|") !== "Caja arriba|Caja 1|Agujero") throw new Error(`orden: ${names}`);
+    near((await body()).volume, 16000 - Math.PI * 9 * 25, 0.5, "agujero en las dos cajas");
+    // Arrastrar no abre el diálogo
+    if (await b.eval(`!!window.__cadStore.draft()`)) throw new Error("se abrió el diálogo al arrastrar");
+  },
+
+  async "menú de la cara: editar la operación que la creó"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const [x, y] = await b.eval(`window.__cadViewer.screenOf([3, 3, 20])`);
+    await b.click(x, y, { button: "right", buttons: 2, wait: 1500 });
+    const label = await b.eval(`[...document.querySelectorAll("button, [role=menuitem]")].map((e) => e.textContent.trim()).find((t) => t.startsWith("Editar «"))`);
+    if (label !== "Editar «Caja 1»") throw new Error(`menú: ${label}`);
+    // El menú es fijo (sin offsetParent): clic por coordenadas
+    const at = await b.eval(`(() => { const e = [...document.querySelectorAll("[role=menuitem]")].find((e) => e.textContent.includes("Caja 1")); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.click(...at);
+    await sleep(1500);
+    const id = (await call("cad_get_document")).features[0].id;
+    if ((await b.eval(`window.__cadStore.draft()?.feature`)) !== id) throw new Error("no se abrió el diálogo de la caja");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);
