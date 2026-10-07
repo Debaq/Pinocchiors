@@ -172,6 +172,13 @@ CadShape* cad_draft_prism(const CadShape* face, double height, double angle);
 // Cara plana desplazada `distance` hacia afuera (negativo = hacia adentro), esquinas redondeadas.
 CadShape* cad_offset_face(const CadShape* face, double distance);
 
+// Hélice como alambre: eje (origen y dirección), radio, paso, vueltas; `left` = a izquierdas.
+CadShape* cad_make_helix(const double* origin, const double* dir, double radius, double pitch, double turns,
+                         int32_t left);
+// Engrosa una cara (o un conjunto de caras) hasta un sólido de espesor `thickness`
+// (hacia su normal; negativo = hacia atrás).
+CadShape* cad_thicken(const CadShape* faces, double thickness);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

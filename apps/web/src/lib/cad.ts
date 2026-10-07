@@ -86,6 +86,7 @@ export type RefView = { id: number } & (
   | { kind: "plane"; plane: Plane }
   | { kind: "axis"; origin: P3; dir: P3 }
   | { kind: "point"; point: P3 }
+  | { kind: "curve"; points: P3[] }
 );
 
 /** Unir funde con lo que toca (o crea pieza si no toca nada); `new` siempre crea pieza aparte */
@@ -206,7 +207,17 @@ export type FeatureKind =
   | { type: "split_parts"; parts: PartId[] }
   | { type: "delete_parts"; parts: PartId[] }
   /** Perfil (regiones de un sketch) a lo largo de un camino (entidades de otro sketch; vacío = todas) */
-  | { type: "sweep"; sketch: number; regions: RegionSelection; path: { type: "sketch"; sketch: number; entities: number[] }; op: BodyOp }
+  | {
+      type: "sweep";
+      sketch: number;
+      regions: RegionSelection;
+      path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
+      op: BodyOp;
+    }
+  /** Hélice de referencia (camino de resortes y roscas) */
+  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean }
+  /** Espesor a caras del sólido */
+  | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
   /** Sólido que pasa por varias secciones, una región por sketch */
   | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
   /** Agujeros en los puntos de un sketch (o sus círculos), contra la normal del plano */
@@ -605,6 +616,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   sweep: "Barrido",
   loft: "Transición",
   hole: "Agujero",
+  helix: "Hélice",
+  thicken: "Engrosar",
 };
 
 /**
@@ -688,7 +701,9 @@ export function dependencies(kind: FeatureKind): number[] {
     case "point":
       return point(kind.def);
     case "sweep":
-      return [kind.sketch, kind.path.sketch];
+      return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
+    case "helix":
+      return axis(kind.axis);
     case "loft":
       return kind.sections.map((x) => x.sketch);
     case "hole":

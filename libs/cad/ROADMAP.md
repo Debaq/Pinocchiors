@@ -404,3 +404,5 @@ cargo test -p cad-model
 - **2026-10-07 Agujero** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 4): simple, con
   caja o avellanado, pasante o ciego con punta, en los puntos de un sketch; tamaños métricos
   M2–M12 para pasar o roscar.
+- **2026-10-07 Hélice y engrosar** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 5 sin el
+  nervio): hélice de referencia que sirve de camino de barrido (resortes) y engrosar caras.

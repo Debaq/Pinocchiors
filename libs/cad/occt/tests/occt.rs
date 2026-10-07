@@ -522,3 +522,27 @@ fn ray_draft_prism_and_offset_face() {
     let a = 100.0 + 4.0 * 10.0 + std::f64::consts::PI;
     assert!((outer.mass().unwrap().area - a).abs() < 1e-6 * a, "{}", outer.mass().unwrap().area);
 }
+
+#[test]
+fn helix_spring_and_thicken() {
+    if !cad_occt::available() {
+        return;
+    }
+    // Hélice de radio 10, paso 5, 3 vueltas: alto 15, largo 3·√((2π·10)² + 5²)
+    let axis = Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] };
+    let h = Shape::helix(axis, 10.0, 5.0, 3.0, false).unwrap();
+    let e = h.edge_info(0).unwrap();
+    let want = 3.0 * ((2.0 * PI * 10.0f64).powi(2) + 25.0).sqrt();
+    assert!((e.length - want).abs() < 1e-3 * want, "{} vs {want}", e.length);
+    let m = h.mass().unwrap();
+    assert!((m.bbox_max[2] - 15.0).abs() < 1e-6 && m.bbox_min[2].abs() < 1e-6);
+    // Resorte: círculo de radio 1 en el plano XZ, en el arranque de la hélice
+    let c = Shape::face(&[vec![Curve::Circle { center: [10.0, 0.0, 0.0], normal: [0.0, 1.0, 0.0], radius: 1.0 }]]).unwrap();
+    let spring = c.sweep(&h).unwrap();
+    let v = spring.mass().unwrap().volume.abs();
+    assert!((v - PI * want).abs() < 0.02 * PI * want, "{v} vs {}", PI * want);
+    // Engrosar un cuadrado de 10: placa de 10 × 10 × 2
+    let sq = Shape::face(&[rect(10.0, 10.0)]).unwrap();
+    let plate = sq.thicken(2.0).unwrap();
+    assert!((plate.mass().unwrap().volume.abs() - 200.0).abs() < 1e-6);
+}

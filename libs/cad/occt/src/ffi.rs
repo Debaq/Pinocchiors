@@ -138,6 +138,8 @@ unsafe extern "C" {
     pub fn cad_count_vertices(s: *const CadShape) -> i32;
     pub fn cad_count_solids(s: *const CadShape) -> i32;
     pub fn cad_ray_hit(s: *const CadShape, origin: *const f64, dir: *const f64) -> f64;
+    pub fn cad_make_helix(origin: *const f64, dir: *const f64, radius: f64, pitch: f64, turns: f64, left: i32) -> *mut CadShape;
+    pub fn cad_thicken(faces: *const CadShape, thickness: f64) -> *mut CadShape;
     pub fn cad_draft_prism(face: *const CadShape, height: f64, angle: f64) -> *mut CadShape;
     pub fn cad_offset_face(face: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_write_step_parts(

@@ -942,6 +942,28 @@ const scenarios = {
     if (p[""] !== "Cara cilíndrica" || p["Diámetro"] !== "6.6 mm") throw new Error(`medida: ${JSON.stringify(p)}`);
   },
 
+  async "hélice y engrosar"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Hélice");
+    await sleep(1500);
+    await accept(b);
+    const refs = (await evaluate()).references;
+    if (refs[0]?.kind !== "curve" || !(refs[0].points.length > 20)) throw new Error(`hélice: ${JSON.stringify(refs[0]?.kind)}`);
+    near(Math.max(...refs[0].points.map((p) => p[2])), 15, 1e-3, "alto de la hélice (3 vueltas de 5)");
+    // Caja y engrosar su cara de arriba 2 mm
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Engrosar");
+    await sleep(2000);
+    await accept(b);
+    const r = await body();
+    near(r.volume, 8000 + 400 * 2, 1e-6, "caja más 2 mm arriba");
+    near(r.bbox_max[2], 12, 1e-6, "llega a 12");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

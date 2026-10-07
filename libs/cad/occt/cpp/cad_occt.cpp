@@ -3,6 +3,10 @@
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
+#include <Geom_CylindricalSurface.hxx>
+#include <Geom2d_Line.hxx>
+#include <BRepOffset_MakeOffset.hxx>
+#include <gp_Ax3.hxx>
 #include <BRepLib.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <LocOpe_DPrism.hxx>
@@ -983,6 +987,35 @@ double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double
         pa[0] = p.X(); pa[1] = p.Y(); pa[2] = p.Z();
         pb[0] = q.X(); pb[1] = q.Y(); pb[2] = q.Z();
         return ext.Value();
+    });
+}
+
+CadShape* cad_make_helix(const double* origin, const double* dir, double radius, double pitch, double turns,
+                         int32_t left) {
+    return guard("hélice", (CadShape*)nullptr, [&] {
+        if (radius <= 0 || pitch <= 0 || turns <= 0) throw Standard_Failure("radio, paso y vueltas tienen que ser positivos");
+        gp_Ax3 ax(pnt(origin), gp_Dir(dir[0], dir[1], dir[2]));
+        Handle(Geom_CylindricalSurface) cyl = new Geom_CylindricalSurface(ax, radius);
+        // En (u, v) del cilindro la hélice es una recta: u = ángulo, v = altura
+        double du = left ? -2 * M_PI : 2 * M_PI;
+        gp_Dir2d d(du, pitch);
+        Handle(Geom2d_Line) line = new Geom2d_Line(gp_Pnt2d(0, 0), d);
+        double len = turns * std::sqrt(du * du + pitch * pitch);
+        TopoDS_Edge e = BRepBuilderAPI_MakeEdge(line, cyl, 0.0, len).Edge();
+        BRepLib::BuildCurves3d(e);
+        return new CadShape{BRepBuilderAPI_MakeWire(e).Wire()};
+    });
+}
+
+CadShape* cad_thicken(const CadShape* faces, double thickness) {
+    return guard("engrosar", (CadShape*)nullptr, [&] {
+        if (std::fabs(thickness) < 1e-9) throw Standard_Failure("espesor cero");
+        BRepOffset_MakeOffset mk;
+        mk.Initialize(faces->s, thickness, 1e-6, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Intersection,
+                      Standard_True);
+        mk.MakeOffsetShape();
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo engrosar");
+        return wrap_checked(mk.Shape(), "engrosar");
     });
 }
 

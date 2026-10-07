@@ -616,6 +616,16 @@ impl Shape {
         wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 1, index as i32) })
     }
 
+    /// Hélice (alambre) alrededor de `axis`.
+    pub fn helix(axis: Axis, radius: f64, pitch: f64, turns: f64, left: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_helix(axis.origin.as_ptr(), axis.dir.as_ptr(), radius, pitch, turns, left as i32) })
+    }
+
+    /// Sólido de espesor `thickness` a partir de esta cara (o caras), hacia su normal.
+    pub fn thicken(&self, thickness: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })
+    }
+
     /// Distancia hasta la primera cara que cruza la semirrecta desde `origin` hacia `dir`.
     pub fn ray_hit(&self, origin: P3, dir: P3) -> Option<f64> {
         let t = unsafe { ffi::cad_ray_hit(self.ptr(), origin.as_ptr(), dir.as_ptr()) };

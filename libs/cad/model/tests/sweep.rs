@@ -89,3 +89,46 @@ fn loft_between_squares() {
     }
     assert!(matches!(doc.evaluate().state(l), Some(FeatureState::Error { .. })));
 }
+
+#[test]
+fn spring_along_a_helix_and_thicken() {
+    if !occt() {
+        return;
+    }
+    // Hélice de radio 10, paso 5, 2 vueltas sobre Z; perfil: círculo de radio 1 en
+    // el plano XZ donde arranca la hélice
+    let mut doc = Document::new();
+    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false });
+    let ev = doc.evaluate();
+    let Some(RefGeom::Curve { points }) = ev.references.get(&hx) else { panic!("sin curva") };
+    let start = points[0];
+    assert!((start[0].hypot(start[1]) - 10.0).abs() < 1e-6 && start[2].abs() < 1e-6, "{start:?}");
+    // Perfil en el plano que contiene el eje y el arranque (normal tangente a la hélice ≈ ⊥ radio)
+    let radial = [start[0] / 10.0, start[1] / 10.0, 0.0];
+    let tangent = [-radial[1], radial[0], 0.0];
+    let plane = Plane { origin: start, normal: tangent, x_dir: radial };
+    let mut prof = Sketch::default();
+    prof.circle([0.0, 0.0], 1.0);
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Custom { plane }, offset: 0.0, sketch: prof });
+    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let len = 2.0 * ((2.0 * PI * 10.0f64).powi(2) + 25.0).sqrt();
+    let v = ev.body.as_ref().unwrap().mass().unwrap().volume;
+    assert!((v - PI * len).abs() < 0.02 * PI * len, "{v} vs {}", PI * len);
+
+    // Engrosar la cara de arriba de una caja 2 mm: suma una placa encima
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 10.0, centered: false, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    let ev = doc.evaluate();
+    let (top, _) = ev.body.as_ref().unwrap().closest_face([5.0, 5.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
+    doc.add(FeatureKind::Thicken { faces: vec![ev.face_ref(top).unwrap()], thickness: 2.0, op: BodyOp::Join });
+    assert_relative_eq!(vol(&doc), 1200.0, max_relative = 1e-6);
+    assert_relative_eq!(doc.evaluate().body.unwrap().mass().unwrap().bbox_max[2], 12.0, epsilon = 1e-6);
+}

@@ -273,6 +273,14 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     });
   };
 
+  /** Engrosar las caras elegidas (si no hay, se eligen en la caja del diálogo) */
+  const startThicken = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "thicken", faces, thickness: 2, op: "join" });
+  };
+
   /** Agujero M6 pasante en los puntos del sketch elegido (o el último) */
   const addHole = () => {
     const s = targetSketch();
@@ -531,6 +539,8 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onSweep={addSweep}
                 onLoft={addLoft}
                 onHole={addHole}
+                onHelix={() => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false })}
+                onThicken={() => void startThicken()}
                 hasBody={!!store.result()?.body}
               />
 
@@ -677,6 +687,8 @@ const AddSection: Component<{
   onSweep: () => void;
   onLoft: () => void;
   onHole: () => void;
+  onHelix: () => void;
+  onThicken: () => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -727,6 +739,8 @@ const AddSection: Component<{
           <B label="Plano" onClick={() => props.onReference("plane")} title="Plano de referencia: desplazado, en ángulo, medio o por tres puntos" />
           <B label="Eje" onClick={() => props.onReference("axis")} title="Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" />
           <B label="Punto" onClick={() => props.onReference("point")} title="Punto de referencia" />
+          <B label="Hélice" onClick={props.onHelix} title="Hélice de referencia: camino para resortes y roscas" />
+          <B label="Engrosar" onClick={props.onThicken} disabled={!props.hasBody} title="Da espesor a las caras elegidas" />
         </div>
       </div>
     </Section>
@@ -1773,9 +1787,39 @@ const FeatureEditor: Component<{
               );
             }}
           </Match>
+          <Match when={f().kind.type === "helix" && (f().kind as Extract<FeatureKind, { type: "helix" }>)}>
+            {(k) => (
+              <>
+                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Eje" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "helix" && (x.axis = a))} />
+                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
+                {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                {field("Vueltas", "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
+                <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
+                <p class="text-[11px] text-text-dim">Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "thicken" && (f().kind as Extract<FeatureKind, { type: "thicken" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras"
+                  refs={k().faces}
+                  lost={lost("faces")}
+                  onChange={(refs) => update((x) => x.type === "thicken" && (x.faces = refs as FaceRef[]))}
+                />
+                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "thicken" && (x.thickness = v), "mm")}
+                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "thicken" && (x.op = o)))}</Row>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "sweep" && (f().kind as Extract<FeatureKind, { type: "sweep" }>)}>
             {(k) => {
-              const pathSketch = () => props.sketches.find((s) => s.id === k().path.sketch);
+              const pathSketch = () => (k().path.type === "sketch" ? props.sketches.find((s) => s.id === (k().path as { sketch: number }).sketch) : undefined);
               const curves = () => {
                 const s = pathSketch();
                 return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => !e.construction && ["line", "arc", "spline"].includes(e.geometry.type)) : [];
@@ -1797,11 +1841,21 @@ const FeatureEditor: Component<{
                   />
                   <Row label="Camino">
                     <Select
-                      options={sketchOptions()}
-                      value={String(k().path.sketch)}
-                      onChange={(v) => update((x) => x.type === "sweep" && (x.path = { type: "sketch", sketch: +v, entities: [] }))}
+                      options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      value={(() => {
+                        const p = k().path;
+                        return p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                      })()}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "sweep" &&
+                            (x.path = v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                        )
+                      }
                     />
                   </Row>
+                  <Show when={k().path.type === "sketch"}>
                   <div class="space-y-1" aria-label="Tramos del camino">
                     <span class="text-xs text-text-muted">Tramos (sin elegir: todos)</span>
                     <For each={curves()} fallback={<p class="text-[11px] text-text-dim">Ese sketch no tiene líneas, arcos ni splines</p>}>
@@ -1809,16 +1863,18 @@ const FeatureEditor: Component<{
                         <Checkbox
                           small
                           label={`${NAMES[e.geometry.type]} ${e.id}`}
-                          checked={k().path.entities.includes(e.id)}
+                          checked={k().path.type === "sketch" && (k().path as { entities: number[] }).entities.includes(e.id)}
                           onChange={(c) =>
-                            update(
-                              (x) => x.type === "sweep" && (x.path.entities = c ? [...x.path.entities, e.id] : x.path.entities.filter((i) => i !== e.id)),
-                            )
+                            update((x) => {
+                              if (x.type !== "sweep" || x.path.type !== "sketch") return;
+                              x.path.entities = c ? [...x.path.entities, e.id] : x.path.entities.filter((i) => i !== e.id);
+                            })
                           }
                         />
                       )}
                     </For>
                   </div>
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
                 </>
               );
@@ -2064,7 +2120,7 @@ function planeLabelFor(f: Feature): string {
 // ─── Geometría de referencia en los diálogos ──────────────────────────────
 
 /** Referencias calculadas de un tipo, con el nombre de su operación (sin `except`) */
-function refOptions(store: CadStore, kind: "plane" | "axis" | "point", except?: number): { value: string; label: string }[] {
+function refOptions(store: CadStore, kind: "plane" | "axis" | "point" | "curve", except?: number): { value: string; label: string }[] {
   const names = new Map((store.doc()?.features ?? []).map((f) => [f.id, f.name]));
   return (store.result()?.references ?? [])
     .filter((r) => r.kind === kind && r.id !== except)

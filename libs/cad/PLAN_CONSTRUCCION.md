@@ -103,7 +103,12 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    `agujero:k:pared` y `agujero:k:caja`. Interfaz: tabla métrica ISO M2–M12 (pasante holgado o
    para roscar, con rosca cosmética; caja ISO 4762 y avellanado a 90° ISO 10642). E2E:
    avellanado M6 en una placa y medir la pared: diámetro 6,6 mm.*
-5. **Hélice** (y ejemplo de rosca/resorte con barrido), **nervio**, **engrosar**.
+5. **Hélice** (y ejemplo de rosca/resorte con barrido), **nervio**, **engrosar**. *Hélice y engrosar hechos el
+   2026-10-07: `FeatureKind::Helix { axis, radius, pitch, turns, left }` (alambre sobre un
+   cilindro, `cad_make_helix`; se ve como curva y es camino de barridos con
+   `SweepPath::Curve`; un resorte = círculo en el arranque + barrido) y `Thicken { faces,
+   thickness, op }` (`BRepOffset_MakeOffset` en modo engrosar). El nervio queda pendiente:
+   `BRepFeat_MakeLinearForm` necesita el contorno abierto llevado hasta el sólido.*
 6. **Mover y reemplazar cara**, **escala**, **patrón en curva**.
 
 ## Pruebas

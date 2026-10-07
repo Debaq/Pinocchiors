@@ -71,6 +71,8 @@ pub enum RefGeom {
     Plane { plane: Plane },
     Axis { origin: P3, dir: P3 },
     Point { point: P3 },
+    /// Curva (hélice), como polilínea para dibujarla.
+    Curve { points: Vec<P3> },
 }
 
 /// Pieza calculada.
@@ -95,6 +97,8 @@ pub struct Evaluation {
     pub sketches: HashMap<FeatureId, SketchResult>,
     /// Planos, ejes y puntos de referencia.
     pub references: HashMap<FeatureId, RefGeom>,
+    /// Curvas de referencia (alambres), para barridos.
+    pub curves: HashMap<FeatureId, Shape>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
     tools: HashMap<FeatureId, (Tagged, BodyOp)>,
     /// Parámetros y campos vinculados, ya calculados.
@@ -115,6 +119,7 @@ struct CacheEntry {
     ms: f64,
     sketch: Option<SketchResult>,
     reference: Option<RefGeom>,
+    curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     /// Para descartar las menos usadas.
     used: u64,
@@ -396,6 +401,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(r) = &e.reference {
                 ctx.ev.references.insert(f.id, r.clone());
             }
+            if let Some(c) = &e.curve {
+                ctx.ev.curves.insert(f.id, c.clone());
+            }
             if let Some(t) = &e.tool {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
@@ -431,6 +439,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 ms,
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
                 reference: ctx.ev.references.get(&f.id).cloned(),
+                curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 used: 0,
             },
@@ -1001,7 +1010,15 @@ impl Ctx<'_> {
     /// extremos, empezando por la punta más cercana a `near` (el perfil: el
     /// barrido arranca en el comienzo del alambre).
     fn path_wire(&self, path: &SweepPath, near: Option<P3>) -> R<Shape> {
-        let SweepPath::Sketch { sketch, entities } = path;
+        let (sketch, entities) = match path {
+            SweepPath::Sketch { sketch, entities } => (sketch, entities),
+            SweepPath::Curve { feature } => {
+                return self.ev.curves.get(feature).cloned().ok_or_else(|| {
+                    self.miss("path", 0);
+                    "la curva del camino no está calculada".to_string()
+                });
+            }
+        };
         let s = self.ev.sketches.get(sketch).ok_or("el sketch del camino no está calculado")?;
         let ends = |id: u32| -> Option<(u32, u32)> {
             match &s.sketch.entity(id).ok()?.geometry {
@@ -1302,6 +1319,33 @@ impl Ctx<'_> {
                 let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), sw.op));
                 self.apply(f.id, tool, sw.op)
+            }
+            FeatureKind::Helix { axis, radius, pitch, turns, left } => {
+                let ax = self.axis("axis", axis)?;
+                let ax = Axis { origin: ax.origin, dir: normalize(ax.dir) };
+                let wire = Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?;
+                // Polilínea para el visor: la del teselado del alambre mismo
+                let points: Vec<P3> = wire.tessellate(0.05, 0.1).map_err(err)?.edges.concat();
+                self.ev.references.insert(f.id, RefGeom::Curve { points });
+                self.ev.curves.insert(f.id, wire);
+                Ok(())
+            }
+            FeatureKind::Thicken { faces, thickness, op } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                let solids = idx
+                    .iter()
+                    .map(|&i| body.face_shape(i).and_then(|fc| fc.thicken(*thickness)))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
+                let shape = fuse(solids)?;
+                let tags = (0..shape.face_count()).map(|i| vec![tag(f.id, format!("cara:{i}"))]).collect();
+                let tool = Tagged { shape, tags };
+                self.ev.tools.insert(f.id, (tool.clone(), *op));
+                self.apply(f.id, tool, *op)
             }
             FeatureKind::Hole(h) => {
                 let tool = self.hole_tool(f.id, h)?;

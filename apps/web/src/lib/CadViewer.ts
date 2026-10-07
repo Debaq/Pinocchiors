@@ -848,6 +848,11 @@ export class CadViewer {
         line.computeLineDistances();
         line.renderOrder = 5;
         this.refsGroup.add(line);
+      } else if (r.kind === "curve") {
+        const g = new THREE.BufferGeometry().setFromPoints(r.points.map((p) => this.toView(p)));
+        const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
+        line.renderOrder = 5;
+        this.refsGroup.add(line);
       } else {
         const g = new THREE.BufferGeometry().setFromPoints([this.toView(r.point)]);
         const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: 8, sizeAttenuation: false, depthTest: false }));

@@ -339,6 +339,22 @@ pub enum FeatureKind {
     Loft(Loft),
     /// Agujeros en los puntos de un sketch.
     Hole(Hole),
+    /// Curva helicoidal de referencia (camino de resortes y roscas).
+    Helix {
+        axis: AxisSpec,
+        radius: f64,
+        pitch: f64,
+        turns: f64,
+        #[serde(default)]
+        left: bool,
+    },
+    /// Da espesor a caras del sólido (hacia afuera; negativo, hacia adentro).
+    Thicken {
+        faces: Vec<FaceRef>,
+        thickness: f64,
+        #[serde(default)]
+        op: BodyOp,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -401,6 +417,8 @@ pub enum SweepPath {
         #[serde(default)]
         entities: Vec<u32>,
     },
+    /// Una curva del historial (una hélice).
+    Curve { feature: FeatureId },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -448,10 +466,11 @@ impl FeatureKind {
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),
-            FeatureKind::Sweep(s) => {
-                let SweepPath::Sketch { sketch, .. } = &s.path;
-                vec![s.sketch, *sketch]
-            }
+            FeatureKind::Sweep(s) => match &s.path {
+                SweepPath::Sketch { sketch, .. } => vec![s.sketch, *sketch],
+                SweepPath::Curve { feature } => vec![s.sketch, *feature],
+            },
+            FeatureKind::Helix { axis, .. } => axis_deps(axis),
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => vec![h.sketch],
             FeatureKind::Extrude(e) => vec![e.sketch],
@@ -505,6 +524,8 @@ impl FeatureKind {
             FeatureKind::Sweep(_) => "Barrido",
             FeatureKind::Loft(_) => "Transición",
             FeatureKind::Hole(_) => "Agujero",
+            FeatureKind::Helix { .. } => "Hélice",
+            FeatureKind::Thicken { .. } => "Engrosar",
         }
     }
 }
