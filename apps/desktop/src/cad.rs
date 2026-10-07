@@ -110,6 +110,16 @@ pub struct PartView {
     pub center: [f64; 3],
 }
 
+/// "#rrggbb" → (r, g, b) en 0..1.
+fn hex_rgb(s: &str) -> Option<[f64; 3]> {
+    let h = s.strip_prefix('#')?;
+    if h.len() != 6 {
+        return None;
+    }
+    let c = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok().map(|v| v as f64 / 255.0);
+    Some([c(0)?, c(2)?, c(4)?])
+}
+
 /// Nombre de cada pieza: el que le puso el usuario o "Pieza n".
 fn part_name(doc: &Document, id: cad_model::PartId, n: usize) -> String {
     doc.parts.iter().find(|p| p.part == id).and_then(|p| p.name.clone()).unwrap_or_else(|| format!("Pieza {n}"))
@@ -562,14 +572,26 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
         let scene = || parts_scene(state, "Diseño", part);
         match format {
             "step" | "stp" => {
+                // Cada pieza como sólido con su nombre y su color (si se eligió)
                 evaluate_committed(state)?;
+                let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
                 let cache = state.cad_cache.lock().unwrap();
                 let eval = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
-                let shape = match part {
-                    Some(id) => eval.parts.iter().find(|x| x.id == id).map(|x| &x.shape).ok_or("Esa pieza ya no existe")?,
-                    None => eval.body.as_ref().ok_or("El diseño todavía no tiene un sólido")?,
-                };
-                let bytes = shape.to_step().map_err(|e| e.to_string())?;
+                let names: Vec<String> = eval.parts.iter().enumerate().map(|(i, x)| part_name(&doc, x.id, i + 1)).collect();
+                let list: Vec<(&cad_model::Shape, &str, Option<[f64; 3]>)> = eval
+                    .parts
+                    .iter()
+                    .zip(&names)
+                    .filter(|(x, _)| part.is_none_or(|id| id == x.id))
+                    .map(|(x, n)| {
+                        let color = doc.parts.iter().find(|q| q.part == x.id).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
+                        (&x.shape, n.as_str(), color)
+                    })
+                    .collect();
+                if list.is_empty() {
+                    return Err(if part.is_some() { "Esa pieza ya no existe" } else { "El diseño todavía no tiene un sólido" }.into());
+                }
+                let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
                 std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
             }
             "stl" => converter_stl::export_stl(&scene()?, p).map_err(|e| format!("Error exportando STL: {e:?}"))?,

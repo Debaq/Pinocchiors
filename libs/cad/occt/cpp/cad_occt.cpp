@@ -3,6 +3,14 @@
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
+#include <STEPCAFControl_Writer.hxx>
+#include <TDocStd_Document.hxx>
+#include <XCAFApp_Application.hxx>
+#include <XCAFDoc_ColorTool.hxx>
+#include <XCAFDoc_DocumentTool.hxx>
+#include <XCAFDoc_ShapeTool.hxx>
+#include <TDataStd_Name.hxx>
+#include <Quantity_Color.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
@@ -1118,6 +1126,32 @@ int32_t cad_write_step(const CadShape* s, uint8_t** out, size_t* len) {
             throw Standard_Failure("no se pudo traducir la forma a STEP");
         std::ostringstream os;
         if (w.WriteStream(os) != IFSelect_RetDone) throw Standard_Failure("no se pudo escribir STEP");
+        return give_bytes(os.str(), out, len);
+    });
+}
+
+int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* names, const double* colors,
+                             int32_t n, uint8_t** out, size_t* len) {
+    quiet_messages();
+    return guard("escribir STEP", 0, [&] {
+        Handle(XCAFApp_Application) app = XCAFApp_Application::GetApplication();
+        Handle(TDocStd_Document) doc;
+        app->NewDocument("MDTV-XCAF", doc);
+        Handle(XCAFDoc_ShapeTool) st = XCAFDoc_DocumentTool::ShapeTool(doc->Main());
+        Handle(XCAFDoc_ColorTool) ct = XCAFDoc_DocumentTool::ColorTool(doc->Main());
+        for (int i = 0; i < n; i++) {
+            TDF_Label l = st->AddShape(shapes[i]->s, Standard_False);
+            TDataStd_Name::Set(l, TCollection_ExtendedString(names[i], Standard_True));
+            const double* c = colors + 3 * i;
+            if (c[0] >= 0) ct->SetColor(l, Quantity_Color(c[0], c[1], c[2], Quantity_TOC_sRGB), XCAFDoc_ColorGen);
+        }
+        STEPCAFControl_Writer w;
+        w.SetNameMode(Standard_True);
+        w.SetColorMode(Standard_True);
+        if (!w.Transfer(doc, STEPControl_AsIs)) throw Standard_Failure("no se pudieron traducir las piezas a STEP");
+        std::ostringstream os;
+        if (w.WriteStream(os) != IFSelect_RetDone) throw Standard_Failure("no se pudo escribir STEP");
+        app->Close(doc);
         return give_bytes(os.str(), out, len);
     });
 }

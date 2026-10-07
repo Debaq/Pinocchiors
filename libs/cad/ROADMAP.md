@@ -391,3 +391,6 @@ cargo test -p cad-model
   impiden reordenar una booleana antes de lo que creó sus piezas.
 - **2026-10-07 Material por pieza** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 5): cada pieza puede
   tener su material; la masa total y el centro de masa salen de las piezas.
+- **2026-10-07 STEP con piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 6, con lo que el plan 5
+  queda completo): el STEP lleva cada pieza con su nombre y su color; cuesta +6,7 MB en el
+  binario estático (XCAF).

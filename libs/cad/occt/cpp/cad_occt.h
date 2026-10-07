@@ -159,6 +159,11 @@ CadShape* cad_make_vertex(const double* p);
 // Distancia mínima entre dos formas y los puntos más cercanos de cada una (−1 si falla).
 double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb);
 
+// STEP con varias piezas, cada una con su nombre (UTF-8) y color (r, g, b en 0..1
+// por pieza; r < 0 = sin color).
+int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* names, const double* colors,
+                             int32_t n, uint8_t** out, size_t* len);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

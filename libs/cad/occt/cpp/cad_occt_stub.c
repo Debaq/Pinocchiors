@@ -56,6 +56,7 @@ int32_t cad_edge_face_pairs(const CadShape* s, int32_t* o) { (void)s; (void)o; r
 CadShape* cad_sub_shape(const CadShape* s, int32_t k, int32_t i) { (void)s; (void)k; (void)i; FAIL_PTR; }
 int32_t cad_count_vertices(const CadShape* s) { (void)s; FAIL_INT; }
 int32_t cad_count_solids(const CadShape* s) { (void)s; FAIL_INT; }
+int32_t cad_write_step_parts(const CadShape* const* s, const char* const* nm, const double* c, int32_t n, uint8_t** o, size_t* l) { (void)s; (void)nm; (void)c; (void)n; (void)o; (void)l; FAIL_INT; }
 int32_t cad_face_indices_in(const CadShape* p, const CadShape* c, int32_t* o) { (void)p; (void)c; (void)o; FAIL_INT; }
 int32_t cad_vertex_point(const CadShape* s, int32_t i, double* o) { (void)s; (void)i; (void)o; FAIL_INT; }
 CadShape* cad_make_vertex(const double* p) { (void)p; FAIL_PTR; }

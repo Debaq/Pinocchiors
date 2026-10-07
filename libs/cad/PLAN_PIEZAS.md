@@ -109,7 +109,13 @@ se pueden combinar piezas entre sí. Es la base de los ensambles
    abre sus datos (material, volumen, área, masa, centro) y la resalta en el visor. La masa
    del diseño suma la de cada pieza y el centro de masa (también la cruz del visor) se pondera
    por masa; la inercia del cuerpo solo se muestra con una sola densidad.*
-6. **STEP con nombres y colores** (XCAF).
+6. **STEP con nombres y colores** (XCAF). *Hecha el 2026-10-07: `cad_write_step_parts` arma un documento
+   XCAF con una etiqueta por pieza (`TDataStd_Name`, `XCAFDoc_ColorTool` en sRGB) y lo escribe
+   con `STEPCAFControl_Writer`; `Shape::parts_to_step`. Exportar STEP usa siempre las piezas
+   con su nombre y su color elegido. Enlace: TKXCAF, TKVCAF, TKV3d, TKHLR, TKService, TKCAF,
+   TKLCAF, TKCDF (con OCCT < 7.8, TKXDESTEP). **Tamaño**: el binario de pruebas estático sin
+   símbolos pasa de 33,6 MB a 40,3 MB (+6,7 MB); si pesa demasiado se puede volver a
+   `STEPControl_Writer` (sin nombres) quitando esos toolkits.*
 
 ## Pruebas
 

@@ -17,12 +17,15 @@ use std::path::{Path, PathBuf};
 
 // Toolkits usados por el puente, en orden de dependencia (importa al enlazar estático).
 const TOOLKITS: &[&str] = &[
-    "TKDESTEP", "TKDE", "TKXSBase", "TKFeat", "TKOffset", "TKFillet", "TKBool", "TKBO",
+    "TKDESTEP", "TKDE",
+    // STEP con nombres y colores por pieza (documento XCAF)
+    "TKXCAF", "TKVCAF", "TKV3d", "TKHLR", "TKService", "TKCAF", "TKLCAF", "TKCDF",
+    "TKXSBase", "TKFeat", "TKOffset", "TKFillet", "TKBool", "TKBO",
     "TKMesh", "TKShHealing", "TKPrim", "TKTopAlgo", "TKGeomAlgo", "TKBRep", "TKGeomBase",
     "TKG3d", "TKG2d", "TKMath", "TKernel",
 ];
 // Nombres anteriores a 7.8 para STEP.
-const TOOLKITS_OLD_STEP: &[&str] = &["TKSTEP", "TKSTEPAttr", "TKSTEP209", "TKSTEPBase"];
+const TOOLKITS_OLD_STEP: &[&str] = &["TKXDESTEP", "TKSTEP", "TKSTEPAttr", "TKSTEP209", "TKSTEPBase"];
 
 fn find_include() -> Option<PathBuf> {
     if let Ok(dir) = env::var("OCCT_INCLUDE_DIR")

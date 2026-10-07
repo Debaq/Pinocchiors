@@ -476,3 +476,20 @@ fn solids_of_a_compound_keep_their_faces() {
     }
     assert!(seen.iter().all(|&x| x));
 }
+
+#[test]
+fn step_with_named_colored_parts() {
+    if !cad_occt::available() {
+        return;
+    }
+    let a = Shape::make_box(Frame::at([0.0; 3]), 10.0, 10.0, 10.0).unwrap();
+    let b = Shape::cylinder(Frame::at([30.0, 0.0, 0.0]), 4.0, 10.0).unwrap();
+    let bytes = Shape::parts_to_step(&[(&a, "Base", Some([0.2, 0.4, 0.6])), (&b, "Eje ñandú", None)]).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    assert!(text.starts_with("ISO-10303-21"));
+    assert!(text.contains("'Base'"), "sin el nombre de la primera");
+    assert!(text.contains("COLOUR_RGB"), "sin color");
+    // Se vuelve a leer con los dos sólidos
+    let back = Shape::from_step(&bytes).unwrap();
+    assert_eq!(back.solids().unwrap().len(), 2);
+}

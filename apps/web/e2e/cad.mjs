@@ -678,6 +678,13 @@ const scenarios = {
     const model = execSync(`unzip -p ${path} 3D/3dmodel.model`).toString();
     const objects = (model.match(/<object /g) ?? []).length;
     if (objects !== 2 || !model.includes('name="Eje"')) throw new Error(`3MF: ${objects} objetos`);
+    // STEP: cada pieza con su nombre y el color elegido (rojo puro = color predefinido)
+    const step = `${out}/piezas.step`;
+    rmSync(step, { force: true });
+    await call("cad_export", { path: step, format: "step" });
+    const text = readFileSync(step, "latin1");
+    if (!text.includes("'Eje'") || !text.includes("'Pieza 1'")) throw new Error("STEP sin los nombres de las piezas");
+    if (!/DRAUGHTING_PRE_DEFINED_COLOUR\('red'\)|COLOUR_RGB/.test(text)) throw new Error("STEP sin el color");
     const one = `${out}/eje.stl`;
     rmSync(one, { force: true });
     await call("cad_export", { path: one, format: "stl", part: ps[1].id });

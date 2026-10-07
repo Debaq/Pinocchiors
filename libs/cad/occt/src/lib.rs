@@ -742,6 +742,18 @@ impl Shape {
         take_bytes(|out, len| unsafe { ffi::cad_write_step(self.ptr(), out, len) })
     }
 
+    /// STEP con varias piezas, cada una con nombre y color opcional (r, g, b en 0..1).
+    pub fn parts_to_step(parts: &[(&Shape, &str, Option<[f64; 3]>)]) -> Result<Vec<u8>> {
+        let names: Vec<std::ffi::CString> =
+            parts.iter().map(|(_, n, _)| std::ffi::CString::new(n.replace('\0', "")).unwrap_or_default()).collect();
+        let name_ptrs: Vec<*const std::ffi::c_char> = names.iter().map(|n| n.as_ptr()).collect();
+        let shapes: Vec<*const ffi::CadShape> = parts.iter().map(|(s, _, _)| s.ptr()).collect();
+        let colors: Vec<f64> = parts.iter().flat_map(|(_, _, c)| c.unwrap_or([-1.0; 3])).collect();
+        take_bytes(|out, len| unsafe {
+            ffi::cad_write_step_parts(shapes.as_ptr(), name_ptrs.as_ptr(), colors.as_ptr(), parts.len() as i32, out, len)
+        })
+    }
+
     pub fn from_step(data: &[u8]) -> Result<Shape> {
         wrap(unsafe { ffi::cad_read_step(data.as_ptr(), data.len()) })
     }

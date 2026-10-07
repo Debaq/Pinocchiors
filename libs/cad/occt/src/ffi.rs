@@ -137,6 +137,14 @@ unsafe extern "C" {
     pub fn cad_sub_shape(s: *const CadShape, kind: i32, index: i32) -> *mut CadShape;
     pub fn cad_count_vertices(s: *const CadShape) -> i32;
     pub fn cad_count_solids(s: *const CadShape) -> i32;
+    pub fn cad_write_step_parts(
+        shapes: *const *const CadShape,
+        names: *const *const std::ffi::c_char,
+        colors: *const f64,
+        n: i32,
+        out: *mut *mut u8,
+        len: *mut usize,
+    ) -> i32;
     pub fn cad_face_indices_in(parent: *const CadShape, child: *const CadShape, out: *mut i32) -> i32;
     pub fn cad_vertex_point(s: *const CadShape, index: i32, out: *mut f64) -> i32;
     pub fn cad_make_vertex(p: *const f64) -> *mut CadShape;
