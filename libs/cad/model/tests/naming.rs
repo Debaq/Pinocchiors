@@ -203,3 +203,76 @@ fn refs_with_origins_roundtrip_json() {
     let back: Document = serde_json::from_str(&old).unwrap();
     assert!(back.evaluate().errors().is_empty());
 }
+
+fn caja_en(x: f64) -> FeatureKind {
+    let FeatureKind::Primitive(mut p) = caja(10.0) else { unreachable!() };
+    p.origin = [x, 0.0, 0.0];
+    FeatureKind::Primitive(p)
+}
+
+/// Arista paralela a X más cercana al punto.
+fn edge_near(ev: &Evaluation, p: [f64; 3]) -> EdgeRef {
+    let (e, _) = ev.body.as_ref().unwrap().closest_edge(p, Some([1.0, 0.0, 0.0]), 0.9).unwrap();
+    ev.edge_ref(e).unwrap()
+}
+
+#[test]
+fn lost_edges_are_reported_and_the_rest_still_applies() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(caja_en(0.0));
+    let lejos = doc.add(caja_en(100.0));
+    let ev = doc.evaluate();
+    let a = edge_near(&ev, [5.0, 0.0, 10.0]);
+    let b = edge_near(&ev, [105.0, 0.0, 10.0]);
+    let fillet = doc.add(FeatureKind::Fillet { edges: vec![a.clone(), b], radius: 1.0 });
+    assert_eq!(doc.evaluate().state(fillet), Some(&FeatureState::Ok));
+
+    // Sin la caja lejana, su arista ya no está: advertencia y se redondea la otra
+    doc.get_mut(lejos).unwrap().suppressed = true;
+    let ev = doc.evaluate();
+    let Some(FeatureState::Warning { missing, message }) = ev.state(fillet) else {
+        panic!("se esperaba advertencia: {:?}", ev.state(fillet));
+    };
+    assert_eq!(missing, &vec![MissingRef { field: "edges".into(), index: 1 }]);
+    assert!(message.contains("1 de 2"), "{message}");
+    assert_relative_eq!(fillet_axis_z(&ev), 9.0, epsilon = 1e-9);
+    assert!(ev.errors().is_empty(), "una advertencia no es error");
+
+    // Si no queda ninguna, falla y dice cuál
+    if let FeatureKind::Fillet { edges, .. } = &mut doc.get_mut(fillet).unwrap().kind {
+        edges.remove(0);
+    }
+    let ev = doc.evaluate();
+    let Some(FeatureState::Error { missing, .. }) = ev.state(fillet) else {
+        panic!("se esperaba error: {:?}", ev.state(fillet));
+    };
+    assert_eq!(missing, &vec![MissingRef { field: "edges".into(), index: 0 }]);
+
+    // Lo guardado se vuelve a leer igual
+    let json = serde_json::to_string(&ev.status).unwrap();
+    let back: Vec<FeatureStatus> = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, ev.status);
+    let _ = a;
+}
+
+#[test]
+fn lost_sketch_face_marks_the_plane() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(caja_en(0.0));
+    let lejos = doc.add(caja_en(100.0));
+    let ev = doc.evaluate();
+    let (f, _) = ev.body.as_ref().unwrap().closest_face([110.0, 5.0, 5.0], Some([1.0, 0.0, 0.0]), 0.9).unwrap();
+    let face = ev.face_ref(f).unwrap();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face }, offset: 0.0, sketch: Sketch::default() });
+    assert_eq!(doc.evaluate().state(sk), Some(&FeatureState::Ok));
+    doc.get_mut(lejos).unwrap().suppressed = true;
+    let ev = doc.evaluate();
+    let Some(FeatureState::Error { missing, .. }) = ev.state(sk) else { panic!("{:?}", ev.state(sk)) };
+    assert_eq!(missing, &vec![MissingRef { field: "plane".into(), index: 0 }]);
+}

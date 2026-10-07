@@ -93,7 +93,10 @@ nuevo.
 3. **Herramienta transparente** (verde/roja) en la vista previa. *Hecha el 2026-10-06: `cad_tool_mesh`
    tesela la herramienta guardada en la evaluación (`Evaluation::tool`) en vez de sumarla a
    `CadResult`; el store la pide tras cada vista previa de una operación con `op`.*
-4. **Referencias rotas**: reporte por referencia, marcado y reemplazo.
+4. **Referencias rotas**: reporte por referencia, marcado y reemplazo. *Hecha el 2026-10-07:
+   `MissingRef` por campo y posición; en listas se sigue con lo que queda
+   (`FeatureState::Warning`), con referencia única falla; la caja marca las perdidas, se activa
+   sola al editar y lo elegido reemplaza a la primera perdida.*
 5. **Árbol**: doble clic, editar desde la cara, barra arrastrable, reordenar.
 6. **Carpetas.**
 

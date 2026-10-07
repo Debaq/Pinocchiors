@@ -731,7 +731,7 @@ pub fn errors_text(result: &CadResult, doc: &Document) -> Vec<String> {
         .status
         .iter()
         .filter_map(|s| match &s.state {
-            FeatureState::Error { message } => Some(format!("{}: {message}", names.get(&s.id).cloned().unwrap_or_default())),
+            FeatureState::Error { message, .. } => Some(format!("{}: {message}", names.get(&s.id).cloned().unwrap_or_default())),
             _ => None,
         })
         .collect()

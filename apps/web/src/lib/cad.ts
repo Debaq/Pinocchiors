@@ -183,9 +183,17 @@ export interface ResolvedValue {
 
 // ─── Resultados ───────────────────────────────────────────────────────────
 
+/** Referencia que no se encontró: campo de la operación y posición en su lista */
+export interface MissingRef {
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent";
+  index: number;
+}
+
 export type FeatureState =
   | { state: "ok" }
-  | { state: "error"; message: string }
+  | { state: "error"; message: string; missing?: MissingRef[] }
+  /** Se calculó con parte de lo elegido: el resto ya no está */
+  | { state: "warning"; message: string; missing: MissingRef[] }
   | { state: "suppressed" }
   | { state: "rolled_back" };
 

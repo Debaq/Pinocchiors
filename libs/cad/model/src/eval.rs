@@ -1,6 +1,7 @@
 //! Recálculo del árbol. Una operación que falla queda marcada con su error y el
 //! cuerpo sigue como estaba: las siguientes se recalculan igual.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use cad_occt::{Axis, Curve, Frame, History, Shape, SurfaceKind, with_history};
@@ -16,9 +17,25 @@ use crate::sketch::{Geometry, Sketch, SolveReport};
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum FeatureState {
     Ok,
-    Error { message: String },
+    /// Falló; `missing` dice qué referencias no se encontraron (si fue por eso).
+    Error {
+        message: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        missing: Vec<MissingRef>,
+    },
+    /// Se calculó con parte de lo elegido: el resto ya no está.
+    Warning { message: String, missing: Vec<MissingRef> },
     Suppressed,
     RolledBack,
+}
+
+/// Referencia de una operación que no se encontró: el campo (como se llama en
+/// la operación: `edges`, `faces`, `regions`, `plane`, `neutral`, `axis`,
+/// `extent`) y su posición en la lista (0 si es una sola).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MissingRef {
+    pub field: String,
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,7 +84,7 @@ impl Evaluation {
         self.status
             .iter()
             .filter_map(|s| match &s.state {
-                FeatureState::Error { message } => Some((s.id, message.clone())),
+                FeatureState::Error { message, .. } => Some((s.id, message.clone())),
                 _ => None,
             })
             .collect()
@@ -208,13 +225,21 @@ fn occt_err(e: String) -> cad_occt::Error {
 struct Ctx<'a> {
     doc: &'a Document,
     ev: Evaluation,
+    /// Referencias no encontradas y avisos de la operación en curso.
+    missing: RefCell<Vec<MissingRef>>,
+    warnings: RefCell<Vec<String>>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
     // Primero las fórmulas: el árbol se calcula con los números que dan
     let res = doc.resolve();
     let doc = &res.document;
-    let mut ctx = Ctx { doc, ev: Evaluation { parameters: res.parameters, bindings: res.bindings, ..Default::default() } };
+    let mut ctx = Ctx {
+        doc,
+        ev: Evaluation { parameters: res.parameters, bindings: res.bindings, ..Default::default() },
+        missing: RefCell::default(),
+        warnings: RefCell::default(),
+    };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     for (i, f) in doc.features.iter().enumerate() {
         let state = if i >= limit {
@@ -222,9 +247,13 @@ pub fn evaluate(doc: &Document) -> Evaluation {
         } else if f.suppressed {
             FeatureState::Suppressed
         } else {
-            match ctx.feature(f) {
-                Ok(()) => FeatureState::Ok,
-                Err(message) => FeatureState::Error { message },
+            let result = ctx.feature(f);
+            let missing = ctx.missing.take();
+            let warnings = ctx.warnings.take();
+            match result {
+                Ok(()) if missing.is_empty() => FeatureState::Ok,
+                Ok(()) => FeatureState::Warning { message: warnings.join("; "), missing },
+                Err(message) => FeatureState::Error { message, missing },
             }
         };
         ctx.ev.status.push(FeatureStatus { id: f.id, state });
@@ -282,22 +311,74 @@ impl Ctx<'_> {
         self.ev.diag()
     }
 
-    fn face(&self, r: &FaceRef) -> R<usize> {
-        self.ev.resolve_face(r)
+    /// Anota una referencia no encontrada (una sola vez: la extrusión puede
+    /// calcularse dos veces para darse vuelta).
+    fn miss(&self, field: &str, index: usize) {
+        let m = MissingRef { field: field.to_string(), index };
+        let mut v = self.missing.borrow_mut();
+        if !v.contains(&m) {
+            v.push(m);
+        }
     }
 
-    fn edge(&self, r: &EdgeRef) -> R<usize> {
-        self.ev.resolve_edge(r)
+    /// Una referencia sola: si no está, la operación falla.
+    fn face(&self, field: &str, r: &FaceRef) -> R<usize> {
+        self.body()?;
+        self.ev.resolve_face(r).inspect_err(|_| self.miss(field, 0))
     }
 
-    fn plane(&self, spec: &PlaneSpec) -> R<Plane> {
+    fn edge(&self, field: &str, r: &EdgeRef) -> R<usize> {
+        self.body()?;
+        self.ev.resolve_edge(r).inspect_err(|_| self.miss(field, 0))
+    }
+
+    /// Una lista de referencias: se sigue con las que están (la operación
+    /// queda con advertencia); si no está ninguna, falla.
+    fn all<T>(&self, field: &str, noun: &str, refs: &[T], resolve: impl Fn(&T) -> R<usize>) -> R<Vec<usize>> {
+        self.body()?;
+        let mut found = Vec::new();
+        let mut lost = 0;
+        for (i, r) in refs.iter().enumerate() {
+            match resolve(r) {
+                Ok(x) => found.push(x),
+                Err(_) => {
+                    self.miss(field, i);
+                    lost += 1;
+                }
+            }
+        }
+        if lost > 0 {
+            if found.is_empty() {
+                return Err(format!("no se encontró ninguna de las {noun} elegidas"));
+            }
+            self.warn(format!("faltan {lost} de {} {noun}", refs.len()));
+        }
+        Ok(found)
+    }
+
+    fn warn(&self, message: String) {
+        let mut v = self.warnings.borrow_mut();
+        if !v.contains(&message) {
+            v.push(message);
+        }
+    }
+
+    fn faces(&self, field: &str, refs: &[FaceRef]) -> R<Vec<usize>> {
+        self.all(field, "caras", refs, |r| self.ev.resolve_face(r))
+    }
+
+    fn edges(&self, field: &str, refs: &[EdgeRef]) -> R<Vec<usize>> {
+        self.all(field, "aristas", refs, |r| self.ev.resolve_edge(r))
+    }
+
+    fn plane(&self, field: &str, spec: &PlaneSpec) -> R<Plane> {
         Ok(match spec {
             PlaneSpec::Xy => Plane::XY,
             PlaneSpec::Xz => Plane::XZ,
             PlaneSpec::Yz => Plane::YZ,
             PlaneSpec::Custom { plane } => *plane,
             PlaneSpec::Face { face } => {
-                let i = self.face(face)?;
+                let i = self.face(field, face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
                 if info.surface != cad_occt::SurfaceKind::Plane {
                     return Err("la cara elegida no es plana".into());
@@ -310,7 +391,7 @@ impl Ctx<'_> {
         })
     }
 
-    fn axis(&self, spec: &AxisSpec) -> R<Axis> {
+    fn axis(&self, field: &str, spec: &AxisSpec) -> R<Axis> {
         Ok(match spec {
             AxisSpec::X => Axis { origin: [0.0; 3], dir: [1.0, 0.0, 0.0] },
             AxisSpec::Y => Axis { origin: [0.0; 3], dir: [0.0, 1.0, 0.0] },
@@ -326,7 +407,7 @@ impl Ctx<'_> {
                 Axis { origin: a, dir: normalize(sub(b, a)) }
             }
             AxisSpec::Edge { edge } => {
-                let i = self.edge(edge)?;
+                let i = self.edge(field, edge)?;
                 let info = self.body()?.edge_info(i).map_err(err)?;
                 match info.circle {
                     Some((center, axis, _)) => Axis { origin: center, dir: axis },
@@ -339,7 +420,7 @@ impl Ctx<'_> {
     fn feature(&mut self, f: &Feature) -> R<()> {
         match &f.kind {
             FeatureKind::Sketch { plane, offset, sketch } => {
-                let plane = self.plane(plane)?.offset(*offset);
+                let plane = self.plane("plane", plane)?.offset(*offset);
                 let mut solved = sketch.clone();
                 let report = solved.solve().map_err(err)?;
                 let regions = find_regions(&solved).map_err(err)?;
@@ -352,7 +433,7 @@ impl Ctx<'_> {
                 self.apply(tool, e.op)
             }
             FeatureKind::Revolve(r) => {
-                let axis = self.axis(&r.axis)?;
+                let axis = self.axis("axis", &r.axis)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
                 let angle = r.angle.to_radians();
                 if angle.abs() < 1e-9 {
@@ -411,7 +492,7 @@ impl Ctx<'_> {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
-                let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
+                let idx = self.edges("edges", edges)?;
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.fillet(&idx, *radius)).map_err(err)?;
                 self.replace_body(new, &h, |k| Some(tag(f.id, format!("redondeo:{k}"))));
@@ -421,14 +502,14 @@ impl Ctx<'_> {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
-                let idx = edges.iter().map(|e| self.edge(e)).collect::<R<Vec<_>>>()?;
+                let idx = self.edges("edges", edges)?;
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.chamfer(&idx, *distance)).map_err(err)?;
                 self.replace_body(new, &h, |k| Some(tag(f.id, format!("chaflan:{k}"))));
                 Ok(())
             }
             FeatureKind::Shell { faces, thickness } => {
-                let idx = faces.iter().map(|r| self.face(r)).collect::<R<Vec<_>>>()?;
+                let idx = self.faces("faces", faces)?;
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.shell(&idx, -thickness.abs())).map_err(err)?;
                 self.replace_body(new, &h, |_| None);
@@ -438,8 +519,8 @@ impl Ctx<'_> {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());
                 }
-                let idx = faces.iter().map(|r| self.face(r)).collect::<R<Vec<_>>>()?;
-                let p = self.plane(neutral)?;
+                let idx = self.faces("faces", faces)?;
+                let p = self.plane("neutral", neutral)?;
                 let body = self.body()?.clone();
                 let (new, h) =
                     with_history(|| body.draft(&idx, p.normal, angle.to_radians(), p.origin, p.normal)).map_err(err)?;
@@ -475,7 +556,7 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Mirror { features, plane } => {
-                let p = self.plane(plane)?;
+                let p = self.plane("plane", plane)?;
                 let mirrored = |src: &Tagged| -> R<Tagged> {
                     let (shape, h) = with_history(|| src.shape.mirror(p.origin, p.normal)).map_err(err)?;
                     let tags = suffixed(&src.tags, &h, shape.face_count(), "#espejo");
@@ -495,7 +576,7 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Split { plane, flip } => {
-                let p = self.plane(plane)?;
+                let p = self.plane("plane", plane)?;
                 let n = if *flip { scale(p.normal, -1.0) } else { p.normal };
                 let body = self.body()?.clone();
                 let (new, h) = with_history(|| body.split_keep(p.origin, n)).map_err(err)?;
@@ -535,7 +616,7 @@ impl Ctx<'_> {
                 if *count < 2 {
                     return Err("se necesitan al menos 2 instancias".into());
                 }
-                let ax = self.axis(axis)?;
+                let ax = self.axis("axis", axis)?;
                 let full = (angle.abs() - 360.0).abs() < 1e-9;
                 let step = if full { angle / *count as f64 } else { angle / (*count - 1) as f64 };
                 for k in 1..*count {
@@ -576,7 +657,7 @@ impl Ctx<'_> {
                 (0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))
             }
             Extent::UpToFace { face } => {
-                let i = self.face(face)?;
+                let i = self.face("extent", face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
                 let d = dot(sub(info.point, plane.origin), n);
                 if d.abs() < 1e-9 {
@@ -623,9 +704,18 @@ impl Ctx<'_> {
     /// cada entidad que las borde y un punto interior de cada región.
     #[allow(clippy::type_complexity)]
     fn profile(&self, sketch: FeatureId, sel: &RegionSelection) -> R<(Vec<Shape>, Vec<(u32, P3)>, Vec<P3>)> {
-        let faces = self.profile_faces(sketch, sel)?;
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
-        let regions = self.selected_regions(sketch, sel)?;
+        let regions = self.selected_regions(s, sel)?;
+        let faces = regions
+            .iter()
+            .map(|r| {
+                let mut loops = vec![loop_curves(&s.sketch, &s.plane, &r.outer)?];
+                for h in &r.holes {
+                    loops.push(loop_curves(&s.sketch, &s.plane, h)?);
+                }
+                Shape::face(&loops).map_err(err)
+            })
+            .collect::<R<Vec<_>>>()?;
         let mut entities: Vec<(u32, P3)> = Vec::new();
         for r in &regions {
             for l in std::iter::once(&r.outer).chain(&r.holes) {
@@ -643,46 +733,30 @@ impl Ctx<'_> {
         Ok((faces, entities, samples))
     }
 
-    fn selected_regions(&self, sketch: FeatureId, sel: &RegionSelection) -> R<Vec<&Region>> {
-        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
-        Ok(match sel {
-            RegionSelection::All => s.regions.iter().filter(|r| r.depth % 2 == 0).collect(),
-            RegionSelection::Points { points } => {
-                let mut v = Vec::new();
-                for p in points {
-                    let r = s
-                        .regions
-                        .iter()
-                        .filter(|r| r.contains(*p))
-                        .max_by_key(|r| r.depth)
-                        .ok_or("una de las regiones elegidas ya no existe")?;
-                    if !v.contains(&r) {
-                        v.push(r);
-                    }
-                }
-                v
-            }
-        })
-    }
-
-    /// Caras B-Rep de las regiones elegidas de un sketch.
-    fn profile_faces(&self, sketch: FeatureId, sel: &RegionSelection) -> R<Vec<Shape>> {
-        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+    /// Regiones elegidas de un sketch; las que ya no están se anotan como
+    /// referencias perdidas y se sigue con el resto.
+    fn selected_regions<'s>(&self, s: &'s SketchResult, sel: &RegionSelection) -> R<Vec<&'s Region>> {
         let regions: Vec<&Region> = match sel {
             RegionSelection::All => s.regions.iter().filter(|r| r.depth % 2 == 0).collect(),
             RegionSelection::Points { points } => {
                 let mut v = Vec::new();
-                for p in points {
+                let mut lost = 0;
+                for (i, p) in points.iter().enumerate() {
                     // La región más interna que contiene el punto
-                    let r = s
-                        .regions
-                        .iter()
-                        .filter(|r| r.contains(*p))
-                        .max_by_key(|r| r.depth)
-                        .ok_or("una de las regiones elegidas ya no existe")?;
-                    if !v.contains(&r) {
-                        v.push(r);
+                    match s.regions.iter().filter(|r| r.contains(*p)).max_by_key(|r| r.depth) {
+                        Some(r) if !v.contains(&r) => v.push(r),
+                        Some(_) => {}
+                        None => {
+                            self.miss("regions", i);
+                            lost += 1;
+                        }
                     }
+                }
+                if lost > 0 && !v.is_empty() {
+                    self.warn(format!("faltan {lost} de {} regiones", points.len()));
+                }
+                if v.is_empty() && lost > 0 {
+                    return Err("no se encontró ninguna de las regiones elegidas".into());
                 }
                 v
             }
@@ -690,16 +764,7 @@ impl Ctx<'_> {
         if regions.is_empty() {
             return Err("el sketch no tiene regiones cerradas".into());
         }
-        regions
-            .iter()
-            .map(|r| {
-                let mut loops = vec![loop_curves(&s.sketch, &s.plane, &r.outer)?];
-                for h in &r.holes {
-                    loops.push(loop_curves(&s.sketch, &s.plane, h)?);
-                }
-                Shape::face(&loops).map_err(err)
-            })
-            .collect()
+        Ok(regions)
     }
 }
 

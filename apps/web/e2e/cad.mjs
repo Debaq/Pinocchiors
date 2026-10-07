@@ -155,6 +155,57 @@ const scenarios = {
     if ((await call("cad_get_document")).features[1].kind.edges.length !== 2) throw new Error("no quedaron dos aristas");
   },
 
+  async "referencia perdida: advertencia, en rojo y reemplazo"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].map((s) => s.textContent)`);
+    const fillet = () => 2 * (1 - Math.PI / 4) * 20;
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Otra caja más arriba (separada) y un redondeo con una arista de cada una
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    const edge = (z) => ({ point: [0, -10, z], direction: [1, 0, 0] });
+    doc.features.push(
+      { ...structuredClone(box), id: box.id + 1, name: "Caja arriba", kind: { ...structuredClone(box.kind), origin: [0, 0, 30] } },
+      { id: box.id + 2, name: "Redondeo 1", suppressed: false, kind: { type: "fillet", edges: [edge(20), edge(50)], radius: 1 } },
+    );
+    doc.next_id = box.id + 3;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    near((await body()).volume, 16000 - fillet(), 0.2, "dos cajas, dos redondeos");
+    // Sin la caja de arriba su arista ya no está: advertencia y se redondea la otra
+    await b.eval(`(() => {
+      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba");
+      s.parentElement.querySelector('[aria-label="Suprimir"]').click();
+    })()`);
+    await sleep(2000);
+    const st = (await evaluate()).status.find((s) => s.id === box.id + 2);
+    if (st.state !== "warning" || st.missing?.[0]?.field !== "edges" || st.missing[0].index !== 1) throw new Error(`estado: ${JSON.stringify(st)}`);
+    near((await body()).volume, 8000 - fillet() / 2, 0.05, "queda un redondeo");
+    if (!(await b.eval(`!!document.querySelector('[title*="faltan 1 de 2 aristas"]')`))) throw new Error("el árbol no avisa");
+    // Al editar, la caja se activa sola y marca la perdida
+    await clickRow(b, "Redondeo 1");
+    await sleep(2000);
+    const before = await items();
+    if (!before[1]?.includes("no encontrada") || before[0].includes("no encontrada")) throw new Error(`ítems: ${before}`);
+    // Elegir otra arista reemplaza a la perdida
+    await b.click(...(await at([10, 0, 20])), { wait: 1500 });
+    const after = await items();
+    if (after.length !== 2 || after.some((t) => t.includes("no encontrada"))) throw new Error(`tras reemplazar: ${after}`);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    await b.key("Enter", "Enter", 13);
+    await sleep(2000);
+    const ok = (await evaluate()).status.find((s) => s.id === box.id + 2);
+    if (ok.state !== "ok") throw new Error(`tras reemplazar: ${JSON.stringify(ok)}`);
+    near((await body()).volume, 8000 - fillet(), 0.2, "dos redondeos en la caja de abajo");
+    const edges = (await call("cad_get_document")).features[2].kind.edges;
+    near(edges[1].point[0], 10, 1e-6, "la arista nueva quedó en el lugar de la perdida");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

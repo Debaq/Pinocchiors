@@ -320,3 +320,13 @@ cargo test -p cad-model
   `cad_tool_mesh` la tesela en el formato de `cad_mesh` (vacía si la operación no tiene); el
   store la pide después de cada vista previa (`store.tool()`). No se dibuja mientras se elige
   en una caja (el sólido es el de antes) ni después de aceptar o cancelar.
+- **2026-10-07 Referencias perdidas** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 4): el
+  recálculo anota qué referencia no encontró (`MissingRef { field, index }`, con el nombre del
+  campo de la operación: `edges`, `faces`, `regions`, `plane`, `neutral`, `axis`, `extent`). En
+  listas (aristas, caras, regiones) la operación sigue con las que están y queda en el estado
+  nuevo `FeatureState::Warning` ("faltan 1 de 2 aristas"); si no queda ninguna, o la referencia
+  es única (plano de un sketch, eje, "hasta una cara"), falla con `Error { missing }`. El árbol
+  muestra la advertencia en ámbar y el error en rojo; en el diálogo las perdidas salen "no
+  encontrada" aunque la caja no esté activa, la caja se activa sola al editar y lo que se elige
+  ocupa el lugar de la primera perdida. Perfil y regiones se resuelven una sola vez
+  (`selected_regions` ya no se repite en `profile_faces`).

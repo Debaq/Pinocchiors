@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import {
@@ -28,6 +28,8 @@ import {
   type FaceRef,
   type Feature,
   type FeatureKind,
+  type FeatureState,
+  type MissingRef,
   type P2,
   type P3,
   type PatternKind,
@@ -671,6 +673,9 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
 
 // ─── Árbol ────────────────────────────────────────────────────────────────
 
+/** Mensaje de error o advertencia de una operación (nada si está bien) */
+const problem = (st: FeatureState | undefined) => (st?.state === "error" || st?.state === "warning" ? st.message : undefined);
+
 const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const store = props.store;
   const doc = () => store.doc();
@@ -693,13 +698,17 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     )}
                     onClick={() => store.select(store.selected() === f.id ? undefined : f.id)}
                     onDblClick={() => f.kind.type === "sketch" && void store.settled().then(() => props.ui.editSketch(f.id))}
-                    title={state()?.state === "error" ? (state() as { message: string }).message : undefined}
+                    title={problem(state())}
                   >
                     <Show
-                      when={state()?.state === "error"}
+                      when={problem(state())}
                       fallback={<span class="w-3.5 text-center text-text-dim">{FEATURE_LABELS[f.kind.type][0]}</span>}
                     >
-                      <Icons.Warning size={14} class="text-error shrink-0" />
+                      <Icons.Warning
+                        size={14}
+                        aria-label={state()?.state === "warning" ? "Advertencia" : "Error"}
+                        class={clsx("shrink-0", state()?.state === "warning" ? "text-warning" : "text-error")}
+                      />
                     </Show>
                     <span class={clsx("flex-1 truncate", f.suppressed && "line-through")}>{f.name}</span>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
@@ -802,12 +811,17 @@ const FeatureEditor: Component<{
     );
   };
   const state = () => props.store.stateOf(f().id);
+  /** Posiciones de las referencias de un campo que no se encontraron */
+  const lost = (field: MissingRef["field"]) => {
+    const st = state();
+    return st?.state === "error" || st?.state === "warning" ? (st.missing ?? []).filter((m) => m.field === field).map((m) => m.index) : [];
+  };
   const sketchOptions = () => props.sketches.map((s) => ({ value: String(s.id), label: s.name }));
-  const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void) => (
+  const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void, lostFace = false) => (
     <Select
       options={[
         ...(["xy", "xz", "yz"] as const).map((k) => ({ value: k, label: PLANE_LABELS[k] })),
-        ...(value.type === "face" ? [{ value: "face", label: "Cara del sólido" }] : []),
+        ...(value.type === "face" ? [{ value: "face", label: lostFace ? "Cara del sólido · no encontrada" : "Cara del sólido" }] : []),
         ...(value.type === "custom" ? [{ value: "custom", label: "Plano propio" }] : []),
       ]}
       value={value.type}
@@ -848,8 +862,8 @@ const FeatureEditor: Component<{
           value={f().name}
           onChange={(e) => void props.store.updateFeature(f().id, (x) => (x.name = e.currentTarget.value))}
         />
-        <Show when={state()?.state === "error"}>
-          <p class="text-xs text-error">{(state() as { message: string }).message}</p>
+        <Show when={problem(state())}>
+          {(msg) => <p class={clsx("text-xs", state()?.state === "warning" ? "text-warning" : "text-error")}>{msg()}</p>}
         </Show>
         <Switch>
           <Match when={f().kind.type === "sketch" && (f().kind as Extract<FeatureKind, { type: "sketch" }>)}>
@@ -857,7 +871,7 @@ const FeatureEditor: Component<{
               const view = () => props.store.sketchView(f().id);
               return (
                 <>
-                  <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)))}</Row>
+                  <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)), lost("plane").length > 0)}</Row>
                   {field("Desplazamiento", "kind.offset", k().offset, (x, v) => x.type === "sketch" && (x.offset = v), "mm")}
                   <p class="text-[11px] text-text-dim">
                     {k().sketch.entities.length} entidades · {k().sketch.constraints.length} restricciones · {view()?.regions.length ?? 0} regiones
@@ -905,6 +919,7 @@ const FeatureEditor: Component<{
                       owner={`${f().id}:hasta`}
                       kind="face"
                       label="Hasta la cara"
+                      lost={lost("extent")}
                       refs={k().extent.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
                       onChange={(refs) => {
                         if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef });
@@ -925,6 +940,7 @@ const FeatureEditor: Component<{
                     ui={props.ui}
                     store={props.store}
                     owner={`${f().id}:regiones`}
+                    lost={lost("regions")}
                     sketch={k().sketch}
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "extrude" && (x.regions = r))}
@@ -969,6 +985,7 @@ const FeatureEditor: Component<{
                     ui={props.ui}
                     store={props.store}
                     owner={`${f().id}:regiones`}
+                    lost={lost("regions")}
                     sketch={k().sketch}
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
@@ -1039,6 +1056,7 @@ const FeatureEditor: Component<{
                     owner={`${f().id}:aristas`}
                     kind="edges"
                     label="Aristas"
+                    lost={lost("edges")}
                     refs={(k() as { edges: EdgeRef[] }).edges}
                     onChange={(refs) =>
                       update((x) => {
@@ -1064,7 +1082,7 @@ const FeatureEditor: Component<{
                     {(d) => (
                       <>
                         {field("Ángulo", "kind.angle", d().angle, (x, v) => x.type === "draft" && (x.angle = v), "°")}
-                        <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)))}</Row>
+                        <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)), lost("neutral").length > 0)}</Row>
                       </>
                     )}
                   </Show>
@@ -1074,6 +1092,7 @@ const FeatureEditor: Component<{
                     owner={`${f().id}:caras`}
                     kind="faces"
                     label={kind.type === "shell" ? "Caras abiertas" : "Caras"}
+                    lost={lost("faces")}
                     refs={(k() as { faces: FaceRef[] }).faces}
                     onChange={(refs) =>
                       update((x) => {
@@ -1200,6 +1219,8 @@ const SelectionBox: Component<{
   kind: "edges" | "faces" | "face";
   label: string;
   refs: (EdgeRef | FaceRef)[];
+  /** Referencias que el último cálculo no encontró (posiciones en `refs`) */
+  lost?: number[];
   onChange: (refs: (EdgeRef | FaceRef)[]) => void;
 }> = (props) => {
   const ui = props.ui;
@@ -1234,9 +1255,15 @@ const SelectionBox: Component<{
     }),
   );
 
+  // Con la caja activa manda lo que se ve (el sólido de antes de la operación);
+  // si no, lo que dijo el último cálculo
+  const isLost = (i: number) => (active() ? resolved()[i] === null : (props.lost ?? []).includes(i));
   const toggleRef = (ref: EdgeRef | FaceRef, index: number) => {
     const at = resolved().indexOf(index);
-    props.onChange(at >= 0 ? props.refs.filter((_, i) => i !== at) : [...props.refs, ref]);
+    if (at >= 0) return props.onChange(props.refs.filter((_, i) => i !== at));
+    // Lo nuevo reemplaza a la primera referencia perdida
+    const gone = props.refs.findIndex((_, i) => resolved()[i] === null);
+    props.onChange(gone >= 0 ? props.refs.map((r, i) => (i === gone ? ref : r)) : [...props.refs, ref]);
   };
   const activate = () => {
     void props.store.setSelecting(true);
@@ -1245,10 +1272,16 @@ const SelectionBox: Component<{
     else if (props.kind === "faces") ui.setPick({ ...base, kind: "faces", toggle: (r, i) => toggleRef(r, i) });
     else ui.setPick({ ...base, kind: "face", done: (r) => props.onChange([r]) });
   };
-  // Vacía al abrirse el diálogo: se empieza eligiendo
-  onMount(() => {
-    if (props.refs.length === 0 && props.store.draft()) activate();
-  });
+  // Vacía o con referencias perdidas al abrirse el diálogo: se empieza eligiendo
+  // (al editar, el borrador se abre después de montar la caja)
+  createEffect(
+    on(
+      () => !!props.store.draft(),
+      (open) => {
+        if (open && untrack(() => props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
+      },
+    ),
+  );
   onCleanup(() => {
     if (active()) ui.cancelPick();
   });
@@ -1276,9 +1309,9 @@ const SelectionBox: Component<{
                 onMouseEnter={() => setHover(i())}
                 onMouseLeave={() => setHover(undefined)}
               >
-                <span class={clsx(active() && resolved()[i()] === null ? "text-error" : "text-text")}>
+                <span class={clsx(isLost(i()) ? "text-error" : "text-text")}>
                   {NOUNS[props.kind]} {i() + 1}
-                  {active() && resolved()[i()] === null ? " · no encontrada" : ""}
+                  {isLost(i()) ? " · no encontrada" : ""}
                 </span>
                 <button
                   class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
@@ -1301,7 +1334,16 @@ const SelectionBox: Component<{
 };
 
 /** Caja de regiones de un sketch: clic dentro de una región la suma o la quita */
-const RegionBox: Component<{ ui: CadUi; store: CadStore; owner: string; sketch: number; value: RegionSelection; onChange: (r: RegionSelection) => void }> = (props) => {
+const RegionBox: Component<{
+  ui: CadUi;
+  store: CadStore;
+  owner: string;
+  sketch: number;
+  value: RegionSelection;
+  /** Regiones que el último cálculo no encontró */
+  lost?: number[];
+  onChange: (r: RegionSelection) => void;
+}> = (props) => {
   const ui = props.ui;
   const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
   const points = () => (props.value.type === "points" ? props.value.points : []);
@@ -1350,7 +1392,10 @@ const RegionBox: Component<{ ui: CadUi; store: CadStore; owner: string; sketch: 
           <For each={points()}>
             {(_, i) => (
               <div class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface">
-                <span class="text-text">Región {i() + 1}</span>
+                <span class={(props.lost ?? []).includes(i()) ? "text-error" : "text-text"}>
+                  Región {i() + 1}
+                  {(props.lost ?? []).includes(i()) ? " · no encontrada" : ""}
+                </span>
                 <button
                   class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
                   aria-label={`Quitar región ${i() + 1}`}
