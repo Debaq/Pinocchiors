@@ -1575,8 +1575,32 @@ export function createCadStore() {
     if (seq === sendSeq) setTool(mesh ? { mesh, op } : null);
   };
 
+  // Cola de envíos: mientras el backend calcula, los cambios que llegan se
+  // juntan y solo se manda el último de cada tipo seguido (escribir "25"
+  // calcula "2" y "25", no "2", "25" y lo que venga en el medio). Guardar y
+  // vista previa no se mezclan: se mandan en orden.
+  const queue: { next: CadDocument | null; preview: boolean }[] = [];
+  let pumping: Promise<void> | null = null;
+  /** Cuántos envíos se saltearon por llegar otro detrás (para las pruebas) */
+  let skipped = 0;
+  const pump = async () => {
+    while (queue.length) {
+      const q = queue.shift()!;
+      await sendNow(q.next, q.preview);
+    }
+    pumping = null;
+  };
+
   /** Guarda `next` en el backend, o con `preview` solo lo muestra (`null` = volver al documento) */
-  const send = (next: CadDocument | null, preview = false) => (lastSend = sendNow(next, preview));
+  const send = (next: CadDocument | null, preview = false) => {
+    const last = queue[queue.length - 1];
+    if (last && last.preview === preview) {
+      last.next = next;
+      skipped++;
+    } else queue.push({ next, preview });
+    pumping ??= pump();
+    return (lastSend = pumping);
+  };
   const sendNow = async (next: CadDocument | null, preview: boolean) => {
     const seq = ++sendSeq;
     setBusy(true);
@@ -1669,6 +1693,8 @@ export function createCadStore() {
     cancelDraft,
     /** Espera a que termine el último recálculo pedido */
     settled: () => lastSend,
+    /** Envíos que no hizo falta mandar porque llegó otro detrás */
+    skippedSends: () => skipped,
     /** Con una caja de selección activa, la vista previa muestra el sólido de antes de la operación */
     setSelecting(on: boolean) {
       const d = draft();

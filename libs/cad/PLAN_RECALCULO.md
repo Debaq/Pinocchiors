@@ -76,9 +76,21 @@ que la interfaz nunca se congele mientras OpenCASCADE trabaja.
    idénticos estados, volumen y orígenes de caras tras cambiar cada operación de un
    documento de 8; cambiar la i-ésima recalcula n − i. Banco de 30 operaciones: todo 506 ms;
    cambiar el chaflán final con caché 9–10 ms.*
-3. **Hilo de cálculo** con cola y descarte de pedidos viejos; eventos al frontend.
-4. **Cancelación** dentro de OCCT para booleanas, redondeos y vaciados.
-5. **Teselado por cara** con reutilización.
+3. **Hilo de cálculo** con cola y descarte de pedidos viejos; eventos al frontend. *En parte,
+   2026-10-07: la cola está en el store (`send` junta los envíos seguidos del mismo tipo
+   mientras el backend calcula; guardar y vista previa no se mezclan; `skippedSends()` para
+   las pruebas). Con la caché por operación los pedidos intermedios ya eran baratos; faltan
+   los eventos de progreso.*
+4. **Cancelación** dentro de OCCT para booleanas, redondeos y vaciados. *Pendiente: con la
+   caché lo que se recalcula suele ser una operación; vale la pena cuando haya redondeos de
+   segundos.*
+5. **Teselado por cara** con reutilización. *Medido el 2026-10-07 (banco de 30 operaciones,
+   5684 triángulos): teselar 40–55 ms, de los que extraer la malla son 4 ms (teselar otra vez
+   el mismo cuerpo); tras cambiar el chaflán final vuelve a tardar ~40 ms porque el chaflán
+   rehace casi todas las caras con formas nuevas y `BRepMesh_IncrementalMesh` solo reutiliza
+   la triangulación de caras compartidas. Reutilizar exigiría pasar triangulaciones entre
+   caras geométricamente iguales (y sus polígonos de aristas): queda para cuando el teselado
+   pese más que el recálculo en diseños reales.*
 
 ## Pruebas
 

@@ -378,3 +378,6 @@ cargo test -p cad-model
   506 ms a 10 ms. El árbol muestra el tiempo de las operaciones lentas. El driver del e2e ahora
   mata el grupo de procesos de Chromium y borra su perfil al cerrar (los `chrome-*` habían
   llenado `/tmp`).
+- **2026-10-07 Cola de envíos y teselado medido** ([PLAN_RECALCULO.md](PLAN_RECALCULO.md),
+  fases 3 y 5): escribir varios valores seguidos calcula solo el último pendiente; el banco
+  ahora mide el teselado (40–55 ms, 4 ms de extracción).

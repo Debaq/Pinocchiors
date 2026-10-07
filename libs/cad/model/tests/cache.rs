@@ -175,6 +175,22 @@ fn bench_thirty_operations() {
         times.push(t.elapsed().as_secs_f64() * 1000.0);
         assert_eq!(ev.recomputed, 1);
     }
+    // Teselar como el visor (0,05 mm, 0,25 rad): la primera vez y tras un cambio al final
+    let body = doc.evaluate_with(&mut cache).body.unwrap();
+    let t = std::time::Instant::now();
+    let mesh = body.tessellate(0.05, 0.25).unwrap();
+    let mesh_ms = t.elapsed().as_secs_f64() * 1000.0;
+    if let FeatureKind::Chamfer { distance, .. } = &mut doc.features[29].kind {
+        *distance = 2.2;
+    }
+    let body2 = doc.evaluate_with(&mut cache).body.unwrap();
+    let t = std::time::Instant::now();
+    body2.tessellate(0.05, 0.25).unwrap();
+    let remesh_ms = t.elapsed().as_secs_f64() * 1000.0;
+    let t = std::time::Instant::now();
+    body2.tessellate(0.05, 0.25).unwrap();
+    println!("teselar otra vez el mismo cuerpo: {:.0} ms", t.elapsed().as_secs_f64() * 1000.0);
+    println!("teselar: {mesh_ms:.0} ms ({} triángulos); tras cambiar el chaflán {remesh_ms:.0} ms", mesh.triangles.len());
     let slowest = full.status.iter().map(|s| s.ms).fold(0.0, f64::max);
     println!("30 operaciones: todo {full_ms:.0} ms; cambiar el chaflán con caché {:?} ms; la más lenta {slowest:.0} ms", times.iter().map(|t| t.round()).collect::<Vec<_>>());
 }

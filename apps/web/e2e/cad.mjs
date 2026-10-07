@@ -590,6 +590,28 @@ const scenarios = {
     if ((await call("cad_get_document")).features.length !== 2) throw new Error("desagrupar tocó las operaciones");
   },
 
+  async "cambios rápidos: se calcula el último"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await clickRow(b, "Caja 1");
+    await sleep(800);
+    const before = await b.eval(`window.__cadStore.skippedSends()`);
+    // Seis valores sin esperar: los del medio no hace falta calcularlos
+    await b.eval(`(() => {
+      const i = [...document.querySelectorAll("label")].find((l) => l.textContent.startsWith("Alto (Z)")).querySelector("input");
+      for (const v of [21, 22, 23, 24, 25, 30]) { i.value = String(v); i.dispatchEvent(new Event("change", { bubbles: true })); }
+    })()`);
+    await b.eval(`window.__cadStore.settled()`);
+    await sleep(500);
+    near((await body()).volume, 20 * 20 * 30, 1e-6, "vista previa con el último valor");
+    if (!((await b.eval(`window.__cadStore.skippedSends()`)) > before)) throw new Error("no se salteó ningún envío");
+    await b.key("Enter", "Enter", 13);
+    await sleep(1500);
+    near((await body()).volume, 12000, 1e-6, "aceptado");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);
