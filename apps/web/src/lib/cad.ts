@@ -205,6 +205,8 @@ export interface PartProps {
   /** "#rrggbb" */
   color?: string;
   hidden?: boolean;
+  /** Material propio (si no, el del diseño) */
+  material?: Material | null;
 }
 
 export interface PartView {
@@ -224,6 +226,36 @@ export const PART_COLORS = ["#9aa4b8", "#c9a96e", "#8fb98b", "#c48b9f", "#7fa7c9
 /** Color de la pieza `i`: el elegido o uno de la paleta */
 export function partColor(doc: CadDocument | null | undefined, p: PartView, i: number): string {
   return doc?.parts?.find((x) => samePart(x.part, p.id))?.color ?? PART_COLORS[i % PART_COLORS.length];
+}
+
+/** Material de la pieza: el propio o el del diseño */
+export function partMaterial(doc: CadDocument | null | undefined, p: PartView): Material | null {
+  return doc?.parts?.find((x) => samePart(x.part, p.id))?.material ?? doc?.material ?? null;
+}
+
+/** Masa en gramos (mm³ × kg/m³ × 1e−6), o null sin material */
+export function partMass(doc: CadDocument | null | undefined, p: PartView): number | null {
+  const m = partMaterial(doc, p);
+  return m ? p.volume * m.density * 1e-6 : null;
+}
+
+/**
+ * Masa del diseño: suma de las piezas con su material, y centro de masa
+ * ponderado. `mass` es null si alguna pieza no tiene material; `uniform` dice
+ * si todas tienen la misma densidad (entonces la inercia del cuerpo vale).
+ */
+export function designMass(doc: CadDocument | null | undefined, r: CadResult | null | undefined): { mass: number | null; center: P3 | null; uniform: boolean } {
+  const body = r?.body;
+  const parts = r?.parts ?? [];
+  if (!body) return { mass: null, center: null, uniform: true };
+  const masses = parts.map((p) => partMass(doc, p));
+  const densities = parts.map((p) => partMaterial(doc, p)?.density ?? null);
+  const uniform = densities.every((d) => d === densities[0]);
+  if (!parts.length || masses.some((m) => m === null)) return { mass: null, center: body.center, uniform };
+  const total = masses.reduce<number>((a, m) => a + (m ?? 0), 0);
+  if (total <= 0) return { mass: total, center: body.center, uniform };
+  const center = [0, 1, 2].map((k) => parts.reduce((a, p, i) => a + p.center[k] * masses[i]!, 0) / total) as P3;
+  return { mass: total, center, uniform };
 }
 
 export function partHidden(doc: CadDocument | null | undefined, p: PartView): boolean {

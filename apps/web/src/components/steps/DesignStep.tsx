@@ -6,8 +6,11 @@ import {
   CONSTRAINT_LABELS,
   FEATURE_LABELS,
   MATERIALS,
+  designMass,
   partColor,
   partHidden,
+  partMass,
+  partMaterial,
   samePart,
   OP_LABELS,
   PLANE_LABELS,
@@ -541,7 +544,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 </Section>
               </Show>
 
-              <PartsSection store={store} onExport={(f, part) => void exportAs(f, part)} />
+              <PartsSection store={store} ui={ui} onExport={(f, part) => void exportAs(f, part)} />
               <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} onUseAsModel={props.onUseAsModel} />
 
               <div class="flex gap-2">
@@ -1894,10 +1897,19 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
 // ─── Sólido ───────────────────────────────────────────────────────────────
 
 /** Piezas del diseño: color, nombre, visibilidad y exportar cada una */
-const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | "3mf", part: PartView) => void }> = (props) => {
+const PartsSection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf", part: PartView) => void }> = (props) => {
   const parts = () => props.store.result()?.parts ?? [];
   const [renaming, setRenaming] = createSignal<string>();
   const key = (p: PartView) => `${p.id.feature}:${p.id.index}`;
+  // Pieza abierta (sus datos y material abajo de la lista; se resalta en el visor)
+  const [open, setOpen] = createSignal<string>();
+  const opened = () => parts().find((p) => key(p) === open());
+  createEffect(
+    on(opened, (p, prev) => {
+      if (p) props.ui.setHighlight({ faces: Array.from({ length: p.faces[1] - p.faces[0] }, (_, k) => p.faces[0] + k), edges: [] });
+      else if (prev) props.ui.setHighlight({ faces: [], edges: [] });
+    }),
+  );
   return (
     <Show when={parts().length > 0}>
       <Section title={`Piezas (${parts().length})`}>
@@ -1917,7 +1929,12 @@ const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | 
                   <Show
                     when={renaming() === key(p)}
                     fallback={
-                      <span class="flex-1 truncate text-text" title="Doble clic para renombrar" onDblClick={() => setRenaming(key(p))}>
+                      <span
+                        class={clsx("flex-1 truncate cursor-pointer", open() === key(p) ? "text-accent" : "text-text")}
+                        title="Clic: ver y elegir material · doble clic: renombrar"
+                        onClick={() => setOpen(open() === key(p) ? undefined : key(p))}
+                        onDblClick={() => setRenaming(key(p))}
+                      >
                         {p.name}
                       </span>
                     }
@@ -1935,7 +1952,9 @@ const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | 
                       }}
                     />
                   </Show>
-                  <span class="font-mono text-[10px] text-text-dim group-hover:hidden">{fmt(p.volume / 1000)} cm³</span>
+                  <span class="font-mono text-[10px] text-text-dim group-hover:hidden">
+                    {partMass(props.store.doc(), p) !== null ? fmtMass(partMass(props.store.doc(), p)!) : `${fmt(p.volume / 1000)} cm³`}
+                  </span>
                   <span class="hidden group-hover:flex items-center gap-0.5">
                     <For each={["stl", "3mf", "step"] as const}>
                       {(f) => (
@@ -1972,10 +1991,70 @@ const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | 
             }}
           </For>
         </div>
+        <Show when={opened()}>
+          {(p) => {
+            const own = () => props.store.doc()?.parts?.find((x) => samePart(x.part, p().id))?.material ?? null;
+            return (
+              <div class="space-y-1.5 rounded border border-border p-2 text-xs" aria-label={`Datos de ${p().name}`}>
+                <MaterialPicker value={own()} none="El del diseño" onChange={(m) => void props.store.setPartProps(p().id, { material: m })} />
+                <Line label="Volumen">{fmt(p().volume / 1000)} cm³</Line>
+                <Line label="Área">{fmt(p().area / 100)} cm²</Line>
+                <Show when={partMass(props.store.doc(), p()) !== null}>
+                  <Line label="Masa">
+                    {fmtMass(partMass(props.store.doc(), p())!)} ({partMaterial(props.store.doc(), p())!.name})
+                  </Line>
+                </Show>
+                <Line label="Centro">{p().center.map((v) => fmt(v, 2)).join(", ")} mm</Line>
+              </div>
+            );
+          }}
+        </Show>
       </Section>
     </Show>
   );
 };
+
+/** Material: ninguno (o el heredado), uno de la lista o una densidad propia */
+const MaterialPicker: Component<{ value: Material | null; none: string; onChange: (m: Material | null) => void }> = (props) => {
+  const choice = () => {
+    const m = props.value;
+    if (!m) return "none";
+    return MATERIALS.some((x) => x.name === m.name && x.density === m.density) ? m.name : "custom";
+  };
+  return (
+    <>
+      <Row label="Material">
+        <Select
+          options={[
+            { value: "none", label: props.none },
+            ...MATERIALS.map((m) => ({ value: m.name, label: `${m.name} (${m.density} kg/m³)` })),
+            { value: "custom", label: "Densidad propia" },
+          ]}
+          value={choice()}
+          onChange={(v) => {
+            if (v === choice()) return;
+            if (v === "none") props.onChange(null);
+            else if (v === "custom") props.onChange({ name: "Otro", density: props.value?.density ?? 1000 });
+            else props.onChange(MATERIALS.find((m) => m.name === v)!);
+          }}
+        />
+      </Row>
+      <Show when={choice() === "custom"}>
+        <Num label="Densidad" suffix="kg/m³" step={10} value={props.value!.density} onCommit={(v) => v > 0 && props.onChange({ name: props.value!.name, density: v })} />
+      </Show>
+    </>
+  );
+};
+
+/** "12,30 g" o "1,234 kg" */
+const fmtMass = (g: number) => (g >= 1000 ? `${fmt(g / 1000, 3)} kg` : `${fmt(g, 2)} g`);
+
+const Line = (p: { label: string; children: JSX.Element }) => (
+  <div class="flex justify-between gap-2">
+    <span class="text-text-muted whitespace-nowrap">{p.label}</span>
+    <span class="font-mono text-text text-right">{p.children}</span>
+  </div>
+);
 
 const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void; onUseAsModel?: () => void }> = (props) => (
   <Show when={props.store.result()?.body}>
@@ -1983,19 +2062,7 @@ const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" 
       const size = () => b().bbox_max.map((v, i) => v - b().bbox_min[i]);
       const material = () => props.store.doc()?.material ?? null;
       const setMaterial = (m: Material | null) => void props.store.commit((d) => (d.material = m));
-      // Gramos: mm³ × kg/m³ × 1e−6
-      const mass = () => (material() ? b().volume * material()!.density * 1e-6 : null);
-      const materialValue = () => {
-        const m = material();
-        if (!m) return "none";
-        return MATERIALS.some((x) => x.name === m.name && x.density === m.density) ? m.name : "custom";
-      };
-      const Line = (p: { label: string; children: JSX.Element }) => (
-        <div class="flex justify-between gap-2">
-          <span class="text-text-muted whitespace-nowrap">{p.label}</span>
-          <span class="font-mono text-text text-right">{p.children}</span>
-        </div>
-      );
+      const total = () => designMass(props.store.doc(), props.store.result());
       return (
         <Section title="Sólido">
           <div class="space-y-1 text-xs">
@@ -2009,32 +2076,14 @@ const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" 
               <p class="text-warning">La forma tiene defectos: puede fallar al exportar o imprimir</p>
             </Show>
           </div>
-          <Row label="Material">
-            <Select
-              options={[
-                { value: "none", label: "Sin material" },
-                ...MATERIALS.map((m) => ({ value: m.name, label: `${m.name} (${m.density} kg/m³)` })),
-                { value: "custom", label: "Densidad propia" },
-              ]}
-              value={materialValue()}
-              onChange={(v) => {
-                if (v === materialValue()) return;
-                if (v === "none") setMaterial(null);
-                else if (v === "custom") setMaterial({ name: "Otro", density: material()?.density ?? 1000 });
-                else setMaterial(MATERIALS.find((m) => m.name === v)!);
-              }}
-            />
-          </Row>
-          <Show when={materialValue() === "custom"}>
-            <Num label="Densidad" suffix="kg/m³" step={10} value={material()!.density} onCommit={(v) => v > 0 && setMaterial({ name: material()!.name, density: v })} />
-          </Show>
+          <MaterialPicker value={material()} none="Sin material" onChange={setMaterial} />
           <div class="space-y-1 text-xs">
-            <Show when={mass() !== null}>
-              <Line label="Masa">{mass()! >= 1000 ? `${fmt(mass()! / 1000, 3)} kg` : `${fmt(mass()!, 2)} g`}</Line>
+            <Show when={total().mass !== null}>
+              <Line label="Masa">{fmtMass(total().mass!)}</Line>
             </Show>
-            <Line label="Centro de masa">{b().center.map((v) => fmt(v, 2)).join(", ")} mm</Line>
-            <Show when={mass() !== null}>
-              {/* kg·mm² = mm⁵ × kg/m³ × 1e−9 */}
+            <Line label="Centro de masa">{(total().center ?? b().center).map((v) => fmt(v, 2)).join(", ")} mm</Line>
+            {/* Con una sola densidad: kg·mm² = mm⁵ × kg/m³ × 1e−9 */}
+            <Show when={total().mass !== null && total().uniform && material()}>
               <Line label="Inercia">
                 {b()
                   .inertia.map((v) => fmt(v * material()!.density * 1e-9, 3))

@@ -743,6 +743,42 @@ const scenarios = {
     if (kinds.join(",") !== "primitive,primitive,boolean,primitive,split_parts,delete_parts") throw new Error(`historial: ${kinds}`);
   },
 
+  async "material por pieza y masa total"(b) {
+    // Sin raíz: la sección Sólido (la última con ese rótulo; la de la pieza va antes)
+    const line = (label, root = "document") =>
+      b.eval(`(() => { const e = [...${root}.querySelectorAll("span")].filter((x) => x.textContent === ${JSON.stringify(label)}).at(-1); return e?.nextElementSibling?.textContent.trim(); })()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    // Cubo de 10 aparte: 1 cm³
+    doc.features.push({ id: box.id + 1, name: "Cubo", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 10, dy: 10, dz: 10, centered: true, centered_z: true }, origin: [40, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.next_id = box.id + 2;
+    doc.material = { name: "PLA", density: 1240 };
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    // 8 cm³ + 1 cm³ de PLA
+    if ((await line("Masa")) !== "11,16 g") throw new Error(`masa con PLA: ${await line("Masa")}`);
+    // La segunda de acero: 8 × 1,24 + 1 × 7,85
+    await b.eval(`[...document.querySelectorAll("[data-part] span.truncate")].find((s) => s.textContent === "Pieza 2").click()`);
+    await sleep(800);
+    const panel = `document.querySelector('[aria-label="Datos de Pieza 2"]')`;
+    const trigger = await b.eval(`(() => { const e = [...${panel}.querySelectorAll("button")].find((x) => x.textContent.includes("El del diseño")); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.click(...trigger, { wait: 600 });
+    await b.clickText("Acero (7850 kg/m³)");
+    await sleep(1500);
+    if ((await line("Masa", panel)) !== "7,85 g (Acero)") throw new Error(`masa de la pieza: ${await line("Masa", panel)}`);
+    if ((await line("Masa")) !== "17,77 g") throw new Error(`masa total: ${await line("Masa")}`);
+    // Con densidades distintas no hay una inercia del cuerpo
+    if ((await line("Inercia")) !== undefined) throw new Error("mostró la inercia con materiales distintos");
+    // El centro de masa se corre hacia el cubo de acero: 40 × 7,85 / 17,77
+    const c = await line("Centro de masa");
+    if (!c?.startsWith("17,67")) throw new Error(`centro: ${c}`);
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

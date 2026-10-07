@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, partColor, partHidden, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -249,7 +249,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => {
     store.mesh();
     const body = store.result()?.body;
-    viewer?.setCenterOfMass(ui.showCenterOfMass() && body ? body.center : null);
+    // Con materiales por pieza, el centro ponderado por la masa de cada una
+    const c = designMass(store.doc(), store.result()).center ?? body?.center;
+    viewer?.setCenterOfMass(ui.showCenterOfMass() && c ? c : null);
   });
   // Color y visibilidad de cada pieza (con una sola, el color de siempre)
   createEffect(() => {

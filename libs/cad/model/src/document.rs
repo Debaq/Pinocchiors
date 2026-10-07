@@ -79,6 +79,9 @@ pub struct PartProps {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Material propio (si no, el del diseño).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<Material>,
 }
 
 /// Carpeta del árbol: las operaciones desde `first` hasta `last` en el orden

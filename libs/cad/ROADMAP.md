@@ -389,3 +389,5 @@ cargo test -p cad-model
   piezas" en unir/restar/intersecar, operación Booleana (unir, restar conservando o no,
   intersecar), Separar sólidos sueltos en piezas y Borrar pieza. Las dependencias por pieza
   impiden reordenar una booleana antes de lo que creó sus piezas.
+- **2026-10-07 Material por pieza** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 5): cada pieza puede
+  tener su material; la masa total y el centro de masa salen de las piezas.

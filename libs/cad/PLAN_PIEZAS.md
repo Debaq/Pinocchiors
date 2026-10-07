@@ -104,7 +104,11 @@ se pueden combinar piezas entre sí. Es la base de los ensambles
    cada sólido suelto es una pieza nueva con id de la operación; las caras conservan su
    origen por `face_indices_of`) y `DeleteParts { parts }`, también desde el tacho de la
    lista de piezas.*
-5. **Material por pieza** (masa por pieza, enlaza con [PLAN_INSPECCION.md](PLAN_INSPECCION.md)).
+5. **Material por pieza** (masa por pieza, enlaza con [PLAN_INSPECCION.md](PLAN_INSPECCION.md)). *Hecha el
+   2026-10-07: `PartProps.material` (si no, el del diseño); clic en el nombre de una pieza
+   abre sus datos (material, volumen, área, masa, centro) y la resalta en el visor. La masa
+   del diseño suma la de cada pieza y el centro de masa (también la cruz del visor) se pondera
+   por masa; la inercia del cuerpo solo se muestra con una sola densidad.*
 6. **STEP con nombres y colores** (XCAF).
 
 ## Pruebas
