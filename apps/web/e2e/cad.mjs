@@ -1056,6 +1056,63 @@ const scenarios = {
     if (await b.eval(`!!document.querySelector('[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");
   },
 
+  async "ensamble: instancias, bisagra, grados libres y choques"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un cilindro como pieza aparte
+    const doc = await call("cad_get_document");
+    doc.features.push({ id: doc.next_id, name: "Eje", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 4, height: 30 }, origin: [60, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Ensamble");
+    await sleep(800);
+    // Insertar las dos piezas (la primera queda fija)
+    await b.clickText("Insertar");
+    await sleep(1500);
+    await b.eval(`(() => { const parts = window.__cadStore.result().parts; window.__p2 = parts[1].id; })()`);
+    await b.eval(`window.__cadStore.editAssembly((a) => { a.instances.push({ id: a.next_id, part: window.__p2, name: "Eje", position: [40, 0, 0], rotation: [0, 0, 0], fixed: false }); a.next_id += 1; })`);
+    await sleep(2000);
+    if ((await b.eval(`document.querySelectorAll("[data-instance]").length`)) !== 2) throw new Error("no hay dos instancias");
+    // Conectores: la tapa de arriba de la caja y el costado del cilindro
+    const faces = await call("cad_assembly_faces");
+    const conn = async (inst, test) => {
+      const [, a, z] = faces.find((f) => f[0] === inst);
+      for (let k = a; k < z; k++) {
+        const c = await call("cad_assembly_connector", { face: k });
+        if (test(c)) return c;
+      }
+      throw new Error(`sin conector en la instancia ${inst}`);
+    };
+    const asm = (await call("cad_get_document")).assembly;
+    const [i1, i2] = asm.instances.map((i) => i.id);
+    const top = await conn(i1, (c) => c.z[2] > 0.99 && Math.abs(c.origin[2] - 10) < 1e-6);
+    const side = await conn(i2, (c) => Math.abs(c.z[2]) > 0.99 && Math.abs(c.origin[0] - 60) < 1e-6 && Math.abs(c.origin[2] - 15) < 1e-6);
+    await b.eval(`window.__cadStore.editAssembly((a) => { a.mates.push({ id: a.next_id, name: "Bisagra 1", kind: "revolute", a: ${JSON.stringify(top)}, b: ${JSON.stringify(side)}, flip: false }); a.next_id += 1; })`);
+    await sleep(2500);
+    let sol = (await evaluate()).assembly.solution;
+    if (!sol.converged || sol.dof !== 1) throw new Error(`bisagra: ${JSON.stringify(sol)}`);
+    const status = await b.eval(`document.querySelector('[aria-label="Estado del ensamble"]').textContent`);
+    if (!status.includes("1 grado libre")) throw new Error(`estado: ${status}`);
+    // El eje queda clavado en el centro de la tapa: se pisa con la caja
+    await b.clickText("Revisar choques");
+    for (let t = 0; t < 20 && !(await b.eval(`!!document.querySelector("[data-hit]")`)); t++) await sleep(500);
+    if (!(await b.eval(`!!document.querySelector("[data-hit]")`))) throw new Error("no detectó el choque");
+    await b.shot("ensamble");
+    // Con el ángulo impuesto ya no queda nada libre
+    await b.eval(`window.__cadStore.editAssembly((a) => { a.mates[0].angle = 45; })`);
+    await sleep(2000);
+    sol = (await evaluate()).assembly.solution;
+    if (sol.dof !== 0) throw new Error(`con ángulo: ${JSON.stringify(sol)}`);
+    // Volver al diseño
+    await b.clickText("Diseño");
+    await sleep(800);
+    if (!(await b.eval(`document.body.innerText.includes("Agregar") || document.body.innerText.includes("AGREGAR")`))) throw new Error("no volvió al diseño");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

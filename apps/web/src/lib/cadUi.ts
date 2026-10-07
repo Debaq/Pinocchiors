@@ -87,7 +87,9 @@ export type PickMode =
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
   | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
   /** Dónde va un sketch nuevo: un plano base o una cara plana */
-  | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void };
+  | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void }
+  /** Una cara de la malla del ensamble (su índice) */
+  | { kind: "asm_face"; prompt: string; done: (face: number) => void };
 
 export interface SketchSession {
   feature: number;
@@ -116,6 +118,8 @@ export function createCadUi(store: CadStore) {
   const [section, setSection] = createSignal<SectionView | null>(null);
   // Desviación del escaneo mostrada en colores (null = color de siempre)
   const [deviation, setDeviation] = createSignal<ScanDeviation | null>(null);
+  // Ensamble: el visor muestra las instancias en vez del diseño
+  const [assemblyMode, setAssemblyMode] = createSignal(false);
   // Plano 2D abierto sobre el visor
   const [drawingOpen, setDrawingOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
@@ -191,6 +195,8 @@ export function createCadUi(store: CadStore) {
     setSection,
     drawingOpen,
     setDrawingOpen,
+    assemblyMode,
+    setAssemblyMode,
     deviation,
     setDeviation,
     /** Acciones del panel con lo elegido (las registra DesignStep) */

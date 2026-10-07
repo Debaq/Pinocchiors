@@ -8,6 +8,7 @@
 //!
 //! Unidades: mm y grados. Ejes: Z arriba.
 
+pub mod assembly;
 pub mod document;
 pub mod eval;
 pub mod expr;
@@ -18,6 +19,7 @@ pub mod regions;
 pub mod sketch;
 
 pub use cad_occt::{self as occt, Shape};
+pub use assembly::{Assembly, AssemblySolution, Connector, Instance, Mate, MateKind};
 pub use document::{Document, Folder, Material, PartProps, ModelError, Parameter, Resolution, ResolvedValue};
 pub use eval::{EvalCache, Evaluation, FeatureState, FeatureStatus, MissingRef, Part, RefGeom, SketchResult};
 pub use feature::*;

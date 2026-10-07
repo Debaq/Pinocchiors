@@ -66,6 +66,9 @@ pub struct Document {
     /// Nombre, color y visibilidad de las piezas (no cambian la geometría).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parts: Vec<PartProps>,
+    /// Ensamble de las piezas (instancias y relaciones); no cambia el diseño.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assembly: Option<crate::assembly::Assembly>,
 }
 
 /// Lo que el usuario le cambió a una pieza.

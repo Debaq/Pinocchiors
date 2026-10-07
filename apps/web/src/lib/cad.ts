@@ -269,6 +269,62 @@ export interface CadDocument {
   folders?: Folder[];
   /** Nombre, color y visibilidad de las piezas */
   parts?: PartProps[];
+  /** Ensamble de las piezas */
+  assembly?: Assembly | null;
+}
+
+// ─── Ensamble ─────────────────────────────────────────────────────────────
+
+export interface Assembly {
+  instances: AsmInstance[];
+  mates: Mate[];
+  next_id: number;
+}
+
+/** Una pieza puesta en el ensamble: posición (mm) y giro como vector (eje × ángulo en rad) */
+export interface AsmInstance {
+  id: number;
+  part: PartId;
+  name: string;
+  position: P3;
+  rotation: P3;
+  fixed: boolean;
+}
+
+/** Sistema de coordenadas sobre una instancia, en coordenadas de su pieza */
+export interface Connector {
+  instance: number;
+  origin: P3;
+  z: P3;
+  x: P3;
+}
+
+export type MateKind = "fastened" | "revolute" | "slider" | "cylindrical" | "planar";
+
+export const MATE_LABELS: Record<MateKind, string> = {
+  fastened: "Fija",
+  revolute: "Bisagra (gira)",
+  slider: "Deslizante",
+  cylindrical: "Cilíndrica (gira y desliza)",
+  planar: "Plana (apoyada)",
+};
+
+export interface Mate {
+  id: number;
+  name: string;
+  kind: MateKind;
+  a: Connector;
+  b: Connector;
+  flip: boolean;
+  /** Ángulo impuesto (grados) en bisagras y cilíndricas */
+  angle?: number | null;
+  /** Distancia impuesta (mm) en deslizantes y cilíndricas */
+  distance?: number | null;
+}
+
+export interface AssemblyView {
+  solution: { poses: [number, P3, P3][]; residual: number; converged: boolean; dof: number };
+  version: number;
 }
 
 /** Pieza: la operación que la creó y su número dentro de ella */
@@ -484,6 +540,7 @@ export interface CadResult {
   recomputed: number;
   parts: PartView[];
   references: RefView[];
+  assembly: AssemblyView | null;
 }
 
 export interface CadStatus {
@@ -2260,6 +2317,20 @@ export function createCadStore() {
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
     exportDesign: (path: string, format: string, part?: PartId) => invoke<number>("cad_export", { path, format, part: part ?? null }),
+
+    // ─── Ensamble ─────────────────────────────────────────────────────
+    assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh")),
+    assemblyFaces: () => invoke<[number, number, number][]>("cad_assembly_faces"),
+    assemblyConnector: (face: number) => invoke<Connector>("cad_assembly_connector", { face }),
+    assemblyInterference: () => invoke<[number, number, number][]>("cad_assembly_interference"),
+    /** Cambia el ensamble (deshacible); lo crea si no hay */
+    editAssembly(mutate: (a: Assembly) => void) {
+      return commit((d) => {
+        const a = d.assembly ?? { instances: [], mates: [], next_id: 1 };
+        mutate(a);
+        d.assembly = a;
+      });
+    },
 
     /** Piezas que hay justo antes de la operación (para elegirlas en su diálogo) */
     partsBefore(featureId: number): Promise<PartView[]> {

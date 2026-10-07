@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -236,10 +236,40 @@ export const CadView: Component<CadViewProps> = (props) => {
   let hadBody = false;
   createEffect(() => {
     const m = store.mesh();
+    // En el ensamble el visor muestra las instancias (efecto de abajo)
+    if (ui.assemblyMode()) return;
     viewer?.setBody(m);
     if (m && !hadBody && !ui.session()) viewer?.frameAll();
     hadBody = !!m;
   });
+  // Ensamble: cada instancia en su lugar, con el color de su pieza
+  let asmSeq = 0;
+  createEffect(
+    on([() => ui.assemblyMode(), () => store.result()?.assembly?.version], async ([on_]) => {
+      const n = ++asmSeq;
+      if (!on_) {
+        viewer?.setBody(store.mesh());
+        return;
+      }
+      if (!store.result()?.assembly) return viewer?.setBody(null);
+      try {
+        const [mesh, faces] = await Promise.all([store.assemblyMesh(), store.assemblyFaces()]);
+        if (n !== asmSeq || !viewer) return;
+        viewer.setBody(mesh);
+        const doc = store.doc();
+        const parts = store.result()?.parts ?? [];
+        viewer.setParts(
+          faces.map(([id, a, b]) => {
+            const inst = doc?.assembly?.instances.find((i) => i.id === id);
+            const k = parts.findIndex((p) => inst && samePart(p.id, inst.part));
+            return { faces: [a, b] as [number, number], edges: [0, 0] as [number, number], color: parseInt((k >= 0 ? partColor(doc, parts[k], k) : "#9aa4b8").slice(1), 16), hidden: false };
+          }),
+        );
+      } catch (e) {
+        ui.setMessage(String(e));
+      }
+    }),
+  );
   createEffect(() => {
     const h = ui.highlight();
     const picks = ui.picks();
@@ -264,6 +294,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Color y visibilidad de cada pieza (con una sola, el color de siempre)
   createEffect(() => {
     store.mesh();
+    if (ui.assemblyMode()) return;
     const parts = store.result()?.parts ?? [];
     const doc = store.doc();
     viewer?.setParts(
@@ -869,6 +900,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
         mode.done(result, hit.triangle);
+      } else if (mode.kind === "asm_face") {
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        if (hit?.kind !== "face") return;
+        ui.setPick({ kind: "none" });
+        mode.done(hit.face);
       } else if (mode.kind === "place") {
         // Dónde va el sketch: un plano base o una cara plana
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true, refPlanes: true });

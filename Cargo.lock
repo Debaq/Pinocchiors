@@ -382,6 +382,7 @@ dependencies = [
  "approx 0.5.1",
  "cad-occt",
  "cad-solver",
+ "nalgebra",
  "serde",
  "serde_bytes",
  "serde_json",

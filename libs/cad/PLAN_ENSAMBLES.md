@@ -75,9 +75,21 @@ Depende de [PLAN_PIEZAS.md](PLAN_PIEZAS.md): sin piezas separadas no hay qué en
 ## Fases
 
 1. **Instancias** de piezas del diseño, mover/girar a mano, fijar; visor con varias instancias.
-2. **Conectores** y relaciones **fija, revoluta, deslizante, cilíndrica**; solver 3D.
+2. **Conectores** y relaciones **fija, revoluta, deslizante, cilíndrica**; solver 3D. *Fases 1 y 2 hechas el 2026-10-07 (más plana), dentro del mismo documento
+   (`Document.assembly`, sin crate ni carpeta nueva: módulo `cad_model::assembly`):
+   instancias con posición y vector de giro, fija o libre; conectores (origen, Z, X en
+   coordenadas de la pieza) tomados de una cara plana (centro y normal) o cilíndrica/cónica
+   (punto del eje y el eje) con `cad_assembly_connector`; relaciones fija, bisagra,
+   deslizante, cilíndrica y plana, con invertir, ángulo y distancia impuestos (para posar o
+   animar). Solver Levenberg-Marquardt con jacobiano numérico (6 incógnitas por instancia
+   libre; sin ninguna fija, la primera queda quieta) y grados libres por rango del
+   jacobiano (SVD). Pruebas: bisagra deja 1, con ángulo 0; deslizante 1; fija 0; dos fijas
+   contradictorias no convergen. Interfaz: pestaña Diseño | Ensamble, insertar piezas,
+   editar posición y giro, relaciones con dos clics en el visor, estado de grados libres.
+   El ensamble no entra en el hash del recálculo del diseño.*
 3. **Arrastre** respetando relaciones y diagnóstico de grados libres.
-4. **Interferencias** y **lista de materiales**.
+4. **Interferencias** y **lista de materiales**. *Interferencias hechas el 2026-10-07 (cajas envolventes y
+   luego intersección booleana; volumen común exacto). Falta la lista de materiales.*
 5. **Animar** relación y exportar glTF animado.
 6. Relaciones avanzadas (engranaje, tornillo, pasador en ranura), **sub-ensambles**, vista
    explosionada, STEP de ensamble.

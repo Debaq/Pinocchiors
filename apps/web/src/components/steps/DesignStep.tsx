@@ -6,6 +6,7 @@ import {
   CONSTRAINT_LABELS,
   FEATURE_LABELS,
   MATERIALS,
+  MATE_LABELS,
   METRIC_HOLES,
   designMass,
   partColor,
@@ -43,6 +44,9 @@ import {
   type P2,
   type P3,
   type AxisDef,
+  type Connector,
+  type Mate,
+  type MateKind,
   type PartId,
   type PlaneDef,
   type PointSpec,
@@ -57,7 +61,7 @@ import {
 } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
 import { regionContains } from "../../lib/CadViewer";
-import { Button, Checkbox, IconButton, Select, Tooltip } from "../ui";
+import { Button, Checkbox, IconButton, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 
 export interface DesignStepProps {
@@ -528,6 +532,29 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
         >
           <Show when={ui.session()} fallback={
             <>
+              {/* Diseño de las piezas o su ensamble */}
+              <div role="tablist" aria-label="Modo" class="grid grid-cols-2 gap-1 rounded-md bg-surface/40 p-0.5">
+                <For each={[["design", "Diseño"], ["assembly", "Ensamble"]] as const}>
+                  {([id, label]) => (
+                    <button
+                      role="tab"
+                      aria-selected={(id === "assembly") === ui.assemblyMode()}
+                      class={clsx(
+                        "rounded px-2 py-1 text-xs",
+                        (id === "assembly") === ui.assemblyMode() ? "bg-accent text-bg" : "text-text-muted hover:text-text",
+                      )}
+                      onClick={() => {
+                        if (store.draft()) void store.acceptDraft();
+                        ui.clearPicks();
+                        ui.setAssemblyMode(id === "assembly");
+                      }}
+                    >
+                      {label}
+                    </button>
+                  )}
+                </For>
+              </div>
+              <Show when={!ui.assemblyMode()} fallback={<AssemblyPanel store={store} ui={ui} />}>
               <Show when={ui.picks().length > 0}>
                 <div class="flex items-center justify-between rounded-md border border-cyan/40 bg-cyan/5 px-2 py-1.5 text-xs">
                   <span class="text-text">Elegido: {pickSummary(ui.picks())}</span>
@@ -663,6 +690,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                   Rehacer
                 </Button>
               </div>
+              </Show>
             </>
           }>
             <SketchPanel ui={ui} />
@@ -2661,6 +2689,227 @@ const ToolChecklist: Component<{ tools: Feature[]; value: number[]; onChange: (i
     </For>
   </div>
 );
+
+// ─── Ensamble ─────────────────────────────────────────────────────────────
+
+const deg = (r: number) => (r * 180) / Math.PI;
+
+/** Instancias de las piezas, relaciones entre ellas, grados libres y choques */
+const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
+  const store = props.store;
+  const asm = () => store.doc()?.assembly ?? null;
+  const parts = () => store.result()?.parts ?? [];
+  const sol = () => store.result()?.assembly?.solution;
+  const [part, setPart] = createSignal<string>("");
+  const [kind, setKind] = createSignal<MateKind>("revolute");
+  const [picking, setPicking] = createSignal<"" | "a" | "b">("");
+  const [hits, setHits] = createSignal<[number, number, number][] | null>(null);
+  const partKey = (p: PartView) => `${p.id.feature}:${p.id.index}`;
+  const instName = (id: number) => asm()?.instances.find((i) => i.id === id)?.name ?? `#${id}`;
+
+  const insert = () => {
+    const p = parts().find((x) => partKey(x) === (part() || (parts()[0] && partKey(parts()[0]))));
+    if (!p) return props.ui.setMessage("El diseño todavía no tiene piezas");
+    void store.editAssembly((a) => {
+      const id = a.next_id || 1;
+      const copies = a.instances.filter((i) => samePart(i.part, p.id)).length;
+      // Las nuevas, corridas a un costado para que no se pisen
+      const size = Math.cbrt(Math.max(p.volume, 1)) * 1.5;
+      a.instances.push({
+        id,
+        part: p.id,
+        name: copies ? `${p.name} (${copies + 1})` : p.name,
+        position: [a.instances.length * size, 0, 0],
+        rotation: [0, 0, 0],
+        fixed: a.instances.length === 0,
+      });
+      a.next_id = id + 1;
+    });
+  };
+
+  /** Dos clics: la cara de una instancia y la de otra; con eso, la relación */
+  const newMate = () => {
+    let first: Connector | null = null;
+    const pick = (step: "a" | "b") => {
+      setPicking(step);
+      props.ui.setPick({
+        kind: "asm_face",
+        prompt: step === "a" ? "Clic en la cara de la primera pieza (plana o cilíndrica)" : "Clic en la cara de la segunda pieza",
+        done: async (face) => {
+          try {
+            const c = await store.assemblyConnector(face);
+            if (step === "a") {
+              first = c;
+              return pick("b");
+            }
+            setPicking("");
+            if (!first || first.instance === c.instance) return props.ui.setMessage("Las dos caras tienen que ser de instancias distintas");
+            const a = first;
+            void store.editAssembly((x) => {
+              const id = x.next_id || 1;
+              // Caras planas enfrentadas: normales opuestas
+              const facing = a.z[0] * c.z[0] + a.z[1] * c.z[1] + a.z[2] * c.z[2] < 0;
+              x.mates.push({ id, name: `${MATE_LABELS[kind()]} ${x.mates.length + 1}`, kind: kind(), a, b: c, flip: kind() === "planar" || kind() === "fastened" ? facing : false });
+              x.next_id = id + 1;
+            });
+          } catch (e) {
+            setPicking("");
+            props.ui.setMessage(String(e));
+          }
+        },
+      });
+    };
+    pick("a");
+  };
+
+  const removeInstance = (id: number) =>
+    void store.editAssembly((a) => {
+      a.instances = a.instances.filter((i) => i.id !== id);
+      a.mates = a.mates.filter((m) => m.a.instance !== id && m.b.instance !== id);
+    });
+
+  return (
+    <div class="space-y-3">
+      <Section title="Instancias">
+        <div class="flex gap-1.5">
+          <div class="flex-1">
+            <Select
+              options={parts().map((p) => ({ value: partKey(p), label: p.name }))}
+              value={part() || (parts()[0] ? partKey(parts()[0]) : "")}
+              onChange={setPart}
+            />
+          </div>
+          <Button size="sm" onClick={insert} disabled={!parts().length}>
+            Insertar
+          </Button>
+        </div>
+        <For each={asm()?.instances ?? []} fallback={<p class="text-[11px] text-text-dim">Insertar piezas del diseño para ensamblarlas</p>}>
+          {(inst) => (
+            <div class="space-y-1 rounded border border-border p-1.5" data-instance={inst.id}>
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="flex-1 truncate text-text">{inst.name}</span>
+                <Checkbox
+                  small
+                  label="Fija"
+                  checked={inst.fixed}
+                  onChange={(c) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.fixed = c))}
+                />
+                <IconButton aria-label={`Quitar ${inst.name}`} size="sm" variant="ghost" onClick={() => removeInstance(inst.id)}>
+                  <Icons.Trash size={11} />
+                </IconButton>
+              </div>
+              <span class="text-[10px] text-text-dim">Posición (mm)</span>
+              <div class="grid grid-cols-3 gap-1">
+                <For each={["X", "Y", "Z"]}>
+                  {(axis, k) => (
+                    <Num
+                      label={axis}
+                      value={inst.position[k()]}
+                      onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.position[k()] = v))}
+                    />
+                  )}
+                </For>
+              </div>
+              <span class="text-[10px] text-text-dim">Giro (°)</span>
+              <div class="grid grid-cols-3 gap-1">
+                <For each={["X", "Y", "Z"]}>
+                  {(axis, k) => (
+                    <Num
+                      label={axis}
+                      value={Math.round(deg(inst.rotation[k()]) * 1000) / 1000}
+                      onCommit={(v) => void store.editAssembly((a) => (a.instances.find((i) => i.id === inst.id)!.rotation[k()] = (v * Math.PI) / 180))}
+                    />
+                  )}
+                </For>
+              </div>
+            </div>
+          )}
+        </For>
+      </Section>
+      <Section title="Relaciones">
+        <div class="flex gap-1.5">
+          <div class="flex-1">
+            <Select options={(Object.keys(MATE_LABELS) as MateKind[]).map((k) => ({ value: k, label: MATE_LABELS[k] }))} value={kind()} onChange={(v) => setKind(v as MateKind)} />
+          </div>
+          <Button size="sm" disabled={(asm()?.instances.length ?? 0) < 2 || !!picking()} onClick={newMate}>
+            {picking() === "a" ? "Cara 1…" : picking() === "b" ? "Cara 2…" : "Agregar"}
+          </Button>
+        </div>
+        <For each={asm()?.mates ?? []} fallback={<p class="text-[11px] text-text-dim">Agregar: elegir el tipo y hacer clic en una cara de cada pieza</p>}>
+          {(m) => {
+            const set = (f: (x: Mate) => void) => void store.editAssembly((a) => f(a.mates.find((x) => x.id === m.id)!));
+            return (
+              <div class="space-y-1 rounded border border-border p-1.5 text-xs" data-mate={m.id}>
+                <div class="flex items-center gap-1.5">
+                  <span class="flex-1 truncate text-text" title={`${instName(m.a.instance)} ↔ ${instName(m.b.instance)}`}>
+                    {m.name}
+                  </span>
+                  <Checkbox small label="Invertir" checked={m.flip} onChange={(c) => set((x) => (x.flip = c))} />
+                  <IconButton aria-label={`Quitar ${m.name}`} size="sm" variant="ghost" onClick={() => void store.editAssembly((a) => (a.mates = a.mates.filter((x) => x.id !== m.id)))}>
+                    <Icons.Trash size={11} />
+                  </IconButton>
+                </div>
+                <p class="text-[11px] text-text-dim">
+                  {instName(m.a.instance)} ↔ {instName(m.b.instance)}
+                </p>
+                <Show when={m.kind === "revolute" || m.kind === "cylindrical"}>
+                  <div class="flex items-center gap-1.5">
+                    <Checkbox small label="Ángulo" checked={m.angle != null} onChange={(c) => set((x) => (x.angle = c ? 0 : null))} />
+                    <Show when={m.angle != null}>
+                      <div class="flex-1">
+                        <Slider value={m.angle ?? 0} min={-180} max={180} step={1} onChange={(v) => set((x) => (x.angle = v))} />
+                      </div>
+                      <span class="w-10 text-right font-mono">{Math.round(m.angle ?? 0)}°</span>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={m.kind === "slider" || m.kind === "cylindrical"}>
+                  <div class="flex items-center gap-1.5">
+                    <Checkbox small label="Distancia" checked={m.distance != null} onChange={(c) => set((x) => (x.distance = c ? 0 : null))} />
+                    <Show when={m.distance != null}>
+                      <div class="flex-1">
+                        <Num value={m.distance ?? 0} suffix="mm" onCommit={(v) => set((x) => (x.distance = v))} />
+                      </div>
+                    </Show>
+                  </div>
+                </Show>
+              </div>
+            );
+          }}
+        </For>
+        <Show when={sol()}>
+          {(s) => (
+            <p class={clsx("text-[11px]", s().converged ? "text-text-dim" : "text-warning")} aria-label="Estado del ensamble">
+              {s().converged
+                ? s().dof === 0
+                  ? "Todo definido: no queda nada que se mueva"
+                  : s().dof === 1
+                    ? "Queda 1 grado libre"
+                    : `Quedan ${s().dof} grados libres`
+                : `No se pueden cumplir todas las relaciones (desvío ${fmt(s().residual, 3)})`}
+            </p>
+          )}
+        </Show>
+      </Section>
+      <Section title="Choques">
+        <Button size="sm" fullWidth disabled={(asm()?.instances.length ?? 0) < 2} onClick={() => void store.assemblyInterference().then(setHits)}>
+          Revisar choques
+        </Button>
+        <Show when={hits()}>
+          {(list) => (
+            <For each={list()} fallback={<p class="text-[11px] text-success">Ninguna pieza se pisa con otra</p>}>
+              {([a, b, v]) => (
+                <p class="text-[11px] text-warning" data-hit>
+                  {instName(a)} y {instName(b)}: {fmt(v / 1000, 3)} cm³ en común
+                </p>
+              )}
+            </For>
+          )}
+        </Show>
+      </Section>
+    </div>
+  );
+};
 
 // ─── Escaneo ──────────────────────────────────────────────────────────────
 

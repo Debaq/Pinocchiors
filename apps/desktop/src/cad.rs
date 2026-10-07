@@ -98,6 +98,15 @@ pub struct CadResult {
     pub parts: Vec<PartView>,
     /// Planos, ejes y puntos de referencia, en el orden del árbol
     pub references: Vec<RefView>,
+    /// Ensamble resuelto (si el documento tiene)
+    pub assembly: Option<AssemblyView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AssemblyView {
+    pub solution: cad_model::AssemblySolution,
+    /// Cambia con el ensamble o el diseño: el visor vuelve a pedir su malla
+    pub version: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,7 +147,7 @@ fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // El JSON es estable y cubre todo el documento; el material, las carpetas
     // y los nombres y colores de piezas no cambian la geometría: no recalculan
-    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), ..doc.clone() };
+    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, ..doc.clone() };
     serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }
@@ -211,11 +220,18 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         })
     });
     let parts = part_views(doc, eval);
+    let assembly = doc.assembly.as_ref().map(|a| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        hash.hash(&mut h);
+        serde_json::to_string(a).unwrap_or_default().hash(&mut h);
+        AssemblyView { solution: cad_model::assembly::solve(a), version: h.finish() }
+    });
     let mut references: Vec<RefView> = eval.references.iter().map(|(id, g)| RefView { id: *id, geom: g.clone() }).collect();
     references.sort_by_key(|r| doc.index_of(r.id));
     Ok(CadResult {
         parts,
         references,
+        assembly,
         status: eval.status.clone(),
         sketches,
         body,
@@ -365,6 +381,98 @@ fn deviation_impl(state: &AppState, tolerance: f64) -> Result<Vec<u8>, String> {
         out.extend(d.per_face.iter().map(|v| *v as f32));
         Ok(out.iter().flat_map(|v| v.to_le_bytes()).collect())
     })
+}
+
+/// Instancias del ensamble en su lugar, con el ensamble y su solución.
+fn assembly_shapes(state: &AppState) -> Result<(cad_model::Assembly, Vec<(u32, cad_model::Shape)>), String> {
+    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.clone().ok_or("El diseño no tiene ensamble")?;
+    evaluate_committed(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let sol = cad_model::assembly::solve(&asm);
+    let shapes = cad_model::assembly::instance_shapes(ev, &asm, &sol);
+    Ok((asm, shapes))
+}
+
+/// Malla del ensamble (como `cad_mesh`, con las instancias en orden: sus caras
+/// van seguidas, ver `AssemblyMeshInfo`).
+#[tauri::command]
+pub async fn cad_assembly_mesh(app: AppHandle) -> Result<Response, String> {
+    in_background(app, |state| assembly_mesh_impl(state).map(Response::new)).await
+}
+
+fn assembly_mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
+    let (_, shapes) = assembly_shapes(state)?;
+    let scale = 1.0 / mm_per_unit(state);
+    if shapes.is_empty() {
+        return Ok(vec![0; 16]);
+    }
+    let list: Vec<cad_model::Shape> = shapes.iter().map(|(_, s)| s.clone()).collect();
+    let all = if list.len() == 1 { list[0].clone() } else { cad_model::Shape::compound(&list).map_err(|e| e.to_string())? };
+    encode_view_mesh(&all, scale)
+}
+
+/// Caras de cada instancia dentro de la malla del ensamble: [id, desde, hasta).
+#[tauri::command]
+pub async fn cad_assembly_faces(app: AppHandle) -> Result<Vec<[u32; 3]>, String> {
+    in_background(app, assembly_faces_impl).await
+}
+
+fn assembly_faces_impl(state: &AppState) -> Result<Vec<[u32; 3]>, String> {
+    let (_, shapes) = assembly_shapes(state)?;
+    let mut start = 0u32;
+    Ok(shapes
+        .iter()
+        .map(|(id, s)| {
+            let n = s.face_count() as u32;
+            let r = [*id, start, start + n];
+            start += n;
+            r
+        })
+        .collect())
+}
+
+/// Conector sobre la cara `face` de la malla del ensamble, en coordenadas de
+/// su pieza: centro y normal de una cara plana, o un punto del eje y el eje de
+/// una cilíndrica o cónica.
+#[tauri::command]
+pub async fn cad_assembly_connector(app: AppHandle, face: usize) -> Result<cad_model::Connector, String> {
+    in_background(app, move |state| assembly_connector_impl(state, face)).await
+}
+
+fn assembly_connector_impl(state: &AppState, face: usize) -> Result<cad_model::Connector, String> {
+    let ranges = assembly_faces_impl(state)?;
+    let [id, start, _] = *ranges.iter().find(|r| (r[1] as usize..r[2] as usize).contains(&face)).ok_or("Esa cara no es de ninguna instancia")?;
+    let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
+    let asm = doc.assembly.ok_or("El diseño no tiene ensamble")?;
+    let inst = asm.instances.iter().find(|i| i.id == id).ok_or("La instancia ya no existe")?;
+    let cache = state.cad_cache.lock().unwrap();
+    let ev = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    let part = ev.parts.iter().find(|p| p.id == inst.part).ok_or("La pieza ya no existe")?;
+    let info = part.shape.face_info(face - start as usize).map_err(|e| e.to_string())?;
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let (origin, z) = match info.axis {
+        Some(ax) if info.surface != cad_model::occt::SurfaceKind::Plane => {
+            // El punto del eje a la altura del centro de la cara
+            let d = ax.dir;
+            let t = dot([info.center[0] - ax.origin[0], info.center[1] - ax.origin[1], info.center[2] - ax.origin[2]], d);
+            ([ax.origin[0] + d[0] * t, ax.origin[1] + d[1] * t, ax.origin[2] + d[2] * t], d)
+        }
+        _ => (info.center, info.normal),
+    };
+    // X: cualquier perpendicular a Z (la de X del mundo si se puede)
+    let helper = if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+    let k = dot(helper, z);
+    let x = [helper[0] - z[0] * k, helper[1] - z[1] * k, helper[2] - z[2] * k];
+    let l = dot(x, x).sqrt();
+    Ok(cad_model::Connector { instance: id, origin, z, x: [x[0] / l, x[1] / l, x[2] / l] })
+}
+
+/// Pares de instancias que se pisan y cuánto volumen comparten (mm³).
+#[tauri::command]
+pub async fn cad_assembly_interference(app: AppHandle) -> Result<Vec<(u32, u32, f64)>, String> {
+    in_background(app, |state| assembly_shapes(state).map(|(_, s)| cad_model::assembly::interferences(&s))).await
 }
 
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
@@ -1079,6 +1187,10 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
+            "cad_assembly_mesh" => assembly_mesh_impl(state).map(Reply::Bytes),
+            "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
+            "cad_assembly_connector" => ok(assembly_connector_impl(state, arg(args, "face")?)?),
+            "cad_assembly_interference" => ok(assembly_shapes(state).map(|(_, s)| cad_model::assembly::interferences(&s))?),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);

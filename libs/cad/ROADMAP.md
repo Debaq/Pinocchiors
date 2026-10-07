@@ -425,3 +425,6 @@ cargo test -p cad-model
 - **2026-10-07 Contornos del escaneo con relaciones** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 3):
   los sketches de corte llegan con paralelas y perpendiculares inferidas y esquinas
   redondeables a una grilla.
+- **2026-10-07 Ensamble** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fases 1, 2 y parte de la 4):
+  instancias de las piezas, relaciones fija, bisagra, deslizante, cilíndrica y plana con un
+  solver 3D, grados libres y revisión de choques.
