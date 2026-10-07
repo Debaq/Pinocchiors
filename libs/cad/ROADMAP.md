@@ -413,3 +413,5 @@ cargo test -p cad-model
   escala normalizada automática, cajetín y exportación a SVG.
 - **2026-10-07 Plano a DXF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 5): la hoja o una
   vista sola a 1:1 para corte láser o CNC.
+- **2026-10-07 Cotas generales en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), parte de la
+  fase 3): ancho y alto de cada vista con flechas y texto, también en el DXF.

@@ -82,7 +82,7 @@ export const MARGIN = 10;
 export const TITLE_H = 28;
 export const TITLE_W = 130;
 /** Separación entre vistas (mm de hoja) */
-const GAP = 15;
+const GAP = 18;
 
 export interface Placed {
   name: ViewName;
@@ -154,8 +154,71 @@ const STYLE: Record<LineKind, string> = {
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const n = (v: number) => (Math.round(v * 1000) / 1000).toString();
 
+/** Cota en la hoja: de `a` a `b` (mm de hoja), corrida `offset` hacia afuera, con su valor en mm de la pieza */
+export interface Dimension {
+  a: P2;
+  b: P2;
+  /** Hacia dónde se corre la línea de cota (perpendicular, en mm de hoja) */
+  offset: P2;
+  value: number;
+}
+
+/**
+ * Cotas generales de cada vista (no la isométrica): ancho abajo y alto a la
+ * izquierda, del rectángulo que ocupa la vista. Se recalculan con el modelo.
+ */
+export function overallDimensions(placed: Placed[]): Dimension[] {
+  const dims: Dimension[] = [];
+  for (const v of placed) {
+    if (v.name === "iso") continue;
+    const b = bounds(v.lines);
+    const [x0, x1] = [v.x + b.min[0] * v.scale, v.x + b.max[0] * v.scale];
+    const [yTop, yBot] = [v.y - b.max[1] * v.scale, v.y - b.min[1] * v.scale];
+    if (x1 - x0 > 1e-6) dims.push({ a: [x0, yBot], b: [x1, yBot], offset: [0, 7], value: b.max[0] - b.min[0] });
+    if (yBot - yTop > 1e-6) dims.push({ a: [x0, yBot], b: [x0, yTop], offset: [-7, 0], value: b.max[1] - b.min[1] });
+  }
+  return dims;
+}
+
+/** Texto de una cota: hasta 2 decimales, coma decimal */
+export const dimText = (v: number) => v.toLocaleString("es", { maximumFractionDigits: 2 });
+
+function dimensionSvg(d: Dimension): string {
+  const [ox, oy] = d.offset;
+  const a2: P2 = [d.a[0] + ox, d.a[1] + oy];
+  const b2: P2 = [d.b[0] + ox, d.b[1] + oy];
+  const len = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1;
+  const [ux, uy] = [(b2[0] - a2[0]) / len, (b2[1] - a2[1]) / len];
+  // Líneas de referencia (con 1 mm de luz y 1,5 de sobrante) y flechas de 2,5 mm
+  const ext = (p: P2, q: P2) => {
+    const ol = Math.hypot(ox, oy) || 1;
+    const [ex, ey] = [ox / ol, oy / ol];
+    return `<line x1="${n(p[0] + ex)}" y1="${n(p[1] + ey)}" x2="${n(q[0] + ex * 1.5)}" y2="${n(q[1] + ey * 1.5)}"/>`;
+  };
+  const arrow = (p: P2, dir: number) => {
+    const [bx, by] = [p[0] + dir * ux * 2.5, p[1] + dir * uy * 2.5];
+    const [px, py] = [-uy * 0.8, ux * 0.8];
+    return `<polygon points="${n(p[0])},${n(p[1])} ${n(bx + px)},${n(by + py)} ${n(bx - px)},${n(by - py)}" fill="#000" stroke="none"/>`;
+  };
+  const mid: P2 = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+  const vertical = Math.abs(uy) > Math.abs(ux);
+  const text = vertical
+    ? `<text x="${n(mid[0] - 1)}" y="${n(mid[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(mid[0] - 1)} ${n(mid[1])})" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`
+    : `<text x="${n(mid[0])}" y="${n(mid[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc(dimText(d.value))}</text>`;
+  return (
+    `<g data-dimension stroke="#000" stroke-width="0.18">` +
+    ext(d.a, a2) +
+    ext(d.b, b2) +
+    `<line x1="${n(a2[0])}" y1="${n(a2[1])}" x2="${n(b2[0])}" y2="${n(b2[1])}"/>` +
+    arrow(a2, 1) +
+    arrow(b2, -1) +
+    text +
+    `</g>`
+  );
+}
+
 /** La hoja completa en SVG (unidades en mm) */
-export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, opts: { hidden: boolean; smooth: boolean }): string {
+export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, opts: { hidden: boolean; smooth: boolean; dimensions?: boolean }): string {
   const out: string[] = [];
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.width}mm" height="${sheet.height}mm" viewBox="0 0 ${sheet.width} ${sheet.height}" font-family="sans-serif">`,
@@ -173,6 +236,7 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
     }
     out.push("</g>");
   }
+  if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
   // Cajetín abajo a la derecha
   const x0 = sheet.width - MARGIN - TITLE_W;
   const y0 = sheet.height - MARGIN - TITLE_H;
@@ -201,7 +265,7 @@ export function sheetSvg(placed: Placed[], sheet: SheetSize, info: TitleBlock, o
  * corte). `view` exporta solo esa vista a escala 1:1 con sus coordenadas
  * (para láser o CNC); sin ella, la hoja entera con el recuadro.
  */
-export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName }): string {
+export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName; dimensions?: boolean }): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
   const section = (name: string, body: () => void) => {
@@ -239,11 +303,12 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
     pair(0, "ENDTAB");
     pair(0, "TABLE");
     pair(2, "LAYER");
-    pair(70, 3);
+    pair(70, 4);
     for (const [name, color, ltype] of [
       ["VISIBLE", 7, "CONTINUOUS"],
       ["OCULTA", 8, "DASHED"],
       ["TANGENTE", 9, "CONTINUOUS"],
+      ["COTAS", 3, "CONTINUOUS"],
     ] as const) {
       pair(0, "LAYER");
       pair(2, name);
@@ -274,6 +339,26 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
         if (l.kind === "smooth" && !opts.smooth) continue;
         const layer = hidden ? "OCULTA" : l.kind === "smooth" ? "TANGENTE" : "VISIBLE";
         for (let i = 0; i + 1 < l.points.length; i++) line(layer, at(l.points[i]), at(l.points[i + 1]));
+      }
+    }
+    if (!opts.view && opts.dimensions) {
+      // Cotas generales como líneas y texto (Y hacia arriba)
+      const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
+      for (const d of overallDimensions(placed)) {
+        const a2: P2 = [d.a[0] + d.offset[0], d.a[1] + d.offset[1]];
+        const b2: P2 = [d.b[0] + d.offset[0], d.b[1] + d.offset[1]];
+        line("COTAS", up(d.a), up(a2));
+        line("COTAS", up(d.b), up(b2));
+        line("COTAS", up(a2), up(b2));
+        const mid = up([(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2]);
+        pair(0, "TEXT");
+        pair(8, "COTAS");
+        pair(10, mid[0]);
+        pair(20, mid[1] + 1);
+        pair(30, 0);
+        pair(40, 3);
+        pair(1, dimText(d.value));
+        if (Math.abs(d.offset[0]) > Math.abs(d.offset[1])) pair(50, 90);
       }
     }
     if (!opts.view) {

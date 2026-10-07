@@ -18,6 +18,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [hidden, setHidden] = createSignal(true);
   const [smooth, setSmooth] = createSignal(false);
   const [iso, setIso] = createSignal(true);
+  const [dimensions, setDimensions] = createSignal(true);
   const [title, setTitle] = createSignal("Diseño");
   const [author, setAuthor] = createSignal("");
   const [views, setViews] = createSignal<Partial<Record<ViewName, DrawingLine[]>>>();
@@ -66,7 +67,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         projection: projection(),
         sheet: sheet().name,
       },
-      { hidden: hidden(), smooth: smooth() },
+      { hidden: hidden(), smooth: smooth(), dimensions: dimensions() },
     );
   });
 
@@ -91,7 +92,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const path = await save({ filters: [{ name: "DXF", extensions: ["dxf"] }], defaultPath: name });
     if (!path) return;
     try {
-      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), view: what === "sheet" ? undefined : what });
+      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), view: what === "sheet" ? undefined : what });
       const bytes = await invoke<number>("cad_write_text", { path, content });
       setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
     } catch (e) {
@@ -133,6 +134,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         {check("Ocultas", hidden, setHidden)}
         {check("Tangentes", smooth, setSmooth)}
         {check("Isométrica", iso, setIso)}
+        {check("Cotas", dimensions, setDimensions)}
         <input
           aria-label="Título del plano"
           class="w-36 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"

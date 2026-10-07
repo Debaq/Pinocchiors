@@ -74,7 +74,11 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    `cad_write_text`.*
 2. **Hoja y cajetín**: tamaños, escala, plantilla, mover vistas, PDF. *En parte: tamaños A4–A2 y Carta, escala automática o
    elegida, cajetín fijo. Faltan plantilla propia, mover vistas y PDF.*
-3. **Cotas** asociativas (largo, distancia, radio, diámetro, ángulo) y notas.
+3. **Cotas** asociativas (largo, distancia, radio, diámetro, ángulo) y notas. *En parte, 2026-10-07: cotas generales automáticas (ancho y
+   alto de cada vista, sin la isométrica) en SVG y en DXF (capa COTAS, líneas y texto); se
+   recalculan con el modelo. Falta acotar aristas elegidas: el HLR de OCCT no dice de qué
+   arista 3D sale cada línea; habría que proyectar las aristas del modelo una por una (o
+   cruzar por geometría) para poder elegirlas en la hoja.*
 4. **Cortes** con rayado y línea de corte A-A; **detalles**.
 5. **DXF** (vista 1:1 para láser primero, hoja completa después). *Hecha el 2026-10-07: `sheetDxf` en `lib/drawing.ts` (R12
    de texto, mm, capas VISIBLE, OCULTA con línea punteada y TANGENTE, cada tramo como LINE);

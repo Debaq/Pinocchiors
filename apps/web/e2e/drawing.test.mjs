@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { layout, sheetSvg, sheetDxf, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { layout, sheetSvg, sheetDxf, overallDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -73,4 +73,14 @@ test("DXF: capas, líneas por tramo y una vista sola a 1:1", () => {
   const ls = one.split("\n");
   for (let i = 0; i < ls.length - 1; i++) if (ls[i] === "10" || ls[i] === "11") xs.push(Number(ls[i + 1]));
   assert.equal(Math.max(...xs) - Math.min(...xs), 40);
+});
+
+test("cotas generales: ancho y alto de cada vista, en mm de la pieza", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20), iso: rect(30, 30) };
+  const { placed } = layout(views, SHEETS[0], "first");
+  const dims = overallDimensions(placed);
+  assert.deepEqual(dims.map((d) => d.value).sort((a, b) => a - b), [10, 20, 40, 40]);
+  const svg = sheetSvg(placed, SHEETS[0], { title: "x", date: "", scale: "", projection: "first", sheet: "A4" }, { hidden: true, smooth: false, dimensions: true });
+  assert.equal((svg.match(/data-dimension/g) ?? []).length, 4);
+  assert.ok(svg.includes(">40<") && svg.includes(">20<"));
 });
