@@ -615,6 +615,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                   <Button size="sm" variant="ghost" fullWidth onClick={() => void detect()}>
                     Detectar planos y cilindros
                   </Button>
+                  <DeviationCard store={store} ui={ui} />
                   <Show when={detections()}>
                     {(list) => (
                       <div class="max-h-48 overflow-y-auto space-y-0.5">
@@ -2662,6 +2663,59 @@ const ToolChecklist: Component<{ tools: Feature[]; value: number[]; onChange: (i
 );
 
 // ─── Escaneo ──────────────────────────────────────────────────────────────
+
+/** Comparar el escaneo con el diseño: colores en el visor y resumen */
+const DeviationCard: Component<{ store: CadStore; ui: CadUi }> = (props) => {
+  const [tolerance, setTolerance] = createSignal(0.2);
+  const [busy, setBusy] = createSignal(false);
+  const [error, setError] = createSignal<string>();
+  const run = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      props.ui.setDeviation(await props.store.deviation(tolerance()));
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Si cambia el diseño, los colores viejos ya no valen
+  createEffect(on(() => props.store.result()?.version, () => props.ui.setDeviation(null), { defer: true }));
+  const d = () => props.ui.deviation();
+  return (
+    <div class="space-y-1.5 rounded-md border border-border p-2" aria-label="Comparar con el escaneo">
+      <span class="text-xs text-text-muted">Comparar el diseño con el escaneo</span>
+      <Num label="Tolerancia" value={tolerance()} step={0.05} suffix="mm" onCommit={(v) => setTolerance(Math.max(0.001, v))} />
+      <Button size="sm" fullWidth disabled={busy() || !props.store.result()?.body} onClick={() => void run()}>
+        {busy() ? "Midiendo…" : "Comparar"}
+      </Button>
+      <Show when={error()}>
+        <p class="text-[11px] text-error">{error()}</p>
+      </Show>
+      <Show when={d()}>
+        {(dev) => (
+          <div class="space-y-0.5 text-xs">
+            <div class="h-2 rounded" style={{ background: "linear-gradient(to right, rgb(51,89,242), rgb(77,191,230), rgb(64,191,89), rgb(242,204,51), rgb(230,51,38))" }} />
+            <div class="flex justify-between text-[10px] text-text-dim">
+              <span>adentro</span>
+              <span>± {fmt(dev().stats.tolerance)} mm</span>
+              <span>afuera</span>
+            </div>
+            <Line label="Dentro de tolerancia">{fmt(dev().stats.within * 100, 1)} %</Line>
+            <Line label="Media (sesgo)">{fmt(dev().stats.mean, 3)} mm</Line>
+            <Line label="Media absoluta">{fmt(dev().stats.meanAbs, 3)} mm</Line>
+            <Line label="P95">{fmt(dev().stats.p95, 3)} mm</Line>
+            <Line label="Máxima">{fmt(dev().stats.maxAbs, 3)} mm</Line>
+            <Button size="sm" variant="ghost" fullWidth onClick={() => props.ui.setDeviation(null)}>
+              Quitar los colores
+            </Button>
+          </div>
+        )}
+      </Show>
+    </div>
+  );
+};
 
 const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; onAdd: (f: Parameters<CadStore["scanAdd"]>[0]) => void }> = (props) => {
   const [depth, setDepth] = createSignal<number>();

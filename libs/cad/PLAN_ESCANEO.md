@@ -62,7 +62,15 @@ cuánto se parece el sólido al escaneo.
 
 ## Fases
 
-1. **Desviación** sólido ↔ escaneo con colores y estadísticas (lo más pedido para validar).
+1. **Desviación** sólido ↔ escaneo con colores y estadísticas (lo más pedido para validar). *Hecha el
+   2026-10-07: `cad_scan::deviation` (árbol de cajas propio sobre la teselación del sólido,
+   punto más cercano de Ericson, signo por la normal del sólido; por triángulo del escaneo, en
+   su centro, porque los triángulos del escaneo conservan el orden de la malla que dibuja el
+   visor). Resumen pesado por área: media con signo, media absoluta, RMS, P95, máximo y
+   fracción dentro de la tolerancia. `cad_deviation` responde en binario (f32). El visor
+   promedia por vértice y pinta verde dentro de ±tol, de celeste a azul hacia adentro y de
+   amarillo a rojo hacia afuera (hasta el P95 o 3 tolerancias). Se borra si cambia el diseño.
+   E2E con el espéculo real: el cilindro ajustado deja 58 % dentro de ±0,2 mm.*
 2. **Detección mejorada**: unir y separar planos; prueba con las piezas reales de `~/Descargas`.
 3. **Restricciones inferidas** en los sketches de corte y redondeo de cotas.
 4. **Alinear el escaneo** y **cortes propuestos**.

@@ -1950,6 +1950,28 @@ const scenarios = {
     if (!(r.volume > 0)) throw new Error("sin volumen");
   },
 
+  async "escaneo: comparar el diseño con colores de desviación"(b) {
+    await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
+    await b.clickContains("Abrir / importar");
+    await sleep(4000);
+    await begin(b);
+    await b.clickContains("Cilindro / agujero");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([6.3, -6.3, 38])`)), { wait: 3000 });
+    await b.clickContains("Agregar el cilindro");
+    await sleep(3000);
+    await b.eval(`[...document.querySelectorAll('[aria-label="Comparar con el escaneo"] button')].find((x) => x.textContent.trim() === "Comparar").click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Dentro de tolerancia")`)); t++) await sleep(500);
+    const text = await b.eval(`document.querySelector('[aria-label="Comparar con el escaneo"]').innerText`);
+    const within = parseFloat((text.match(/Dentro de tolerancia\s+([\d,]+)/) ?? [])[1]?.replace(",", "."));
+    // El cilindro calza con su zona del escaneo: una parte apreciable queda dentro de ±0,2 mm
+    if (!(within > 1)) throw new Error(`dentro de tolerancia: ${text}`);
+    if (!(await b.eval(`!!window.__cadViewer.scan.geometry.getAttribute("color")`))) throw new Error("el escaneo no se coloreó");
+    await b.shot("desviacion");
+    await b.clickText("Quitar los colores");
+    await sleep(500);
+    if (await b.eval(`!!window.__cadViewer.scan.geometry.getAttribute("color")`)) throw new Error("quedaron los colores");
+  },
+
   async "escaneo: cilindro elegido con un clic"(b) {
     await b.eval(`window.__nextPath = [${JSON.stringify(SPECULUM)}]`);
     await b.clickContains("Abrir / importar");

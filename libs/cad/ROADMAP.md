@@ -419,3 +419,6 @@ cargo test -p cad-model
   frente en corte por el plano medio, rayado, con la línea de corte en la planta.
 - **2026-10-07 Plano a PDF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 2): con `svg2pdf` en
   Rust, a tamaño real de hoja; el SVG pasó a ser XML válido.
+- **2026-10-07 Desviación escaneo ↔ diseño** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 1): el
+  escaneo se pinta según cuánto se aparta del sólido, con resumen (media, P95, máximo, % dentro
+  de tolerancia).

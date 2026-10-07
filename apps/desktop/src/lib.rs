@@ -161,6 +161,7 @@ pub fn run() {
             cad::cad_measure,
             cad::cad_parts_at,
             cad::cad_drawing,
+            cad::cad_deviation,
             cad::cad_write_text,
             cad::cad_write_pdf,
             cad::cad_export,

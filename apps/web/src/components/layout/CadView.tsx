@@ -341,6 +341,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer?.setTool(t?.mesh ?? null, t?.op);
   });
   createEffect(() => viewer?.setScanHighlight(ui.scanHighlight()));
+  createEffect(() => {
+    props.scanMesh;
+    viewer?.setScanDeviation(ui.deviation());
+  });
   createEffect(() => viewer?.setScanVisible(scanVisible(), scanOpacity()));
 
   // Sketch: vista de frente al entrar, normal al salir

@@ -22,6 +22,7 @@ import {
   type Plane,
   type PlaneSpec,
   type Region,
+  type ScanDeviation,
   type ScanPick,
   type Sketch,
   type SketchConstraint,
@@ -113,6 +114,8 @@ export function createCadUi(store: CadStore) {
   const [actions, setActions] = createSignal<Partial<Record<CadAction, () => void>>>({});
   const [pickFilter, setPickFilter] = createSignal<PickFilter>("all");
   const [section, setSection] = createSignal<SectionView | null>(null);
+  // Desviación del escaneo mostrada en colores (null = color de siempre)
+  const [deviation, setDeviation] = createSignal<ScanDeviation | null>(null);
   // Plano 2D abierto sobre el visor
   const [drawingOpen, setDrawingOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
@@ -188,6 +191,8 @@ export function createCadUi(store: CadStore) {
     setSection,
     drawingOpen,
     setDrawingOpen,
+    deviation,
+    setDeviation,
     /** Acciones del panel con lo elegido (las registra DesignStep) */
     actions,
     setActions,

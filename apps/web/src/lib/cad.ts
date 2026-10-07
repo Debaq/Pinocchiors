@@ -499,6 +499,26 @@ export interface SolvedSketch {
 }
 
 /** Malla del sólido para el visor (`cad_mesh`) */
+// ─── Desviación escaneo ↔ diseño ──────────────────────────────────────────
+
+export interface ScanDeviation {
+  stats: { mean: number; meanAbs: number; rms: number; p95: number; maxAbs: number; within: number; tolerance: number };
+  /** Por triángulo del escaneo (mismo orden que su malla), mm; + afuera del sólido */
+  perFace: Float32Array;
+}
+
+/** Color de una desviación: verde dentro de ±tol; azul hacia adentro, rojo hacia afuera hasta `range` */
+export function deviationColor(v: number, tol: number, range: number): [number, number, number] {
+  const green: [number, number, number] = [0.25, 0.75, 0.35];
+  if (Math.abs(v) <= tol) return green;
+  const t = Math.min(1, (Math.abs(v) - tol) / Math.max(range - tol, 1e-9));
+  const end: [number, number, number] = v > 0 ? [0.9, 0.2, 0.15] : [0.2, 0.35, 0.95];
+  const mid: [number, number, number] = v > 0 ? [0.95, 0.8, 0.2] : [0.3, 0.75, 0.9];
+  // Verde → amarillo/celeste → rojo/azul
+  const lerp = (a: number[], b: number[], k: number) => a.map((x, i) => x + (b[i] - x) * k) as [number, number, number];
+  return t < 0.5 ? lerp(green, mid, t * 2) : lerp(mid, end, (t - 0.5) * 2);
+}
+
 // ─── Medir ────────────────────────────────────────────────────────────────
 
 export type MeasureItem = { kind: "face"; index: number } | { kind: "edge"; index: number } | { kind: "vertex"; point: P3 };
@@ -2225,6 +2245,14 @@ export function createCadStore() {
     },
 
     faceRef: (face: number) => invoke<FaceRef>("cad_face_ref", { face }),
+    /** Desviación del escaneo respecto del sólido: resumen y un valor por triángulo (mm, + afuera) */
+    async deviation(tolerance: number): Promise<ScanDeviation> {
+      const buf = await invoke<ArrayBuffer>("cad_deviation", { tolerance });
+      const f = new Float32Array(buf);
+      const [count, mean, meanAbs, rms, p95, maxAbs, within, tol] = f;
+      return { stats: { mean, meanAbs, rms, p95, maxAbs, within, tolerance: tol }, perFace: f.slice(8, 8 + count) };
+    },
+
     /** Medidas de una o dos cosas elegidas en el sólido mostrado */
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),

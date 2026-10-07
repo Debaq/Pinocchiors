@@ -10,6 +10,7 @@
 //!   "hasta el escaneo");
 //! - `*_feature`: convertir lo detectado en operaciones de [`cad_model`].
 
+mod deviation;
 mod mesh;
 mod outline;
 mod pick;
@@ -19,6 +20,7 @@ use cad_model::{BodyOp, Extent, Extrude, FeatureId, FeatureKind, PlaneSpec, Prim
 use cad_solver::fitting::{self, PrimitiveParams, PrimitiveType};
 use serde::{Deserialize, Serialize};
 
+pub use deviation::{Deviation, DeviationStats, deviation};
 pub use mesh::ScanMesh;
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};
 pub use pick::{CylinderPick, PickError, PickOptions, PlanePick, boundary_loops, pick_cylinder, pick_plane};

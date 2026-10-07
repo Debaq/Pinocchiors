@@ -7,7 +7,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { THEME_EVENT, themeHex } from "./theme";
-import { ellipsePolyline, splineOf, type BodyOp, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
+import { deviationColor, ellipsePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 import { ViewCube } from "./ViewCube";
 
@@ -301,6 +301,48 @@ export class CadViewer {
       this.scan.visible = this.showScan;
       this.scene.add(this.scan);
     }
+    this.requestRender();
+  }
+
+  /**
+   * Colorea el escaneo con la desviación por triángulo (promediada en cada
+   * vértice) o le devuelve su color con `null`.
+   */
+  setScanDeviation(dev: ScanDeviation | null) {
+    if (!this.scan) return;
+    const g = this.scan.geometry;
+    const m = this.scan.material as THREE.MeshStandardMaterial;
+    if (!dev) {
+      g.deleteAttribute("color");
+      m.vertexColors = false;
+      m.color.set(themeHex("comment"));
+      m.opacity = this.scanOpacity;
+      m.needsUpdate = true;
+      return this.requestRender();
+    }
+    const idx = g.getIndex()!;
+    const nv = (g.getAttribute("position") as THREE.BufferAttribute).count;
+    const sum = new Float32Array(nv);
+    const cnt = new Uint16Array(nv);
+    for (let t = 0; t < dev.perFace.length && t * 3 + 2 < idx.count; t++) {
+      for (let c = 0; c < 3; c++) {
+        const v = idx.getX(t * 3 + c);
+        sum[v] += dev.perFace[t];
+        cnt[v]++;
+      }
+    }
+    const tol = dev.stats.tolerance;
+    const range = Math.max(dev.stats.p95, tol * 3);
+    const colors = new Float32Array(nv * 3);
+    for (let v = 0; v < nv; v++) {
+      const [r, gg, b] = deviationColor(cnt[v] ? sum[v] / cnt[v] : 0, tol, range);
+      colors.set([r, gg, b], v * 3);
+    }
+    g.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    m.vertexColors = true;
+    m.color.set(0xffffff);
+    m.opacity = Math.max(this.scanOpacity, 0.9);
+    m.needsUpdate = true;
     this.requestRender();
   }
 

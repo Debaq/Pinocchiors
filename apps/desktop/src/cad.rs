@@ -338,6 +338,35 @@ pub async fn cad_mesh(app: AppHandle) -> Result<Response, String> {
     in_background(app, |state| mesh_impl(state).map(Response::new)).await
 }
 
+/// Desviación del escaneo (el modelo cargado) respecto del sólido guardado:
+/// f32 en binario; primero el resumen (triángulos, media, media absoluta, rms,
+/// p95, máximo, fracción dentro de la tolerancia, tolerancia) y después un
+/// valor por triángulo del escaneo (mm, + afuera del sólido).
+#[tauri::command]
+pub async fn cad_deviation(app: AppHandle, tolerance: f64) -> Result<Response, String> {
+    in_background(app, move |state| deviation_impl(state, tolerance).map(Response::new)).await
+}
+
+fn deviation_impl(state: &AppState, tolerance: f64) -> Result<Vec<u8>, String> {
+    require_occt()?;
+    evaluate_committed(state)?;
+    let (positions, normals, triangles) = {
+        let cache = state.cad_cache.lock().unwrap();
+        let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
+        let m = body.mass().map_err(|e| e.to_string())?;
+        let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
+        let t = body.tessellate(size * 2e-4, 0.1).map_err(|e| e.to_string())?;
+        (t.positions, t.normals, t.triangles)
+    };
+    with_scan(state, |scan| {
+        let d = cad_scan::deviation(&scan.mesh, &positions, &normals, &triangles, tolerance);
+        let s = &d.stats;
+        let mut out: Vec<f32> = vec![d.per_face.len() as f32, s.mean as f32, s.mean_abs as f32, s.rms as f32, s.p95 as f32, s.max_abs as f32, s.within as f32, s.tolerance as f32];
+        out.extend(d.per_face.iter().map(|v| *v as f32));
+        Ok(out.iter().flat_map(|v| v.to_le_bytes()).collect())
+    })
+}
+
 fn mesh_impl(state: &AppState) -> Result<Vec<u8>, String> {
     evaluate(state)?;
     let scale = 1.0 / mm_per_unit(state);
@@ -1049,6 +1078,7 @@ pub mod bridge {
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
             "cad_drawing" => ok(drawing_impl(state, &arg::<Vec<DrawingViewSpec>>(args, "views")?)?),
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);
