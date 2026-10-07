@@ -1055,6 +1055,7 @@ const KIND_NAMES: Record<ChainKind, string> = {
   pincer: "Pinza",
   fin: "Aleta",
   tentacle: "Tentáculo",
+  mouth: "Boca",
   body: "Cuerpo",
   other: "Otros",
 };
@@ -1072,6 +1073,7 @@ const KIND_HUES: Record<ChainKind, number> = {
   pincer: 0,
   fin: 170,
   tentacle: 300,
+  mouth: 15,
   body: 45,
   other: 0,
 };

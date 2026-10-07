@@ -92,3 +92,8 @@ fn camel_fits_with_long_legs() {
 fn lizard_fits_with_sprawled_legs() {
     assert_errors(&fit_errors(characters::lizard(), &BodyPlan::variant("lizard").unwrap().build()), 0.06);
 }
+
+#[test]
+fn spider_legs_find_their_tips() {
+    assert_errors(&fit_errors(characters::spider(), &BodyPlan::variant("spider").unwrap().build()), 0.06);
+}

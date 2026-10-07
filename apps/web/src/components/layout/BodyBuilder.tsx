@@ -1,12 +1,35 @@
 import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { Panel, Slider } from "../ui";
-import { FEET_ICONS, LIMB_BITS, LIMB_ICONS, NECK_ICONS, PART_ICONS, POSTURE_ICONS, SHAPE_ICONS } from "./bodyIcons";
+import {
+  ARTHROPOD_ICONS,
+  FEET_ICONS,
+  LIMB_BITS,
+  LIMB_ICONS,
+  NECK_ICONS,
+  PART_ICONS,
+  POSTURE_ICONS,
+  RADIAL_ICONS,
+  SHAPE_ICONS,
+} from "./bodyIcons";
 import type { BodyPlan, BodyShape } from "../../lib/bodyPlan";
 import type { SkeletonPreset } from "../panels/SkeletonPanel";
 
-type CountField = "neck" | "tail" | "trunk" | "ears" | "wings" | "limbs" | "limb_segments" | "antennae" | "horns" | "tusks" | "tentacles";
-type FlagField = "fins" | "pincers" | "jaw" | "flukes";
+type CountField =
+  | "neck"
+  | "tail"
+  | "trunk"
+  | "ears"
+  | "wings"
+  | "limbs"
+  | "limb_segments"
+  | "antennae"
+  | "horns"
+  | "tusks"
+  | "tentacles"
+  | "abdomen"
+  | "mantle";
+type FlagField = "fins" | "pincers" | "jaw" | "flukes" | "fangs" | "palps" | "eye_stalks" | "segmented";
 
 const SHAPES: { id: BodyShape; label: string; hint: string }[] = [
   { id: "biped", label: "Bípedo", hint: "Humanoides y primates" },
@@ -42,7 +65,15 @@ const DEFAULT_COUNT: Partial<Record<CountField, number>> = {
   wings: 3,
   antennae: 2,
   tentacles: 1,
+  abdomen: 2,
 };
+
+const RADIAL_POSES: { id: NonNullable<BodyPlan["radial_pose"]>; label: string; hint: string }[] = [
+  { id: "spread", label: "Extendidos", hint: "Brazos sobre el suelo alrededor del cuerpo: pulpo, calamar" },
+  { id: "hanging", label: "Colgando", hint: "Brazos que cuelgan de una campana: medusa" },
+  { id: "flat", label: "En estrella", hint: "Brazos planos y el cuerpo pegado al suelo: estrella de mar" },
+  { id: "up", label: "Hacia arriba", hint: "Tentáculos que se abren desde un disco sobre una columna: anémona" },
+];
 
 export interface BodyBuilderProps {
   /** Plan del esqueleto actual; sin plan solo se elige la forma base */
@@ -156,7 +187,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   /** Tarjeta de una parte con segmentos: clic la prende o la apaga */
   const Part: Component<{ field: CountField; icon: string; label: string; hint: string; min?: number; max: number }> = (p) => (
     <Tile
-      icon={PART_ICONS[p.icon]}
+      icon={PART_ICONS[p.icon] ?? ARTHROPOD_ICONS[p.icon]}
       label={p.label}
       hint={p.hint}
       active={count(p.field) > 0}
@@ -176,7 +207,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   /** Tarjeta de una parte sin segmentos */
   const Flag: Component<{ field: FlagField; icon: string; label: string; hint: string }> = (p) => (
     <Tile
-      icon={PART_ICONS[p.icon]}
+      icon={PART_ICONS[p.icon] ?? ARTHROPOD_ICONS[p.icon]}
       label={p.label}
       hint={p.hint}
       active={!!plan()?.[p.field]}
@@ -186,7 +217,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   );
 
   const percent = (v: number) => `${Math.round(v * 100)} %`;
-  const Ratio: Component<{ field: "leg_length" | "arm_length" | "tail_length"; label: string; max: number }> = (p) => (
+  const Ratio: Component<{ field: "leg_length" | "arm_length" | "tail_length" | "body_width"; label: string; max: number }> = (p) => (
     <Slider
       label={p.label}
       value={plan()?.[p.field] ?? 1}
@@ -348,7 +379,7 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
           </Section>
         </Show>
 
-        <Show when={headed() || shape() === "arthropod" || shape() === "fish"}>
+        <Show when={headed() || shape() === "fish"}>
           <Section title="Cuerpo">
             <div class={GRID}>
               <Show when={shape() === "quadruped"}>
@@ -357,21 +388,17 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
               </Show>
               <Part
                 field="tail"
-                icon={shape() === "biped" ? "bipedTail" : shape() === "arthropod" ? "stinger" : shape() === "fish" ? "fishTail" : "tail"}
+                icon={shape() === "biped" ? "bipedTail" : shape() === "fish" ? "fishTail" : "tail"}
                 label="Cola"
                 hint="Cola: más segmentos la doblan más suave (prensil: muchos y larga)"
                 max={16}
               />
               <Show when={shape() !== "fish"}>
-                <Part field="wings" icon={shape() === "arthropod" ? "insectWings" : "wings"} label="Alas" hint="Un par de alas" max={5} />
+                <Part field="wings" icon="wings" label="Alas" hint="Un par de alas" max={5} />
               </Show>
               <Show when={shape() === "fish"}>
                 <Flag field="fins" icon="fins" label="Aletas" hint="Aletas pectorales y dorsal" />
                 <Flag field="flukes" icon="flukes" label="Aleta caudal" hint="Aleta horizontal al final de la cola (delfín, ballena)" />
-              </Show>
-              <Show when={shape() === "arthropod"}>
-                <Part field="antennae" icon="antennae" label="Antenas" hint="Un par de antenas" max={4} />
-                <Flag field="pincers" icon="pincers" label="Pinzas" hint="Un par de pinzas al frente" />
               </Show>
             </div>
             <Show when={count("tail") > 0}>
@@ -388,19 +415,92 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
         </Show>
 
         <Show when={shape() === "arthropod"}>
+          <Section title="Cuerpo">
+            <div class={GRID}>
+              <Tile
+                icon={ARTHROPOD_ICONS.fusedHead}
+                label="Cabeza fusionada"
+                hint="La cabeza es el frente del tórax: araña, cangrejo, escorpión"
+                active={!plan()?.separate_head}
+                disabled={props.disabled}
+                onClick={() => update({ separate_head: false })}
+              />
+              <Tile
+                icon={ARTHROPOD_ICONS.separateHead}
+                label="Cabeza aparte"
+                hint="Cabeza con un cuello corto que gira sola: insectos, hormiga, ciempiés"
+                active={!!plan()?.separate_head}
+                disabled={props.disabled}
+                onClick={() => update({ separate_head: true })}
+              />
+              <Part field="abdomen" icon="abdomen" label="Abdomen" hint="Abdomen detrás del tórax: más segmentos lo doblan más (abeja que pica, langosta)" max={12} />
+              <Part field="tail" icon="stinger" label="Cola con aguijón" hint="Cola de escorpión que se arquea sobre el lomo" max={12} />
+              <Part field="wings" icon="insectWings" label="Alas" hint="Alas: más segmentos las doblan más" max={5} />
+              <Flag field="segmented" icon="segmented" label="Patas en cada segmento" hint="Un par de patas en cada segmento del cuerpo: ciempiés, milpiés" />
+            </div>
+            <Show when={count("wings") > 0}>
+              <CountRow label="Pares de alas" value={Math.max(plan()?.wing_pairs ?? 1, 1)} min={1} max={2} onChange={(wing_pairs) => update({ wing_pairs })} disabled={props.disabled} />
+            </Show>
+          </Section>
+          <Section title="Cabeza y boca">
+            <div class={GRID}>
+              <Part field="antennae" icon="antennae" label="Antenas" hint="Un par de antenas (langosta: largas, más segmentos)" max={6} />
+              <Flag field="fangs" icon="fangs" label="Colmillos" hint="Quelíceros de la araña o mandíbulas de la hormiga: muerden" />
+              <Flag field="palps" icon="palps" label="Pedipalpos" hint="Las patitas cortas al frente de la araña" />
+              <Flag field="eye_stalks" icon="eyeStalks" label="Ojos con pedúnculo" hint="Ojos sobre tallos: cangrejo, langosta" />
+              <Flag field="pincers" icon="pincers" label="Pinzas" hint="Brazo, palma y un dedo móvil que abre y cierra" />
+            </div>
+          </Section>
           <Section title="Patas">
-            <CountRow label="Pares de patas" value={count("limbs")} min={1} max={6} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
-            <CountRow label="Segmentos por pata" value={count("limb_segments")} min={2} max={4} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
+            <CountRow
+              label="Pares de patas"
+              value={count("limbs")}
+              min={1}
+              max={plan()?.segmented ? 24 : 8}
+              onChange={(limbs) => update({ limbs })}
+              disabled={props.disabled}
+            />
+            <CountRow label="Segmentos por pata" value={count("limb_segments")} min={2} max={5} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
           </Section>
         </Show>
 
         <Show when={shape() === "radial"}>
+          <Section title="Forma">
+            <div class={GRID}>
+              <For each={RADIAL_POSES}>
+                {(r) => (
+                  <Tile
+                    icon={RADIAL_ICONS[r.id]}
+                    label={r.label}
+                    hint={r.hint}
+                    active={(plan()?.radial_pose ?? "spread") === r.id}
+                    disabled={props.disabled}
+                    onClick={() => update({ radial_pose: r.id })}
+                  />
+                )}
+              </For>
+            </div>
+            <CountRow
+              label="Manto o columna (0: sin cabeza)"
+              value={plan()?.mantle ?? 1}
+              min={0}
+              max={6}
+              onChange={(mantle) => update({ mantle })}
+              disabled={props.disabled}
+            />
+          </Section>
           <Section title="Brazos">
             <div class={GRID}>
-              <Part field="tentacles" icon="tentacles" label="Tentáculos" hint="Pares de tentáculos largos (calamar: 1)" max={2} />
+              <Part
+                field="tentacles"
+                icon="tentacles"
+                label="Tentáculos de caza"
+                hint="Pares de tentáculos mucho más largos que los brazos, entre los del frente: el calamar tiene 1 par para atrapar presas"
+                max={2}
+              />
               <Flag field="fins" icon="fins" label="Aletas" hint="Aletas del manto (calamar)" />
             </div>
-            <CountRow label="Brazos" value={count("limbs")} min={3} max={12} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
+            <CountRow label="Brazos" value={count("limbs")} min={3} max={16} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
             <CountRow label="Segmentos por brazo" value={count("limb_segments")} min={2} max={10} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
           </Section>
         </Show>
@@ -426,11 +526,14 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
           </Section>
         </Show>
 
-        <Show when={headed() || (count("tail") > 0 && shape() !== "serpent" && shape() !== "tree")}>
+        <Show when={headed() || shape() === "arthropod" || (count("tail") > 0 && shape() !== "serpent" && shape() !== "tree")}>
           <Section title="Proporciones">
             <div class="space-y-3">
-              <Show when={headed()}>
+              <Show when={headed() || shape() === "arthropod"}>
                 <Ratio field="leg_length" label="Largo de las patas" max={2} />
+              </Show>
+              <Show when={shape() === "arthropod"}>
+                <Ratio field="body_width" label="Ancho del cuerpo" max={3} />
               </Show>
               <Show when={(shape() === "biped" || shape() === "digitigrade") && count("wings") === 0}>
                 <Ratio field="arm_length" label="Largo de los brazos" max={2} />

@@ -1579,7 +1579,39 @@ pub struct BodyPlanDto {
     pub heads: usize,
     #[serde(default = "one")]
     pub tails: usize,
+    #[serde(default)]
+    pub separate_head: bool,
+    #[serde(default = "one")]
+    pub abdomen: usize,
+    #[serde(default = "default_leg_length")]
+    pub body_width: f64,
+    #[serde(default)]
+    pub fangs: bool,
+    #[serde(default)]
+    pub palps: bool,
+    #[serde(default)]
+    pub eye_stalks: bool,
+    #[serde(default = "one")]
+    pub wing_pairs: usize,
+    #[serde(default)]
+    pub segmented: bool,
+    /// "spread", "hanging", "flat", "up"
+    #[serde(default = "default_radial_pose")]
+    pub radial_pose: String,
+    #[serde(default = "one")]
+    pub mantle: usize,
 }
+
+fn default_radial_pose() -> String {
+    "spread".into()
+}
+
+const RADIAL_POSES: [(&str, pinocchio_skeleton::RadialPose); 4] = [
+    ("spread", pinocchio_skeleton::RadialPose::Spread),
+    ("hanging", pinocchio_skeleton::RadialPose::Hanging),
+    ("flat", pinocchio_skeleton::RadialPose::Flat),
+    ("up", pinocchio_skeleton::RadialPose::Up),
+];
 
 fn one() -> usize {
     1
@@ -1652,6 +1684,16 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             missing: p.missing,
             heads: p.heads,
             tails: p.tails,
+            separate_head: p.separate_head,
+            abdomen: p.abdomen,
+            body_width: p.body_width,
+            fangs: p.fangs,
+            palps: p.palps,
+            eye_stalks: p.eye_stalks,
+            wing_pairs: p.wing_pairs,
+            segmented: p.segmented,
+            radial_pose: RADIAL_POSES.iter().find(|(_, r)| *r == p.radial_pose).map_or("spread", |(id, _)| id).to_string(),
+            mantle: p.mantle,
         }
     }
 }
@@ -1673,7 +1715,7 @@ impl BodyPlanDto {
             trunk: clamp(self.trunk, 16),
             ears: clamp(self.ears, 4),
             wings: clamp(self.wings, 6),
-            limbs: clamp(self.limbs, 12),
+            limbs: clamp(self.limbs, 24),
             limb_segments: clamp(self.limb_segments, 12),
             fins: self.fins,
             pincers: self.pincers,
@@ -1694,6 +1736,16 @@ impl BodyPlanDto {
             missing: self.missing & 0b1111,
             heads: self.heads.clamp(1, 5),
             tails: self.tails.clamp(1, 9),
+            separate_head: self.separate_head,
+            abdomen: clamp(self.abdomen, 12),
+            body_width: ratio(self.body_width, 3.0),
+            fangs: self.fangs,
+            palps: self.palps,
+            eye_stalks: self.eye_stalks,
+            wing_pairs: self.wing_pairs.clamp(1, 2),
+            segmented: self.segmented,
+            radial_pose: RADIAL_POSES.iter().find(|(id, _)| *id == self.radial_pose).map_or_else(Default::default, |(_, r)| *r),
+            mantle: clamp(self.mantle, 6),
         })
     }
 }

@@ -3,7 +3,7 @@
  * correr, trotar o galopar, saltar, saludar, aplaudir, golpear, patear,
  * bailar, asentir, negar, comer, sacudirse, mover la cola, aletear, planear,
  * nadar, reptar, atacar, amenazar, arrastrarse con tentáculos, paso de
- * portante, echarse y flexiones.
+ * portante, echarse, flexiones, morder, caminar de lado y picar.
  *
  * No depende de la plantilla elegida: parte el esqueleto en cadenas (tramos
  * sin ramificar) y reconoce patas, brazos, alas, cola, cabeza, trompa,
@@ -39,6 +39,7 @@ export type ChainKind =
   | "pincer"
   | "fin"
   | "tentacle"
+  | "mouth"
   | "body"
   | "other";
 
@@ -105,7 +106,10 @@ export type PresetAnimationId =
   | "tentacleCrawl"
   | "pace"
   | "lieDown"
-  | "pushUps";
+  | "pushUps"
+  | "bite"
+  | "sideWalk"
+  | "sting";
 
 export interface PresetAnimation {
   id: PresetAnimationId;
@@ -176,11 +180,12 @@ function kindByName(name: string): ChainKind | undefined {
   if (/wing|humerus|radius|carpus|digits/.test(n)) return "wing";
   if (/trunk|proboscis/.test(n)) return "trunk";
   if (/(^|[_.])ear/.test(n)) return "ear";
-  if (/antenna/.test(n)) return "antenna";
+  if (/fang|mandible|chelicer/.test(n)) return "mouth";
+  if (/antenna|(^|[_.])palp|eyestalk/.test(n)) return "antenna";
   if (/pincer|pedipalp|claw/.test(n)) return "pincer";
   if (/dorsal|horn|tusk|antler/.test(n)) return "other";
   if (/pectoral|fin|fluke/.test(n)) return "fin";
-  if (/tail|vertebra/.test(n)) return "tail";
+  if (/tail|vertebra|abdomen/.test(n)) return "tail";
   if (/head|neck|skull|sensor|jaw/.test(n)) return "head";
   if (/^arm\d|tentacle/.test(n)) return "tentacle";
   if (/leg|paw|hoof|foot|toe/.test(n)) return "leg";
@@ -350,6 +355,9 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   threat: { name: "Amenazar", description: "Se alza sobre las patas traseras y agita las delanteras" },
   tentacleCrawl: { name: "Arrastrarse", description: "Los tentáculos se enroscan y estiran por turnos" },
   pace: { name: "Paso de portante", description: "Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)" },
+  bite: { name: "Morder", description: "Los colmillos o mandíbulas se abren y se cierran; la cabeza acompaña" },
+  sideWalk: { name: "Caminar de lado", description: "Paso de cangrejo: las patas empujan y tiran hacia el costado" },
+  sting: { name: "Picar", description: "El abdomen se curva por debajo del cuerpo y pica dos veces" },
   pushUps: { name: "Flexiones", description: "Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza" },
   lieDown: {
     name: "Echarse",
@@ -358,6 +366,27 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
 };
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
+
+/** Colas de verdad (no el abdomen de un artrópodo) */
+const wagging = (body: Body) =>
+  body.chains.filter((c) => c.kind === "tail" && !/abdomen/.test(body.bones[c.joints[0]].name));
+
+/**
+ * Se arrastra con los brazos: cinco o más, con las puntas en el suelo y el
+ * cuerpo abajo (pulpo, estrella de mar; no la medusa ni la anémona)
+ */
+function crawlingArms(body: Body): boolean {
+  const arms = chainsOf(body, "tentacle");
+  if (body.chains.some((c) => c.kind === "leg") || arms.length < 5) return false;
+  // Contra el tamaño, no la altura: la estrella de mar es plana
+  const low = (j: number) => body.bones[j].position[1] - body.ground < 0.15 * body.size;
+  const rootLow = body.bones[body.root].position[1] - body.ground < 0.4 * body.size;
+  return rootLow && arms.every((c) => low(c.joints[c.joints.length - 1]));
+}
+
+/** Abdómenes que pican (los de los insectos alados) */
+const stingers = (body: Body) =>
+  body.chains.filter((c) => c.kind === "tail" && c.rotating.length >= 2 && /abdomen/.test(body.bones[c.joints[0]].name));
 
 /** Cuatro patas abiertas al costado, sin pinzas: reptiles, anfibios */
 function sprawlingQuadruped(body: Body): boolean {
@@ -391,18 +420,21 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (head) ids.push("nod", "shakeHead");
   if (head && upright.length >= 2 && arms === 0) ids.push("eat");
   if (upright.length >= 4) ids.push("shake");
-  if (legs.length >= 2 && count(body, "tail") > 0 && count(body, "pincer") === 0) ids.push("wag");
+  if (legs.length >= 2 && wagging(body).length > 0 && count(body, "pincer") === 0) ids.push("wag");
   if (count(body, "wing") >= 2) ids.push("glide");
   if (ids.includes("swim")) ids.push("swimFast");
   if (legs.length === 0 && body.chains.some((c) => c.kind === "body" && c.rotating.length >= 6)) ids.push("strike");
   if (count(body, "pincer") > 0) ids.push("pinch");
   if (legs.length >= 4 && legs.every((l) => l.sprawl) && !sprawlingQuadruped(body)) ids.push("threat");
-  if (legs.length === 0 && count(body, "tentacle") >= 6) ids.push("tentacleCrawl");
+  if (crawlingArms(body)) ids.push("tentacleCrawl");
   if (upright.length >= 4) ids.push("pace");
   // Arrodillarse sobre el carpo pide patas delanteras con carpo y menudillo
   if (kneelingLegs(body)) ids.push("lieDown");
   // Las lagartijas; una tortuga (cola corta) no
   if (sprawlingQuadruped(body) && head && chainsOf(body, "tail").some((c) => c.rotating.length >= 3)) ids.push("pushUps");
+  if (count(body, "mouth") >= 2) ids.push("bite");
+  if (count(body, "pincer") > 0 && legs.length >= 6 && legs.every((l) => l.sprawl)) ids.push("sideWalk");
+  if (count(body, "wing") >= 2 && stingers(body).length > 0) ids.push("sting");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }
 
@@ -683,8 +715,10 @@ const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl" | "pace" | "spr
     arm: deg(10),
     elbow: deg(10),
     lean: 0,
-    // Trípode alterno: patas vecinas en contrafase
-    phase: (leg, pair) => ((pair + (left(leg) ? 0 : 1)) % 2) * 0.5,
+    // Trípode alterno (patas vecinas en contrafase); con muchas patas
+    // (ciempiés), una onda que corre de atrás hacia adelante
+    phase: (leg, pair, pairs) =>
+      pairs > 4 ? (((1 - pair / pairs) * 1.5 + (left(leg) ? 0 : 0.5)) % 1) : ((pair + (left(leg) ? 0 : 1)) % 2) * 0.5,
   },
 };
 
@@ -1338,6 +1372,52 @@ function pushUps(body: Body, pose: PoseBuilder, t: number): void {
   appendages(body, pose, t, 1, 0.4);
 }
 
+/** Morder: colmillos o mandíbulas se cierran hacia el medio, tres veces */
+function bite(body: Body, pose: PoseBuilder, t: number): void {
+  const close = 0.5 - 0.5 * Math.cos(TAU * 3 * t);
+  for (const fang of chainsOf(body, "mouth")) {
+    const side = fang.side || 1;
+    // Abiertas hacia afuera y cerradas hacia el medio
+    pose.turn(fang.rotating[0], body.up, side * (deg(25) * (1 - close) - deg(10) * close));
+  }
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, nodAxis(body), (deg(6) * close) / Math.max(head.length, 1)));
+  appendages(body, pose, t, 3, 0.6);
+}
+
+/**
+ * Paso de cangrejo: cada pata se levanta y se dobla o se estira hacia el
+ * costado (las de un lado tiran mientras las del otro empujan) y el cuerpo
+ * se mece de lado a lado
+ */
+function sideWalk(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = chainsOf(body, "leg");
+  const sides = [legs.filter((l) => l.side < 0), legs.filter((l) => l.side > 0)];
+  sides.forEach((s) => s.sort((a, b) => b.along - a.along));
+  for (const s of sides) {
+    s.forEach((leg, pair) => {
+      const phase = ((pair + (leg.side < 0 ? 0 : 1)) % 2) * 0.5;
+      const { swing, lift } = stride((((t + phase) % 1) + 1) % 1, 0.5);
+      const d = flat(leg.dir);
+      pose.turn(leg.rotating[0], liftAxis(body, d), deg(18) * lift);
+      if (leg.rotating.length > 1) pose.turn(leg.rotating[1], liftAxis(body, segment(body, leg, 1)), deg(20) * swing * leg.side);
+    });
+  }
+  pose.move(scale(body.right, 0.02 * body.size * wave(t, 2)));
+  for (const pincer of chainsOf(body, "pincer")) pose.turn(pincer.rotating[0], liftAxis(body, segment(body, pincer, 0)), deg(8) * wave(t, 2));
+  appendages(body, pose, t, 2, 0.5);
+}
+
+/** Picar: el abdomen se curva por debajo y adelante, dos veces */
+function sting(body: Body, pose: PoseBuilder, t: number): void {
+  const curl = pulse(t, 0.1, 0.45, 0.4) + pulse(t, 0.55, 0.9, 0.4);
+  for (const abdomen of stingers(body)) {
+    abdomen.rotating.forEach((j) => pose.turn(j, nodAxis(body), (-deg(70) * curl) / abdomen.rotating.length));
+  }
+  for (const wing of chainsOf(body, "wing")) pose.turn(wing.rotating[0], liftAxis(body, segment(body, wing, 0)), deg(25) * wave(t, 8));
+  appendages(body, pose, t, 2, 0.5);
+}
+
 /** Portante: como el paso, con las dos patas de cada lado juntas y el cuerpo meciéndose hacia el lado que apoya */
 function pace(body: Body, pose: PoseBuilder, t: number): void {
   pose.turn(body.root, body.forward, deg(4) * wave(t, 1, 0.5));
@@ -1458,6 +1538,12 @@ export function generateAnimation(
       const g = sprawlingQuadruped(body) ? GAITS.sprint : GAITS.run;
       return bake(name, body, { frames: g.frames, step: 1, grounded: grounded(body), fps }, (p, t) => gait(body, g, p, t));
     }
+    case "bite":
+      return bake(name, body, { frames: 36, step: 1, grounded: legs.length > 0, fps }, (p, t) => bite(body, p, t));
+    case "sideWalk":
+      return bake(name, body, { frames: 24, step: 1, grounded: true, fps }, (p, t) => sideWalk(body, p, t));
+    case "sting":
+      return bake(name, body, { frames: 36, step: 1, grounded: legs.length > 0, fps }, (p, t) => sting(body, p, t));
     case "pushUps":
       return bake(name, body, { frames: 48, step: 1, grounded: true, fps }, (p, t) => pushUps(body, p, t));
     case "trot":

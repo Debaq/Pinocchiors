@@ -63,6 +63,20 @@ pub enum NeckShape {
     Level,
 }
 
+/// Hacia dónde van los brazos del cuerpo radial.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RadialPose {
+    /// Extendidos sobre el suelo alrededor del cuerpo: pulpo, calamar.
+    #[default]
+    Spread,
+    /// Colgando de una campana: medusa.
+    Hanging,
+    /// Planos en estrella, el cuerpo pegado al suelo: estrella de mar.
+    Flat,
+    /// Hacia arriba desde un disco sobre una columna: anémona.
+    Up,
+}
+
 /// Forma base y apéndices. Los campos que no aplican a la forma se ignoran;
 /// un apéndice con 0 segmentos no se agrega.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -122,6 +136,28 @@ pub struct BodyPlan {
     pub heads: usize,
     /// Cantidad de colas, cada una con `tail` segmentos.
     pub tails: usize,
+    /// Artrópodo: cabeza aparte con un cuello corto (insecto) o fusionada
+    /// al tórax (araña, cangrejo).
+    pub separate_head: bool,
+    /// Artrópodo: segmentos del abdomen (0: sin abdomen, como el cangrejo).
+    pub abdomen: usize,
+    /// Artrópodo: ancho del cuerpo respecto de la plantilla (cangrejo: más).
+    pub body_width: Real,
+    /// Artrópodo: colmillos o mandíbulas (quelíceros de la araña).
+    pub fangs: bool,
+    /// Artrópodo: pedipalpos, las patitas cortas al frente de la araña.
+    pub palps: bool,
+    /// Artrópodo: ojos en pedúnculo (cangrejo, langosta).
+    pub eye_stalks: bool,
+    /// Artrópodo: pares de alas (libélula, escarabajo: 2).
+    pub wing_pairs: usize,
+    /// Artrópodo: un par de patas en cada segmento del cuerpo (ciempiés).
+    pub segmented: bool,
+    /// Radial: hacia dónde van los brazos.
+    pub radial_pose: RadialPose,
+    /// Radial: segmentos del manto o de la columna (0: sin cabeza, como la
+    /// estrella de mar).
+    pub mantle: usize,
 }
 
 /// Bit de cada extremidad en [`BodyPlan::missing`].
@@ -188,6 +224,16 @@ impl BodyPlan {
             missing: 0,
             heads: 1,
             tails: 1,
+            separate_head: false,
+            abdomen: 1,
+            body_width: 1.0,
+            fangs: false,
+            palps: false,
+            eye_stalks: false,
+            wing_pairs: 1,
+            segmented: false,
+            radial_pose: RadialPose::Spread,
+            mantle: 1,
         }
     }
 
@@ -209,13 +255,22 @@ impl BodyPlan {
             ("turtle", "Tortuga", "Patas abiertas y cortas, cuello que se estira y cola corta"),
             ("spider_monkey", "Mono araña / gibón", "Bípedo de brazos largos con cola prensil"),
             ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
-            ("octopus", "Pulpo", "Cuerpo radial con 8 tentáculos"),
-            ("squid", "Calamar", "Cuerpo radial con 8 brazos, 2 tentáculos largos y aletas"),
+            ("octopus", "Pulpo", "Cuerpo radial con 8 brazos y manto"),
+            ("squid", "Calamar", "Cuerpo radial con 8 brazos, 2 tentáculos de caza y aletas"),
+            ("jellyfish", "Medusa", "Campana con tentáculos colgando"),
+            ("starfish", "Estrella de mar", "Cinco brazos planos sin cabeza"),
+            ("anemone", "Anémona", "Columna con tentáculos hacia arriba"),
             ("fish", "Pez", "Eje horizontal con aletas y cola"),
             ("dolphin", "Delfín / ballena", "Cola larga con aleta caudal horizontal"),
-            ("crab", "Cangrejo", "Artrópodo de 8 patas con pinzas"),
-            ("insect", "Insecto", "Artrópodo de 6 patas con antenas y alas"),
-            ("scorpion", "Escorpión", "Artrópodo con pinzas y cola"),
+            ("spider", "Araña", "8 patas largas, abdomen grande, quelíceros y pedipalpos"),
+            ("crab", "Cangrejo", "Cuerpo ancho, 8 patas, pinzas y ojos en pedúnculo"),
+            ("lobster", "Langosta / camarón", "Pinzas, antenas largas, ojos en pedúnculo y abdomen largo"),
+            ("scorpion", "Escorpión", "Pinzas, abdomen y cola con aguijón"),
+            ("insect", "Insecto / mosca", "6 patas, cabeza aparte, antenas y un par de alas"),
+            ("ant", "Hormiga", "6 patas, cabeza aparte, mandíbulas, antenas y abdomen"),
+            ("beetle", "Escarabajo", "6 patas, mandíbulas, antenas y dos pares de alas"),
+            ("bee", "Abeja / avispa", "6 patas, dos pares de alas, antenas y abdomen que pica"),
+            ("centipede", "Ciempiés", "Cuerpo largo con un par de patas en cada segmento"),
             ("trex", "Dinosaurio bípedo", "Bípedo digitígrado con cola larga y brazos cortos"),
             ("bird_walker", "Ave", "Bípedo digitígrado con alas"),
             ("snake", "Serpiente", "Cadena de 16 segmentos"),
@@ -339,31 +394,106 @@ impl BodyPlan {
             "octopus" => with(Radial, |p| {
                 p.limbs = 8;
                 p.limb_segments = 6;
+                p.mantle = 2;
             }),
             "squid" => with(Radial, |p| {
                 p.limbs = 8;
                 p.limb_segments = 5;
                 p.tentacles = 1;
                 p.fins = true;
+                p.mantle = 3;
+            }),
+            "jellyfish" => with(Radial, |p| {
+                p.radial_pose = RadialPose::Hanging;
+                p.limbs = 8;
+                p.limb_segments = 6;
+            }),
+            "starfish" => with(Radial, |p| {
+                p.radial_pose = RadialPose::Flat;
+                p.limbs = 5;
+                p.limb_segments = 4;
+                p.mantle = 0;
+            }),
+            "anemone" => with(Radial, |p| {
+                p.radial_pose = RadialPose::Up;
+                p.limbs = 12;
+                p.limb_segments = 3;
+                p.mantle = 2;
             }),
             "fish" => with(Fish, |p| p.tail = 4),
             "dolphin" => with(Fish, |p| {
                 p.tail = 6;
                 p.flukes = true;
             }),
+            "spider" => with(Arthropod, |p| {
+                p.limbs = 4;
+                p.limb_segments = 4;
+                p.abdomen = 2;
+                p.fangs = true;
+                p.palps = true;
+                p.leg_length = 1.4;
+            }),
             "crab" => with(Arthropod, |p| {
                 p.limbs = 4;
                 p.pincers = true;
+                p.eye_stalks = true;
+                p.abdomen = 0;
+                p.body_width = 1.8;
             }),
-            "insect" => with(Arthropod, |p| {
-                p.limbs = 3;
-                p.antennae = 2;
-                p.wings = 2;
+            "lobster" => with(Arthropod, |p| {
+                p.limbs = 4;
+                p.pincers = true;
+                p.eye_stalks = true;
+                p.antennae = 4;
+                p.abdomen = 5;
             }),
             "scorpion" => with(Arthropod, |p| {
                 p.limbs = 4;
                 p.pincers = true;
+                p.fangs = true;
+                p.abdomen = 2;
                 p.tail = 6;
+            }),
+            "insect" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.antennae = 2;
+                p.wings = 2;
+                p.abdomen = 2;
+            }),
+            "ant" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.antennae = 3;
+                p.fangs = true;
+                p.abdomen = 2;
+            }),
+            "beetle" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.antennae = 2;
+                p.fangs = true;
+                p.wings = 2;
+                p.wing_pairs = 2;
+                p.abdomen = 2;
+                p.body_width = 1.3;
+            }),
+            "bee" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.antennae = 2;
+                p.wings = 2;
+                p.wing_pairs = 2;
+                p.abdomen = 3;
+            }),
+            "centipede" => with(Arthropod, |p| {
+                p.limbs = 12;
+                p.limb_segments = 2;
+                p.separate_head = true;
+                p.antennae = 3;
+                p.fangs = true;
+                p.segmented = true;
+                p.leg_length = 0.6;
             }),
             "trex" => with(DigitigradeBiped, |p| {
                 p.tail = 6;
@@ -528,6 +658,10 @@ impl BodyPlan {
 
     /// Alas desde `from`, hacia afuera y arriba.
     fn add_wings(&self, b: &mut Builder, from: usize, root: Vector3, span: Real) {
+        self.add_wings_named(b, from, root, span, "wing");
+    }
+
+    fn add_wings_named(&self, b: &mut Builder, from: usize, root: Vector3, span: Real, name: &str) {
         if self.wings == 0 {
             return;
         }
@@ -535,7 +669,7 @@ impl BodyPlan {
             let start = Vector3::new(root.x() * s, root.y(), root.z());
             let end = start + Vector3::new(s * span, 0.35 * span, -0.2 * span);
             let points = curve(start, end, start + Vector3::new(s * 0.5 * span, 0.5 * span, 0.0), self.wings + 1);
-            b.chain_sided("wing", from, &points, side);
+            b.chain_sided(name, from, &points, side);
         }
     }
 
@@ -731,41 +865,87 @@ impl BodyPlan {
     }
 
     fn radial(&self, b: &mut Builder) {
-        let body = b.root("body", v(0.0, 0.35, 0.0));
-        let head = b.bone("head", v(0.0, 1.0, 0.0), body);
-        b.mark_leaf(head);
+        // Cuerpo y manto (o campana, o columna) según hacia dónde van los brazos
+        let (body_y, head_y) = match self.radial_pose {
+            RadialPose::Spread => (0.35, 1.0),
+            RadialPose::Hanging => (1.0, 1.25),
+            RadialPose::Flat => (0.05, 0.25),
+            RadialPose::Up => (0.02, 0.55),
+        };
+        let body = b.root("body", v(0.0, body_y, 0.0));
+        let mut head = None;
+        if self.mantle > 0 {
+            let n = self.mantle;
+            let mut last = body;
+            for i in 1..=n {
+                let name = if i == n { "head".to_string() } else { format!("mantle_{i}") };
+                let y = body_y + (head_y - body_y) * i as Real / n as Real;
+                last = b.bone(name, v(0.0, y, 0.0), last);
+            }
+            head = Some(last);
+        }
+        // La anémona abre los tentáculos desde el disco de arriba
+        let (arms_from, disc) = match (self.radial_pose, head) {
+            (RadialPose::Up, Some(h)) => (h, v(0.0, head_y, 0.0)),
+            _ => (body, v(0.0, body_y, 0.0)),
+        };
+        if let Some(h) = head
+            && arms_from != h
+        {
+            b.mark_leaf(h);
+        }
+        let pose = self.radial_pose;
+        let arm = |angle: Real, long: Real, segments: usize| {
+            let dir = v(angle.sin(), 0.0, angle.cos());
+            match pose {
+                RadialPose::Spread => {
+                    curve(v(0.0, 0.3, 0.0) + dir * 0.12, dir * 0.95 * long + v(0.0, 0.02, 0.0), dir * 0.5 * long + v(0.0, 0.05, 0.0), segments)
+                }
+                // Cuelgan de la campana hasta cerca del suelo, un poco abiertos
+                RadialPose::Hanging => curve(
+                    disc + dir * 0.15 - v(0.0, 0.05, 0.0),
+                    dir * (0.3 + 0.1 * long) + v(0.0, 0.05, 0.0),
+                    dir * 0.3 + v(0.0, 0.55, 0.0),
+                    segments,
+                ),
+                RadialPose::Flat => curve(disc + dir * 0.08, dir * 0.6 * long + v(0.0, 0.03, 0.0), dir * 0.32 * long + v(0.0, 0.05, 0.0), segments),
+                RadialPose::Up => curve(
+                    disc + dir * 0.08,
+                    disc + dir * 0.3 * long + v(0.0, 0.4 * long, 0.0),
+                    disc + dir * 0.1 + v(0.0, 0.25, 0.0),
+                    segments,
+                ),
+            }
+        };
         let n = self.limbs.max(1);
         let segments = self.limb_segments.max(1);
-        let arm = |angle: Real| {
-            let dir = v(angle.sin(), 0.0, angle.cos());
-            curve(v(0.0, 0.3, 0.0) + dir * 0.12, dir * 0.95 + v(0.0, 0.02, 0.0), dir * 0.5 + v(0.0, 0.05, 0.0), segments)
-        };
-        // Pares simétricos respecto del plano YZ (espejo _l / _r); si la
-        // cantidad es impar, uno va al frente
+        // Pares simétricos respecto del plano YZ (espejo _l / _r), repartidos
+        // parejo; si la cantidad es impar, uno va al frente
         let pairs = n / 2;
+        let tau = 2.0 * std::f64::consts::PI as Real;
         for i in 0..pairs {
-            let angle = std::f64::consts::PI as Real * (i as Real + 0.5) / pairs as Real;
+            let angle = if n % 2 == 1 { tau * (i + 1) as Real / n as Real } else { tau * (i as Real + 0.5) / n as Real };
             for (s, side) in SIDES {
-                b.chain_sided(&format!("arm{}", i + 1), body, &arm(s * angle), side);
+                b.chain_sided(&format!("arm{}", i + 1), arms_from, &arm(s * angle, 1.0, segments), side);
             }
         }
         if n % 2 == 1 {
-            b.chain("arm0", body, &arm(0.0), true);
+            b.chain("arm0", arms_from, &arm(0.0, 1.0, segments), true);
         }
-        // Tentáculos largos, hacia adelante, entre los brazos del frente
+        // Tentáculos de caza, más largos, entre los brazos del frente
         for i in 0..self.tentacles {
             let angle = 0.2 + 0.25 * i as Real;
             for (s, side) in SIDES {
-                let dir = v((s * angle).sin(), 0.0, (s * angle).cos());
-                let points = curve(v(0.0, 0.3, 0.0) + dir * 0.1, dir * 1.6 + v(0.0, 0.02, 0.0), dir * 0.8 + v(0.0, 0.05, 0.0), segments + 2);
-                b.chain_sided(&format!("tentacle{}", i + 1), body, &points, side);
+                b.chain_sided(&format!("tentacle{}", i + 1), arms_from, &arm(s * angle, 1.7, segments + 2), side);
             }
         }
         // Aletas del manto, arriba a los costados
         if self.fins {
+            let from = head.unwrap_or(body);
+            let top = b.position(from).y();
             for (s, side) in SIDES {
-                let root = b.bone_sided("fin", v(0.08 * s, 0.9, 0.0), head, side);
-                let tip = b.bone_sided("fin_tip", v(0.3 * s, 0.95, -0.05), root, side);
+                let root = b.bone_sided("fin", v(0.08 * s, top - 0.1, 0.0), from, side);
+                let tip = b.bone_sided("fin_tip", v(0.3 * s, top - 0.05, -0.05), root, side);
                 b.mark_leaf(tip);
             }
         }
@@ -800,44 +980,117 @@ impl BodyPlan {
     }
 
     fn arthropod(&self, b: &mut Builder) {
-        let thorax = b.root("thorax", v(0.0, 0.3, 0.0));
-        let head_tip = v(0.0, 0.32, 0.3);
-        // Cabeza sin cuello: el "cuello" es un tramo mínimo del tórax
-        let head = b.bone("head", head_tip, thorax);
+        let w = self.body_width.clamp(0.5, 3.0);
+        let reach = self.leg_length.clamp(0.5, 2.0);
+        // Con patas cortas el cuerpo va más bajo (siguen abiertas al costado)
+        let h = 0.3 * reach.min(1.0);
+        let thorax = b.root("thorax", v(0.0, h, 0.0));
+
+        // Cabeza: aparte con un cuello corto (insecto) o fusionada al tórax
+        // (araña, cangrejo: el frente del caparazón)
+        let (head, head_tip) = if self.separate_head {
+            let neck = b.bone("neck", v(0.0, h + 0.02, 0.16), thorax);
+            let tip = v(0.0, h + 0.03, 0.3);
+            (b.bone("head", tip, neck), tip)
+        } else {
+            let tip = v(0.0, h + 0.02, 0.18 + 0.06 * w);
+            (b.bone("head", tip, thorax), tip)
+        };
+        let mut head_parts = false;
         if self.antennae > 0 {
             for (s, side) in SIDES {
-                let root = head_tip + v(0.05 * s, 0.03, 0.0);
+                let root = head_tip + v(0.04 * s, 0.03, 0.0);
                 let end = root + v(0.2 * s, 0.25, 0.3);
                 let points = curve(root, end, root + v(0.05 * s, 0.2, 0.1), self.antennae);
                 b.chain_sided("antenna", head, &points, side);
             }
-        } else {
-            b.mark_leaf(head);
+            head_parts = true;
         }
-        let pairs = self.limbs.max(1);
-        let segments = self.limb_segments.max(2);
-        for i in 0..pairs {
-            let z = if pairs == 1 { 0.0 } else { 0.15 - 0.35 * i as Real / (pairs - 1) as Real };
-            for (s, side) in SIDES {
-                let start = v(0.12 * s, 0.3, z);
-                let points = curve(start, v(0.55 * s, 0.0, z * 1.4), v(0.4 * s, 0.5, z * 1.2), segments);
-                b.chain_sided(&format!("leg{}", i + 1), thorax, &points, side);
+        for (s, side) in SIDES {
+            if self.eye_stalks {
+                let root = head_tip + v(0.05 * s * w, 0.02, -0.02);
+                b.chain_sided("eyestalk", head, &[root, root + v(0.02 * s, 0.1, 0.02)], side);
+                head_parts = true;
+            }
+            if self.fangs {
+                // Quelíceros o mandíbulas: abajo y adelante, cerrando hacia el medio
+                let root = head_tip + v(0.03 * s, -0.03, 0.0);
+                b.chain_sided("fang", head, &[root, root + v(-0.015 * s, -0.06, 0.06)], side);
+                head_parts = true;
+            }
+            if self.palps {
+                let root = head_tip + v(0.05 * s, -0.02, -0.03);
+                let points = [root + v(0.03 * s, 0.06, 0.07), root + v(0.05 * s, 0.0, 0.15)];
+                b.chain_sided("palp", head, &points, side);
+                head_parts = true;
             }
         }
+        if !head_parts {
+            b.mark_leaf(head);
+        }
+
+        // Abdomen hacia atrás (el de la araña, abultado); en el ciempiés
+        // tiene un segmento por par de patas
+        let pairs = self.limbs.max(1);
+        let n = if self.segmented { self.abdomen.max(pairs - 1) } else { self.abdomen };
+        let length = if self.segmented { 0.12 * n as Real } else { 0.18 + 0.1 * n as Real };
+        let bulge = if self.fangs && self.palps { 0.06 } else { 0.0 };
+        let mut abdomen = Vec::with_capacity(n);
+        let mut last = thorax;
+        for i in 1..=n {
+            let t = i as Real / n as Real;
+            let name = if i == n { "abdomen_tip".to_string() } else { format!("abdomen_{i}") };
+            let p = v(0.0, h + bulge * (4.0 * t * (1.0 - t)) - 0.02 * t, -0.12 - length * t);
+            last = b.bone(name, p, last);
+            abdomen.push(last);
+        }
+        if self.tail > 0 {
+            // Cola de escorpión: sale del final del abdomen, arriba y adelante
+            let start = b.position(last);
+            self.add_tail(b, last, start + v(0.0, 0.45, 0.12), start + v(0.0, 0.25, -0.3));
+        } else if n > 0 {
+            b.mark_leaf(last);
+        }
+
+        // Patas en abanico: las de adelante apuntan adelante y las de atrás
+        // atrás (en el ciempiés, una por segmento y hacia el costado)
+        let segments = self.limb_segments.max(2);
+        for i in 0..pairs {
+            let t = if pairs == 1 { 0.5 } else { i as Real / (pairs - 1) as Real };
+            let (from, z, angle) = if self.segmented {
+                let from = if i == 0 { thorax } else { abdomen.get(i - 1).copied().unwrap_or(thorax) };
+                (from, b.position(from).z(), 0.15 - 0.3 * t)
+            } else {
+                (thorax, 0.12 - 0.24 * t, 0.7 - 1.4 * t)
+            };
+            for (s, side) in SIDES {
+                let dir = v(s * angle.cos(), 0.0, angle.sin());
+                let start = v(0.08 * s * w, h, z);
+                let tip = start + dir * (0.45 * reach) - v(0.0, h, 0.0);
+                let knee = start + dir * (0.28 * reach) + v(0.0, 0.2 * reach, 0.0);
+                b.chain_sided(&format!("leg{}", i + 1), from, &curve(start, tip, knee, segments), side);
+            }
+        }
+
+        // Pinzas: brazo, palma hasta la bisagra y el dedo móvil
         if self.pincers {
             for (s, side) in SIDES {
-                let points = [v(0.28 * s, 0.32, 0.38), v(0.3 * s, 0.3, 0.55), v(0.2 * s, 0.3, 0.68)];
+                let x = s * (0.6 + 0.4 * w);
+                let points = [
+                    v(0.1 * x, h + 0.02, 0.2),
+                    v(0.22 * x, h + 0.05, 0.32),
+                    v(0.25 * x, h + 0.04, 0.5),
+                    v(0.16 * x, h + 0.03, 0.62),
+                ];
                 b.chain_sided("pincer", thorax, &points, side);
             }
         }
-        if self.tail > 0 {
-            // Cola de escorpión: hacia atrás y por arriba
-            self.add_tail(b, thorax, v(0.0, 0.75, -0.25), v(0.0, 0.5, -0.6));
-        } else {
-            let abdomen = b.bone("abdomen", v(0.0, 0.28, -0.35), thorax);
-            b.mark_leaf(abdomen);
+
+        // Alas: el primer par adelante, el segundo detrás
+        for k in 0..self.wing_pairs.clamp(1, 2) {
+            let name = if k == 0 { "wing" } else { "wing2" };
+            self.add_wings_named(b, thorax, v(0.05 * w, h + 0.06, 0.06 - 0.1 * k as Real), 0.5, name);
         }
-        self.add_wings(b, thorax, v(0.06, 0.36, 0.05), 0.5);
     }
 
     fn tree(&self, b: &mut Builder) {
@@ -1176,5 +1429,47 @@ mod tests {
         unique.sort();
         unique.dedup();
         assert_eq!(unique.len(), names.len(), "nombres únicos");
+    }
+
+    #[test]
+    fn arthropods_and_radials_have_their_parts() {
+        let names_of = |id: &str| names(&BodyPlan::variant(id).unwrap().build()).iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let has = |id: &str, name: &str| assert!(names_of(id).iter().any(|n| n == name), "{id}: falta {name}");
+        has("spider", "fang_tip_l");
+        has("spider", "palp_tip_r");
+        has("spider", "leg4_tip_l");
+        has("crab", "eyestalk_tip_l");
+        has("crab", "pincer_tip_r");
+        has("ant", "neck");
+        has("bee", "wing2_tip_l");
+        has("scorpion", "tail_tip");
+        has("centipede", "leg12_tip_r");
+        assert!(!names_of("crab").iter().any(|n| n.starts_with("abdomen")), "el cangrejo no tiene abdomen");
+        // La pinza tiene brazo, palma y dedo móvil
+        assert_eq!(names_of("crab").iter().filter(|n| n.starts_with("pincer") && n.ends_with("_l")).count(), 4);
+        // Ciempiés: cada par de patas cuelga de su segmento
+        let centipede = BodyPlan::variant("centipede").unwrap().build();
+        let leg = centipede.bones().iter().position(|b| b.name == "leg5_1_l").unwrap();
+        let parent = centipede.bones()[leg].parent.unwrap();
+        assert!(centipede.bones()[parent].name.starts_with("abdomen"));
+
+        // Estrella de mar: 5 brazos a 72°, sin cabeza
+        let star = BodyPlan::variant("starfish").unwrap().build();
+        assert!(!star.bones().iter().any(|b| b.name == "head"));
+        let mut angles: Vec<Real> = star
+            .bones()
+            .iter()
+            .filter(|b| b.name.starts_with("arm") && b.name.contains("_tip"))
+            .map(|b| b.position.x().atan2(b.position.z()))
+            .collect();
+        angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(angles.len(), 5);
+        for w in angles.windows(2) {
+            assert!((w[1] - w[0] - 1.2566).abs() < 0.01, "{angles:?}");
+        }
+        // Medusa: los brazos cuelgan por debajo de la campana
+        let jelly = BodyPlan::variant("jellyfish").unwrap().build();
+        let body = jelly.bones().iter().find(|b| b.name == "body").unwrap().position.y();
+        assert!(jelly.bones().iter().filter(|b| b.name.starts_with("arm")).all(|b| b.position.y() < body));
     }
 }

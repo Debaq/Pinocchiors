@@ -300,3 +300,28 @@ pub fn lizard() -> Character {
     }
     Character { capsules, joints }
 }
+
+/// Araña: cefalotórax, abdomen grande y 8 patas en abanico con la rodilla alta.
+pub fn spider() -> Character {
+    let mut capsules = vec![
+        Capsule([0.0, 0.3, -0.02], [0.0, 0.3, 0.12], 0.1),
+        Capsule([0.0, 0.32, -0.2], [0.0, 0.32, -0.45], 0.16),
+    ];
+    let mut joints = Vec::new();
+    for i in 0..4 {
+        let t = i as f64 / 3.0;
+        let angle = 0.7 - 1.4 * t;
+        let z = 0.12 - 0.24 * t;
+        for (s, side) in [(-1.0, "l"), (1.0, "r")] {
+            let dir = [s * f64::cos(angle), 0.0, f64::sin(angle)];
+            let at = |r: f64, y: f64| [0.08 * s + dir[0] * r, y, z + dir[2] * r];
+            let knee = at(0.38, 0.55);
+            let tip = at(0.62, 0.0);
+            capsules.push(Capsule(at(0.0, 0.3), knee, 0.03));
+            capsules.push(Capsule(knee, tip, 0.022));
+            let name: &'static str = Box::leak(format!("leg{}_tip_{side}", i + 1).into_boxed_str());
+            joints.push((name, tip));
+        }
+    }
+    Character { capsules, joints }
+}

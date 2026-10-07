@@ -564,3 +564,126 @@ export const LIMB_ICONS: Record<"biped" | "quadruped", Record<number, Component>
   biped: Object.fromEntries(LIMB_BITS.map((b) => [b, limbIcon(BIPED_LIMBS, b, bipedTrunk)])),
   quadruped: Object.fromEntries(LIMB_BITS.map((b) => [b, limbIcon(QUAD_LIMBS, b, quadTrunk)])),
 };
+
+// ─── Artrópodo (desde arriba, la cabeza hacia arriba) ───────────────────────
+
+const BUG_LEGS: Point[][] = [
+  [[20, 19], [12, 14], [8, 17]],
+  [[20, 23], [11, 23], [7, 28]],
+  [[28, 19], [36, 14], [40, 17]],
+  [[28, 23], [37, 23], [41, 28]],
+];
+
+const Bug: Component<{ head?: boolean; abdomen?: boolean }> = (props) => (
+  <>
+    <ellipse cx="24" cy="21" rx="5" ry="6" />
+    {props.head !== false && <circle cx="24" cy="11" r="3" />}
+    {props.abdomen !== false && <ellipse cx="24" cy="35" rx="5.5" ry="7" />}
+    <Chains chains={BUG_LEGS} joints={false} />
+  </>
+);
+
+const OnBug: Component<{ children: JSX.Element; head?: boolean; abdomen?: boolean }> = (props) => (
+  <Frame>
+    <Faint>
+      <Bug head={props.head} abdomen={props.abdomen} />
+    </Faint>
+    <Accent>{props.children}</Accent>
+  </Frame>
+);
+
+export const ARTHROPOD_ICONS: Record<string, Component> = {
+  separateHead: () => (
+    <OnBug head={false}>
+      <Chain points={[[24, 15], [24, 12]]} />
+      <circle cx="24" cy="8" r="3.5" />
+    </OnBug>
+  ),
+  fusedHead: () => (
+    <OnBug head={false}>
+      <path d="M19 21 Q19 10 24 10 Q29 10 29 21" />
+    </OnBug>
+  ),
+  abdomen: () => (
+    <OnBug abdomen={false}>
+      <Chain points={[[24, 27], [24, 33], [24, 39], [24, 44]]} />
+      <ellipse cx="24" cy="35" rx="5.5" ry="8" opacity="0.6" />
+    </OnBug>
+  ),
+  fangs: () => (
+    <OnBug>
+      <Chain points={[[22, 9], [21, 5], [23, 3]]} />
+      <Chain points={[[26, 9], [27, 5], [25, 3]]} />
+    </OnBug>
+  ),
+  palps: () => (
+    <OnBug>
+      <Chain points={[[21, 10], [16, 7], [16, 3]]} />
+      <Chain points={[[27, 10], [32, 7], [32, 3]]} />
+    </OnBug>
+  ),
+  eyeStalks: () => (
+    <OnBug>
+      <Chain points={[[22, 9], [19, 4]]} />
+      <Chain points={[[26, 9], [29, 4]]} />
+      <circle cx="19" cy="3.5" r="1.8" />
+      <circle cx="29" cy="3.5" r="1.8" />
+    </OnBug>
+  ),
+  segmented: () => (
+    <Frame>
+      <Faint>
+        <circle cx="24" cy="5" r="2.5" />
+      </Faint>
+      <Accent>
+        <Chain points={[[24, 8], [24, 15], [24, 22], [24, 29], [24, 36], [24, 43]]} />
+        <Chains joints={false} chains={[8, 15, 22, 29, 36, 43].map((y) => [[17, y + 2], [24, y], [31, y + 2]] as Point[])} />
+      </Accent>
+    </Frame>
+  ),
+  bodyWidth: () => (
+    <OnBug>
+      <path d="M12 21 h24 M12 21 l3 -2 M12 21 l3 2 M36 21 l-3 -2 M36 21 l-3 2" stroke-width="1.6" />
+    </OnBug>
+  ),
+};
+
+// ─── Radial (de costado, salvo la estrella) ─────────────────────────────────
+
+export const RADIAL_ICONS: Record<string, Component> = {
+  spread: () => (
+    <Frame>
+      <Ground />
+      <ellipse cx="24" cy="15" rx="7" ry="9" />
+      <Chains joints={false} chains={[[[19, 23], [12, 38], [3, 42]], [[22, 24], [18, 38], [12, 43]], [[26, 24], [30, 38], [36, 43]], [[29, 23], [36, 38], [45, 42]]]} />
+    </Frame>
+  ),
+  hanging: () => (
+    <Frame>
+      <Ground />
+      <path d="M10 18 Q10 5 24 5 Q38 5 38 18 Z" />
+      <Chains joints={false} chains={[[[14, 18], [12, 30], [13, 42]], [[20, 18], [19, 30], [20, 42]], [[28, 18], [29, 30], [28, 42]], [[34, 18], [36, 30], [35, 42]]]} />
+    </Frame>
+  ),
+  flat: () => (
+    <Frame>
+      {/* Desde arriba */}
+      <circle cx="24" cy="24" r="4" />
+      <Chains
+        joints={false}
+        chains={[0, 1, 2, 3, 4].map((k) => {
+          const a = (2 * Math.PI * k) / 5 - Math.PI / 2;
+          return [[24 + 4 * Math.cos(a), 24 + 4 * Math.sin(a)], [24 + 19 * Math.cos(a), 24 + 19 * Math.sin(a)]] as Point[];
+        })}
+      />
+    </Frame>
+  ),
+  up: () => (
+    <Frame>
+      <Ground />
+      <path d="M20 44 L21 24 M28 44 L27 24" />
+      <ellipse cx="24" cy="23" rx="7" ry="2.5" />
+      <Chains joints={false} chains={[[[18, 22], [10, 14], [8, 6]], [[21, 21], [17, 11], [17, 3]], [[27, 21], [31, 11], [31, 3]], [[30, 22], [38, 14], [40, 6]]]} />
+    </Frame>
+  ),
+};

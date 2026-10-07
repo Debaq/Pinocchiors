@@ -33,4 +33,20 @@ export interface BodyPlan {
   /** Cantidad de cabezas y de colas (1 si no viene) */
   heads?: number;
   tails?: number;
+  /** Artrópodo: cabeza aparte (insecto) o fusionada (araña, cangrejo) */
+  separate_head?: boolean;
+  /** Artrópodo: segmentos del abdomen (0: sin abdomen) */
+  abdomen?: number;
+  /** Artrópodo: ancho del cuerpo */
+  body_width?: number;
+  fangs?: boolean;
+  palps?: boolean;
+  eye_stalks?: boolean;
+  wing_pairs?: number;
+  /** Artrópodo: un par de patas por segmento (ciempiés) */
+  segmented?: boolean;
+  /** Radial: hacia dónde van los brazos */
+  radial_pose?: "spread" | "hanging" | "flat" | "up";
+  /** Radial: segmentos del manto o columna (0: sin cabeza) */
+  mantle?: number;
 }
