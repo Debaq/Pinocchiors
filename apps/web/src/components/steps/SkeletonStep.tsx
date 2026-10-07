@@ -2,7 +2,7 @@ import { Component, Show, type JSX } from "solid-js";
 import { Button, Checkbox, Panel, Select, Slider } from "../ui";
 import type { PaintSettings } from "../../lib/Viewer3D";
 import { SkeletonPanel, type SkeletonPreset } from "../panels/SkeletonPanel";
-import { BodyPlanPanel, type BodyPlan } from "../panels/BodyPlanPanel";
+import { BodyPlanPanel, type BodyPlan, type BodyShape } from "../panels/BodyPlanPanel";
 import { ConfigPanel, type AutorigConfig } from "../panels/ConfigPanel";
 import { SkeletonTransformPanel, type SkeletonTransform } from "../panels/SkeletonTransformPanel";
 import * as Icons from "../icons";
@@ -26,6 +26,8 @@ export interface SkeletonStepProps {
   /** Plan de la plantilla generada (variantes con apéndices) */
   bodyPlan?: BodyPlan;
   onBodyPlanChange?: (plan: BodyPlan) => void;
+  /** Armar un cuerpo desde cero con una forma base */
+  onBodyShape?: (shape: BodyShape) => void;
   // Ajuste automático
   onAutoFit?: () => void;
   /** Sin modelo se edita el esqueleto solo: no hay a qué ajustarlo ni pesos */
@@ -116,9 +118,12 @@ export const SkeletonStep: Component<SkeletonStepProps> = (props) => {
           selectedPreset={props.selectedPreset}
           onPresetChange={props.onPresetChange}
         />
-        <Show when={props.bodyPlan}>
-          <BodyPlanPanel plan={props.bodyPlan!} onChange={props.onBodyPlanChange} disabled={props.isProcessing} />
-        </Show>
+        <BodyPlanPanel
+          plan={props.bodyPlan}
+          onChange={props.onBodyPlanChange}
+          onShape={props.onBodyShape}
+          disabled={props.isProcessing}
+        />
       </div>
 
       <Show when={hasSkeleton() && props.hasModel === false}>

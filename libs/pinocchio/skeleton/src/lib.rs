@@ -19,7 +19,7 @@ pub mod gltf_loader;
 
 pub use skeleton::{fit_to_bounds, map_positions, skeleton_bounds, BasicSkeleton, Skeleton};
 pub use bone::Bone;
-pub use body::{BodyPlan, BodyShape};
+pub use body::{BodyPlan, BodyShape, Feet, NeckShape};
 pub use symmetry::{mirror_name, mirror_pairs, reflect, symmetry_plane};
 pub use presets::{
     HumanSkeleton, QuadSkeleton, HorseSkeleton, CentaurSkeleton,

@@ -34,6 +34,33 @@ pub enum BodyShape {
     Tree,
 }
 
+/// Cómo apoyan las patas del cuadrúpedo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Feet {
+    /// Dos tramos (hombro → codo → pata): la plantilla básica.
+    #[default]
+    Simple,
+    /// Sobre la planta entera: oso, mapache.
+    Plantigrade,
+    /// Sobre los dedos, con muñeca y corvejón altos: perro, felino.
+    Digitigrade,
+    /// Sobre la punta (casco o almohadilla): caballo, camélidos, ciervo.
+    /// Carpo, corvejón y menudillo.
+    Unguligrade,
+}
+
+/// Forma del cuello.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NeckShape {
+    /// Sube adelante desde los hombros.
+    #[default]
+    Rising,
+    /// Baja adelante y vuelve a subir (U): camello, dromedario.
+    Swan,
+    /// Casi vertical y recto: llama, alpaca.
+    Upright,
+}
+
 /// Forma base y apéndices. Los campos que no aplican a la forma se ignoran;
 /// un apéndice con 0 segmentos no se agrega.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -72,6 +99,16 @@ pub struct BodyPlan {
     /// Largo de las patas respecto del cuerpo (1 = el de la plantilla;
     /// elefante menos, jirafa más). Solo bípedos y cuadrúpedos.
     pub leg_length: Real,
+    /// Tipo de pata (solo cuadrúpedos).
+    pub feet: Feet,
+    /// Forma del cuello (solo cuadrúpedos).
+    pub neck_shape: NeckShape,
+    /// Jorobas sobre el lomo (0, 1 o 2; solo cuadrúpedos).
+    pub humps: usize,
+    /// Largo de los brazos respecto de la plantilla (mono araña: más). Bípedos.
+    pub arm_length: Real,
+    /// Largo de la cola respecto de la plantilla (cola prensil: más).
+    pub tail_length: Real,
 }
 
 impl BodyPlan {
@@ -105,6 +142,11 @@ impl BodyPlan {
             tentacles: 0,
             flukes: false,
             leg_length: 1.0,
+            feet: Feet::Simple,
+            neck_shape: NeckShape::Rising,
+            humps: 0,
+            arm_length: 1.0,
+            tail_length: 1.0,
         }
     }
 
@@ -112,9 +154,16 @@ impl BodyPlan {
     pub fn variants() -> &'static [(&'static str, &'static str, &'static str)] {
         &[
             ("elephant", "Elefante", "Cuadrúpedo de patas cortas con trompa, colmillos, orejas y cola"),
+            ("horse", "Caballo / burro", "Patas con carpo, corvejón y menudillo; cuello y mandíbula"),
+            ("camel", "Camello", "Camélido de dos jorobas con cuello en U"),
+            ("dromedary", "Dromedario", "Camélido de una joroba con cuello en U"),
+            ("llama", "Llama / alpaca", "Camélido sin joroba con cuello vertical (guanaco, vicuña)"),
+            ("deer", "Ciervo / antílope", "Patas con casco, astas y cola corta"),
             ("bull", "Toro / cabra", "Cuadrúpedo con cuernos y mandíbula"),
             ("giraffe", "Jirafa", "Cuadrúpedo de cuello largo"),
-            ("dog", "Perro / felino", "Cuadrúpedo con cola larga y orejas"),
+            ("dog", "Perro / felino", "Cuadrúpedo digitígrado con cola larga y orejas"),
+            ("bear", "Oso", "Cuadrúpedo plantígrado con cola corta"),
+            ("spider_monkey", "Mono araña / gibón", "Bípedo de brazos largos con cola prensil"),
             ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
             ("octopus", "Pulpo", "Cuerpo radial con 8 tentáculos"),
             ("squid", "Calamar", "Cuerpo radial con 8 brazos, 2 tentáculos largos y aletas"),
@@ -146,21 +195,74 @@ impl BodyPlan {
                 p.tusks = 2;
                 p.leg_length = 0.8;
             }),
+            "horse" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
+                p.neck = 3;
+                p.tail = 3;
+                p.ears = 1;
+                p.jaw = true;
+                p.leg_length = 1.15;
+            }),
+            "camel" | "dromedary" => {
+                let humps = if id == "camel" { 2 } else { 1 };
+                let mut plan = Self::new(Quadruped);
+                plan.feet = Feet::Unguligrade;
+                plan.neck_shape = NeckShape::Swan;
+                plan.neck = 4;
+                plan.humps = humps;
+                plan.tail = 2;
+                plan.ears = 1;
+                plan.jaw = true;
+                plan.leg_length = 1.3;
+                Some(plan)
+            }
+            "llama" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
+                p.neck_shape = NeckShape::Upright;
+                p.neck = 4;
+                p.tail = 2;
+                p.ears = 1;
+                p.jaw = true;
+                p.leg_length = 1.1;
+            }),
+            "deer" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
+                p.neck = 2;
+                p.horns = 3;
+                p.ears = 1;
+                p.tail = 1;
+                p.leg_length = 1.15;
+            }),
             "bull" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
                 p.horns = 2;
                 p.jaw = true;
                 p.ears = 1;
                 p.tail = 3;
             }),
             "giraffe" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
                 p.neck = 6;
                 p.tail = 3;
                 p.horns = 1;
                 p.leg_length = 1.3;
             }),
             "dog" => with(Quadruped, |p| {
+                p.feet = Feet::Digitigrade;
                 p.tail = 4;
                 p.ears = 1;
+            }),
+            "bear" => with(Quadruped, |p| {
+                p.feet = Feet::Plantigrade;
+                p.tail = 1;
+                p.ears = 1;
+                p.jaw = true;
+                p.leg_length = 0.85;
+            }),
+            "spider_monkey" => with(Biped, |p| {
+                p.arm_length = 1.6;
+                p.tail = 12;
+                p.tail_length = 2.2;
             }),
             "dragon" => with(Quadruped, |p| {
                 p.neck = 5;
@@ -319,6 +421,10 @@ impl BodyPlan {
             return;
         }
         let start = b.position(from);
+        let k = self.tail_length.clamp(0.3, 4.0);
+        // Una cola alargada no atraviesa el suelo
+        let lift = |p: Vector3| Vector3::new(p.x(), p.y().max(0.08), p.z());
+        let (end, bend) = (lift(start + (end - start) * k), lift(start + (bend - start) * k));
         let points = curve(start, end, bend, self.tail);
         b.chain("tail", from, &points, true);
     }
@@ -341,11 +447,14 @@ impl BodyPlan {
         let spine = b.bone("spine", v(0.0, 0.65, 0.0), pelvis);
         let chest = b.bone("chest", v(0.0, 0.8, 0.0), spine);
         self.neck_and_head(b, chest, v(0.0, 0.9, 0.0), v(0.0, 1.0, 0.0), v(0.0, 0.85, 0.01));
+        let arm = self.arm_length.clamp(0.5, 2.5);
         for (s, side) in SIDES {
-            let shoulder = b.bone_sided("shoulder", v(0.1 * s, 0.85, 0.0), chest, side);
-            let elbow = b.bone_sided("elbow", v(0.25 * s, 0.65, 0.0), shoulder, side);
-            let wrist = b.bone_sided("wrist", v(0.35 * s, 0.5, 0.0), elbow, side);
-            let hand = b.bone_sided("hand", v(0.4 * s, 0.45, 0.0), wrist, side);
+            let at_shoulder = v(0.1 * s, 0.85, 0.0);
+            let reach = |p: Vector3| at_shoulder + (p - at_shoulder) * arm;
+            let shoulder = b.bone_sided("shoulder", at_shoulder, chest, side);
+            let elbow = b.bone_sided("elbow", reach(v(0.25 * s, 0.65, 0.0)), shoulder, side);
+            let wrist = b.bone_sided("wrist", reach(v(0.35 * s, 0.5, 0.0)), elbow, side);
+            let hand = b.bone_sided("hand", reach(v(0.4 * s, 0.45, 0.0)), wrist, side);
             b.mark_leaf(hand);
             let hip = b.bone_sided("hip", v(0.1 * s, 0.45, 0.0), pelvis, side);
             let knee = b.bone_sided("knee", v(0.1 * s, 0.25, 0.0), hip, side);
@@ -369,9 +478,12 @@ impl BodyPlan {
             let foot = b.bone_sided("foot", v(0.14 * s, 0.0, 0.1), ankle, side);
             b.mark_leaf(foot);
             if self.wings == 0 {
-                let shoulder = b.bone_sided("shoulder", v(0.1 * s, 0.66, 0.3), chest, side);
-                let elbow = b.bone_sided("elbow", v(0.14 * s, 0.58, 0.34), shoulder, side);
-                let hand = b.bone_sided("hand", v(0.12 * s, 0.54, 0.42), elbow, side);
+                let at_shoulder = v(0.1 * s, 0.66, 0.3);
+                let arm = self.arm_length.clamp(0.5, 2.5);
+                let reach = |p: Vector3| at_shoulder + (p - at_shoulder) * arm;
+                let shoulder = b.bone_sided("shoulder", at_shoulder, chest, side);
+                let elbow = b.bone_sided("elbow", reach(v(0.14 * s, 0.58, 0.34)), shoulder, side);
+                let hand = b.bone_sided("hand", reach(v(0.12 * s, 0.54, 0.42)), elbow, side);
                 b.mark_leaf(hand);
             }
         }
@@ -383,20 +495,89 @@ impl BodyPlan {
         let hip = b.root("hip", v(0.0, 0.5, -0.3));
         let spine = b.bone("spine", v(0.0, 0.55, 0.0), hip);
         let chest = b.bone("chest", v(0.0, 0.55, 0.3), spine);
-        // Cuello largo: sube más
-        let rise = if self.neck > 1 { 0.12 * self.neck as Real } else { 0.05 };
-        let neck_tip = v(0.0, 0.6 + rise, 0.4 + 0.02 * self.neck as Real);
-        let head = neck_tip + v(0.0, 0.02, 0.14);
-        self.neck_and_head(b, chest, neck_tip, head, v(0.0, 0.55 + 0.6 * rise, 0.42));
+        let n = self.neck as Real;
+        let (neck_tip, head, bend) = match self.neck_shape {
+            // Cuello largo: sube más
+            NeckShape::Rising => {
+                let rise = if self.neck > 1 { 0.12 * n } else { 0.05 };
+                let tip = v(0.0, 0.6 + rise, 0.4 + 0.02 * n);
+                (tip, tip + v(0.0, 0.02, 0.14), v(0.0, 0.55 + 0.6 * rise, 0.42))
+            }
+            // Baja adelante de los hombros y sube: la cabeza queda al frente
+            NeckShape::Swan => {
+                let tip = v(0.0, 0.55 + 0.06 * n, 0.3 + 0.12 * n);
+                (tip, tip + v(0.0, -0.01, 0.15), v(0.0, 0.3, 0.3 + 0.08 * n))
+            }
+            // Recto hacia arriba, apenas inclinado adelante
+            NeckShape::Upright => {
+                let tip = v(0.0, 0.6 + 0.09 * n, 0.36 + 0.015 * n);
+                (tip, tip + v(0.0, 0.01, 0.13), v(0.0, 0.58 + 0.045 * n, 0.33 + 0.008 * n))
+            }
+        };
+        self.neck_and_head(b, chest, neck_tip, head, bend);
         for (s, side) in SIDES {
-            let shoulder = b.bone(side_name("shoulder", side), v(0.15 * s, 0.5, 0.25), chest);
-            let elbow = b.bone(side_name("elbow", side), v(0.15 * s, 0.28, 0.27), shoulder);
-            let paw = b.bone(if s < 0.0 { "paw_fl" } else { "paw_fr" }, v(0.15 * s, 0.0, 0.25), elbow);
-            b.mark_leaf(paw);
-            let hip_side = b.bone(side_name("hip", side), v(0.15 * s, 0.45, -0.28), hip);
-            let knee = b.bone(side_name("knee", side), v(0.15 * s, 0.25, -0.32), hip_side);
-            let paw = b.bone(if s < 0.0 { "paw_bl" } else { "paw_br" }, v(0.15 * s, 0.0, -0.28), knee);
-            b.mark_leaf(paw);
+            let (front, back) = if s < 0.0 { ("_fl", "_bl") } else { ("_fr", "_br") };
+            let x = 0.15 * s;
+            // Delantera: hombro → codo → (muñeca o carpo) → (menudillo) → pata
+            let front_leg: &[(&str, Vector3)] = match self.feet {
+                Feet::Simple => &[("shoulder", v(x, 0.5, 0.25)), ("elbow", v(x, 0.28, 0.27))],
+                Feet::Plantigrade => &[("shoulder", v(x, 0.5, 0.25)), ("elbow", v(x, 0.28, 0.23)), ("wrist", v(x, 0.04, 0.25))],
+                Feet::Digitigrade => &[("shoulder", v(x, 0.5, 0.25)), ("elbow", v(x, 0.3, 0.22)), ("wrist", v(x, 0.08, 0.25))],
+                Feet::Unguligrade => &[
+                    ("shoulder", v(x, 0.5, 0.27)),
+                    ("elbow", v(x, 0.36, 0.22)),
+                    ("wrist", v(x, 0.18, 0.25)),
+                    ("fetlock", v(x, 0.05, 0.25)),
+                ],
+            };
+            let paw_front = match self.feet {
+                Feet::Simple => v(x, 0.0, 0.25),
+                Feet::Plantigrade => v(x, 0.0, 0.31),
+                Feet::Digitigrade => v(x, 0.0, 0.29),
+                Feet::Unguligrade => v(x, 0.0, 0.28),
+            };
+            // Trasera: cadera → rodilla → (tobillo o corvejón) → (menudillo) → pata
+            let back_leg: &[(&str, Vector3)] = match self.feet {
+                Feet::Simple => &[("hip", v(x, 0.45, -0.28)), ("knee", v(x, 0.25, -0.32))],
+                Feet::Plantigrade => &[("hip", v(x, 0.45, -0.28)), ("knee", v(x, 0.25, -0.24)), ("ankle", v(x, 0.04, -0.3))],
+                Feet::Digitigrade => &[("hip", v(x, 0.45, -0.28)), ("knee", v(x, 0.3, -0.22)), ("hock", v(x, 0.12, -0.34))],
+                Feet::Unguligrade => &[
+                    ("hip", v(x, 0.45, -0.28)),
+                    ("knee", v(x, 0.31, -0.22)),
+                    ("hock", v(x, 0.2, -0.36)),
+                    ("fetlock", v(x, 0.05, -0.33)),
+                ],
+            };
+            let paw_back = match self.feet {
+                Feet::Simple => v(x, 0.0, -0.28),
+                Feet::Plantigrade => v(x, 0.0, -0.22),
+                Feet::Digitigrade => v(x, 0.0, -0.3),
+                Feet::Unguligrade => v(x, 0.0, -0.3),
+            };
+            for (joints, paw, parent, suffix) in [(front_leg, paw_front, chest, front), (back_leg, paw_back, hip, back)] {
+                let mut last = parent;
+                for &(name, p) in joints {
+                    // El menudillo lleva el sufijo de la pata (delantera o trasera)
+                    let name = if name == "fetlock" { format!("fetlock{suffix}") } else { side_name(name, side) };
+                    last = b.bone(name, p, last);
+                }
+                let tip = b.bone(format!("paw{suffix}"), paw, last);
+                b.mark_leaf(tip);
+            }
+        }
+        // Jorobas sobre el lomo: una en el medio o una sobre cada hombro y cadera
+        match self.humps {
+            0 => {}
+            1 => {
+                let hump = b.bone("hump", v(0.0, 0.76, 0.02), spine);
+                b.mark_leaf(hump);
+            }
+            _ => {
+                let front = b.bone("hump_front", v(0.0, 0.74, 0.16), chest);
+                b.mark_leaf(front);
+                let back = b.bone("hump_back", v(0.0, 0.74, -0.14), spine);
+                b.mark_leaf(back);
+            }
         }
         let length = 0.15 + 0.08 * self.tail as Real;
         self.add_tail(b, hip, v(0.0, 0.45 - 0.4 * length, -0.35 - length), v(0.0, 0.5, -0.35 - 0.6 * length));
@@ -661,7 +842,7 @@ mod tests {
 
     #[test]
     fn sides_are_mirrored() {
-        for id in ["elephant", "octopus", "crab", "dragon", "fish", "squid", "dolphin", "bull"] {
+        for id in ["elephant", "octopus", "crab", "dragon", "fish", "squid", "dolphin", "bull", "camel", "horse", "bear", "dog", "spider_monkey"] {
             let skeleton = BodyPlan::variant(id).unwrap().build();
             let pairs = mirror_pairs(&skeleton);
             for (i, pair) in pairs.iter().enumerate() {
@@ -713,5 +894,67 @@ mod tests {
             let r = (tip.position.x().powi(2) + tip.position.z().powi(2)).sqrt();
             assert!(r > 0.8, "{} lejos del centro", tip.name);
         }
+    }
+
+    fn chain_to(skeleton: &BasicSkeleton, leaf: &str) -> Vec<String> {
+        let mut b = skeleton.bones().iter().position(|b| b.name == leaf).unwrap();
+        let mut out = vec![skeleton.bones()[b].name.clone()];
+        while let Some(p) = skeleton.bones()[b].parent {
+            b = p;
+            out.push(skeleton.bones()[b].name.clone());
+        }
+        out.reverse();
+        out
+    }
+
+    #[test]
+    fn feet_add_leg_sections() {
+        let leg = |feet: Feet, leaf: &str| {
+            let mut plan = BodyPlan::new(BodyShape::Quadruped);
+            plan.feet = feet;
+            chain_to(&plan.build(), leaf).join(" ")
+        };
+        assert_eq!(leg(Feet::Simple, "paw_fl"), "hip spine chest shoulder_l elbow_l paw_fl");
+        assert_eq!(leg(Feet::Digitigrade, "paw_bl"), "hip hip_l knee_l hock_l paw_bl");
+        assert_eq!(leg(Feet::Plantigrade, "paw_br"), "hip hip_r knee_r ankle_r paw_br");
+        assert_eq!(leg(Feet::Unguligrade, "paw_fr"), "hip spine chest shoulder_r elbow_r wrist_r fetlock_fr paw_fr");
+        assert_eq!(leg(Feet::Unguligrade, "paw_bl"), "hip hip_l knee_l hock_l fetlock_bl paw_bl");
+        // Los cascos tocan el suelo y el carpo dobla al revés que el corvejón
+        let horse = BodyPlan::variant("horse").unwrap().build();
+        let at = |name: &str| horse.bones().iter().find(|b| b.name == name).unwrap().position;
+        assert!(at("paw_fl").y().abs() < 1e-9 && at("paw_bl").y().abs() < 1e-9);
+        assert!(at("knee_l").z() > at("hock_l").z(), "la rodilla trasera va adelante del corvejón");
+        assert!(at("elbow_l").z() < at("wrist_l").z(), "el codo va atrás del carpo");
+    }
+
+    #[test]
+    fn camelids_have_their_neck_and_humps() {
+        let skeleton = |id: &str| BodyPlan::variant(id).unwrap().build();
+        let at = |s: &BasicSkeleton, name: &str| s.bones().iter().find(|b| b.name == name).unwrap().position;
+        let camel = skeleton("camel");
+        assert!(camel.bones().iter().any(|b| b.name == "hump_front") && camel.bones().iter().any(|b| b.name == "hump_back"));
+        assert!(skeleton("dromedary").bones().iter().any(|b| b.name == "hump"));
+        assert!(!skeleton("llama").bones().iter().any(|b| b.name.starts_with("hump")));
+        // Camello: el cuello baja antes de subir; llama: sube derecho
+        let neck_ys = |s: &BasicSkeleton| (1..=4).map(|i| at(s, &if i == 4 { "neck_4".into() } else { format!("neck_{i}") }).y()).collect::<Vec<_>>();
+        let camel_neck = neck_ys(&camel);
+        assert!(camel_neck[0] < at(&camel, "chest").y(), "el cuello del camello baja: {camel_neck:?}");
+        assert!(camel_neck[3] > at(&camel, "chest").y());
+        let llama = skeleton("llama");
+        let llama_neck = neck_ys(&llama);
+        assert!(llama_neck.windows(2).all(|w| w[1] > w[0]), "la llama sube derecho: {llama_neck:?}");
+        let head = at(&llama, "neck_4");
+        assert!(head.y() - at(&llama, "chest").y() > 2.0 * (head.z() - at(&llama, "chest").z()), "cuello casi vertical");
+    }
+
+    #[test]
+    fn spider_monkey_has_long_arms_and_tail() {
+        let monkey = BodyPlan::variant("spider_monkey").unwrap().build();
+        let human = BodyPlan::new(BodyShape::Biped).build();
+        let at = |s: &BasicSkeleton, name: &str| s.bones().iter().find(|b| b.name == name).unwrap().position;
+        let arm = |s: &BasicSkeleton| at(s, "hand_l").distance(&at(s, "shoulder_l"));
+        assert!(arm(&monkey) > 1.5 * arm(&human));
+        assert_eq!(monkey.bones().iter().filter(|b| b.name.starts_with("tail")).count(), 12);
+        assert!(at(&monkey, "tail_tip").distance(&at(&monkey, "pelvis")) > 0.8);
     }
 }

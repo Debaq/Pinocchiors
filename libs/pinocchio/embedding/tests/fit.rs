@@ -78,3 +78,12 @@ fn octopus_arms_find_their_tentacles() {
 fn fish_fits() {
     assert_errors(&fit_errors(characters::fish(), &BodyPlan::variant("fish").unwrap().build()), 0.08);
 }
+
+#[test]
+fn camel_fits_with_long_legs() {
+    for id in ["camel", "dromedary"] {
+        println!("— {id}");
+        assert_errors(&fit_errors(characters::camel(), &BodyPlan::variant(id).unwrap().build()), 0.07);
+    }
+    assert_errors(&fit_errors(characters::llama(), &BodyPlan::variant("llama").unwrap().build()), 0.07);
+}

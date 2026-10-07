@@ -252,7 +252,7 @@ import { DesignStep } from "./components/steps/DesignStep";
 import { createCadStore } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createScanCloud } from "./lib/scanCloud";
-import type { BodyPlan } from "./components/panels/BodyPlanPanel";
+import type { BodyPlan, BodyShape } from "./components/panels/BodyPlanPanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -1989,7 +1989,7 @@ export const App: Component = () => {
     let name = preset.name;
     for (let i = 2; names.has(name); i++) name = `${preset.name} ${i}`;
     // Son keys FK: las cadenas de IK las siguen solas mientras no se muevan sus controles
-    const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" }, name);
+    const clip = generateAnimation(b, id, { verticalSwim: selectedSkeleton() === "plan:dolphin" || bodyPlan()?.flukes === true }, name);
     await history.execute(`Animación: ${name}`, {
       kind: "clips",
       data: { before, after: [...kept, clip], activeBefore: active?.id, activeAfter: clip.id },
@@ -4743,16 +4743,24 @@ export const App: Component = () => {
     void handleTransformChange({ ...current, rotation: [deg(best[0]), deg(best[1]), deg(best[2])] });
   };
 
-  /** Cambió un apéndice: se rehace la plantilla */
-  const handleBodyPlanChange = (plan: BodyPlan) =>
+  /** Cambió un apéndice: se rehace la plantilla. Con `presetId`, además
+   * cambia la plantilla elegida (cuerpo armado desde una forma base) */
+  const handleBodyPlanChange = (plan: BodyPlan, presetId?: string) =>
     undoable(async (done) => {
       const request = ++skeletonRequest;
       const previous = bodyPlan();
+      const previousPreset = selectedSkeleton();
       setBodyPlan(plan);
+      if (presetId) setSelectedSkeleton(presetId);
       try {
         const data = await invoke<TauriSkeletonData>("select_body_plan", { plan });
         if (request !== skeletonRequest) return;
-        done("Esqueleto por forma de cuerpo");
+        done(presetId ? "Cuerpo desde cero" : "Esqueleto por forma de cuerpo");
+        if (presetId) {
+          setSkeletonLoaded(true);
+          setAutorigComplete(false);
+          setBoneEditMode(false);
+        }
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonTransform({ ...defaultTransform });
         setFitInfo(undefined);
@@ -4762,9 +4770,24 @@ export const App: Component = () => {
         console.error("Body plan error:", e);
         setStatusMessage(`Error: ${e}`);
         // El panel vuelve a mostrar la forma que sigue puesta
-        if (request === skeletonRequest) setBodyPlan(previous);
+        if (request === skeletonRequest) {
+          setBodyPlan(previous);
+          setSelectedSkeleton(previousPreset);
+        }
       }
     });
+
+  /** Cuerpo desde cero: la forma base sin apéndices */
+  const handleBodyShape = async (shape: BodyShape) => {
+    try {
+      const plan = await invoke<BodyPlan>("new_body_plan", { shape });
+      // Sin plantilla de la lista: el id dice de qué forma salió
+      await handleBodyPlanChange(plan, `plan:${shape}`);
+    } catch (e) {
+      console.error("Body shape error:", e);
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
 
   const handleAutoFit = () =>
     undoable(async (done) => {
@@ -4795,7 +4818,11 @@ export const App: Component = () => {
       const presetId = selectedSkeleton();
       if (presetId) {
         try {
-          const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
+          // Un cuerpo armado vuelve a su plan, no a la variante de la que partió
+          const plan = bodyPlan();
+          const data = plan
+            ? await invoke<TauriSkeletonData>("select_body_plan", { plan })
+            : await invoke<TauriSkeletonData>("select_skeleton", { presetId });
           done("Resetear esqueleto");
           setSkeletonData(tauriSkeletonToViewer(data));
           setSkeletonTransform({ ...defaultTransform });
@@ -6144,6 +6171,7 @@ export const App: Component = () => {
               fitInfo: fitInfo(),
               bodyPlan: bodyPlan(),
               onBodyPlanChange: handleBodyPlanChange,
+              onBodyShape: handleBodyShape,
               onResetTransform: handleResetTransform,
               editing: boneEditMode() && activeTool() === "move",
               onEdit: () => useTool("move"),

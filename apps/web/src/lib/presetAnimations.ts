@@ -2,7 +2,8 @@
  * Animaciones básicas generadas a partir del esqueleto: reposo, caminar,
  * correr, trotar o galopar, saltar, saludar, aplaudir, golpear, patear,
  * bailar, asentir, negar, comer, sacudirse, mover la cola, aletear, planear,
- * nadar, reptar, atacar, amenazar y arrastrarse con tentáculos.
+ * nadar, reptar, atacar, amenazar, arrastrarse con tentáculos, paso de
+ * portante y echarse.
  *
  * No depende de la plantilla elegida: parte el esqueleto en cadenas (tramos
  * sin ramificar) y reconoce patas, brazos, alas, cola, cabeza, trompa,
@@ -101,7 +102,9 @@ export type PresetAnimationId =
   | "strike"
   | "pinch"
   | "threat"
-  | "tentacleCrawl";
+  | "tentacleCrawl"
+  | "pace"
+  | "lieDown";
 
 export interface PresetAnimation {
   id: PresetAnimationId;
@@ -345,6 +348,11 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   pinch: { name: "Atacar con pinzas", description: "Levanta las pinzas y las cierra de golpe; la cola pica si la tiene" },
   threat: { name: "Amenazar", description: "Se alza sobre las patas traseras y agita las delanteras" },
   tentacleCrawl: { name: "Arrastrarse", description: "Los tentáculos se enroscan y estiran por turnos" },
+  pace: { name: "Paso de portante", description: "Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)" },
+  lieDown: {
+    name: "Echarse",
+    description: "Se arrodilla sobre las patas delanteras, dobla las traseras, descansa y se levanta empezando por atrás",
+  },
 };
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
@@ -382,6 +390,9 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (count(body, "pincer") > 0) ids.push("pinch");
   if (legs.length >= 4 && legs.every((l) => l.sprawl)) ids.push("threat");
   if (legs.length === 0 && count(body, "tentacle") >= 6) ids.push("tentacleCrawl");
+  if (upright.length >= 4) ids.push("pace");
+  // Arrodillarse sobre el carpo pide patas delanteras con carpo y menudillo
+  if (kneelingLegs(body)) ids.push("lieDown");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }
 
@@ -581,7 +592,7 @@ function stride(u: number, duty: number): { swing: number; lift: number } {
 
 const left = (leg: Chain) => leg.side < 0;
 
-const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl", Gait> = {
+const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl" | "pace", Gait> = {
   walk: {
     frames: 24,
     duty: 0.62,
@@ -628,6 +639,18 @@ const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl", Gait> = {
     lean: 0,
     // Galope transverso: traseras casi juntas, delanteras media vuelta después
     phase: (leg, pair) => (pair === 0 ? 0.45 : 0) + (left(leg) ? 0 : 0.12),
+  },
+  pace: {
+    frames: 28,
+    duty: 0.6,
+    hip: deg(24),
+    knee: deg(40),
+    lift: deg(20),
+    arm: deg(18),
+    elbow: deg(12),
+    lean: 0,
+    // Las dos del mismo lado juntas
+    phase: (leg) => (left(leg) ? 0 : 0.5),
   },
   crawl: {
     frames: 20,
@@ -738,10 +761,15 @@ function gait(body: Body, g: Gait, pose: PoseBuilder, t: number): void {
     const ikPose = { rotations: pose.rotations, translations: new Map([[body.root, pose.offset]]), controls: new Map() };
     const fk = new Fk(body.bones, ikPose);
     const lateral = cross(body.up, body.forward);
+    const middle = legs.reduce((sum, l) => sum + l.leg.along, 0) / legs.length;
     for (const { leg, k, a, b, c, target, lift } of legs) {
       solveTwoBone(fk, a, b, c, target, { restNormal: legNormal(body, a, b, c) });
-      // Pie plano en el suelo; en el aire, la punta un poco hacia abajo
-      if (leg.joints.length > k + 2) fk.setWorld(c, axisAngle(lateral, deg(15) * lift));
+      // Pie plano en el suelo; en el aire, la punta un poco hacia abajo. Con
+      // carpo o corvejón y menudillo, la caña se pliega atrás al avanzar (más
+      // la delantera)
+      const long = leg.joints.length > k + 3;
+      const fold = !long ? deg(15) : leg.along > middle ? 1.5 * g.knee : 0.8 * g.knee;
+      if (leg.joints.length > k + 2) fk.setWorld(c, axisAngle(lateral, fold * lift));
     }
   }
 }
@@ -1132,6 +1160,8 @@ function legsOnGround(body: Body, pose: PoseBuilder, legs: Chain[]): void {
     const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
     const [a, b, c] = [leg.joints[k - 1], leg.joints[k], leg.joints[k + 1]];
     solveTwoBone(fk, a, b, c, pos(body, c), { restNormal: legNormal(body, a, b, c) });
+    // El tramo bajo (caña, pie) queda como en reposo: el casco no se mueve
+    if (leg.joints.length > k + 2) fk.setWorld(c, IDENTITY);
   }
 }
 
@@ -1249,6 +1279,105 @@ function tentacleCrawl(body: Body, pose: PoseBuilder, t: number): void {
 /** Con patas a IK los pies ya pisan el suelo; si no, se baja el cuerpo hasta la pata más baja */
 const grounded = (body: Body) => ikLegs(body).length === 0;
 
+/** Portante: como el paso, con las dos patas de cada lado juntas y el cuerpo meciéndose hacia el lado que apoya */
+function pace(body: Body, pose: PoseBuilder, t: number): void {
+  pose.turn(body.root, body.forward, deg(4) * wave(t, 1, 0.5));
+  gait(body, GAITS.pace, pose, t);
+}
+
+/**
+ * Patas para echarse, si las delanteras tienen carpo y menudillo (hombro,
+ * codo, carpo, menudillo, casco) y hay cuatro con IK
+ */
+function kneelingLegs(body: Body): { front: Chain[]; back: Chain[] } | null {
+  const legs = ikLegs(body);
+  if (legs.length !== 4) return null;
+  const sorted = [...legs].sort((a, b) => b.along - a.along);
+  const [front, back] = [sorted.slice(0, 2), sorted.slice(2)];
+  const long = (l: Chain) => l.joints.length >= bendIndex(body, l, /knee|tibio|shin|calf/i) + 4;
+  return front.every(long) && front[0].side !== front[1].side ? { front, back } : null;
+}
+
+/**
+ * Echarse como un camélido o un caballo: baja de rodillas (los carpos al
+ * suelo, las cañas plegadas atrás), dobla las traseras, apoya el pecho,
+ * descansa y se levanta al revés: primero el pecho, luego atrás, luego adelante
+ */
+function lieDown(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = kneelingLegs(body);
+  if (!legs) return;
+  const ramp = (a: number, b: number) => smoothstep((t - a) / (b - a));
+  const kneel = ramp(0.08, 0.28) * (1 - ramp(0.8, 0.94));
+  const fold = ramp(0.28, 0.46) * (1 - ramp(0.68, 0.8));
+  const settle = ramp(0.44, 0.54) * (1 - ramp(0.62, 0.68));
+  const parts = (leg: Chain) => {
+    const k = bendIndex(body, leg, /knee|tibio|shin|calf/i);
+    const [a, b, c] = [leg.joints[k - 1], leg.joints[k], leg.joints[k + 1]];
+    const upper = length(sub(pos(body, b), pos(body, a))) + length(sub(pos(body, c), pos(body, b)));
+    const lower = length(sub(pos(body, tipOf(leg)), pos(body, c)));
+    return { leg, k, a, b, c, upper, lower, height: pos(body, a)[1] - body.ground };
+  };
+  const front = legs.front.map(parts);
+  const back = legs.back.map(parts);
+  const avg = (xs: number[]) => xs.reduce((s, x) => s + x, 0) / xs.length;
+  // Altura de hombros y caderas sobre el suelo: de rodillas el carpo toca el
+  // suelo y el brazo queda casi recto; echado, todo se recoge a la mitad
+  const frontRest = avg(front.map((f) => f.height));
+  const backRest = avg(back.map((f) => f.height));
+  const frontUpper = avg(front.map((f) => f.upper));
+  const backUpper = avg(back.map((f) => f.upper));
+  const frontHeight = frontRest + (0.9 * frontUpper - frontRest) * kneel + (0.5 * frontUpper - 0.9 * frontUpper) * settle;
+  const backHeight = backRest + (0.5 * backUpper - backRest) * fold;
+  const frontDrop = frontRest - frontHeight;
+  const backDrop = backRest - backHeight;
+  // El cuerpo gira sobre la raíz (cerca de las caderas) y baja
+  const along = (j: number) => dot(sub(pos(body, j), pos(body, body.root)), body.forward);
+  const span = avg(front.map((f) => along(f.a))) - avg(back.map((f) => along(f.a)));
+  const pitch = Math.asin(Math.max(-0.9, Math.min(0.9, (frontDrop - backDrop) / Math.max(span, 1e-6))));
+  pose.turn(body.root, nodAxis(body), pitch);
+  // La cabeza sigue derecha: el cuello compensa el giro del cuerpo
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, nodAxis(body), (-pitch + deg(4) * wave(t, 3)) / head.length));
+  appendages(body, pose, t, 2, 0.5);
+  // La cola se alza para no hundirse en el suelo al bajar la grupa
+  for (const tail of chainsOf(body, "tail")) pose.turn(tail.rotating[0], nodAxis(body), deg(35) * (backDrop / Math.max(backRest, 1e-6)));
+  pose.move(scale(body.up, -backDrop));
+
+  // Patas: la articulación de abajo (carpo o corvejón) baja al suelo y la
+  // caña se pliega lo justo para que el casco siga apoyado
+  const fk = new Fk(body.bones, { rotations: pose.rotations, translations: new Map([[body.root, pose.offset]]), controls: new Map() });
+  const lateral = cross(body.up, body.forward);
+  const floor = body.ground + 0.02 * body.height;
+  for (const [group, amount, sign] of [
+    [front, kneel, 1],
+    [back, fold, -1],
+  ] as const) {
+    for (const f of group) {
+      const rest = pos(body, f.c);
+      const target: Vec3 = [rest[0], rest[1] + (floor - rest[1]) * amount, rest[2]];
+      solveTwoBone(fk, f.a, f.b, f.c, target, { restNormal: legNormal(body, f.a, f.b, f.c) });
+      if (f.leg.joints.length > f.k + 2) {
+        // Delanteras: la caña atrás; traseras: adelante, bajo el vientre. El
+        // menor pliegue que deja el casco sobre el suelo (búsqueda binaria:
+        // plegar más lo sube)
+        const tipY = (angle: number) => {
+          fk.setWorld(f.c, axisAngle(lateral, sign * angle));
+          return fk.position(tipOf(f.leg))[1];
+        };
+        let [lo, hi] = [0, deg(110)];
+        if (tipY(lo) < body.ground) {
+          for (let i = 0; i < 20; i++) {
+            const mid = 0.5 * (lo + hi);
+            if (tipY(mid) < body.ground) lo = mid;
+            else hi = mid;
+          }
+          tipY(hi);
+        }
+      }
+    }
+  }
+}
+
 /** Crea el clip `id` para el esqueleto; `name` por defecto, el de la animación */
 export function generateAnimation(
   body: Body,
@@ -1316,6 +1445,10 @@ export function generateAnimation(
       return bake(name, body, { frames: 36, step: 2, fps }, (p, t) => threat(body, p, t));
     case "tentacleCrawl":
       return bake(name, body, { frames: 48, step: 2, fps }, (p, t) => tentacleCrawl(body, p, t));
+    case "pace":
+      return bake(name, body, { frames: 28, step: 2, grounded: grounded(body), fps }, (p, t) => pace(body, p, t));
+    case "lieDown":
+      return bake(name, body, { frames: 120, step: 2, fps }, (p, t) => lieDown(body, p, t));
   }
 }
 

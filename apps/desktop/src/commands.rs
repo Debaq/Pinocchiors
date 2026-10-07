@@ -1347,8 +1347,8 @@ pub fn list_skeleton_presets() -> Vec<SkeletonPreset> {
         },
         SkeletonPreset {
             id: "horse".to_string(),
-            name: "Caballo".to_string(),
-            description: "Cuadrúpedo con proporciones equinas".to_string(),
+            name: "Caballo simple".to_string(),
+            description: "Cuadrúpedo con proporciones equinas y patas de dos tramos".to_string(),
             num_bones: HorseSkeleton::new().num_bones(),
         },
         SkeletonPreset {
@@ -1557,11 +1557,44 @@ pub struct BodyPlanDto {
     pub flukes: bool,
     #[serde(default = "default_leg_length")]
     pub leg_length: f64,
+    /// "simple", "plantigrade", "digitigrade", "unguligrade"
+    #[serde(default = "default_feet")]
+    pub feet: String,
+    /// "rising", "swan", "upright"
+    #[serde(default = "default_neck_shape")]
+    pub neck_shape: String,
+    #[serde(default)]
+    pub humps: usize,
+    #[serde(default = "default_leg_length")]
+    pub arm_length: f64,
+    #[serde(default = "default_leg_length")]
+    pub tail_length: f64,
 }
 
 fn default_leg_length() -> f64 {
     1.0
 }
+
+fn default_feet() -> String {
+    "simple".into()
+}
+
+fn default_neck_shape() -> String {
+    "rising".into()
+}
+
+const FEET: [(&str, pinocchio_skeleton::Feet); 4] = [
+    ("simple", pinocchio_skeleton::Feet::Simple),
+    ("plantigrade", pinocchio_skeleton::Feet::Plantigrade),
+    ("digitigrade", pinocchio_skeleton::Feet::Digitigrade),
+    ("unguligrade", pinocchio_skeleton::Feet::Unguligrade),
+];
+
+const NECK_SHAPES: [(&str, pinocchio_skeleton::NeckShape); 3] = [
+    ("rising", pinocchio_skeleton::NeckShape::Rising),
+    ("swan", pinocchio_skeleton::NeckShape::Swan),
+    ("upright", pinocchio_skeleton::NeckShape::Upright),
+];
 
 const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 8] = [
     ("biped", pinocchio_skeleton::BodyShape::Biped),
@@ -1595,6 +1628,11 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             tentacles: p.tentacles,
             flukes: p.flukes,
             leg_length: p.leg_length,
+            feet: FEET.iter().find(|(_, f)| *f == p.feet).map_or("simple", |(id, _)| id).to_string(),
+            neck_shape: NECK_SHAPES.iter().find(|(_, n)| *n == p.neck_shape).map_or("rising", |(id, _)| id).to_string(),
+            humps: p.humps,
+            arm_length: p.arm_length,
+            tail_length: p.tail_length,
         }
     }
 }
@@ -1608,6 +1646,7 @@ impl BodyPlanDto {
             .ok_or_else(|| format!("Forma desconocida: {}", self.shape))?;
         // Límites para que la interfaz no pida esqueletos absurdos
         let clamp = |n: usize, max: usize| n.min(max);
+        let ratio = |k: f64, max: f64| if k.is_finite() { k.clamp(0.5, max) } else { 1.0 };
         Ok(pinocchio_skeleton::BodyPlan {
             shape,
             neck: clamp(self.neck, 12).max(1),
@@ -1625,7 +1664,13 @@ impl BodyPlanDto {
             tusks: clamp(self.tusks, 6),
             tentacles: clamp(self.tentacles, 3),
             flukes: self.flukes,
-            leg_length: if self.leg_length.is_finite() { self.leg_length.clamp(0.5, 2.0) } else { 1.0 },
+            leg_length: ratio(self.leg_length, 2.0),
+            // Lo desconocido (un proyecto de una versión más nueva) queda en lo básico
+            feet: FEET.iter().find(|(id, _)| *id == self.feet).map_or_else(Default::default, |(_, f)| *f),
+            neck_shape: NECK_SHAPES.iter().find(|(id, _)| *id == self.neck_shape).map_or_else(Default::default, |(_, n)| *n),
+            humps: clamp(self.humps, 2),
+            arm_length: ratio(self.arm_length, 2.0),
+            tail_length: ratio(self.tail_length, 3.0),
         })
     }
 }
@@ -1635,6 +1680,17 @@ impl BodyPlanDto {
 pub fn get_body_plan(preset_id: String) -> Option<BodyPlanDto> {
     let id = preset_id.strip_prefix("plan:")?;
     pinocchio_skeleton::BodyPlan::variant(id).map(Into::into)
+}
+
+/// Plan sin apéndices extra de una forma base, para armar un cuerpo desde cero
+#[tauri::command]
+pub fn new_body_plan(shape: String) -> Result<BodyPlanDto, String> {
+    let shape = BODY_SHAPES
+        .iter()
+        .find(|(id, _)| *id == shape)
+        .map(|(_, s)| *s)
+        .ok_or_else(|| format!("Forma desconocida: {shape}"))?;
+    Ok(pinocchio_skeleton::BodyPlan::new(shape).into())
 }
 
 /// Genera la plantilla de un plan (forma + apéndices) y la deja como preset
@@ -4297,6 +4353,15 @@ mod tests {
         assert!(presets.iter().any(|p| p.id == "plan:elephant" && p.num_bones > 20));
         let bad = BodyPlanDto { shape: "blob".into(), ..get_body_plan("plan:fish".into()).unwrap() };
         assert!(bad.to_plan().is_err());
+        // Un proyecto de antes de los tipos de pata abre con las patas básicas
+        let old: BodyPlanDto = serde_json::from_str(
+            r#"{"shape":"quadruped","neck":1,"tail":2,"trunk":0,"ears":0,"wings":0,"limbs":0,"limb_segments":0,"fins":false,"pincers":false,"antennae":0}"#,
+        )
+        .unwrap();
+        assert_eq!(old.to_plan().unwrap(), pinocchio_skeleton::BodyPlan::new(pinocchio_skeleton::BodyShape::Quadruped));
+        let camel = new_body_plan("quadruped".into()).map(|dto| BodyPlanDto { feet: "unguligrade".into(), humps: 2, ..dto }).unwrap();
+        assert!(camel.to_plan().unwrap().build().bones().iter().any(|b| b.name == "fetlock_fl"));
+        assert!(new_body_plan("blob".into()).is_err());
     }
 
     /// Tira de dos quads (6 vértices) y la misma geometría como malla original

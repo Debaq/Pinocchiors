@@ -230,3 +230,49 @@ pub fn fish() -> Character {
     ];
     Character { capsules, joints }
 }
+
+/// Camello de dos jorobas: patas largas con carpo y corvejón, cuello en U.
+pub fn camel() -> Character {
+    let capsules = vec![
+        Capsule([0.0, 1.25, -0.6], [0.0, 1.3, 0.6], 0.32),
+        Capsule([0.0, 1.55, 0.3], [0.0, 1.62, 0.25], 0.2),
+        Capsule([0.0, 1.55, -0.25], [0.0, 1.62, -0.3], 0.2),
+        Capsule([0.0, 1.3, 0.75], [0.0, 1.05, 1.15], 0.13),
+        Capsule([0.0, 1.05, 1.15], [0.0, 1.7, 1.45], 0.1),
+        Capsule([0.0, 1.75, 1.45], [0.0, 1.68, 1.8], 0.1),
+        Capsule([0.0, 1.3, -0.9], [0.0, 0.9, -1.0], 0.04),
+    ];
+    camelid(capsules, [0.0, 1.68, 1.88])
+}
+
+/// Llama: sin jorobas, cuello vertical.
+pub fn llama() -> Character {
+    let capsules = vec![
+        Capsule([0.0, 1.25, -0.6], [0.0, 1.3, 0.6], 0.3),
+        Capsule([0.0, 1.35, 0.7], [0.0, 2.0, 0.85], 0.11),
+        Capsule([0.0, 2.05, 0.85], [0.0, 1.98, 1.2], 0.1),
+        Capsule([0.0, 1.3, -0.9], [0.0, 0.9, -1.0], 0.04),
+    ];
+    camelid(capsules, [0.0, 1.98, 1.28])
+}
+
+/// Cuerpo de camélido con sus patas largas.
+fn camelid(mut capsules: Vec<Capsule>, head: [f64; 3]) -> Character {
+    let mut joints = vec![("head", head), ("tail_tip", [0.0, 0.9, -1.0])];
+    for (s, side) in [(-1.0, "l"), (1.0, "r")] {
+        let x = 0.25 * s;
+        let front = [[x, 1.2, 0.5], [x, 0.95, 0.42], [x, 0.5, 0.48], [x, 0.1, 0.48], [x, 0.03, 0.55]];
+        let back = [[x, 1.2, -0.5], [x, 0.85, -0.4], [x, 0.55, -0.62], [x, 0.1, -0.58], [x, 0.03, -0.52]];
+        for leg in [front, back] {
+            for w in leg.windows(2) {
+                capsules.push(Capsule(w[0], w[1], 0.07));
+            }
+        }
+        let name = |base: String| -> &'static str { Box::leak(base.into_boxed_str()) };
+        joints.push((name(format!("wrist_{side}")), front[2]));
+        joints.push((name(format!("hock_{side}")), back[2]));
+        joints.push((name(format!("paw_f{side}")), front[4]));
+        joints.push((name(format!("paw_b{side}")), back[4]));
+    }
+    Character { capsules, joints }
+}
