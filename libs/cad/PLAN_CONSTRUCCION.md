@@ -86,7 +86,15 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    perfil desplazado ±t/2 con `BRepOffsetAPI_MakeOffset`, esquinas de afuera redondeadas). Con
    desmolde o delgada las caras laterales no llevan el origen `lado:` (la sonda queda fuera de
    la pared); las tapas sí.*
-3. **Barrido y transición** con interfaz (el puente ya existe).
+3. **Barrido y transición** con interfaz (el puente ya existe). *Hecha el 2026-10-07: `FeatureKind::Sweep(Sweep { sketch,
+   regions, path: SweepPath::Sketch { sketch, entities }, op })` (camino encadenado por los
+   extremos de líneas, arcos y splines abiertas, orientado para arrancar del lado del perfil)
+   y `Loft(Loft { sections, ruled, op })` (una región por sketch). El puente barre caras con
+   `BRepOffsetAPI_MakePipeShell` en modo esquina a inglete (`MakePipe` dejaba sólidos
+   inválidos en esquinas vivas) y resta los agujeros barridos aparte. Orígenes: "inicio" (y
+   "fin" en la transición) por la muestra de la región; el resto por número de cara.
+   "Barrido" arma el perfil con las regiones elegidas (o el último sketch con regiones) y el
+   camino con otro sketch; "Transición", con los dos últimos sketches con regiones.*
 4. **Agujero** con tamaños estándar.
 5. **Hélice** (y ejemplo de rosca/resorte con barrido), **nervio**, **engrosar**.
 6. **Mover y reemplazar cara**, **escala**, **patrón en curva**.

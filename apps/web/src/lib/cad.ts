@@ -205,6 +205,10 @@ export type FeatureKind =
   /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
   | { type: "split_parts"; parts: PartId[] }
   | { type: "delete_parts"; parts: PartId[] }
+  /** Perfil (regiones de un sketch) a lo largo de un camino (entidades de otro sketch; vacío = todas) */
+  | { type: "sweep"; sketch: number; regions: RegionSelection; path: { type: "sketch"; sketch: number; entities: number[] }; op: BodyOp }
+  /** Sólido que pasa por varias secciones, una región por sketch */
+  | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
@@ -587,6 +591,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   plane: "Plano",
   axis: "Eje",
   point: "Punto",
+  sweep: "Barrido",
+  loft: "Transición",
 };
 
 export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
@@ -653,6 +659,10 @@ export function dependencies(kind: FeatureKind): number[] {
     }
     case "point":
       return point(kind.def);
+    case "sweep":
+      return [kind.sketch, kind.path.sketch];
+    case "loft":
+      return kind.sections.map((x) => x.sketch);
     case "extrude":
       return [kind.sketch];
     case "revolve":

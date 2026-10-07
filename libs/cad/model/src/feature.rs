@@ -333,6 +333,51 @@ pub enum FeatureKind {
     Plane { def: PlaneDef },
     Axis { def: AxisDef },
     Point { def: PointSpec },
+    /// Perfil llevado a lo largo de un camino.
+    Sweep(Sweep),
+    /// Sólido que pasa por varias secciones (una región por sketch).
+    Loft(Loft),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Sweep {
+    /// Sketch del perfil y qué regiones.
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub regions: RegionSelection,
+    pub path: SweepPath,
+    #[serde(default)]
+    pub op: BodyOp,
+}
+
+/// Camino de un barrido.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SweepPath {
+    /// Entidades de un sketch encadenadas por sus extremos (vacío = todas las que
+    /// no son de construcción).
+    Sketch {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Loft {
+    pub sections: Vec<LoftSection>,
+    /// Caras planas entre secciones (si no, superficies suaves).
+    #[serde(default)]
+    pub ruled: bool,
+    #[serde(default)]
+    pub op: BodyOp,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoftSection {
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub regions: RegionSelection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -363,6 +408,11 @@ impl FeatureKind {
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),
+            FeatureKind::Sweep(s) => {
+                let SweepPath::Sketch { sketch, .. } = &s.path;
+                vec![s.sketch, *sketch]
+            }
+            FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
@@ -411,6 +461,8 @@ impl FeatureKind {
             FeatureKind::Plane { .. } => "Plano",
             FeatureKind::Axis { .. } => "Eje",
             FeatureKind::Point { .. } => "Punto",
+            FeatureKind::Sweep(_) => "Barrido",
+            FeatureKind::Loft(_) => "Transición",
         }
     }
 }

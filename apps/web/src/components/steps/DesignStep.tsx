@@ -199,7 +199,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   const features = () => store.doc()?.features ?? [];
   const selectedFeature = () => features().find((f) => f.id === store.selected());
   const sketches = () => features().filter((f) => f.kind.type === "sketch");
-  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import"].includes(f.kind.type));
+  const toolFeatures = () => features().filter((f) => ["extrude", "revolve", "primitive", "import", "sweep", "loft"].includes(f.kind.type));
 
   const say = (msg: string) => {
     setNotice(msg);
@@ -251,6 +251,32 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     const sel = selectedFeature();
     if (sel?.kind.type === "sketch") return sel;
     return [...sketches()].pop();
+  };
+
+  /** Sketches con alguna región cerrada (perfiles posibles) */
+  const profileSketches = () => sketches().filter((s) => (store.sketchView(s.id)?.regions.length ?? 0) > 0);
+
+  /** Barrido: perfil = el sketch de las regiones elegidas (o el último con regiones); camino = otro sketch */
+  const addSweep = () => {
+    const picked = pickedRegions();
+    const profile = picked ? sketches().find((f) => f.id === picked.sketch) : [...profileSketches()].pop();
+    const path = [...sketches()].reverse().find((s) => s.id !== profile?.id && !profileSketches().includes(s)) ?? [...sketches()].reverse().find((s) => s.id !== profile?.id);
+    if (!profile || !path) return say("Hacen falta dos sketches: el perfil (una región cerrada) y el camino");
+    ui.clearPicks();
+    void store.addFeature({
+      type: "sweep",
+      sketch: profile.id,
+      regions: picked ? { type: "points", points: picked.points } : { type: "all" },
+      path: { type: "sketch", sketch: path.id, entities: [] },
+      op: "join",
+    });
+  };
+
+  /** Transición entre los dos últimos sketches con regiones */
+  const addLoft = () => {
+    const list = profileSketches().slice(-2);
+    if (list.length < 2) return say("Hacen falta al menos dos sketches con una región cerrada, en planos distintos");
+    void store.addFeature({ type: "loft", sections: list.map((s) => ({ sketch: s.id, regions: { type: "all" } })), ruled: false, op: "join" });
   };
 
   const addExtrude = () => {
@@ -493,6 +519,8 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onSplitParts={() => void store.addFeature({ type: "split_parts", parts: pickedParts() })}
                 onDeleteParts={() => void store.addFeature({ type: "delete_parts", parts: pickedParts() })}
                 onReference={(k) => void addReference(k)}
+                onSweep={addSweep}
+                onLoft={addLoft}
                 hasBody={!!store.result()?.body}
               />
 
@@ -636,6 +664,8 @@ const AddSection: Component<{
   onSplitParts: () => void;
   onDeleteParts: () => void;
   onReference: (kind: "plane" | "axis" | "point") => void;
+  onSweep: () => void;
+  onLoft: () => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -655,6 +685,8 @@ const AddSection: Component<{
           <B label="Sketch" onClick={props.onSketch} title="En el plano o la cara elegida; si no hay nada elegido, se elige en el visor" />
           <B label="Extrusión" onClick={props.onExtrude} title="Las regiones elegidas en el visor; si no hay, todo el último sketch" />
           <B label="Revolución" onClick={props.onRevolve} title="Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" />
+          <B label="Barrido" onClick={props.onSweep} title="Un perfil a lo largo de un camino dibujado en otro sketch" />
+          <B label="Transición" onClick={props.onLoft} title="Un sólido que pasa por regiones de varios sketches" />
         </div>
         <div class="grid grid-cols-3 gap-1.5">
           <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true })} />
@@ -1612,6 +1644,103 @@ const FeatureEditor: Component<{
                 />
               );
             }}
+          </Match>
+          <Match when={f().kind.type === "sweep" && (f().kind as Extract<FeatureKind, { type: "sweep" }>)}>
+            {(k) => {
+              const pathSketch = () => props.sketches.find((s) => s.id === k().path.sketch);
+              const curves = () => {
+                const s = pathSketch();
+                return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => !e.construction && ["line", "arc", "spline"].includes(e.geometry.type)) : [];
+              };
+              const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline" };
+              return (
+                <>
+                  <Row label="Perfil">
+                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
+                  </Row>
+                  <RegionBox
+                    ui={props.ui}
+                    store={props.store}
+                    owner={`${f().id}:regiones`}
+                    lost={lost("regions")}
+                    sketch={k().sketch}
+                    value={k().regions}
+                    onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
+                  />
+                  <Row label="Camino">
+                    <Select
+                      options={sketchOptions()}
+                      value={String(k().path.sketch)}
+                      onChange={(v) => update((x) => x.type === "sweep" && (x.path = { type: "sketch", sketch: +v, entities: [] }))}
+                    />
+                  </Row>
+                  <div class="space-y-1" aria-label="Tramos del camino">
+                    <span class="text-xs text-text-muted">Tramos (sin elegir: todos)</span>
+                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">Ese sketch no tiene líneas, arcos ni splines</p>}>
+                      {(e) => (
+                        <Checkbox
+                          small
+                          label={`${NAMES[e.geometry.type]} ${e.id}`}
+                          checked={k().path.entities.includes(e.id)}
+                          onChange={(c) =>
+                            update(
+                              (x) => x.type === "sweep" && (x.path.entities = c ? [...x.path.entities, e.id] : x.path.entities.filter((i) => i !== e.id)),
+                            )
+                          }
+                        />
+                      )}
+                    </For>
+                  </div>
+                  <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "loft" && (f().kind as Extract<FeatureKind, { type: "loft" }>)}>
+            {(k) => (
+              <>
+                <For each={k().sections}>
+                  {(sec, i) => (
+                    <div class="flex items-end gap-1">
+                      <div class="flex-1">
+                        <Row label={`Sección ${i() + 1}`}>
+                          <Select
+                            options={sketchOptions()}
+                            value={String(sec.sketch)}
+                            onChange={(v) => update((x) => x.type === "loft" && (x.sections[i()] = { sketch: +v, regions: { type: "all" } }))}
+                          />
+                        </Row>
+                      </div>
+                      <IconButton
+                        aria-label={`Quitar la sección ${i() + 1}`}
+                        size="sm"
+                        variant="ghost"
+                        disabled={k().sections.length <= 2}
+                        onClick={() => update((x) => x.type === "loft" && x.sections.splice(i(), 1))}
+                      >
+                        <Icons.X size={10} />
+                      </IconButton>
+                    </div>
+                  )}
+                </For>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    update((x) => {
+                      if (x.type !== "loft") return;
+                      const used = new Set(x.sections.map((s) => s.sketch));
+                      const next = props.sketches.find((s) => !used.has(s.id));
+                      if (next) x.sections.push({ sketch: next.id, regions: { type: "all" } });
+                    })
+                  }
+                >
+                  Agregar sección
+                </Button>
+                <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
+                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
+              </>
+            )}
           </Match>
           <Match when={f().kind.type === "plane" && (f().kind as Extract<FeatureKind, { type: "plane" }>)}>
             {(k) => {

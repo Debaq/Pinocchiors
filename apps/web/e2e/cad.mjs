@@ -870,6 +870,45 @@ const scenarios = {
     if (k.thin !== 1 || k.extent.second !== 4) throw new Error(`guardado: ${JSON.stringify(k)}`);
   },
 
+  async "barrido y transición"(b) {
+    const sketchDoc = (features) => ({ features, next_id: features.length, rollback: null });
+    const sketch = (id, plane, offset, build) => {
+      const sk = { points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [], next_id: 1, origin: 0 };
+      build(sk);
+      return { id, name: `Sketch ${id + 1}`, suppressed: false, kind: { type: "sketch", plane: { type: plane }, offset, sketch: sk } };
+    };
+    const pt = (sk, x, y) => { const id = sk.next_id++; sk.points.push({ id, x, y }); return id; };
+    const line = (sk, a, c) => sk.entities.push({ id: sk.next_id++, geometry: { type: "line", start: a, end: c }, construction: false });
+    const square = (h) => (sk) => {
+      const p = [[-h, -h], [h, -h], [h, h], [-h, h]].map(([x, y]) => pt(sk, x, y));
+      for (let k = 0; k < 4; k++) line(sk, p[k], p[(k + 1) % 4]);
+    };
+    await begin(b);
+    // Perfil: cuadrado de 4 en la planta; camino: recta de 20 hacia arriba en el frente
+    await call("cad_set_document", {
+      document: sketchDoc([
+        sketch(0, "xy", 0, square(2)),
+        sketch(1, "xz", 0, (sk) => line(sk, pt(sk, 0, 0), pt(sk, 0, 20))),
+      ]),
+    });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Barrido");
+    await sleep(2500);
+    await accept(b);
+    near((await body()).volume, 16 * 20, 1e-6, "barrido recto");
+    const k = (await call("cad_get_document")).features.at(-1).kind;
+    if (k.type !== "sweep" || k.sketch !== 0 || k.path.sketch !== 1) throw new Error(`barrido: ${JSON.stringify(k)}`);
+    // Transición: dos cuadrados iguales a 0 y 10 = prisma
+    await call("cad_set_document", { document: sketchDoc([sketch(0, "xy", 0, square(5)), sketch(1, "xy", 10, square(5))]) });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Transición");
+    await sleep(2500);
+    await accept(b);
+    near((await body()).volume, 1000, 1e-3, "transición");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

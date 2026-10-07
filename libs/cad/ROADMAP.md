@@ -399,3 +399,5 @@ cargo test -p cad-model
   el visor, usables como plano de sketch, eje de revolución o de patrón y plano de simetría.
 - **2026-10-07 Extrusión completa** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 2): dos
   direcciones, hasta la siguiente cara, desmolde de las paredes y extrusión delgada.
+- **2026-10-07 Barrido y transición** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 3):
+  operaciones con diálogo; el barrido usa esquinas a inglete y el camino se encadena solo.

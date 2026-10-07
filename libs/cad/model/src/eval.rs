@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::document::{Document, ResolvedValue};
 use crate::feature::*;
 use crate::geom::*;
-use crate::regions::{Loop, Region, arc_sweep, find_regions};
+use crate::regions::{Loop, LoopPiece, Region, arc_sweep, find_regions};
 use crate::sketch::{Geometry, Sketch, SolveReport};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -907,6 +907,62 @@ impl Ctx<'_> {
         })
     }
 
+    /// Alambre del camino de un barrido: las entidades encadenadas por sus
+    /// extremos, empezando por la punta más cercana a `near` (el perfil: el
+    /// barrido arranca en el comienzo del alambre).
+    fn path_wire(&self, path: &SweepPath, near: Option<P3>) -> R<Shape> {
+        let SweepPath::Sketch { sketch, entities } = path;
+        let s = self.ev.sketches.get(sketch).ok_or("el sketch del camino no está calculado")?;
+        let ends = |id: u32| -> Option<(u32, u32)> {
+            match &s.sketch.entity(id).ok()?.geometry {
+                Geometry::Line { start, end } => Some((*start, *end)),
+                Geometry::Arc { start, end, .. } => Some((*start, *end)),
+                Geometry::Spline { points, closed: false, .. } => Some((*points.first()?, *points.last()?)),
+                _ => None,
+            }
+        };
+        let ids: Vec<u32> = if entities.is_empty() {
+            s.sketch.entities.iter().filter(|e| !e.construction && ends(e.id).is_some()).map(|e| e.id).collect()
+        } else {
+            entities.clone()
+        };
+        if ids.is_empty() {
+            return Err("el camino no tiene líneas, arcos ni splines".into());
+        }
+        let mut left: Vec<(u32, (u32, u32))> = ids.iter().map(|&i| ends(i).map(|e| (i, e)).ok_or_else(|| "el camino tiene que ser de líneas, arcos o splines abiertas".to_string())).collect::<R<_>>()?;
+        // Arranque: una entidad con un extremo que no comparte con nadie
+        let degree = |p: u32, l: &[(u32, (u32, u32))]| l.iter().filter(|(_, (a, b))| *a == p || *b == p).count();
+        let first = left
+            .iter()
+            .position(|(_, (a, b))| degree(*a, &left) == 1 || degree(*b, &left) == 1)
+            .unwrap_or(0);
+        let (id, (a, b)) = left.remove(first);
+        let reversed = degree(a, &left) > 0 && degree(b, &left) == 0;
+        let mut pieces = vec![LoopPiece { entity: id, reversed }];
+        let mut tip = if reversed { a } else { b };
+        while let Some(k) = left.iter().position(|(_, (a, b))| *a == tip || *b == tip) {
+            let (id, (a, b)) = left.remove(k);
+            let reversed = b == tip;
+            pieces.push(LoopPiece { entity: id, reversed });
+            tip = if reversed { a } else { b };
+        }
+        if !left.is_empty() {
+            return Err("el camino no es continuo".into());
+        }
+        let start = if pieces[0].reversed { ends(pieces[0].entity).unwrap().1 } else { ends(pieces[0].entity).unwrap().0 };
+        let world = |p: u32| s.sketch.point(p).ok().map(|q| s.plane.to_world(q));
+        if let (Some(near), Some(a), Some(b)) = (near, world(start), world(tip))
+            && norm(sub(b, near)) < norm(sub(a, near))
+        {
+            pieces.reverse();
+            for p in &mut pieces {
+                p.reversed = !p.reversed;
+            }
+        }
+        let curves = loop_curves(&s.sketch, &s.plane, &Loop { pieces, polygon: Vec::new(), area: 0.0 })?;
+        Shape::wire(&curves).map_err(err)
+    }
+
     fn reference_plane(&self, def: &PlaneDef) -> R<Plane> {
         Ok(match def {
             PlaneDef::Offset { base, distance } => self.plane("base", base)?.offset(*distance),
@@ -1138,6 +1194,56 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(*op, targets, tools, *keep_tools),
+            FeatureKind::Sweep(sw) => {
+                let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
+                let spine = self.path_wire(&sw.path, samples.first().copied())?;
+                let solids = faces.iter().map(|fc| fc.sweep(&spine)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                let shape = fuse(solids)?;
+                // La tapa del perfil; el resto por su número (no hay más origen estable)
+                let mut tags = vec![Vec::new(); shape.face_count()];
+                for p in &samples {
+                    mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
+                }
+                for (i, slot) in tags.iter_mut().enumerate() {
+                    if slot.is_empty() {
+                        slot.push(tag(f.id, format!("cara:{i}")));
+                    }
+                }
+                let tool = Tagged { shape, tags };
+                self.ev.tools.insert(f.id, (tool.clone(), sw.op));
+                self.apply(f.id, tool, sw.op)
+            }
+            FeatureKind::Loft(l) => {
+                if l.sections.len() < 2 {
+                    return Err("hacen falta al menos dos secciones".into());
+                }
+                let mut faces = Vec::new();
+                let mut samples = Vec::new();
+                for s in &l.sections {
+                    let (fs, _, sm) = self.profile(s.sketch, &s.regions)?;
+                    if fs.len() != 1 {
+                        return Err("cada sección tiene que ser una sola región".into());
+                    }
+                    faces.extend(fs);
+                    samples.push(sm);
+                }
+                let shape = Shape::loft(&faces, true, l.ruled).map_err(err)?;
+                let mut tags = vec![Vec::new(); shape.face_count()];
+                for p in &samples[0] {
+                    mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
+                }
+                for p in samples.last().unwrap() {
+                    mark(&shape, &mut tags, *p, tag(f.id, "fin"));
+                }
+                for (i, slot) in tags.iter_mut().enumerate() {
+                    if slot.is_empty() {
+                        slot.push(tag(f.id, format!("cara:{i}")));
+                    }
+                }
+                let tool = Tagged { shape, tags };
+                self.ev.tools.insert(f.id, (tool.clone(), l.op));
+                self.apply(f.id, tool, l.op)
+            }
             FeatureKind::Plane { def } => {
                 let plane = self.reference_plane(def)?;
                 self.ev.references.insert(f.id, RefGeom::Plane { plane });

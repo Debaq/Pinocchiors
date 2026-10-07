@@ -21,6 +21,7 @@
 #include <BRepAdaptor_Surface.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
+#include <BRepOffsetAPI_MakePipeShell.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
@@ -489,10 +490,35 @@ CadShape* cad_pipe(const CadShape* profile, const CadShape* spine) {
         } else {
             throw Standard_Failure("la trayectoria debe ser un alambre");
         }
-        BRepOffsetAPI_MakePipe mk(w, profile->s);
-        mk.Build();
-        if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer");
-        return wrap(mk.Shape());
+        // Con una cara: cada lazo con MakePipeShell (esquinas a inglete, como
+        // Onshape; MakePipe deja sólidos inválidos en esquinas vivas) y los
+        // agujeros restados. Sin cara (alambre o arista), el barrido de siempre.
+        TopExp_Explorer fx(profile->s, TopAbs_FACE);
+        if (!fx.More()) {
+            BRepOffsetAPI_MakePipe mk(w, profile->s);
+            mk.Build();
+            if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer");
+            return wrap(mk.Shape());
+        }
+        auto sweep_wire = [&](const TopoDS_Wire& section) {
+            BRepOffsetAPI_MakePipeShell mk(w);
+            mk.SetMode(Standard_False);
+            mk.SetTransitionMode(BRepBuilderAPI_RightCorner);
+            mk.Add(section, Standard_False, Standard_False);
+            mk.Build();
+            if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el perfil por ese camino");
+            if (!mk.MakeSolid()) throw Standard_Failure("el barrido no cierra un sólido");
+            return mk.Shape();
+        };
+        TopoDS_Face face = TopoDS::Face(fx.Current());
+        TopoDS_Wire outer = BRepTools::OuterWire(face);
+        TopoDS_Shape result = sweep_wire(outer);
+        for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) {
+            TopoDS_Wire inner = TopoDS::Wire(wx.Current());
+            if (inner.IsSame(outer)) continue;
+            result = BRepAlgoAPI_Cut(result, sweep_wire(inner)).Shape();
+        }
+        return wrap_checked(result, "barrido");
     });
 }
 
