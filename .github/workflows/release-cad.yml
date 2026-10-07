@@ -3,6 +3,7 @@
 # Variante aparte de release.yml (que sale sin CAD: sin OCCT, cad-occt compila
 # un stub). Se lanza SOLO a mano:
 #   gh workflow run "Release con CAD" --ref <rama> -f plataformas=linux
+# (plataformas: linux, windows o todas).
 #
 # OCCT se compila mínimo y estático con scripts/build-occt.sh (solo modelado y
 # STEP, sin visualización ni X11) y queda en caché por versión y por hash del
@@ -18,7 +19,7 @@ on:
       plataformas:
         description: "Plataformas a compilar"
         type: choice
-        options: [linux, todas]
+        options: [linux, windows, todas]
         default: linux
 
 permissions:
@@ -44,12 +45,15 @@ jobs:
           echo "tag=pre.${date}.${sha}" >> "$GITHUB_OUTPUT"
       - id: m
         run: |
-          desktop='[{"os":"ubuntu-22.04","platform":"linux"}'
-          if [[ "${{ inputs.plataformas }}" == todas ]]; then
-            desktop+=',{"os":"windows-latest","platform":"windows"}'
-            desktop+=',{"os":"macos-latest","platform":"macos"}'
-          fi
-          echo "desktop=${desktop}]" >> "$GITHUB_OUTPUT"
+          linux='{"os":"ubuntu-22.04","platform":"linux"}'
+          windows='{"os":"windows-latest","platform":"windows"}'
+          macos='{"os":"macos-latest","platform":"macos"}'
+          case "${{ inputs.plataformas }}" in
+            windows) desktop="$windows" ;;
+            todas)   desktop="$linux,$windows,$macos" ;;
+            *)       desktop="$linux" ;;
+          esac
+          echo "desktop=[${desktop}]" >> "$GITHUB_OUTPUT"
 
   desktop:
     name: Desktop con CAD (${{ matrix.platform }})
@@ -170,7 +174,10 @@ jobs:
           TAG: ${{ needs.matrix.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
-          cd dist && sha256sum * > SHA256SUMS-cad.txt && cd ..
+          # Con una sola plataforma no pisar las sumas de otra ya subida.
+          sums=SHA256SUMS-cad.txt
+          if [[ "${{ inputs.plataformas }}" == windows ]]; then sums=SHA256SUMS-cad-windows.txt; fi
+          cd dist && sha256sum * > "$sums" && cd ..
           if gh release view "$TAG" -R "$REPO" > /dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber -R "$REPO"
           else
