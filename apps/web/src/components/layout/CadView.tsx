@@ -251,6 +251,19 @@ export const CadView: Component<CadViewProps> = (props) => {
     const body = store.result()?.body;
     viewer?.setCenterOfMass(ui.showCenterOfMass() && body ? body.center : null);
   });
+  // Vista de corte: el plano recorre la caja envolvente del sólido
+  createEffect(() => {
+    store.mesh();
+    const s = ui.section();
+    const body = store.result()?.body;
+    if (!s || !body) return viewer?.setSection(null);
+    const axis = { xy: 2, xz: 1, yz: 0 }[s.plane];
+    const normal: P3 = [0, 0, 0];
+    normal[axis] = s.flip ? -1 : 1;
+    const origin: P3 = body.bbox_min.map((v, i) => (v + body.bbox_max[i]) / 2) as P3;
+    origin[axis] = body.bbox_min[axis] + s.at * (body.bbox_max[axis] - body.bbox_min[axis]);
+    viewer?.setSection({ origin, normal });
+  });
 
   // Medidas de lo elegido en el sólido (una o dos cosas), como en Onshape
   const [measurement, setMeasurement] = createSignal<Measurement>();
@@ -1385,6 +1398,42 @@ export const CadView: Component<CadViewProps> = (props) => {
                   )}
                 </For>
               </div>
+              <div class="w-px h-5 bg-border mx-0.5" />
+              <Tooltip content={ui.section() ? "Sacar la vista de corte" : "Vista de corte (no cambia el modelo)"}>
+                <IconButton
+                  aria-label="Vista de corte"
+                  size="sm"
+                  active={!!ui.section()}
+                  onClick={() => ui.setSection(ui.section() ? null : { plane: "xz", at: 0.5, flip: false })}
+                >
+                  <Icons.Scissors size={14} />
+                </IconButton>
+              </Tooltip>
+              <Show when={ui.section()}>
+                {(s) => (
+                  <>
+                    <For each={["xy", "xz", "yz"] as const}>
+                      {(p) => (
+                        <button
+                          aria-label={`Corte por ${p.toUpperCase()}`}
+                          class={clsx("px-1.5 py-0.5 rounded text-[11px]", s().plane === p ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
+                          onClick={() => ui.setSection({ ...s(), plane: p })}
+                        >
+                          {p.toUpperCase()}
+                        </button>
+                      )}
+                    </For>
+                    <div class="w-24" aria-label="Posición del corte">
+                      <Slider value={s().at} min={0} max={1} step={0.01} onChange={(v) => ui.setSection({ ...s(), at: v })} />
+                    </div>
+                    <Tooltip content="Ver el otro lado">
+                      <IconButton aria-label="Invertir el corte" size="sm" onClick={() => ui.setSection({ ...s(), flip: !s().flip })}>
+                        <Icons.ArrowsLeftRight size={14} />
+                      </IconButton>
+                    </Tooltip>
+                  </>
+                )}
+              </Show>
               <div class="w-px h-5 bg-border mx-0.5" />
               <Tooltip content={ui.showPlanes() ? "Ocultar los planos base" : "Mostrar los planos base"}>
                 <IconButton aria-label="Planos base" size="sm" active={ui.showPlanes()} onClick={() => ui.setShowPlanes(!ui.showPlanes())}>

@@ -111,7 +111,12 @@ selección y menú contextual.
    dibuja una caja: hacia la derecha elige lo que queda entero adentro, hacia la izquierda lo
    que la toca (triángulos y segmentos contra el rectángulo, Liang–Barsky); solo cuenta lo
    visible (rayos a puntos de muestra); Mayús suma. Con "Todo" la caja elige caras y aristas.*
-6. **Vista de corte** con tapa.
+6. **Vista de corte** con tapa. *Hecha el 2026-10-07: botón de tijera en la barra del visor;
+   plano XY, XZ o YZ que recorre la caja envolvente con un deslizador e invertir. Planos de
+   recorte de three.js sobre el sólido, sus aristas y la herramienta; la tapa con stencil
+   (caras traseras suman, delanteras restan, el plano se pinta donde queda distinto de cero).
+   Lo cortado no se puede elegir. Falta: plano por una cara elegida y manipulador para
+   arrastrarlo.*
 
 ## Pruebas
 

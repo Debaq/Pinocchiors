@@ -490,6 +490,49 @@ const scenarios = {
     await filter("Todo");
   },
 
+  async "vista de corte con tapa"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const pixel = (x, y) =>
+      b.eval(`(() => {
+        const c = window.__cadViewer.canvas, r = c.getBoundingClientRect();
+        const gl = c.getContext("webgl2") || c.getContext("webgl");
+        window.__cadViewer.renderNow();
+        const px = new Uint8Array(4);
+        const dpr = c.width / r.width;
+        gl.readPixels(Math.round((${x} - r.left) * dpr), Math.round(c.height - (${y} - r.top) * dpr), 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        return [...px];
+      })()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Agujero pasante en Z para que la sección tenga hueco
+    const doc = await call("cad_get_document");
+    doc.features.push({ id: doc.features[0].id + 1, name: "Agujero", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 4, height: 40 }, origin: [0, 0, -20], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } });
+    doc.next_id = doc.features[1].id + 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const vol = (await body()).volume;
+    // De frente y con corte por XZ a la mitad: se ve la tapa (naranja) y el hueco
+    await b.eval(`window.__cadViewer.lookFrom([0, -1, 0])`);
+    await sleep(800);
+    await b.eval(`document.querySelector('[aria-label="Vista de corte"]').click()`);
+    await sleep(800);
+    // Fuera de la línea de la grilla (z = 0)
+    const solid = await pixel(...(await at([7, 0, 4])));
+    const hole = await pixel(...(await at([0, 0, 4])));
+    const orange = (p) => p[0] > p[1] && p[1] > p[2] && p[0] - p[2] > 50;
+    if (!orange(solid)) throw new Error(`sin tapa en el material: ${solid}`);
+    if (orange(hole)) throw new Error(`tapa sobre el hueco: ${hole}`);
+    await b.shot("corte");
+    // El modelo no cambió y al sacar el corte vuelve la cara de adelante
+    near((await body()).volume, vol, 1e-9, "volumen");
+    await b.eval(`document.querySelector('[aria-label="Vista de corte"]').click()`);
+    await sleep(800);
+    if (orange(await pixel(...(await at([7, -10, 4]))))) throw new Error("quedó la tapa");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

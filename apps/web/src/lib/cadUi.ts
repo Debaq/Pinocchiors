@@ -31,6 +31,13 @@ import {
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
 export type CadAction = "sketch" | "fillet" | "chamfer" | "shell" | "draft";
 
+/** Vista de corte: plano base, posición (0..1 a lo largo del sólido) y lado que se ve */
+export interface SectionView {
+  plane: "xy" | "xz" | "yz";
+  at: number;
+  flip: boolean;
+}
+
 /** Qué se puede elegir en el visor (fuera de los sketches) */
 export type PickFilter = "all" | "faces" | "edges" | "vertices" | "sketches";
 
@@ -103,6 +110,7 @@ export function createCadUi(store: CadStore) {
   const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
   const [actions, setActions] = createSignal<Partial<Record<CadAction, () => void>>>({});
   const [pickFilter, setPickFilter] = createSignal<PickFilter>("all");
+  const [section, setSection] = createSignal<SectionView | null>(null);
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
@@ -171,6 +179,9 @@ export function createCadUi(store: CadStore) {
     setShowCenterOfMass,
     pickFilter,
     setPickFilter,
+    /** Vista de corte (solo visual; no cambia el modelo) */
+    section,
+    setSection,
     /** Acciones del panel con lo elegido (las registra DesignStep) */
     actions,
     setActions,

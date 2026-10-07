@@ -366,3 +366,7 @@ cargo test -p cad-model
 - **2026-10-07 Filtros y caja de selección** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 5):
   filtro de qué se elige en la barra del visor y selección por caja al arrastrar en vacío
   (ventana hacia la derecha, cruce hacia la izquierda, solo lo visible, Mayús suma).
+- **2026-10-07 Vista de corte** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 6): corte solo de
+  vista por los planos base, con posición regulable, invertir y la sección rellena (tapa con
+  stencil); lo cortado no se elige. Con esto el plan 3 queda hecho salvo el plano de corte por
+  una cara y su manipulador.

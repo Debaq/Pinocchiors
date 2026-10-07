@@ -137,6 +137,9 @@ export class CadViewer {
   private bodyVertices: THREE.Vector3[] = [];
   /** Vértices elegidos y la línea de la distancia medida */
   private marks = new THREE.Group();
+  /** Vista de corte: plano (en el visor) que deja ver lo de su lado positivo, y la tapa */
+  private section: THREE.Plane | null = null;
+  private sectionGroup = new THREE.Group();
   /** Cubo de vistas en la esquina superior derecha */
   private viewCube = new ViewCube();
   /** Giro de cámara en curso hacia una vista (ver `lookFrom`) */
@@ -152,7 +155,8 @@ export class CadViewer {
   showScan = true;
 
   constructor(private container: HTMLElement) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+    this.renderer.localClippingEnabled = true;
     this.renderer.setPixelRatio(window.devicePixelRatio);
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
@@ -186,6 +190,7 @@ export class CadViewer {
     this.scene.add(this.planesGroup);
     this.marks.renderOrder = 6;
     this.scene.add(this.marks);
+    this.scene.add(this.sectionGroup);
     this.buildPlanes();
     this.applyTheme();
     window.addEventListener(THEME_EVENT, this.onTheme);
@@ -394,6 +399,7 @@ export class CadViewer {
       this.scene.add(this.bodyEdges);
     }
     this.paintBody();
+    this.applySection();
     this.requestRender();
   }
 
@@ -943,7 +949,8 @@ export class CadViewer {
       const dist = cam.distanceTo(p);
       ray.set(cam, p.clone().sub(cam).normalize());
       ray.far = dist * 1.01;
-      const hit = ray.intersectObject(this.body)[0];
+      if (this.section && this.section.distanceToPoint(p) < 0) return false;
+      const hit = this.kept(ray.intersectObject(this.body));
       return !hit || hit.distance >= dist - dist * 2e-3;
     };
     const vec = (arr: ArrayLike<number>, i: number) => new THREE.Vector3(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]);
@@ -1046,6 +1053,91 @@ export class CadViewer {
     return out;
   }
 
+  /** Dibuja ya, sin esperar al cuadro (para leer píxeles en las pruebas) */
+  renderNow() {
+    this.renderer.render(this.scene, this.camera);
+    this.viewCube.render(this.renderer, this.camera, this.controls.target);
+  }
+
+  /** Primer impacto que no quedó cortado por la vista de corte */
+  private kept<T extends THREE.Intersection>(hits: T[]): T | undefined {
+    const s = this.section;
+    return s ? hits.find((h) => s.distanceToPoint(h.point) >= -1e-6) : hits[0];
+  }
+
+  /**
+   * Vista de corte por un plano del CAD (punto y normal en mm): se ve lo que
+   * queda del lado de la normal y la sección se rellena (tapa). `null` la saca.
+   */
+  setSection(plane: { origin: P3; normal: P3 } | null) {
+    this.section = plane ? new THREE.Plane().setFromNormalAndCoplanarPoint(this.dirToView(plane.normal), this.toView(plane.origin)) : null;
+    this.applySection();
+    this.requestRender();
+  }
+
+  private applySection() {
+    const planes = this.section ? [this.section] : [];
+    for (const o of [this.body, this.bodyEdges]) if (o) (o.material as THREE.Material).clippingPlanes = planes;
+    this.tool?.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) (o.material as THREE.Material).clippingPlanes = planes;
+    });
+    // Tapa: las caras de atrás suman y las de adelante restan en el stencil;
+    // donde queda distinto de cero el plano corta material y se pinta la tapa
+    for (const o of [...this.sectionGroup.children]) {
+      this.sectionGroup.remove(o);
+      const m = o as THREE.Mesh;
+      m.geometry.dispose();
+      (m.material as THREE.Material).dispose();
+    }
+    if (!this.section || !this.body) return;
+    const geometry = this.body.geometry;
+    const base = { depthWrite: false, depthTest: false, colorWrite: false, stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, clippingPlanes: planes };
+    const back = new THREE.Mesh(
+      geometry.clone(),
+      new THREE.MeshBasicMaterial({
+        ...base,
+        side: THREE.BackSide,
+        stencilFail: THREE.IncrementWrapStencilOp,
+        stencilZFail: THREE.IncrementWrapStencilOp,
+        stencilZPass: THREE.IncrementWrapStencilOp,
+      }),
+    );
+    const front = new THREE.Mesh(
+      geometry.clone(),
+      new THREE.MeshBasicMaterial({
+        ...base,
+        side: THREE.FrontSide,
+        stencilFail: THREE.DecrementWrapStencilOp,
+        stencilZFail: THREE.DecrementWrapStencilOp,
+        stencilZPass: THREE.DecrementWrapStencilOp,
+      }),
+    );
+    back.renderOrder = front.renderOrder = 0.5;
+    const r = (geometry.boundingSphere?.radius ?? 100) * 4;
+    const cap = new THREE.Mesh(
+      new THREE.PlaneGeometry(r, r),
+      new THREE.MeshStandardMaterial({
+        color: themeHex("orange"),
+        metalness: 0.1,
+        roughness: 0.75,
+        side: THREE.DoubleSide,
+        stencilWrite: true,
+        stencilRef: 0,
+        stencilFunc: THREE.NotEqualStencilFunc,
+        stencilFail: THREE.ReplaceStencilOp,
+        stencilZFail: THREE.ReplaceStencilOp,
+        stencilZPass: THREE.ReplaceStencilOp,
+      }),
+    );
+    // Sobre el plano, mirando hacia lo que se ve; centrado en el modelo
+    const center = this.section.projectPoint(geometry.boundingSphere?.center ?? new THREE.Vector3(), new THREE.Vector3());
+    cap.position.copy(center);
+    cap.lookAt(center.clone().sub(this.section.normal));
+    cap.renderOrder = 0.6;
+    cap.onAfterRender = (renderer) => renderer.clearStencil();
+    this.sectionGroup.add(back, front, cap);
+  }
+
   /** Acerca la cámara a lo elegido: caras y aristas del sólido y puntos (mm); vacío = todo */
   frameSelection(faces: number[], edges: number[], points: P3[] = []) {
     const box = new THREE.Box3();
@@ -1129,7 +1221,7 @@ export class CadViewer {
     const dist = this.camera.position.distanceTo(this.controls.target);
     if (want.vertices && this.bodyVertices.length) {
       const rect = this.renderer.domElement.getBoundingClientRect();
-      const front = this.body ? this.raycaster.intersectObject(this.body)[0]?.distance : undefined;
+      const front = this.body ? this.kept(this.raycaster.intersectObject(this.body))?.distance : undefined;
       let best: { d: number; v: THREE.Vector3 } | undefined;
       for (const v of this.bodyVertices) {
         const s = v.clone().project(this.camera);
@@ -1140,11 +1232,11 @@ export class CadViewer {
         if (front !== undefined && this.camera.position.distanceTo(v) > front + dist * 0.01) continue;
         best = { d: px, v };
       }
-      if (best) return { kind: "vertex", at: this.fromView(best.v), point: best.v };
+      if (best && (!this.section || this.section.distanceToPoint(best.v) >= 0)) return { kind: "vertex", at: this.fromView(best.v), point: best.v };
     }
     if (want.edges && this.bodyEdges) {
       this.raycaster.params.Line = { threshold: dist * 0.006 };
-      const hit = this.raycaster.intersectObject(this.bodyEdges)[0];
+      const hit = this.kept(this.raycaster.intersectObject(this.bodyEdges));
       if (hit && hit.index != null) {
         const segEdge: number[] = this.bodyEdges.geometry.userData.segEdge;
         return { kind: "edge", edge: segEdge[hit.index / 2], point: hit.point };
@@ -1160,7 +1252,7 @@ export class CadViewer {
       }
     }
     if (want.faces && this.body) {
-      const hit = this.raycaster.intersectObject(this.body)[0];
+      const hit = this.kept(this.raycaster.intersectObject(this.body));
       if (hit && hit.faceIndex != null && this.bodyData) {
         candidates.push({ d: hit.distance, rank: 1, pick: { kind: "face", face: this.bodyData.triangleFace[hit.faceIndex], point: hit.point } });
       }
