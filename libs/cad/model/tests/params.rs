@@ -13,7 +13,7 @@ fn volume(ev: &Evaluation) -> f64 {
 
 fn caja() -> FeatureKind {
     FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 1.0, dy: 10.0, dz: 1.0, centered: false },
+        shape: PrimitiveShape::Box { dx: 1.0, dy: 10.0, dz: 1.0, centered: false, centered_z: false },
         origin: [0.0; 3],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -41,7 +41,7 @@ fn primitive_dimensions_follow_parameters() {
     assert_relative_eq!(volume(&doc.evaluate()), 60.0 * 10.0 * 30.0, epsilon = 1e-6);
     // El documento guardado no cambia: las fórmulas se aplican al recalcular
     let FeatureKind::Primitive(p) = &doc.get(b).unwrap().kind else { unreachable!() };
-    assert_eq!(p.shape, PrimitiveShape::Box { dx: 1.0, dy: 10.0, dz: 1.0, centered: false });
+    assert_eq!(p.shape, PrimitiveShape::Box { dx: 1.0, dy: 10.0, dz: 1.0, centered: false, centered_z: false });
 }
 
 #[test]

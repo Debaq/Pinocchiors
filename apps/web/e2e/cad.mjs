@@ -33,11 +33,17 @@ const evaluate = () => call("cad_evaluate");
 async function sketchOn(b) {
   await b.clickText("Sketch");
   await sleep(400);
-  // Un punto de la planta delante-derecha: el rayo no cruza los otros planos
-  // (la cámara mira desde +X, +Z del visor) ni la caja (que está en y ≥ 0)
+  // Un punto de la planta delante-derecha que no tape el sólido ni otro plano
+  // (el visor dice qué hay bajo cada punto)
   const s = await b.eval(`window.__cadViewer.planeSize`);
-  const [x, y] = await b.eval(`window.__cadViewer.screenOf([${0.4 * s}, ${-0.4 * s}, 0])`);
-  await b.click(x, y, { wait: 1500 });
+  // Primero el de siempre; si el sólido lo tapa, más cerca del borde del plano
+  const tries = [[0.4, -0.4], [0.47, -0.47], [-0.47, -0.47], [0.47, 0.47], [-0.47, 0.47], [0.47, 0], [0, -0.47]];
+  for (const [u, v] of tries) {
+    const [x, y] = await b.eval(`window.__cadViewer.screenOf([${u * s}, ${v * s}, 0])`);
+    const hit = await b.eval(`(() => { const h = window.__cadViewer.pick(${x}, ${y}, { faces: true, planes: true }); return h && (h.kind === "plane" ? h.plane : h.kind); })()`);
+    if (hit === "xy") return void (await b.click(x, y, { wait: 1500 }));
+  }
+  throw new Error("no encontré un punto libre de la planta");
 }
 const body = async () => (await evaluate()).body;
 /** Acepta el diálogo de la operación recién creada (✓) */
@@ -93,7 +99,7 @@ const scenarios = {
     // Sin aristas elegidas: el diálogo abre con la caja de aristas activa
     await b.clickText("Redondeo");
     await sleep(1500);
-    for (const p of [[0, -10, 20], [10, 0, 20]]) {
+    for (const p of [[0, -10, 10], [10, 0, 10]]) {
       const [x, y] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
       await b.click(x, y, { wait: 1000 });
     }
@@ -117,8 +123,8 @@ const scenarios = {
     await accept(b);
     await b.clickText("Redondeo");
     await sleep(1500);
-    const A = await at([0, -10, 20]);
-    const B = await at([10, 0, 20]);
+    const A = await at([0, -10, 10]);
+    const B = await at([10, 0, 10]);
     await b.click(...A, { wait: 1200 });
     await b.click(...B, { wait: 1200 });
     if ((await items()).length !== 2) throw new Error(`ítems: ${await items()}`);
@@ -163,13 +169,13 @@ const scenarios = {
     await b.clickText("Caja");
     await sleep(1500);
     await accept(b);
-    // Otra caja más arriba (separada) y un redondeo con una arista de cada una
+    // Otra caja más arriba (z 20..40, separada) y un redondeo con una arista de cada una
     const doc = await call("cad_get_document");
     const box = doc.features[0];
     const edge = (z) => ({ point: [0, -10, z], direction: [1, 0, 0] });
     doc.features.push(
       { ...structuredClone(box), id: box.id + 1, name: "Caja arriba", kind: { ...structuredClone(box.kind), origin: [0, 0, 30] } },
-      { id: box.id + 2, name: "Redondeo 1", suppressed: false, kind: { type: "fillet", edges: [edge(20), edge(50)], radius: 1 } },
+      { id: box.id + 2, name: "Redondeo 1", suppressed: false, kind: { type: "fillet", edges: [edge(10), edge(40)], radius: 1 } },
     );
     doc.next_id = box.id + 3;
     await call("cad_set_document", { document: doc });
@@ -192,7 +198,7 @@ const scenarios = {
     const before = await items();
     if (!before[1]?.includes("no encontrada") || before[0].includes("no encontrada")) throw new Error(`ítems: ${before}`);
     // Elegir otra arista reemplaza a la perdida
-    await b.click(...(await at([10, 0, 20])), { wait: 1500 });
+    await b.click(...(await at([10, 0, 10])), { wait: 1500 });
     const after = await items();
     if (after.length !== 2 || after.some((t) => t.includes("no encontrada"))) throw new Error(`tras reemplazar: ${after}`);
     await b.key("Escape", "Escape", 27);
@@ -214,7 +220,7 @@ const scenarios = {
     // Caja, agujero (cilindro que resta) y otra caja más arriba
     const doc = await call("cad_get_document");
     const box = doc.features[0];
-    const hole = { type: "primitive", shape: { type: "cylinder", radius: 3, height: 40 }, origin: [0, 0, -5], z: [0, 0, 1], x: [1, 0, 0], op: "cut" };
+    const hole = { type: "primitive", shape: { type: "cylinder", radius: 3, height: 40 }, origin: [0, 0, -15], z: [0, 0, 1], x: [1, 0, 0], op: "cut" };
     doc.features.push(
       { id: box.id + 1, name: "Agujero", suppressed: false, kind: hole },
       { ...structuredClone(box), id: box.id + 2, name: "Caja arriba", kind: { ...structuredClone(box.kind), origin: [0, 0, 30] } },
@@ -246,7 +252,7 @@ const scenarios = {
     await sleep(2000);
     if ((await rollback()) !== null) throw new Error(`retroceso al final: ${await rollback()}`);
     near((await body()).volume, 16000 - holeVol, 0.5, "todo otra vez");
-    // Arrastrar "Caja arriba" al principio: ahora el agujero (z −5..35) también
+    // Arrastrar "Caja arriba" al principio: ahora el agujero (z −15..25) también
     // le saca 5 mm de abajo
     const r = await rows();
     await b.drag(r[2][0], (r[2][1] + r[2][2]) / 2, ...(await gap(0)));
@@ -263,7 +269,7 @@ const scenarios = {
     await b.clickText("Caja");
     await sleep(1500);
     await accept(b);
-    const [x, y] = await b.eval(`window.__cadViewer.screenOf([3, 3, 20])`);
+    const [x, y] = await b.eval(`window.__cadViewer.screenOf([3, 3, 10])`);
     await b.click(x, y, { button: "right", buttons: 2, wait: 1500 });
     const label = await b.eval(`[...document.querySelectorAll("button, [role=menuitem]")].map((e) => e.textContent.trim()).find((t) => t.startsWith("Editar «"))`);
     if (label !== "Editar «Caja 1»") throw new Error(`menú: ${label}`);
@@ -318,10 +324,10 @@ const scenarios = {
     // Círculo sobre la cara de arriba, extruido hacia adentro y restando
     await b.clickText("Sketch");
     await sleep(300);
-    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`)), { wait: 2500 });
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 10])`)), { wait: 2500 });
     await b.clickText("Círculo");
-    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`)));
-    await b.click(...(await b.eval(`window.__cadViewer.screenOf([5, 0, 20])`)), { wait: 800 });
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 10])`)));
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([5, 0, 10])`)), { wait: 800 });
     await b.clickText("Terminar sketch");
     await sleep(1500);
     await b.clickText("Extrusión");
@@ -393,7 +399,7 @@ const scenarios = {
     let r = await body();
     near(r.bbox_min[0], -10, 1e-6, "caja centrada en X");
     near(r.bbox_min[1], -10, 1e-6, "caja centrada en Y");
-    near(r.bbox_min[2], 0, 1e-6, "base en el origen");
+    near(r.bbox_min[2], -10, 1e-6, "centrada en Z: el centro en el origen");
     await accept(b);
     // Exportar del encabezado: con un diseño y sin modelo, exporta el sólido
     await b.clickContains("Exportar");
@@ -444,11 +450,11 @@ const scenarios = {
     await accept(b);
     await b.clickText("Sketch");
     await sleep(300);
-    let [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`);
+    let [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 10])`);
     await b.click(x, y, { wait: 2500 });
     await b.clickText("Círculo");
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 20])`);
-    const [x2, y2] = await b.eval(`window.__cadViewer.screenOf([5, 0, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, 0, 10])`);
+    const [x2, y2] = await b.eval(`window.__cadViewer.screenOf([5, 0, 10])`);
     await b.click(x, y);
     await b.click(x2, y2);
     await sleep(800);
@@ -472,16 +478,16 @@ const scenarios = {
     await accept(b);
     await b.clickText("Sketch");
     await sleep(300);
-    let [x, y] = await b.eval(`window.__cadViewer.screenOf([-3, -3, 20])`);
+    let [x, y] = await b.eval(`window.__cadViewer.screenOf([-3, -3, 10])`);
     await b.click(x, y, { wait: 2500 });
     await b.clickText("Línea");
     const glyph = () => b.eval(`document.querySelector("[data-snap]")?.dataset.snap`);
     // Cerca de la esquina de la cara: vértice del sólido
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([10, 10, 10])`);
     await b.click(x - 3, y + 2);
     if ((await glyph()) !== "solid_vertex") throw new Error(`glifo en la esquina: ${await glyph()}`);
     // Cerca del medio de la arista de adelante
-    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, -10, 20])`);
+    [x, y] = await b.eval(`window.__cadViewer.screenOf([0, -10, 10])`);
     await b.mouse("mouseMoved", x + 3, y - 2, { buttons: 0 });
     await sleep(200);
     if ((await glyph()) !== "solid_midpoint") throw new Error(`glifo en el medio: ${await glyph()}`);
@@ -732,17 +738,17 @@ const scenarios = {
     await accept(b);
     near((await body()).volume, 8000 + Math.PI * 25 * 10, 0.5, "solo la región elegida");
     // Cara superior de la caja elegida → sketch sobre ella
-    await b.click(...(await at([0, 0, 20])), { wait: 600 });
+    await b.click(...(await at([0, 0, 10])), { wait: 600 });
     await b.clickText("Sketch");
     await sleep(1500);
     const planes = (await evaluate()).sketches.map((v) => v.plane.origin[2]);
-    if (!planes.some((z) => Math.abs(z - 20) < 1e-6)) throw new Error(`plano del sketch: ${planes}`);
+    if (!planes.some((z) => Math.abs(z - 10) < 1e-6)) throw new Error(`plano del sketch: ${planes}`);
     await b.clickText("Descartar");
     await sleep(800);
     // Arista superior frontal elegida → redondeo directo
     await b.key("Escape", "Escape", 27);
     const faces = (await body()).faces;
-    await b.click(...(await at([0, -10, 20])), { wait: 600 });
+    await b.click(...(await at([0, -10, 10])), { wait: 600 });
     await b.clickText("Redondeo");
     await sleep(2000);
     if ((await body()).faces !== faces + 1) throw new Error("el redondeo no tomó la arista elegida");

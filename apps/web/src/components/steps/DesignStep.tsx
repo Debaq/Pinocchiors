@@ -33,6 +33,7 @@ import {
   type P2,
   type P3,
   type PatternKind,
+  type PrimitiveShape,
   type RegionSelection,
   type PlaneSpec,
   type ScanPick,
@@ -566,7 +567,7 @@ const AddSection: Component<{
           <B label="Revolución" onClick={props.onRevolve} title="Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" />
         </div>
         <div class="grid grid-cols-3 gap-1.5">
-          <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true })} />
+          <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true })} />
           <B label="Cilindro" onClick={() => props.onPrimitive({ type: "cylinder", radius: 10, height: 20 })} />
           <B label="Esfera" onClick={() => props.onPrimitive({ type: "sphere", radius: 10 })} />
           <B label="Cono" onClick={() => props.onPrimitive({ type: "cone", r1: 10, r2: 0, height: 20 })} />
@@ -1104,6 +1105,27 @@ const FeatureEditor: Component<{
                       }, "mm")
                     )}
                   </For>
+                  <Show when={k().shape.type === "box" && (k().shape as Extract<PrimitiveShape, { type: "box" }>)}>
+                    {(bx) => (
+                      <Row label="Origen en">
+                        <Select
+                          options={[
+                            { value: "center", label: "El centro" },
+                            { value: "base", label: "El centro de la base" },
+                            { value: "corner", label: "Una esquina" },
+                          ]}
+                          value={bx().centered_z ? "center" : bx().centered ? "base" : "corner"}
+                          onChange={(v) =>
+                            update((x) => {
+                              if (x.type !== "primitive" || x.shape.type !== "box") return;
+                              x.shape.centered = v !== "corner";
+                              x.shape.centered_z = v === "center";
+                            })
+                          }
+                        />
+                      </Row>
+                    )}
+                  </Show>
                   <div class="space-y-1">
                     <span class="text-xs text-text-muted">Posición (mm)</span>
                     <div class="grid grid-cols-3 gap-1">

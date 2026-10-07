@@ -11,7 +11,7 @@ fn occt() -> bool {
 
 fn caja(dz: f64) -> FeatureKind {
     FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz, centered: false },
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz, centered: false, centered_z: false },
         origin: [0.0; 3],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
@@ -83,7 +83,7 @@ fn origin_survives_booleans_that_split_faces() {
     let b = doc.add(caja(10.0));
     // Ranura que parte la cara superior en dos
     doc.add(FeatureKind::Primitive(Primitive {
-        shape: PrimitiveShape::Box { dx: 2.0, dy: 12.0, dz: 4.0, centered: false },
+        shape: PrimitiveShape::Box { dx: 2.0, dy: 12.0, dz: 4.0, centered: false, centered_z: false },
         origin: [4.0, -1.0, 8.0],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],

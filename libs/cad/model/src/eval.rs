@@ -463,8 +463,9 @@ impl Ctx<'_> {
             FeatureKind::Primitive(p) => {
                 let frame = Frame { origin: p.origin, z: p.z, x: p.x };
                 let tool = match p.shape {
-                    PrimitiveShape::Box { dx, dy, dz, centered } => {
+                    PrimitiveShape::Box { dx, dy, dz, centered, centered_z } => {
                         let frame = if centered { box_centered(frame, dx, dy) } else { frame };
+                        let frame = if centered_z { Frame { origin: sub(frame.origin, scale(normalize(frame.z), dz / 2.0)), ..frame } } else { frame };
                         Shape::make_box(frame, dx, dy, dz)
                     }
                     PrimitiveShape::Cylinder { radius, height } => Shape::cylinder(frame, radius, height),

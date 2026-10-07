@@ -127,8 +127,11 @@ export interface Sketch {
 }
 
 export type PrimitiveShape =
-  /** `centered`: centrada en X e Y sobre el origen (las cajas viejas van desde la esquina) */
-  | { type: "box"; dx: number; dy: number; dz: number; centered?: boolean }
+  /**
+   * `centered`: centrada en X e Y sobre el origen (las cajas viejas van desde la
+   * esquina); `centered_z`: también en Z (el centro de la caja en el origen)
+   */
+  | { type: "box"; dx: number; dy: number; dz: number; centered?: boolean; centered_z?: boolean }
   | { type: "cylinder"; radius: number; height: number }
   | { type: "cone"; r1: number; r2: number; height: number }
   | { type: "sphere"; radius: number }

@@ -337,3 +337,9 @@ cargo test -p cad-model
   operaciones que la originaron según sus `FaceTag` y el sketch de extrusiones y revoluciones.
   El arrastre usa eventos de puntero (no HTML5 drag & drop, que WebKitGTK con Tauri maneja
   mal) y un umbral de 4 px para no confundirlo con el clic que abre el diálogo.
+- **2026-10-07 Caja con el centro en el origen** (pedido del usuario: "centro con centro"): las
+  cajas nuevas quedan centradas también en Z (`PrimitiveShape::Box { centered_z }`, campo nuevo
+  con `serde(default)`: las viejas siguen con la base en el origen o en una esquina). El diálogo
+  tiene "Origen en: el centro / el centro de la base / una esquina". El e2e se ajustó (la tapa
+  de la caja de 20 queda en z = 10) y `sketchOn` pregunta al visor qué hay bajo el punto antes
+  de hacer clic en la planta, porque ahora la caja la atraviesa.

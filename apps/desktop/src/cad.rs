@@ -816,7 +816,7 @@ mod tests {
     fn box_doc() -> Document {
         let mut doc = Document::new();
         doc.add(FeatureKind::Primitive(cad_model::Primitive {
-            shape: cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 30.0, centered: false },
+            shape: cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false },
             origin: [0.0; 3],
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
@@ -854,7 +854,7 @@ mod tests {
         // Borrador con la caja más alta
         let mut draft = box_doc();
         if let FeatureKind::Primitive(p) = &mut draft.features[0].kind {
-            p.shape = cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 60.0, centered: false };
+            p.shape = cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 60.0, centered: false, centered_z: false };
         }
         let r = preview_impl(&state, Some(draft)).unwrap();
         assert!((r.body.unwrap().volume - 12000.0).abs() < 1e-6);
