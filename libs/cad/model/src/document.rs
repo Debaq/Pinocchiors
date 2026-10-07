@@ -63,6 +63,22 @@ pub struct Document {
     /// Carpetas del árbol: solo presentación, no cambian el recálculo.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub folders: Vec<Folder>,
+    /// Nombre, color y visibilidad de las piezas (no cambian la geometría).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<PartProps>,
+}
+
+/// Lo que el usuario le cambió a una pieza.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PartProps {
+    pub part: crate::feature::PartId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Color como "#rrggbb".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 /// Carpeta del árbol: las operaciones desde `first` hasta `last` en el orden

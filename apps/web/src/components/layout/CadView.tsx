@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, partColor, partHidden, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -250,6 +250,20 @@ export const CadView: Component<CadViewProps> = (props) => {
     store.mesh();
     const body = store.result()?.body;
     viewer?.setCenterOfMass(ui.showCenterOfMass() && body ? body.center : null);
+  });
+  // Color y visibilidad de cada pieza (con una sola, el color de siempre)
+  createEffect(() => {
+    store.mesh();
+    const parts = store.result()?.parts ?? [];
+    const doc = store.doc();
+    viewer?.setParts(
+      parts.map((p, i) => ({
+        faces: p.faces,
+        edges: p.edges,
+        color: parseInt(partColor(doc, p, i).slice(1), 16),
+        hidden: partHidden(doc, p),
+      })),
+    );
   });
   // Vista de corte: el plano recorre la caja envolvente del sólido
   createEffect(() => {

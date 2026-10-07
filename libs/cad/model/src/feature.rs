@@ -69,7 +69,9 @@ pub enum AxisSpec {
     Custom { origin: P3, direction: P3 },
 }
 
-/// Qué hace la herramienta con el cuerpo.
+/// Qué hace la herramienta con las piezas. Unir funde la herramienta con las
+/// piezas que toca (si no toca ninguna, es una pieza nueva); restar e
+/// intersectar actúan sobre cada pieza; `New` siempre crea una pieza aparte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BodyOp {
@@ -77,6 +79,15 @@ pub enum BodyOp {
     Join,
     Cut,
     Intersect,
+    New,
+}
+
+/// Pieza del diseño: la operación que la creó y el número de pieza dentro de
+/// ella (una unión que junta piezas conserva el de la primera).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct PartId {
+    pub feature: FeatureId,
+    pub index: u32,
 }
 
 /// Qué regiones del sketch usar.

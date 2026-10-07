@@ -6,6 +6,8 @@ import {
   CONSTRAINT_LABELS,
   FEATURE_LABELS,
   MATERIALS,
+  partColor,
+  partHidden,
   OP_LABELS,
   PLANE_LABELS,
   constraintIds,
@@ -35,6 +37,7 @@ import {
   type MissingRef,
   type P2,
   type P3,
+  type PartView,
   type PatternKind,
   type PrimitiveShape,
   type RegionSelection,
@@ -322,12 +325,13 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
 
   // ─── Archivos ─────────────────────────────────────────────────────────
 
-  const exportAs = async (format: "step" | "stl" | "3mf") => {
+  const exportAs = async (format: "step" | "stl" | "3mf", part?: PartView) => {
     const names = { step: "STEP", stl: "STL", "3mf": "3MF" };
-    const path = await save({ filters: [{ name: names[format], extensions: [format === "step" ? "step" : format] }], defaultPath: `diseno.${format}` });
+    const base = part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : "diseno";
+    const path = await save({ filters: [{ name: names[format], extensions: [format === "step" ? "step" : format] }], defaultPath: `${base}.${format}` });
     if (!path) return;
     try {
-      const bytes = await store.exportDesign(path, format);
+      const bytes = await store.exportDesign(path, format, part?.id);
       say(`Exportado (${fmt(bytes / 1024, 0)} KB)`);
     } catch (e) {
       say(String(e));
@@ -512,6 +516,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 </Section>
               </Show>
 
+              <PartsSection store={store} onExport={(f, part) => void exportAs(f, part)} />
               <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} onUseAsModel={props.onUseAsModel} />
 
               <div class="flex gap-2">
@@ -1731,6 +1736,80 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
 };
 
 // ─── Sólido ───────────────────────────────────────────────────────────────
+
+/** Piezas del diseño: color, nombre, visibilidad y exportar cada una */
+const PartsSection: Component<{ store: CadStore; onExport: (f: "step" | "stl" | "3mf", part: PartView) => void }> = (props) => {
+  const parts = () => props.store.result()?.parts ?? [];
+  const [renaming, setRenaming] = createSignal<string>();
+  const key = (p: PartView) => `${p.id.feature}:${p.id.index}`;
+  return (
+    <Show when={parts().length > 0}>
+      <Section title={`Piezas (${parts().length})`}>
+        <div class="space-y-0.5">
+          <For each={parts()}>
+            {(p, i) => {
+              const hidden = () => partHidden(props.store.doc(), p);
+              return (
+                <div data-part={key(p)} class={clsx("group flex items-center gap-1.5 px-1 py-0.5 rounded text-xs hover:bg-surface", hidden() && "opacity-50")}>
+                  <input
+                    type="color"
+                    aria-label={`Color de ${p.name}`}
+                    class="w-4 h-4 shrink-0 rounded cursor-pointer bg-transparent border-0 p-0"
+                    value={partColor(props.store.doc(), p, i())}
+                    onChange={(e) => void props.store.setPartProps(p.id, { color: e.currentTarget.value })}
+                  />
+                  <Show
+                    when={renaming() === key(p)}
+                    fallback={
+                      <span class="flex-1 truncate text-text" title="Doble clic para renombrar" onDblClick={() => setRenaming(key(p))}>
+                        {p.name}
+                      </span>
+                    }
+                  >
+                    <input
+                      aria-label="Nombre de la pieza"
+                      class="flex-1 min-w-0 px-1 rounded bg-surface/40 border border-accent text-xs text-text outline-none"
+                      value={p.name}
+                      ref={(el) => setTimeout(() => el.select())}
+                      onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                      onBlur={(e) => {
+                        const name = e.currentTarget.value.trim();
+                        setRenaming(undefined);
+                        if (name && name !== p.name) void props.store.setPartProps(p.id, { name });
+                      }}
+                    />
+                  </Show>
+                  <span class="font-mono text-[10px] text-text-dim group-hover:hidden">{fmt(p.volume / 1000)} cm³</span>
+                  <span class="hidden group-hover:flex items-center gap-0.5">
+                    <For each={["stl", "3mf", "step"] as const}>
+                      {(f) => (
+                        <button
+                          class="px-1 rounded text-[10px] text-text-muted hover:text-text hover:bg-bg-lighter"
+                          aria-label={`Exportar ${p.name} como ${f.toUpperCase()}`}
+                          onClick={() => props.onExport(f, p)}
+                        >
+                          {f.toUpperCase()}
+                        </button>
+                      )}
+                    </For>
+                  </span>
+                  <IconButton
+                    aria-label={hidden() ? `Mostrar ${p.name}` : `Ocultar ${p.name}`}
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void props.store.setPartProps(p.id, { hidden: !hidden() })}
+                  >
+                    {hidden() ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                  </IconButton>
+                </div>
+              );
+            }}
+          </For>
+        </div>
+      </Section>
+    </Show>
+  );
+};
 
 const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void; onUseAsModel?: () => void }> = (props) => (
   <Show when={props.store.result()?.body}>

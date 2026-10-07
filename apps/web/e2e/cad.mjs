@@ -612,6 +612,66 @@ const scenarios = {
     near((await body()).volume, 12000, 1e-6, "aceptado");
   },
 
+  async "piezas: nueva, color, ocultar y exportar"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const parts = async () => (await evaluate()).parts;
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Cilindro como pieza nueva, al lado
+    await b.clickText("Cilindro");
+    await sleep(1500);
+    await b.eval(`__cadStore.commit((d) => { const k = d.features.at(-1).kind; k.op = "new"; k.origin = [40, 0, -10]; })`);
+    await sleep(1500);
+    if ((await b.eval(`__cadStore.tool()?.op`)) !== "new") throw new Error("la herramienta no es de pieza nueva");
+    await accept(b);
+    let ps = await parts();
+    if (ps.length !== 2 || ps[0].name !== "Pieza 1" || ps[1].name !== "Pieza 2") throw new Error(`piezas: ${JSON.stringify(ps.map((p) => p.name))}`);
+    near(ps[0].volume, 8000, 1e-6, "caja");
+    // Una arista de la caja: el redondeo solo cambia la caja
+    const cyl = ps[1].volume;
+    await b.click(...(await at([0, -10, 10])), { wait: 800 });
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    await accept(b);
+    ps = await parts();
+    near(ps[1].volume, cyl, 1e-9, "el cilindro no se tocó");
+    if (!(ps[0].volume < 8000)) throw new Error("no se redondeó la caja");
+    // Color y nombre de la segunda (no recalculan)
+    const version = await b.eval(`__cadStore.result().version`);
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Color de Pieza 2"]'); i.value = "#ff0000"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(800);
+    await b.eval(`document.querySelector('[data-part="${ps[1].id.feature}:0"] span.truncate').dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))`);
+    await sleep(400);
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Nombre de la pieza"]'); i.value = "Eje"; i.blur(); })()`);
+    await sleep(1200);
+    const props = (await call("cad_get_document")).parts;
+    if (props?.[0]?.color !== "#ff0000" || props[0].name !== "Eje") throw new Error(`propiedades: ${JSON.stringify(props)}`);
+    if ((await b.eval(`__cadStore.result().version`)) !== version) throw new Error("cambiar color o nombre recalculó");
+    if ((await parts())[1].name !== "Eje") throw new Error("no cambió el nombre");
+    // Ocultar la caja: no se puede elegir donde estaba
+    await b.eval(`document.querySelector('[aria-label="Ocultar Pieza 1"]').click()`);
+    await sleep(1000);
+    const [x, y] = await at([3, 3, 10]);
+    const hit = await b.eval(`window.__cadViewer.pick(${x}, ${y}, { faces: true })?.kind ?? null`);
+    if (hit === "face") throw new Error("se eligió una cara de la pieza oculta");
+    await b.shot("piezas");
+    // Exportar 3MF: dos objetos con nombre; y solo una pieza
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const path = `${out}/piezas.3mf`;
+    rmSync(path, { force: true });
+    await call("cad_export", { path, format: "3mf" });
+    const { execSync } = await import("node:child_process");
+    const model = execSync(`unzip -p ${path} 3D/3dmodel.model`).toString();
+    const objects = (model.match(/<object /g) ?? []).length;
+    if (objects !== 2 || !model.includes('name="Eje"')) throw new Error(`3MF: ${objects} objetos`);
+    const one = `${out}/eje.stl`;
+    rmSync(one, { force: true });
+    await call("cad_export", { path: one, format: "stl", part: ps[1].id });
+    if (!existsSync(one)) throw new Error("no se exportó la pieza sola");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

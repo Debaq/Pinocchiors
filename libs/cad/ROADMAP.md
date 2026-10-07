@@ -381,3 +381,7 @@ cargo test -p cad-model
 - **2026-10-07 Cola de envíos y teselado medido** ([PLAN_RECALCULO.md](PLAN_RECALCULO.md),
   fases 3 y 5): escribir varios valores seguidos calcula solo el último pendiente; el banco
   ahora mide el teselado (40–55 ms, 4 ms de extracción).
+- **2026-10-07 Varias piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fases 1 y 2): un diseño puede
+  tener varias piezas ("Nueva pieza" en el selector de operación; unir algo que no toca nada
+  también la crea). Cada operación actúa sobre las piezas que corresponden; la sección
+  "Piezas" da color, nombre, visibilidad y exportación por pieza.

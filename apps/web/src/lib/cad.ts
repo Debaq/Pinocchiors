@@ -58,7 +58,8 @@ export type AxisSpec =
   | { type: "edge"; edge: EdgeRef }
   | { type: "custom"; origin: P3; direction: P3 };
 
-export type BodyOp = "join" | "cut" | "intersect";
+/** Unir funde con lo que toca (o crea pieza si no toca nada); `new` siempre crea pieza aparte */
+export type BodyOp = "join" | "cut" | "intersect" | "new";
 
 export type RegionSelection = { type: "all" } | { type: "points"; points: P2[] };
 
@@ -179,6 +180,47 @@ export interface CadDocument {
   material?: Material | null;
   /** Carpetas del árbol (solo presentación) */
   folders?: Folder[];
+  /** Nombre, color y visibilidad de las piezas */
+  parts?: PartProps[];
+}
+
+/** Pieza: la operación que la creó y su número dentro de ella */
+export interface PartId {
+  feature: number;
+  index: number;
+}
+
+export const samePart = (a: PartId, b: PartId) => a.feature === b.feature && a.index === b.index;
+
+export interface PartProps {
+  part: PartId;
+  name?: string;
+  /** "#rrggbb" */
+  color?: string;
+  hidden?: boolean;
+}
+
+export interface PartView {
+  id: PartId;
+  name: string;
+  /** Caras y aristas [desde, hasta) del cuerpo */
+  faces: [number, number];
+  edges: [number, number];
+  volume: number;
+  area: number;
+  center: P3;
+}
+
+/** Colores de pieza por defecto (la primera, el de siempre) */
+export const PART_COLORS = ["#9aa4b8", "#c9a96e", "#8fb98b", "#c48b9f", "#7fa7c9", "#b39ddb", "#d4a373", "#80cbc4"];
+
+/** Color de la pieza `i`: el elegido o uno de la paleta */
+export function partColor(doc: CadDocument | null | undefined, p: PartView, i: number): string {
+  return doc?.parts?.find((x) => samePart(x.part, p.id))?.color ?? PART_COLORS[i % PART_COLORS.length];
+}
+
+export function partHidden(doc: CadDocument | null | undefined, p: PartView): boolean {
+  return !!doc?.parts?.find((x) => samePart(x.part, p.id))?.hidden;
 }
 
 /** Carpeta: las operaciones de `first` a `last` en el orden actual */
@@ -321,6 +363,7 @@ export interface CadResult {
   version: number;
   /** Operaciones calculadas en este recálculo (las demás salieron de la caché) */
   recomputed: number;
+  parts: PartView[];
 }
 
 export interface CadStatus {
@@ -452,7 +495,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   import: "Importado",
 };
 
-export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar" };
+export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
 
 /** Planos base (Z arriba) */
 export const BASE_PLANES: Record<"xy" | "xz" | "yz", Plane> = {
@@ -1994,7 +2037,20 @@ export function createCadStore() {
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
 
-    exportDesign: (path: string, format: string) => invoke<number>("cad_export", { path, format }),
+    /** Exporta el diseño (todas las piezas, o solo `part`) */
+    exportDesign: (path: string, format: string, part?: PartId) => invoke<number>("cad_export", { path, format, part: part ?? null }),
+
+    /** Cambia nombre, color o visibilidad de una pieza (deshacible; no recalcula) */
+    setPartProps(id: PartId, change: Omit<Partial<PartProps>, "part">) {
+      return commit((d) => {
+        const list = [...(d.parts ?? [])];
+        const i = list.findIndex((p) => samePart(p.part, id));
+        const next = { ...(i >= 0 ? list[i] : { part: id }), ...change };
+        if (i >= 0) list[i] = next;
+        else list.push(next);
+        d.parts = list;
+      });
+    },
 
     async importStep(path: string, op: BodyOp = "join") {
       // El backend cambia el documento y descarta el borrador

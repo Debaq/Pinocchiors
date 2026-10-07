@@ -77,8 +77,21 @@ se pueden combinar piezas entre sí. Es la base de los ensambles
 ## Fases
 
 1. **Modelo** con `parts` y `BodyOp::New` + alcance `Auto`; compatibilidad con documentos
-   viejos; un objeto por pieza en el visor.
+   viejos; un objeto por pieza en el visor. *Hecha el 2026-10-07: `Evaluation.parts`
+   (`Part { id: PartId { feature, index }, shape, tags }`) y `body` = compuesto de todas (la
+   pieza misma si hay una), con sus caras y aristas en el orden de las piezas: referencias,
+   teselado, medir y la caché siguen igual. Unir funde con las piezas que toca (cruce o
+   apoyo, por `min_distance` tras cajas envolventes) o crea una nueva; restar e intersectar
+   van pieza por pieza (una pieza que queda vacía se va; intersectar quita las que no toca);
+   redondeo, chaflán, vaciado y desmolde reparten sus índices por pieza (`by_part`,
+   `per_part`); patrón y simetría de todo el sólido copian cada pieza dentro de sí misma.
+   Documentos viejos: mismo volumen; si había sólidos separados, ahora son piezas.*
 2. **Lista de piezas** con nombre, color, visibilidad; exportar STL/3MF/OBJ por pieza.
+   *Hecha el 2026-10-07: `Document.parts: Vec<PartProps>` (no entra en el hash),
+   `CadResult.parts` (rangos de caras y aristas, volumen), sección "Piezas" con color,
+   renombrar con doble clic, ojo y exportar STL/3MF/STEP por pieza; el visor colorea por pieza
+   (paleta si no se eligió) y saca del dibujo y de la selección las ocultas. `cad_export`
+   acepta `part`; sin ella, 3MF/STL/OBJ llevan un objeto por pieza con su nombre.*
 3. **Alcance explícito** ("Con") y operación **Booleana** entre piezas.
 4. **Separar y borrar** piezas.
 5. **Material por pieza** (masa por pieza, enlaza con [PLAN_INSPECCION.md](PLAN_INSPECCION.md)).

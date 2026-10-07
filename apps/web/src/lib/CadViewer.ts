@@ -13,6 +13,14 @@ import { ViewCube } from "./ViewCube";
 
 export type BasePlane = "xy" | "xz" | "yz";
 
+/** Color (0xrrggbb) y visibilidad de una pieza: sus caras y aristas [desde, hasta) del cuerpo */
+export interface PartStyle {
+  faces: [number, number];
+  edges: [number, number];
+  color: number;
+  hidden: boolean;
+}
+
 export type CadPick =
   | { kind: "face"; face: number; point: THREE.Vector3 }
   | { kind: "edge"; edge: number; point: THREE.Vector3 }
@@ -133,6 +141,12 @@ export class CadViewer {
   private grid: THREE.GridHelper;
   private highlightedFaces = new Set<number>();
   private highlightedEdges = new Set<number>();
+  /** Color y visibilidad de cada pieza (rangos de caras y aristas del cuerpo) */
+  private partStyles: PartStyle[] = [];
+  private hiddenFaces = new Set<number>();
+  private hiddenEdges = new Set<number>();
+  /** Cara de cada triángulo dibujado (sin los de piezas ocultas) */
+  private visibleTriFace = new Uint32Array();
   /** Vértices del sólido (extremos de aristas), en coordenadas del visor */
   private bodyVertices: THREE.Vector3[] = [];
   /** Vértices elegidos y la línea de la distancia medida */
@@ -331,6 +345,22 @@ export class CadViewer {
   // ─── Sólido ─────────────────────────────────────────────────────────────
 
   setBody(data: CadMesh | null) {
+    this.bodyData = data;
+    this.fitPlanes(data?.positions);
+    this.buildBody();
+  }
+
+  /**
+   * Color y visibilidad de cada pieza: rangos de caras y aristas del cuerpo.
+   * Las ocultas no se dibujan ni se pueden elegir.
+   */
+  setParts(styles: PartStyle[]) {
+    this.partStyles = styles;
+    this.buildBody();
+  }
+
+  /** Arma la malla y las aristas del cuerpo con las piezas visibles */
+  private buildBody() {
     if (this.body) {
       this.scene.remove(this.body);
       this.body.geometry.dispose();
@@ -343,15 +373,30 @@ export class CadViewer {
       (this.bodyEdges.material as THREE.Material).dispose();
       this.bodyEdges = undefined;
     }
-    this.bodyData = data;
     this.bodyVertices = [];
-    this.fitPlanes(data?.positions);
+    const data = this.bodyData;
+    this.hiddenFaces = new Set();
+    const hiddenEdges = (this.hiddenEdges = new Set<number>());
+    for (const p of this.partStyles) {
+      if (!p.hidden) continue;
+      for (let f = p.faces[0]; f < p.faces[1]; f++) this.hiddenFaces.add(f);
+      for (let e = p.edges[0]; e < p.edges[1]; e++) hiddenEdges.add(e);
+    }
     if (data) {
+      // Triángulos de las caras visibles (y de qué cara es cada uno, para elegir)
+      const idx: number[] = [];
+      const triFace: number[] = [];
+      for (let t = 0; t < data.triangleFace.length; t++) {
+        if (this.hiddenFaces.has(data.triangleFace[t])) continue;
+        idx.push(data.indices[t * 3], data.indices[t * 3 + 1], data.indices[t * 3 + 2]);
+        triFace.push(data.triangleFace[t]);
+      }
+      this.visibleTriFace = Uint32Array.from(triFace);
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
       g.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
       g.setAttribute("color", new THREE.BufferAttribute(new Float32Array(data.positions.length), 3));
-      g.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      g.setIndex(new THREE.BufferAttribute(Uint32Array.from(idx), 1));
       g.computeBoundingSphere();
       const m = new THREE.MeshStandardMaterial({
         vertexColors: true,
@@ -365,18 +410,18 @@ export class CadViewer {
       this.body.renderOrder = 1;
       this.scene.add(this.body);
 
-      // Vértices: extremos de las aristas, sin repetir
+      // Vértices: extremos de las aristas visibles, sin repetir
       const ends: THREE.Vector3[] = [];
       let first = 0;
-      for (const end of data.edgeEnds) {
-        if (end > first) {
+      data.edgeEnds.forEach((end, e) => {
+        if (end > first && !hiddenEdges.has(e)) {
           for (const i of [first, end - 1]) {
             const v = new THREE.Vector3(data.edgePoints[i * 3], data.edgePoints[i * 3 + 1], data.edgePoints[i * 3 + 2]);
             if (!ends.some((w) => w.distanceToSquared(v) < 1e-12)) ends.push(v);
           }
         }
         first = end;
-      }
+      });
       this.bodyVertices = ends;
 
       // Aristas: cada polilínea en segmentos, con el índice de arista por segmento
@@ -384,9 +429,11 @@ export class CadViewer {
       const segEdge: number[] = [];
       let start = 0;
       data.edgeEnds.forEach((end, e) => {
-        for (let i = start; i < end - 1; i++) {
-          segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
-          segEdge.push(e);
+        if (!hiddenEdges.has(e)) {
+          for (let i = start; i < end - 1; i++) {
+            segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
+            segEdge.push(e);
+          }
         }
         start = end;
       });
@@ -419,7 +466,7 @@ export class CadViewer {
       this.tool = undefined;
     }
     if (data) {
-      const color = themeHex(op === "join" ? "green" : op === "cut" ? "red" : "warning");
+      const color = themeHex(op === "join" ? "green" : op === "cut" ? "red" : op === "new" ? "cyan" : "warning");
       const g = new THREE.BufferGeometry();
       g.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
       g.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
@@ -530,10 +577,13 @@ export class CadViewer {
     if (this.body && this.bodyData) {
       const base = new THREE.Color(BODY_COLOR);
       const hi = new THREE.Color(themeHex("accent"));
+      const partColors = this.partStyles.map((p) => ({ faces: p.faces, color: new THREE.Color(p.color) }));
+      const faceColor = (f: number) => partColors.find((p) => p.faces[0] <= f && f < p.faces[1])?.color ?? base;
       const colors = this.body.geometry.getAttribute("color") as THREE.BufferAttribute;
       const idx = this.bodyData.indices;
       for (let t = 0; t < this.bodyData.triangleFace.length; t++) {
-        const c = this.highlightedFaces.has(this.bodyData.triangleFace[t]) ? hi : base;
+        const f = this.bodyData.triangleFace[t];
+        const c = this.highlightedFaces.has(f) ? hi : faceColor(f);
         for (let k = 0; k < 3; k++) colors.setXYZ(idx[t * 3 + k], c.r, c.g, c.b);
       }
       colors.needsUpdate = true;
@@ -958,6 +1008,7 @@ export class CadViewer {
       const state = new Map<number, { all: boolean; any: boolean }>();
       for (let tri = 0; tri < d.triangleFace.length; tri++) {
         const f = d.triangleFace[tri];
+        if (this.hiddenFaces.has(f)) continue;
         const st = state.get(f) ?? { all: true, any: false };
         const ps = [0, 1, 2].map((k) => pt(d.positions, d.indices[tri * 3 + k]));
         if (ps.some((p) => !p)) st.all = false;
@@ -972,7 +1023,8 @@ export class CadViewer {
       const tris = new Map<number, number[]>();
       for (let tri = 0; tri < d.triangleFace.length; tri++) {
         const f = d.triangleFace[tri];
-        const st = state.get(f)!;
+        const st = state.get(f);
+        if (!st) continue;
         if (!(window ? st.all : st.any)) continue;
         let list = tris.get(f);
         if (!list) tris.set(f, (list = []));
@@ -1011,7 +1063,7 @@ export class CadViewer {
     if (d && want.edges) {
       let start = 0;
       d.edgeEnds.forEach((end, e) => {
-        if (polyline(d.edgePoints, start, end)) {
+        if (!this.hiddenEdges.has(e) && polyline(d.edgePoints, start, end)) {
           // Visible si se ve alguno de sus puntos (hasta 5 de muestra, sin los extremos)
           const n = end - start;
           const samples =
@@ -1254,7 +1306,7 @@ export class CadViewer {
     if (want.faces && this.body) {
       const hit = this.kept(this.raycaster.intersectObject(this.body));
       if (hit && hit.faceIndex != null && this.bodyData) {
-        candidates.push({ d: hit.distance, rank: 1, pick: { kind: "face", face: this.bodyData.triangleFace[hit.faceIndex], point: hit.point } });
+        candidates.push({ d: hit.distance, rank: 1, pick: { kind: "face", face: this.visibleTriFace[hit.faceIndex], point: hit.point } });
       }
     }
     if (want.planes && this.planesGroup.visible) {

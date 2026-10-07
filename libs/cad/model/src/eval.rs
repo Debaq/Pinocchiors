@@ -64,11 +64,24 @@ struct Tagged {
     tags: Vec<Vec<FaceTag>>,
 }
 
+/// Pieza calculada.
+#[derive(Debug, Clone)]
+pub struct Part {
+    pub id: PartId,
+    pub shape: Shape,
+    /// Orígenes de cada cara de la pieza.
+    pub tags: Vec<Vec<FaceTag>>,
+}
+
 #[derive(Debug, Default)]
 pub struct Evaluation {
+    /// Todas las piezas juntas (la pieza misma si hay una sola): sus caras y
+    /// aristas son las de cada pieza, en el orden de `parts`.
     pub body: Option<Shape>,
     /// Orígenes de cada cara del cuerpo (mismo orden que sus índices).
     pub face_tags: Vec<Vec<FaceTag>>,
+    /// Piezas, en el orden en que se crearon.
+    pub parts: Vec<Part>,
     pub status: Vec<FeatureStatus>,
     pub sketches: HashMap<FeatureId, SketchResult>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
@@ -86,6 +99,7 @@ pub struct Evaluation {
 struct CacheEntry {
     body: Option<Shape>,
     face_tags: Vec<Vec<FaceTag>>,
+    parts: Vec<Part>,
     state: FeatureState,
     ms: f64,
     sketch: Option<SketchResult>,
@@ -165,6 +179,26 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
 impl Evaluation {
     pub fn state(&self, id: FeatureId) -> Option<&FeatureState> {
         self.status.iter().find(|s| s.id == id).map(|s| &s.state)
+    }
+
+    /// Caras y aristas de cada pieza dentro del cuerpo: (pieza, caras, aristas).
+    pub fn part_ranges(&self) -> Vec<(PartId, std::ops::Range<usize>, std::ops::Range<usize>)> {
+        let (mut f, mut e) = (0, 0);
+        self.parts
+            .iter()
+            .map(|p| {
+                let (nf, ne) = (p.shape.face_count(), p.shape.edge_count());
+                let r = (p.id, f..f + nf, e..e + ne);
+                f += nf;
+                e += ne;
+                r
+            })
+            .collect()
+    }
+
+    /// Pieza dueña de una cara del cuerpo.
+    pub fn part_of_face(&self, face: usize) -> Option<PartId> {
+        self.part_ranges().into_iter().find(|(_, f, _)| f.contains(&face)).map(|(id, _, _)| id)
     }
 
     pub fn errors(&self) -> Vec<(FeatureId, String)> {
@@ -339,6 +373,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         if let Some(e) = cache.get(key) {
             ctx.ev.body = e.body.clone();
             ctx.ev.face_tags = e.face_tags.clone();
+            ctx.ev.parts = e.parts.clone();
             if let Some(s) = &e.sketch {
                 ctx.ev.sketches.insert(f.id, s.clone());
             }
@@ -371,6 +406,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             CacheEntry {
                 body: ctx.ev.body.clone(),
                 face_tags: ctx.ev.face_tags.clone(),
+                parts: ctx.ev.parts.clone(),
                 state: state.clone(),
                 ms,
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
@@ -388,32 +424,58 @@ impl Ctx<'_> {
         self.ev.body.as_ref().ok_or_else(|| "todavía no hay un sólido".to_string())
     }
 
-    fn apply(&mut self, tool: Tagged, op: BodyOp) -> R<()> {
-        let Some(b) = &self.ev.body else {
-            if op != BodyOp::Join {
-                return Err("no hay sólido que cortar".into());
+    /// Rehace el cuerpo (todas las piezas juntas) y sus orígenes de caras.
+    fn sync(&mut self) {
+        let parts = &self.ev.parts;
+        match parts.len() {
+            0 => {
+                self.ev.body = None;
+                self.ev.face_tags.clear();
             }
-            self.ev.body = Some(tool.shape);
-            self.ev.face_tags = tool.tags;
-            return Ok(());
-        };
-        let (new, h) = with_history(|| match op {
-            BodyOp::Join => b.union(&tool.shape),
-            BodyOp::Cut => b.cut(&tool.shape),
-            BodyOp::Intersect => b.intersect(&tool.shape),
-        })
-        .map_err(err)?;
-        let n = new.face_count();
-        self.ev.face_tags = propagate(&[&self.ev.face_tags, &tool.tags], &h, n).0;
-        self.ev.body = Some(new);
-        Ok(())
+            1 => {
+                self.ev.body = Some(parts[0].shape.clone());
+                self.ev.face_tags = parts[0].tags.clone();
+            }
+            _ => {
+                let shapes: Vec<Shape> = parts.iter().map(|p| p.shape.clone()).collect();
+                self.ev.body = Shape::compound(&shapes).ok();
+                self.ev.face_tags = parts.iter().flat_map(|p| p.tags.iter().cloned()).collect();
+            }
+        }
     }
 
-    /// Reemplaza el cuerpo por el resultado de una operación sobre él; los
-    /// orígenes pasan por la historia y `extra` nombra lo generado después.
-    fn replace_body(&mut self, new: Shape, h: &History, extra: impl Fn(usize) -> Option<FaceTag>) {
+    fn new_part(&mut self, feature: FeatureId, tool: Tagged) {
+        let index = self.ev.parts.iter().filter(|p| p.id.feature == feature).count() as u32;
+        self.ev.parts.push(Part { id: PartId { feature, index }, shape: tool.shape, tags: tool.tags });
+    }
+
+    /// Piezas que la forma toca (se cruzan o se apoyan).
+    fn touching(&self, tool: &Shape) -> Vec<usize> {
+        let Ok(tm) = tool.mass() else { return vec![] };
+        let tol = self.diag().max(norm(sub(tm.bbox_max, tm.bbox_min))) * 1e-7;
+        self.ev
+            .parts
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| {
+                let Ok(pm) = p.shape.mass() else { return false };
+                let apart = (0..3).any(|k| pm.bbox_min[k] > tm.bbox_max[k] + tol || tm.bbox_min[k] > pm.bbox_max[k] + tol);
+                !apart && p.shape.min_distance(tool).is_some_and(|(d, _, _)| d <= tol)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Reemplaza la pieza `i` por el resultado de una operación sobre ella:
+    /// los orígenes pasan por la historia y `extra` nombra lo generado
+    /// después. Si no queda nada, la pieza se va.
+    fn replace_part(&mut self, i: usize, new: Shape, h: &History, extra: impl Fn(usize) -> Option<FaceTag>) {
         let n = new.face_count();
-        let (mut tags, used) = propagate(&[&self.ev.face_tags], h, n);
+        if n == 0 {
+            self.ev.parts.remove(i);
+            return;
+        }
+        let (mut tags, used) = propagate(&[&self.ev.parts[i].tags], h, n);
         for (k, images) in h.images.iter().enumerate().skip(used) {
             if let Some(t) = extra(k - used) {
                 for &f in images {
@@ -425,8 +487,132 @@ impl Ctx<'_> {
                 }
             }
         }
-        self.ev.face_tags = tags;
-        self.ev.body = Some(new);
+        let p = &mut self.ev.parts[i];
+        p.shape = new;
+        p.tags = tags;
+    }
+
+    fn apply(&mut self, feature: FeatureId, tool: Tagged, op: BodyOp) -> R<()> {
+        if self.ev.parts.is_empty() && matches!(op, BodyOp::Cut | BodyOp::Intersect) {
+            return Err("no hay sólido que cortar".into());
+        }
+        match op {
+            BodyOp::New => self.new_part(feature, tool),
+            BodyOp::Join => {
+                let touched = self.touching(&tool.shape);
+                if touched.is_empty() {
+                    self.new_part(feature, tool);
+                } else {
+                    // Las piezas que toca y la herramienta, en una: la primera
+                    let mut inputs: Vec<&Tagged> = Vec::new();
+                    let parts: Vec<Tagged> =
+                        touched.iter().map(|&i| Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() }).collect();
+                    inputs.extend(parts.iter());
+                    inputs.push(&tool);
+                    let shapes: Vec<Shape> = inputs.iter().map(|t| t.shape.clone()).collect();
+                    let (new, h) = with_history(|| Shape::fuse_all(&shapes)).map_err(err)?;
+                    let tag_lists: Vec<&[Vec<FaceTag>]> = inputs.iter().map(|t| t.tags.as_slice()).collect();
+                    let tags = propagate(&tag_lists, &h, new.face_count()).0;
+                    let first = touched[0];
+                    for &i in touched.iter().skip(1).rev() {
+                        self.ev.parts.remove(i);
+                    }
+                    let p = &mut self.ev.parts[first];
+                    p.shape = new;
+                    p.tags = tags;
+                }
+            }
+            BodyOp::Cut => {
+                for i in self.touching(&tool.shape).into_iter().rev() {
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
+                    let n = new.face_count();
+                    if n == 0 {
+                        self.ev.parts.remove(i);
+                        continue;
+                    }
+                    let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
+                    let p = &mut self.ev.parts[i];
+                    p.shape = new;
+                    p.tags = tags;
+                }
+            }
+            BodyOp::Intersect => {
+                // Lo que la herramienta no toca desaparece
+                let touched = self.touching(&tool.shape);
+                for i in (0..self.ev.parts.len()).rev() {
+                    if !touched.contains(&i) {
+                        self.ev.parts.remove(i);
+                        continue;
+                    }
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.intersect(&tool.shape)).map_err(err)?;
+                    let n = new.face_count();
+                    if n == 0 {
+                        self.ev.parts.remove(i);
+                        continue;
+                    }
+                    let tags = propagate(&[&self.ev.parts[i].tags, &tool.tags], &h, n).0;
+                    let p = &mut self.ev.parts[i];
+                    p.shape = new;
+                    p.tags = tags;
+                }
+            }
+        }
+        self.sync();
+        Ok(())
+    }
+
+    /// Reparte índices del cuerpo (caras o aristas) por pieza: (pieza, índices locales).
+    fn by_part(&self, global: &[usize], edges: bool) -> Vec<(usize, Vec<usize>)> {
+        let ranges = self.ev.part_ranges();
+        let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
+        for &g in global {
+            let Some((pi, r)) = ranges.iter().enumerate().map(|(i, (_, f, e))| (i, if edges { e } else { f })).find(|(_, r)| r.contains(&g))
+            else {
+                continue;
+            };
+            let local = g - r.start;
+            match out.iter_mut().find(|(p, _)| *p == pi) {
+                Some((_, v)) => {
+                    if !v.contains(&local) {
+                        v.push(local)
+                    }
+                }
+                None => out.push((pi, vec![local])),
+            }
+        }
+        out
+    }
+
+    /// Aplica `op` a cada pieza con sus índices locales (de atrás para
+    /// adelante: una pieza que se vacía se puede ir sin correr las demás);
+    /// `extra(k)` nombra lo generado por el k-ésimo índice de todos.
+    fn per_part(
+        &mut self,
+        groups: Vec<(usize, Vec<usize>)>,
+        op: impl Fn(&Shape, &[usize]) -> cad_occt::Result<Shape>,
+        extra: impl Fn(usize) -> Option<FaceTag>,
+    ) -> R<()> {
+        let offsets: Vec<usize> = groups.iter().scan(0, |acc, (_, v)| {
+            let o = *acc;
+            *acc += v.len();
+            Some(o)
+        }).collect();
+        let mut work: Vec<(usize, Vec<usize>, usize)> = groups.into_iter().zip(offsets).map(|((p, v), o)| (p, v, o)).collect();
+        work.sort_by(|a, b| b.0.cmp(&a.0));
+        for (pi, local, offset) in work {
+            let part = self.ev.parts[pi].shape.clone();
+            let (new, h) = with_history(|| op(&part, &local)).map_err(err)?;
+            self.replace_part(pi, new, &h, |k| extra(k + offset));
+        }
+        self.sync();
+        Ok(())
+    }
+
+    /// Todas las piezas, cada una con su lista vacía.
+    fn all_parts(&self) -> Vec<(usize, Vec<usize>)> {
+        (0..self.ev.parts.len()).map(|i| (i, vec![])).collect()
     }
 
     fn diag(&self) -> f64 {
@@ -552,7 +738,7 @@ impl Ctx<'_> {
             FeatureKind::Extrude(e) => {
                 let tool = self.extrude(f.id, e)?;
                 self.ev.tools.insert(f.id, (tool.clone(), e.op));
-                self.apply(tool, e.op)
+                self.apply(f.id, tool, e.op)
             }
             FeatureKind::Revolve(r) => {
                 let axis = self.axis("axis", &r.axis)?;
@@ -580,7 +766,7 @@ impl Ctx<'_> {
                 }
                 let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), r.op));
-                self.apply(tool, r.op)
+                self.apply(f.id, tool, r.op)
             }
             FeatureKind::Primitive(p) => {
                 let frame = Frame { origin: p.origin, z: p.z, x: p.x };
@@ -598,7 +784,7 @@ impl Ctx<'_> {
                 .map_err(err)?;
                 let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
                 self.ev.tools.insert(f.id, (tool.clone(), p.op));
-                self.apply(tool, p.op)
+                self.apply(f.id, tool, p.op)
             }
             FeatureKind::Import { format, data, op } => {
                 let tool = match format {
@@ -609,34 +795,32 @@ impl Ctx<'_> {
                 let tags = (0..tool.face_count()).map(|i| vec![tag(f.id, format!("cara:{i}"))]).collect();
                 let tool = Tagged { shape: tool, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
-                self.apply(tool, *op)
+                self.apply(f.id, tool, *op)
             }
             FeatureKind::Fillet { edges, radius } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
-                let body = self.body()?.clone();
-                let (new, h) = with_history(|| body.fillet(&idx, *radius)).map_err(err)?;
-                self.replace_body(new, &h, |k| Some(tag(f.id, format!("redondeo:{k}"))));
-                Ok(())
+                let groups = self.by_part(&idx, true);
+                self.per_part(groups, |s, e| s.fillet(e, *radius), |k| Some(tag(f.id, format!("redondeo:{k}"))))
             }
             FeatureKind::Chamfer { edges, distance } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
-                let body = self.body()?.clone();
-                let (new, h) = with_history(|| body.chamfer(&idx, *distance)).map_err(err)?;
-                self.replace_body(new, &h, |k| Some(tag(f.id, format!("chaflan:{k}"))));
-                Ok(())
+                let groups = self.by_part(&idx, true);
+                self.per_part(groups, |s, e| s.chamfer(e, *distance), |k| Some(tag(f.id, format!("chaflan:{k}"))))
             }
             FeatureKind::Shell { faces, thickness } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara para abrir".into());
+                }
                 let idx = self.faces("faces", faces)?;
-                let body = self.body()?.clone();
-                let (new, h) = with_history(|| body.shell(&idx, -thickness.abs())).map_err(err)?;
-                self.replace_body(new, &h, |_| None);
-                Ok(())
+                // Solo las piezas de las caras elegidas
+                let groups = self.by_part(&idx, false);
+                self.per_part(groups, |s, fs| s.shell(fs, -thickness.abs()), |_| None)
             }
             FeatureKind::Draft { faces, neutral, angle } => {
                 if faces.is_empty() {
@@ -644,11 +828,8 @@ impl Ctx<'_> {
                 }
                 let idx = self.faces("faces", faces)?;
                 let p = self.plane("neutral", neutral)?;
-                let body = self.body()?.clone();
-                let (new, h) =
-                    with_history(|| body.draft(&idx, p.normal, angle.to_radians(), p.origin, p.normal)).map_err(err)?;
-                self.replace_body(new, &h, |_| None);
-                Ok(())
+                let groups = self.by_part(&idx, false);
+                self.per_part(groups, |s, fs| s.draft(fs, p.normal, angle.to_radians(), p.origin, p.normal), |_| None)
             }
             FeatureKind::Pattern { features, pattern } => {
                 let transforms = self.pattern_transforms(pattern)?;
@@ -664,17 +845,22 @@ impl Ctx<'_> {
                         .collect()
                 };
                 if features.is_empty() {
-                    let body = Tagged { shape: self.body()?.clone(), tags: self.ev.face_tags.clone() };
-                    let mut all = vec![body.clone()];
-                    all.extend(copies_of(&body)?);
-                    let fused = fuse_tagged(all)?;
-                    self.ev.body = Some(fused.shape);
-                    self.ev.face_tags = fused.tags;
+                    // Todo el sólido: cada pieza con sus copias
+                    self.body()?;
+                    for i in 0..self.ev.parts.len() {
+                        let part = Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() };
+                        let mut all = vec![part.clone()];
+                        all.extend(copies_of(&part)?);
+                        let fused = fuse_tagged(all)?;
+                        self.ev.parts[i].shape = fused.shape;
+                        self.ev.parts[i].tags = fused.tags;
+                    }
+                    self.sync();
                     return Ok(());
                 }
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
-                    self.apply(fuse_tagged(copies_of(&tool)?)?, op)?;
+                    self.apply(f.id, fuse_tagged(copies_of(&tool)?)?, op)?;
                 }
                 Ok(())
             }
@@ -686,26 +872,32 @@ impl Ctx<'_> {
                     Ok(Tagged { shape, tags })
                 };
                 if features.is_empty() {
-                    let body = Tagged { shape: self.body()?.clone(), tags: self.ev.face_tags.clone() };
-                    let m = mirrored(&body)?;
-                    self.apply(m, BodyOp::Join)?;
+                    // Todo el sólido: cada pieza con su reflejo
+                    self.body()?;
+                    for i in 0..self.ev.parts.len() {
+                        let part = Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() };
+                        let m = mirrored(&part)?;
+                        let fused = fuse_tagged(vec![part, m])?;
+                        self.ev.parts[i].shape = fused.shape;
+                        self.ev.parts[i].tags = fused.tags;
+                    }
+                    self.sync();
                     return Ok(());
                 }
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
                     let m = mirrored(&tool)?;
-                    self.apply(m, op)?;
+                    self.apply(f.id, m, op)?;
                 }
                 Ok(())
             }
             FeatureKind::Split { plane, flip } => {
                 let p = self.plane("plane", plane)?;
                 let n = if *flip { scale(p.normal, -1.0) } else { p.normal };
-                let body = self.body()?.clone();
-                let (new, h) = with_history(|| body.split_keep(p.origin, n)).map_err(err)?;
-                // Después de las caras del cuerpo vienen las del semiespacio: el corte
-                self.replace_body(new, &h, |_| Some(tag(f.id, "corte")));
-                Ok(())
+                self.body()?;
+                // Después de las caras de la pieza vienen las del semiespacio: el corte
+                let groups = self.all_parts();
+                self.per_part(groups, |s, _| s.split_keep(p.origin, n), |_| Some(tag(f.id, "corte")))
             }
         }
     }

@@ -94,13 +94,32 @@ pub struct CadResult {
     pub version: u64,
     /// Operaciones que se calcularon en este recálculo (las demás, de la caché)
     pub recomputed: usize,
+    /// Piezas, con sus caras y aristas dentro del cuerpo
+    pub parts: Vec<PartView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PartView {
+    pub id: cad_model::PartId,
+    pub name: String,
+    /// Rango [desde, hasta) de caras y de aristas del cuerpo
+    pub faces: [usize; 2],
+    pub edges: [usize; 2],
+    pub volume: f64,
+    pub area: f64,
+    pub center: [f64; 3],
+}
+
+/// Nombre de cada pieza: el que le puso el usuario o "Pieza n".
+fn part_name(doc: &Document, id: cad_model::PartId, n: usize) -> String {
+    doc.parts.iter().find(|p| p.part == id).and_then(|p| p.name.clone()).unwrap_or_else(|| format!("Pieza {n}"))
 }
 
 fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // El JSON es estable y cubre todo el documento; el material y las carpetas
-    // no cambian la geometría: cambiarlos no recalcula
-    let doc = Document { material: None, folders: Vec::new(), ..doc.clone() };
+    // El JSON es estable y cubre todo el documento; el material, las carpetas
+    // y los nombres y colores de piezas no cambian la geometría: no recalculan
+    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), ..doc.clone() };
     serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }
@@ -172,7 +191,26 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
             axes: m.axes,
         })
     });
+    let parts = eval
+        .part_ranges()
+        .into_iter()
+        .zip(&eval.parts)
+        .enumerate()
+        .map(|(i, ((id, f, e), p))| {
+            let m = p.shape.mass().ok();
+            PartView {
+                id,
+                name: part_name(doc, id, i + 1),
+                faces: [f.start, f.end],
+                edges: [e.start, e.end],
+                volume: m.map_or(0.0, |m| m.volume),
+                area: m.map_or(0.0, |m| m.area),
+                center: m.map_or([0.0; 3], |m| m.center),
+            }
+        })
+        .collect();
     Ok(CadResult {
+        parts,
         status: eval.status.clone(),
         sketches,
         body,
@@ -443,59 +481,85 @@ fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<ca
 }
 
 fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
+    parts_scene(state, name, None)
+}
+
+/// Escena para exportar: una malla por pieza con su nombre (o solo `only`).
+fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) -> Result<Scene, String> {
     evaluate_committed(state)?;
+    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
     let cache = state.cad_cache.lock().unwrap();
-    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
-    // Más fino que el del visor: es lo que se imprime o se exporta
-    let t = body.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
-    let positions: Vec<[f32; 3]> = t
-        .positions
-        .iter()
-        .map(|p| converter_scene::z_up_to_y_up([p[0] as f32, p[1] as f32, p[2] as f32]))
-        .collect();
-    let normals: Vec<[f32; 3]> = t
-        .normals
-        .iter()
-        .map(|n| converter_scene::z_up_to_y_up([n[0] as f32, n[1] as f32, n[2] as f32]))
-        .collect();
+    let eval = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+    if eval.parts.is_empty() {
+        return Err("El diseño todavía no tiene un sólido".into());
+    }
     let mut scene = Scene::new();
-    scene.meshes.push(SceneMesh {
-        name: name.to_string(),
-        primitives: vec![Primitive {
-            attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
-            indices: Some(IndexData::U32(t.triangles.iter().flatten().copied().collect())),
-            material: None,
-        }],
-    });
-    scene.nodes.push(Node { name: name.to_string(), transform: Transform::identity(), mesh: Some(0), skin: None, children: Vec::new() });
-    scene.root_nodes.push(0);
+    let several = eval.parts.len() > 1;
+    for (i, p) in eval.parts.iter().enumerate() {
+        if only.is_some_and(|o| o != p.id) {
+            continue;
+        }
+        // Más fino que el del visor: es lo que se imprime o se exporta
+        let t = p.shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
+        let positions: Vec<[f32; 3]> = t
+            .positions
+            .iter()
+            .map(|p| converter_scene::z_up_to_y_up([p[0] as f32, p[1] as f32, p[2] as f32]))
+            .collect();
+        let normals: Vec<[f32; 3]> = t
+            .normals
+            .iter()
+            .map(|n| converter_scene::z_up_to_y_up([n[0] as f32, n[1] as f32, n[2] as f32]))
+            .collect();
+        // Una pieza sola conserva el nombre del diseño
+        let label = if several || only.is_some() { part_name(&doc, p.id, i + 1) } else { name.to_string() };
+        let mesh = scene.meshes.len();
+        scene.meshes.push(SceneMesh {
+            name: label.clone(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
+                indices: Some(IndexData::U32(t.triangles.iter().flatten().copied().collect())),
+                material: None,
+            }],
+        });
+        scene.root_nodes.push(scene.nodes.len());
+        scene.nodes.push(Node { name: label, transform: Transform::identity(), mesh: Some(mesh), skin: None, children: Vec::new() });
+    }
+    if scene.meshes.is_empty() {
+        return Err("Esa pieza ya no existe".into());
+    }
     scene.meters_per_unit = 0.001;
     Ok(scene)
 }
 
 /// Exporta el sólido: STEP (exacto) o malla (STL, 3MF, OBJ, PLY, GLB).
 #[tauri::command]
-pub async fn cad_export(app: AppHandle, path: String, format: String) -> Result<u64, String> {
+pub async fn cad_export(app: AppHandle, path: String, format: String, part: Option<cad_model::PartId>) -> Result<u64, String> {
     require_occt()?;
-    in_background(app, move |state| export_impl(state, &path, &format)).await
+    in_background(app, move |state| export_impl(state, &path, &format, part)).await
 }
 
-fn export_impl(state: &AppState, path: &str, format: &str) -> Result<u64, String> {
+fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>) -> Result<u64, String> {
     {
         let p = std::path::Path::new(path);
+        let scene = || parts_scene(state, "Diseño", part);
         match format {
             "step" | "stp" => {
                 evaluate_committed(state)?;
                 let cache = state.cad_cache.lock().unwrap();
-                let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
-                let bytes = body.to_step().map_err(|e| e.to_string())?;
+                let eval = &cache.as_ref().ok_or("El diseño todavía no tiene un sólido")?.eval;
+                let shape = match part {
+                    Some(id) => eval.parts.iter().find(|x| x.id == id).map(|x| &x.shape).ok_or("Esa pieza ya no existe")?,
+                    None => eval.body.as_ref().ok_or("El diseño todavía no tiene un sólido")?,
+                };
+                let bytes = shape.to_step().map_err(|e| e.to_string())?;
                 std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
             }
-            "stl" => converter_stl::export_stl(&body_scene(state, "Diseño")?, p).map_err(|e| format!("Error exportando STL: {e:?}"))?,
-            "3mf" => converter_3mf::export_3mf(&body_scene(state, "Diseño")?, p).map_err(|e| format!("Error exportando 3MF: {e}"))?,
-            "obj" => converter_obj::export_obj(&body_scene(state, "Diseño")?, p).map_err(|e| format!("Error exportando OBJ: {e:?}"))?,
-            "ply" => converter_ply::export_ply(&body_scene(state, "Diseño")?, p).map_err(|e| format!("Error exportando PLY: {e}"))?,
-            "glb" => converter_gltf_io::export_glb(&body_scene(state, "Diseño")?, p, &Default::default())
+            "stl" => converter_stl::export_stl(&scene()?, p).map_err(|e| format!("Error exportando STL: {e:?}"))?,
+            "3mf" => converter_3mf::export_3mf(&scene()?, p).map_err(|e| format!("Error exportando 3MF: {e}"))?,
+            "obj" => converter_obj::export_obj(&scene()?, p).map_err(|e| format!("Error exportando OBJ: {e:?}"))?,
+            "ply" => converter_ply::export_ply(&scene()?, p).map_err(|e| format!("Error exportando PLY: {e}"))?,
+            "glb" => converter_gltf_io::export_glb(&scene()?, p, &Default::default())
                 .map_err(|e| format!("Error exportando GLB: {e}"))?,
             other => return Err(format!("Formato no soportado para el diseño: {other}")),
         }
@@ -813,7 +877,7 @@ pub mod bridge {
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
-                ok(export_impl(state, &path, &format)?)
+                ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?)?)
             }
             "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {
