@@ -59,7 +59,7 @@ const OutlinerNode: Component<{
     }
   };
   onCleanup(() => clearTimeout(confirmTimer));
-  const hasChildren = () => props.node.children.length > 0;
+  const hasChildren = () => props.node.children.length > 0 || !!props.node.content;
   const NodeIcon = nodeIcon(props.node.type);
   const isGroup = props.node.type === "group";
 
@@ -72,6 +72,7 @@ const OutlinerNode: Component<{
           props.node.selected && "bg-accent/20 border-l-2 border-accent"
         )}
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}
+        data-outliner-row={props.node.id}
         title={props.node.hint}
         onClick={() => (isGroup ? props.onToggleExpanded(props.node) : props.onSelectNode?.(props.node.id))}
       >
@@ -113,7 +114,7 @@ const OutlinerNode: Component<{
           {props.node.label}
         </span>
         <Show when={isGroup}>
-          <span class="text-[10px] text-text-dim pr-1">{props.node.children.length}</span>
+          <span class="text-[10px] text-text-dim pr-1">{props.node.count ?? props.node.children.length}</span>
         </Show>
 
         {/* Borrar */}
@@ -151,8 +152,13 @@ const OutlinerNode: Component<{
         </Show>
       </div>
 
+      {/* Contenido propio (el árbol de operaciones) */}
+      <Show when={expanded() && props.node.content}>
+        <div style={{ "padding-left": `${props.depth * 12 + 16}px` }}>{props.node.content}</div>
+      </Show>
+
       {/* Children */}
-      <Show when={expanded() && hasChildren()}>
+      <Show when={expanded() && props.node.children.length > 0}>
         <For each={props.node.children}>
           {(child) => (
             <OutlinerNode

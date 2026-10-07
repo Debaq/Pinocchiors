@@ -261,9 +261,10 @@ import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./c
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
-import { DesignStep } from "./components/steps/DesignStep";
-import { createCadStore, folderRange, partColor, partHidden, PLANE_LABELS } from "./lib/cad";
+import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
+import { createCadStore, partColor, partHidden, PLANE_LABELS } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
+import { createDesignActions } from "./lib/designActions";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
 import { BodyBuilder } from "./components/layout/BodyBuilder";
@@ -459,6 +460,7 @@ export const App: Component = () => {
   // Diseño CAD: documento propio con su historial (copias del documento)
   const cad = createCadStore();
   const cadUi = createCadUi(cad);
+  const designActions = createDesignActions(cad, cadUi);
   // Objetos de la escena (ver lib/objects.ts): el activo es el modelo de siempre
   const [objects, setObjects] = createSignal<SceneObject[]>([]);
   const [activeObjectId, setActiveObjectId] = createSignal<number>();
@@ -466,6 +468,13 @@ export const App: Component = () => {
   if (import.meta.env.DEV) Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __viewer: () => viewer() });
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
+  // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
+  createEffect(
+    on(
+      () => !!cadUi.session(),
+      (editing) => editing && inDesign() && pipeline.activeStep() !== "design" && pipeline.setActiveStep("design"),
+    )
+  );
   // Entrar a Diseñar sin diseño crea uno vacío: no hay que "empezar" nada
   let creatingDesign = false;
   createEffect(() => {
@@ -1248,6 +1257,8 @@ export const App: Component = () => {
   };
 
   // ─── El diseño en el Outliner ─────────────────────────────────────────────
+  // El árbol de operaciones de Diseñar va dentro del Outliner (se crea una vez)
+  const featureTree = <FeatureTree store={cad} ui={cadUi} />;
   /** Planos, operaciones y piezas del diseño paramétrico para el Outliner */
   const cadOutline = (): CadOutline | undefined => {
     const doc = cad.doc();
@@ -1263,57 +1274,24 @@ export const App: Component = () => {
       selected: picks.some((p) => p.kind === "plane" && p.plane === id),
       hint: "Plano base del diseño",
     }));
-    const features: SceneNode[] = [];
-    // Carpeta del árbol que empieza en cada posición
-    const folders = (doc.folders ?? []).flatMap((f, index) => {
-      const range = folderRange(doc, f);
-      return range ? [{ f, index, range }] : [];
-    });
-    let into: { node: SceneNode; last: number } | undefined;
     doc.features.forEach((f, i) => {
+      const kind = f.kind.type;
+      if (kind !== "plane" && kind !== "axis" && kind !== "point") return;
       const state = cad.stateOf(f.id);
       const muted = !!f.suppressed || (rollback !== null && i >= rollback) || state?.state === "rolled_back";
-      const error = state?.state === "error";
-      const kind = f.kind.type;
-      const isRef = kind === "plane" || kind === "axis" || kind === "point";
-      const item: CadOutlineItem = {
+      planes.push({
         id: `cad-${f.id}`,
-        type: isRef ? kind : kind === "sketch" ? "sketch" : "feature",
+        type: kind,
         label: f.name,
         visible: !hiddenRefs.includes(f.id),
         selected: cad.selected() === f.id || picks.some((p) => p.kind === "refplane" && p.feature === f.id),
-        // Solo los sketches y las referencias se ocultan en el visor
-        readonly: !(isRef || kind === "sketch"),
         deletable: true,
         muted,
-        error,
-        hint: error && state?.state === "error" ? state.message : muted ? (f.suppressed ? "Suprimida" : "Después de la barra de retroceso") : undefined,
-      };
-      if (isRef) {
-        planes.push(item);
-        return;
-      }
-      const folder = folders.find((x) => x.range[0] === i);
-      if (folder) {
-        into = {
-          node: {
-            id: `cadfolder-${folder.index}`,
-            type: "folder",
-            label: folder.f.name,
-            visible: true,
-            expanded: !folder.f.collapsed,
-            selected: false,
-            readonly: true,
-            children: [],
-          },
-          last: folder.range[1],
-        };
-        features.push(into.node);
-      }
-      (into ? into.node.children : features).push({ ...item, expanded: false, children: [] });
-      if (into && i >= into.last) into = undefined;
+        error: state?.state === "error",
+        hint: state?.state === "error" ? state.message : muted ? (f.suppressed ? "Suprimida" : "Después de la barra de retroceso") : undefined,
+      });
     });
-    return { planes, features };
+    return { planes, featureTree, featureCount: doc.features.length };
   };
 
   /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen) */
@@ -6508,7 +6486,10 @@ export const App: Component = () => {
     // Un objeto pasa a ser el activo: las herramientas del espacio actúan sobre él
     const object = objectOfNode(nodeId);
     if (object) {
-      if (isCadObject(object) && inDesign()) cadUi.setOpenPart(partKey(object.source.part));
+      if (isCadObject(object) && inDesign()) {
+        cadUi.setOpenPart(partKey(object.source.part));
+        pipeline.setActiveStep("design_part");
+      }
       void activateObject(object.id);
       return;
     }
@@ -6689,7 +6670,7 @@ export const App: Component = () => {
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} />
+              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions} />
             </Show>
 
             {/* Welcome Screen overlay */}
@@ -6822,7 +6803,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={<DesignStep store={cad} ui={cadUi} hasModel={meshLoaded()} />}
+            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section} hasModel={meshLoaded()} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

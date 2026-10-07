@@ -11,6 +11,9 @@ import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { DrawingView } from "./DrawingView";
+import { DesignToolbar } from "../design/DesignToolbar";
+import { FeatureEditor, pickSummary } from "../steps/DesignStep";
+import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 
@@ -19,6 +22,10 @@ export interface CadViewProps {
   ui: CadUi;
   /** Modelo cargado, de referencia (escaneo a calcar) */
   scanMesh?: MeshData | null;
+  /** Grilla visible (el ojo del Outliner) */
+  showGrid?: boolean;
+  /** Acciones para la barra de herramientas */
+  actions: DesignActions;
 }
 
 // Grupos de la barra: elegir · dibujar · modificar
@@ -358,6 +365,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }));
     viewer?.setVisibleSketches(list);
   });
+  createEffect(() => viewer?.setGridVisible(props.showGrid !== false));
   // Planos base: visibles fuera de la edición (y al elegir dónde va un sketch)
   const [planesReady, setPlanesReady] = createSignal(0);
   createEffect(() => {
@@ -1314,6 +1322,27 @@ export const CadView: Component<CadViewProps> = (props) => {
     return out;
   });
 
+  /** Operación con el diálogo abierto (o el sketch elegido) */
+  const editedFeature = () => {
+    const id = store.selected();
+    return store.doc()?.features.some((f) => f.id === id) ? id : undefined;
+  };
+  // El diálogo se arrastra desde su borde de arriba
+  const [dialogPos, setDialogPos] = createSignal<[number, number]>([0, 0]);
+  const startDialogDrag = (e: PointerEvent) => {
+    e.preventDefault();
+    const [x0, y0] = dialogPos();
+    const sx = e.clientX;
+    const sy = e.clientY;
+    const move = (ev: PointerEvent) => setDialogPos([x0 + ev.clientX - sx, Math.max(0, y0 + ev.clientY - sy)]);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
   const promptText = () => {
     const m = ui.pick();
     return m.kind === "none" ? undefined : m.prompt;
@@ -1438,11 +1467,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         )}
       </Index>
 
-      {/* Barra superior */}
-      <div class="absolute top-2 left-2 right-2 flex items-start gap-2 pointer-events-none">
+      {/* Barra superior: herramientas, vista y el diálogo de la operación abierta */}
+      <div class="absolute top-2 left-2 right-36 flex flex-col items-start gap-1.5 pointer-events-none">
         <Show
           when={ui.session()}
           fallback={
+            <>
+            <DesignToolbar store={store} ui={ui} actions={props.actions} />
             <div class="flex items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
               <IconButton aria-label="Encuadrar todo" size="sm" onClick={() => viewer?.frameAll()}>
                 <Icons.FrameCorners size={14} />
@@ -1520,6 +1551,30 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </div>
               </Show>
             </div>
+            {/* Diálogo de la operación elegida (por id: no se rehace con cada cambio del documento) */}
+            <Show when={!ui.assemblyMode()}>
+              <For each={editedFeature() !== undefined ? [editedFeature()!] : []}>
+                {(id) => (
+                  <div
+                    data-feature-dialog
+                    class="w-72 max-h-[60vh] flex flex-col rounded-md border border-border bg-bg-lighter/95 shadow-lg pointer-events-auto"
+                    style={{ transform: `translate(${dialogPos()[0]}px, ${dialogPos()[1]}px)` }}
+                  >
+                    <div
+                      class="h-3 shrink-0 cursor-move rounded-t-md flex items-center justify-center hover:bg-surface/60"
+                      title="Arrastrar para mover"
+                      onPointerDown={startDialogDrag}
+                    >
+                      <div class="w-8 h-0.5 rounded bg-border" />
+                    </div>
+                    <div class="overflow-y-auto px-2.5 pb-2.5">
+                      <FeatureEditor featureId={id} store={store} ui={ui} sketches={props.actions.sketches()} tools={props.actions.toolFeatures()} />
+                    </div>
+                  </div>
+                )}
+              </For>
+            </Show>
+            </>
           }
         >
           {(s) => (
@@ -1684,6 +1739,20 @@ export const CadView: Component<CadViewProps> = (props) => {
         </Show>
         <Show when={store.error()}>
           <span class="text-xs text-error bg-bg-lighter/90 rounded px-2 py-0.5">{store.error()}</span>
+        </Show>
+        <Show when={props.actions.notice()}>
+          <span class="text-xs text-warning bg-bg-lighter/90 rounded px-2 py-0.5">{props.actions.notice()}</span>
+        </Show>
+        <Show when={!ui.session() && ui.picks().length > 0}>
+          <span class="flex items-center gap-2 text-xs text-text bg-bg-lighter/90 rounded px-2 py-0.5 pointer-events-auto">
+            Elegido: {pickSummary(ui.picks())}
+            <button class="text-text-muted hover:text-text" onClick={() => ui.clearPicks()}>
+              Limpiar (Esc)
+            </button>
+          </span>
+        </Show>
+        <Show when={!ui.session() && store.draft()}>
+          <span class="text-[11px] text-text-dim">Enter: aceptar la operación · Esc: cancelar · arrastrar el borde de arriba del diálogo para moverlo</span>
         </Show>
         <Show when={ui.session()}>
           <span class="text-[11px] text-text-dim">

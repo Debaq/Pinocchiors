@@ -54,7 +54,7 @@ async function accept(b, wait = 1500) {
 /** Clic en una fila del árbol de operaciones por su nombre */
 async function clickRow(b, name) {
   const r = await b.eval(`(() => {
-    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null && !x.closest("[data-outliner]"));
+    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null));
     if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];
   })()`);
   if (!r) throw new Error("no encontré la operación " + name);
@@ -184,7 +184,7 @@ const scenarios = {
     near((await body()).volume, 16000 - fillet(), 0.2, "dos cajas, dos redondeos");
     // Sin la caja de arriba su arista ya no está: advertencia y se redondea la otra
     await b.eval(`(() => {
-      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba" && !x.closest("[data-outliner]"));
+      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba"));
       s.parentElement.querySelector('[aria-label="Suprimir"]').click();
     })()`);
     await sleep(2000);
@@ -2078,11 +2078,14 @@ const scenarios = {
     })`);
     await sleep(2500);
     // Filas del Outliner: sangría y texto
-    const rows = () => b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const rows = () => b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
     const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)})`;
-    const expect = ["PLANOS", "Grid", "Planta (XY)", "Frente (XZ)", "Lateral (YZ)", "Plano 1", "OPERACIONES", "Caja 1", "Cilindro aparte", "OBJETOS", "Pieza 1", "Pieza 2"];
+    const expect = ["PLANOS", "Grid", "Planta (XY)", "Frente (XZ)", "Lateral (YZ)", "Plano 1", "OPERACIONES", "OBJETOS", "Pieza 1", "Pieza 2"];
     const got = await rows();
     if (JSON.stringify(got) !== JSON.stringify(expect)) throw new Error(`árbol: ${JSON.stringify(got)}`);
+    // Las operaciones son el árbol de Diseñar, dentro del grupo Operaciones
+    const tree = await b.eval(`document.querySelector("[data-outliner] [data-feature-tree]")?.innerText ?? ""`);
+    if (!["Caja 1", "Plano 1", "Cilindro aparte"].every((n) => tree.includes(n))) throw new Error(`operaciones: ${tree}`);
     // Elegir la pieza la abre en la lista de piezas
     await b.eval(`${row("Pieza 2")}.click()`);
     await sleep(500);
@@ -2092,6 +2095,11 @@ const scenarios = {
     await eye("Pieza 2");
     await sleep(1500);
     if (!(await b.eval(`window.__cadStore.doc().parts?.[0]?.hidden`))) throw new Error("no se ocultó la pieza");
+    // La grilla también se apaga en el visor de Diseñar
+    await eye("Grid");
+    await sleep(300);
+    if (await b.eval(`window.__cadViewer.grid.visible`)) throw new Error("la grilla sigue visible");
+    await eye("Grid");
     await eye("Frente (XZ)");
     await sleep(300);
     if (JSON.stringify(await b.eval(`window.__cadUi.hiddenPlanes()`)) !== '["xz"]') throw new Error("no se ocultó el plano");
@@ -2121,7 +2129,7 @@ const scenarios = {
       d.next_id = 52;
     })`);
     await sleep(2500);
-    const rows = () => b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const rows = () => b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
     const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)})`;
     // Sin botones: a Fabricar y la primera pieza ya tiene malla
     await b.clickText("Fabricar");
@@ -2191,7 +2199,7 @@ const scenarios = {
     const status = await b.eval(`document.body.innerText.match(/El diseño cambió[^\\n]*/)?.[0] ?? ""`);
     if (!status.includes("1 modificación")) throw new Error(`aviso: ${status}`);
     // En el Outliner, la pieza con su malla y lo hecho sobre ella
-    const got = await b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const got = await b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
     const at = got.indexOf("Pieza 1");
     if (got[at + 1] !== "Malla generada" || got[at + 2] !== "Escalar para fabricar") throw new Error(`árbol del objeto: ${JSON.stringify(got.slice(at))}`);
     await b.shot("objetos-rehecho");
@@ -2204,6 +2212,28 @@ for (const [name, run] of Object.entries(scenarios)) {
   if (filter && !name.includes(filter)) continue;
   await call("cad_close");
   const b = await launch(URL);
+  // Las herramientas de los menús de la barra: si no está a la vista, se abre su menú
+  const clickText = b.clickText.bind(b);
+  b.clickText = async (text, nth = 0) => {
+    try {
+      return await clickText(text, nth);
+    } catch (e) {
+      const menu = await b.eval(`[...document.querySelectorAll("[data-toolbar-menu]")].find((m) => JSON.parse(m.dataset.items).includes(${JSON.stringify(text)}))?.dataset.toolbarMenu`);
+      if (menu) {
+        await clickText(menu);
+        return clickText(text, nth);
+      }
+      // Lo del panel de Diseñar está repartido en pestañas: probar en cada una
+      for (const tab of ["Diseño", "Pieza", "Inspección", "Desde el escaneo"]) {
+        if (!(await b.eval(`(() => { const t = document.querySelector('nav button[aria-label=${JSON.stringify(tab)}]'); t?.click(); return !!t; })()`))) continue;
+        await sleep(400);
+        try {
+          return await clickText(text, nth);
+        } catch {}
+      }
+      throw e;
+    }
+  };
   try {
     // Con la máquina cargada la app tarda en montar: esperar el encabezado
     for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Diseñar")`)); t++) await sleep(500);

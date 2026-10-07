@@ -16,6 +16,9 @@ export type PipelineStepId =
   | "print3d"
   | "scan"
   | "design"
+  | "design_part"
+  | "design_inspect"
+  | "design_scan"
   | "export";
 
 export interface PipelineStep {
@@ -78,8 +81,23 @@ export const PIPELINE_STEPS: PipelineStep[] = [
   },
   {
     id: "design",
-    label: "Diseño CAD",
+    label: "Diseño",
     icon: Icons.Ruler,
+  },
+  {
+    id: "design_part",
+    label: "Pieza",
+    icon: Icons.Cube,
+  },
+  {
+    id: "design_inspect",
+    label: "Inspección",
+    icon: Icons.MagnifyingGlass,
+  },
+  {
+    id: "design_scan",
+    label: "Desde el escaneo",
+    icon: Icons.Scan,
   },
   {
     id: "export",
@@ -113,7 +131,7 @@ export const WORKSPACES: Workspace[] = [
   { id: "print", label: "Fabricar", sections: ["print3d"] },
   { id: "scan", label: "Orizon3D", sections: ["scan"], withoutModel: true },
   // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
-  { id: "design", label: "Diseñar", sections: ["design"], withoutModel: true },
+  { id: "design", label: "Diseñar", sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },
 ];
 
 export const stepInfo = (id: PipelineStepId) => PIPELINE_STEPS.find((s) => s.id === id) ?? PIPELINE_STEPS[0];

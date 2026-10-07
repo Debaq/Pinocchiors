@@ -435,8 +435,17 @@ cargo test -p cad-model
 - **Hecho (2026-10-07):** las piezas del diseño son objetos del Outliner y pasan solas a
   Preparar, Rig y Fabricar; lo hecho sobre su malla se rehace si cambia el diseño. Ver
   `PLAN_OBJETOS.md`. El Outliner va en tres grupos: Planos, Operaciones y Objetos.
-- **Pendiente pedido por el usuario (2026-10-07), segundo en la próxima sesión:** reordenar la
-  interfaz de Diseñar. El panel vertical unificado (todo apilado) no es usable; buscar algo
-  profesional e intuitivo al estilo Blender, Onshape o FreeCAD: barra de herramientas por
-  categorías arriba del visor, árbol de operaciones a un lado, diálogo de la operación y
-  propiedades en sus propios paneles.
+- **Rediseño de la interfaz de Diseñar (2026-10-07, EN CURSO).** Decisiones del usuario: árbol de
+  operaciones en el Outliner (no columna aparte) y botones con ícono y texto.
+  - Hecho: fase 1, barra de herramientas arriba del visor (`components/design/DesignToolbar.tsx`,
+    íconos en `icons/design.tsx`; principales a la vista, el resto en menús Sólidos / Modificar /
+    Patrones / Piezas / Referencias; Diseño|Ensamble, Plano 2D, deshacer) y diálogo de la operación
+    flotante y arrastrable en `CadView` (`FeatureEditor` exportado de DesignStep). Las acciones
+    salieron a `lib/designActions.ts` (`createDesignActions`, una vez en App). Fase 2, el árbol de
+    operaciones (`FeatureTree`, exportado) vive en el grupo Operaciones del Outliner (`SceneNode.content`).
+  - Fase 3 a medio probar: el panel en pestañas Diseño / Pieza / Inspección / Desde el escaneo
+    (secciones `design*` en `lib/pipeline.ts`, `DesignStep` recibe `section`). Compila; falta correr
+    la suite e2e completa (`node e2e/cad.mjs`, ~25 min) y mirar capturas. El arnés de cad.mjs abre
+    solo los menús de la barra y las pestañas cuando un texto no está a la vista.
+  - Falta: fase 4, línea de ayuda abajo del visor (ya muestra lo elegido, avisos y Enter/Esc; revisar).
+  - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.

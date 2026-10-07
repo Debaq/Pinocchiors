@@ -1,3 +1,4 @@
+import type { JSX } from "solid-js";
 import type { SkeletonData } from "./Viewer3D";
 import type { SceneStructure } from "../components/steps/StructureStep";
 
@@ -25,6 +26,10 @@ export interface SceneNode {
   error?: boolean;
   /** Muestra de color (piezas del CAD) */
   color?: string;
+  /** Contenido propio en vez de hijos (el árbol de operaciones del diseño) */
+  content?: JSX.Element;
+  /** Cuántos elementos tiene (si no, los hijos) */
+  count?: number;
 }
 
 /** Elemento del CAD ya armado por App (ids `plane-xy`, `cad-<id>`, `part-<op>-<n>`…) */
@@ -34,8 +39,10 @@ export type CadOutlineItem = Omit<SceneNode, "expanded" | "children"> & { childr
 export interface CadOutline {
   /** Planos base y de referencia (también ejes y puntos), en orden del árbol */
   planes: CadOutlineItem[];
-  /** Sketches y operaciones, en orden del árbol (con sus carpetas) */
-  features: SceneNode[];
+  /** Árbol de operaciones (el de Diseñar: arrastrar, carpetas, barra de retroceso) */
+  featureTree: JSX.Element;
+  /** Cuántas operaciones hay */
+  featureCount: number;
 }
 
 /** Un objeto de la escena (id `obj-<n>`); del activo cuelga su modelo */
@@ -224,7 +231,7 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     : model;
 
   root.children.push(group("group-planes", "Planos", planes));
-  if (state.cad?.features.length) root.children.push(group("group-features", "Operaciones", state.cad.features));
+  if (state.cad) root.children.push({ ...group("group-features", "Operaciones", []), content: state.cad.featureTree, count: state.cad.featureCount });
   if (objects.length) root.children.push(group("group-objects", "Objetos", objects));
   return root;
 }

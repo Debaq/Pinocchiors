@@ -958,6 +958,12 @@ export class CadViewer {
     }
   }
 
+  /** Grilla del suelo (la misma que se oculta desde el Outliner) */
+  setGridVisible(visible: boolean) {
+    this.grid.visible = visible;
+    this.requestRender();
+  }
+
   setPlanes(visible: boolean, selected: BasePlane[], hidden: BasePlane[] = []) {
     this.selectedPlanes = new Set(selected);
     this.hiddenPlanes = new Set(hidden);
@@ -1343,7 +1349,9 @@ export class CadViewer {
     this.scene.remove(this.grid);
     this.grid.geometry.dispose();
     const step = Math.pow(10, Math.floor(Math.log10(size / 4)));
+    const visible = this.grid.visible;
     this.grid = new THREE.GridHelper(Math.ceil(size / step) * step, Math.ceil(size / step));
+    this.grid.visible = visible;
     this.scene.add(this.grid);
     this.applyTheme();
     this.controls.update();
