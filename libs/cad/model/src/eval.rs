@@ -1265,16 +1265,38 @@ impl Ctx<'_> {
 
     fn extrude_dir(&self, id: FeatureId, e: &Extrude, reverse: bool) -> R<Tagged> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
-        let (faces, entities, _) = self.profile(e.sketch, &e.regions)?;
+        let (faces, entities, samples) = self.profile(e.sketch, &e.regions)?;
+        // Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
+        let faces = match e.thin {
+            Some(t) if t > 0.0 => faces
+                .iter()
+                .map(|f| {
+                    let outer = f.offset_face(t / 2.0).map_err(err)?;
+                    match f.offset_face(-t / 2.0) {
+                        Ok(inner) => outer.cut(&inner).map_err(err),
+                        // Más angosto que la pared: queda lleno
+                        Err(_) => Ok(outer),
+                    }
+                })
+                .collect::<R<Vec<_>>>()?,
+            Some(_) => return Err("el espesor tiene que ser mayor que cero".into()),
+            None => faces,
+        };
         let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
-        let (start, length) = match &e.extent {
-            Extent::Blind { distance } => (0.0, *distance),
-            Extent::Symmetric { distance } => (-distance / 2.0, *distance),
+        let drafted = e.draft.abs() > 1e-9;
+        // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
+        // (las paredes se angostan a partir del plano del sketch)
+        let segments: Vec<(f64, f64)> = match &e.extent {
+            Extent::Blind { distance } => vec![(0.0, *distance)],
+            Extent::Symmetric { distance } if drafted => vec![(0.0, distance / 2.0), (0.0, -distance / 2.0)],
+            Extent::Symmetric { distance } => vec![(-distance / 2.0, *distance)],
+            Extent::TwoSides { distance, second } if drafted => vec![(0.0, *distance), (0.0, -second)],
+            Extent::TwoSides { distance, second } => vec![(-second, distance + second)],
             Extent::ThroughAll => {
                 let body = self.body()?;
                 let m = body.mass().map_err(err)?;
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
-                (0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))
+                vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
             }
             Extent::UpToFace { face } => {
                 let i = self.face("extent", face)?;
@@ -1286,35 +1308,58 @@ impl Ctx<'_> {
                 if d < 0.0 {
                     n = scale(n, -1.0);
                 }
-                (0.0, d.abs())
+                vec![(0.0, d.abs())]
+            }
+            Extent::UpToNext => {
+                // La primera cara que cruzan los rayos desde el perfil
+                let body = self.body()?;
+                let from = samples.iter().chain(entities.iter().map(|(_, p)| p));
+                let t = from.filter_map(|p| body.ray_hit(*p, n)).fold(f64::INFINITY, f64::min);
+                if !t.is_finite() {
+                    return Err("no hay ninguna cara del sólido hacia ese lado".into());
+                }
+                vec![(0.0, t)]
             }
         };
-        if length.abs() < 1e-9 {
+        if segments.iter().all(|(_, l)| l.abs() < 1e-9) {
             return Err("distancia cero".into());
         }
         let mut solids = Vec::new();
-        for f in faces {
-            let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f };
-            solids.push(f.prism(scale(n, length)).map_err(err)?);
+        for f in &faces {
+            for &(start, length) in &segments {
+                if length.abs() < 1e-9 {
+                    continue;
+                }
+                let f = if start != 0.0 { f.translate(scale(n, start)).map_err(err)? } else { f.clone() };
+                if drafted {
+                    // La cara mira hacia la normal del plano: la altura lleva el signo del lado
+                    let height = if dot(n, plane.normal) > 0.0 { length } else { -length };
+                    solids.push(f.draft_prism(height, e.draft.to_radians()).map_err(err)?);
+                } else {
+                    solids.push(f.prism(scale(n, length)).map_err(err)?);
+                }
+            }
         }
         let shape = fuse(solids)?;
+        let lo = segments.iter().map(|(s, l)| s.min(s + l)).fold(f64::INFINITY, f64::min);
+        let hi = segments.iter().map(|(s, l)| s.max(s + l)).fold(f64::NEG_INFINITY, f64::max);
         // Tapas por su posición a lo largo de la dirección; laterales por la
         // entidad del sketch que barren (su punto medio, a media altura)
         let mut tags = vec![Vec::new(); shape.face_count()];
-        let scale_tol = self.diag().max(length.abs()) * 1e-6;
+        let scale_tol = self.diag().max(hi - lo) * 1e-6;
         for (i, slot) in tags.iter_mut().enumerate() {
             let info = shape.face_info(i).map_err(err)?;
             if info.surface == SurfaceKind::Plane && dot(info.normal, n).abs() > 0.999 {
                 let d = dot(sub(info.point, plane.origin), n);
-                if (d - start).abs() <= scale_tol {
+                if (d - lo).abs() <= scale_tol {
                     slot.push(tag(id, "inicio"));
-                } else if (d - start - length).abs() <= scale_tol {
+                } else if (d - hi).abs() <= scale_tol {
                     slot.push(tag(id, "fin"));
                 }
             }
         }
         for (eid, p) in &entities {
-            let probe = add(*p, scale(n, start + length / 2.0));
+            let probe = add(*p, scale(n, (lo + hi) / 2.0));
             mark(&shape, &mut tags, probe, tag(id, format!("lado:{eid}")));
         }
         Ok(Tagged { shape, tags })

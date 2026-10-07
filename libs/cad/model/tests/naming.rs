@@ -130,6 +130,8 @@ fn extruded_faces_are_named_by_sketch_entity() {
         extent: Extent::Blind { distance: 10.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     let name = |f: usize| ev.face_tags[f].iter().map(|t| t.name.clone()).collect::<Vec<_>>();
@@ -154,6 +156,8 @@ fn extruded_faces_are_named_by_sketch_entity() {
         extent: Extent::Blind { distance: 4.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     if let FeatureKind::Extrude(e) = &mut doc.get_mut(ext).unwrap().kind {
         e.extent = Extent::Blind { distance: 50.0 };

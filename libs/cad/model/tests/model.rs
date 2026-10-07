@@ -144,6 +144,8 @@ fn plate_doc() -> (Document, FeatureId, [usize; 2]) {
         extent: Extent::Blind { distance: 10.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     (doc, sk, cons)
 }
@@ -198,6 +200,8 @@ fn pocket_on_face_through_all_and_up_to_face() {
         extent: Extent::ThroughAll,
         reverse: true,
         op: BodyOp::Cut,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -215,6 +219,8 @@ fn pocket_on_face_through_all_and_up_to_face() {
         extent: Extent::UpToFace { face: top_ref },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -436,6 +442,8 @@ fn cut_on_face_points_into_material() {
         extent: Extent::Blind { distance: 5.0 },
         reverse: false, // hacia afuera de la cara: se da vuelta sola
         op: BodyOp::Cut,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -793,6 +801,8 @@ fn ellipse_is_dimensioned_and_extruded_exactly() {
         extent: Extent::Blind { distance: 3.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -831,6 +841,8 @@ fn spline_handles_set_end_tangents() {
             extent: Extent::Blind { distance: 1.0 },
             reverse: false,
             op: BodyOp::Join,
+            draft: 0.0,
+            thin: None,
         }));
         let ev = doc.evaluate();
         assert_all_ok(&ev);

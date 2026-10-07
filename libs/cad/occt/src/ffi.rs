@@ -137,6 +137,9 @@ unsafe extern "C" {
     pub fn cad_sub_shape(s: *const CadShape, kind: i32, index: i32) -> *mut CadShape;
     pub fn cad_count_vertices(s: *const CadShape) -> i32;
     pub fn cad_count_solids(s: *const CadShape) -> i32;
+    pub fn cad_ray_hit(s: *const CadShape, origin: *const f64, dir: *const f64) -> f64;
+    pub fn cad_draft_prism(face: *const CadShape, height: f64, angle: f64) -> *mut CadShape;
+    pub fn cad_offset_face(face: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_write_step_parts(
         shapes: *const *const CadShape,
         names: *const *const std::ffi::c_char,

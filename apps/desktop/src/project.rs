@@ -888,6 +888,8 @@ mod tests {
             extent: cad_model::Extent::Symmetric { distance: 4.0 },
             reverse: true,
             op: cad_model::BodyOp::Join,
+            draft: 0.0,
+            thin: None,
         }));
         doc.add(cad_model::FeatureKind::Import { format: cad_model::ImportFormat::Step, data: vec![0, 1, 2, 255], op: cad_model::BodyOp::Cut });
         *state.cad_document.lock().unwrap() = Some(doc.clone());

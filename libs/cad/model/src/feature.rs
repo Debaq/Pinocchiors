@@ -178,6 +178,14 @@ pub enum Extent {
     ThroughAll,
     /// Hasta el plano de una cara.
     UpToFace { face: FaceRef },
+    /// Hacia los dos lados del plano: `distance` hacia la normal y `second` hacia atrás.
+    TwoSides { distance: f64, second: f64 },
+    /// Hasta la primera cara del sólido que encuentra.
+    UpToNext,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -191,6 +199,12 @@ pub struct Extrude {
     pub reverse: bool,
     #[serde(default)]
     pub op: BodyOp,
+    /// Ángulo de desmolde de las paredes (grados; positivo = se angosta al avanzar).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub draft: f64,
+    /// Extrusión delgada: una pared de este espesor siguiendo el contorno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

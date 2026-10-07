@@ -71,6 +71,8 @@ pub fn extrude_into(sketch: FeatureId, depth: f64, op: BodyOp) -> FeatureKind {
         extent: Extent::Blind { distance: depth },
         reverse: true,
         op,
+    draft: 0.0,
+    thin: None,
     })
 }
 

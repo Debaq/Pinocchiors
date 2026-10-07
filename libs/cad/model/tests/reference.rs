@@ -87,6 +87,8 @@ fn sketch_on_reference_plane_and_revolve_on_reference_axis() {
         extent: Extent::Blind { distance: 5.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());

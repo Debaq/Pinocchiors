@@ -825,6 +825,51 @@ const scenarios = {
     if (hit === "refplane") throw new Error("el plano oculto se sigue eligiendo");
   },
 
+  async "extrusión: dos direcciones, desmolde y delgada"(b) {
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    // Cuadrado de 10 centrado (más rápido que dibujarlo)
+    const sk = doc.features[0].kind.sketch;
+    const ids = [[-5, -5], [5, -5], [5, 5], [-5, 5]].map(([x, y]) => {
+      const id = sk.next_id++;
+      sk.points.push({ id, x, y });
+      return id;
+    });
+    for (let k = 0; k < 4; k++) sk.entities.push({ id: sk.next_id++, geometry: { type: "line", start: ids[k], end: ids[(k + 1) % 4] }, construction: false });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await sleep(2000);
+    // Dos direcciones: 10 hacia arriba y 4 hacia abajo
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.extent = { type: "two_sides", distance: 10, second: 2 }; })`);
+    await sleep(1200);
+    await setInput(b, "Hacia atrás", 4);
+    await sleep(1500);
+    let r = await body();
+    near(r.bbox_min[2], -4, 1e-6, "hacia atrás");
+    near(r.volume, 1400, 1e-6, "dos direcciones");
+    // Desmolde de 10° en las dos direcciones
+    await setInput(b, "Desmolde", 10);
+    await sleep(1500);
+    const t = Math.tan((10 * Math.PI) / 180);
+    const frustum = (h) => { const top = 10 - 2 * h * t; return (h / 3) * (100 + top * top + 10 * top); };
+    near((await body()).volume, frustum(10) + frustum(4), 1e-3, "con desmolde");
+    // Delgada de 1 mm, sin desmolde
+    await setInput(b, "Desmolde", 0);
+    await sleep(1200);
+    await b.clickText("Delgada (solo una pared)");
+    await sleep(1500);
+    const ring = 100 + 4 * 10 * 0.5 + Math.PI * 0.25 - 81;
+    near((await body()).volume, ring * 14, 1e-3, "delgada");
+    await accept(b);
+    const k = (await call("cad_get_document")).features.at(-1).kind;
+    if (k.thin !== 1 || k.extent.second !== 4) throw new Error(`guardado: ${JSON.stringify(k)}`);
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

@@ -616,6 +616,23 @@ impl Shape {
         wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 1, index as i32) })
     }
 
+    /// Distancia hasta la primera cara que cruza la semirrecta desde `origin` hacia `dir`.
+    pub fn ray_hit(&self, origin: P3, dir: P3) -> Option<f64> {
+        let t = unsafe { ffi::cad_ray_hit(self.ptr(), origin.as_ptr(), dir.as_ptr()) };
+        (t > 0.0).then_some(t)
+    }
+
+    /// Prisma de esta cara (plana) hacia su normal con las paredes inclinadas
+    /// `angle` radianes (positivo: se angosta al subir).
+    pub fn draft_prism(&self, height: f64, angle: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_draft_prism(self.ptr(), height, angle) })
+    }
+
+    /// Esta cara plana desplazada hacia afuera (o hacia adentro si es negativo).
+    pub fn offset_face(&self, distance: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_offset_face(self.ptr(), distance) })
+    }
+
     /// Los sólidos de la forma, cada uno como forma propia.
     pub fn solids(&self) -> Result<Vec<Shape>> {
         let n = unsafe { ffi::cad_count_solids(self.ptr()) }.max(0) as usize;

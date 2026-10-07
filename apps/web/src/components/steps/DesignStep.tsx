@@ -1210,7 +1210,9 @@ const FeatureEditor: Component<{
                       options={[
                         { value: "blind", label: "Distancia" },
                         { value: "symmetric", label: "Simétrica" },
+                        { value: "two_sides", label: "Dos direcciones" },
                         { value: "through_all", label: "Atravesar todo" },
+                        { value: "up_to_next", label: "Hasta la siguiente" },
                         { value: "up_to_face", label: "Hasta una cara" },
                       ]}
                       value={extentType()}
@@ -1218,7 +1220,8 @@ const FeatureEditor: Component<{
                         if (v === extentType()) return;
                         const d = "distance" in k().extent ? (k().extent as { distance: number }).distance : 10;
                         if (v === "blind" || v === "symmetric") setExtent({ type: v, distance: d });
-                        else if (v === "through_all") setExtent({ type: "through_all" });
+                        else if (v === "two_sides") setExtent({ type: "two_sides", distance: d, second: d / 2 });
+                        else if (v === "through_all" || v === "up_to_next") setExtent({ type: v });
                         else setUpTo(true);
                       }}
                     />
@@ -1238,7 +1241,7 @@ const FeatureEditor: Component<{
                       }}
                     />
                   </Show>
-                  <Show when={k().extent.type === "blind" || k().extent.type === "symmetric"}>
+                  <Show when={k().extent.type === "blind" || k().extent.type === "symmetric" || k().extent.type === "two_sides"}>
                     {field(
                       "Distancia",
                       "kind.extent.distance",
@@ -1246,6 +1249,25 @@ const FeatureEditor: Component<{
                       (x, v) => x.type === "extrude" && "distance" in x.extent && (x.extent.distance = v),
                       "mm",
                     )}
+                  </Show>
+                  <Show when={k().extent.type === "two_sides"}>
+                    {field(
+                      "Hacia atrás",
+                      "kind.extent.second",
+                      (k().extent as { second: number }).second,
+                      (x, v) => x.type === "extrude" && x.extent.type === "two_sides" && (x.extent.second = v),
+                      "mm",
+                    )}
+                  </Show>
+                  {field("Desmolde", "kind.draft", k().draft ?? 0, (x, v) => x.type === "extrude" && (x.draft = v), "°")}
+                  <Checkbox
+                    small
+                    label="Delgada (solo una pared)"
+                    checked={k().thin != null}
+                    onChange={(c) => update((x) => x.type === "extrude" && (x.thin = c ? 1 : null))}
+                  />
+                  <Show when={k().thin != null}>
+                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "extrude" && (x.thin = v), "mm")}
                   </Show>
                   <RegionBox
                     ui={props.ui}

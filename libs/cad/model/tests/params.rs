@@ -63,6 +63,8 @@ fn sketch_dimensions_and_extrusion_follow_parameters() {
         extent: Extent::Blind { distance: 5.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     doc.parameters = vec![param("largo", "50"), param("espesor", "largo * 0.1")];
     doc.bindings.insert(format!("{}.kind.sketch.constraints.{largo}.value", sk.0), "largo".into());

@@ -3,6 +3,12 @@
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
+#include <BRepLib.hxx>
+#include <IntCurvesFace_ShapeIntersector.hxx>
+#include <LocOpe_DPrism.hxx>
+#include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <gp_Lin.hxx>
 #include <STEPCAFControl_Writer.hxx>
 #include <TDocStd_Document.hxx>
 #include <XCAFApp_Application.hxx>
@@ -951,6 +957,58 @@ double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double
         pa[0] = p.X(); pa[1] = p.Y(); pa[2] = p.Z();
         pb[0] = q.X(); pb[1] = q.Y(); pb[2] = q.Z();
         return ext.Value();
+    });
+}
+
+double cad_ray_hit(const CadShape* s, const double* origin, const double* dir) {
+    return guard("rayo", -1.0, [&] {
+        IntCurvesFace_ShapeIntersector inter;
+        inter.Load(s->s, 1e-7);
+        gp_Lin line(pnt(origin), gp_Dir(dir[0], dir[1], dir[2]));
+        inter.Perform(line, 1e-9, RealLast());
+        if (!inter.IsDone() || inter.NbPnt() == 0) return -1.0;
+        double best = -1.0;
+        for (int i = 1; i <= inter.NbPnt(); i++) {
+            double t = inter.WParameter(i);
+            if (t > 1e-9 && (best < 0 || t < best)) best = t;
+        }
+        return best;
+    });
+}
+
+CadShape* cad_draft_prism(const CadShape* face, double height, double angle) {
+    return guard("prisma con desmolde", (CadShape*)nullptr, [&] {
+        TopExp_Explorer ex(face->s, TopAbs_FACE);
+        if (!ex.More()) throw Standard_Failure("se esperaba una cara");
+        // LocOpe_DPrism mide la altura a lo largo de la pared inclinada: la que
+        // se pide es la vertical
+        if (std::fabs(std::cos(angle)) < 1e-6) throw Standard_Failure("ángulo de desmolde inválido");
+        // Hacia el otro lado el ángulo también cambia de signo (para que siga angostándose)
+        LocOpe_DPrism dp(TopoDS::Face(ex.Current()), height / std::cos(angle), height < 0 ? -angle : angle);
+        TopoDS_Shape r = dp.Shape();
+        return wrap_checked(r, "prisma con desmolde");
+    });
+}
+
+CadShape* cad_offset_face(const CadShape* face, double distance) {
+    return guard("desplazar perfil", (CadShape*)nullptr, [&] {
+        TopExp_Explorer ex(face->s, TopAbs_FACE);
+        if (!ex.More()) throw Standard_Failure("se esperaba una cara");
+        TopoDS_Face f = TopoDS::Face(ex.Current());
+        BRepOffsetAPI_MakeOffset mk(f, GeomAbs_Arc);
+        mk.Perform(distance);
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo desplazar el perfil");
+        TopoDS_Shape w = mk.Shape();
+        // Los lazos desplazados forman la cara nueva (el exterior y sus agujeros)
+        TopExp_Explorer wx(w, TopAbs_WIRE);
+        if (!wx.More()) throw Standard_Failure("el desplazamiento no dejó contorno");
+        BRepBuilderAPI_MakeFace mf(TopoDS::Wire(wx.Current()), Standard_True);
+        for (wx.Next(); wx.More(); wx.Next()) mf.Add(TopoDS::Wire(wx.Current()));
+        if (!mf.IsDone()) throw Standard_Failure("el contorno desplazado no forma una cara");
+        BRepLib::BuildCurves3d(mf.Face());
+        ShapeFix_Face fix(mf.Face());
+        fix.Perform();
+        return new CadShape{fix.Face()};
     });
 }
 

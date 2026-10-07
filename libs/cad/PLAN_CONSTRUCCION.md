@@ -77,7 +77,15 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    (para el sketch, en el modo de elegir lugar y en la selección), ejes punteados y puntos; se
    ocultan con el ojo del árbol. Diálogos con `PlaneField`/`AxisField`/`PointField`; "Plano",
    "Eje" y "Punto" en Agregar arrancan de lo elegido.*
-2. **Extrusión completa**: dos direcciones, hasta la siguiente, desmoldeo, delgada.
+2. **Extrusión completa**: dos direcciones, hasta la siguiente, desmoldeo, delgada. *Hecha el
+   2026-10-07: `Extent::TwoSides { distance, second }` y `Extent::UpToNext` (rayos desde el
+   interior y los bordes del perfil, `cad_ray_hit` con `IntCurvesFace_ShapeIntersector`);
+   `Extrude.draft` (grados, `cad_draft_prism` con `LocOpe_DPrism`, que mide la altura sobre la
+   pared inclinada: se divide por cos; hacia atrás cambia el signo del ángulo; simétrica y dos
+   direcciones se angostan desde el plano hacia cada lado) y `Extrude.thin` (anillo entre el
+   perfil desplazado ±t/2 con `BRepOffsetAPI_MakeOffset`, esquinas de afuera redondeadas). Con
+   desmolde o delgada las caras laterales no llevan el origen `lado:` (la sonda queda fuera de
+   la pared); las tapas sí.*
 3. **Barrido y transición** con interfaz (el puente ya existe).
 4. **Agujero** con tamaños estándar.
 5. **Hélice** (y ejemplo de rosca/resorte con barrido), **nervio**, **engrosar**.

@@ -97,7 +97,11 @@ export type Extent =
   | { type: "blind"; distance: number }
   | { type: "symmetric"; distance: number }
   | { type: "through_all" }
-  | { type: "up_to_face"; face: FaceRef };
+  | { type: "up_to_face"; face: FaceRef }
+  /** `distance` hacia la normal y `second` hacia atrás */
+  | { type: "two_sides"; distance: number; second: number }
+  /** Hasta la primera cara del sólido que encuentra */
+  | { type: "up_to_next" };
 
 export interface SketchPoint {
   id: number;
@@ -174,7 +178,18 @@ export type PatternKind =
 
 export type FeatureKind =
   | { type: "sketch"; plane: PlaneSpec; offset: number; sketch: Sketch }
-  | { type: "extrude"; sketch: number; regions: RegionSelection; extent: Extent; reverse: boolean; op: BodyOp }
+  | {
+      type: "extrude";
+      sketch: number;
+      regions: RegionSelection;
+      extent: Extent;
+      reverse: boolean;
+      op: BodyOp;
+      /** Desmolde de las paredes (grados; positivo = se angosta) */
+      draft?: number;
+      /** Extrusión delgada: espesor de la pared */
+      thin?: number | null;
+    }
   | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp }
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp }
   | { type: "fillet"; edges: EdgeRef[]; radius: number }

@@ -101,6 +101,8 @@ fn reverse_engineer_plate() {
         extent: Extent::Symmetric { distance: depth },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     doc.add(boss.feature());
     let ev = doc.evaluate();

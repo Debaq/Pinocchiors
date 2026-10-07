@@ -397,3 +397,5 @@ cargo test -p cad-model
 - **2026-10-07 Geometría de referencia** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 1):
   planos, ejes y puntos de referencia como operaciones del historial, visibles y elegibles en
   el visor, usables como plano de sketch, eje de revolución o de patrón y plano de simetría.
+- **2026-10-07 Extrusión completa** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 2): dos
+  direcciones, hasta la siguiente cara, desmolde de las paredes y extrusión delgada.

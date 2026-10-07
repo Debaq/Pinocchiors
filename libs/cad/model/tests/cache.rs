@@ -28,6 +28,8 @@ fn sample() -> Document {
         extent: Extent::Blind { distance: 8.0 },
         reverse: false,
         op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
     }));
     doc.add(prim(PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 10.0, centered: false, centered_z: false }, [35.0, 10.0, 8.0], BodyOp::Join));
     let hole = doc.add(prim(PrimitiveShape::Cylinder { radius: 2.0, height: 40.0 }, [45.0, 15.0, -5.0], BodyOp::Cut));

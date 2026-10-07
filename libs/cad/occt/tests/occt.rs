@@ -493,3 +493,32 @@ fn step_with_named_colored_parts() {
     let back = Shape::from_step(&bytes).unwrap();
     assert_eq!(back.solids().unwrap().len(), 2);
 }
+
+#[test]
+fn ray_draft_prism_and_offset_face() {
+    if !cad_occt::available() {
+        return;
+    }
+    let b = Shape::make_box(Frame::at([0.0, 0.0, 10.0]), 10.0, 10.0, 5.0).unwrap();
+    // Desde abajo: la base de la caja a 10
+    let t = b.ray_hit([5.0, 5.0, 0.0], [0.0, 0.0, 1.0]).unwrap();
+    assert!((t - 10.0).abs() < 1e-9, "{t}");
+    assert!(b.ray_hit([50.0, 5.0, 0.0], [0.0, 0.0, 1.0]).is_none());
+    // Cuadrado de 10 con paredes a 45°: pirámide truncada de altura 2 (10 → 6 de lado)
+    let sq = Shape::face(&[rect(10.0, 10.0)]).unwrap();
+    let p = sq.draft_prism(2.0, std::f64::consts::FRAC_PI_4).unwrap();
+    let v = p.mass().unwrap().volume;
+    let want = 2.0 / 3.0 * (100.0 + 36.0 + (100.0f64 * 36.0).sqrt());
+    assert!((v.abs() - want).abs() < 1e-6 * want, "{v} vs {want}");
+    // Altura negativa: hacia el otro lado, mismo volumen
+    let down = sq.draft_prism(-2.0, std::f64::consts::FRAC_PI_4).unwrap();
+    let m = down.mass().unwrap();
+    assert!((m.volume.abs() - want).abs() < 1e-6 * want, "{}", m.volume);
+    assert!(m.bbox_max[2] < 1e-9, "fue hacia arriba: {:?}", m.bbox_max);
+    // Desplazar hacia adentro 1: cuadrado de 8; hacia afuera con esquinas redondas
+    let inner = sq.offset_face(-1.0).unwrap();
+    assert!((inner.mass().unwrap().area - 64.0).abs() < 1e-6);
+    let outer = sq.offset_face(1.0).unwrap();
+    let a = 100.0 + 4.0 * 10.0 + std::f64::consts::PI;
+    assert!((outer.mass().unwrap().area - a).abs() < 1e-6 * a, "{}", outer.mass().unwrap().area);
+}

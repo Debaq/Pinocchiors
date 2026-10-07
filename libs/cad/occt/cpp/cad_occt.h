@@ -164,6 +164,14 @@ double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double
 int32_t cad_write_step_parts(const CadShape* const* shapes, const char* const* names, const double* colors,
                              int32_t n, uint8_t** out, size_t* len);
 
+// Primer cruce de la semirrecta origen + t·dir (t > 0) con las caras de la forma; −1 si no hay.
+double cad_ray_hit(const CadShape* s, const double* origin, const double* dir);
+// Prisma de una cara plana hacia su normal, con las paredes inclinadas `angle` (rad;
+// positivo = se angosta).
+CadShape* cad_draft_prism(const CadShape* face, double height, double angle);
+// Cara plana desplazada `distance` hacia afuera (negativo = hacia adentro), esquinas redondeadas.
+CadShape* cad_offset_face(const CadShape* face, double distance);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 
