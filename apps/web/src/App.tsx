@@ -266,6 +266,7 @@ import { createCadUi } from "./lib/cadUi";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
 import { BodyBuilder } from "./components/layout/BodyBuilder";
+import { recordTemplateUse } from "./lib/templateUsage";
 import { SkeletonEditor, type SkeletonEditorTab } from "./components/layout/SkeletonEditor";
 import { SkeletonFitTab, SkeletonWeightsTab, type SkeletonStepProps } from "./components/steps/SkeletonStep";
 import { JointTunePanel, type TuneDirection, type TuneRotation } from "./components/panels/JointTunePanel";
@@ -299,6 +300,8 @@ interface TauriSkeletonPreset {
   name: string;
   description: string;
   num_bones: number;
+  category: string;
+  shape: string | null;
 }
 
 interface TauriAutoFitResult {
@@ -1400,6 +1403,8 @@ export const App: Component = () => {
           name: p.name,
           description: p.description,
           numBones: p.num_bones,
+          category: p.category,
+          shape: p.shape ?? undefined,
         }))
       );
 
@@ -1618,6 +1623,7 @@ export const App: Component = () => {
         const data = await invoke<TauriSkeletonData>("select_skeleton", { presetId });
         if (request !== skeletonRequest) return;
         done(`Plantilla: ${skeletonPresets().find((p) => p.id === presetId)?.name ?? presetId}`);
+        recordTemplateUse(presetId);
         setSkeletonData(tauriSkeletonToViewer(data));
         setSkeletonLoaded(true);
         setFitInfo(undefined);

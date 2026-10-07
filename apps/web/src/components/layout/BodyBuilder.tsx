@@ -15,6 +15,7 @@ import {
 } from "./bodyIcons";
 import type { BodyPlan, BodyShape } from "../../lib/bodyPlan";
 import type { SkeletonPreset } from "../panels/SkeletonPanel";
+import { TemplatePicker } from "./TemplatePicker";
 
 type CountField =
   | "neck"
@@ -240,6 +241,10 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   return (
     <div>
 
+        <Section title="Partir de una plantilla">
+          <TemplatePicker presets={templates()} selected={props.selectedPreset} onPick={props.onPreset} disabled={props.disabled} />
+        </Section>
+
         <Section title="Forma base">
           <div class={GRID}>
             <For each={SHAPES}>
@@ -257,28 +262,6 @@ export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
           </div>
         </Section>
 
-        <Section title="Partir de una plantilla">
-          <div class="flex flex-wrap gap-1.5">
-            <For each={templates()}>
-              {(t) => (
-                <button
-                  type="button"
-                  title={t.description}
-                  disabled={props.disabled}
-                  class={clsx(
-                    "px-2 h-6 rounded-full border text-[11px] transition-colors",
-                    t.id === props.selectedPreset
-                      ? "border-accent bg-accent/15 text-accent"
-                      : "border-border text-text-muted hover:border-border-hover hover:text-text"
-                  )}
-                  onClick={() => props.onPreset?.(t.id)}
-                >
-                  {t.name}
-                </button>
-              )}
-            </For>
-          </div>
-        </Section>
 
         <Show when={shape() === "quadruped"}>
           <Section title="Postura">

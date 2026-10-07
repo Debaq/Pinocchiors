@@ -364,7 +364,7 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   brachiate: { name: "Braquiar", description: "Avanza colgado de los brazos, una mano y después la otra, con el cuerpo como péndulo" },
   tailHang: { name: "Colgarse de la cola", description: "Cabeza abajo, colgado de la cola prensil; se mece y estira los brazos" },
   hop: { name: "Salto de rana", description: "Se agacha, estira las patas traseras de golpe, vuela y cae sobre las delanteras" },
-  sting: { name: "Picar", description: "El abdomen se curva por debajo del cuerpo y pica dos veces" },
+  sting: { name: "Curvar el abdomen", description: "El abdomen se curva por debajo del cuerpo dos veces: la avispa que pica, la libélula que pone huevos" },
   pushUps: { name: "Flexiones", description: "Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza" },
   lieDown: {
     name: "Echarse",
@@ -374,18 +374,27 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
 
+/** Dos alas o más, largas para el cuerpo (el avestruz no vuela) */
+function flyingWings(body: Body): boolean {
+  const wings = chainsOf(body, "wing");
+  return wings.length >= 2 && Math.min(...wings.map((w) => chainLength(body, w))) > 0.3 * body.size;
+}
+
 /** Largo de una cadena (suma de sus tramos) */
 const chainLength = (body: Body, c: Chain) =>
   c.joints.slice(1).reduce((sum, j, i) => sum + length(sub(pos(body, j), pos(body, c.joints[i]))), 0);
 
-/** Dos brazos al menos un 20 % más largos que las piernas: gibón, mono araña */
+/**
+ * Dos brazos al menos un 20 % más largos que las piernas y largos para el
+ * cuerpo (más de 0,6 de la altura): gibón, mono araña; no el pingüino
+ */
 function longArms(body: Body): boolean {
   const arms = limbs(body, "arm");
   const legs = limbs(body, "leg").filter((l) => !l.sprawl);
   if (arms.length !== 2 || legs.length !== 2) return false;
   const arm = Math.min(...arms.map((a) => chainLength(body, a)));
   const leg = Math.max(...legs.map((l) => chainLength(body, l)));
-  return arm > 1.2 * leg;
+  return arm > 1.2 * leg && arm > 0.6 * body.height;
 }
 
 /** Patas traseras plegadas en Z: la rodilla adelante de la cadera y el tobillo detrás de la rodilla */
@@ -394,7 +403,11 @@ function foldedHindLegs(body: Body): Chain[] {
   if (legs.length < 4) return [];
   const middle = legs.reduce((sum, l) => sum + l.along, 0) / legs.length;
   const fwd = (a: number, b: number) => dot(sub(pos(body, b), pos(body, a)), body.forward);
-  return legs.filter((l) => l.along < middle && l.joints.length >= 4 && fwd(l.joints[0], l.joints[1]) > 0 && fwd(l.joints[1], l.joints[2]) < 0);
+  // Pliegue marcado: no la leve inclinación de una pata plantígrada o con casco
+  const fold = 0.08 * body.size;
+  return legs.filter(
+    (l) => l.along < middle && l.joints.length >= 4 && fwd(l.joints[0], l.joints[1]) > fold && fwd(l.joints[1], l.joints[2]) < -fold
+  );
 }
 
 /** Colas de verdad (no el abdomen de un artrópodo) */
@@ -433,7 +446,7 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (upright.length === 2 || sprawlingQuadruped(body)) ids.push("run");
   if (upright.length >= 4) ids.push("trot");
   if (count(body, "arm") > 0) ids.push("wave");
-  if (count(body, "wing") >= 2) ids.push("fly");
+  if (flyingWings(body)) ids.push("fly");
   if (legs.length === 0 && (count(body, "tentacle") >= 3 || count(body, "tail") + count(body, "fin") > 0)) {
     ids.push("swim");
   }
@@ -451,7 +464,7 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (head && upright.length >= 2 && arms === 0) ids.push("eat");
   if (upright.length >= 4) ids.push("shake");
   if (legs.length >= 2 && wagging(body).length > 0 && count(body, "pincer") === 0) ids.push("wag");
-  if (count(body, "wing") >= 2) ids.push("glide");
+  if (flyingWings(body)) ids.push("glide");
   if (ids.includes("swim")) ids.push("swimFast");
   if (legs.length === 0 && body.chains.some((c) => c.kind === "body" && c.rotating.length >= 6)) ids.push("strike");
   if (count(body, "pincer") > 0) ids.push("pinch");
@@ -466,7 +479,7 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (count(body, "pincer") > 0 && legs.length >= 6 && legs.every((l) => l.sprawl)) ids.push("sideWalk");
   if (count(body, "wing") >= 2 && stingers(body).length > 0) ids.push("sting");
   if (longArms(body)) ids.push("brachiate");
-  if (arms >= 2 && wagging(body).some((c) => c.rotating.length >= 6)) ids.push("tailHang");
+  if (arms >= 2 && upright.length >= 2 && wagging(body).some((c) => c.rotating.length >= 6)) ids.push("tailHang");
   if (foldedHindLegs(body).length >= 2) ids.push("hop");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }

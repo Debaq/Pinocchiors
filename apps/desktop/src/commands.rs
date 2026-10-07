@@ -136,6 +136,11 @@ pub struct SkeletonPreset {
     pub name: String,
     pub description: String,
     pub num_bones: usize,
+    /// Grupo en la lista: "primates", "mammals", "birds", "reptiles",
+    /// "aquatic", "invertebrates", "fantasy", "other"
+    pub category: String,
+    /// Forma base del plan (para su dibujo), si viene de un plan
+    pub shape: Option<String>,
 }
 
 /// Datos del esqueleto para visualización
@@ -1338,56 +1343,77 @@ pub fn list_skeleton_presets() -> Vec<SkeletonPreset> {
             name: "Humanoide".to_string(),
             description: "Esqueleto humano bípedo con 20 huesos".to_string(),
             num_bones: HumanSkeleton::new().num_bones(),
+            category: "primates".into(),
+            shape: Some("biped".into()),
         },
         SkeletonPreset {
             id: "quad".to_string(),
             name: "Cuadrúpedo".to_string(),
             description: "Animal de 4 patas genérico".to_string(),
             num_bones: QuadSkeleton::new().num_bones(),
+            category: "mammals".into(),
+            shape: Some("quadruped".into()),
         },
         SkeletonPreset {
             id: "horse".to_string(),
             name: "Caballo simple".to_string(),
             description: "Cuadrúpedo con proporciones equinas y patas de dos tramos".to_string(),
             num_bones: HorseSkeleton::new().num_bones(),
+            category: "mammals".into(),
+            shape: Some("quadruped".into()),
         },
         SkeletonPreset {
             id: "centaur".to_string(),
             name: "Centauro".to_string(),
             description: "Híbrido humano-caballo con 27 huesos".to_string(),
             num_bones: CentaurSkeleton::new().num_bones(),
+            category: "fantasy".into(),
+            shape: None,
         },
         SkeletonPreset {
             id: "bird".to_string(),
             name: "Ave".to_string(),
             description: "Esqueleto de ave con alas".to_string(),
             num_bones: BirdSkeleton::new().num_bones(),
+            category: "birds".into(),
+            shape: Some("digitigrade".into()),
         },
         SkeletonPreset {
             id: "spider".to_string(),
             name: "Araña".to_string(),
             description: "Arácnido de 8 patas".to_string(),
             num_bones: SpiderSkeleton::new().num_bones(),
+            category: "invertebrates".into(),
+            shape: Some("arthropod".into()),
         },
         SkeletonPreset {
             id: "serpent".to_string(),
             name: "Serpiente".to_string(),
             description: "Esqueleto vertebrado flexible".to_string(),
             num_bones: SerpentSkeleton::default().num_bones(),
+            category: "reptiles".into(),
+            shape: Some("serpent".into()),
         },
         SkeletonPreset {
             id: "mech".to_string(),
             name: "Mech".to_string(),
             description: "Robot bípedo mecánico".to_string(),
             num_bones: MechSkeleton::new().num_bones(),
+            category: "other".into(),
+            shape: Some("biped".into()),
         },
     ]
     .into_iter()
-    .chain(pinocchio_skeleton::BodyPlan::variants().iter().map(|&(id, name, description)| SkeletonPreset {
-        id: format!("plan:{id}"),
-        name: name.to_string(),
-        description: format!("{description} (apéndices configurables)"),
-        num_bones: pinocchio_skeleton::BodyPlan::variant(id).map_or(0, |p| p.build().num_bones()),
+    .chain(pinocchio_skeleton::BodyPlan::variants().iter().map(|v| {
+        let plan = pinocchio_skeleton::BodyPlan::variant(v.id);
+        SkeletonPreset {
+            id: format!("plan:{}", v.id),
+            name: v.name.to_string(),
+            description: v.description.to_string(),
+            num_bones: plan.map_or(0, |p| p.build().num_bones()),
+            category: v.category.id().to_string(),
+            shape: plan.map(|p| BodyPlanDto::from(p).shape),
+        }
     }))
     .collect()
 }
@@ -4447,7 +4473,7 @@ mod tests {
 
     #[test]
     fn body_plans_round_trip_and_are_listed() {
-        for (id, _, _) in pinocchio_skeleton::BodyPlan::variants() {
+        for id in pinocchio_skeleton::BodyPlan::variants().iter().map(|v| v.id) {
             let plan = pinocchio_skeleton::BodyPlan::variant(id).unwrap();
             let dto = get_body_plan(format!("plan:{id}")).expect("variante");
             assert_eq!(dto.to_plan().unwrap(), plan, "{id}");

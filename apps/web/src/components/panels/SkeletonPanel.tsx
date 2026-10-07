@@ -2,12 +2,17 @@ import { Component, For, Show, createMemo, createSignal } from "solid-js";
 import { clsx } from "clsx";
 import { Panel } from "../ui";
 import * as Icons from "../icons";
+import { byUse, matches } from "../../lib/templateUsage";
 
 export interface SkeletonPreset {
   id: string;
   name: string;
   description: string;
   numBones: number;
+  /** Grupo de la lista (ver `CATEGORIES` en lib/templateUsage) */
+  category?: string;
+  /** Forma base del plan, para su dibujo */
+  shape?: string;
 }
 
 export interface SkeletonPanelProps {
@@ -16,21 +21,12 @@ export interface SkeletonPanelProps {
   onPresetChange?: (presetId: string) => void;
 }
 
-/** Minúsculas y sin tildes: "arana" encuentra "Araña" */
-const normalize = (text: string) => text.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLowerCase();
 
 export const SkeletonPanel: Component<SkeletonPanelProps> = (props) => {
   const [query, setQuery] = createSignal("");
 
-  // Cada palabra buscada debe aparecer en el nombre o la descripción
-  const filtered = createMemo(() => {
-    const words = normalize(query()).split(/\s+/).filter(Boolean);
-    if (words.length === 0) return props.presets;
-    return props.presets.filter((p) => {
-      const text = normalize(`${p.name} ${p.description}`);
-      return words.every((w) => text.includes(w));
-    });
-  });
+  // Las más usadas primero; cada palabra buscada debe aparecer en el nombre o la descripción
+  const filtered = createMemo(() => byUse(props.presets.filter((p) => matches(query(), p))));
 
   const selectedPreset = () =>
     props.presets.find((p) => p.id === props.selectedPreset);

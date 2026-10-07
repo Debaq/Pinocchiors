@@ -187,6 +187,45 @@ impl Limb {
     }
 }
 
+/// Grupo de una variante en la lista de plantillas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Category {
+    Primates,
+    Mammals,
+    Birds,
+    Reptiles,
+    Aquatic,
+    Invertebrates,
+    Fantasy,
+    Other,
+}
+
+impl Category {
+    /// Identificador estable (para la interfaz).
+    pub fn id(self) -> &'static str {
+        match self {
+            Category::Primates => "primates",
+            Category::Mammals => "mammals",
+            Category::Birds => "birds",
+            Category::Reptiles => "reptiles",
+            Category::Aquatic => "aquatic",
+            Category::Invertebrates => "invertebrates",
+            Category::Fantasy => "fantasy",
+            Category::Other => "other",
+        }
+    }
+}
+
+/// Variante con nombre de un plan de cuerpo.
+#[derive(Debug, Clone, Copy)]
+pub struct Variant {
+    pub id: &'static str,
+    pub name: &'static str,
+    /// Qué es y ejemplos (para buscar).
+    pub description: &'static str,
+    pub category: Category,
+}
+
 impl BodyPlan {
     /// Plan sin apéndices extra para una forma.
     pub fn new(shape: BodyShape) -> Self {
@@ -241,47 +280,100 @@ impl BodyPlan {
         }
     }
 
-    /// Variantes con nombre: `(id, nombre, descripción)`.
-    pub fn variants() -> &'static [(&'static str, &'static str, &'static str)] {
-        &[
-            ("elephant", "Elefante", "Cuadrúpedo de patas cortas con trompa, colmillos, orejas y cola"),
-            ("horse", "Caballo / burro", "Patas con carpo, corvejón y menudillo; cuello y mandíbula"),
-            ("camel", "Camello", "Camélido de dos jorobas con cuello en U"),
-            ("dromedary", "Dromedario", "Camélido de una joroba con cuello en U"),
-            ("llama", "Llama / alpaca", "Camélido sin joroba con cuello vertical (guanaco, vicuña)"),
-            ("deer", "Ciervo / antílope", "Patas con casco, astas y cola corta"),
-            ("bull", "Toro / cabra", "Cuadrúpedo con cuernos y mandíbula"),
-            ("giraffe", "Jirafa", "Cuadrúpedo de cuello largo"),
-            ("dog", "Perro / felino", "Cuadrúpedo digitígrado con cola larga y orejas"),
-            ("bear", "Oso", "Cuadrúpedo plantígrado con cola corta"),
-            ("lizard", "Lagarto / iguana", "Patas abiertas al costado, cuerpo bajo y cola larga (salamandra, geco)"),
-            ("crocodile", "Cocodrilo / caimán", "Patas abiertas, mandíbula y cola larga y gruesa"),
-            ("turtle", "Tortuga", "Patas abiertas y cortas, cuello que se estira y cola corta"),
-            ("frog", "Rana / sapo", "Patas traseras de salto plegadas, cuerpo bajo y sin cola"),
-            ("rabbit", "Conejo / liebre", "Patas traseras de salto con el pie largo y orejas largas"),
-            ("spider_monkey", "Mono araña / gibón", "Bípedo de brazos largos con cola prensil"),
-            ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
-            ("octopus", "Pulpo", "Cuerpo radial con 8 brazos y manto"),
-            ("squid", "Calamar", "Cuerpo radial con 8 brazos, 2 tentáculos de caza y aletas"),
-            ("jellyfish", "Medusa", "Campana con tentáculos colgando"),
-            ("starfish", "Estrella de mar", "Cinco brazos planos sin cabeza"),
-            ("anemone", "Anémona", "Columna con tentáculos hacia arriba"),
-            ("fish", "Pez", "Eje horizontal con aletas y cola"),
-            ("dolphin", "Delfín / ballena", "Cola larga con aleta caudal horizontal"),
-            ("spider", "Araña", "8 patas largas, abdomen grande, quelíceros y pedipalpos"),
-            ("crab", "Cangrejo", "Cuerpo ancho, 8 patas, pinzas y ojos en pedúnculo"),
-            ("lobster", "Langosta / camarón", "Pinzas, antenas largas, ojos en pedúnculo y abdomen largo"),
-            ("scorpion", "Escorpión", "Pinzas, abdomen y cola con aguijón"),
-            ("insect", "Insecto / mosca", "6 patas, cabeza aparte, antenas y un par de alas"),
-            ("ant", "Hormiga", "6 patas, cabeza aparte, mandíbulas, antenas y abdomen"),
-            ("beetle", "Escarabajo", "6 patas, mandíbulas, antenas y dos pares de alas"),
-            ("bee", "Abeja / avispa", "6 patas, dos pares de alas, antenas y abdomen que pica"),
-            ("centipede", "Ciempiés", "Cuerpo largo con un par de patas en cada segmento"),
-            ("trex", "Dinosaurio bípedo", "Bípedo digitígrado con cola larga y brazos cortos"),
-            ("bird_walker", "Ave", "Bípedo digitígrado con alas"),
-            ("snake", "Serpiente", "Cadena de 16 segmentos"),
-            ("tree", "Árbol / planta", "Tallo con ramas, sin anatomía"),
-        ]
+    /// Variantes con nombre, ordenadas por categoría.
+    pub fn variants() -> &'static [Variant] {
+        const fn v(id: &'static str, name: &'static str, description: &'static str, category: Category) -> Variant {
+            Variant { id, name, description, category }
+        }
+        use Category::*;
+        const VARIANTS: &[Variant] = &[
+            v("human", "Humano", "Bípedo de proporciones humanas: personajes, maniquí, humanoides", Primates),
+            v("gorilla", "Gorila / chimpancé", "Brazos largos y piernas cortas: orangután, simio", Primates),
+            v("capuchin", "Mono capuchino / macaco", "Bípedo con cola larga: tití, mono aullador", Primates),
+            v("spider_monkey", "Mono araña / gibón", "Bípedo de brazos muy largos con cola prensil: braquia y se cuelga", Primates),
+            v("dog", "Perro / lobo / zorro", "Cuadrúpedo digitígrado con cola y orejas: coyote, chacal, hiena", Mammals),
+            v("cat", "Gato / felino", "Cuadrúpedo digitígrado de cola larga: tigre, león, leopardo, lince, puma", Mammals),
+            v("bear", "Oso", "Cuadrúpedo plantígrado con cola corta: panda, mapache, tejón", Mammals),
+            v("horse", "Caballo / burro", "Patas con carpo, corvejón y menudillo; cuello y mandíbula: cebra, mula, poni", Mammals),
+            v("camel", "Camello", "Camélido de dos jorobas con cuello en U", Mammals),
+            v("dromedary", "Dromedario", "Camélido de una joroba con cuello en U", Mammals),
+            v("llama", "Llama / alpaca", "Camélido sin joroba con cuello vertical: guanaco, vicuña", Mammals),
+            v("deer", "Ciervo / antílope", "Patas con casco, astas y cola corta: gacela, corzo, impala", Mammals),
+            v("moose", "Alce / reno", "Ciervo grande de patas largas con astas: caribú, uapití", Mammals),
+            v("bull", "Toro", "Cuadrúpedo con cuernos y mandíbula: bisonte, búfalo, ñu", Mammals),
+            v("cow", "Vaca", "Cuadrúpedo con cuernos cortos, orejas y cola larga: buey, yak", Mammals),
+            v("goat", "Cabra / oveja", "Cuernos curvos, cola corta: carnero, íbice, muflón", Mammals),
+            v("pig", "Cerdo / jabalí", "Patas cortas con pezuña, colmillos chicos, orejas y cola: facóquero, tapir", Mammals),
+            v("giraffe", "Jirafa", "Cuadrúpedo de cuello largo: okapi", Mammals),
+            v("elephant", "Elefante", "Cuadrúpedo de patas cortas con trompa, colmillos, orejas y cola: mamut", Mammals),
+            v("hippo", "Hipopótamo / rinoceronte", "Cuerpo pesado, patas cortas, mandíbula grande y cola corta", Mammals),
+            v("rabbit", "Conejo / liebre", "Patas traseras de salto con el pie largo y orejas largas", Mammals),
+            v("squirrel", "Ardilla", "Patas de salto y cola larga y peluda: ardilla voladora, chinchilla", Mammals),
+            v("mouse", "Ratón / rata", "Patas cortas, orejas y cola muy larga: hámster, jerbo, musaraña", Mammals),
+            v("otter", "Nutria / comadreja", "Cuerpo largo, patas cortas y cola larga: hurón, visón, castor", Mammals),
+            v("kangaroo", "Canguro / ualabí", "Bípedo inclinado con patas de salto, brazos cortos y cola gruesa", Mammals),
+            v("bat", "Murciélago", "Alas grandes en lugar de brazos, patas cortas y orejas", Mammals),
+            v("seal", "Foca / león marino", "Cuerpo bajo, aletas cortas al costado y cuello que se estira: morsa", Mammals),
+            v("bird_walker", "Ave", "Bípedo digitígrado con alas: pájaro genérico", Birds),
+            v("eagle", "Águila / ave rapaz", "Alas grandes, patas fuertes y cola: halcón, búho, cóndor", Birds),
+            v("chicken", "Gallina / gallo", "Alas cortas, cuello y cola: pavo, faisán, codorniz", Birds),
+            v("ostrich", "Avestruz / emú", "Cuello y patas muy largos, alas chicas: ñandú, casuario", Birds),
+            v("flamingo", "Flamenco / garza", "Cuello largo, patas larguísimas y alas: cigüeña, grulla", Birds),
+            v("duck", "Pato / ganso", "Patas cortas, cuello mediano y alas: cisne, gaviota", Birds),
+            v("penguin", "Pingüino", "Bípedo erguido con aletas cortas y patas cortas", Birds),
+            v("lizard", "Lagarto / iguana", "Patas abiertas al costado, cuerpo bajo y cola larga: geco, varano", Reptiles),
+            v("chameleon", "Camaleón", "Patas abiertas más altas y cola prensil larga", Reptiles),
+            v("salamander", "Salamandra / ajolote", "Patas abiertas cortas, cuerpo bajo y cola: tritón", Reptiles),
+            v("crocodile", "Cocodrilo / caimán", "Patas abiertas, mandíbula y cola larga y gruesa: aligátor", Reptiles),
+            v("turtle", "Tortuga", "Patas abiertas y cortas, cuello que se estira y cola corta: galápago", Reptiles),
+            v("frog", "Rana / sapo", "Patas traseras de salto plegadas, cuerpo bajo y sin cola", Reptiles),
+            v("snake", "Serpiente", "Cadena de 16 segmentos: víbora, cobra", Reptiles),
+            v("python", "Pitón / boa", "Serpiente larga de 28 segmentos: anaconda", Reptiles),
+            v("trex", "Tiranosaurio", "Bípedo digitígrado con cola larga y brazos cortos: alosaurio", Reptiles),
+            v("raptor", "Velocirraptor", "Bípedo ágil con cola larga, brazos y mandíbula: deinonico", Reptiles),
+            v("sauropod", "Dinosaurio de cuello largo", "Cuadrúpedo de cuello y cola larguísimos: braquiosaurio, diplodoco", Reptiles),
+            v("triceratops", "Triceratops", "Cuadrúpedo con cuernos, mandíbula y cola: estegosaurio, anquilosaurio", Reptiles),
+            v("pterodactyl", "Pterodáctilo", "Alas grandes, cuello largo y cola corta: pteranodon", Reptiles),
+            v("fish", "Pez", "Eje horizontal con aletas y cola", Aquatic),
+            v("shark", "Tiburón", "Pez grande con aletas y cola larga: barracuda, atún", Aquatic),
+            v("eel", "Anguila / morena", "Cuerpo largo sin aletas pares: lamprea", Aquatic),
+            v("dolphin", "Delfín / ballena", "Cola larga con aleta caudal horizontal: orca, marsopa", Aquatic),
+            v("octopus", "Pulpo", "Cuerpo radial con 8 brazos y manto", Aquatic),
+            v("squid", "Calamar", "8 brazos, 2 tentáculos de caza y aletas: sepia", Aquatic),
+            v("jellyfish", "Medusa", "Campana con tentáculos colgando", Aquatic),
+            v("starfish", "Estrella de mar", "Cinco brazos planos sin cabeza: erizo, ofiura", Aquatic),
+            v("anemone", "Anémona", "Columna con tentáculos hacia arriba: coral, pólipo", Aquatic),
+            v("spider", "Araña", "8 patas largas, abdomen grande, quelíceros y pedipalpos: tarántula", Invertebrates),
+            v("crab", "Cangrejo", "Cuerpo ancho, 8 patas, pinzas y ojos en pedúnculo", Invertebrates),
+            v("lobster", "Langosta / camarón", "Pinzas, antenas largas, ojos en pedúnculo y abdomen largo: cangrejo de río", Invertebrates),
+            v("scorpion", "Escorpión", "Pinzas, abdomen y cola con aguijón", Invertebrates),
+            v("insect", "Insecto / mosca", "6 patas, cabeza aparte, antenas y un par de alas: mosquito", Invertebrates),
+            v("ant", "Hormiga", "6 patas, cabeza aparte, mandíbulas, antenas y abdomen: termita", Invertebrates),
+            v("beetle", "Escarabajo", "6 patas, mandíbulas, antenas y dos pares de alas: mariquita, cucaracha", Invertebrates),
+            v("bee", "Abeja / avispa", "6 patas, dos pares de alas, antenas y abdomen que pica: abejorro", Invertebrates),
+            v("mantis", "Mantis religiosa", "Patas delanteras como pinzas, cabeza aparte, alas y abdomen largo", Invertebrates),
+            v("dragonfly", "Libélula", "Dos pares de alas, abdomen muy largo y patas cortas: caballito del diablo", Invertebrates),
+            v("butterfly", "Mariposa / polilla", "Dos pares de alas grandes, antenas largas y abdomen", Invertebrates),
+            v("grasshopper", "Saltamontes / grillo", "6 patas largas, antenas largas, alas y abdomen: langosta, chicharra", Invertebrates),
+            v("centipede", "Ciempiés", "Cuerpo largo con un par de patas en cada segmento", Invertebrates),
+            v("millipede", "Milpiés", "Cuerpo muy largo con muchas patas cortas", Invertebrates),
+            v("worm", "Gusano / lombriz", "Cadena corta sin extremidades: oruga, larva, sanguijuela", Invertebrates),
+            v("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos", Fantasy),
+            v("wyvern", "Wyvern / dragón bípedo", "Bípedo con alas grandes, cuello y cola largos", Fantasy),
+            v("hydra", "Hidra", "Cinco cabezas con cuellos largos y cola", Fantasy),
+            v("cerberus", "Cerbero", "Perro de tres cabezas", Fantasy),
+            v("kitsune", "Zorro de nueve colas", "Zorro con nueve colas: kitsune, kumiho", Fantasy),
+            v("griffin", "Grifo / hipogrifo", "Cuadrúpedo con alas, orejas y cola", Fantasy),
+            v("pegasus", "Pegaso", "Caballo con alas", Fantasy),
+            v("werewolf", "Hombre lobo", "Bípedo con orejas, mandíbula y cola", Fantasy),
+            v("minotaur", "Minotauro / sátiro", "Bípedo con cuernos, mandíbula y cola corta", Fantasy),
+            v("demon", "Demonio / gárgola", "Bípedo con cuernos, alas y cola larga", Fantasy),
+            v("angel", "Ángel / arpía", "Bípedo con alas grandes", Fantasy),
+            v("mermaid", "Sirena / naga", "Torso humano sin piernas con una cola larga", Fantasy),
+            v("tree", "Árbol / planta", "Tallo con ramas, sin anatomía", Other),
+            v("rope", "Cuerda / cadena", "Cadena de 12 segmentos para objetos que se doblan: cable, manguera, bufanda", Other),
+        ];
+        VARIANTS
     }
 
     /// Receta de una variante con nombre.
@@ -479,7 +571,7 @@ impl BodyPlan {
                 p.limbs = 3;
                 p.separate_head = true;
                 p.antennae = 2;
-                p.wings = 2;
+                p.wings = 3;
                 p.abdomen = 2;
             }),
             "ant" => with(Arthropod, |p| {
@@ -494,7 +586,7 @@ impl BodyPlan {
                 p.separate_head = true;
                 p.antennae = 2;
                 p.fangs = true;
-                p.wings = 2;
+                p.wings = 3;
                 p.wing_pairs = 2;
                 p.abdomen = 2;
                 p.body_width = 1.3;
@@ -503,7 +595,7 @@ impl BodyPlan {
                 p.limbs = 3;
                 p.separate_head = true;
                 p.antennae = 2;
-                p.wings = 2;
+                p.wings = 3;
                 p.wing_pairs = 2;
                 p.abdomen = 3;
             }),
@@ -526,6 +618,287 @@ impl BodyPlan {
                 p.wings = 3;
             }),
             "snake" => with(Serpent, |p| p.tail = 16),
+            // Primates y humanoides
+            "human" => with(Biped, |_| {}),
+            "gorilla" => with(Biped, |p| {
+                p.arm_length = 1.35;
+                p.leg_length = 0.85;
+                p.jaw = true;
+            }),
+            "capuchin" => with(Biped, |p| {
+                p.tail = 6;
+                p.tail_length = 1.6;
+                p.leg_length = 0.9;
+                p.arm_length = 1.15;
+            }),
+            // Mamíferos
+            "cat" => with(Quadruped, |p| {
+                p.feet = Feet::Digitigrade;
+                p.tail = 6;
+                p.tail_length = 1.4;
+                p.ears = 1;
+                p.jaw = true;
+                p.leg_length = 0.9;
+            }),
+            "moose" => Self::variant("deer").map(|mut p| {
+                p.horns = 4;
+                p.leg_length = 1.3;
+                p.neck = 2;
+                p
+            }),
+            "cow" => Self::variant("bull").map(|mut p| {
+                p.horns = 1;
+                p.tail = 4;
+                p
+            }),
+            "goat" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
+                p.horns = 3;
+                p.ears = 1;
+                p.tail = 1;
+                p.jaw = true;
+                p.neck = 2;
+            }),
+            "pig" => with(Quadruped, |p| {
+                p.feet = Feet::Unguligrade;
+                p.leg_length = 0.65;
+                p.ears = 1;
+                p.tail = 2;
+                p.jaw = true;
+                p.tusks = 1;
+            }),
+            "hippo" => with(Quadruped, |p| {
+                p.leg_length = 0.55;
+                p.jaw = true;
+                p.ears = 1;
+                p.tail = 1;
+            }),
+            "squirrel" => with(Quadruped, |p| {
+                p.jumper = true;
+                p.feet = Feet::Digitigrade;
+                p.tail = 7;
+                p.tail_length = 1.6;
+                p.ears = 1;
+                p.leg_length = 0.75;
+            }),
+            "mouse" => with(Quadruped, |p| {
+                p.feet = Feet::Plantigrade;
+                p.leg_length = 0.55;
+                p.tail = 10;
+                p.tail_length = 1.9;
+                p.ears = 1;
+            }),
+            "otter" => with(Quadruped, |p| {
+                p.feet = Feet::Plantigrade;
+                p.leg_length = 0.55;
+                p.neck = 2;
+                p.tail = 6;
+                p.tail_length = 1.3;
+            }),
+            "kangaroo" => with(DigitigradeBiped, |p| {
+                p.tail = 6;
+                p.tail_length = 1.2;
+                p.ears = 1;
+                p.arm_length = 0.6;
+                p.leg_length = 1.2;
+                p.neck = 2;
+            }),
+            "bat" => with(DigitigradeBiped, |p| {
+                p.wings = 4;
+                p.tail = 1;
+                p.ears = 1;
+                p.leg_length = 0.5;
+            }),
+            "seal" => with(Quadruped, |p| {
+                p.sprawl = true;
+                p.neck_shape = NeckShape::Level;
+                p.neck = 2;
+                p.leg_length = 0.5;
+                p.tail = 2;
+            }),
+            // Aves
+            "eagle" => with(DigitigradeBiped, |p| {
+                p.wings = 4;
+                p.tail = 2;
+                p.neck = 2;
+                p.leg_length = 0.8;
+            }),
+            "chicken" => with(DigitigradeBiped, |p| {
+                p.wings = 2;
+                p.tail = 2;
+                p.neck = 2;
+                p.leg_length = 0.8;
+            }),
+            "ostrich" => with(DigitigradeBiped, |p| {
+                p.wings = 2;
+                p.tail = 1;
+                p.neck = 6;
+                p.leg_length = 1.5;
+            }),
+            "flamingo" => with(DigitigradeBiped, |p| {
+                p.wings = 3;
+                p.tail = 1;
+                p.neck = 6;
+                p.leg_length = 1.8;
+            }),
+            "duck" => with(DigitigradeBiped, |p| {
+                p.wings = 3;
+                p.tail = 1;
+                p.neck = 3;
+                p.leg_length = 0.6;
+            }),
+            // Las aletas son los brazos, cortos
+            "penguin" => with(Biped, |p| {
+                p.tail = 1;
+                p.leg_length = 0.5;
+                p.arm_length = 0.7;
+            }),
+            // Reptiles y anfibios
+            "chameleon" => Self::variant("lizard").map(|mut p| {
+                p.tail = 10;
+                p.tail_length = 1.4;
+                p.leg_length = 1.3;
+                p.jaw = true;
+                p
+            }),
+            "salamander" => Self::variant("lizard").map(|mut p| {
+                p.tail = 6;
+                p.leg_length = 0.7;
+                p
+            }),
+            "python" => with(Serpent, |p| p.tail = 28),
+            "raptor" => with(DigitigradeBiped, |p| {
+                p.tail = 6;
+                p.neck = 2;
+                p.jaw = true;
+                p.arm_length = 1.2;
+            }),
+            "sauropod" => with(Quadruped, |p| {
+                p.neck_shape = NeckShape::Level;
+                p.neck = 8;
+                p.tail = 10;
+                p.tail_length = 1.6;
+                p.leg_length = 1.2;
+            }),
+            "triceratops" => with(Quadruped, |p| {
+                p.horns = 2;
+                p.jaw = true;
+                p.tail = 5;
+                p.leg_length = 0.85;
+            }),
+            "pterodactyl" => with(DigitigradeBiped, |p| {
+                p.wings = 4;
+                p.neck = 3;
+                p.tail = 1;
+                p.jaw = true;
+                p.leg_length = 0.7;
+            }),
+            // Marinos
+            "shark" => with(Fish, |p| p.tail = 5),
+            "eel" => with(Serpent, |p| p.tail = 14),
+            // Invertebrados
+            "mantis" => with(Arthropod, |p| {
+                p.limbs = 2;
+                p.pincers = true;
+                p.separate_head = true;
+                p.antennae = 2;
+                p.wings = 2;
+                p.abdomen = 4;
+                p.leg_length = 1.2;
+            }),
+            "dragonfly" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.wings = 3;
+                p.wing_pairs = 2;
+                p.abdomen = 7;
+                p.leg_length = 0.6;
+            }),
+            "butterfly" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.separate_head = true;
+                p.antennae = 3;
+                p.wings = 3;
+                p.wing_pairs = 2;
+                p.abdomen = 3;
+                p.leg_length = 0.7;
+            }),
+            "grasshopper" => with(Arthropod, |p| {
+                p.limbs = 3;
+                p.limb_segments = 4;
+                p.separate_head = true;
+                p.antennae = 4;
+                p.wings = 3;
+                p.abdomen = 3;
+                p.leg_length = 1.3;
+            }),
+            "millipede" => Self::variant("centipede").map(|mut p| {
+                p.limbs = 20;
+                p.fangs = false;
+                p.leg_length = 0.5;
+                p
+            }),
+            "worm" => with(Serpent, |p| p.tail = 8),
+            // Fantásticos
+            "wyvern" => with(DigitigradeBiped, |p| {
+                p.wings = 4;
+                p.neck = 4;
+                p.tail = 8;
+                p.jaw = true;
+                p.horns = 2;
+            }),
+            "hydra" => with(Quadruped, |p| {
+                p.heads = 5;
+                p.neck = 4;
+                p.tail = 6;
+                p.jaw = true;
+            }),
+            "cerberus" => Self::variant("dog").map(|mut p| {
+                p.heads = 3;
+                p.jaw = true;
+                p
+            }),
+            "kitsune" => Self::variant("dog").map(|mut p| {
+                p.tails = 9;
+                p.tail = 5;
+                p.tail_length = 1.4;
+                p
+            }),
+            "griffin" => with(Quadruped, |p| {
+                p.feet = Feet::Digitigrade;
+                p.wings = 3;
+                p.tail = 4;
+                p.ears = 1;
+            }),
+            "pegasus" => Self::variant("horse").map(|mut p| {
+                p.wings = 4;
+                p
+            }),
+            "werewolf" => with(Biped, |p| {
+                p.ears = 1;
+                p.jaw = true;
+                p.tail = 4;
+                p.arm_length = 1.1;
+            }),
+            "minotaur" => with(Biped, |p| {
+                p.horns = 2;
+                p.jaw = true;
+                p.tail = 2;
+            }),
+            "demon" => with(Biped, |p| {
+                p.horns = 2;
+                p.wings = 3;
+                p.tail = 6;
+                p.tail_length = 1.5;
+            }),
+            "angel" => with(Biped, |p| p.wings = 4),
+            "mermaid" => with(Biped, |p| {
+                p.missing = Limb::BackLeft as u8 | Limb::BackRight as u8;
+                p.tail = 8;
+                p.tail_length = 2.4;
+            }),
+            // Otros
+            "rope" => with(Serpent, |p| p.tail = 12),
             "tree" => with(Tree, |p| {
                 p.tail = 4;
                 p.limbs = 4;
@@ -686,6 +1059,9 @@ impl BodyPlan {
         if self.wings == 0 {
             return;
         }
+        // Más segmentos, ala más larga (3 = la plantilla): el avestruz tiene
+        // alas cortas y el águila largas
+        let span = span * (self.wings as Real / 3.0).clamp(0.5, 1.6);
         for (s, side) in SIDES {
             let start = Vector3::new(root.x() * s, root.y(), root.z());
             let end = start + Vector3::new(s * span, 0.35 * span, -0.2 * span);
@@ -726,7 +1102,10 @@ impl BodyPlan {
         let pelvis = b.root("pelvis", v(0.0, 0.6, 0.0));
         let spine = b.bone("spine", v(0.0, 0.66, 0.14), pelvis);
         let chest = b.bone("chest", v(0.0, 0.7, 0.26), spine);
-        self.neck_and_head(b, chest, v(0.0, 0.88, 0.42), v(0.0, 0.92, 0.6), v(0.0, 0.84, 0.3));
+        // Cuello largo (avestruz, flamenco): sube más con cada segmento
+        let rise = 0.07 * self.neck.saturating_sub(1) as Real;
+        let tip = v(0.0, 0.88 + rise, 0.42 + 0.01 * rise);
+        self.neck_and_head(b, chest, tip, tip + v(0.0, 0.04, 0.18), v(0.0, 0.84 + 0.5 * rise, 0.3));
         for (s, side) in SIDES {
             let leg_joints = [
                 ("hip", v(0.12 * s, 0.55, 0.0)),
@@ -1259,8 +1638,9 @@ mod tests {
 
     #[test]
     fn every_variant_builds_a_valid_tree() {
-        for (id, _, _) in BodyPlan::variants() {
-            let skeleton = BodyPlan::variant(id).unwrap().build();
+        for variant in BodyPlan::variants() {
+            let id = variant.id;
+            let skeleton = BodyPlan::variant(id).unwrap_or_else(|| panic!("{id} sin receta")).build();
             assert!(skeleton.num_bones() >= 5, "{id}");
             let roots = (0..skeleton.num_bones()).filter(|&b| skeleton.get_parent(b).is_none()).count();
             assert_eq!(roots, 1, "{id}: una sola raíz");
