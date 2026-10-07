@@ -1102,6 +1102,9 @@ const scenarios = {
     for (let t = 0; t < 20 && !(await b.eval(`!!document.querySelector("[data-hit]")`)); t++) await sleep(500);
     if (!(await b.eval(`!!document.querySelector("[data-hit]")`))) throw new Error("no detectó el choque");
     await b.shot("ensamble");
+    // Lista de materiales: las dos piezas, una de cada una
+    const bom = await b.eval(`[...document.querySelectorAll("[data-bom-row]")].map((r) => r.children[0].textContent + "×" + r.children[1].textContent)`);
+    if (bom.length !== 2 || !bom.every((r) => r.endsWith("×1"))) throw new Error(`lista: ${bom}`);
     // Con el ángulo impuesto ya no queda nada libre
     await b.eval(`window.__cadStore.editAssembly((a) => { a.mates[0].angle = 45; })`);
     await sleep(2000);

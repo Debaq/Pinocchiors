@@ -428,3 +428,5 @@ cargo test -p cad-model
 - **2026-10-07 Ensamble** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fases 1, 2 y parte de la 4):
   instancias de las piezas, relaciones fija, bisagra, deslizante, cilíndrica y plana con un
   solver 3D, grados libres y revisión de choques.
+- **2026-10-07 Lista de materiales** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fase 4): piezas,
+  cantidades, material y masa del ensamble, exportable a CSV.

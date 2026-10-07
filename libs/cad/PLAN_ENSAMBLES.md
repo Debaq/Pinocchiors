@@ -89,7 +89,9 @@ Depende de [PLAN_PIEZAS.md](PLAN_PIEZAS.md): sin piezas separadas no hay qué en
    El ensamble no entra en el hash del recálculo del diseño.*
 3. **Arrastre** respetando relaciones y diagnóstico de grados libres.
 4. **Interferencias** y **lista de materiales**. *Interferencias hechas el 2026-10-07 (cajas envolventes y
-   luego intersección booleana; volumen común exacto). Falta la lista de materiales.*
+   luego intersección booleana; volumen común exacto). Lista de materiales también: piezas
+   agrupadas con cantidad, material y masa (con el material de cada pieza o el del diseño),
+   masa total y exportar CSV (separado por punto y coma, coma decimal).*
 5. **Animar** relación y exportar glTF animado.
 6. Relaciones avanzadas (engranaje, tornillo, pasador en ranura), **sub-ensambles**, vista
    explosionada, STEP de ensamble.

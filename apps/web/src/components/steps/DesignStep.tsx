@@ -1,4 +1,5 @@
 import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
 import {
@@ -2891,6 +2892,9 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           )}
         </Show>
       </Section>
+      <Show when={(asm()?.instances.length ?? 0) > 0}>
+        <BomSection store={store} />
+      </Show>
       <Section title="Choques">
         <Button size="sm" fullWidth disabled={(asm()?.instances.length ?? 0) < 2} onClick={() => void store.assemblyInterference().then(setHits)}>
           Revisar choques
@@ -2908,6 +2912,66 @@ const AssemblyPanel: Component<{ store: CadStore; ui: CadUi }> = (props) => {
         </Show>
       </Section>
     </div>
+  );
+};
+
+/** Lista de materiales del ensamble: piezas, cantidades, material y masa; exportable a CSV */
+const BomSection: Component<{ store: CadStore }> = (props) => {
+  const rows = createMemo(() => {
+    const doc = props.store.doc();
+    const parts = props.store.result()?.parts ?? [];
+    const out: { name: string; qty: number; material: string; mass: number | null; volume: number }[] = [];
+    for (const inst of doc?.assembly?.instances ?? []) {
+      const p = parts.find((x) => samePart(x.id, inst.part));
+      if (!p) continue;
+      const row = out.find((r) => r.name === p.name);
+      if (row) row.qty += 1;
+      else out.push({ name: p.name, qty: 1, material: partMaterial(doc, p)?.name ?? "", mass: partMass(doc, p), volume: p.volume });
+    }
+    return out;
+  });
+  const total = () => (rows().every((r) => r.mass !== null) ? rows().reduce((a, r) => a + r.mass! * r.qty, 0) : null);
+  const exportCsv = async () => {
+    const path = await save({ filters: [{ name: "CSV", extensions: ["csv"] }], defaultPath: "lista_de_materiales.csv" });
+    if (!path) return;
+    const q = (s: string) => `"${s.replace(/"/g, '""')}"`;
+    const lines = [
+      "Elemento;Pieza;Cantidad;Material;Masa unitaria (g);Volumen unitario (cm³)",
+      ...rows().map((r, i) => [i + 1, q(r.name), r.qty, q(r.material), r.mass === null ? "" : r.mass.toFixed(2).replace(".", ","), (r.volume / 1000).toFixed(3).replace(".", ",")].join(";")),
+    ];
+    await invoke("cad_write_text", { path, content: lines.join("\n") + "\n" });
+  };
+  return (
+    <Section title="Lista de materiales">
+      <table class="w-full text-[11px]" aria-label="Lista de materiales">
+        <thead>
+          <tr class="text-text-dim">
+            <th class="text-left font-normal">Pieza</th>
+            <th class="text-right font-normal">Cant.</th>
+            <th class="text-left font-normal pl-2">Material</th>
+            <th class="text-right font-normal">Masa</th>
+          </tr>
+        </thead>
+        <tbody>
+          <For each={rows()}>
+            {(r) => (
+              <tr class="text-text" data-bom-row>
+                <td class="truncate max-w-[7rem]">{r.name}</td>
+                <td class="text-right font-mono">{r.qty}</td>
+                <td class="pl-2 truncate max-w-[5rem]">{r.material || "—"}</td>
+                <td class="text-right font-mono">{r.mass === null ? "—" : fmtMass(r.mass * r.qty)}</td>
+              </tr>
+            )}
+          </For>
+        </tbody>
+      </table>
+      <Show when={total() !== null}>
+        <p class="text-xs text-text">Masa total: {fmtMass(total()!)}</p>
+      </Show>
+      <Button size="sm" variant="ghost" fullWidth onClick={() => void exportCsv()}>
+        Exportar CSV
+      </Button>
+    </Section>
   );
 };
 
