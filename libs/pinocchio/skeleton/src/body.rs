@@ -59,6 +59,8 @@ pub enum NeckShape {
     Swan,
     /// Casi vertical y recto: llama, alpaca.
     Upright,
+    /// Horizontal, la cabeza al frente: reptiles, tortuga.
+    Level,
 }
 
 /// Forma base y apéndices. Los campos que no aplican a la forma se ignoran;
@@ -109,6 +111,41 @@ pub struct BodyPlan {
     pub arm_length: Real,
     /// Largo de la cola respecto de la plantilla (cola prensil: más).
     pub tail_length: Real,
+    /// Patas abiertas al costado y cuerpo cerca del suelo: lagarto,
+    /// cocodrilo, tortuga (solo cuadrúpedos).
+    pub sprawl: bool,
+    /// Extremidades que faltan (bits, ver [`Limb`]): de cada una queda solo
+    /// la raíz (hombro o cadera), para el muñón. Bípedos y cuadrúpedos.
+    pub missing: u8,
+    /// Cantidad de cabezas, cada una con su cuello y sus apéndices
+    /// (hidra, cerbero). Bípedos y cuadrúpedos.
+    pub heads: usize,
+    /// Cantidad de colas, cada una con `tail` segmentos.
+    pub tails: usize,
+}
+
+/// Bit de cada extremidad en [`BodyPlan::missing`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Limb {
+    /// Brazo izquierdo o pata delantera izquierda.
+    FrontLeft = 1,
+    /// Brazo derecho o pata delantera derecha.
+    FrontRight = 2,
+    /// Pierna izquierda o pata trasera izquierda.
+    BackLeft = 4,
+    /// Pierna derecha o pata trasera derecha.
+    BackRight = 8,
+}
+
+impl Limb {
+    fn of(front: bool, side: &str) -> Self {
+        match (front, side == "_l") {
+            (true, true) => Limb::FrontLeft,
+            (true, false) => Limb::FrontRight,
+            (false, true) => Limb::BackLeft,
+            (false, false) => Limb::BackRight,
+        }
+    }
 }
 
 impl BodyPlan {
@@ -147,6 +184,10 @@ impl BodyPlan {
             humps: 0,
             arm_length: 1.0,
             tail_length: 1.0,
+            sprawl: false,
+            missing: 0,
+            heads: 1,
+            tails: 1,
         }
     }
 
@@ -163,6 +204,9 @@ impl BodyPlan {
             ("giraffe", "Jirafa", "Cuadrúpedo de cuello largo"),
             ("dog", "Perro / felino", "Cuadrúpedo digitígrado con cola larga y orejas"),
             ("bear", "Oso", "Cuadrúpedo plantígrado con cola corta"),
+            ("lizard", "Lagarto / iguana", "Patas abiertas al costado, cuerpo bajo y cola larga (salamandra, geco)"),
+            ("crocodile", "Cocodrilo / caimán", "Patas abiertas, mandíbula y cola larga y gruesa"),
+            ("turtle", "Tortuga", "Patas abiertas y cortas, cuello que se estira y cola corta"),
             ("spider_monkey", "Mono araña / gibón", "Bípedo de brazos largos con cola prensil"),
             ("dragon", "Dragón", "Cuadrúpedo con alas, cuello y cola largos"),
             ("octopus", "Pulpo", "Cuerpo radial con 8 tentáculos"),
@@ -259,6 +303,29 @@ impl BodyPlan {
                 p.jaw = true;
                 p.leg_length = 0.85;
             }),
+            "lizard" => with(Quadruped, |p| {
+                p.sprawl = true;
+                p.feet = Feet::Plantigrade;
+                p.neck_shape = NeckShape::Level;
+                p.tail = 8;
+                p.tail_length = 1.6;
+            }),
+            "crocodile" => with(Quadruped, |p| {
+                p.sprawl = true;
+                p.feet = Feet::Plantigrade;
+                p.neck_shape = NeckShape::Level;
+                p.jaw = true;
+                p.tail = 10;
+                p.tail_length = 1.8;
+                p.leg_length = 0.8;
+            }),
+            "turtle" => with(Quadruped, |p| {
+                p.sprawl = true;
+                p.neck_shape = NeckShape::Level;
+                p.neck = 3;
+                p.tail = 1;
+                p.leg_length = 0.8;
+            }),
             "spider_monkey" => with(Biped, |p| {
                 p.arm_length = 1.6;
                 p.tail = 12;
@@ -317,6 +384,11 @@ impl BodyPlan {
         }
     }
 
+    /// La extremidad está (no se quitó).
+    pub fn has(&self, limb: Limb) -> bool {
+        self.missing & limb as u8 == 0
+    }
+
     /// Esqueleto plantilla del plan.
     pub fn build(&self) -> BasicSkeleton {
         let mut b = Builder::default();
@@ -333,6 +405,7 @@ impl BodyPlan {
         // Largo de las patas: lo que está debajo de la línea del cuerpo se
         // estira o se acorta, lo de arriba sube o baja lo mismo
         let body_line = match self.shape {
+            BodyShape::Quadruped if self.sprawl => Some(0.17),
             BodyShape::Biped | BodyShape::Quadruped => Some(0.45),
             BodyShape::DigitigradeBiped => Some(0.55),
             _ => None,
@@ -350,14 +423,30 @@ impl BodyPlan {
         BasicSkeleton::from_bones(b.bones)
     }
 
+    /// Cuellos desde `chest` hasta cada cabeza, con sus apéndices. `tip` es
+    /// la punta del cuello, la cabeza va de ahí a `head` y `bend` curva el
+    /// cuello. Con varias cabezas se abren en abanico hacia los costados y
+    /// los huesos de la segunda en adelante llevan el número (`neck2_1`,
+    /// `head2`, `ear2_tip_l`…).
+    fn neck_and_head(&self, b: &mut Builder, chest: usize, tip: Vector3, head: Vector3, bend: Vector3) {
+        let n = self.heads.clamp(1, 9);
+        let spread = 1.6 * head.distance(&tip);
+        for k in 0..n {
+            let x = (k as Real - (n - 1) as Real / 2.0) * spread;
+            let shift = Vector3::new(x, 0.0, 0.0);
+            let tag = if k == 0 { String::new() } else { (k + 1).to_string() };
+            self.one_head(b, chest, tip + shift, head + shift, bend + shift * 0.5, &tag);
+        }
+    }
+
     /// Cuello desde `chest` hasta la cabeza, y apéndices de la cabeza.
     /// `base` y `tip` son el arranque y la punta del cuello; la cabeza va de
     /// la punta del cuello a `head`.
-    fn neck_and_head(&self, b: &mut Builder, chest: usize, tip: Vector3, head: Vector3, bend: Vector3) {
+    fn one_head(&self, b: &mut Builder, chest: usize, tip: Vector3, head: Vector3, bend: Vector3, tag: &str) {
         let start = b.position(chest);
         let points = curve(start, tip, bend, self.neck.max(1));
-        let neck = b.chain("neck", chest, &points, false);
-        let head_bone = b.bone("head", head, neck);
+        let neck = b.chain(&format!("neck{tag}"), chest, &points, false);
+        let head_bone = b.bone(format!("head{tag}"), head, neck);
         let forward = (head - tip).try_normalize().unwrap_or(Vector3::unit_z());
         let size = head.distance(&tip);
         if self.trunk > 0 {
@@ -365,14 +454,14 @@ impl BodyPlan {
             let end = v(head.x(), 0.12, head.z() + 0.1);
             let control = head + forward * (1.5 * size) - Vector3::unit_y() * (0.3 * size);
             let points = curve(head, end, control, self.trunk);
-            b.chain("trunk", head_bone, &points, true);
+            b.chain(&format!("trunk{tag}"), head_bone, &points, true);
         }
         if self.antennae > 0 {
             for (s, side) in SIDES {
                 let root = head + Vector3::new(0.3 * s * size, 0.3 * size, 0.0);
                 let end = root + forward * (1.5 * size) + Vector3::new(0.8 * s * size, 1.2 * size, 0.0);
                 let points = curve(root, end, root + Vector3::new(0.2 * s * size, 1.0 * size, 0.2 * size), self.antennae);
-                b.chain_sided("antenna", head_bone, &points, side);
+                b.chain_sided(&format!("antenna{tag}"), head_bone, &points, side);
             }
         } else {
             b.mark_leaf(head_bone);
@@ -383,7 +472,7 @@ impl BodyPlan {
                 let root = head + Vector3::new(0.3 * s * size, 0.4 * size, -0.1 * size);
                 let end = root + Vector3::new(0.5 * s * size, 0.9 * size, -0.4 * size);
                 let points = curve(root, end, root + Vector3::new(0.1 * s * size, 0.6 * size, 0.1 * size), self.horns);
-                b.chain_sided("horn", head_bone, &points, side);
+                b.chain_sided(&format!("horn{tag}"), head_bone, &points, side);
             }
         }
         if self.tusks > 0 {
@@ -393,15 +482,15 @@ impl BodyPlan {
                 let end = root + forward * (0.9 * size) + Vector3::new(0.1 * s * size, -0.5 * size, 0.0);
                 let control = root + forward * (0.6 * size) + Vector3::new(0.05 * s * size, -0.35 * size, 0.0);
                 let points = curve(root, end, control, self.tusks);
-                b.chain_sided("tusk", head_bone, &points, side);
+                b.chain_sided(&format!("tusk{tag}"), head_bone, &points, side);
             }
         }
         if self.jaw {
             // Bisagra en la base de la cabeza (gira con el cuello) y punta bajo el hocico
             let hinge = tip + Vector3::new(0.0, -0.2 * size, 0.0) + forward * (0.1 * size);
-            let jaw = b.bone("jaw", hinge, neck);
+            let jaw = b.bone(format!("jaw{tag}"), hinge, neck);
             let end = head + Vector3::new(0.0, -0.4 * size, 0.0) + forward * (0.1 * size);
-            let jaw_tip = b.bone("jaw_tip", end, jaw);
+            let jaw_tip = b.bone(format!("jaw{tag}_tip"), end, jaw);
             b.mark_leaf(jaw_tip);
         }
         if self.ears > 0 {
@@ -410,7 +499,7 @@ impl BodyPlan {
                 let root = tip + Vector3::new(0.45 * s * size, 0.25 * size, 0.0);
                 let end = root + Vector3::new(0.7 * s * size, -0.5 * size, -0.3 * size);
                 let points = curve(root, end, root + Vector3::new(0.5 * s * size, 0.0, -0.2 * size), self.ears + 1);
-                b.chain_sided("ear", neck, &points, side);
+                b.chain_sided(&format!("ear{tag}"), neck, &points, side);
             }
         }
     }
@@ -424,9 +513,17 @@ impl BodyPlan {
         let k = self.tail_length.clamp(0.3, 4.0);
         // Una cola alargada no atraviesa el suelo
         let lift = |p: Vector3| Vector3::new(p.x(), p.y().max(0.08), p.z());
-        let (end, bend) = (lift(start + (end - start) * k), lift(start + (bend - start) * k));
-        let points = curve(start, end, bend, self.tail);
-        b.chain("tail", from, &points, true);
+        let (end, bend) = (start + (end - start) * k, start + (bend - start) * k);
+        // Varias colas: abiertas en abanico hacia los costados (`tail`, `tail2_1`…)
+        let n = self.tails.clamp(1, 9);
+        let spread = 0.35 * end.distance(&start);
+        for i in 0..n {
+            let x = (i as Real - (n - 1) as Real / 2.0) * spread;
+            let shift = Vector3::new(x, 0.0, 0.0);
+            let points = curve(start, lift(end + shift), lift(bend + shift * 0.5), self.tail);
+            let name = if i == 0 { "tail".to_string() } else { format!("tail{}", i + 1) };
+            b.chain(&name, from, &points, true);
+        }
     }
 
     /// Alas desde `from`, hacia afuera y arriba.
@@ -451,16 +548,20 @@ impl BodyPlan {
         for (s, side) in SIDES {
             let at_shoulder = v(0.1 * s, 0.85, 0.0);
             let reach = |p: Vector3| at_shoulder + (p - at_shoulder) * arm;
-            let shoulder = b.bone_sided("shoulder", at_shoulder, chest, side);
-            let elbow = b.bone_sided("elbow", reach(v(0.25 * s, 0.65, 0.0)), shoulder, side);
-            let wrist = b.bone_sided("wrist", reach(v(0.35 * s, 0.5, 0.0)), elbow, side);
-            let hand = b.bone_sided("hand", reach(v(0.4 * s, 0.45, 0.0)), wrist, side);
-            b.mark_leaf(hand);
-            let hip = b.bone_sided("hip", v(0.1 * s, 0.45, 0.0), pelvis, side);
-            let knee = b.bone_sided("knee", v(0.1 * s, 0.25, 0.0), hip, side);
-            let ankle = b.bone_sided("ankle", v(0.1 * s, 0.05, 0.0), knee, side);
-            let foot = b.bone_sided("foot", v(0.1 * s, 0.0, 0.05), ankle, side);
-            b.mark_leaf(foot);
+            let arm_joints = [
+                ("shoulder", at_shoulder),
+                ("elbow", reach(v(0.25 * s, 0.65, 0.0))),
+                ("wrist", reach(v(0.35 * s, 0.5, 0.0))),
+                ("hand", reach(v(0.4 * s, 0.45, 0.0))),
+            ];
+            b.limb(&arm_joints, chest, side, self.has(Limb::of(true, side)));
+            let leg_joints = [
+                ("hip", v(0.1 * s, 0.45, 0.0)),
+                ("knee", v(0.1 * s, 0.25, 0.0)),
+                ("ankle", v(0.1 * s, 0.05, 0.0)),
+                ("foot", v(0.1 * s, 0.0, 0.05)),
+            ];
+            b.limb(&leg_joints, pelvis, side, self.has(Limb::of(false, side)));
         }
         self.add_tail(b, pelvis, v(0.0, 0.2, -0.4), v(0.0, 0.35, -0.25));
         self.add_wings(b, chest, v(0.08, 0.82, -0.05), 0.5);
@@ -472,19 +573,23 @@ impl BodyPlan {
         let chest = b.bone("chest", v(0.0, 0.7, 0.26), spine);
         self.neck_and_head(b, chest, v(0.0, 0.88, 0.42), v(0.0, 0.92, 0.6), v(0.0, 0.84, 0.3));
         for (s, side) in SIDES {
-            let hip = b.bone_sided("hip", v(0.12 * s, 0.55, 0.0), pelvis, side);
-            let knee = b.bone_sided("knee", v(0.14 * s, 0.35, 0.1), hip, side);
-            let ankle = b.bone_sided("ankle", v(0.14 * s, 0.12, -0.06), knee, side);
-            let foot = b.bone_sided("foot", v(0.14 * s, 0.0, 0.1), ankle, side);
-            b.mark_leaf(foot);
+            let leg_joints = [
+                ("hip", v(0.12 * s, 0.55, 0.0)),
+                ("knee", v(0.14 * s, 0.35, 0.1)),
+                ("ankle", v(0.14 * s, 0.12, -0.06)),
+                ("foot", v(0.14 * s, 0.0, 0.1)),
+            ];
+            b.limb(&leg_joints, pelvis, side, self.has(Limb::of(false, side)));
             if self.wings == 0 {
                 let at_shoulder = v(0.1 * s, 0.66, 0.3);
                 let arm = self.arm_length.clamp(0.5, 2.5);
                 let reach = |p: Vector3| at_shoulder + (p - at_shoulder) * arm;
-                let shoulder = b.bone_sided("shoulder", at_shoulder, chest, side);
-                let elbow = b.bone_sided("elbow", reach(v(0.14 * s, 0.58, 0.34)), shoulder, side);
-                let hand = b.bone_sided("hand", reach(v(0.12 * s, 0.54, 0.42)), elbow, side);
-                b.mark_leaf(hand);
+                let arm_joints = [
+                    ("shoulder", at_shoulder),
+                    ("elbow", reach(v(0.14 * s, 0.58, 0.34))),
+                    ("hand", reach(v(0.12 * s, 0.54, 0.42))),
+                ];
+                b.limb(&arm_joints, chest, side, self.has(Limb::of(true, side)));
             }
         }
         self.add_tail(b, pelvis, v(0.0, 0.45, -0.9), v(0.0, 0.6, -0.45));
@@ -492,9 +597,13 @@ impl BodyPlan {
     }
 
     fn quadruped(&self, b: &mut Builder) {
-        let hip = b.root("hip", v(0.0, 0.5, -0.3));
-        let spine = b.bone("spine", v(0.0, 0.55, 0.0), hip);
-        let chest = b.bone("chest", v(0.0, 0.55, 0.3), spine);
+        // Con las patas abiertas el cuerpo va cerca del suelo: todo lo que
+        // no es pata baja lo mismo
+        let drop = if self.sprawl { 0.3 } else { 0.0 };
+        let up = |p: Vector3| p - v(0.0, drop, 0.0);
+        let hip = b.root("hip", up(v(0.0, 0.5, -0.3)));
+        let spine = b.bone("spine", up(v(0.0, 0.55, 0.0)), hip);
+        let chest = b.bone("chest", up(v(0.0, 0.55, 0.3)), spine);
         let n = self.neck as Real;
         let (neck_tip, head, bend) = match self.neck_shape {
             // Cuello largo: sube más
@@ -513,8 +622,13 @@ impl BodyPlan {
                 let tip = v(0.0, 0.6 + 0.09 * n, 0.36 + 0.015 * n);
                 (tip, tip + v(0.0, 0.01, 0.13), v(0.0, 0.58 + 0.045 * n, 0.33 + 0.008 * n))
             }
+            // Al frente, apenas por encima del lomo
+            NeckShape::Level => {
+                let tip = v(0.0, 0.56 + 0.005 * n, 0.36 + 0.07 * n);
+                (tip, tip + v(0.0, 0.0, 0.16), v(0.0, 0.55, 0.33 + 0.035 * n))
+            }
         };
-        self.neck_and_head(b, chest, neck_tip, head, bend);
+        self.neck_and_head(b, chest, up(neck_tip), up(head), up(bend));
         for (s, side) in SIDES {
             let (front, back) = if s < 0.0 { ("_fl", "_bl") } else { ("_fr", "_br") };
             let x = 0.15 * s;
@@ -554,34 +668,66 @@ impl BodyPlan {
                 Feet::Digitigrade => v(x, 0.0, -0.3),
                 Feet::Unguligrade => v(x, 0.0, -0.3),
             };
-            for (joints, paw, parent, suffix) in [(front_leg, paw_front, chest, front), (back_leg, paw_back, hip, back)] {
+            // Abiertas: el codo y la rodilla salen al costado a la altura del
+            // cuerpo y el antebrazo baja al suelo (con planta, la mano mira
+            // adelante y afuera)
+            let sprawled = |shoulder: (&'static str, Vector3), bend: (&'static str, Vector3), low: (&'static str, Vector3), paw: Vector3, full: Vector3| {
+                if self.feet == Feet::Simple { (vec![shoulder, bend], paw) } else { (vec![shoulder, bend, low], full) }
+            };
+            let (front_leg, paw_front, back_leg, paw_back) = if self.sprawl {
+                let z = |front: bool, d: Real| if front { 0.28 + d } else { -0.28 + d };
+                let (f, pf) = sprawled(
+                    ("shoulder", v(0.1 * s, 0.22, z(true, 0.0))),
+                    ("elbow", v(0.27 * s, 0.2, z(true, 0.0))),
+                    ("wrist", v(0.31 * s, 0.03, z(true, 0.03))),
+                    v(0.31 * s, 0.0, z(true, 0.04)),
+                    v(0.36 * s, 0.0, z(true, 0.1)),
+                );
+                let (bk, pb) = sprawled(
+                    ("hip", v(0.1 * s, 0.2, z(false, 0.0))),
+                    ("knee", v(0.28 * s, 0.18, z(false, 0.03))),
+                    ("ankle", v(0.31 * s, 0.03, z(false, -0.01))),
+                    v(0.31 * s, 0.0, z(false, 0.01)),
+                    v(0.37 * s, 0.0, z(false, 0.03)),
+                );
+                (f, pf, bk, pb)
+            } else {
+                (front_leg.to_vec(), paw_front, back_leg.to_vec(), paw_back)
+            };
+            for (joints, paw, parent, suffix, is_front) in [(&front_leg, paw_front, chest, front, true), (&back_leg, paw_back, hip, back, false)] {
+                // Sin la pata queda solo el hombro o la cadera (el muñón)
+                let present = self.has(Limb::of(is_front, side));
                 let mut last = parent;
-                for &(name, p) in joints {
+                for &(name, p) in joints.iter().take(if present { joints.len() } else { 1 }) {
                     // El menudillo lleva el sufijo de la pata (delantera o trasera)
                     let name = if name == "fetlock" { format!("fetlock{suffix}") } else { side_name(name, side) };
                     last = b.bone(name, p, last);
                 }
-                let tip = b.bone(format!("paw{suffix}"), paw, last);
-                b.mark_leaf(tip);
+                if present {
+                    last = b.bone(format!("paw{suffix}"), paw, last);
+                }
+                b.mark_leaf(last);
             }
         }
         // Jorobas sobre el lomo: una en el medio o una sobre cada hombro y cadera
         match self.humps {
             0 => {}
             1 => {
-                let hump = b.bone("hump", v(0.0, 0.76, 0.02), spine);
+                let hump = b.bone("hump", up(v(0.0, 0.76, 0.02)), spine);
                 b.mark_leaf(hump);
             }
             _ => {
-                let front = b.bone("hump_front", v(0.0, 0.74, 0.16), chest);
+                let front = b.bone("hump_front", up(v(0.0, 0.74, 0.16)), chest);
                 b.mark_leaf(front);
-                let back = b.bone("hump_back", v(0.0, 0.74, -0.14), spine);
+                let back = b.bone("hump_back", up(v(0.0, 0.74, -0.14)), spine);
                 b.mark_leaf(back);
             }
         }
         let length = 0.15 + 0.08 * self.tail as Real;
-        self.add_tail(b, hip, v(0.0, 0.45 - 0.4 * length, -0.35 - length), v(0.0, 0.5, -0.35 - 0.6 * length));
-        self.add_wings(b, chest, v(0.12, 0.6, 0.22), 0.8);
+        // Arrastrada, la cola baja menos: va casi horizontal
+        let fall = if self.sprawl { 0.12 } else { 0.4 };
+        self.add_tail(b, hip, up(v(0.0, 0.45 - fall * length, -0.35 - length)), up(v(0.0, 0.5, -0.35 - 0.6 * length)));
+        self.add_wings(b, chest, up(v(0.12, 0.6, 0.22)), 0.8);
     }
 
     fn radial(&self, b: &mut Builder) {
@@ -789,6 +935,17 @@ impl Builder {
         last
     }
 
+    /// Extremidad con nombres de lado (`shoulder_l`, `elbow_l`…) desde
+    /// `parent`. Si falta (`present` falso) queda solo la primera
+    /// articulación, como hoja: el muñón.
+    fn limb(&mut self, joints: &[(&str, Vector3)], parent: usize, side: &str, present: bool) {
+        let mut last = parent;
+        for &(name, p) in joints.iter().take(if present { joints.len() } else { 1 }) {
+            last = self.bone_sided(name, p, last, side);
+        }
+        self.mark_leaf(last);
+    }
+
     /// Como [`Builder::chain`], con sufijo de lado en cada hueso (siempre hoja al final).
     fn chain_sided(&mut self, prefix: &str, parent: usize, points: &[Vector3], side: &str) -> usize {
         let mut last = parent;
@@ -842,7 +999,7 @@ mod tests {
 
     #[test]
     fn sides_are_mirrored() {
-        for id in ["elephant", "octopus", "crab", "dragon", "fish", "squid", "dolphin", "bull", "camel", "horse", "bear", "dog", "spider_monkey"] {
+        for id in ["elephant", "octopus", "crab", "dragon", "fish", "squid", "dolphin", "bull", "camel", "horse", "bear", "dog", "spider_monkey", "lizard", "crocodile", "turtle"] {
             let skeleton = BodyPlan::variant(id).unwrap().build();
             let pairs = mirror_pairs(&skeleton);
             for (i, pair) in pairs.iter().enumerate() {
@@ -956,5 +1113,68 @@ mod tests {
         assert!(arm(&monkey) > 1.5 * arm(&human));
         assert_eq!(monkey.bones().iter().filter(|b| b.name.starts_with("tail")).count(), 12);
         assert!(at(&monkey, "tail_tip").distance(&at(&monkey, "pelvis")) > 0.8);
+    }
+
+    #[test]
+    fn reptiles_sprawl_close_to_the_ground() {
+        for id in ["lizard", "crocodile", "turtle"] {
+            let skeleton = BodyPlan::variant(id).unwrap().build();
+            let at = |name: &str| skeleton.bones().iter().find(|b| b.name == name).unwrap().position;
+            for (paw, top) in [("paw_fl", "shoulder_l"), ("paw_br", "hip_r")] {
+                let (paw, top) = (at(paw), at(top));
+                assert!(paw.y().abs() < 1e-9, "{id}: la pata toca el suelo");
+                // Más afuera que abajo: abierta al costado
+                assert!((paw.x() - top.x()).abs() > 0.8 * (top.y() - paw.y()), "{id}: pata abierta");
+            }
+            assert!(at("chest").y() < 0.3, "{id}: cuerpo bajo");
+            let tail = skeleton.bones().iter().filter(|b| b.name.starts_with("tail")).map(|b| b.position.y());
+            assert!(tail.fold(Real::MAX, Real::min) > 0.0, "{id}: la cola no atraviesa el suelo");
+            assert!(at("head").z() > at("chest").z() + 0.1 && (at("head").y() - at("chest").y()).abs() < 0.1, "{id}: cabeza al frente");
+        }
+        let mut lizard = BodyPlan::variant("lizard").unwrap();
+        lizard.leg_length = 1.5;
+        let tall = lizard.build();
+        assert!(tall.bones().iter().find(|b| b.name == "chest").unwrap().position.y() > 0.25, "patas más largas suben el cuerpo");
+    }
+
+    #[test]
+    fn missing_limbs_leave_a_stump() {
+        let mut plan = BodyPlan::new(BodyShape::Biped);
+        plan.missing = Limb::FrontLeft as u8 | Limb::BackRight as u8;
+        let skeleton = plan.build();
+        let names = names(&skeleton);
+        assert!(names.contains(&"shoulder_l") && !names.contains(&"elbow_l") && !names.contains(&"hand_l"));
+        assert!(names.contains(&"hip_r") && !names.contains(&"knee_r"));
+        assert!(names.contains(&"hand_r") && names.contains(&"foot_l"));
+        let stump = skeleton.bones().iter().find(|b| b.name == "shoulder_l").unwrap();
+        assert!(stump.is_leaf, "el muñón es hoja");
+
+        let mut horse = BodyPlan::variant("horse").unwrap();
+        horse.missing = Limb::BackLeft as u8;
+        let names_horse: Vec<String> = horse.build().bones().iter().map(|b| b.name.clone()).collect();
+        assert!(names_horse.contains(&"hip_l".into()) && !names_horse.iter().any(|n| n == "knee_l" || n == "paw_bl" || n == "fetlock_bl"));
+        assert!(names_horse.contains(&"paw_br".into()));
+    }
+
+    #[test]
+    fn several_heads_and_tails() {
+        let mut plan = BodyPlan::variant("dog").unwrap();
+        plan.heads = 3;
+        plan.tails = 2;
+        plan.horns = 1;
+        let skeleton = plan.build();
+        let names = names(&skeleton);
+        for name in ["head", "head2", "head3", "neck2_1", "ear3_tip_l", "horn2_tip_r", "tail_tip", "tail2_tip"] {
+            assert!(names.contains(&name), "{name} en {names:?}");
+        }
+        let at = |name: &str| skeleton.bones().iter().find(|b| b.name == name).unwrap().position;
+        // En abanico: una al medio y una a cada lado, sin tocarse
+        assert!(at("head").x() < at("head2").x() - 0.1 && at("head2").x() < at("head3").x() - 0.1);
+        assert!((at("head2").x()).abs() < 1e-9, "la del medio queda centrada");
+        assert!((at("tail_tip").x() + at("tail2_tip").x()).abs() < 1e-9 && at("tail_tip").x() < 0.0);
+        let mut unique = names.clone();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), names.len(), "nombres únicos");
     }
 }

@@ -1,37 +1,9 @@
 import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { Panel, Slider } from "../ui";
-import * as Icons from "../icons";
-import { FEET_ICONS, NECK_ICONS, PART_ICONS, SHAPE_ICONS } from "./bodyIcons";
-
-export type BodyShape = "biped" | "digitigrade" | "quadruped" | "radial" | "fish" | "arthropod" | "serpent" | "tree";
-
-/** Forma de cuerpo + apéndices (ver `BodyPlanDto` en apps/desktop) */
-export interface BodyPlan {
-  shape: BodyShape;
-  neck: number;
-  tail: number;
-  trunk: number;
-  ears: number;
-  wings: number;
-  limbs: number;
-  limb_segments: number;
-  fins: boolean;
-  pincers: boolean;
-  antennae: number;
-  /** Los proyectos anteriores no los traen (el backend pone lo básico) */
-  horns?: number;
-  jaw?: boolean;
-  tusks?: number;
-  tentacles?: number;
-  flukes?: boolean;
-  leg_length?: number;
-  feet?: "simple" | "plantigrade" | "digitigrade" | "unguligrade";
-  neck_shape?: "rising" | "swan" | "upright";
-  humps?: number;
-  arm_length?: number;
-  tail_length?: number;
-}
+import { FEET_ICONS, LIMB_BITS, LIMB_ICONS, NECK_ICONS, PART_ICONS, POSTURE_ICONS, SHAPE_ICONS } from "./bodyIcons";
+import type { BodyPlan, BodyShape } from "../../lib/bodyPlan";
+import type { SkeletonPreset } from "../panels/SkeletonPanel";
 
 type CountField = "neck" | "tail" | "trunk" | "ears" | "wings" | "limbs" | "limb_segments" | "antennae" | "horns" | "tusks" | "tentacles";
 type FlagField = "fins" | "pincers" | "jaw" | "flukes";
@@ -58,6 +30,7 @@ const NECKS: { id: NonNullable<BodyPlan["neck_shape"]>; label: string; hint: str
   { id: "rising", label: "Sube", hint: "Sale de los hombros hacia arriba y adelante" },
   { id: "swan", label: "En U", hint: "Baja delante de los hombros y vuelve a subir: camello" },
   { id: "upright", label: "Vertical", hint: "Recto hacia arriba: llama, alpaca" },
+  { id: "level", label: "Al frente", hint: "Horizontal, la cabeza adelante: reptiles, tortuga" },
 ];
 
 /** Cantidad al activar una parte que estaba en 0 */
@@ -71,25 +44,35 @@ const DEFAULT_COUNT: Partial<Record<CountField, number>> = {
   tentacles: 1,
 };
 
-export interface BodyPlanPanelProps {
+export interface BodyBuilderProps {
   /** Plan del esqueleto actual; sin plan solo se elige la forma base */
   plan?: BodyPlan;
   onChange?: (plan: BodyPlan) => void;
   /** Empezar un cuerpo desde cero con esta forma */
   onShape?: (shape: BodyShape) => void;
+  /** Plantillas con plan (`plan:<id>`) para partir de una */
+  presets: SkeletonPreset[];
+  selectedPreset?: string;
+  onPreset?: (presetId: string) => void;
   disabled?: boolean;
 }
 
+/** Nombre de la extremidad de cada bit (lado del personaje) */
+const limbLabel = (bit: number, quadruped: boolean) =>
+  quadruped
+    ? { 1: "Delantera izq.", 2: "Delantera der.", 4: "Trasera izq.", 8: "Trasera der." }[bit]!
+    : { 1: "Brazo izq.", 2: "Brazo der.", 4: "Pierna izq.", 8: "Pierna der." }[bit]!;
+
 // ─── Piezas ─────────────────────────────────────────────────────────────────
 
-/** Tarjetas de al menos 68 px: cuatro por fila en el panel ancho, menos si es angosto */
-const GRID = "grid gap-1.5 grid-cols-[repeat(auto-fill,minmax(68px,1fr))]";
+/** Tarjetas de al menos 84 px: tantas por fila como entren en la columna */
+const GRID = "grid gap-2 grid-cols-[repeat(auto-fill,minmax(84px,1fr))]";
 
+/** Sección plegable (recuerda si quedó abierta) */
 const Section: Component<{ title: string; children: JSX.Element }> = (props) => (
-  <div class="space-y-1.5">
-    <div class="text-[10px] font-semibold uppercase tracking-wide text-text-muted">{props.title}</div>
-    {props.children}
-  </div>
+  <Panel title={props.title} id={`body.${props.title}`} dense>
+    <div class="space-y-3 pb-3">{props.children}</div>
+  </Panel>
 );
 
 /** Botón con pictograma, para elegir una opción o prender una parte */
@@ -111,13 +94,15 @@ const Tile: Component<{
   >
     <button
       type="button"
-      class="w-full flex flex-col items-center gap-0.5 px-1 pt-1.5 pb-1"
+      class="w-full flex flex-col items-center gap-1 px-1 pt-2 pb-1.5"
       title={props.hint}
       aria-pressed={props.active}
       onClick={() => props.onClick()}
     >
-      <props.icon />
-      <span class="w-full text-[10px] leading-tight text-center break-words">{props.label}</span>
+      <span class="[&>svg]:w-14 [&>svg]:h-14">
+        <props.icon />
+      </span>
+      <span class="w-full text-[11px] leading-tight text-center break-words">{props.label}</span>
     </button>
     {props.children}
   </div>
@@ -149,14 +134,14 @@ const CountRow: Component<{ label: string; value: number; min: number; max: numb
   </div>
 );
 
-// ─── Panel ──────────────────────────────────────────────────────────────────
+// ─── Constructor ────────────────────────────────────────────────────────────
 
 /**
- * Constructor de cuerpos: forma base, tipo de pata, cuello y partes que se
- * prenden o apagan. Cada cambio rehace la plantilla; las variantes de la
- * lista son puntos de partida.
+ * Constructor de cuerpos (pestaña Crear del editor de esqueleto): forma
+ * base, plantillas de partida, postura, patas, cuello y partes que se
+ * prenden o apagan. Cada cambio rehace la plantilla.
  */
-export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
+export const BodyBuilder: Component<BodyBuilderProps> = (props) => {
   const plan = () => props.plan;
   const update = (partial: Partial<BodyPlan>) => {
     const current = plan();
@@ -214,15 +199,14 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
     />
   );
 
+  const neckRow = () => (
+    <CountRow label="Segmentos del cuello" value={Math.max(count("neck"), 1)} min={1} max={10} onChange={(neck) => update({ neck })} disabled={props.disabled} />
+  );
+
+  const templates = () => props.presets.filter((p) => p.id.startsWith("plan:"));
+
   return (
-    <Panel title="Constructor de cuerpo" id="body-builder" icon={<Icons.Bone size={14} />} defaultOpen>
-      <div class="space-y-4 pt-1">
-        <p class="text-xs text-text-muted leading-relaxed">
-          <Show when={plan()} fallback="Elige una forma para armar un cuerpo desde cero, o parte de una plantilla de la lista.">
-            Prende o apaga partes y elige cómo son; el esqueleto se rehace al momento. Pasa el mouse sobre cada
-            dibujo para ver ejemplos.
-          </Show>
-        </p>
+    <div>
 
         <Section title="Forma base">
           <div class={GRID}>
@@ -241,10 +225,54 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
           </div>
         </Section>
 
+        <Section title="Partir de una plantilla">
+          <div class="flex flex-wrap gap-1.5">
+            <For each={templates()}>
+              {(t) => (
+                <button
+                  type="button"
+                  title={t.description}
+                  disabled={props.disabled}
+                  class={clsx(
+                    "px-2 h-6 rounded-full border text-[11px] transition-colors",
+                    t.id === props.selectedPreset
+                      ? "border-accent bg-accent/15 text-accent"
+                      : "border-border text-text-muted hover:border-border-hover hover:text-text"
+                  )}
+                  onClick={() => props.onPreset?.(t.id)}
+                >
+                  {t.name}
+                </button>
+              )}
+            </For>
+          </div>
+        </Section>
+
         <Show when={shape() === "quadruped"}>
+          <Section title="Postura">
+            <div class={GRID}>
+              <Tile
+                icon={POSTURE_ICONS.under}
+                label="Bajo el cuerpo"
+                hint="Patas verticales bajo el cuerpo: mamíferos"
+                active={!plan()?.sprawl}
+                disabled={props.disabled}
+                onClick={() => update({ sprawl: false })}
+              />
+              <Tile
+                icon={POSTURE_ICONS.sprawl}
+                label="Al costado"
+                hint="Patas abiertas y cuerpo cerca del suelo: lagarto, cocodrilo, tortuga, salamandra"
+                active={!!plan()?.sprawl}
+                disabled={props.disabled}
+                // Abiertas solo hay simple o con planta (dedos y casco se arman como planta)
+                onClick={() => update({ sprawl: true, feet: (plan()?.feet ?? "simple") === "simple" ? "simple" : "plantigrade" })}
+              />
+            </div>
+          </Section>
           <Section title="Patas">
             <div class={GRID}>
-              <For each={FEET}>
+              <For each={plan()?.sprawl ? FEET.slice(0, 2) : FEET}>
                 {(f) => (
                   <Tile
                     icon={FEET_ICONS[f.id]}
@@ -273,13 +301,34 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
                 )}
               </For>
             </div>
+            {neckRow()}
           </Section>
         </Show>
-        <Show when={headed()}>
-          <CountRow label="Segmentos del cuello" value={Math.max(count("neck"), 1)} min={1} max={10} onChange={(neck) => update({ neck })} disabled={props.disabled} />
+        <Show when={headed() && shape() !== "quadruped"}>
+          <Section title="Cuello">{neckRow()}</Section>
         </Show>
 
         <Show when={headed()}>
+          <Section title="Extremidades">
+            <div class={GRID}>
+              <For each={LIMB_BITS.filter((bit) => shape() !== "digitigrade" || bit > 2 || count("wings") === 0)}>
+                {(bit) => {
+                  const quad = () => shape() === "quadruped";
+                  const label = () => limbLabel(bit, quad());
+                  return (
+                    <Tile
+                      icon={LIMB_ICONS[quad() ? "quadruped" : "biped"][bit]}
+                      label={label()}
+                      hint={`${label()}: apágala si al modelo le falta (queda el ${bit <= 2 ? "hombro" : "cadera"} para el muñón)`}
+                      active={((plan()?.missing ?? 0) & bit) === 0}
+                      disabled={props.disabled}
+                      onClick={() => update({ missing: (plan()?.missing ?? 0) ^ bit })}
+                    />
+                  );
+                }}
+              </For>
+            </div>
+          </Section>
           <Section title="Cabeza">
             <div class={GRID}>
               <Part field="ears" icon="ears" label="Orejas" hint="Orejas que se mueven" max={3} />
@@ -288,6 +337,14 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
               <Part field="trunk" icon="trunk" label="Trompa" hint="Trompa: más segmentos la doblan más suave" max={12} />
               <Flag field="jaw" icon="jaw" label="Mandíbula" hint="Un hueso que abre la boca" />
             </div>
+            <CountRow
+              label="Cabezas (cada una con su cuello)"
+              value={Math.max(plan()?.heads ?? 1, 1)}
+              min={1}
+              max={5}
+              onChange={(heads) => update({ heads })}
+              disabled={props.disabled}
+            />
           </Section>
         </Show>
 
@@ -317,12 +374,24 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
                 <Flag field="pincers" icon="pincers" label="Pinzas" hint="Un par de pinzas al frente" />
               </Show>
             </div>
+            <Show when={count("tail") > 0}>
+              <CountRow
+                label="Colas (el número de la tarjeta son sus segmentos)"
+                value={Math.max(plan()?.tails ?? 1, 1)}
+                min={1}
+                max={9}
+                onChange={(tails) => update({ tails })}
+                disabled={props.disabled}
+              />
+            </Show>
           </Section>
         </Show>
 
         <Show when={shape() === "arthropod"}>
-          <CountRow label="Pares de patas" value={count("limbs")} min={1} max={6} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
-          <CountRow label="Segmentos por pata" value={count("limb_segments")} min={2} max={4} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
+          <Section title="Patas">
+            <CountRow label="Pares de patas" value={count("limbs")} min={1} max={6} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
+            <CountRow label="Segmentos por pata" value={count("limb_segments")} min={2} max={4} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
+          </Section>
         </Show>
 
         <Show when={shape() === "radial"}>
@@ -331,19 +400,30 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
               <Part field="tentacles" icon="tentacles" label="Tentáculos" hint="Pares de tentáculos largos (calamar: 1)" max={2} />
               <Flag field="fins" icon="fins" label="Aletas" hint="Aletas del manto (calamar)" />
             </div>
+            <CountRow label="Brazos" value={count("limbs")} min={3} max={12} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
+            <CountRow label="Segmentos por brazo" value={count("limb_segments")} min={2} max={10} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
           </Section>
-          <CountRow label="Brazos" value={count("limbs")} min={3} max={12} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
-          <CountRow label="Segmentos por brazo" value={count("limb_segments")} min={2} max={10} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
         </Show>
 
         <Show when={shape() === "serpent"}>
-          <CountRow label="Segmentos del cuerpo" value={count("tail")} min={4} max={32} onChange={(tail) => update({ tail })} disabled={props.disabled} />
+          <Section title="Cuerpo">
+            <div class={GRID}>
+              <Tile icon={PART_ICONS.body} label="Cuerpo" hint="Una cadena sin extremidades" active onClick={() => {}} />
+            </div>
+            <CountRow label="Segmentos del cuerpo" value={count("tail")} min={4} max={32} onChange={(tail) => update({ tail })} disabled={props.disabled} />
+          </Section>
         </Show>
 
         <Show when={shape() === "tree"}>
-          <CountRow label="Segmentos del tallo" value={count("tail")} min={2} max={16} onChange={(tail) => update({ tail })} disabled={props.disabled} />
-          <CountRow label="Ramas" value={count("limbs")} min={0} max={12} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
-          <CountRow label="Segmentos por rama" value={count("limb_segments")} min={1} max={8} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
+          <Section title="Tallo y ramas">
+            <div class={GRID}>
+              <Tile icon={PART_ICONS.stem} label="Tallo" hint="El eje que sube desde la base" active onClick={() => {}} />
+              <Tile icon={PART_ICONS.branches} label="Ramas" hint="Ramas repartidas a lo largo del tallo" active={count("limbs") > 0} onClick={() => update({ limbs: count("limbs") > 0 ? 0 : 4 })} />
+            </div>
+            <CountRow label="Segmentos del tallo" value={count("tail")} min={2} max={16} onChange={(tail) => update({ tail })} disabled={props.disabled} />
+            <CountRow label="Ramas" value={count("limbs")} min={0} max={12} onChange={(limbs) => update({ limbs })} disabled={props.disabled} />
+            <CountRow label="Segmentos por rama" value={count("limb_segments")} min={1} max={8} onChange={(limb_segments) => update({ limb_segments })} disabled={props.disabled} />
+          </Section>
         </Show>
 
         <Show when={headed() || (count("tail") > 0 && shape() !== "serpent" && shape() !== "tree")}>
@@ -361,7 +441,6 @@ export const BodyPlanPanel: Component<BodyPlanPanelProps> = (props) => {
             </div>
           </Section>
         </Show>
-      </div>
-    </Panel>
+    </div>
   );
 };

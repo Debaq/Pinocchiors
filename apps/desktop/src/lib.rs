@@ -81,6 +81,7 @@ pub fn run() {
             // Transformación de esqueleto
             commands::transform_skeleton,
             commands::move_bone,
+            commands::set_bone_positions,
             commands::auto_fit_skeleton,
             commands::center_bones,
             // Autorig

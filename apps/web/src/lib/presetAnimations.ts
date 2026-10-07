@@ -3,7 +3,7 @@
  * correr, trotar o galopar, saltar, saludar, aplaudir, golpear, patear,
  * bailar, asentir, negar, comer, sacudirse, mover la cola, aletear, planear,
  * nadar, reptar, atacar, amenazar, arrastrarse con tentáculos, paso de
- * portante y echarse.
+ * portante, echarse y flexiones.
  *
  * No depende de la plantilla elegida: parte el esqueleto en cadenas (tramos
  * sin ramificar) y reconoce patas, brazos, alas, cola, cabeza, trompa,
@@ -104,7 +104,8 @@ export type PresetAnimationId =
   | "threat"
   | "tentacleCrawl"
   | "pace"
-  | "lieDown";
+  | "lieDown"
+  | "pushUps";
 
 export interface PresetAnimation {
   id: PresetAnimationId;
@@ -349,6 +350,7 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
   threat: { name: "Amenazar", description: "Se alza sobre las patas traseras y agita las delanteras" },
   tentacleCrawl: { name: "Arrastrarse", description: "Los tentáculos se enroscan y estiran por turnos" },
   pace: { name: "Paso de portante", description: "Las dos patas del mismo lado avanzan juntas y el cuerpo se mece (camélidos, jirafa)" },
+  pushUps: { name: "Flexiones", description: "Despliegue de lagartija: estira las patas delanteras y sube y baja la cabeza" },
   lieDown: {
     name: "Echarse",
     description: "Se arrodilla sobre las patas delanteras, dobla las traseras, descansa y se levanta empezando por atrás",
@@ -357,13 +359,19 @@ const ANIMATIONS: Record<PresetAnimationId, Omit<PresetAnimation, "id">> = {
 
 const count = (body: Body, kind: ChainKind) => body.chains.filter((c) => c.kind === kind).length;
 
+/** Cuatro patas abiertas al costado, sin pinzas: reptiles, anfibios */
+function sprawlingQuadruped(body: Body): boolean {
+  const legs = body.chains.filter((c) => c.kind === "leg");
+  return legs.length === 4 && legs.every((l) => l.sprawl) && count(body, "pincer") === 0;
+}
+
 /** Animaciones que tienen sentido para este esqueleto */
 export function availableAnimations(body: Body): PresetAnimation[] {
   const legs = body.chains.filter((c) => c.kind === "leg");
   const upright = legs.filter((c) => !c.sprawl);
   const ids: PresetAnimationId[] = ["idle"];
   if (legs.length >= 2) ids.push("walk");
-  if (upright.length === 2) ids.push("run");
+  if (upright.length === 2 || sprawlingQuadruped(body)) ids.push("run");
   if (upright.length >= 4) ids.push("trot");
   if (count(body, "arm") > 0) ids.push("wave");
   if (count(body, "wing") >= 2) ids.push("fly");
@@ -388,11 +396,13 @@ export function availableAnimations(body: Body): PresetAnimation[] {
   if (ids.includes("swim")) ids.push("swimFast");
   if (legs.length === 0 && body.chains.some((c) => c.kind === "body" && c.rotating.length >= 6)) ids.push("strike");
   if (count(body, "pincer") > 0) ids.push("pinch");
-  if (legs.length >= 4 && legs.every((l) => l.sprawl)) ids.push("threat");
+  if (legs.length >= 4 && legs.every((l) => l.sprawl) && !sprawlingQuadruped(body)) ids.push("threat");
   if (legs.length === 0 && count(body, "tentacle") >= 6) ids.push("tentacleCrawl");
   if (upright.length >= 4) ids.push("pace");
   // Arrodillarse sobre el carpo pide patas delanteras con carpo y menudillo
   if (kneelingLegs(body)) ids.push("lieDown");
+  // Las lagartijas; una tortuga (cola corta) no
+  if (sprawlingQuadruped(body) && head && chainsOf(body, "tail").some((c) => c.rotating.length >= 3)) ids.push("pushUps");
   return ids.map((id) => ({ id, ...ANIMATIONS[id] }));
 }
 
@@ -592,7 +602,7 @@ function stride(u: number, duty: number): { swing: number; lift: number } {
 
 const left = (leg: Chain) => leg.side < 0;
 
-const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl" | "pace", Gait> = {
+const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl" | "pace" | "sprint", Gait> = {
   walk: {
     frames: 24,
     duty: 0.62,
@@ -651,6 +661,18 @@ const GAITS: Record<"walk" | "run" | "trot" | "gallop" | "crawl" | "pace", Gait>
     lean: 0,
     // Las dos del mismo lado juntas
     phase: (leg) => (left(leg) ? 0 : 0.5),
+  },
+  // Pique de reptil: patas en diagonal, rápido y con zancada larga
+  sprint: {
+    frames: 12,
+    duty: 0.45,
+    hip: deg(30),
+    knee: deg(30),
+    lift: deg(28),
+    arm: deg(10),
+    elbow: deg(10),
+    lean: 0,
+    phase: (leg, pair) => ((pair + (left(leg) ? 0 : 1)) % 2) * 0.5,
   },
   crawl: {
     frames: 20,
@@ -722,8 +744,18 @@ function gait(body: Body, g: Gait, pose: PoseBuilder, t: number): void {
   const [firstSpine] = body.spine;
   if (firstSpine !== undefined) {
     pose.turn(firstSpine, nod, g.lean);
-    const twist = legs.length === 2 ? deg(6) : deg(3);
-    body.spine.forEach((j) => pose.turn(j, body.up, (twist / body.spine.length) * wave(t, 1, legOfSide(-1))));
+    if (sprawlingQuadruped(body)) {
+      // Reptil: la columna ondula de lado, caderas y hombros a contramano, y
+      // la cabeza sigue mirando adelante
+      const bend = (g === GAITS.sprint ? deg(14) : deg(10)) * wave(t, 1, legOfSide(-1));
+      pose.turn(body.root, body.up, bend);
+      body.spine.forEach((j) => pose.turn(j, body.up, (-2 * bend) / body.spine.length));
+      const head = headJoints(body);
+      head.forEach((j) => pose.turn(j, body.up, bend / Math.max(head.length, 1)));
+    } else {
+      const twist = legs.length === 2 ? deg(6) : deg(3);
+      body.spine.forEach((j) => pose.turn(j, body.up, (twist / body.spine.length) * wave(t, 1, legOfSide(-1))));
+    }
   } else if (g.lean) {
     pose.turn(body.root, nod, g.lean);
   }
@@ -1279,6 +1311,33 @@ function tentacleCrawl(body: Body, pose: PoseBuilder, t: number): void {
 /** Con patas a IK los pies ya pisan el suelo; si no, se baja el cuerpo hasta la pata más baja */
 const grounded = (body: Body) => ikLegs(body).length === 0;
 
+/**
+ * Flexiones de lagartija: estira las patas delanteras (el pecho sube, el
+ * cuerpo gira sobre la cadera) tres veces y la cabeza cabecea al subir
+ */
+function pushUps(body: Body, pose: PoseBuilder, t: number): void {
+  const legs = chainsOf(body, "leg");
+  const middle = legs.reduce((sum, l) => sum + l.along, 0) / legs.length;
+  const front = legs.filter((l) => l.along > middle);
+  const raise = 0.5 - 0.5 * Math.cos(TAU * 3 * t);
+  const pitch = deg(14) * raise;
+  pose.turn(body.root, nodAxis(body), -pitch);
+  // Las delanteras bajan lo que sube el pecho, para seguir apoyadas
+  const root = pos(body, body.root);
+  for (const leg of front) {
+    const shoulder = pos(body, leg.joints[0]);
+    const tip = pos(body, tipOf(leg));
+    const span = dot(sub(shoulder, root), body.forward);
+    const reach = Math.max(length(flat(sub(tip, shoulder))), 1e-6);
+    pose.turn(leg.rotating[0], liftAxis(body, flat(leg.dir)), -Math.atan2(span * Math.sin(pitch), reach));
+  }
+  const head = headJoints(body);
+  head.forEach((j) => pose.turn(j, nodAxis(body), (pitch * 0.6 + deg(8) * raise * wave(t, 6)) / Math.max(head.length, 1)));
+  // La cola queda apoyada: compensa el giro del cuerpo
+  for (const tail of chainsOf(body, "tail")) pose.turn(tail.rotating[0], nodAxis(body), 1.2 * pitch);
+  appendages(body, pose, t, 1, 0.4);
+}
+
 /** Portante: como el paso, con las dos patas de cada lado juntas y el cuerpo meciéndose hacia el lado que apoya */
 function pace(body: Body, pose: PoseBuilder, t: number): void {
   pose.turn(body.root, body.forward, deg(4) * wave(t, 1, 0.5));
@@ -1395,10 +1454,12 @@ export function generateAnimation(
       const frames = legs.length >= 4 && g === GAITS.walk ? 28 : g.frames;
       return bake(name, body, { frames, step: 2, grounded: grounded(body), fps }, (p, t) => gait(body, g, p, t));
     }
-    case "run":
-      return bake(name, body, { frames: GAITS.run.frames, step: 1, grounded: grounded(body), fps }, (p, t) =>
-        gait(body, GAITS.run, p, t)
-      );
+    case "run": {
+      const g = sprawlingQuadruped(body) ? GAITS.sprint : GAITS.run;
+      return bake(name, body, { frames: g.frames, step: 1, grounded: grounded(body), fps }, (p, t) => gait(body, g, p, t));
+    }
+    case "pushUps":
+      return bake(name, body, { frames: 48, step: 1, grounded: true, fps }, (p, t) => pushUps(body, p, t));
     case "trot":
       return bake(name, body, { frames: GAITS.trot.frames, step: 1, grounded: grounded(body), fps }, (p, t) =>
         gait(body, GAITS.trot, p, t)

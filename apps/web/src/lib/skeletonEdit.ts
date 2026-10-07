@@ -119,3 +119,103 @@ export function skeletonFromJson(text: string): { name: string; bones: EditBone[
   });
   return { name: typeof raw.name === "string" ? raw.name : "Esqueleto", bones };
 }
+
+// ─── Ajuste fino de articulaciones ──────────────────────────────────────────
+//
+// Mueven articulaciones sin cambiar la estructura: reciben y devuelven las
+// posiciones de todas. Con espejo, el par del otro lado queda en el reflejo
+// de cada articulación tocada.
+
+export interface JointEditContext {
+  parents: (number | null)[];
+  /** Par izquierda ↔ derecha de cada articulación */
+  mirror: (number | null)[];
+  /** Plano de simetría: normal (hacia la derecha) y un punto */
+  symmetry: { normal: Vec3; point: Vec3 };
+}
+
+const add = (a: Vec3, b: Vec3): Vec3 => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a: Vec3, b: Vec3): Vec3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const scale = (a: Vec3, s: number): Vec3 => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a: Vec3, b: Vec3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const len = (a: Vec3) => Math.hypot(a[0], a[1], a[2]);
+
+/** La articulación y todas las que cuelgan de ella */
+export function subtree(parents: (number | null)[], j: number): number[] {
+  const out = [j];
+  for (let k = 0; k < out.length; k++) parents.forEach((p, i) => p === out[k] && out.push(i));
+  return out;
+}
+
+/** −1 a la izquierda del plano, 1 a la derecha, 0 sobre él (en fracción de `size`) */
+export function sideOf(p: Vec3, ctx: JointEditContext, size: number): number {
+  const d = dot(sub(p, ctx.symmetry.point), ctx.symmetry.normal);
+  return Math.abs(d) < 1e-3 * size ? 0 : Math.sign(d);
+}
+
+/**
+ * Lleva al otro lado las articulaciones `touched`: cada par queda en el
+ * reflejo. Las del medio no tienen par y no cambian.
+ */
+function mirrored(positions: Vec3[], ctx: JointEditContext, touched: number[]): Vec3[] {
+  const out = positions.map((p) => [...p] as Vec3);
+  const set = new Set(touched);
+  const { normal, point } = ctx.symmetry;
+  for (const j of touched) {
+    const m = ctx.mirror[j];
+    // Si los dos lados se tocaron (giro de algo del medio), no se pisan
+    if (m === null || m === undefined || set.has(m)) continue;
+    const d = dot(sub(out[j], point), normal);
+    out[m] = sub(out[j], scale(normal, 2 * d));
+  }
+  return out;
+}
+
+/** Desplaza la articulación `j` (y lo que cuelga de ella si `withChildren`) */
+export function moveJoints(positions: Vec3[], ctx: JointEditContext, j: number, delta: Vec3, withChildren: boolean, mirror: boolean): Vec3[] {
+  const touched = withChildren ? subtree(ctx.parents, j) : [j];
+  const out = positions.map((p, i) => (touched.includes(i) ? add(p, delta) : ([...p] as Vec3)));
+  return mirror ? mirrored(out, ctx, touched) : out;
+}
+
+/** Giro de `v` alrededor del eje unitario `axis` (Rodrigues) */
+function rotate(v: Vec3, axis: Vec3, angle: number): Vec3 {
+  const c = Math.cos(angle);
+  const s = Math.sin(angle);
+  const cross: Vec3 = [axis[1] * v[2] - axis[2] * v[1], axis[2] * v[0] - axis[0] * v[2], axis[0] * v[1] - axis[1] * v[0]];
+  return add(add(scale(v, c), scale(cross, s)), scale(axis, dot(axis, v) * (1 - c)));
+}
+
+/** Gira lo que cuelga de `j` alrededor de `j` (el miembro entero se mueve como un bloque) */
+export function rotateLimb(positions: Vec3[], ctx: JointEditContext, j: number, axis: Vec3, angle: number, mirror: boolean): Vec3[] {
+  const pivot = positions[j];
+  const moved = subtree(ctx.parents, j).slice(1);
+  const out = positions.map((p, i) => (moved.includes(i) ? add(pivot, rotate(sub(p, pivot), axis, angle)) : ([...p] as Vec3)));
+  return mirror ? mirrored(out, ctx, moved) : out;
+}
+
+/**
+ * Alarga (o acorta, con `amount` negativo) el hueso que llega a `j`: la
+ * articulación se aleja de su padre en la misma dirección y lo que cuelga
+ * de ella la sigue. Nunca deja el hueso más corto que un 5 % de su largo
+ */
+export function stretchBone(positions: Vec3[], ctx: JointEditContext, j: number, amount: number, mirror: boolean): Vec3[] {
+  const parent = ctx.parents[j];
+  if (parent === null || parent === undefined) return positions.map((p) => [...p] as Vec3);
+  const bone = sub(positions[j], positions[parent]);
+  const length = len(bone);
+  if (length < 1e-9) return positions.map((p) => [...p] as Vec3);
+  const next = Math.max(0.05 * length, length + amount);
+  return moveJoints(positions, ctx, j, scale(bone, next / length - 1), true, mirror);
+}
+
+/**
+ * Copia el lado de `j` al otro: cada articulación de ese lado con par deja
+ * a su par en el reflejo (para corregir una mitad y emparejar la otra)
+ */
+export function copySide(positions: Vec3[], ctx: JointEditContext, j: number, size: number): Vec3[] {
+  const side = sideOf(positions[j], ctx, size);
+  if (side === 0) return positions.map((p) => [...p] as Vec3);
+  const touched = positions.flatMap((p, i) => (ctx.mirror[i] != null && sideOf(p, ctx, size) === side ? [i] : []));
+  return mirrored(positions, ctx, touched);
+}

@@ -200,6 +200,27 @@ export const FEET_ICONS: Record<string, Component> = {
   ),
 };
 
+// ─── Postura (de frente) ────────────────────────────────────────────────────
+
+export const POSTURE_ICONS: Record<string, Component> = {
+  under: () => (
+    <Frame>
+      <Ground />
+      <ellipse cx="24" cy="16" rx="9" ry="6" />
+      <Chain points={[[18, 21], [18, 32], [18, 43]]} />
+      <Chain points={[[30, 21], [30, 32], [30, 43]]} />
+    </Frame>
+  ),
+  sprawl: () => (
+    <Frame>
+      <Ground />
+      <ellipse cx="24" cy="31" rx="7" ry="5" />
+      <Chain points={[[18, 31], [8, 29], [5, 43]]} />
+      <Chain points={[[30, 31], [40, 29], [43, 43]]} />
+    </Frame>
+  ),
+};
+
 // ─── Cuello ─────────────────────────────────────────────────────────────────
 
 const BODY_NO_NECK = () => (
@@ -222,6 +243,14 @@ export const NECK_ICONS: Record<string, Component> = {
       <BODY_NO_NECK />
       <Accent>
         <Chain points={[[31, 22], [35, 28], [39, 22], [40, 12], [46, 13]]} />
+      </Accent>
+    </Frame>
+  ),
+  level: () => (
+    <Frame>
+      <BODY_NO_NECK />
+      <Accent>
+        <Chain points={[[31, 22], [36, 21], [40, 21], [46, 22]]} />
       </Accent>
     </Frame>
   ),
@@ -483,4 +512,55 @@ export const PART_ICONS: Record<string, Component> = {
       </Accent>
     </Frame>
   ),
+};
+
+// ─── Extremidades (para quitarlas) ──────────────────────────────────────────
+
+/** Bit de cada extremidad en `BodyPlan.missing` */
+export const LIMB_BITS = [1, 2, 4, 8] as const;
+
+// Bípedo de frente: el lado izquierdo del personaje queda a la derecha del dibujo
+const BIPED_LIMBS: Record<number, Point[]> = {
+  1: [[24, 14], [31, 21], [34, 28]],
+  2: [[24, 14], [17, 21], [14, 28]],
+  4: [[24, 26], [28, 35], [28, 44]],
+  8: [[24, 26], [20, 35], [20, 44]],
+};
+// Cuadrúpedo desde arriba, la cabeza hacia arriba: su izquierda queda a la izquierda
+const QUAD_LIMBS: Record<number, Point[]> = {
+  1: [[19, 17], [11, 15], [8, 10]],
+  2: [[29, 17], [37, 15], [40, 10]],
+  4: [[19, 31], [11, 33], [8, 38]],
+  8: [[29, 31], [37, 33], [40, 38]],
+};
+
+const limbIcon = (limbs: Record<number, Point[]>, bit: number, body: () => JSX.Element): Component => () => (
+  <Frame>
+    <Faint>
+      {body()}
+      <Chains chains={LIMB_BITS.filter((b) => b !== bit).map((b) => limbs[b])} />
+    </Faint>
+    <Accent>
+      <Chain points={limbs[bit]} />
+    </Accent>
+  </Frame>
+);
+
+const bipedTrunk = () => (
+  <>
+    <circle cx="24" cy="8" r="3.2" />
+    <Chain points={[[24, 26], [24, 18], [24, 12]]} />
+  </>
+);
+const quadTrunk = () => (
+  <>
+    <ellipse cx="24" cy="24" rx="5.5" ry="11" />
+    <ellipse cx="24" cy="8" rx="3" ry="3.5" />
+    <path d="M24 35 Q23 41 26 46" />
+  </>
+);
+
+export const LIMB_ICONS: Record<"biped" | "quadruped", Record<number, Component>> = {
+  biped: Object.fromEntries(LIMB_BITS.map((b) => [b, limbIcon(BIPED_LIMBS, b, bipedTrunk)])),
+  quadruped: Object.fromEntries(LIMB_BITS.map((b) => [b, limbIcon(QUAD_LIMBS, b, quadTrunk)])),
 };

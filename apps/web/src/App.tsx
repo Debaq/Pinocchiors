@@ -1,4 +1,4 @@
-import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack } from "solid-js";
+import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -73,7 +73,7 @@ import {
 } from "./lib/placement";
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import { createPipelineStore, type PipelineStepId } from "./lib/pipeline";
-import { VIEW_AXES, fromView, viewSize, type Axis } from "./lib/axes";
+import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree } from "./lib/scene-tree";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore } from "./lib/history";
@@ -184,7 +184,19 @@ import { LibraryPanel } from "./components/panels/LibraryPanel";
 import { IkPanel } from "./components/panels/IkPanel";
 import { ConstraintPanel } from "./components/panels/ConstraintPanel";
 import { SkeletonEditPanel } from "./components/panels/SkeletonEditPanel";
-import { addChildBone, removeBone, skeletonFromJson, skeletonToJson, type EditBone } from "./lib/skeletonEdit";
+import {
+  addChildBone,
+  copySide,
+  moveJoints,
+  removeBone,
+  rotateLimb,
+  sideOf,
+  skeletonFromJson,
+  skeletonToJson,
+  stretchBone,
+  type EditBone,
+  type JointEditContext,
+} from "./lib/skeletonEdit";
 import { SPRING_PRESETS } from "./lib/secondary";
 import {
   CONSTRAINT_PREFIX,
@@ -252,7 +264,11 @@ import { DesignStep } from "./components/steps/DesignStep";
 import { createCadStore } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createScanCloud } from "./lib/scanCloud";
-import type { BodyPlan, BodyShape } from "./components/panels/BodyPlanPanel";
+import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
+import { BodyBuilder } from "./components/layout/BodyBuilder";
+import { SkeletonEditor, type SkeletonEditorTab } from "./components/layout/SkeletonEditor";
+import { SkeletonFitTab, SkeletonWeightsTab, type SkeletonStepProps } from "./components/steps/SkeletonStep";
+import { JointTunePanel, type TuneDirection, type TuneRotation } from "./components/panels/JointTunePanel";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TAURI TYPES
@@ -465,6 +481,10 @@ export const App: Component = () => {
     skeletonTransform: {
       apply: (d: { before: SkeletonTransform; after: SkeletonTransform }) => applyTransform(d.after),
       revert: (d: { before: SkeletonTransform; after: SkeletonTransform }) => applyTransform(d.before),
+    },
+    jointPositions: {
+      apply: (d: { before: Vec3[]; after: Vec3[] }) => sendBonePositions(d.after),
+      revert: (d: { before: Vec3[]; after: Vec3[] }) => sendBonePositions(d.before),
     },
     moveJoint: {
       apply: (d: { index: number; from: Vec3; to: Vec3 }) => handleBoneMoved(d.index, d.to),
@@ -1347,7 +1367,12 @@ export const App: Component = () => {
     { key: "g", shift: true, action: () => rigging() && handleSelectCommand("group"), description: "Seleccionar el grupo" },
     { key: "r", alt: true, action: () => animating() && handleResetPose("rotation"), description: "Giro en reposo" },
     { key: "g", alt: true, action: () => animating() && handleResetPose("translation"), description: "Posición de reposo" },
-    { key: "e", ctrl: true, action: () => animating() && toggleRigEditor(), description: "Editor de pose y rig" },
+    {
+      key: "e",
+      ctrl: true,
+      action: () => (animating() ? toggleRigEditor() : inSkeletonStep() && toggleSkeletonEditor()),
+      description: "Editor de pose y rig, o constructor de cuerpo",
+    },
     { key: "c", ctrl: true, action: () => animating() && handleCopyPose(), description: "Copiar pose" },
     { key: "v", ctrl: true, action: () => animating() && handlePastePose(false), description: "Pegar pose" },
     { key: "v", ctrl: true, shift: true, action: () => animating() && handlePastePose(true), description: "Pegar pose espejada" },
@@ -2395,7 +2420,7 @@ export const App: Component = () => {
     applyPoseEdit(reset, "Pose de reposo");
   };
 
-  const rigPanel = (
+  const rigPanel = () => (
     <RigPanel
       boneNames={rigBones().map((b) => b.name)}
       settings={rigSettings()}
@@ -3844,7 +3869,7 @@ export const App: Component = () => {
     />
   );
 
-  const ikPanel = (
+  const ikPanel = () => (
     <IkPanel
       chains={rigSettings().ikChains ?? []}
       controls={rigSettings().controls}
@@ -3869,7 +3894,7 @@ export const App: Component = () => {
     />
   );
 
-  const constraintPanel = (
+  const constraintPanel = () => (
     <ConstraintPanel
       constraints={rigSettings().constraints ?? []}
       joints={rigBones().flatMap((b, j) => (b.parent === null || rigBones().some((c) => c.parent === j) ? [b.name] : []))}
@@ -3958,6 +3983,22 @@ export const App: Component = () => {
     setRigEditorTab("library");
     setRigEditorOpen(true);
   };
+  // Editor de esqueleto al costado del visor, en la sección Esqueleto:
+  // crear → ajustar → pesos, y los ayudantes del rig
+  const [skeletonEditorOpen, setSkeletonEditorOpen] = createPersisted("skeletonEditor.open", false);
+  const [skeletonEditorTab, setSkeletonEditorTab] = createPersisted<SkeletonEditorTab>("skeletonEditor.tab", "create");
+  const [skeletonEditorFraction, setSkeletonEditorFraction] = createPersisted("skeletonEditor.fraction", 0.42);
+  const inSkeletonStep = () => pipeline.activeStep() === "skeleton";
+  const skeletonEditorVisible = () => skeletonEditorOpen() && inSkeletonStep() && !textureEditor();
+  const toggleSkeletonEditor = () => {
+    if (!skeletonEditorOpen()) setTextureEditor(undefined);
+    setSkeletonEditorOpen(!skeletonEditorOpen());
+  };
+  const resizeSkeletonEditor = (e: PointerEvent) => {
+    const start = skeletonEditorFraction();
+    const width = splitRef?.clientWidth ?? 1;
+    startDrag(e, "col-resize", (dx) => setSkeletonEditorFraction(Math.min(0.75, Math.max(0.2, start + dx / width))));
+  };
   // Panel lateral de Orizon3D (como los editores de pieles y de rig)
   const [scanEditorOpen, setScanEditorOpen] = createPersisted("scanEditor.open", true);
   const [scanEditorTab, setScanEditorTab] = createPersisted<ScanEditorTab>("scanEditor.tab", "capture");
@@ -3986,7 +4027,187 @@ export const App: Component = () => {
     v.setCloudTool(on ? scanCloud.tool() : null);
   });
 
-  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel}{constraintPanel}</div>, rig: rigPanel };
+  /** Props del paso Esqueleto: la barra lateral y las pestañas del editor */
+  const skeletonStepProps = (): SkeletonStepProps => ({
+    presets: skeletonPresets(),
+    selectedPreset: selectedSkeleton(),
+    skeletonLoaded: skeletonLoaded(),
+    skeletonBones: skeletonData()?.bones.length,
+    onPresetChange: handleSkeletonChange,
+    autorigConfig: autorigConfig(),
+    onAutorigConfigChange: setAutorigConfig,
+    onAutorig: handleAutorig,
+    canAutorig: meshLoaded() && skeletonLoaded(),
+    hasModel: meshLoaded(),
+    isProcessing: isProcessing(),
+    autorigComplete: autorigComplete(),
+    numBones: boneNames().length || undefined,
+    skeletonTransform: skeletonTransform(),
+    onTransformChange: handleTransformChange,
+    onAutoFit: handleAutoFit,
+    fitInfo: fitInfo(),
+    editorOpen: skeletonEditorVisible(),
+    onToggleEditor: toggleSkeletonEditor,
+    onResetTransform: handleResetTransform,
+    editing: boneEditMode() && activeTool() === "move",
+    onEdit: () => useTool("move"),
+    symmetric: symmetricEdit(),
+    onSymmetricChange: setSymmetricEdit,
+    onCenterAll: () => handleCenterBones(false),
+    painting: activeTool() === "paint",
+    onPaint: () => useTool("paint"),
+    paintConfig: paintConfig(),
+    onPaintConfigChange: setPaintConfig,
+    boneNames: skeletonData()?.bones.map((b) => b.name) ?? [],
+    selectedBone: viewSettings().selectedBone,
+    onSelectBone: (index: number) => {
+      setViewSettings((prev) => ({ ...prev, selectedBone: index, showWeights: true }));
+      viewerRef?.selectBone(index);
+    },
+    posing: boneEditMode() && activeTool() === "rotate",
+    onPose: () => useTool("rotate"),
+    onResetPose: () => viewerRef?.resetPose(),
+  });
+
+  // ─── Ajuste fino de articulaciones (pestaña Ajustar) ──────────────────────
+
+  const sendBonePositions = async (positions: Vec3[]) => {
+    const data = await invoke<TauriSkeletonData>("set_bone_positions", { positions });
+    setSkeletonData(tauriSkeletonToViewer(data));
+  };
+  const jointEditCtx = (): JointEditContext => {
+    const ctx = rigCtx();
+    return { parents: ctx.bones.map((b) => b.parent), mirror: ctx.mirror, symmetry: ctx.symmetry };
+  };
+  /** Mayor medida de la caja del esqueleto (los pasos son una fracción de ella) */
+  const skeletonSize = () => {
+    const ps = rigBones().map((b) => b.position);
+    if (ps.length === 0) return 1;
+    const extent = [0, 1, 2].map((k) => Math.max(...ps.map((p) => p[k])) - Math.min(...ps.map((p) => p[k])));
+    return Math.max(...extent) || 1;
+  };
+  /** Aplica un ajuste a todas las posiciones; queda en el historial y descarta los pesos */
+  const tuneJoints = async (description: string, edit: (positions: Vec3[], ctx: JointEditContext) => Vec3[]) => {
+    const before = rigBones().map((b) => [...b.position] as Vec3);
+    if (before.length === 0) return;
+    const after = edit(before, jointEditCtx());
+    if (after.every((p, i) => p.every((x, k) => Math.abs(x - before[i][k]) < 1e-12))) return;
+    try {
+      await history.execute(description, { kind: "jointPositions", data: { before, after } });
+      dropWeights("Ajustaste el esqueleto");
+    } catch (e) {
+      console.error("Joint tune error:", e);
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+  const tunedJoint = () => {
+    const j = viewSettings().selectedBone;
+    return j >= 0 && j < rigBones().length ? j : -1;
+  };
+  const DIRECTION_NAMES: Record<TuneDirection, string> = {
+    forward: "adelante",
+    back: "atrás",
+    up: "arriba",
+    down: "abajo",
+    left: "a la izquierda",
+    right: "a la derecha",
+  };
+  const handleTuneMove = (direction: TuneDirection, fraction: number, withChildren: boolean) => {
+    const j = tunedJoint();
+    if (j < 0) return;
+    const { forward, up, right } = bodyAxes(rigCtx().body);
+    const axis = { forward, back: forward, up, down: up, right, left: right }[direction];
+    const sign = direction === "back" || direction === "down" || direction === "left" ? -1 : 1;
+    const d = sign * fraction * skeletonSize();
+    void tuneJoints(`Mover ${rigBones()[j].name} ${DIRECTION_NAMES[direction]}`, (ps, ctx) =>
+      moveJoints(ps, ctx, j, [axis[0] * d, axis[1] * d, axis[2] * d], withChildren, symmetricEdit())
+    );
+  };
+  const handleTuneRotate = (rotation: TuneRotation, degrees: number) => {
+    const j = tunedJoint();
+    if (j < 0) return;
+    const { forward, up, right } = bodyAxes(rigCtx().body);
+    const rad = (degrees * Math.PI) / 180;
+    const p = rigBones()[j].position;
+    // Ángulos con el signo de la interfaz: + adelante, + abrir, + a la izquierda
+    const side = sideOf(p, jointEditCtx(), skeletonSize()) || 1;
+    const [axis, angle] =
+      rotation === "pitch" ? [right, -rad] : rotation === "spread" ? [forward, side * rad] : [up, -rad];
+    void tuneJoints(`Girar desde ${rigBones()[j].name}`, (ps, ctx) => rotateLimb(ps, ctx, j, axis, angle, symmetricEdit()));
+  };
+  const handleTuneStretch = (fraction: number) => {
+    const j = tunedJoint();
+    if (j < 0) return;
+    void tuneJoints(`${fraction > 0 ? "Alargar" : "Acortar"} hasta ${rigBones()[j].name}`, (ps, ctx) =>
+      stretchBone(ps, ctx, j, fraction * skeletonSize(), symmetricEdit())
+    );
+  };
+  const handleTunePosition = (view: Vec3, withChildren: boolean) => {
+    const j = tunedJoint();
+    if (j < 0) return;
+    const target = fromView(view);
+    const p = rigBones()[j].position;
+    void tuneJoints(`Posición de ${rigBones()[j].name}`, (ps, ctx) =>
+      moveJoints(ps, ctx, j, [target[0] - p[0], target[1] - p[1], target[2] - p[2]], withChildren, symmetricEdit())
+    );
+  };
+  const jointTunePanel = () => (
+    <JointTunePanel
+      boneNames={rigBones().map((b) => b.name)}
+      selected={tunedJoint()}
+      onSelect={(i) => selectJoints([i], i)}
+      position={tunedJoint() >= 0 ? toView(rigBones()[tunedJoint()].position) : undefined}
+      hasParent={tunedJoint() >= 0 && rigBones()[tunedJoint()].parent !== null}
+      sided={
+        tunedJoint() >= 0 &&
+        rigCtx().mirror[tunedJoint()] != null &&
+        sideOf(rigBones()[tunedJoint()].position, jointEditCtx(), skeletonSize()) !== 0
+      }
+      symmetric={symmetricEdit()}
+      onSymmetricChange={setSymmetricEdit}
+      onSetPosition={handleTunePosition}
+      onMove={handleTuneMove}
+      onRotate={handleTuneRotate}
+      onStretch={handleTuneStretch}
+      onCopySide={() => {
+        const j = tunedJoint();
+        if (j >= 0) void tuneJoints("Copiar el lado al otro", (ps, ctx) => copySide(ps, ctx, j, skeletonSize()));
+      }}
+      onCenter={meshLoaded() ? () => handleCenterBones(true) : undefined}
+      disabled={isProcessing()}
+    />
+  );
+
+  /** Pestañas del editor de esqueleto */
+  const skeletonEditorPanels: Record<SkeletonEditorTab, () => JSX.Element> = {
+    create: () => (
+      <>
+        <BodyBuilder
+          plan={bodyPlan()}
+          onChange={handleBodyPlanChange}
+          onShape={handleBodyShape}
+          presets={skeletonPresets()}
+          selectedPreset={selectedSkeleton()}
+          onPreset={handleSkeletonChange}
+          disabled={isProcessing()}
+        />
+        <div>{skeletonEditPanel}</div>
+      </>
+    ),
+    fit: () => <SkeletonFitTab {...skeletonStepProps()} tunePanel={jointTunePanel()} />,
+    weights: () => <SkeletonWeightsTab {...skeletonStepProps()} />,
+    controls: () => (
+      <>
+        <div>
+          {ikPanel()}
+          {constraintPanel()}
+        </div>
+        {rigPanel()}
+      </>
+    ),
+  };
+
+  const rigEditorPanels = { library: libraryPanel, joint: jointPanel, pose: posePanel, ik: <div>{ikPanel()}{constraintPanel()}</div>, rig: rigPanel() };
 
   /** Hay esqueleto y las herramientas actúan sobre él (atajos de selección de pose) */
   const rigging = () => !!skeletonData() && toolCtx() !== "object";
@@ -5816,6 +6037,19 @@ export const App: Component = () => {
             </div>
             <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeRigEditor} />
           </Show>
+          {/* Editor de esqueleto a la izquierda del visor */}
+          <Show when={skeletonEditorVisible()}>
+            <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * skeletonEditorFraction()}%` }}>
+              <SkeletonEditor
+                tab={skeletonEditorTab()}
+                onTab={setSkeletonEditorTab}
+                onClose={() => setSkeletonEditorOpen(false)}
+                panels={skeletonEditorPanels}
+                bones={skeletonData()?.bones.length}
+              />
+            </div>
+            <div class="shrink-0 w-1 cursor-col-resize bg-border hover:bg-accent/50 transition-colors" onPointerDown={resizeSkeletonEditor} />
+          </Show>
           {/* Orizon3D a la izquierda del visor */}
           <Show when={scanEditorVisible()}>
             <div class="shrink-0 min-w-0 border-r border-border" style={{ width: `${100 * scanEditorFraction()}%` }}>
@@ -6150,50 +6384,7 @@ export const App: Component = () => {
               onOpenEditor: () =>
                 openTextureEditor("quad", { material: Math.max(0, skinMaterials().findIndex((m) => m.maps.base)), slot: "base" }),
             }}
-            skeletonProps={{
-              structurePanel: skeletonEditPanel,
-              presets: skeletonPresets(),
-              selectedPreset: selectedSkeleton(),
-              skeletonLoaded: skeletonLoaded(),
-              skeletonBones: skeletonData()?.bones.length,
-              onPresetChange: handleSkeletonChange,
-              autorigConfig: autorigConfig(),
-              onAutorigConfigChange: setAutorigConfig,
-              onAutorig: handleAutorig,
-              canAutorig: meshLoaded() && skeletonLoaded(),
-              hasModel: meshLoaded(),
-              isProcessing: isProcessing(),
-              autorigComplete: autorigComplete(),
-              numBones: boneNames().length || undefined,
-              skeletonTransform: skeletonTransform(),
-              onTransformChange: handleTransformChange,
-              onAutoFit: handleAutoFit,
-              fitInfo: fitInfo(),
-              bodyPlan: bodyPlan(),
-              onBodyPlanChange: handleBodyPlanChange,
-              onBodyShape: handleBodyShape,
-              onResetTransform: handleResetTransform,
-              editing: boneEditMode() && activeTool() === "move",
-              onEdit: () => useTool("move"),
-              symmetric: symmetricEdit(),
-              onSymmetricChange: setSymmetricEdit,
-              selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
-              onCenterSelected: () => handleCenterBones(true),
-              onCenterAll: () => handleCenterBones(false),
-              painting: activeTool() === "paint",
-              onPaint: () => useTool("paint"),
-              paintConfig: paintConfig(),
-              onPaintConfigChange: setPaintConfig,
-              boneNames: skeletonData()?.bones.map((b) => b.name) ?? [],
-              selectedBone: viewSettings().selectedBone,
-              onSelectBone: (index: number) => {
-                setViewSettings((prev) => ({ ...prev, selectedBone: index, showWeights: true }));
-                viewerRef?.selectBone(index);
-              },
-              posing: boneEditMode() && activeTool() === "rotate",
-              onPose: () => useTool("rotate"),
-              onResetPose: () => viewerRef?.resetPose(),
-            }}
+            skeletonProps={skeletonStepProps()}
             scanProps={{
               editorOpen: scanEditorVisible(),
               onOpenEditor: () => {
@@ -6240,7 +6431,6 @@ export const App: Component = () => {
                 if (clip) replaceClip({ ...clip, name });
               },
               onOpenLibrary: openLibrary,
-              selectedBoneName: skeletonData()?.bones[viewSettings().selectedBone]?.name,
               editorOpen: rigEditorOpen(),
               onToggleEditor: toggleRigEditor,
               puppeteering: puppeteering(),

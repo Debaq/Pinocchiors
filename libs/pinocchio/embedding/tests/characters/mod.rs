@@ -276,3 +276,27 @@ fn camelid(mut capsules: Vec<Capsule>, head: [f64; 3]) -> Character {
     }
     Character { capsules, joints }
 }
+
+/// Lagarto: cuerpo bajo, patas abiertas al costado y cola larga.
+pub fn lizard() -> Character {
+    let mut capsules = vec![
+        Capsule([0.0, 0.2, -0.4], [0.0, 0.2, 0.4], 0.12),
+        Capsule([0.0, 0.22, 0.45], [0.0, 0.2, 0.75], 0.08),
+        Capsule([0.0, 0.2, -0.4], [0.0, 0.12, -0.9], 0.07),
+        Capsule([0.0, 0.12, -0.9], [0.0, 0.06, -1.4], 0.035),
+    ];
+    let mut joints = vec![("head", [0.0, 0.2, 0.8]), ("tail_tip", [0.0, 0.06, -1.4])];
+    for (s, side) in [(-1.0, "l"), (1.0, "r")] {
+        for (z, front) in [(0.3, true), (-0.3, false)] {
+            let leg = [[0.1 * s, 0.2, z], [0.32 * s, 0.2, z], [0.36 * s, 0.03, z + 0.03], [0.42 * s, 0.02, z + 0.12]];
+            for w in leg.windows(2) {
+                capsules.push(Capsule(w[0], w[1], 0.04));
+            }
+            let name = |base: String| -> &'static str { Box::leak(base.into_boxed_str()) };
+            let (bend, paw) = if front { ("elbow", format!("paw_f{side}")) } else { ("knee", format!("paw_b{side}")) };
+            joints.push((name(format!("{bend}_{side}")), leg[1]));
+            joints.push((name(paw), leg[3]));
+        }
+    }
+    Character { capsules, joints }
+}

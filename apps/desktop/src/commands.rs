@@ -1560,7 +1560,7 @@ pub struct BodyPlanDto {
     /// "simple", "plantigrade", "digitigrade", "unguligrade"
     #[serde(default = "default_feet")]
     pub feet: String,
-    /// "rising", "swan", "upright"
+    /// "rising", "swan", "upright", "level"
     #[serde(default = "default_neck_shape")]
     pub neck_shape: String,
     #[serde(default)]
@@ -1569,6 +1569,20 @@ pub struct BodyPlanDto {
     pub arm_length: f64,
     #[serde(default = "default_leg_length")]
     pub tail_length: f64,
+    #[serde(default)]
+    pub sprawl: bool,
+    /// Extremidades que faltan: bits 1 brazo o pata delantera izquierda, 2
+    /// derecha, 4 pierna o pata trasera izquierda, 8 derecha
+    #[serde(default)]
+    pub missing: u8,
+    #[serde(default = "one")]
+    pub heads: usize,
+    #[serde(default = "one")]
+    pub tails: usize,
+}
+
+fn one() -> usize {
+    1
 }
 
 fn default_leg_length() -> f64 {
@@ -1590,10 +1604,11 @@ const FEET: [(&str, pinocchio_skeleton::Feet); 4] = [
     ("unguligrade", pinocchio_skeleton::Feet::Unguligrade),
 ];
 
-const NECK_SHAPES: [(&str, pinocchio_skeleton::NeckShape); 3] = [
+const NECK_SHAPES: [(&str, pinocchio_skeleton::NeckShape); 4] = [
     ("rising", pinocchio_skeleton::NeckShape::Rising),
     ("swan", pinocchio_skeleton::NeckShape::Swan),
     ("upright", pinocchio_skeleton::NeckShape::Upright),
+    ("level", pinocchio_skeleton::NeckShape::Level),
 ];
 
 const BODY_SHAPES: [(&str, pinocchio_skeleton::BodyShape); 8] = [
@@ -1633,6 +1648,10 @@ impl From<pinocchio_skeleton::BodyPlan> for BodyPlanDto {
             humps: p.humps,
             arm_length: p.arm_length,
             tail_length: p.tail_length,
+            sprawl: p.sprawl,
+            missing: p.missing,
+            heads: p.heads,
+            tails: p.tails,
         }
     }
 }
@@ -1671,6 +1690,10 @@ impl BodyPlanDto {
             humps: clamp(self.humps, 2),
             arm_length: ratio(self.arm_length, 2.0),
             tail_length: ratio(self.tail_length, 3.0),
+            sprawl: self.sprawl,
+            missing: self.missing & 0b1111,
+            heads: self.heads.clamp(1, 5),
+            tails: self.tails.clamp(1, 9),
         })
     }
 }
@@ -1873,6 +1896,31 @@ pub fn move_bone(
     *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
     *state.result.lock().unwrap() = None;
 
+    Ok(data)
+}
+
+/// Pone todas las articulaciones en `positions` (coordenadas del esqueleto
+/// visible) sin cambiar la estructura: el ajuste fino que mueve varias a la
+/// vez (un miembro girado, un hueso alargado, un lado copiado al otro).
+#[tauri::command]
+pub fn set_bone_positions(positions: Vec<[f64; 3]>, state: State<'_, AppState>) -> Result<SkeletonData, String> {
+    let mut base = current_base(&state)?;
+    if positions.len() != base.num_bones() {
+        return Err(format!("Se esperaban {} posiciones y llegaron {}", base.num_bones(), positions.len()));
+    }
+    if positions.iter().flatten().any(|v| !v.is_finite()) {
+        return Err("Posición inválida".into());
+    }
+    let params = *state.skeleton_transform.lock().unwrap();
+    for (bone, p) in base.bones_mut().iter_mut().zip(&positions) {
+        bone.position = invert_gizmo(Vector3::new(p[0], p[1], p[2]), &params);
+    }
+    let skel = pinocchio_skeleton::map_positions(&base, |p| apply_gizmo(p, &params));
+    let mut data = skeleton_to_data(&skel);
+    data.pivot = visible_pivot(&params);
+    *state.original_skeleton.lock().unwrap() = Some(SkeletonType::Custom(base));
+    *state.skeleton.lock().unwrap() = Some(SkeletonType::Custom(skel));
+    *state.result.lock().unwrap() = None;
     Ok(data)
 }
 

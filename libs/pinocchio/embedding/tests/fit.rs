@@ -87,3 +87,8 @@ fn camel_fits_with_long_legs() {
     }
     assert_errors(&fit_errors(characters::llama(), &BodyPlan::variant("llama").unwrap().build()), 0.07);
 }
+
+#[test]
+fn lizard_fits_with_sprawled_legs() {
+    assert_errors(&fit_errors(characters::lizard(), &BodyPlan::variant("lizard").unwrap().build()), 0.06);
+}
