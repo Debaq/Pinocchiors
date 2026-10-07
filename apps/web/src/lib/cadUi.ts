@@ -31,6 +31,9 @@ import {
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
 export type CadAction = "sketch" | "fillet" | "chamfer" | "shell" | "draft";
 
+/** Qué se puede elegir en el visor (fuera de los sketches) */
+export type PickFilter = "all" | "faces" | "edges" | "vertices" | "sketches";
+
 /** Algo elegido en el visor fuera de la edición de sketches */
 export type Pick3d =
   | { kind: "face"; face: number }
@@ -99,6 +102,7 @@ export function createCadUi(store: CadStore) {
   const [picks, setPicks] = createSignal<Pick3d[]>([]);
   const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
   const [actions, setActions] = createSignal<Partial<Record<CadAction, () => void>>>({});
+  const [pickFilter, setPickFilter] = createSignal<PickFilter>("all");
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
@@ -165,6 +169,8 @@ export function createCadUi(store: CadStore) {
     hiddenSketches,
     showCenterOfMass,
     setShowCenterOfMass,
+    pickFilter,
+    setPickFilter,
     /** Acciones del panel con lo elegido (las registra DesignStep) */
     actions,
     setActions,

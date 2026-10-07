@@ -363,3 +363,6 @@ cargo test -p cad-model
   menú cambia según lo que hay bajo el puntero (cara, arista o vacío) y crea operaciones con
   eso: sketch en la cara, vaciar, desmoldar, redondear, chaflán; más editar lo que la originó y
   las vistas. Mayús+S abre un sketch con lo elegido e Inicio encuadra todo.
+- **2026-10-07 Filtros y caja de selección** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 5):
+  filtro de qué se elige en la barra del visor y selección por caja al arrastrar en vacío
+  (ventana hacia la derecha, cruce hacia la izquierda, solo lo visible, Mayús suma).

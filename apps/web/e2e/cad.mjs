@@ -442,6 +442,54 @@ const scenarios = {
     if (!(d[2] > 0.999)) throw new Error(`frente: ${d}`);
   },
 
+  async "filtros y selección por caja"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const picks = () => b.eval(`window.__cadUi.picks().map((p) => p.kind)`);
+    const filter = (label) => b.eval(`[...document.querySelectorAll('[role=radio]')].find((e) => e.textContent === ${JSON.stringify(label)}).click()`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Rectángulo de pantalla que contiene toda la caja
+    const corners = [];
+    for (const x of [-10, 10]) for (const y of [-10, 10]) for (const z of [-10, 10]) corners.push(await at([x, y, z]));
+    const xs = corners.map((c) => c[0]);
+    const ys = corners.map((c) => c[1]);
+    const [l, r, t, bt] = [Math.min(...xs) - 25, Math.max(...xs) + 25, Math.min(...ys) - 25, Math.max(...ys) + 25];
+    // Aristas, ventana (izquierda → derecha): las 9 que se ven (3 quedan detrás)
+    await filter("Aristas");
+    await b.drag(l, t, r, bt);
+    await sleep(500);
+    let k = await picks();
+    if (k.length !== 9 || k.some((x) => x !== "edge")) throw new Error(`aristas: ${k}`);
+    // Con el filtro, un clic sobre una cara no la elige
+    await b.click(...(await at([3, 3, 10])), { wait: 500 });
+    if ((await picks()).length) throw new Error("eligió una cara con el filtro de aristas");
+    // Caras, cruce (derecha → izquierda) chico en medio de la tapa: solo la tapa
+    await filter("Caras");
+    const [cx, cy] = await at([0, 0, 10]);
+    await b.drag(cx + 8, cy - 6, cx - 8, cy + 6);
+    await sleep(500);
+    k = await picks();
+    if (k.length !== 1 || k[0] !== "face") throw new Error(`cruce: ${k}`);
+    // Vértices con caja: los 7 visibles
+    await filter("Vértices");
+    await b.drag(l, t, r, bt);
+    await sleep(500);
+    k = await picks();
+    if (k.length !== 7) throw new Error(`vértices: ${k.length}`);
+    // Mayús suma: más las caras visibles (3)
+    await filter("Caras");
+    await b.mouse("mouseMoved", l, t, { buttons: 0 });
+    await b.mouse("mousePressed", l, t, { modifiers: 8 });
+    for (let i = 1; i <= 10; i++) { await b.mouse("mouseMoved", l + ((r - l) * i) / 10, t + ((bt - t) * i) / 10, { buttons: 1, modifiers: 8 }); await sleep(40); }
+    await b.mouse("mouseReleased", r, bt, { modifiers: 8 });
+    await sleep(500);
+    k = await picks();
+    if (k.filter((x) => x === "face").length !== 3 || k.length !== 10) throw new Error(`sumar caras: ${k}`);
+    await filter("Todo");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

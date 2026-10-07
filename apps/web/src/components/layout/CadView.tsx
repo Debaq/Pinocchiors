@@ -6,7 +6,7 @@ import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
-import type { CadUi, SketchTool } from "../../lib/cadUi";
+import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
@@ -844,10 +844,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       } else {
         // Sin herramienta: elegir caras, aristas, regiones de sketches y planos
         // (Mayús o Ctrl suma a la selección), como en Onshape
-        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, vertices: true, regions: true, planes: true });
+        const hit = viewer.pick(e.clientX, e.clientY, FILTER_WANT[ui.pickFilter()]);
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (!hit || hit.kind === "scan") {
           if (!additive) ui.clearPicks();
+          // En vacío: arrastrar elige por caja
+          boxStart = { x: e.clientX, y: e.clientY, additive };
           return ui.setMessage(undefined);
         }
         if (hit.kind === "face") ui.pickToggle({ kind: "face", face: hit.face }, additive);
@@ -872,6 +874,10 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    if (boxStart && (e.buttons & 1) === 1) {
+      const r = container.getBoundingClientRect();
+      setBox({ x0: boxStart.x - r.left, y0: boxStart.y - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top });
+    }
     const s = ui.session();
     if (!s) return;
     const hit = snapped(e);
@@ -895,11 +901,36 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   const [overCube, setOverCube] = createSignal(false);
+  // Selección por caja: desde dónde y el rectángulo que se ve mientras se arrastra
+  let boxStart: { x: number; y: number; additive: boolean } | undefined;
+  const [box, setBox] = createSignal<{ x0: number; y0: number; x1: number; y1: number }>();
+  const finishBox = (x: number, y: number) => {
+    const s = boxStart;
+    boxStart = undefined;
+    setBox(undefined);
+    if (!s || !viewer || Math.hypot(x - s.x, y - s.y) < 5) return;
+    const f = ui.pickFilter();
+    const want = BOX_WANT[f];
+    const got = viewer.boxSelect(s.x, s.y, x, y, want, x >= s.x);
+    const found: Pick3d[] = [
+      ...got.faces.map((face): Pick3d => ({ kind: "face", face })),
+      ...got.edges.map((edge): Pick3d => ({ kind: "edge", edge })),
+      ...got.vertices.map((at): Pick3d => ({ kind: "vertex", at })),
+      ...got.regions.map((r): Pick3d => ({ kind: "region", ...r })),
+    ];
+    const key = (p: Pick3d) => JSON.stringify(p);
+    ui.setPicks((cur) => {
+      const base = s.additive ? cur : [];
+      const seen = new Set(base.map(key));
+      return [...base, ...found.filter((p) => !seen.has(key(p)))];
+    });
+  };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
+    if (e.button === 0 && boxStart) finishBox(e.clientX, e.clientY);
     const down = rightDown;
     rightDown = undefined;
     if (e.button !== 2 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
@@ -1334,6 +1365,27 @@ export const CadView: Component<CadViewProps> = (props) => {
               <IconButton aria-label="Encuadrar todo" size="sm" onClick={() => viewer?.frameAll()}>
                 <Icons.FrameCorners size={14} />
               </IconButton>
+              <div class="w-px h-5 bg-border mx-0.5" />
+              <div role="radiogroup" aria-label="Qué elegir" class="flex items-center gap-0.5">
+                <For each={FILTERS}>
+                  {(f) => (
+                    <Tooltip content={f.tip}>
+                      <button
+                        role="radio"
+                        aria-checked={ui.pickFilter() === f.id}
+                        class={clsx(
+                          "px-1.5 py-0.5 rounded text-[11px]",
+                          ui.pickFilter() === f.id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
+                        )}
+                        onClick={() => ui.setPickFilter(f.id)}
+                      >
+                        {f.label}
+                      </button>
+                    </Tooltip>
+                  )}
+                </For>
+              </div>
+              <div class="w-px h-5 bg-border mx-0.5" />
               <Tooltip content={ui.showPlanes() ? "Ocultar los planos base" : "Mostrar los planos base"}>
                 <IconButton aria-label="Planos base" size="sm" active={ui.showPlanes()} onClick={() => ui.setShowPlanes(!ui.showPlanes())}>
                   <Icons.Square size={14} />
@@ -1480,6 +1532,22 @@ export const CadView: Component<CadViewProps> = (props) => {
         )}
       </Show>
 
+      {/* Caja de selección: hacia la derecha, lo que queda adentro; hacia la izquierda, lo que toca */}
+      <Show when={box()}>
+        {(r) => (
+          <div
+            data-box-select
+            class={clsx("absolute pointer-events-none border border-cyan bg-cyan/10", r().x1 < r().x0 && "border-dashed")}
+            style={{
+              left: `${Math.min(r().x0, r().x1)}px`,
+              top: `${Math.min(r().y0, r().y1)}px`,
+              width: `${Math.abs(r().x1 - r().x0)}px`,
+              height: `${Math.abs(r().y1 - r().y0)}px`,
+            }}
+          />
+        )}
+      </Show>
+
       {/* Medidas de lo elegido */}
       <Show when={measurement()}>{(m) => <MeasurePanel m={m()} />}</Show>
 
@@ -1503,6 +1571,30 @@ export const CadView: Component<CadViewProps> = (props) => {
       </div>
     </div>
   );
+};
+
+/** Filtros de selección del visor (fuera de los sketches) */
+const FILTERS: { id: PickFilter; label: string; tip: string }[] = [
+  { id: "all", label: "Todo", tip: "Elegir caras, aristas, vértices, regiones y planos" },
+  { id: "faces", label: "Caras", tip: "Elegir solo caras" },
+  { id: "edges", label: "Aristas", tip: "Elegir solo aristas" },
+  { id: "vertices", label: "Vértices", tip: "Elegir solo vértices" },
+  { id: "sketches", label: "Sketches", tip: "Elegir solo regiones de sketches y planos" },
+];
+const FILTER_WANT: Record<PickFilter, Parameters<CadViewer["pick"]>[2]> = {
+  all: { faces: true, edges: true, vertices: true, regions: true, planes: true },
+  faces: { faces: true },
+  edges: { edges: true },
+  vertices: { vertices: true },
+  sketches: { regions: true, planes: true },
+};
+/** Por caja, "Todo" elige caras y aristas (los vértices, con su filtro) */
+const BOX_WANT: Record<PickFilter, Parameters<CadViewer["boxSelect"]>[4]> = {
+  all: { faces: true, edges: true },
+  faces: { faces: true },
+  edges: { edges: true },
+  vertices: { vertices: true },
+  sketches: { regions: true },
 };
 
 /** Vistas estándar de Onshape: Mayús + número, dirección desde donde se mira (Z arriba) */

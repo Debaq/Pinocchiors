@@ -907,6 +907,145 @@ export class CadViewer {
     return dir !== null;
   }
 
+  /**
+   * Selección por caja (coordenadas de cliente). `window`: lo que queda entero
+   * adentro; si no, lo que la toca (como arrastrar hacia la izquierda en Onshape).
+   */
+  boxSelect(
+    x0: number,
+    y0: number,
+    x1: number,
+    y1: number,
+    want: { faces?: boolean; edges?: boolean; vertices?: boolean; regions?: boolean },
+    window: boolean,
+  ): { faces: number[]; edges: number[]; vertices: P3[]; regions: { sketch: number; region: number }[] } {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const box = { l: Math.min(x0, x1), r: Math.max(x0, x1), t: Math.min(y0, y1), b: Math.max(y0, y1) };
+    const v = new THREE.Vector3();
+    /** Punto del visor en pantalla (null si queda detrás de la cámara) */
+    const screen = (x: number, y: number, z: number): [number, number] | null => {
+      v.set(x, y, z).project(this.camera);
+      if (v.z > 1) return null;
+      return [rect.left + ((v.x + 1) / 2) * rect.width, rect.top + ((1 - v.y) / 2) * rect.height];
+    };
+    const inBox = (p: [number, number]) => p[0] >= box.l && p[0] <= box.r && p[1] >= box.t && p[1] <= box.b;
+    // Cada elemento es una lista de segmentos o triángulos en pantalla: con
+    // ventana tienen que estar todos sus puntos adentro; con cruce alcanza que
+    // alguno toque la caja
+    const out = { faces: [] as number[], edges: [] as number[], vertices: [] as P3[], regions: [] as { sketch: number; region: number }[] };
+    const d = this.bodyData;
+    const pt = (arr: ArrayLike<number>, i: number) => screen(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]);
+    // Solo lo que se ve: un rayo desde la cámara a unos puntos de muestra
+    const cam = this.camera.position;
+    const ray = new THREE.Raycaster();
+    const visible = (p: THREE.Vector3) => {
+      if (!this.body) return true;
+      const dist = cam.distanceTo(p);
+      ray.set(cam, p.clone().sub(cam).normalize());
+      ray.far = dist * 1.01;
+      const hit = ray.intersectObject(this.body)[0];
+      return !hit || hit.distance >= dist - dist * 2e-3;
+    };
+    const vec = (arr: ArrayLike<number>, i: number) => new THREE.Vector3(arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]);
+    if (d && want.faces) {
+      const state = new Map<number, { all: boolean; any: boolean }>();
+      for (let tri = 0; tri < d.triangleFace.length; tri++) {
+        const f = d.triangleFace[tri];
+        const st = state.get(f) ?? { all: true, any: false };
+        const ps = [0, 1, 2].map((k) => pt(d.positions, d.indices[tri * 3 + k]));
+        if (ps.some((p) => !p)) st.all = false;
+        else {
+          const tp = ps as [number, number][];
+          st.all &&= tp.every(inBox);
+          if (!window && !st.any) st.any = triangleTouchesBox(tp, box);
+        }
+        state.set(f, st);
+      }
+      // Visible si se ve el centro de alguno de sus triángulos (hasta 8 de muestra)
+      const tris = new Map<number, number[]>();
+      for (let tri = 0; tri < d.triangleFace.length; tri++) {
+        const f = d.triangleFace[tri];
+        const st = state.get(f)!;
+        if (!(window ? st.all : st.any)) continue;
+        let list = tris.get(f);
+        if (!list) tris.set(f, (list = []));
+        list.push(tri);
+      }
+      for (const [f, list] of tris) {
+        const step = Math.max(1, Math.floor(list.length / 8));
+        for (let k = 0; k < list.length; k += step) {
+          const tri = list[k];
+          const c = new THREE.Vector3();
+          for (let j = 0; j < 3; j++) c.add(vec(d.positions, d.indices[tri * 3 + j]));
+          if (visible(c.divideScalar(3))) {
+            out.faces.push(f);
+            break;
+          }
+        }
+      }
+    }
+    const polyline = (arr: ArrayLike<number>, from: number, to: number) => {
+      let all = to > from;
+      let any = false;
+      let prev: [number, number] | null = null;
+      for (let i = from; i < to; i++) {
+        const p = pt(arr, i);
+        if (!p) {
+          all = false;
+          prev = null;
+          continue;
+        }
+        all &&= inBox(p);
+        if (!window && !any) any = inBox(p) || (prev !== null && segmentTouchesBox(prev, p, box));
+        prev = p;
+      }
+      return window ? all : any;
+    };
+    if (d && want.edges) {
+      let start = 0;
+      d.edgeEnds.forEach((end, e) => {
+        if (polyline(d.edgePoints, start, end)) {
+          // Visible si se ve alguno de sus puntos (hasta 5 de muestra, sin los extremos)
+          const n = end - start;
+          const samples =
+            n <= 2
+              ? [vec(d.edgePoints, start).add(vec(d.edgePoints, end - 1)).multiplyScalar(0.5)]
+              : [1, 2, 3, 4, 5].map((k) => vec(d.edgePoints, start + Math.round((k * (n - 1)) / 6)));
+          if (samples.some(visible)) out.edges.push(e);
+        }
+        start = end;
+      });
+    }
+    if (want.vertices) for (const p of this.bodyVertices) {
+      const sp = screen(p.x, p.y, p.z);
+      if (sp && inBox(sp) && visible(p)) out.vertices.push(this.fromView(p));
+    }
+    if (want.regions) {
+      for (const o of this.sketchesGroup.children) {
+        const m = o as THREE.Mesh;
+        if (!m.isMesh) continue;
+        const pos = m.geometry.getAttribute("position") as THREE.BufferAttribute;
+        const idx = m.geometry.getIndex();
+        const n = idx ? idx.count : pos.count;
+        const at = (k: number) => screen(pos.getX(k), pos.getY(k), pos.getZ(k));
+        let all = n > 0;
+        let any = false;
+        for (let k = 0; k + 2 < n; k += 3) {
+          const ps = [0, 1, 2].map((j) => at(idx ? idx.getX(k + j) : k + j));
+          if (ps.some((p) => !p)) {
+            all = false;
+            continue;
+          }
+          const tp = ps as [number, number][];
+          all &&= tp.every(inBox);
+          if (!window && !any) any = triangleTouchesBox(tp, box);
+        }
+        if (window ? all : any) out.regions.push({ sketch: m.userData.sketch, region: m.userData.region });
+      }
+    }
+    return out;
+  }
+
   /** Acerca la cámara a lo elegido: caras y aristas del sólido y puntos (mm); vacío = todo */
   frameSelection(faces: number[], edges: number[], points: P3[] = []) {
     const box = new THREE.Box3();
@@ -1092,4 +1231,45 @@ export class CadViewer {
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
+}
+
+// ─── Geometría en pantalla (selección por caja) ─────────────────────────────
+
+type Box2 = { l: number; r: number; t: number; b: number };
+
+/** ¿El segmento pq toca el rectángulo? (Liang–Barsky) */
+function segmentTouchesBox(p: [number, number], q: [number, number], box: Box2): boolean {
+  let t0 = 0;
+  let t1 = 1;
+  const dx = q[0] - p[0];
+  const dy = q[1] - p[1];
+  for (const [den, num] of [
+    [-dx, p[0] - box.l],
+    [dx, box.r - p[0]],
+    [-dy, p[1] - box.t],
+    [dy, box.b - p[1]],
+  ]) {
+    if (den === 0) {
+      if (num < 0) return false;
+    } else {
+      const t = num / den;
+      if (den < 0) t0 = Math.max(t0, t);
+      else t1 = Math.min(t1, t);
+      if (t0 > t1) return false;
+    }
+  }
+  return true;
+}
+
+/** ¿El triángulo toca el rectángulo? Algún lado lo cruza o el rectángulo queda adentro */
+function triangleTouchesBox(tri: [number, number][], box: Box2): boolean {
+  for (let i = 0; i < 3; i++) if (segmentTouchesBox(tri[i], tri[(i + 1) % 3], box)) return true;
+  // Rectángulo entero dentro del triángulo: basta con una esquina
+  const [a, b, c] = tri;
+  const p = [box.l, box.t];
+  const s = (u: number[], v: number[], w: number[]) => (v[0] - u[0]) * (w[1] - u[1]) - (v[1] - u[1]) * (w[0] - u[0]);
+  const d1 = s(a, b, p);
+  const d2 = s(b, c, p);
+  const d3 = s(c, a, p);
+  return (d1 >= 0 && d2 >= 0 && d3 >= 0) || (d1 <= 0 && d2 <= 0 && d3 <= 0);
 }

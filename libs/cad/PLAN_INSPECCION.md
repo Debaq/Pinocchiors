@@ -106,7 +106,11 @@ selección y menú contextual.
    estaba elegido, la acción usa toda la selección de ese tipo. Las acciones las registra el
    panel en `ui.actions`. Atajos: Mayús+S (sketch con lo elegido), Inicio (encuadrar todo).
    Ocultar y aislar esperan a las varias piezas (plan 5).*
-5. **Filtros y selección por caja.**
+5. **Filtros y selección por caja.** *Hecha el 2026-10-07: filtro en la barra del visor
+   (Todo, Caras, Aristas, Vértices, Sketches) que limita el clic; arrastrar desde el vacío
+   dibuja una caja: hacia la derecha elige lo que queda entero adentro, hacia la izquierda lo
+   que la toca (triángulos y segmentos contra el rectángulo, Liang–Barsky); solo cuenta lo
+   visible (rayos a puntos de muestra); Mayús suma. Con "Todo" la caja elige caras y aristas.*
 6. **Vista de corte** con tapa.
 
 ## Pruebas
