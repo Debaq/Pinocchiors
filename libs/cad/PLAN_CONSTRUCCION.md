@@ -95,7 +95,14 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    "fin" en la transición) por la muestra de la región; el resto por número de cara.
    "Barrido" arma el perfil con las regiones elegidas (o el último sketch con regiones) y el
    camino con otro sketch; "Transición", con los dos últimos sketches con regiones.*
-4. **Agujero** con tamaños estándar.
+4. **Agujero** con tamaños estándar. *Hecha el 2026-10-07: `FeatureKind::Hole(Hole { sketch, points,
+   diameter, depth: Blind | ThroughAll, style: Simple | Counterbore | Countersink, tip_angle,
+   thread })`: centros en los puntos sueltos del sketch (o los de `points`, o los centros de
+   sus círculos), contra la normal del plano; la herramienta (cilindro, punta de broca, caja o
+   cono) arranca apenas por encima de la cara y se resta respetando el alcance. Orígenes
+   `agujero:k:pared` y `agujero:k:caja`. Interfaz: tabla métrica ISO M2–M12 (pasante holgado o
+   para roscar, con rosca cosmética; caja ISO 4762 y avellanado a 90° ISO 10642). E2E:
+   avellanado M6 en una placa y medir la pared: diámetro 6,6 mm.*
 5. **Hélice** (y ejemplo de rosca/resorte con barrido), **nervio**, **engrosar**.
 6. **Mover y reemplazar cara**, **escala**, **patrón en curva**.
 

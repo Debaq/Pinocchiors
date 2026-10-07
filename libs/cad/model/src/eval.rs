@@ -907,6 +907,96 @@ impl Ctx<'_> {
         })
     }
 
+    /// Herramienta de los agujeros: por cada centro, el cilindro (con punta en
+    /// los ciegos) más la caja o el avellanado; entra contra la normal del plano.
+    fn hole_tool(&self, id: FeatureId, h: &Hole) -> R<Tagged> {
+        let s = self.ev.sketches.get(&h.sketch).ok_or("el sketch de los centros no está calculado")?;
+        let ids: Vec<u32> = if !h.points.is_empty() {
+            h.points.clone()
+        } else {
+            let loose: Vec<u32> = s
+                .sketch
+                .entities
+                .iter()
+                .filter_map(|e| match e.geometry {
+                    Geometry::Point { point } if !e.construction => Some(point),
+                    _ => None,
+                })
+                .collect();
+            if loose.is_empty() {
+                s.sketch.entities.iter().filter_map(|e| match e.geometry {
+                    Geometry::Circle { center, .. } if !e.construction => Some(center),
+                    _ => None,
+                }).collect()
+            } else {
+                loose
+            }
+        };
+        if ids.is_empty() {
+            return Err("el sketch no tiene puntos ni círculos para los agujeros".into());
+        }
+        if h.diameter <= 0.0 {
+            return Err("el diámetro tiene que ser mayor que cero".into());
+        }
+        let r = h.diameter / 2.0;
+        let down = scale(normalize(s.plane.normal), -1.0);
+        let x = normalize(s.plane.x_dir);
+        // Un poco por encima del plano: que la herramienta no quede pegada a la cara
+        let lift = (self.diag() * 1e-4).max(1e-3);
+        let depth = match h.depth {
+            HoleDepth::Blind { depth } if depth > 0.0 => depth,
+            HoleDepth::Blind { .. } => return Err("la profundidad tiene que ser mayor que cero".into()),
+            HoleDepth::ThroughAll => {
+                let center = self.body().ok().and_then(|b| b.mass().ok()).map_or(s.plane.origin, |m| scale(add(m.bbox_min, m.bbox_max), 0.5));
+                self.diag() * 2.0 + 2.0 * norm(sub(center, s.plane.origin))
+            }
+        };
+        let mut parts = Vec::new();
+        let mut probes: Vec<(P3, String)> = Vec::new();
+        for (k, pid) in ids.iter().enumerate() {
+            let c = s.plane.to_world(s.sketch.point(*pid).map_err(err)?);
+            let top = sub(c, scale(down, lift));
+            let frame = |o: P3| Frame { origin: o, z: down, x };
+            parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?);
+            probes.push((add(add(c, scale(down, depth / 2.0)), scale(x, r)), format!("agujero:{k}:pared")));
+            // Punta de broca en los ciegos
+            if matches!(h.depth, HoleDepth::Blind { .. }) && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
+                let tip = r / (h.tip_angle.to_radians() / 2.0).tan();
+                parts.push(Shape::cone(frame(add(c, scale(down, depth))), r, 0.0, tip).map_err(err)?);
+            }
+            match h.style {
+                HoleStyle::Simple => {}
+                HoleStyle::Counterbore { diameter, depth: d } => {
+                    if diameter <= h.diameter || d <= 0.0 {
+                        return Err("la caja tiene que ser más ancha que el agujero y tener profundidad".into());
+                    }
+                    parts.push(Shape::cylinder(frame(top), diameter / 2.0, d + lift).map_err(err)?);
+                    probes.push((add(add(c, scale(down, d / 2.0)), scale(x, diameter / 2.0)), format!("agujero:{k}:caja")));
+                }
+                HoleStyle::Countersink { diameter, angle } => {
+                    if diameter <= h.diameter || angle <= 0.0 || angle >= 180.0 {
+                        return Err("el avellanado tiene que ser más ancho que el agujero, con ángulo entre 0 y 180°".into());
+                    }
+                    let height = (diameter - h.diameter) / 2.0 / (angle.to_radians() / 2.0).tan();
+                    // Desde un poco más arriba, para que el borde quede justo en la superficie
+                    let extra = lift * (angle.to_radians() / 2.0).tan();
+                    parts.push(Shape::cone(frame(top), diameter / 2.0 + extra, r, height + lift).map_err(err)?);
+                }
+            }
+        }
+        let shape = fuse(parts)?;
+        let mut tags = vec![Vec::new(); shape.face_count()];
+        for (p, name) in probes {
+            mark(&shape, &mut tags, p, tag(id, name));
+        }
+        for (i, slot) in tags.iter_mut().enumerate() {
+            if slot.is_empty() {
+                slot.push(tag(id, format!("cara:{i}")));
+            }
+        }
+        Ok(Tagged { shape, tags })
+    }
+
     /// Alambre del camino de un barrido: las entidades encadenadas por sus
     /// extremos, empezando por la punta más cercana a `near` (el perfil: el
     /// barrido arranca en el comienzo del alambre).
@@ -1212,6 +1302,11 @@ impl Ctx<'_> {
                 let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), sw.op));
                 self.apply(f.id, tool, sw.op)
+            }
+            FeatureKind::Hole(h) => {
+                let tool = self.hole_tool(f.id, h)?;
+                self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Cut));
+                self.apply(f.id, tool, BodyOp::Cut)
             }
             FeatureKind::Loft(l) => {
                 if l.sections.len() < 2 {

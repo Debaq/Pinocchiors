@@ -401,3 +401,6 @@ cargo test -p cad-model
   direcciones, hasta la siguiente cara, desmolde de las paredes y extrusión delgada.
 - **2026-10-07 Barrido y transición** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 3):
   operaciones con diálogo; el barrido usa esquinas a inglete y el camino se encadena solo.
+- **2026-10-07 Agujero** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 4): simple, con
+  caja o avellanado, pasante o ciego con punta, en los puntos de un sketch; tamaños métricos
+  M2–M12 para pasar o roscar.

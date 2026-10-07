@@ -909,6 +909,39 @@ const scenarios = {
     near((await body()).volume, 1000, 1e-3, "transición");
   },
 
+  async "agujero avellanado y medir su diámetro"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const panel = () => b.eval(`Object.fromEntries([...document.querySelectorAll("[data-measure]")].map((e) => [e.dataset.measure, e.textContent]))`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Sketch en la cara de arriba con un punto en el centro
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Sketch");
+    await sleep(2000);
+    await b.clickText("Punto");
+    await b.click(...(await at([0, 0, 10])), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Agujero");
+    await sleep(2000);
+    // M6 pasante; avellanado
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.style = { type: "countersink", diameter: 12.4, angle: 90 }; })`);
+    await sleep(1500);
+    await accept(b);
+    const h = (12.4 - 6.6) / 2;
+    const cone = (Math.PI * h / 3) * (6.2 * 6.2 + 3.3 * 3.3 + 6.2 * 3.3);
+    near((await body()).volume, 8000 - cone - Math.PI * 3.3 * 3.3 * (20 - h), 0.05, "placa avellanada");
+    // Medir la pared del agujero (el lado de atrás, que se ve desde la cámara)
+    await b.eval(`window.__cadViewer.lookFrom([0.3, -0.3, 1])`);
+    await sleep(800);
+    await b.click(...(await at([-2.33, 2.33, 0])), { wait: 1500 });
+    const p = await panel();
+    if (p[""] !== "Cara cilíndrica" || p["Diámetro"] !== "6.6 mm") throw new Error(`medida: ${JSON.stringify(p)}`);
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

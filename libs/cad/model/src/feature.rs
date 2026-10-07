@@ -337,6 +337,46 @@ pub enum FeatureKind {
     Sweep(Sweep),
     /// Sólido que pasa por varias secciones (una región por sketch).
     Loft(Loft),
+    /// Agujeros en los puntos de un sketch.
+    Hole(Hole),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Hole {
+    /// Sketch de los centros: sus puntos sueltos (o los de `points`); si no
+    /// tiene, los centros de sus círculos. El agujero entra contra la normal
+    /// del plano (en un sketch sobre una cara, hacia adentro del material).
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub points: Vec<u32>,
+    pub diameter: f64,
+    pub depth: HoleDepth,
+    #[serde(default)]
+    pub style: HoleStyle,
+    /// Ángulo de la punta en los ciegos (grados; 0 = fondo plano).
+    #[serde(default)]
+    pub tip_angle: f64,
+    /// Rosca cosmética (solo dato, p. ej. "M6").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HoleDepth {
+    Blind { depth: f64 },
+    ThroughAll,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HoleStyle {
+    #[default]
+    Simple,
+    /// Caja para la cabeza: diámetro y profundidad.
+    Counterbore { diameter: f64, depth: f64 },
+    /// Avellanado: diámetro en la superficie y ángulo total (grados).
+    Countersink { diameter: f64, angle: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -413,6 +453,7 @@ impl FeatureKind {
                 vec![s.sketch, *sketch]
             }
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            FeatureKind::Hole(h) => vec![h.sketch],
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
@@ -463,6 +504,7 @@ impl FeatureKind {
             FeatureKind::Point { .. } => "Punto",
             FeatureKind::Sweep(_) => "Barrido",
             FeatureKind::Loft(_) => "Transición",
+            FeatureKind::Hole(_) => "Agujero",
         }
     }
 }

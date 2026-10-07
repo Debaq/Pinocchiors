@@ -6,6 +6,7 @@ import {
   CONSTRAINT_LABELS,
   FEATURE_LABELS,
   MATERIALS,
+  METRIC_HOLES,
   designMass,
   partColor,
   partHidden,
@@ -272,6 +273,14 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     });
   };
 
+  /** Agujero M6 pasante en los puntos del sketch elegido (o el último) */
+  const addHole = () => {
+    const s = targetSketch();
+    if (!s) return say("Primero un sketch con puntos (o círculos) donde van los agujeros, por ejemplo sobre una cara");
+    const m6 = METRIC_HOLES.find((h) => h.size === "M6")!;
+    void store.addFeature({ type: "hole", sketch: s.id, points: [], diameter: m6.clearance, depth: { type: "through_all" }, style: { type: "simple" }, tip_angle: 118, thread: null });
+  };
+
   /** Transición entre los dos últimos sketches con regiones */
   const addLoft = () => {
     const list = profileSketches().slice(-2);
@@ -521,6 +530,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onReference={(k) => void addReference(k)}
                 onSweep={addSweep}
                 onLoft={addLoft}
+                onHole={addHole}
                 hasBody={!!store.result()?.body}
               />
 
@@ -666,6 +676,7 @@ const AddSection: Component<{
   onReference: (kind: "plane" | "axis" | "point") => void;
   onSweep: () => void;
   onLoft: () => void;
+  onHole: () => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -687,6 +698,7 @@ const AddSection: Component<{
           <B label="Revolución" onClick={props.onRevolve} title="Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" />
           <B label="Barrido" onClick={props.onSweep} title="Un perfil a lo largo de un camino dibujado en otro sketch" />
           <B label="Transición" onClick={props.onLoft} title="Un sólido que pasa por regiones de varios sketches" />
+          <B label="Agujero" onClick={props.onHole} disabled={!props.hasBody} title="En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado, tamaños métricos" />
         </div>
         <div class="grid grid-cols-3 gap-1.5">
           <B label="Caja" onClick={() => props.onPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true })} />
@@ -1642,6 +1654,122 @@ const FeatureEditor: Component<{
                   missing={lost("parts")}
                   onChange={(v) => update((x) => (x.type === "split_parts" || x.type === "delete_parts") && (x.parts = v))}
                 />
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "hole" && (f().kind as Extract<FeatureKind, { type: "hole" }>)}>
+            {(k) => {
+              // Tamaño estándar que corresponde a los diámetros actuales (si alguno)
+              const fit = (): { size: string; mode: "clearance" | "tap" } | null => {
+                for (const m of METRIC_HOLES) {
+                  if (Math.abs(m.clearance - k().diameter) < 1e-6) return { size: m.size, mode: "clearance" };
+                  if (Math.abs(m.tap - k().diameter) < 1e-6) return { size: m.size, mode: "tap" };
+                }
+                return null;
+              };
+              const applySize = (size: string, mode: "clearance" | "tap") => {
+                const m = METRIC_HOLES.find((x) => x.size === size);
+                if (!m) return;
+                update((x) => {
+                  if (x.type !== "hole") return;
+                  x.diameter = mode === "tap" ? m.tap : m.clearance;
+                  x.thread = mode === "tap" ? m.size : null;
+                  if (x.style.type === "counterbore") x.style = { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth };
+                  if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: 90 };
+                });
+              };
+              const view = () => props.store.sketchView(k().sketch);
+              const sketchPoints = () => {
+                const s = props.sketches.find((x) => x.id === k().sketch);
+                return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => e.geometry.type === "point" && !e.construction) : [];
+              };
+              return (
+                <>
+                  <Row label="Centros en">
+                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "hole" && ((x.sketch = +v), (x.points = [])))} />
+                  </Row>
+                  <p class="text-[11px] text-text-dim">
+                    {sketchPoints().length ? `${sketchPoints().length} puntos del sketch` : `${view()?.sketch.entities.filter((e) => e.geometry.type === "circle").length ?? 0} centros de círculos`}
+                  </p>
+                  <Row label="Tipo">
+                    <Select
+                      options={[
+                        { value: "simple", label: "Simple" },
+                        { value: "counterbore", label: "Con caja" },
+                        { value: "countersink", label: "Avellanado" },
+                      ]}
+                      value={k().style.type}
+                      onChange={(v) => {
+                        if (v === k().style.type) return;
+                        const m = METRIC_HOLES.find((x) => x.size === fit()?.size) ?? METRIC_HOLES.find((x) => x.size === "M6")!;
+                        update((x) => {
+                          if (x.type !== "hole") return;
+                          x.style =
+                            v === "counterbore"
+                              ? { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth }
+                              : v === "countersink"
+                                ? { type: "countersink", diameter: m.csink, angle: 90 }
+                                : { type: "simple" };
+                        });
+                      }}
+                    />
+                  </Row>
+                  <Row label="Tamaño">
+                    <Select
+                      options={[{ value: "", label: "A medida" }, ...METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))]}
+                      value={fit()?.size ?? ""}
+                      onChange={(v) => v && applySize(v, fit()?.mode ?? "clearance")}
+                    />
+                  </Row>
+                  <Show when={fit()}>
+                    {(fi) => (
+                      <Row label="Para">
+                        <Select
+                          options={[
+                            { value: "clearance", label: "Que pase el tornillo" },
+                            { value: "tap", label: "Roscar (rosca cosmética)" },
+                          ]}
+                          value={fi().mode}
+                          onChange={(v) => applySize(fi().size, v as "clearance" | "tap")}
+                        />
+                      </Row>
+                    )}
+                  </Show>
+                  {field("Diámetro", "kind.diameter", k().diameter, (x, v) => x.type === "hole" && (x.diameter = v), "mm")}
+                  <Row label="Profundidad">
+                    <Select
+                      options={[
+                        { value: "through_all", label: "Pasante" },
+                        { value: "blind", label: "Ciega" },
+                      ]}
+                      value={k().depth.type}
+                      onChange={(v) => v !== k().depth.type && update((x) => x.type === "hole" && (x.depth = v === "blind" ? { type: "blind", depth: 10 } : { type: "through_all" }))}
+                    />
+                  </Row>
+                  <Show when={k().depth.type === "blind"}>
+                    {field("Hasta", "kind.depth.depth", (k().depth as { depth: number }).depth, (x, v) => x.type === "hole" && x.depth.type === "blind" && (x.depth.depth = v), "mm")}
+                    {field("Punta", "kind.tip_angle", k().tip_angle, (x, v) => x.type === "hole" && (x.tip_angle = v), "°")}
+                  </Show>
+                  <Show when={k().style.type === "counterbore" && (k().style as { diameter: number; depth: number })}>
+                    {(st) => (
+                      <>
+                        {field("Caja: diámetro", "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.diameter = v), "mm")}
+                        {field("Caja: profundidad", "kind.style.depth", st().depth, (x, v) => x.type === "hole" && x.style.type === "counterbore" && (x.style.depth = v), "mm")}
+                      </>
+                    )}
+                  </Show>
+                  <Show when={k().style.type === "countersink" && (k().style as { diameter: number; angle: number })}>
+                    {(st) => (
+                      <>
+                        {field("Avellanado: diámetro", "kind.style.diameter", st().diameter, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.diameter = v), "mm")}
+                        {field("Avellanado: ángulo", "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "countersink" && (x.style.angle = v), "°")}
+                      </>
+                    )}
+                  </Show>
+                  <Show when={k().thread}>
+                    <p class="text-[11px] text-text-dim">Rosca {k().thread} (cosmética: no se modela)</p>
+                  </Show>
+                </>
               );
             }}
           </Match>
