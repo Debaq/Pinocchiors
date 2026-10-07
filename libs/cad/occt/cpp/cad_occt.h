@@ -179,6 +179,10 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
 // (hacia su normal; negativo = hacia atrás).
 CadShape* cad_thicken(const CadShape* faces, double thickness);
 
+// `n` puntos a distancias iguales a lo largo de un alambre (o arista), con la
+// tangente en cada uno: out_p y out_t tienen 3n valores.
+int32_t cad_wire_sample(const CadShape* wire, int32_t n, double* out_p, double* out_t);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

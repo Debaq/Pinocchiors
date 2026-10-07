@@ -57,6 +57,7 @@ CadShape* cad_sub_shape(const CadShape* s, int32_t k, int32_t i) { (void)s; (voi
 int32_t cad_count_vertices(const CadShape* s) { (void)s; FAIL_INT; }
 int32_t cad_count_solids(const CadShape* s) { (void)s; FAIL_INT; }
 double cad_ray_hit(const CadShape* s, const double* o, const double* d) { (void)s; (void)o; (void)d; return -1.0; }
+int32_t cad_wire_sample(const CadShape* w, int32_t n, double* p, double* t) { (void)w; (void)n; (void)p; (void)t; FAIL_INT; }
 CadShape* cad_make_helix(const double* o, const double* d, double r, double p, double t, int32_t l) { (void)o; (void)d; (void)r; (void)p; (void)t; (void)l; FAIL_PTR; }
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }

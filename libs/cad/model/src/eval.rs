@@ -1330,6 +1330,65 @@ impl Ctx<'_> {
                 self.ev.curves.insert(f.id, wire);
                 Ok(())
             }
+            FeatureKind::MoveFace { faces, distance } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                if distance.abs() < 1e-9 {
+                    return Err("distancia cero".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                // Cada cara: el prisma que barre al moverse, sumado o restado de su pieza
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("por ahora solo se mueven caras planas".into());
+                    }
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    let n = normalize(info.normal);
+                    let prism = body.face_shape(i).and_then(|fc| fc.prism(scale(n, *distance))).map_err(err)?;
+                    jobs.push((part, prism, i));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                for (k, (part, prism, _)) in jobs.into_iter().enumerate() {
+                    let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; prism.face_count()];
+                    self.scope = vec![part];
+                    let op = if *distance > 0.0 { BodyOp::Join } else { BodyOp::Cut };
+                    let r = self.apply(f.id, Tagged { shape: prism, tags }, op);
+                    if r.is_err() {
+                        self.scope = saved;
+                        return r;
+                    }
+                }
+                self.scope = saved;
+                Ok(())
+            }
+            FeatureKind::Scale { factor, center } => {
+                if factor.iter().any(|v| v.abs() < 1e-12) {
+                    return Err("la escala no puede ser cero".into());
+                }
+                self.body()?;
+                let c = self.point("center", center)?;
+                let m = [
+                    [factor[0], 0.0, 0.0, c[0] - factor[0] * c[0]],
+                    [0.0, factor[1], 0.0, c[1] - factor[1] * c[1]],
+                    [0.0, 0.0, factor[2], c[2] - factor[2] * c[2]],
+                ];
+                let which: Vec<usize> = if self.scope.is_empty() {
+                    (0..self.ev.parts.len()).collect()
+                } else {
+                    self.find_parts("scope", &self.scope.clone())?
+                };
+                for i in which {
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.transform(m)).map_err(err)?;
+                    self.replace_part(i, new, &h, |_| None);
+                }
+                self.sync();
+                Ok(())
+            }
             FeatureKind::Thicken { faces, thickness, op } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());
@@ -1474,6 +1533,18 @@ impl Ctx<'_> {
                 let d = normalize(*direction);
                 for k in 1..*count {
                     let v = scale(d, spacing * k as f64);
+                    out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                }
+            }
+            PatternKind::Curve { path, count } => {
+                if *count < 2 {
+                    return Err("se necesitan al menos 2 instancias".into());
+                }
+                let wire = self.path_wire(path, None)?;
+                let pts = wire.sample_curve(*count as usize).map_err(err)?;
+                let p0 = pts[0].0;
+                for (p, _) in pts.into_iter().skip(1) {
+                    let v = sub(p, p0);
                     out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
                 }
             }

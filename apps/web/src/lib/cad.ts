@@ -175,7 +175,9 @@ export type PrimitiveShape =
 
 export type PatternKind =
   | { type: "linear"; direction: P3; count: number; spacing: number }
-  | { type: "circular"; axis: AxisSpec; count: number; angle: number };
+  | { type: "circular"; axis: AxisSpec; count: number; angle: number }
+  /** Copias repartidas de punta a punta de un camino */
+  | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number };
 
 export type FeatureKind =
   | { type: "sketch"; plane: PlaneSpec; offset: number; sketch: Sketch }
@@ -218,6 +220,10 @@ export type FeatureKind =
   | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean }
   /** Espesor a caras del sólido */
   | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
+  /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
+  | { type: "move_face"; faces: FaceRef[]; distance: number }
+  /** Escala por eje alrededor de un punto */
+  | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
   | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
   /** Agujeros en los puntos de un sketch (o sus círculos), contra la normal del plano */
@@ -618,6 +624,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   hole: "Agujero",
   helix: "Hélice",
   thicken: "Engrosar",
+  move_face: "Mover cara",
+  scale: "Escala",
 };
 
 /**
@@ -712,8 +720,13 @@ export function dependencies(kind: FeatureKind): number[] {
       return [kind.sketch];
     case "revolve":
       return [kind.sketch, ...axis(kind.axis)];
-    case "pattern":
-      return [...kind.features, ...(kind.pattern.type === "circular" ? axis(kind.pattern.axis) : [])];
+    case "pattern": {
+      const p = kind.pattern;
+      const extra = p.type === "circular" ? axis(p.axis) : p.type === "curve" ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature] : [];
+      return [...kind.features, ...extra];
+    }
+    case "scale":
+      return point(kind.center);
     case "mirror":
       return [...kind.features, ...plane(kind.plane)];
     case "boolean":

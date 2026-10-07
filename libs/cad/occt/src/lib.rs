@@ -616,6 +616,15 @@ impl Shape {
         wrap(unsafe { ffi::cad_sub_shape(self.ptr(), 1, index as i32) })
     }
 
+    /// `n` puntos a distancias iguales a lo largo de este alambre, con su tangente.
+    pub fn sample_curve(&self, n: usize) -> Result<Vec<(P3, P3)>> {
+        let (mut p, mut t) = (vec![0.0; 3 * n], vec![0.0; 3 * n]);
+        if unsafe { ffi::cad_wire_sample(self.ptr(), n as i32, p.as_mut_ptr(), t.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        Ok((0..n).map(|i| ([p[3 * i], p[3 * i + 1], p[3 * i + 2]], [t[3 * i], t[3 * i + 1], t[3 * i + 2]])).collect())
+    }
+
     /// Hélice (alambre) alrededor de `axis`.
     pub fn helix(axis: Axis, radius: f64, pitch: f64, turns: f64, left: bool) -> Result<Shape> {
         wrap(unsafe { ffi::cad_make_helix(axis.origin.as_ptr(), axis.dir.as_ptr(), radius, pitch, turns, left as i32) })

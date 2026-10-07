@@ -406,3 +406,5 @@ cargo test -p cad-model
   M2–M12 para pasar o roscar.
 - **2026-10-07 Hélice y engrosar** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 5 sin el
   nervio): hélice de referencia que sirve de camino de barrido (resortes) y engrosar caras.
+- **2026-10-07 Mover cara, escala y patrón en curva** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md),
+  fase 6): se arregló también la transformación no uniforme del puente (perdía la escala).

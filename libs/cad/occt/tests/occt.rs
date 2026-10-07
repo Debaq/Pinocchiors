@@ -546,3 +546,18 @@ fn helix_spring_and_thicken() {
     let plate = sq.thicken(2.0).unwrap();
     assert!((plate.mass().unwrap().volume.abs() - 200.0).abs() < 1e-6);
 }
+
+#[test]
+fn sample_a_wire_evenly() {
+    if !cad_occt::available() {
+        return;
+    }
+    // Recta de 0 a 30 en X y luego 10 en Y: 5 puntos cada 10
+    let w = Shape::wire(&[Curve::Line([0.0; 3], [30.0, 0.0, 0.0]), Curve::Line([30.0, 0.0, 0.0], [30.0, 10.0, 0.0])]).unwrap();
+    let s = w.sample_curve(5).unwrap();
+    let want = [[0.0, 0.0], [10.0, 0.0], [20.0, 0.0], [30.0, 0.0], [30.0, 10.0]];
+    for ((p, _), w) in s.iter().zip(want) {
+        assert!((p[0] - w[0]).abs() < 1e-6 && (p[1] - w[1]).abs() < 1e-6, "{p:?} vs {w:?}");
+    }
+    assert!((s[0].1[0] - 1.0).abs() < 1e-9);
+}

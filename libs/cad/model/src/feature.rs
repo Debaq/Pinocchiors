@@ -114,6 +114,10 @@ pub enum AxisDef {
     Planes { a: PlaneSpec, b: PlaneSpec },
 }
 
+fn origin_point() -> PointSpec {
+    PointSpec::At { point: [0.0; 3] }
+}
+
 fn plane_deps(p: &PlaneSpec) -> Vec<FeatureId> {
     match p {
         PlaneSpec::Reference { feature } => vec![*feature],
@@ -265,6 +269,8 @@ pub enum PatternKind {
     Linear { direction: P3, count: u32, spacing: f64 },
     /// `angle` total; 360 reparte las copias en la vuelta completa.
     Circular { axis: AxisSpec, count: u32, angle: f64 },
+    /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
+    Curve { path: SweepPath, count: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -347,6 +353,14 @@ pub enum FeatureKind {
         turns: f64,
         #[serde(default)]
         left: bool,
+    },
+    /// Mueve caras planas a lo largo de su normal (afuera suma, adentro resta).
+    MoveFace { faces: Vec<FaceRef>, distance: f64 },
+    /// Escala las piezas (o las del alcance) alrededor de un punto, por eje.
+    Scale {
+        factor: P3,
+        #[serde(default = "origin_point")]
+        center: PointSpec,
     },
     /// Da espesor a caras del sólido (hacia afuera; negativo, hacia adentro).
     Thicken {
@@ -471,6 +485,7 @@ impl FeatureKind {
                 SweepPath::Curve { feature } => vec![s.sketch, *feature],
             },
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
+            FeatureKind::Scale { center, .. } => point_deps(center),
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => vec![h.sketch],
             FeatureKind::Extrude(e) => vec![e.sketch],
@@ -481,8 +496,11 @@ impl FeatureKind {
             }
             FeatureKind::Pattern { features, pattern } => {
                 let mut d = features.clone();
-                if let PatternKind::Circular { axis, .. } = pattern {
-                    d.extend(axis_dep(axis));
+                match pattern {
+                    PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
+                    PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
+                    PatternKind::Curve { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
+                    _ => {}
                 }
                 d
             }
@@ -526,6 +544,8 @@ impl FeatureKind {
             FeatureKind::Hole(_) => "Agujero",
             FeatureKind::Helix { .. } => "Hélice",
             FeatureKind::Thicken { .. } => "Engrosar",
+            FeatureKind::MoveFace { .. } => "Mover cara",
+            FeatureKind::Scale { .. } => "Escala",
         }
     }
 }

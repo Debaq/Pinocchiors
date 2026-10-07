@@ -281,6 +281,22 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     void store.addFeature({ type: "thicken", faces, thickness: 2, op: "join" });
   };
 
+  const startMoveFace = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "move_face", faces, distance: 5 });
+  };
+
+  /** Patrón a lo largo del último sketch (o de la operación elegida, si tiene herramienta) */
+  const addCurvePattern = () => {
+    const sel = selectedFeature();
+    const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    const path = [...sketches()].pop();
+    if (!path) return say("Primero un sketch con el camino (líneas o arcos)");
+    void store.addFeature({ type: "pattern", features, pattern: { type: "curve", path: { type: "sketch", sketch: path.id, entities: [] }, count: 4 } });
+  };
+
   /** Agujero M6 pasante en los puntos del sketch elegido (o el último) */
   const addHole = () => {
     const s = targetSketch();
@@ -541,6 +557,9 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 onHole={addHole}
                 onHelix={() => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false })}
                 onThicken={() => void startThicken()}
+                onMoveFace={() => void startMoveFace()}
+                onScale={() => void store.addFeature({ type: "scale", factor: [2, 2, 2], center: { type: "at", point: [0, 0, 0] } })}
+                onCurvePattern={addCurvePattern}
                 hasBody={!!store.result()?.body}
               />
 
@@ -689,6 +708,9 @@ const AddSection: Component<{
   onHole: () => void;
   onHelix: () => void;
   onThicken: () => void;
+  onMoveFace: () => void;
+  onScale: () => void;
+  onCurvePattern: () => void;
   hasBody: boolean;
 }> = (props) => {
   const B = (p: { label: string; onClick: () => void; disabled?: boolean; title?: string }) => (
@@ -741,6 +763,9 @@ const AddSection: Component<{
           <B label="Punto" onClick={() => props.onReference("point")} title="Punto de referencia" />
           <B label="Hélice" onClick={props.onHelix} title="Hélice de referencia: camino para resortes y roscas" />
           <B label="Engrosar" onClick={props.onThicken} disabled={!props.hasBody} title="Da espesor a las caras elegidas" />
+          <B label="Mover cara" onClick={props.onMoveFace} disabled={!props.hasBody} title="Lleva caras planas hacia afuera o hacia adentro" />
+          <B label="Escala" onClick={props.onScale} disabled={!props.hasBody} title="Escala las piezas alrededor de un punto" />
+          <B label="Patrón en curva" onClick={props.onCurvePattern} disabled={!props.hasBody} title="Copias a lo largo de un camino (sketch o hélice)" />
         </div>
       </div>
     </Section>
@@ -1529,6 +1554,32 @@ const FeatureEditor: Component<{
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "pattern" && (x.features = ids))} />
                 <Show
+                  when={k().pattern.type !== "curve"}
+                  fallback={
+                    <>
+                      <Row label="A lo largo de">
+                        <Select
+                          options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                          value={(() => {
+                            const p = (k().pattern as Extract<PatternKind, { type: "curve" }>).path;
+                            return p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                          })()}
+                          onChange={(v) =>
+                            update(
+                              (x) =>
+                                x.type === "pattern" &&
+                                x.pattern.type === "curve" &&
+                                (x.pattern.path = v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                            )
+                          }
+                        />
+                      </Row>
+                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      <p class="text-[11px] text-text-dim">Las copias se reparten de punta a punta del camino, sin girar.</p>
+                    </>
+                  }
+                >
+                <Show
                   when={k().pattern.type === "linear" && (k().pattern as Extract<PatternKind, { type: "linear" }>)}
                   fallback={
                     <>
@@ -1567,6 +1618,7 @@ const FeatureEditor: Component<{
                       {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
                     </>
                   )}
+                </Show>
                 </Show>
               </>
             )}
@@ -1798,6 +1850,49 @@ const FeatureEditor: Component<{
                 <p class="text-[11px] text-text-dim">Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.</p>
               </>
             )}
+          </Match>
+          <Match when={f().kind.type === "move_face" && (f().kind as Extract<FeatureKind, { type: "move_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras planas"
+                  refs={k().faces}
+                  lost={lost("faces")}
+                  onChange={(refs) => update((x) => x.type === "move_face" && (x.faces = refs as FaceRef[]))}
+                />
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "move_face" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Positiva: hacia afuera (suma material); negativa: hacia adentro.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "scale" && (f().kind as Extract<FeatureKind, { type: "scale" }>)}>
+            {(k) => {
+              const uniform = () => k().factor[0] === k().factor[1] && k().factor[1] === k().factor[2];
+              const [perAxis, setPerAxis] = createSignal(!uniform());
+              return (
+                <>
+                  <Checkbox small label="Distinta en cada eje" checked={perAxis()} onChange={(c) => {
+                    setPerAxis(c);
+                    if (!c) update((x) => x.type === "scale" && (x.factor = [x.factor[0], x.factor[0], x.factor[0]]));
+                  }} />
+                  <Show
+                    when={perAxis()}
+                    fallback={field("Factor", "kind.factor.0", k().factor[0], (x, v) => x.type === "scale" && (x.factor = [v, v, v]))}
+                  >
+                    <div class="grid grid-cols-3 gap-1">
+                      <For each={["X", "Y", "Z"]}>
+                        {(axis, i) => field(axis, `kind.factor.${i()}`, k().factor[i()], (x, v) => x.type === "scale" && (x.factor[i()] = v))}
+                      </For>
+                    </div>
+                  </Show>
+                  <PointField store={props.store} ui={props.ui} owner={`${f().id}:centro`} label="Centro" value={k().center} except={f().id} onChange={(p) => update((x) => x.type === "scale" && (x.center = p))} />
+                </>
+              );
+            }}
           </Match>
           <Match when={f().kind.type === "thicken" && (f().kind as Extract<FeatureKind, { type: "thicken" }>)}>
             {(k) => (

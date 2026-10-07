@@ -109,7 +109,14 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    `SweepPath::Curve`; un resorte = círculo en el arranque + barrido) y `Thicken { faces,
    thickness, op }` (`BRepOffset_MakeOffset` en modo engrosar). El nervio queda pendiente:
    `BRepFeat_MakeLinearForm` necesita el contorno abierto llevado hasta el sólido.*
-6. **Mover y reemplazar cara**, **escala**, **patrón en curva**.
+6. **Mover y reemplazar cara**, **escala**, **patrón en curva**. *Hecha el 2026-10-07 salvo reemplazar cara:
+   `MoveFace { faces, distance }` (caras planas: el prisma que barre la cara se suma o se
+   resta de su pieza; conserva historia y orígenes; caras no planas, error claro),
+   `Scale { factor: [sx, sy, sz], center }` (transformación general; el puente ahora detecta
+   si la matriz es semejanza antes de usar `gp_Trsf`, que con una escala no uniforme se
+   quedaba solo con la traslación) y `PatternKind::Curve { path, count }` (copias trasladadas
+   a distancias iguales de punta a punta del camino, `cad_wire_sample` con
+   `GCPnts_UniformAbscissa`).*
 
 ## Pruebas
 

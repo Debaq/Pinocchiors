@@ -3,6 +3,8 @@
 #define _USE_MATH_DEFINES  // M_PI en MSVC
 #include "cad_occt.h"
 
+#include <BRepAdaptor_CompCurve.hxx>
+#include <GCPnts_UniformAbscissa.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
@@ -653,7 +655,16 @@ CadShape* cad_draft(const CadShape* s, const int32_t* faces, int32_t n, const do
 
 CadShape* cad_transform(const CadShape* s, const double* m) {
     return guard("transformar", (CadShape*)nullptr, [&] {
+        // ¿Semejanza? Columnas ortogonales y del mismo largo; si no (escala no
+        // uniforme), la transformación general. gp_Trsf::SetValues no siempre
+        // avisa: con una matriz que no lo es se queda solo con la traslación.
+        gp_XYZ c0(m[0], m[4], m[8]), c1(m[1], m[5], m[9]), c2(m[2], m[6], m[10]);
+        double l0 = c0.Modulus(), l1 = c1.Modulus(), l2 = c2.Modulus();
+        double tol = 1e-9 * std::max({l0, l1, l2, 1.0});
+        bool similar = std::fabs(l0 - l1) < tol && std::fabs(l1 - l2) < tol && std::fabs(c0.Dot(c1)) < tol * l0 &&
+                       std::fabs(c1.Dot(c2)) < tol * l1 && std::fabs(c0.Dot(c2)) < tol * l0;
         try {
+            if (!similar) throw Standard_Failure("no es semejanza");
             gp_Trsf t;
             t.SetValues(m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11]);
             BRepBuilderAPI_Transform mk(s->s, t, Standard_True);
@@ -1016,6 +1027,28 @@ CadShape* cad_thicken(const CadShape* faces, double thickness) {
         mk.MakeOffsetShape();
         if (!mk.IsDone()) throw Standard_Failure("no se pudo engrosar");
         return wrap_checked(mk.Shape(), "engrosar");
+    });
+}
+
+int32_t cad_wire_sample(const CadShape* wire, int32_t n, double* out_p, double* out_t) {
+    return guard("muestrear curva", 0, [&] {
+        if (n < 2) throw Standard_Failure("hacen falta al menos dos puntos");
+        TopoDS_Wire w;
+        if (wire->s.ShapeType() == TopAbs_WIRE) w = TopoDS::Wire(wire->s);
+        else if (wire->s.ShapeType() == TopAbs_EDGE) w = BRepBuilderAPI_MakeWire(TopoDS::Edge(wire->s)).Wire();
+        else throw Standard_Failure("se esperaba un alambre");
+        BRepAdaptor_CompCurve c(w);
+        GCPnts_UniformAbscissa ua(c, (int)n);
+        if (!ua.IsDone() || ua.NbPoints() != n) throw Standard_Failure("no se pudo repartir la curva");
+        for (int i = 1; i <= n; i++) {
+            gp_Pnt p;
+            gp_Vec t;
+            c.D1(ua.Parameter(i), p, t);
+            if (t.Magnitude() > 1e-12) t.Normalize();
+            put(out_p + 3 * (i - 1), p.XYZ());
+            put(out_t + 3 * (i - 1), t.XYZ());
+        }
+        return 1;
     });
 }
 

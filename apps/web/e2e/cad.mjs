@@ -964,6 +964,29 @@ const scenarios = {
     near(r.bbox_max[2], 12, 1e-6, "llega a 12");
   },
 
+  async "mover cara y escala"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // La cara de arriba, 5 mm hacia afuera
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Mover cara");
+    await sleep(2000);
+    await accept(b);
+    let r = await body();
+    near(r.volume, 8000 + 400 * 5, 1e-6, "cara movida");
+    near(r.bbox_max[2], 15, 1e-6, "llega a 15");
+    // Escala ×2 desde el origen
+    await b.clickText("Escala");
+    await sleep(2000);
+    await accept(b);
+    r = await body();
+    near(r.volume, 10000 * 8, 1e-3, "escala ×2");
+    near(r.bbox_max[2], 30, 1e-5, "alto escalado");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);
