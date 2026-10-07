@@ -63,6 +63,7 @@ tauri-plugin-shell = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rmp-serde = { workspace = true }
+serde_bytes = { workspace = true }
 zip = { workspace = true, features = ["deflate"] }
 
 # Async

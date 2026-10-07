@@ -785,6 +785,7 @@ fn measure_impl(state: &AppState, items: &[cad_model::MeasureItem]) -> Result<ca
     cad_model::measure(body, items)
 }
 
+#[cfg(test)]
 fn body_scene(state: &AppState, name: &str) -> Result<Scene, String> {
     parts_scene(state, name, None)
 }
@@ -905,15 +906,96 @@ pub async fn cad_import_step(app: AppHandle, path: String, op: Option<BodyOp>) -
     .await
 }
 
-/// El sólido pasa a ser el modelo de la app (para imprimir, pintar, rigging…).
+/// Suelda los vértices repetidos por cara (el teselado parte las aristas
+/// vivas para las normales) y promedia las normales, como un STL importado:
+/// para Reparar y Fabricar la malla tiene que quedar cerrada.
+fn weld_scene(scene: &mut Scene) {
+    for mesh in &mut scene.meshes {
+        for prim in &mut mesh.primitives {
+            let Some(positions) = prim.attributes.iter().find_map(|a| match a {
+                VertexAttribute::Positions(p) => Some(p.clone()),
+                _ => None,
+            }) else {
+                continue;
+            };
+            let Some(IndexData::U32(indices)) = &prim.indices else { continue };
+            let mut index: HashMap<[u32; 3], u32> = HashMap::new();
+            let mut welded: Vec<[f32; 3]> = Vec::new();
+            let remap: Vec<u32> = positions
+                .iter()
+                .map(|p| {
+                    *index.entry(p.map(f32::to_bits)).or_insert_with(|| {
+                        welded.push(*p);
+                        (welded.len() - 1) as u32
+                    })
+                })
+                .collect();
+            let indices: Vec<u32> = indices.iter().map(|&i| remap[i as usize]).collect();
+            let mut normals = vec![[0.0f32; 3]; welded.len()];
+            for t in indices.chunks_exact(3) {
+                let [a, b, c] = [t[0], t[1], t[2]].map(|i| welded[i as usize]);
+                let u = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+                let v = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+                // Producto vectorial sin normalizar: pesa por el área
+                let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
+                for &i in t {
+                    for k in 0..3 {
+                        normals[i as usize][k] += n[k];
+                    }
+                }
+            }
+            for n in &mut normals {
+                let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                if len > 1e-12 {
+                    *n = n.map(|x| x / len);
+                }
+            }
+            prim.attributes = vec![VertexAttribute::Positions(welded), VertexAttribute::Normals(normals)];
+            prim.indices = Some(IndexData::U32(indices));
+        }
+    }
+}
+
+/// Resultado de `cad_part_to_model`
+#[derive(Serialize)]
+pub struct PartModel {
+    /// Se cargó una malla nueva (`false`: la pieza no cambió desde `known`)
+    pub changed: bool,
+    /// Huella de la malla de la pieza (texto: un u64 no entra entero en JS)
+    pub hash: String,
+    pub info: Option<MeshInfo>,
+}
+
+/// La malla de una pieza del diseño pasa a ser el modelo del objeto activo.
+/// `known` es la huella de la última vez: si la pieza no cambió no hace nada.
+/// El esqueleto del objeto se conserva (como al importar un modelo sin rig);
+/// lo demás derivado de la malla se descarta y lo rehace la interfaz.
 #[tauri::command]
-pub async fn cad_to_model(app: AppHandle, on_progress: Channel<Progress>) -> Result<MeshInfo, String> {
+pub async fn cad_part_to_model(
+    app: AppHandle,
+    part: cad_model::PartId,
+    known: Option<String>,
+    on_progress: Channel<Progress>,
+) -> Result<PartModel, String> {
     require_occt()?;
-    in_background(app, move |state| {
-        let scene = body_scene(state, "Diseño")?;
-        load_scene(scene, "Diseño".into(), "CAD".into(), &on_progress, state)
-    })
-    .await
+    in_background(app, move |state| part_to_model_impl(state, part, known, &on_progress)).await
+}
+
+fn part_to_model_impl(
+    state: &AppState,
+    part: cad_model::PartId,
+    known: Option<String>,
+    progress: &Channel<Progress>,
+) -> Result<PartModel, String> {
+    let mut scene = parts_scene(state, "Pieza", Some(part))?;
+    weld_scene(&mut scene);
+    let hash = format!("{:016x}", scene_hash(&scene));
+    if known.as_deref() == Some(hash.as_str()) && state.mesh.lock().unwrap().is_some() {
+        return Ok(PartModel { changed: false, hash, info: None });
+    }
+    let name = scene.meshes.first().map(|m| m.name.clone()).unwrap_or_else(|| "Pieza".into());
+    let info = load_scene(scene, name, "CAD".into(), progress, state)?;
+    Ok(PartModel { changed: true, hash, info: Some(info) })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1230,6 +1312,26 @@ pub mod bridge {
                 ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
             }
             "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
+            "cad_part_to_model" => {
+                let channel = Channel::new(|_| Ok(()));
+                ok(part_to_model_impl(state, arg(args, "part")?, arg(args, "known")?, &channel)?)
+            }
+            "object_activate" => ok(crate::project::activate_impl(state, arg(args, "id")?)?),
+            "object_remove" => ok(crate::project::remove_impl(state, arg(args, "id")?)),
+            "object_adopt" => ok(crate::project::adopt_impl(state, arg(args, "id")?)),
+            "object_mesh_data" => crate::project::object_mesh_bytes(state, arg(args, "id")?).map(Reply::Bytes),
+            "take_snapshot" => ok(crate::project::take_snapshot_impl(state)),
+            "swap_snapshot" => ok(crate::project::swap_snapshot_impl(state, arg(args, "id")?)?),
+            "drop_snapshot" => {
+                state.undo_snapshots.lock().unwrap().remove(arg(args, "id")?);
+                ok(())
+            }
+            "analyze_print3d" => ok(crate::commands::analyze_print3d_impl(state)?),
+            "scale_mesh_for_print" => ok(crate::commands::scale_mesh_for_print_impl(arg(args, "params")?, state)?),
+            "undo_print_scale" => ok(crate::commands::undo_print_scale_impl(state)?),
+            "subdivide_mesh" => ok(crate::commands::subdivide_mesh_impl(arg(args, "config")?, state)?),
+            "get_placement_info" => ok(crate::placement::placement_info(state)?),
+            "apply_placement" => ok(crate::placement::apply_placement_impl(state, arg(args, "matrix")?)?),
             "get_supported_formats" => ok(crate::commands::get_supported_formats()),
             _ => Ok(Reply::Json(json!(null))),
         }
@@ -1351,6 +1453,47 @@ mod tests {
         assert_eq!(triangles, 12, "la caja como herramienta");
         let none = tool_mesh_impl(&state, cad_model::FeatureId(99)).unwrap();
         assert_eq!(none, vec![0; 16]);
+    }
+
+    #[test]
+    fn part_model_is_closed() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(box_doc());
+        let mut scene = body_scene(&state, "Diseño").unwrap();
+        weld_scene(&mut scene);
+        let prims = scene.world_primitives();
+        assert_eq!(prims[0].positions.len(), 8, "un cubo soldado tiene 8 vértices");
+        let mesh = crate::commands::scene_to_pinocchio_mesh(&scene).unwrap();
+        assert!(pinocchio_print3d::is_mesh_closed(&mesh));
+        // La caja de 10 × 20 × 30 mm
+        assert!((pinocchio_print3d::compute_volume(&mesh).abs() - 6000.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn part_to_model_skips_unchanged_parts() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(box_doc());
+        let channel = Channel::new(|_| Ok(()));
+        let part = cad_model::PartId { feature: state.cad_document.lock().unwrap().as_ref().unwrap().features[0].id, index: 0 };
+        let first = part_to_model_impl(&state, part, None, &channel).unwrap();
+        assert!(first.changed);
+        let again = part_to_model_impl(&state, part, Some(first.hash.clone()), &channel).unwrap();
+        assert!(!again.changed, "misma pieza: no recarga");
+        state.cad_document.lock().unwrap().as_mut().unwrap().features[0].kind = FeatureKind::Primitive(cad_model::Primitive {
+            shape: cad_model::PrimitiveShape::Box { dx: 40.0, dy: 20.0, dz: 30.0, centered: false, centered_z: false },
+            origin: [0.0; 3],
+            z: [0.0, 0.0, 1.0],
+            x: [1.0, 0.0, 0.0],
+            op: BodyOp::Join,
+        });
+        let changed = part_to_model_impl(&state, part, Some(first.hash), &channel).unwrap();
+        assert!(changed.changed, "la pieza cambió: malla nueva");
     }
 
     #[test]

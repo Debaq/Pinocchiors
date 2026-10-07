@@ -171,6 +171,10 @@ pub struct AppState {
     pub cad_ops: Mutex<cad_model::EvalCache>,
     /// Modelo preparado para escaneo → CAD
     pub cad_scan: Mutex<Option<crate::cad::ScanCache>>,
+
+    // ── Objetos ──
+    /// Objetos de la escena que no están activos (el activo es todo lo de arriba)
+    pub objects: Mutex<crate::project::ObjectSlots>,
 }
 
 impl AppState {
@@ -209,6 +213,7 @@ impl AppState {
             cad_cache: Mutex::new(None),
             cad_ops: Mutex::new(cad_model::EvalCache::default()),
             cad_scan: Mutex::new(None),
+            objects: Mutex::new(Default::default()),
         }
     }
 }
@@ -233,6 +238,23 @@ impl AppState {
         *self.cad_preview.lock().unwrap() = None;
         *self.cad_cache.lock().unwrap() = None;
         self.cad_ops.lock().unwrap().clear();
+        *self.cad_scan.lock().unwrap() = None;
+        *self.objects.lock().unwrap() = Default::default();
+    }
+
+    /// Objeto nuevo: sin modelo, esqueleto ni nada derivado (el diseño, los
+    /// demás objetos y las copias para deshacer quedan)
+    pub fn clear_model(&self) {
+        *self.original_model.lock().unwrap() = None;
+        *self.scene.lock().unwrap() = None;
+        *self.mesh.lock().unwrap() = None;
+        *self.skeleton.lock().unwrap() = None;
+        *self.original_skeleton.lock().unwrap() = None;
+        *self.skeleton_transform.lock().unwrap() = SkeletonTransformParams::default();
+        *self.skeleton_preset.lock().unwrap() = None;
+        self.rig_on_quad.store(false, Ordering::SeqCst);
+        self.use_retopology.store(true, Ordering::SeqCst);
+        self.reset_derived();
         *self.cad_scan.lock().unwrap() = None;
     }
 

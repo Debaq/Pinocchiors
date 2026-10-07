@@ -41,7 +41,7 @@ pub async fn get_placement_info(app: AppHandle) -> Result<PlacementInfo, String>
     in_background(app, placement_info).await
 }
 
-fn placement_info(state: &AppState) -> Result<PlacementInfo, String> {
+pub(crate) fn placement_info(state: &AppState) -> Result<PlacementInfo, String> {
     let mesh = state.mesh.lock().unwrap();
     let mesh = mesh.as_ref().ok_or("No hay malla cargada")?;
     let positions: Vec<Vector3> = mesh.vertices.iter().map(|v| v.position).collect();
@@ -167,7 +167,7 @@ fn transform_mesh(mesh: &Mesh, rigid: &Rigid) -> Result<Mesh, String> {
     Ok(out)
 }
 
-fn apply_placement_impl(state: &AppState, matrix: [f64; 16]) -> Result<PlacementResult, String> {
+pub(crate) fn apply_placement_impl(state: &AppState, matrix: [f64; 16]) -> Result<PlacementResult, String> {
     let rigid = Rigid::from_column_major(matrix)?;
     let _guard = state.try_begin_processing().ok_or("Espera a que termine el proceso en curso")?;
 

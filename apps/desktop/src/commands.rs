@@ -622,8 +622,6 @@ pub(crate) fn load_scene(
     drop(scene_lock);
     drop(mesh_lock);
     state.reset_derived();
-    // Modelo nuevo: historial nuevo
-    *state.undo_snapshots.lock().unwrap() = Default::default();
 
     // El rig del archivo reemplaza al esqueleto anterior; sin rig, el
     // esqueleto elegido se conserva para ajustarlo al modelo nuevo
@@ -661,7 +659,7 @@ pub(crate) fn get_mesh_data_impl(state: &AppState) -> Result<MeshData, String> {
     Ok(scene_mesh_data(scene))
 }
 
-fn scene_mesh_data(scene: &Scene) -> MeshData {
+pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
     let prims = scene.world_primitives();
     let has_uvs = prims.iter().any(|p| p.uvs.is_some());
 
@@ -3492,7 +3490,7 @@ pub async fn analyze_print3d(app: AppHandle) -> Result<Print3dAnalysisInfo, Stri
     in_background(app, analyze_print3d_impl).await
 }
 
-fn analyze_print3d_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
+pub(crate) fn analyze_print3d_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     let mesh_lock = state.mesh.lock().unwrap();
     let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
 
@@ -3508,7 +3506,7 @@ pub async fn scale_mesh_for_print(app: AppHandle, params: ScalePrintInput) -> Re
     in_background(app, move |state| scale_mesh_for_print_impl(params, state)).await
 }
 
-fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppState) -> Result<Print3dAnalysisInfo, String> {
+pub(crate) fn scale_mesh_for_print_impl(params: ScalePrintInput, state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     // Guardar backup (malla y escena) para poder deshacer
     {
         let mesh_lock = state.mesh.lock().unwrap();
@@ -3586,7 +3584,7 @@ pub async fn undo_print_scale(app: AppHandle) -> Result<Print3dAnalysisInfo, Str
     in_background(app, undo_print_scale_impl).await
 }
 
-fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
+pub(crate) fn undo_print_scale_impl(state: &AppState) -> Result<Print3dAnalysisInfo, String> {
     let mesh = state
         .mesh_before_print_scale
         .lock()
@@ -3659,7 +3657,7 @@ pub async fn subdivide_mesh(app: AppHandle, config: SubdivideConfigInput) -> Res
     in_background(app, move |state| subdivide_mesh_impl(config, state)).await
 }
 
-fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState) -> Result<SubdivideResultInfo, String> {
+pub(crate) fn subdivide_mesh_impl(config: SubdivideConfigInput, state: &AppState) -> Result<SubdivideResultInfo, String> {
     let mesh_lock = state.mesh.lock().unwrap();
     let mesh = mesh_lock.as_ref().ok_or("No hay malla cargada")?;
 

@@ -22,9 +22,9 @@ function near(actual, expected, tol, what) {
 
 async function begin(b) {
   await b.clickText("Diseñar");
-  await sleep(800);
-  await b.clickText("Nuevo diseño");
-  await sleep(800);
+  // El diseño vacío se crea solo al entrar
+  for (let t = 0; t < 40 && !(await b.eval(`!!window.__cadStore.doc()`)); t++) await sleep(250);
+  await sleep(500);
 }
 
 const evaluate = () => call("cad_evaluate");
@@ -54,7 +54,7 @@ async function accept(b, wait = 1500) {
 /** Clic en una fila del árbol de operaciones por su nombre */
 async function clickRow(b, name) {
   const r = await b.eval(`(() => {
-    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null);
+    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null && !x.closest("[data-outliner]"));
     if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];
   })()`);
   if (!r) throw new Error("no encontré la operación " + name);
@@ -184,7 +184,7 @@ const scenarios = {
     near((await body()).volume, 16000 - fillet(), 0.2, "dos cajas, dos redondeos");
     // Sin la caja de arriba su arista ya no está: advertencia y se redondea la otra
     await b.eval(`(() => {
-      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba");
+      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba" && !x.closest("[data-outliner]"));
       s.parentElement.querySelector('[aria-label="Suprimir"]').click();
     })()`);
     await sleep(2000);
@@ -2064,6 +2064,137 @@ const scenarios = {
     await sleep(3000);
     const r = await body();
     near(r.bbox_max[0] - r.bbox_min[0], 18, 0.05, "diámetro del cilindro escaneado");
+  },
+
+  async "outliner: planos, operaciones y piezas"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Plano 1", kind: { type: "plane", def: { type: "offset", base: { type: "xy" }, distance: 15 } } });
+      d.features.push({ id: 51, name: "Cilindro aparte", kind: { type: "primitive", shape: { type: "cylinder", radius: 5, height: 10 }, origin: [40, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 52;
+    })`);
+    await sleep(2500);
+    // Filas del Outliner: sangría y texto
+    const rows = () => b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)})`;
+    const expect = ["PLANOS", "Grid", "Planta (XY)", "Frente (XZ)", "Lateral (YZ)", "Plano 1", "OPERACIONES", "Caja 1", "Cilindro aparte", "OBJETOS", "Pieza 1", "Pieza 2"];
+    const got = await rows();
+    if (JSON.stringify(got) !== JSON.stringify(expect)) throw new Error(`árbol: ${JSON.stringify(got)}`);
+    // Elegir la pieza la abre en la lista de piezas
+    await b.eval(`${row("Pieza 2")}.click()`);
+    await sleep(500);
+    if ((await b.eval(`window.__cadUi.openPart()`)) !== "51:0") throw new Error("no se abrió la pieza");
+    // Ojo: el último botón de la fila
+    const eye = (label) => b.eval(`(() => { const bs = ${row(label)}.parentElement.querySelectorAll("button"); bs[bs.length - 1].click(); })()`);
+    await eye("Pieza 2");
+    await sleep(1500);
+    if (!(await b.eval(`window.__cadStore.doc().parts?.[0]?.hidden`))) throw new Error("no se ocultó la pieza");
+    await eye("Frente (XZ)");
+    await sleep(300);
+    if (JSON.stringify(await b.eval(`window.__cadUi.hiddenPlanes()`)) !== '["xz"]') throw new Error("no se ocultó el plano");
+    // Elegir una operación abre su diálogo
+    await b.eval(`${row("Plano 1")}.click()`);
+    await sleep(1200);
+    if ((await b.eval(`window.__cadStore.draft()?.feature`)) !== 50) throw new Error("no se abrió el plano");
+    await accept(b, 1000);
+    // Borrar la pieza (dos clics en la papelera)
+    for (let k = 0; k < 2; k++) {
+      await b.eval(`[...${row("Pieza 2")}.parentElement.querySelectorAll("button")].find((x) => x.title.includes("orrar")).click()`);
+      await sleep(300);
+    }
+    await sleep(2500);
+    const parts = await b.eval(`window.__cadStore.result().parts.length`);
+    if (parts !== 1) throw new Error(`quedaron ${parts} piezas`);
+    await b.shot("outliner");
+  },
+
+  async "objetos: las piezas pasan solas a Fabricar"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 51, name: "Cilindro aparte", kind: { type: "primitive", shape: { type: "cylinder", radius: 5, height: 10 }, origin: [40, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 52;
+    })`);
+    await sleep(2500);
+    const rows = () => b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)})`;
+    // Sin botones: a Fabricar y la primera pieza ya tiene malla
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Malla generada")`)); t++) await sleep(250);
+    await sleep(1500);
+    let got = await rows();
+    if (!got.includes("Malla generada") || got.indexOf("Malla generada") !== got.indexOf("Pieza 1") + 1) throw new Error(`sin malla bajo la pieza 1: ${JSON.stringify(got)}`);
+    // Otra pieza: clic en el Outliner y pasa a ser el objeto activo
+    await b.eval(`${row("Pieza 2")}.click()`);
+    for (let t = 0; t < 40 && (await rows()).indexOf("Malla generada") !== (await rows()).indexOf("Pieza 2") + 1; t++) await sleep(250);
+    got = await rows();
+    if (got.indexOf("Malla generada") !== got.indexOf("Pieza 2") + 1) throw new Error(`la pieza 2 no quedó activa: ${JSON.stringify(got)}`);
+    const objs = await b.eval(`JSON.stringify(window.__objects?.().map((o) => [o.name, !!o.source.hash, !!o.ui]))`);
+    if (objs !== JSON.stringify([["Pieza 1", true, true], ["Pieza 2", true, false]])) throw new Error(`objetos: ${objs}`);
+    // La pieza 1 se sigue viendo, en gris
+    for (let t = 0; t < 20 && (await b.eval(`window.__viewer().ghostCount`)) !== 1; t++) await sleep(250);
+    if ((await b.eval(`window.__viewer().ghostCount`)) !== 1) throw new Error("la pieza 1 no se ve en gris");
+    await b.shot("objetos-fantasma");
+    // Se cambia el diseño (cilindro más ancho) y al volver a Fabricar la malla se regenera sola
+    const before = await b.eval(`window.__objects().find((o) => o.name === "Pieza 2").source.hash`);
+    await b.clickText("Diseñar");
+    await sleep(800);
+    await b.eval(`window.__cadStore.commit((d) => { d.features.find((f) => f.id === 51).kind.shape.radius = 8; })`);
+    await sleep(2000);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && (await b.eval(`window.__objects().find((o) => o.name === "Pieza 2").source.hash`)) === before; t++) await sleep(250);
+    const after = await b.eval(`window.__objects().find((o) => o.name === "Pieza 2").source.hash`);
+    if (after === before) throw new Error("la malla no se regeneró");
+    await b.shot("objetos");
+  },
+
+  async "objetos: lo hecho sobre la malla se rehace si cambia el diseño"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!window.__objects?.()[0]?.source.hash`)); t++) await sleep(250);
+    await sleep(1000);
+    const dims = async () => (await call("analyze_print3d")).dimensions;
+    const d0 = await dims();
+    if (!(await call("analyze_print3d")).is_closed) throw new Error("la malla de la pieza no quedó cerrada");
+    // Escalar ×2 desde Fabricar
+    await b.clickText("Analizar para impresión");
+    await sleep(1000);
+    await b.eval(`(() => { const i = [...document.querySelectorAll("label")].find((l) => l.textContent.trim().startsWith("×"))?.querySelector("input"); i.value = "2"; i.dispatchEvent(new InputEvent("input", { bubbles: true })); })()`);
+    await b.clickText("Escalar");
+    await sleep(2000);
+    const d1 = await dims();
+    near(d1[0], 2 * d0[0], 1e-3 * d0[0], "ancho escalado");
+    // El diseño cambia: la caja el doble de ancha
+    const hash = await b.eval(`window.__objects()[0].source.hash`);
+    await b.clickText("Diseñar");
+    await sleep(800);
+    await b.eval(`window.__cadStore.commit((d) => { d.features[0].kind.shape.dx = 40; })`);
+    await sleep(2000);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 60 && (await b.eval(`window.__objects()[0].source.hash`)) === hash; t++) await sleep(250);
+    await sleep(2000);
+    // La malla nueva sale ya escalada: el ancho es 2 × 2 y lo demás 2 ×
+    const d2 = await dims();
+    near(d2[0], 4 * d0[0], 1e-3 * d0[0], "ancho rehecho");
+    near(d2[1], 2 * d0[1], 1e-3 * d0[1], "alto rehecho");
+    // El panel muestra el análisis de la malla nueva
+    const shown = await b.eval(`document.body.innerText.match(/Dimensiones\\s*([\\d.]+)/)?.[1]`);
+    near(parseFloat(shown), d2[0], 0.1, "ancho en el panel");
+    const status = await b.eval(`document.body.innerText.match(/El diseño cambió[^\\n]*/)?.[0] ?? ""`);
+    if (!status.includes("1 modificación")) throw new Error(`aviso: ${status}`);
+    // En el Outliner, la pieza con su malla y lo hecho sobre ella
+    const got = await b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("div.flex.items-center")].map((d) => d.innerText.split("\\n")[0])`);
+    const at = got.indexOf("Pieza 1");
+    if (got[at + 1] !== "Malla generada" || got[at + 2] !== "Escalar para fabricar") throw new Error(`árbol del objeto: ${JSON.stringify(got.slice(at))}`);
+    await b.shot("objetos-rehecho");
   },
 };
 

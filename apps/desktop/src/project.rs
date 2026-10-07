@@ -71,6 +71,28 @@ struct ProjectState {
     scene_before_print_scale: Option<Scene>,
     /// Diseño CAD (recetas: el sólido se recalcula al abrir)
     cad: Option<cad_model::Document>,
+    /// Los objetos de la escena que no están activos (el activo es el resto
+    /// de los campos); `None` = el activo todavía no tiene número
+    active_object: Option<u64>,
+    objects: Vec<StoredObject>,
+}
+
+/// Un objeto que no está activo: su modelo completo (sin diseño ni objetos)
+/// ya serializado como `ProjectState`
+#[derive(Serialize, Deserialize, Clone)]
+struct StoredObject {
+    id: u64,
+    #[serde(with = "serde_bytes")]
+    state: Vec<u8>,
+}
+
+/// Objetos de la escena. El activo vive en `AppState` (escena, malla,
+/// esqueleto, quads…); los demás quedan acá, serializados. Cambiar de objeto
+/// guarda el activo en su casillero y restaura el otro.
+#[derive(Default)]
+pub struct ObjectSlots {
+    pub active: Option<u64>,
+    stored: Vec<StoredObject>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -427,7 +449,19 @@ impl From<SkinDto> for Skin<4> {
 // ESTADO ↔ PROYECTO
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Todo el estado: el objeto activo, los demás y el diseño
 fn capture(state: &AppState) -> ProjectState {
+    let objects = state.objects.lock().unwrap();
+    ProjectState {
+        cad: state.cad_document.lock().unwrap().clone(),
+        active_object: objects.active,
+        objects: objects.stored.clone(),
+        ..capture_model(state)
+    }
+}
+
+/// Solo el modelo del objeto activo (para deshacer y para guardarlo en su casillero)
+fn capture_model(state: &AppState) -> ProjectState {
     let mesh = |m: &std::sync::Mutex<Option<Mesh>>| m.lock().unwrap().as_ref().map(MeshDto::from);
     let skeleton = |s: &std::sync::Mutex<Option<SkeletonType>>| s.lock().unwrap().as_ref().map(SkeletonDto::from);
     ProjectState {
@@ -462,13 +496,27 @@ fn capture(state: &AppState) -> ProjectState {
         }),
         mesh_before_print_scale: mesh(&state.mesh_before_print_scale),
         scene_before_print_scale: state.scene_before_print_scale.lock().unwrap().clone(),
-        cad: state.cad_document.lock().unwrap().clone(),
+        ..Default::default()
     }
 }
 
 /// Reemplaza todo el estado por el del proyecto. Se convierte primero y se
 /// asigna al final: si algo falla, el estado actual queda intacto.
-fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
+fn restore(state: &AppState, mut p: ProjectState) -> Result<(), String> {
+    let cad = p.cad.take();
+    let objects = ObjectSlots { active: p.active_object, stored: std::mem::take(&mut p.objects) };
+    restore_model(state, p)?;
+    *state.objects.lock().unwrap() = objects;
+    *state.cad_document.lock().unwrap() = cad;
+    *state.cad_preview.lock().unwrap() = None;
+    *state.cad_cache.lock().unwrap() = None;
+    state.cad_ops.lock().unwrap().clear();
+    *state.cad_scan.lock().unwrap() = None;
+    Ok(())
+}
+
+/// Reemplaza el modelo del objeto activo (no toca el diseño ni los demás objetos)
+fn restore_model(state: &AppState, p: ProjectState) -> Result<(), String> {
     let mesh = |m: Option<MeshDto>| m.map(MeshDto::into_mesh).transpose();
     let mesh_now = mesh(p.mesh)?;
     let before_repair = mesh(p.mesh_before_repair)?;
@@ -508,10 +556,7 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.print3d_pieces.lock().unwrap() = pieces;
     *state.mesh_before_print_scale.lock().unwrap() = before_print;
     *state.scene_before_print_scale.lock().unwrap() = p.scene_before_print_scale;
-    *state.cad_document.lock().unwrap() = p.cad;
-    *state.cad_preview.lock().unwrap() = None;
-    *state.cad_cache.lock().unwrap() = None;
-    state.cad_ops.lock().unwrap().clear();
+    // La malla del escaneo → CAD sale del modelo activo
     *state.cad_scan.lock().unwrap() = None;
     Ok(())
 }
@@ -701,6 +746,108 @@ pub fn new_project(state: tauri::State<'_, AppState>) -> Result<(), String> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// OBJETOS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Deja activo el objeto `id`: el actual se guarda en su casillero (si tiene
+/// número) y se restaura el de `id`; si `id` no tiene casillero es un objeto
+/// nuevo y empieza vacío. El diseño no cambia.
+#[tauri::command]
+pub async fn object_activate(app: AppHandle, id: u64) -> Result<(), String> {
+    in_background(app, move |state| {
+        let _guard = state.try_begin_processing().ok_or("Hay un proceso en curso: espera a que termine")?;
+        activate_impl(state, id)
+    })
+    .await
+}
+
+pub(crate) fn activate_impl(state: &AppState, id: u64) -> Result<(), String> {
+    let mut objects = state.objects.lock().unwrap();
+    if objects.active == Some(id) {
+        return Ok(());
+    }
+    let target = match objects.stored.iter().position(|o| o.id == id) {
+        Some(i) => {
+            let bytes = &objects.stored[i].state;
+            Some(rmp_serde::from_slice::<ProjectState>(bytes).map_err(|e| format!("Objeto ilegible: {e}"))?)
+        }
+        None => None,
+    };
+    if let Some(current) = objects.active {
+        let bytes = rmp_serde::to_vec_named(&capture_model(state)).map_err(|e| format!("No se pudo guardar el objeto: {e}"))?;
+        objects.stored.retain(|o| o.id != current);
+        objects.stored.push(StoredObject { id: current, state: bytes });
+    }
+    objects.stored.retain(|o| o.id != id);
+    objects.active = Some(id);
+    drop(objects);
+    // Las ediciones de nodos para deshacer eran del otro objeto
+    state.scene_edits.lock().unwrap().clear();
+    match target {
+        Some(p) => restore_model(state, p),
+        None => {
+            state.clear_model();
+            Ok(())
+        }
+    }
+}
+
+/// Borra un objeto (si es el activo, el modelo queda vacío)
+#[tauri::command]
+pub fn object_remove(id: u64, state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let _guard = state.try_begin_processing().ok_or("Hay un proceso en curso: espera a que termine")?;
+    remove_impl(&state, id);
+    Ok(())
+}
+
+pub(crate) fn remove_impl(state: &AppState, id: u64) {
+    let mut objects = state.objects.lock().unwrap();
+    objects.stored.retain(|o| o.id != id);
+    if objects.active == Some(id) {
+        objects.active = None;
+        drop(objects);
+        state.clear_model();
+    }
+}
+
+/// Malla de un objeto que no está activo, para verlo en gris junto al activo,
+/// en las unidades de la escena activa (mismo formato que `get_mesh_data`)
+#[tauri::command]
+pub async fn object_mesh_data(app: AppHandle, id: u64) -> Result<tauri::ipc::Response, String> {
+    in_background(app, move |state| object_mesh_bytes(state, id)).await.map(tauri::ipc::Response::new)
+}
+
+pub(crate) fn object_mesh_bytes(state: &AppState, id: u64) -> Result<Vec<u8>, String> {
+    let project: ProjectState = {
+        let objects = state.objects.lock().unwrap();
+        let stored = objects.stored.iter().find(|o| o.id == id).ok_or("Ese objeto no está guardado")?;
+        rmp_serde::from_slice(&stored.state).map_err(|e| format!("Objeto ilegible: {e}"))?
+    };
+    let scene = project.scene.ok_or("El objeto no tiene malla")?;
+    let target = state.scene.lock().unwrap().as_ref().map_or(scene.meters_per_unit, |s| s.meters_per_unit);
+    let mut data = crate::commands::scene_mesh_data(&scene);
+    let k = (scene.meters_per_unit / target) as f32;
+    if (k - 1.0).abs() > 1e-6 {
+        data.positions.iter_mut().for_each(|v| *v *= k);
+    }
+    Ok(data.to_bytes())
+}
+
+/// Le da número al objeto activo sin cambiar nada (el modelo que ya estaba
+/// cuando todavía no había objetos)
+#[tauri::command]
+pub fn object_adopt(id: u64, state: tauri::State<'_, AppState>) {
+    adopt_impl(&state, id);
+}
+
+pub(crate) fn adopt_impl(state: &AppState, id: u64) {
+    let mut objects = state.objects.lock().unwrap();
+    if objects.active.is_none() {
+        objects.active = Some(id);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // DESHACER
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -728,10 +875,16 @@ pub struct SnapshotTaken {
 pub async fn take_snapshot(app: AppHandle) -> Result<SnapshotTaken, String> {
     in_background(app, |state| {
         let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
-        let project = capture(state);
+        let project = capture_model(state);
         Ok(store_snapshot(&mut state.undo_snapshots.lock().unwrap(), project))
     })
     .await
+}
+
+/// Copia del modelo activo para deshacer (lo de `take_snapshot`, sin la marca de proceso)
+pub(crate) fn take_snapshot_impl(state: &AppState) -> SnapshotTaken {
+    let project = capture_model(state);
+    store_snapshot(&mut state.undo_snapshots.lock().unwrap(), project)
 }
 
 fn store_snapshot(snapshots: &mut UndoSnapshots, project: ProjectState) -> SnapshotTaken {
@@ -759,14 +912,14 @@ pub async fn swap_snapshot(app: AppHandle, id: u64) -> Result<(), String> {
     .await
 }
 
-fn swap_snapshot_impl(state: &AppState, id: u64) -> Result<(), String> {
+pub(crate) fn swap_snapshot_impl(state: &AppState, id: u64) -> Result<(), String> {
     let mut snapshots = state.undo_snapshots.lock().unwrap();
     let other = snapshots
         .entries
         .remove(&id)
         .ok_or("La copia para deshacer ya no está (no se guarda en el proyecto, y las más viejas se descartan)")?;
-    let current = capture(state);
-    restore(state, other)?;
+    let current = capture_model(state);
+    restore_model(state, other)?;
     snapshots.entries.insert(id, current);
     Ok(())
 }
@@ -774,7 +927,14 @@ fn swap_snapshot_impl(state: &AppState, id: u64) -> Result<(), String> {
 /// Descarta una copia (la operación no se hizo)
 #[tauri::command]
 pub fn drop_snapshot(id: u64, state: tauri::State<'_, AppState>) {
-    state.undo_snapshots.lock().unwrap().entries.remove(&id);
+    state.undo_snapshots.lock().unwrap().remove(id);
+}
+
+impl UndoSnapshots {
+    /// Descarta una copia (la operación no se hizo, o su paso ya no se puede deshacer)
+    pub fn remove(&mut self, id: u64) {
+        self.entries.remove(&id);
+    }
 }
 
 /// Descarta todas las copias (modelo nuevo: historial nuevo)
@@ -815,6 +975,38 @@ mod tests {
             [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
         ];
         Mesh::try_from_triangles(&p, &t).unwrap()
+    }
+
+    /// Cambiar de objeto guarda el activo en su casillero y trae el otro; el
+    /// diseño no se toca y el proyecto lleva todos los objetos
+    #[test]
+    fn objects_swap_and_survive_save() {
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(cad_model::Document::new());
+        *state.mesh.lock().unwrap() = Some(cube());
+        *state.skeleton.lock().unwrap() = Some(SkeletonType::Human);
+        adopt_impl(&state, 1);
+        // Objeto nuevo: empieza vacío
+        activate_impl(&state, 2).unwrap();
+        assert!(state.mesh.lock().unwrap().is_none());
+        assert!(state.skeleton.lock().unwrap().is_none());
+        assert!(state.cad_document.lock().unwrap().is_some(), "el diseño queda");
+        // Vuelta al primero: su malla y su esqueleto
+        activate_impl(&state, 1).unwrap();
+        assert_eq!(state.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8);
+        assert!(matches!(*state.skeleton.lock().unwrap(), Some(SkeletonType::Human)));
+        // Ida y vuelta por el archivo: los dos objetos siguen
+        let bytes = rmp_serde::to_vec_named(&capture(&state)).unwrap();
+        let other = AppState::new();
+        restore(&other, rmp_serde::from_slice(&bytes).unwrap()).unwrap();
+        assert_eq!(other.objects.lock().unwrap().active, Some(1));
+        activate_impl(&other, 2).unwrap();
+        assert!(other.mesh.lock().unwrap().is_none());
+        assert!(other.cad_document.lock().unwrap().is_some());
+        remove_impl(&other, 2);
+        assert_eq!(other.objects.lock().unwrap().active, None);
+        activate_impl(&other, 1).unwrap();
+        assert_eq!(other.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8);
     }
 
     /// Deshacer y rehacer intercambian el estado con la copia

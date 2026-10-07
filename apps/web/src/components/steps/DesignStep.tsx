@@ -70,8 +70,6 @@ export interface DesignStepProps {
   ui: CadUi;
   /** Hay un modelo cargado que se puede usar como escaneo de referencia */
   hasModel: boolean;
-  /** El sólido pasó a ser el modelo de la app */
-  onUseAsModel?: () => void;
 }
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
@@ -517,18 +515,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
         <Show
           when={store.doc()}
           fallback={
-            <div class="space-y-3">
-              <p class="text-xs text-text-muted leading-relaxed">
-                Diseño paramétrico: sketches con medidas, extrusiones, redondeos, agujeros y patrones. Todo queda editable: cambiar una medida
-                recalcula la pieza. Con un modelo escaneado cargado, se pueden tomar sus caras planas y cilíndricas como punto de partida.
-              </p>
-              <Button variant="primary" size="sm" fullWidth icon={<Icons.Plus size={14} />} onClick={() => void store.newDesign()}>
-                Nuevo diseño
-              </Button>
-              <Button size="sm" fullWidth icon={<Icons.FolderOpen size={14} />} onClick={() => void importStep()}>
-                Abrir un STEP
-              </Button>
-            </div>
+            <p class="text-xs text-text-dim">Preparando el diseño…</p>
           }
         >
           <Show when={ui.session()} fallback={
@@ -681,7 +668,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
               </Show>
 
               <PartsSection store={store} ui={ui} onExport={(f, part) => void exportAs(f, part)} />
-              <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} onUseAsModel={props.onUseAsModel} />
+              <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} />
 
               <div class="flex gap-2">
                 <Button size="sm" variant="ghost" icon={<Icons.ArrowCounterClockwise size={14} />} disabled={!store.canUndo()} onClick={() => store.undo()}>
@@ -3096,7 +3083,8 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step"
   const [renaming, setRenaming] = createSignal<string>();
   const key = (p: PartView) => `${p.id.feature}:${p.id.index}`;
   // Pieza abierta (sus datos y material abajo de la lista; se resalta en el visor)
-  const [open, setOpen] = createSignal<string>();
+  const open = props.ui.openPart;
+  const setOpen = props.ui.setOpenPart;
   const opened = () => parts().find((p) => key(p) === open());
   createEffect(
     on(opened, (p, prev) => {
@@ -3250,7 +3238,7 @@ const Line = (p: { label: string; children: JSX.Element }) => (
   </div>
 );
 
-const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void; onUseAsModel?: () => void }> = (props) => (
+const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void }> = (props) => (
   <Show when={props.store.result()?.body}>
     {(b) => {
       const size = () => b().bbox_max.map((v, i) => v - b().bbox_min[i]);
@@ -3301,11 +3289,6 @@ const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" 
               3MF
             </Button>
           </div>
-          <Show when={props.onUseAsModel}>
-            <Button size="sm" fullWidth variant="ghost" onClick={() => props.onUseAsModel?.()}>
-              Usar como modelo (fabricar, pintar, animar)
-            </Button>
-          </Show>
         </Section>
       );
     }}

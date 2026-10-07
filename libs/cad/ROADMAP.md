@@ -432,10 +432,9 @@ cargo test -p cad-model
   cantidades, material y masa del ensamble, exportable a CSV.
 - **2026-10-07 Cotas a mano en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 3): largo,
   diámetro y distancia entre paralelas eligiendo líneas de la hoja; siguen al modelo.
-- **Pendiente pedido por el usuario (2026-10-07):** lo que se crea en Diseñar (cajas, piezas)
-  queda separado del resto del programa: las piezas del CAD no aparecen en el Outliner. Hoy
-  solo se pasan con "Usar como modelo". Hay que integrarlas (cada pieza como objeto del
-  outliner, actualizado al recalcular).
+- **Hecho (2026-10-07):** las piezas del diseño son objetos del Outliner y pasan solas a
+  Preparar, Rig y Fabricar; lo hecho sobre su malla se rehace si cambia el diseño. Ver
+  `PLAN_OBJETOS.md`. El Outliner va en tres grupos: Planos, Operaciones y Objetos.
 - **Pendiente pedido por el usuario (2026-10-07), segundo en la próxima sesión:** reordenar la
   interfaz de Diseñar. El panel vertical unificado (todo apilado) no es usable; buscar algo
   profesional e intuitivo al estilo Blender, Onshape o FreeCAD: barra de herramientas por

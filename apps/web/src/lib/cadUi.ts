@@ -125,6 +125,10 @@ export function createCadUi(store: CadStore) {
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
+  // Planos base ocultos uno por uno (desde el Outliner)
+  const [hiddenPlanes, setHiddenPlanes] = createSignal<BasePlane[]>([]);
+  // Pieza abierta en la lista de piezas ("<operación>:<n>"), también desde el Outliner
+  const [openPart, setOpenPart] = createSignal<string>();
   // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
   createEffect(on(() => store.result()?.version, () => setPicks((p) => p.filter((x) => x.kind === "plane")), { defer: true }));
   const [message, setMessage] = createSignal<string>();
@@ -207,6 +211,25 @@ export function createCadUi(store: CadStore) {
     },
     showPlanes,
     setShowPlanes,
+    hiddenPlanes,
+    openPart,
+    setOpenPart,
+    /** Muestra u oculta un plano base; con todos ocultos se apaga el botón de planos */
+    togglePlane(plane: BasePlane) {
+      const all: BasePlane[] = ["xy", "xz", "yz"];
+      batch(() => {
+        if (!showPlanes()) {
+          setShowPlanes(true);
+          setHiddenPlanes(all.filter((p) => p !== plane));
+          return;
+        }
+        const next = hiddenPlanes().includes(plane) ? hiddenPlanes().filter((p) => p !== plane) : [...hiddenPlanes(), plane];
+        if (next.length === all.length) {
+          setShowPlanes(false);
+          setHiddenPlanes([]);
+        } else setHiddenPlanes(next);
+      });
+    },
 
     /** Empieza a editar el sketch de la operación `feature` */
     editSketch(feature: number): boolean {

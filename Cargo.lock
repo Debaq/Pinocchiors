@@ -3381,6 +3381,7 @@ dependencies = [
  "rayon",
  "rmp-serde",
  "serde",
+ "serde_bytes",
  "serde_json",
  "svg2pdf",
  "tauri",

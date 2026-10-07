@@ -140,6 +140,7 @@ export class CadViewer {
   /** Planos, ejes y puntos de referencia */
   private refsGroup = new THREE.Group();
   private selectedPlanes = new Set<BasePlane>();
+  private hiddenPlanes = new Set<BasePlane>();
   /** Lado de los planos base (mm): acompaña el tamaño del modelo */
   planeSize = 60;
   private grid: THREE.GridHelper;
@@ -916,6 +917,7 @@ export class CadViewer {
       { id: "yz", rot: new THREE.Euler(0, Math.PI / 2, 0) },
     ];
     for (const d of defs) {
+      if (this.hiddenPlanes.has(d.id)) continue;
       const picked = this.selectedPlanes.has(d.id);
       const g = new THREE.PlaneGeometry(size, size);
       const m = new THREE.MeshBasicMaterial({
@@ -956,8 +958,9 @@ export class CadViewer {
     }
   }
 
-  setPlanes(visible: boolean, selected: BasePlane[]) {
+  setPlanes(visible: boolean, selected: BasePlane[], hidden: BasePlane[] = []) {
     this.selectedPlanes = new Set(selected);
+    this.hiddenPlanes = new Set(hidden);
     this.planesGroup.visible = visible;
     this.buildPlanes();
   }

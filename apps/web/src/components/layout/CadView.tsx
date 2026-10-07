@@ -364,7 +364,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     planesReady();
     const show = ui.showPlanes() && !ui.session();
     const selected = ui.picks().flatMap((p) => (p.kind === "plane" ? [p.plane] : []));
-    viewer?.setPlanes(show || ui.pick().kind === "place", selected);
+    const place = ui.pick().kind === "place";
+    viewer?.setPlanes(show || place, selected, place ? [] : ui.hiddenPlanes());
   });
   // Herramienta de la operación en el diálogo (translúcida, verde o roja)
   createEffect(() => {

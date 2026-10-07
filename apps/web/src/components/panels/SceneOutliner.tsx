@@ -2,6 +2,7 @@ import { Component, For, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { SceneNode } from "../../lib/scene-tree";
 import * as Icons from "../icons";
+import * as SketchIcons from "../icons/sketch";
 
 export interface SceneOutlinerProps {
   tree: SceneNode;
@@ -21,6 +22,14 @@ const nodeIcon = (type: SceneNode["type"]) => {
     case "grid": return Icons.GridFour;
     case "weights": return Icons.Eye;
     case "node": return Icons.TreeStructure;
+    case "group": return Icons.Stack;
+    case "plane": return Icons.Square;
+    case "axis": return SketchIcons.Line;
+    case "point": return SketchIcons.Point;
+    case "sketch": return SketchIcons.Rect;
+    case "feature": return Icons.Wrench;
+    case "folder": return Icons.Folder;
+    case "part": return Icons.Cube;
     default: return Icons.Cube;
   }
 };
@@ -52,6 +61,7 @@ const OutlinerNode: Component<{
   onCleanup(() => clearTimeout(confirmTimer));
   const hasChildren = () => props.node.children.length > 0;
   const NodeIcon = nodeIcon(props.node.type);
+  const isGroup = props.node.type === "group";
 
   return (
     <div>
@@ -63,7 +73,7 @@ const OutlinerNode: Component<{
         )}
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}
         title={props.node.hint}
-        onClick={() => props.onSelectNode?.(props.node.id)}
+        onClick={() => (isGroup ? props.onToggleExpanded(props.node) : props.onSelectNode?.(props.node.id))}
       >
         {/* Expand arrow */}
         <Show
@@ -80,19 +90,31 @@ const OutlinerNode: Component<{
           </button>
         </Show>
 
-        {/* Icon */}
-        <NodeIcon size={12} class={clsx(
-          props.node.type === "bone" && props.node.selected ? "text-purple" : "text-text-muted"
-        )} />
+        {/* Icon (las piezas, con su color) */}
+        <Show
+          when={props.node.color}
+          fallback={
+            <NodeIcon size={12} class={clsx(
+              props.node.type === "bone" && props.node.selected ? "text-purple" : "text-text-muted"
+            )} />
+          }
+        >
+          <span class="w-3 h-3 shrink-0 rounded-sm border border-border" style={{ background: props.node.color }} />
+        </Show>
 
         {/* Label */}
         <span class={clsx(
-          "text-xs flex-1 truncate",
-          props.node.selected ? "text-accent font-medium" : "text-text",
-          !props.node.visible && "opacity-50"
+          "flex-1 truncate",
+          isGroup ? "text-[10px] font-semibold uppercase tracking-wide text-text-muted" : "text-xs",
+          !isGroup && (props.node.error ? "text-red" : props.node.selected ? "text-accent font-medium" : "text-text"),
+          (!props.node.visible || props.node.muted) && "opacity-50",
+          props.node.muted && "italic"
         )}>
           {props.node.label}
         </span>
+        <Show when={isGroup}>
+          <span class="text-[10px] text-text-dim pr-1">{props.node.children.length}</span>
+        </Show>
 
         {/* Borrar */}
         <Show when={props.node.deletable && props.onDeleteNode}>
@@ -158,7 +180,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
     setOpenState((prev) => ({ ...prev, [node.id]: !isExpanded(node) }));
 
   return (
-    <div class="space-y-0.5">
+    <div class="space-y-0.5" data-outliner>
       <For each={props.tree.children}>
         {(node) => (
           <OutlinerNode

@@ -1,5 +1,5 @@
 import { Component, createEffect, createMemo, createSignal, on, onMount, onCleanup, Show, untrack, type JSX } from "solid-js";
-import { invoke, Channel } from "@tauri-apps/api/core";
+import { invoke as rawInvoke, Channel, type InvokeArgs, type InvokeOptions } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -74,9 +74,10 @@ import {
 import type { SceneStructure, MaterialInfo } from "./components/steps/StructureStep";
 import { createPipelineStore, type PipelineStepId } from "./lib/pipeline";
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
-import { buildSceneTree } from "./lib/scene-tree";
+import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
+import { isCadObject, isGeometryStep, materialized, nextObjectId, partKey, savedTrail, syncCadObjects, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
-import { createHistoryStore } from "./lib/history";
+import { createHistoryStore, type SavedHistory } from "./lib/history";
 import { createShortcutManager, type ShortcutDef } from "./lib/shortcuts";
 import { decodeMesh, decodeWeights } from "./lib/buffers";
 import { createPersisted, startDrag } from "./lib/ui-state";
@@ -261,7 +262,7 @@ import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignStep } from "./components/steps/DesignStep";
-import { createCadStore } from "./lib/cad";
+import { createCadStore, folderRange, partColor, partHidden, PLANE_LABELS } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
@@ -408,6 +409,49 @@ function tauriSkeletonToViewer(data: TauriSkeletonData): SkeletonData {
 // APP COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** Comando del backend que cambia la geometría, grabado para rehacerlo sobre una malla nueva */
+interface RecordedCall {
+  cmd: string;
+  args?: unknown;
+}
+
+/**
+ * Comandos que cambian la malla del objeto activo. Si la pieza del diseño de
+ * la que sale cambia, se vuelven a correr en orden sobre la malla nueva (el
+ * esqueleto se conserva y los pesos se recalculan aparte).
+ */
+const REPLAYABLE = new Set([
+  "repair_mesh",
+  "undo_repair",
+  "run_retopology",
+  "set_active_mesh",
+  "run_uv_unwrap",
+  "unwrap_original_mesh",
+  "undo_unwrap_original",
+  "restore_transferred_uvs",
+  "scale_mesh_for_print",
+  "undo_print_scale",
+  "subdivide_mesh",
+]);
+
+/** Pasos deshacibles en curso que graban sus comandos (el último es el que graba) */
+const recorders: RecordedCall[][] = [];
+
+/** Argumentos que se pueden guardar: los canales de avance se marcan y se rehacen al repetir */
+const recordableArgs = (args?: InvokeArgs) =>
+  args === undefined ? undefined : JSON.parse(JSON.stringify(args, (_, v) => (v instanceof Channel ? { __channel: true } : v)));
+
+/** Se rehace: los de `REPLAYABLE` y borrar la retopología (borrar el esqueleto no: se conserva aparte) */
+const replayable = (cmd: string, args?: InvokeArgs) =>
+  REPLAYABLE.has(cmd) || (cmd === "remove_object" && (args as { kind?: string } | undefined)?.kind === "quadmesh");
+
+/** `invoke` que además graba los comandos de geometría del paso deshacible en curso */
+const invoke = <T,>(cmd: string, args?: InvokeArgs, options?: InvokeOptions): Promise<T> => {
+  const recorder = recorders[recorders.length - 1];
+  if (recorder && replayable(cmd, args)) recorder.push({ cmd, args: recordableArgs(args) });
+  return rawInvoke<T>(cmd, args, options);
+};
+
 export const App: Component = () => {
   // Pipeline
   const pipeline = createPipelineStore();
@@ -415,8 +459,23 @@ export const App: Component = () => {
   // Diseño CAD: documento propio con su historial (copias del documento)
   const cad = createCadStore();
   const cadUi = createCadUi(cad);
+  // Objetos de la escena (ver lib/objects.ts): el activo es el modelo de siempre
+  const [objects, setObjects] = createSignal<SceneObject[]>([]);
+  const [activeObjectId, setActiveObjectId] = createSignal<number>();
+  const activeObject = () => objects().find((o) => o.id === activeObjectId());
+  if (import.meta.env.DEV) Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __viewer: () => viewer() });
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
+  // Entrar a Diseñar sin diseño crea uno vacío: no hay que "empezar" nada
+  let creatingDesign = false;
+  createEffect(() => {
+    if (!inDesign() || !cad.status()?.available || cad.doc() || creatingDesign) return;
+    creatingDesign = true;
+    void cad
+      .newDesign()
+      .catch((e) => cad.setError(String(e)))
+      .finally(() => (creatingDesign = false));
+  });
   // Salir de Diseñar con el diálogo de una operación abierto lo acepta (si no, quedaría oculto)
   createEffect(() => {
     if (!inDesign() && cad.draft()) void cad.acceptDraft();
@@ -1188,6 +1247,398 @@ export const App: Component = () => {
     }
   };
 
+  // ─── El diseño en el Outliner ─────────────────────────────────────────────
+  /** Planos, operaciones y piezas del diseño paramétrico para el Outliner */
+  const cadOutline = (): CadOutline | undefined => {
+    const doc = cad.doc();
+    if (!doc) return undefined;
+    const picks = cadUi.picks();
+    const hiddenRefs = cadUi.hiddenSketches();
+    const rollback = doc.rollback ?? null;
+    const planes: CadOutlineItem[] = (["xy", "xz", "yz"] as const).map((id) => ({
+      id: `plane-${id}`,
+      type: "plane",
+      label: PLANE_LABELS[id],
+      visible: cadUi.showPlanes() && !cadUi.hiddenPlanes().includes(id),
+      selected: picks.some((p) => p.kind === "plane" && p.plane === id),
+      hint: "Plano base del diseño",
+    }));
+    const features: SceneNode[] = [];
+    // Carpeta del árbol que empieza en cada posición
+    const folders = (doc.folders ?? []).flatMap((f, index) => {
+      const range = folderRange(doc, f);
+      return range ? [{ f, index, range }] : [];
+    });
+    let into: { node: SceneNode; last: number } | undefined;
+    doc.features.forEach((f, i) => {
+      const state = cad.stateOf(f.id);
+      const muted = !!f.suppressed || (rollback !== null && i >= rollback) || state?.state === "rolled_back";
+      const error = state?.state === "error";
+      const kind = f.kind.type;
+      const isRef = kind === "plane" || kind === "axis" || kind === "point";
+      const item: CadOutlineItem = {
+        id: `cad-${f.id}`,
+        type: isRef ? kind : kind === "sketch" ? "sketch" : "feature",
+        label: f.name,
+        visible: !hiddenRefs.includes(f.id),
+        selected: cad.selected() === f.id || picks.some((p) => p.kind === "refplane" && p.feature === f.id),
+        // Solo los sketches y las referencias se ocultan en el visor
+        readonly: !(isRef || kind === "sketch"),
+        deletable: true,
+        muted,
+        error,
+        hint: error && state?.state === "error" ? state.message : muted ? (f.suppressed ? "Suprimida" : "Después de la barra de retroceso") : undefined,
+      };
+      if (isRef) {
+        planes.push(item);
+        return;
+      }
+      const folder = folders.find((x) => x.range[0] === i);
+      if (folder) {
+        into = {
+          node: {
+            id: `cadfolder-${folder.index}`,
+            type: "folder",
+            label: folder.f.name,
+            visible: true,
+            expanded: !folder.f.collapsed,
+            selected: false,
+            readonly: true,
+            children: [],
+          },
+          last: folder.range[1],
+        };
+        features.push(into.node);
+      }
+      (into ? into.node.children : features).push({ ...item, expanded: false, children: [] });
+      if (into && i >= into.last) into = undefined;
+    });
+    return { planes, features };
+  };
+
+  /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen) */
+  const objectRows = (): ObjectRow[] => {
+    const doc = cad.committed();
+    const parts = cad.result()?.parts ?? [];
+    const active = activeObjectId();
+    return objects().flatMap((o): ObjectRow[] => {
+      const isActive = o.id === active;
+      // Lo hecho sobre la malla: del historial vivo (activo) o del guardado (los demás)
+      const trail = isActive ? (history.current(), history.trail()) : savedTrail(o.history);
+      const modifications: SceneNode[] = trail.filter(isGeometryStep).map((node) => ({
+        id: `mod-${o.id}-${node.id}`,
+        type: "feature",
+        label: node.description,
+        visible: true,
+        expanded: false,
+        selected: false,
+        readonly: true,
+        children: [],
+        hint: isCadObject(o) ? "Se rehace sola si la pieza cambia en el diseño" : undefined,
+      }));
+      if (isCadObject(o)) {
+        const i = parts.findIndex((p) => partKey(p.id) === partKey(o.source.part));
+        const view = parts[i];
+        if (!view && !materialized(o, active)) return [];
+        return [{
+          id: `obj-${o.id}`,
+          type: "part",
+          label: o.name,
+          active: isActive,
+          modifications,
+          meshLabel: "Malla generada",
+          selected: isActive,
+          visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
+          readonly: inDesign() ? !view : !isActive && !o.ui,
+          deletable: true,
+          color: view ? partColor(doc, view, i) : undefined,
+          muted: !view,
+          hint: view
+            ? `Pieza del diseño · ${(view.volume / 1000).toLocaleString("es", { maximumFractionDigits: 2 })} cm³`
+            : "Ya no está en el diseño: queda la última malla",
+        }];
+      }
+      return [{
+        id: `obj-${o.id}`,
+        type: "mesh",
+        label: o.name,
+        active: isActive,
+        modifications,
+        selected: isActive,
+        visible: isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
+        readonly: !isActive && !o.ui,
+        deletable: true,
+        hint: isActive ? undefined : "Clic para trabajar con este objeto",
+      }];
+    });
+  };
+
+  /** `obj-<n>` → objeto */
+  const objectOfNode = (nodeId: string): SceneObject | undefined => {
+    const m = /^obj-(\d+)$/.exec(nodeId);
+    return m ? objects().find((o) => o.id === Number(m[1])) : undefined;
+  };
+  const cadFeatureOfNode = (nodeId: string): number | undefined => {
+    const m = /^cad-(\d+)$/.exec(nodeId);
+    return m ? Number(m[1]) : undefined;
+  };
+
+  // ─── Objetos ──────────────────────────────────────────────────────────────
+
+  /** Espacios que trabajan sobre la malla del objeto activo */
+  const meshWorkspace = () => ["prepare", "rig", "print"].includes(pipeline.workspace()?.id ?? "");
+
+  /** Interfaz vacía: un objeto que todavía no tiene modelo */
+  const EMPTY_OBJECT_UI = JSON.stringify({ model: false });
+
+  /**
+   * Deja activo el objeto `id`: el actual guarda su interfaz e historial, el
+   * backend intercambia los modelos y la interfaz se pone como estaba la del
+   * otro. Fuera de Diseñar, una pieza del diseño se asegura su malla.
+   */
+  let switchingObject: Promise<void> = Promise.resolve();
+  const activateObject = (id: number, ensureMesh = !inDesign()) =>
+    (switchingObject = switchingObject.then(async () => {
+      if (id !== activeObjectId()) {
+        if (operations > 0) return void setStatusMessage("Espera a que termine la operación para cambiar de objeto");
+        const current = activeObjectId();
+        const ui = projectUi(false);
+        const saved = history.save();
+        try {
+          await busy("Cambiando de objeto...", () => invoke("object_activate", { id }));
+        } catch (e) {
+          return void setStatusMessage(`Error: ${e}`);
+        }
+        const target = objects().find((o) => o.id === id);
+        setObjects((list) =>
+          list.map((o) =>
+            o.id === current ? { ...o, ui, history: saved, rev: (o.rev ?? 0) + 1 } : o.id === id ? { ...o, ui: undefined, history: undefined } : o
+          )
+        );
+        setActiveObjectId(id);
+        setSwitching(true);
+        try {
+          await restoreProjectUi(target?.ui ?? EMPTY_OBJECT_UI, true);
+          if (!target?.ui) {
+            setSceneStructure(undefined);
+            setSceneMaterials([]);
+            setMeshInfo({ vertices: 0, faces: 0, format: "" });
+          }
+          loadObjectHistory(target?.history);
+          setFileName(target?.name);
+        } finally {
+          setSwitching(false);
+        }
+      }
+      if (ensureMesh) await ensureCadMesh();
+    }));
+
+  /** Historial del objeto que pasa a estar activo: lo que ya no se puede deshacer queda como hito */
+  const loadObjectHistory = (saved: SceneObject["history"]) => {
+    history.load(saved, ["sceneEdit"]);
+    history.seal((step) => step.kind === "snapshot" && !snapshotUi.has((step.data as { id: number }).id));
+  };
+
+  /** Objeto nuevo y activo (vacío): para importar o escanear un modelo */
+  const newObject = async (name: string, source: SceneObject["source"]) => {
+    const id = nextObjectId(objects());
+    setObjects((list) => [...list, { id, name, source }]);
+    await activateObject(id, false);
+    return id;
+  };
+
+  /**
+   * Dónde va un modelo que se importa o se escanea: un objeto nuevo, salvo que
+   * el activo sea importado y todavía no tenga malla (un esqueleto solo: sus
+   * animaciones pasan al modelo, como siempre)
+   */
+  const objectForNewModel = async (name: string): Promise<{ id: number; created: boolean }> => {
+    await adoptCurrentModel();
+    const active = activeObject();
+    if (active && active.source.kind === "import" && !meshLoaded()) {
+      setObjects((list) => list.map((o) => (o.id === active.id ? { ...o, name } : o)));
+      return { id: active.id, created: false };
+    }
+    return { id: await newObject(name, { kind: "import" }), created: true };
+  };
+
+  /** Borra un objeto; si era el activo, queda sin modelo */
+  const removeObject = async (id: number) => {
+    await switchingObject;
+    try {
+      await invoke("object_remove", { id });
+    } catch (e) {
+      return setStatusMessage(`Error: ${e}`);
+    }
+    const was = objects().find((o) => o.id === id);
+    if (was?.history) dropSnapshotsOf(was.history);
+    setObjects((list) => list.filter((o) => o.id !== id));
+    if (activeObjectId() === id) {
+      setActiveObjectId(undefined);
+      resetHistory();
+      await restoreProjectUi(EMPTY_OBJECT_UI, true);
+      setSceneStructure(undefined);
+      setSceneMaterials([]);
+      setMeshInfo({ vertices: 0, faces: 0, format: "" });
+      setFileName(undefined);
+    }
+  };
+
+  /** El modelo cargado antes de que hubiera objetos pasa a ser uno (proyectos viejos, recuperación) */
+  const adoptCurrentModel = async () => {
+    if (activeObjectId() !== undefined || (!meshLoaded() && !skeletonLoaded())) return;
+    const id = nextObjectId(objects());
+    await invoke("object_adopt", { id }).catch(() => {});
+    setObjects((list) => [...list, { id, name: fileName() ?? "Modelo", source: { kind: "import" } }]);
+    setActiveObjectId(id);
+  };
+
+  /**
+   * La pieza del diseño activa tiene su malla al día: la primera vez se
+   * genera; si el diseño cambió, se regenera y se rehacen sus modificaciones.
+   */
+  const ensureCadMesh = async () => {
+    const object = activeObject();
+    if (!isCadObject(object)) return;
+    const parts = cad.result()?.parts ?? [];
+    if (!parts.some((p) => partKey(p.id) === partKey(object.source.part))) return;
+    let r: { changed: boolean; hash: string; info: MeshInfo | null };
+    try {
+      r = await busy(`Preparando la malla de ${object.name}...`, () =>
+        invoke("cad_part_to_model", { part: object.source.part, known: object.source.hash ?? null, onProgress: progressChannel() })
+      );
+    } catch (e) {
+      return setStatusMessage(`Error: ${e}`);
+    }
+    if (!r.changed || !r.info) return;
+    const first = !object.source.hash;
+    setObjects((list) => list.map((o) => (o.id === object.id && isCadObject(o) ? { ...o, source: { ...o.source, hash: r.hash } } : o)));
+    setSwitching(true);
+    try {
+      if (first) await showNewModel(r.info, `Malla de ${object.name}`);
+      else await replayModifications(r.info);
+      setFileName(object.name);
+    } finally {
+      setSwitching(false);
+    }
+  };
+
+  /**
+   * La pieza cambió en el diseño y el backend ya cargó su malla nueva
+   * (conservando el esqueleto): se rehacen en orden las modificaciones del
+   * historial (orientar, reparar, escalar, dividir, retopología, UV…) y, si
+   * había pesos, se recalculan. Las copias para deshacer de esos pasos tenían
+   * la malla vieja: quedan como hitos.
+   */
+  const replayModifications = async (info: MeshInfo) => {
+    const hadWeights = autorigComplete() && skeletonLoaded();
+    const revive = (args: unknown) =>
+      JSON.parse(JSON.stringify(args ?? {}), (_, v) => (v && typeof v === "object" && v.__channel === true ? progressChannel() : v));
+    let count = 0;
+    // Lo último que dijeron los pasos de Fabricar (el panel muestra eso)
+    let subdivided: TauriSubdivideResult | undefined;
+    try {
+      await busy("Rehaciendo las modificaciones...", async () => {
+        for (const node of history.trail()) {
+          const step = node.step;
+          if (step?.kind === "placement") {
+            const matrix = new THREE.Matrix4().fromArray((step.data as { matrix: number[] }).matrix);
+            await rawInvoke("apply_placement", { matrix: matrix.elements });
+            count++;
+          } else if (step?.kind === "snapshot") {
+            for (const op of (step.data as { ops?: RecordedCall[] }).ops ?? []) {
+              const result = await rawInvoke(op.cmd, revive(op.args));
+              if (op.cmd === "subdivide_mesh") subdivided = result as TauriSubdivideResult;
+              count++;
+            }
+          }
+        }
+        if (hadWeights) {
+          const config = autorigConfig();
+          await rawInvoke("run_autorig", {
+            config: { quality: config.quality, diffusion_weight: config.diffusionWeight, max_influences: config.maxInfluences },
+            onProgress: progressChannel(),
+          });
+        }
+      });
+    } catch (e) {
+      setStatusMessage(`El diseño cambió y no se pudo rehacer todo: ${e}`);
+    }
+    for (const node of history.nodes()) {
+      if (node.step?.kind !== "snapshot" || node.milestone) continue;
+      const id = (node.step.data as { id?: number }).id;
+      if (id !== undefined) {
+        snapshotUi.delete(id);
+        invoke("drop_snapshot", { id }).catch(() => {});
+      }
+    }
+    history.seal((step) => step.kind === "snapshot");
+    history.milestone("Malla regenerada del diseño");
+    // La interfaz relee del backend lo que quedó (malla, quads, esqueleto, pesos)
+    await restoreProjectUi(projectUi(false), true);
+    setMeshInfo((prev) => ({ ...prev, format: info.format }));
+    if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
+    if (subdivideResult()) setSubdivideResult(subdivided);
+    if (count > 0 || hadWeights) setStatusMessage(`El diseño cambió: malla nueva con ${count} modificación${count === 1 ? "" : "es"} rehecha${count === 1 ? "" : "s"}`);
+  };
+
+  // Los demás objetos se ven en gris en el visor (los que ya tienen malla y no se ocultaron)
+  const [hiddenGhosts, setHiddenGhosts] = createSignal<number[]>([]);
+  const ghostCache = new Map<string, MeshData>();
+  let ghostRequest = 0;
+  createEffect(() => {
+    const v = viewer();
+    if (!v) return;
+    const active = activeObjectId();
+    const hidden = hiddenGhosts();
+    // `"model":false` en su interfaz: todavía no tiene malla
+    const list = objects().filter((o) => o.id !== active && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id));
+    const request = ++ghostRequest;
+    void (async () => {
+      await switchingObject;
+      const out: MeshData[] = [];
+      for (const o of list) {
+        // En las unidades del activo: cambia con el activo y con lo hecho sobre el objeto
+        const key = `${o.id}:${o.rev ?? 0}:${active}`;
+        let data = ghostCache.get(key);
+        if (!data) {
+          try {
+            data = decodeMesh(await rawInvoke<ArrayBuffer>("object_mesh_data", { id: o.id }));
+          } catch {
+            continue;
+          }
+          for (const k of [...ghostCache.keys()]) if (k.startsWith(`${o.id}:`)) ghostCache.delete(k);
+          ghostCache.set(key, data);
+        }
+        out.push(data);
+      }
+      if (request === ghostRequest) v.setGhosts(out);
+    })();
+  });
+
+  // Cada pieza del diseño es un objeto (solo con el diseño guardado, no con la vista previa de un diálogo)
+  createEffect(() => {
+    const r = cad.result();
+    if (!r || cad.draft()) return;
+    setObjects((list) => syncCadObjects(list, r.parts.map((p) => ({ id: p.id, name: p.name }))));
+  });
+
+  // Salir de Diseñar a un espacio que trabaja sobre la malla: la pieza elegida
+  // (la activa, la abierta en la lista de piezas o la primera) tiene su malla al día
+  createEffect(
+    on(meshWorkspace, (needsMesh) => {
+      if (!needsMesh) return;
+      untrack(() => {
+        const active = activeObject();
+        if (active) return void activateObject(active.id, true);
+        const parts = cad.result()?.parts ?? [];
+        const wanted = parts.find((p) => partKey(p.id) === cadUi.openPart()) ?? parts[0];
+        const target = wanted && objects().find((o) => isCadObject(o) && partKey(o.source.part) === partKey(wanted.id));
+        if (target) void activateObject(target.id, true);
+      });
+    })
+  );
+
   // Derived scene tree
   const sceneTree = () => buildSceneTree({
     hasMesh: meshLoaded(),
@@ -1206,6 +1657,8 @@ export const App: Component = () => {
     structure: sceneStructure(),
     hiddenNodes: new Set(hiddenFileNodes()),
     selectedNode: selectedFileNode(),
+    cad: cadOutline(),
+    objects: objectRows(),
   });
 
   // ─── Deshacer operaciones del backend ────────────────────────────────────
@@ -1231,18 +1684,22 @@ export const App: Component = () => {
     }
     const before = projectUi(false);
     let description: string | undefined;
+    // Los comandos de geometría que corra quedan en el paso (para rehacerlos si cambia el diseño)
+    const ops: RecordedCall[] = [];
+    recorders.push(ops);
     operations++;
     try {
       return await run((d) => void (description = d));
     } finally {
       operations--;
+      recorders.splice(recorders.lastIndexOf(ops), 1);
       if (description === undefined) {
         if (id !== undefined) invoke("drop_snapshot", { id }).catch(() => {});
       } else if (id === undefined) {
-        history.milestone(description);
+        history.milestone(description, { kind: "snapshot", data: { ops } });
       } else {
         snapshotUi.set(id, { before, after: projectUi(false) });
-        await history.execute(description, { kind: "snapshot", data: { id } }, { applied: true });
+        await history.execute(description, { kind: "snapshot", data: { id, ops } }, { applied: true });
       }
     }
   };
@@ -1263,9 +1720,17 @@ export const App: Component = () => {
 
   /** Modelo nuevo: historial nuevo (y sin copias del anterior) */
   const resetHistory = () => {
+    dropSnapshotsOf(history.save());
     history.clear();
-    snapshotUi.clear();
-    invoke("clear_snapshots").catch(() => {});
+  };
+  /** Descarta las copias del backend de los pasos de un historial (los demás objetos guardan las suyas) */
+  const dropSnapshotsOf = (saved: SavedHistory) => {
+    for (const node of saved.nodes) {
+      if (node.step?.kind !== "snapshot") continue;
+      const id = (node.step.data as { id: number }).id;
+      snapshotUi.delete(id);
+      invoke("drop_snapshot", { id }).catch(() => {});
+    }
   };
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
@@ -1480,17 +1945,21 @@ export const App: Component = () => {
       }
       const filePath = models[0];
       const textures = files.filter((f) => f !== filePath && TEXTURE_FILE_EXTENSIONS.includes(extensionOf(f)));
-      if (meshLoaded() && !(await confirmDiscard("Importar modelo", "El modelo nuevo reemplaza al abierto.", "Reemplazar"))) return;
-
       const name = filePath.split(/[\\/]/).pop() ?? filePath;
       setStatusMessage(`Importando ${name}...`);
 
+      // El modelo importado es un objeto nuevo de la escena (los demás quedan)
+      const target = await objectForNewModel(name);
       setSwitching(true);
-      const info = await busy(`Importando ${name}...`, () =>
-        invoke<MeshInfo>("import_model", { path: filePath, textures, onProgress: progressChannel() })
-      );
-      // El backend ya tiene el modelo nuevo: el archivo del proyecto anterior no le corresponde
-      setProjectPath(undefined);
+      let info: MeshInfo;
+      try {
+        info = await busy(`Importando ${name}...`, () =>
+          invoke<MeshInfo>("import_model", { path: filePath, textures, onProgress: progressChannel() })
+        );
+      } catch (e) {
+        if (target.created) await removeObject(target.id);
+        throw e;
+      }
       await showNewModel(info, `Importar ${name}`);
       // El nombre cambia solo si la importación salió bien
       setFileName(name);
@@ -1515,36 +1984,24 @@ export const App: Component = () => {
   /** Modelo del escáner (Orizon3D), de la nube editada o del escáner: reemplaza al abierto */
   const handleScanModel = async (settings: ScanMeshSettings, fromCloud: boolean) => {
     if (blockedByTask()) return;
-    if (meshLoaded() && !(await confirmDiscard("Crear modelo del escáner", "El modelo del escáner reemplaza al abierto.", "Reemplazar"))) return;
+    const target = await objectForNewModel("Escaneo");
     setIsProcessing(true);
     try {
-      const info = await busy("Creando el modelo del escáner...", () =>
-        invoke<MeshInfo>(fromCloud ? "scan_cloud_create_model" : "scanner_create_model", { settings, onProgress: progressChannel() })
-      );
-      setProjectPath(undefined);
+      let info: MeshInfo;
+      try {
+        info = await busy("Creando el modelo del escáner...", () =>
+          invoke<MeshInfo>(fromCloud ? "scan_cloud_create_model" : "scanner_create_model", { settings, onProgress: progressChannel() })
+        );
+      } catch (e) {
+        if (target.created) await removeObject(target.id);
+        throw e;
+      }
       setFileName("Escaneo");
       // Se ve el modelo nuevo; la nube sigue en edición por si hay que retocarla
       scanCloud.setShown(false);
       await showNewModel(info, "Escanear");
     } catch (e) {
       console.error("Scan model error:", e);
-      setStatusMessage(`Error: ${e}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  /** El sólido del diseño pasa a ser el modelo de la app (fabricar, pintar, animar) */
-  const handleCadToModel = async () => {
-    if (blockedByTask()) return;
-    if (meshLoaded() && !(await confirmDiscard("Usar el diseño como modelo", "El sólido del diseño reemplaza al modelo abierto.", "Reemplazar"))) return;
-    setIsProcessing(true);
-    try {
-      const info = await busy("Convirtiendo el diseño en modelo...", () => invoke<MeshInfo>("cad_to_model", { onProgress: progressChannel() }));
-      setProjectPath(undefined);
-      setFileName("Diseño");
-      await showNewModel(info, "Diseño CAD");
-    } catch (e) {
       setStatusMessage(`Error: ${e}`);
     } finally {
       setIsProcessing(false);
@@ -1610,9 +2067,6 @@ export const App: Component = () => {
         `Modelo cargado: ${info.num_vertices.toLocaleString()} vertices, esqueleto de ${info.rig.num_bones} huesos y ${animations} (${info.format})`
       );
     }
-
-    // Modelo nuevo: el proyecto abierto ya no corresponde
-    setProjectPath(undefined);
 
     // Pipeline: importado; se muestra lo que trae el archivo
     pipeline.markCompleted("import");
@@ -5249,6 +5703,24 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const handleToggleVisibility = (nodeId: string) => {
+    if (nodeId.startsWith("plane-")) {
+      cadUi.togglePlane(nodeId.slice(6) as "xy" | "xz" | "yz");
+      return;
+    }
+    const feature = cadFeatureOfNode(nodeId);
+    if (feature !== undefined) {
+      cadUi.toggleSketchVisible(feature);
+      return;
+    }
+    const object = objectOfNode(nodeId);
+    if (object) {
+      const view = isCadObject(object) ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(object.source.part)) : undefined;
+      // En Diseñar el ojo es el de la pieza en el diseño; fuera, el del objeto en el visor
+      if (view && inDesign()) void cad.setPartProps(view.id, { hidden: !partHidden(cad.doc(), view) });
+      else if (object.id === activeObjectId()) setViewSettings((prev) => ({ ...prev, showMesh: !prev.showMesh }));
+      else setHiddenGhosts((list) => (list.includes(object.id) ? list.filter((x) => x !== object.id) : [...list, object.id]));
+      return;
+    }
     if (nodeId.startsWith("node-")) {
       toggleFileNode(Number(nodeId.slice(5)));
       return;
@@ -5303,7 +5775,31 @@ export const App: Component = () => {
    * Borra un objeto desde el Outliner (o el menú del visor). No se puede
    * deshacer: queda como hito en el historial.
    */
-  const handleDeleteNode = (nodeId: string) =>
+  const handleDeleteNode = (nodeId: string) => {
+    // Lo del diseño se deshace con el historial del propio diseño
+    const feature = cadFeatureOfNode(nodeId);
+    if (feature !== undefined) {
+      const name = cad.doc()?.features.find((f) => f.id === feature)?.name ?? "La operación";
+      if (!cad.removeFeature(feature)) setStatusMessage(`${name}: otras operaciones dependen de ella`);
+      else setStatusMessage(`${name} borrada`);
+      return;
+    }
+    const object = objectOfNode(nodeId);
+    if (object) {
+      void (async () => {
+        const view = isCadObject(object) ? cad.result()?.parts.find((p) => partKey(p.id) === partKey(object.source.part)) : undefined;
+        if (view) {
+          await cad.addFeature({ type: "delete_parts", parts: [view.id] });
+          await cad.acceptDraft();
+        }
+        if (!isCadObject(object) || materialized(object, activeObjectId()) || !view) await removeObject(object.id);
+        setStatusMessage(`${object.name} borrado`);
+      })();
+      return;
+    }
+    return deleteSceneNode(nodeId);
+  };
+  const deleteSceneNode = (nodeId: string) =>
     undoable(async (done) => {
       if (nodeId.startsWith("node-")) {
         await deleteFileNode(Number(nodeId.slice(5)));
@@ -5480,6 +5976,9 @@ export const App: Component = () => {
       poseLibrary: poseLibrary(),
       mixer: mixer(),
       history: withHistory ? history.save() : undefined,
+      // Los objetos van solo al proyecto (no a las copias de deshacer ni al casillero de cada uno)
+      objects: withHistory ? objects() : undefined,
+      activeObject: withHistory ? activeObjectId() : undefined,
     });
   };
 
@@ -5516,6 +6015,8 @@ export const App: Component = () => {
       // no se guardan en el proyecto: esos pasos quedan como hitos
       snapshotUi.clear();
       history.load(ui.history, ["snapshot", "sceneEdit"]);
+      setObjects(Array.isArray(ui.objects) ? ui.objects : []);
+      setActiveObjectId(typeof ui.activeObject === "number" ? ui.activeObject : undefined);
     }
     setPlacementMode(undefined);
     setBoneEditMode(false);
@@ -5661,6 +6162,8 @@ export const App: Component = () => {
       await restoreProjectUi(opened.ui);
       cadUi.cancelSketch();
       await cad.reload();
+      // Proyecto de antes de los objetos: su modelo pasa a ser uno
+      await adoptCurrentModel();
       // La recuperación no es el archivo del usuario: el próximo Guardar pregunta dónde
       setProjectPath(recovered ? undefined : path);
       setRecovery(undefined);
@@ -5993,6 +6496,22 @@ export const App: Component = () => {
   };
 
   const handleSelectNode = (nodeId: string) => {
+    // Lo del diseño se elige en Diseñar
+    const plane = nodeId.startsWith("plane-") ? (nodeId.slice(6) as "xy" | "xz" | "yz") : undefined;
+    const feature = cadFeatureOfNode(nodeId);
+    if (plane || feature !== undefined) {
+      if (!inDesign()) pipeline.openWorkspace("design");
+      if (plane) cadUi.pickToggle({ kind: "plane", plane }, false);
+      else if (feature !== undefined) cad.select(cad.selected() === feature ? undefined : feature);
+      return;
+    }
+    // Un objeto pasa a ser el activo: las herramientas del espacio actúan sobre él
+    const object = objectOfNode(nodeId);
+    if (object) {
+      if (isCadObject(object) && inDesign()) cadUi.setOpenPart(partKey(object.source.part));
+      void activateObject(object.id);
+      return;
+    }
     if (nodeId.startsWith("node-")) {
       const index = Number(nodeId.slice(5));
       setSelectedFileNode(selectedFileNode() === index ? undefined : index);
@@ -6024,7 +6543,7 @@ export const App: Component = () => {
           onWorkspace={pipeline.openWorkspace}
           exporting={pipeline.activeStep() === "export"}
           onExport={openExport}
-          hasModel={meshLoaded()}
+          hasModel={meshLoaded() || hasDesignBody()}
           canExport={hasWork() || hasDesignBody()}
         />
 
@@ -6170,7 +6689,7 @@ export const App: Component = () => {
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() ? meshData() : null} />
+              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} />
             </Show>
 
             {/* Welcome Screen overlay */}
@@ -6303,7 +6822,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={<DesignStep store={cad} ui={cadUi} hasModel={meshLoaded()} onUseAsModel={handleCadToModel} />}
+            designPanel={<DesignStep store={cad} ui={cadUi} hasModel={meshLoaded()} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),
@@ -6482,7 +7001,7 @@ export const App: Component = () => {
             }}
             boneNames={skeletonBoneNames()}
             hasWeights={skeletonLoaded()}
-            sceneTree={meshLoaded() ? sceneTree() : undefined}
+            sceneTree={meshLoaded() || cad.doc() ? sceneTree() : undefined}
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
             onDeleteNode={handleDeleteNode}

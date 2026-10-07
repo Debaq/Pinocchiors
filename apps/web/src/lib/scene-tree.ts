@@ -3,7 +3,10 @@ import type { SceneStructure } from "../components/steps/StructureStep";
 
 export interface SceneNode {
   id: string;
-  type: "scene" | "mesh" | "wireframe" | "skeleton" | "bone" | "quadmesh" | "grid" | "weights" | "node";
+  type:
+    | "scene" | "mesh" | "wireframe" | "skeleton" | "bone" | "quadmesh" | "grid" | "weights" | "node"
+    // Grupos del Outliner y lo que viene del CAD
+    | "group" | "plane" | "axis" | "point" | "sketch" | "feature" | "folder" | "part";
   label: string;
   visible: boolean;
   expanded: boolean;
@@ -16,7 +19,33 @@ export interface SceneNode {
   readonly?: boolean;
   /** Texto al pasar el mouse */
   hint?: string;
+  /** Atenuado (operación suprimida o después de la barra de retroceso) */
+  muted?: boolean;
+  /** Con error al calcular */
+  error?: boolean;
+  /** Muestra de color (piezas del CAD) */
+  color?: string;
 }
+
+/** Elemento del CAD ya armado por App (ids `plane-xy`, `cad-<id>`, `part-<op>-<n>`…) */
+export type CadOutlineItem = Omit<SceneNode, "expanded" | "children"> & { children?: SceneNode[] };
+
+/** Lo que el diseño paramétrico agrega al Outliner */
+export interface CadOutline {
+  /** Planos base y de referencia (también ejes y puntos), en orden del árbol */
+  planes: CadOutlineItem[];
+  /** Sketches y operaciones, en orden del árbol (con sus carpetas) */
+  features: SceneNode[];
+}
+
+/** Un objeto de la escena (id `obj-<n>`); del activo cuelga su modelo */
+export type ObjectRow = CadOutlineItem & {
+  active: boolean;
+  /** Lo hecho sobre su malla (orientar, reparar, escalar…), en orden */
+  modifications?: SceneNode[];
+  /** Nombre de la malla del activo ("Malla generada" en las piezas del diseño) */
+  meshLabel?: string;
+};
 
 export interface SceneTreeState {
   hasMesh: boolean;
@@ -38,6 +67,10 @@ export interface SceneTreeState {
   hiddenNodes?: Set<number>;
   /** Nodo del archivo elegido */
   selectedNode?: number;
+  /** Planos y operaciones del diseño paramétrico */
+  cad?: CadOutline;
+  /** Objetos en orden de creación (sin objetos, el modelo va suelto) */
+  objects?: ObjectRow[];
 }
 
 /** Hay geometría en el nodo o debajo de él (se puede ocultar o borrar) */
@@ -73,6 +106,18 @@ function fileNodes(structure: SceneStructure, hidden: Set<number>, selected?: nu
   return structure.roots.map(build);
 }
 
+const leaf = (item: CadOutlineItem): SceneNode => ({ expanded: false, ...item, children: item.children ?? [] });
+
+function group(id: string, label: string, children: SceneNode[]): SceneNode {
+  return { id, type: "group", label, visible: true, expanded: true, selected: false, readonly: true, children };
+}
+
+/**
+ * Árbol del Outliner en tres grupos: Planos (grilla, planos base y de
+ * referencia), Operaciones (el historial del diseño) y Objetos (modelos
+ * importados y piezas del diseño, por orden de creación; del activo cuelgan
+ * su malla, retopología, esqueleto y pesos). Los grupos vacíos no se muestran.
+ */
 export function buildSceneTree(state: SceneTreeState): SceneNode {
   const root: SceneNode = {
     id: "scene",
@@ -84,20 +129,24 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
     children: [],
   };
 
-  // Grid
-  root.children.push({
-    id: "grid",
-    type: "grid",
-    label: "Grid",
-    visible: state.showGrid,
-    expanded: false,
-    selected: false,
-    children: [],
-  });
+  // ── Planos ──
+  const planes: SceneNode[] = [
+    {
+      id: "grid",
+      type: "grid",
+      label: "Grid",
+      visible: state.showGrid,
+      expanded: false,
+      selected: false,
+      children: [],
+    },
+    ...(state.cad?.planes ?? []).map(leaf),
+  ];
 
-  // Mesh
+  // ── Modelo del objeto activo ──
+  const model: SceneNode[] = [];
   if (state.hasMesh) {
-    root.children.push({
+    model.push({
       id: "mesh",
       type: "mesh",
       label: "Malla",
@@ -107,10 +156,8 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       children: state.structure ? fileNodes(state.structure, state.hiddenNodes ?? new Set(), state.selectedNode) : [],
     });
   }
-
-  // Wireframe
   if (state.hasWireframe) {
-    root.children.push({
+    model.push({
       id: "wireframe",
       type: "wireframe",
       label: "Wireframe",
@@ -120,10 +167,8 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       children: [],
     });
   }
-
-  // Quad mesh
   if (state.hasQuadMesh) {
-    root.children.push({
+    model.push({
       id: "quadmesh",
       type: "quadmesh",
       label: "Quad Mesh",
@@ -134,10 +179,8 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       children: [],
     });
   }
-
-  // Skeleton + bones
   if (state.hasSkeleton && state.skeletonData) {
-    const skeletonNode: SceneNode = {
+    model.push({
       id: "skeleton",
       type: "skeleton",
       label: "Esqueleto",
@@ -155,13 +198,10 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
         children: [],
         boneIndex: i,
       })),
-    };
-    root.children.push(skeletonNode);
+    });
   }
-
-  // Weights
   if (state.hasWeights) {
-    root.children.push({
+    model.push({
       id: "weights",
       type: "weights",
       label: "Heatmap Pesos",
@@ -172,6 +212,19 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
       children: [],
     });
   }
+  // ── Objetos ──
+  const objects: SceneNode[] = state.objects?.length
+    ? state.objects.map(({ active, modifications = [], meshLabel, ...row }) => {
+        // Del activo: su malla, lo hecho sobre ella y lo que salió después (quads, esqueleto, pesos)
+        const [first, ...rest] = model;
+        const mesh = first?.id === "mesh" ? [{ ...first, label: meshLabel ?? first.label }] : [];
+        const children = active ? [...mesh, ...modifications, ...(mesh.length ? rest : model)] : modifications;
+        return { ...leaf(row), expanded: active, children };
+      })
+    : model;
 
+  root.children.push(group("group-planes", "Planos", planes));
+  if (state.cad?.features.length) root.children.push(group("group-features", "Operaciones", state.cad.features));
+  if (objects.length) root.children.push(group("group-objects", "Objetos", objects));
   return root;
 }

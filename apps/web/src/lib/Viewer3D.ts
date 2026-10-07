@@ -590,6 +590,8 @@ export class Viewer3D {
   /** Las demás tomas, de fondo */
   private cloudGhost: THREE.Points | null = null;
   private cloudGroup = new THREE.Group();
+  /** Objetos de la escena que no están activos: en gris translúcido, no se eligen */
+  private ghostGroup = new THREE.Group();
   /** Con la nube a la vista se ocultan el modelo y el esqueleto */
   private cloudFocus = false;
   private cloudPointSize = 2;
@@ -729,6 +731,7 @@ export class Viewer3D {
     this.scene.add(this.skeletonGroup);
     this.scene.add(this.measureGroup);
     this.scene.add(this.cloudGroup);
+    this.scene.add(this.ghostGroup);
 
     // Grid - Dracula style
     this.scene.add(this.grid);
@@ -1886,6 +1889,37 @@ export class Viewer3D {
     this.attachGizmo();
     this.applyHiddenToOverlays();
     this.updateNodeHighlight();
+  }
+
+  /** Cuántos objetos en gris hay (para las pruebas) */
+  get ghostCount(): number {
+    return this.ghostGroup.children.length;
+  }
+
+  /** Los demás objetos de la escena, en gris (reemplaza a los anteriores) */
+  setGhosts(list: MeshData[]): void {
+    for (const child of [...this.ghostGroup.children]) {
+      const mesh = child as THREE.Mesh;
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+      this.ghostGroup.remove(mesh);
+    }
+    for (const data of list) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+      geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+      geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      const material = new THREE.MeshStandardMaterial({
+        color: themeHex("comment"),
+        transparent: true,
+        opacity: 0.4,
+        depthWrite: false,
+        roughness: 0.9,
+      });
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.renderOrder = -1;
+      this.ghostGroup.add(mesh);
+    }
   }
 
   /** Texturas de la piel; se aplican solo si la malla actual tiene UV */

@@ -50,8 +50,8 @@ export interface SavedHistory {
 export interface HistoryStore {
   /** Aplica un paso y lo agrega como hijo del actual. `applied`: ya estaba aplicado */
   execute: (description: string, step: Step, options?: { applied?: boolean }) => Promise<void>;
-  /** Registra un hito (operación ya hecha que no se puede deshacer) */
-  milestone: (description: string) => void;
+  /** Registra un hito (operación ya hecha que no se puede deshacer); `step` guarda sus datos igual */
+  milestone: (description: string, step?: Step) => void;
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   /** Va a cualquier nodo del árbol: deshace hasta el ancestro común y rehace hasta él */
@@ -62,6 +62,8 @@ export interface HistoryStore {
   canReach: (id: number) => boolean;
   nodes: () => readonly HistoryNode[];
   current: () => number;
+  /** Los pasos hechos, en orden: de la raíz (sin ella) al actual */
+  trail: () => HistoryNode[];
   /** Convierte en hitos los pasos que ya no se pueden deshacer */
   seal: (match: (step: Step) => boolean) => void;
   /** Solo la raíz (modelo nuevo) */
@@ -149,7 +151,8 @@ export function createHistoryStore(handlers: StepHandlers): HistoryStore {
         if (!options?.applied) await handler(step).apply(step.data, true);
         add({ description, time: Date.now(), step });
       }),
-    milestone: (description) => add({ description, time: Date.now(), step: null, milestone: true }),
+    milestone: (description, step) => add({ description, time: Date.now(), step: step ?? null, milestone: true }),
+    trail: () => path(current()).slice(1).map((id) => nodes()[id]),
     undo: () => serial(async () => void (await undoOne())),
     redo: () =>
       serial(async () => {
