@@ -904,7 +904,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     rightDown = undefined;
     if (e.button !== 2 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
     if (ui.session() || ui.pick().kind !== "none" || !viewer) return;
-    void openFaceMenu(e.clientX, e.clientY);
+    void openMenu(e.clientX, e.clientY);
   };
 
   /** F: acercar a lo elegido (o a todo si no hay nada) */
@@ -924,45 +924,106 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer?.lookFrom(info.normal);
   };
 
-  /** Operaciones que dieron origen a la cara bajo el puntero, para editarlas */
-  const openFaceMenu = async (x: number, y: number) => {
-    const hit = viewer!.pick(x, y, { faces: true });
-    if (hit?.kind !== "face") return;
-    const ref = await store.faceRef(hit.face).catch(() => undefined);
+  /** Operaciones de las que salieron estas etiquetas (y el sketch de extrusiones y revoluciones), lo más reciente primero */
+  const editEntries = (tags: { feature: number }[]): MenuEntry[] => {
     const features = store.doc()?.features ?? [];
     const byId = (id: number) => features.find((f) => f.id === id);
     const ids: number[] = [];
-    for (const t of ref?.tags ?? []) {
+    for (const t of tags) {
       const f = byId(t.feature);
       if (!f || ids.includes(f.id)) continue;
       ids.push(f.id);
-      // El sketch de una extrusión o revolución también se puede editar desde acá
       if ((f.kind.type === "extrude" || f.kind.type === "revolve") && byId(f.kind.sketch) && !ids.includes(f.kind.sketch)) ids.push(f.kind.sketch);
     }
-    // Lo más reciente primero, como queda en el árbol de abajo hacia arriba
     ids.sort((a, b) => features.findIndex((f) => f.id === b) - features.findIndex((f) => f.id === a));
-    setMenu({
-      x,
-      y,
-      items: [
-        { header: "Cara" },
-        ...ids.map((id): MenuEntry => {
-          const f = byId(id)!;
-          const sketch = f.kind.type === "sketch";
-          return {
-            label: `${sketch ? "Editar sketch" : "Editar"} «${f.name}»`,
-            onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),
-          };
-        }),
-        ...(ids.length ? [{ separator: true } as MenuEntry] : []),
-        { label: "Mirar de frente", onSelect: () => void normalToFace(hit.face) },
-        {
-          label: "Acercar a la cara",
-          shortcut: "F",
-          onSelect: () => viewer?.frameSelection([hit.face], []),
-        },
-      ],
+    return ids.map((id): MenuEntry => {
+      const f = byId(id)!;
+      const sketch = f.kind.type === "sketch";
+      return {
+        label: `${sketch ? "Editar sketch" : "Editar"} «${f.name}»`,
+        onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),
+      };
     });
+  };
+
+  /**
+   * Menú del clic derecho según lo que hay bajo el puntero (como Onshape): con
+   * una cara o arista, editar lo que la creó y operaciones con ella (o con todo
+   * lo elegido del mismo tipo, si ya estaba elegida); en vacío, las vistas.
+   */
+  const openMenu = async (x: number, y: number) => {
+    const hit = viewer!.pick(x, y, { faces: true, edges: true });
+    const act = ui.actions();
+    const run = (name: keyof ReturnType<typeof ui.actions>) => () => act[name]?.();
+    const sep: MenuEntry = { separator: true };
+    if (hit?.kind === "face") {
+      // La cara se suma a lo elegido si ya había caras elegidas y esta es una de ellas
+      const picked = ui.picks().filter((p) => p.kind === "face");
+      const inSel = picked.some((p) => p.kind === "face" && p.face === hit.face);
+      const [ref, info] = await Promise.all([
+        store.faceRef(hit.face).catch(() => undefined),
+        invoke<{ surface: string }>("cad_face_info", { face: hit.face }).catch(() => undefined),
+      ]);
+      const use = (fn: () => void) => () => {
+        if (!inSel) ui.setPicks([{ kind: "face", face: hit.face }]);
+        fn();
+      };
+      const n = inSel ? picked.length : 1;
+      const plane = info?.surface === "plane";
+      const edit = editEntries(ref?.tags ?? []);
+      setMenu({
+        x,
+        y,
+        items: [
+          { header: n > 1 ? `${n} caras` : "Cara" },
+          ...edit,
+          ...(edit.length ? [sep] : []),
+          ...(plane && n === 1 ? [{ label: "Sketch en la cara", shortcut: "Mayús+S", onSelect: use(run("sketch")) }] : []),
+          { label: n > 1 ? "Vaciar con estas caras abiertas" : "Vaciar con la cara abierta", onSelect: use(run("shell")) },
+          { label: "Desmoldar", onSelect: use(run("draft")) },
+          sep,
+          ...(plane ? [{ label: "Mirar de frente", onSelect: () => void normalToFace(hit.face) }] : []),
+          { label: "Acercar", shortcut: "F", onSelect: () => viewer?.frameSelection(inSel ? picked.map((p) => (p as { face: number }).face) : [hit.face], []) },
+        ],
+      });
+    } else if (hit?.kind === "edge") {
+      const picked = ui.picks().filter((p) => p.kind === "edge");
+      const inSel = picked.some((p) => p.kind === "edge" && p.edge === hit.edge);
+      const ref = await store.edgeRef(hit.edge).catch(() => undefined);
+      const use = (fn: () => void) => () => {
+        if (!inSel) ui.setPicks([{ kind: "edge", edge: hit.edge }]);
+        fn();
+      };
+      const n = inSel ? picked.length : 1;
+      const edit = editEntries((ref?.sides ?? []).flat());
+      setMenu({
+        x,
+        y,
+        items: [
+          { header: n > 1 ? `${n} aristas` : "Arista" },
+          { label: "Redondear", onSelect: use(run("fillet")) },
+          { label: "Chaflán", onSelect: use(run("chamfer")) },
+          ...(edit.length ? [sep, ...edit] : []),
+          sep,
+          { label: "Acercar", shortcut: "F", onSelect: () => viewer?.frameSelection([], inSel ? picked.map((p) => (p as { edge: number }).edge) : [hit.edge]) },
+        ],
+      });
+    } else {
+      const view = (label: string, dir: P3, shortcut: string): MenuEntry => ({ label, shortcut, onSelect: () => viewer?.lookFrom(dir) });
+      setMenu({
+        x,
+        y,
+        items: [
+          { header: "Vista" },
+          { label: "Encuadrar todo", shortcut: "Inicio", onSelect: () => viewer?.frameAll() },
+          sep,
+          view("Frente", [0, -1, 0], "1"),
+          view("Derecha", [1, 0, 0], "3"),
+          view("Arriba", [0, 0, 1], "7"),
+          view("Isométrica", [1, -1, 1], "Mayús+7"),
+        ],
+      });
+    }
   };
 
   const onKey = (e: KeyboardEvent) => {
@@ -973,6 +1034,19 @@ export const CadView: Component<CadViewProps> = (props) => {
     const view = viewForKey(e);
     if (view) {
       viewer?.lookFrom(view);
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!ui.session() && e.key === "Home" && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      viewer?.frameAll();
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (!ui.session() && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.code === "KeyS" && ui.pick().kind === "none") {
+      // Sketch en la cara o el plano elegido (sin nada, se elige dónde)
+      ui.actions().sketch?.();
       e.preventDefault();
       e.stopPropagation();
       return;

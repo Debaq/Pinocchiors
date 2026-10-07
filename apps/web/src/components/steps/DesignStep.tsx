@@ -293,6 +293,16 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
   };
 
+  // El menú del visor las usa con lo elegido
+  ui.setActions({
+    sketch: () => void startSketch(),
+    fillet: () => void startEdges("fillet"),
+    chamfer: () => void startEdges("chamfer"),
+    shell: () => void startFaces("shell"),
+    draft: () => void startFaces("draft"),
+  });
+  onCleanup(() => ui.setActions({}));
+
   const addPattern = (kind: "linear" | "circular") => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];

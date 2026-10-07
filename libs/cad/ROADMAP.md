@@ -359,3 +359,7 @@ cargo test -p cad-model
   el visor del diseño, vistas estándar con Mayús+1…7 (Onshape) y 1/3/7 con o sin Ctrl (como el
   visor de mallas), F o «.» para acercar a lo elegido, y en el menú de la cara "Mirar de frente"
   y "Acercar a la cara". Los giros duran 0,3 s con frenado.
+- **2026-10-07 Menú del clic derecho** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 4): el
+  menú cambia según lo que hay bajo el puntero (cara, arista o vacío) y crea operaciones con
+  eso: sketch en la cara, vaciar, desmoldar, redondear, chaflán; más editar lo que la originó y
+  las vistas. Mayús+S abre un sketch con lo elegido e Inicio encuadra todo.

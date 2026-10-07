@@ -28,6 +28,9 @@ import {
   type SolveReport,
 } from "./cad";
 
+/** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
+export type CadAction = "sketch" | "fillet" | "chamfer" | "shell" | "draft";
+
 /** Algo elegido en el visor fuera de la edición de sketches */
 export type Pick3d =
   | { kind: "face"; face: number }
@@ -95,6 +98,7 @@ export function createCadUi(store: CadStore) {
   // Selección en el visor (caras, aristas, regiones, planos), como en Onshape
   const [picks, setPicks] = createSignal<Pick3d[]>([]);
   const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
+  const [actions, setActions] = createSignal<Partial<Record<CadAction, () => void>>>({});
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
@@ -161,6 +165,9 @@ export function createCadUi(store: CadStore) {
     hiddenSketches,
     showCenterOfMass,
     setShowCenterOfMass,
+    /** Acciones del panel con lo elegido (las registra DesignStep) */
+    actions,
+    setActions,
     toggleSketchVisible(id: number) {
       setHiddenSketches((h) => (h.includes(id) ? h.filter((x) => x !== id) : [...h, id]));
     },

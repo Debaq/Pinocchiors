@@ -402,6 +402,46 @@ const scenarios = {
     await b.shot("vista_normal");
   },
 
+  async "menú del clic derecho: redondear, sketch en la cara y vistas"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const menuItems = () => b.eval(`[...document.querySelectorAll("[role=menuitem]")].map((e) => e.textContent.trim())`);
+    const choose = async (text) => {
+      const r = await b.eval(`(() => { const e = [...document.querySelectorAll("[role=menuitem]")].find((e) => e.textContent.includes(${JSON.stringify(text)})); if (!e) return null; const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+      if (!r) throw new Error(`no está «${text}» en el menú: ${await menuItems()}`);
+      await b.click(...r, { wait: 1500 });
+    };
+    const right = async (p, dx = 0, dy = 0) => {
+      const [x, y] = await at(p);
+      await b.click(x + dx, y + dy, { button: "right", buttons: 2, wait: 1200 });
+    };
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Arista de arriba adelante → Redondear: el diálogo abre con esa arista
+    await right([0, -10, 10]);
+    await choose("Redondear");
+    await sleep(1000);
+    await accept(b);
+    near((await body()).volume, 8000 - (1 - Math.PI / 4) * 20, 0.05, "redondeo desde el menú");
+    // Cara de arriba → Sketch en la cara
+    await right([3, 3, 10]);
+    await choose("Sketch en la cara");
+    await sleep(1500);
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error("no empezó el sketch");
+    const plane = (await evaluate()).sketches.at(-1)?.plane;
+    near(plane?.origin[2] ?? NaN, 10, 1e-6, "sketch sobre la cara de arriba");
+    await b.clickText("Descartar");
+    await sleep(1000);
+    // En vacío: vistas
+    const [ex, ey] = await b.eval(`(() => { const r = window.__cadViewer.canvas.getBoundingClientRect(); return [r.left + 60, r.bottom - 60]; })()`);
+    await b.click(ex, ey, { button: "right", buttons: 2, wait: 1000 });
+    await choose("Frente");
+    await sleep(700);
+    const d = await b.eval(`window.__cadViewer.camera.position.clone().sub(window.__cadViewer.controls.target).normalize().toArray()`);
+    if (!(d[2] > 0.999)) throw new Error(`frente: ${d}`);
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

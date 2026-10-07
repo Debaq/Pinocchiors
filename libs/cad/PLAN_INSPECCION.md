@@ -99,7 +99,13 @@ selección y menú contextual.
    Onshape y 1/3/7 (Ctrl: la opuesta) como el resto de la app; F o «.» acerca a lo elegido
    (caras, aristas, vértices) o a todo; "Mirar de frente" y "Acercar a la cara" en el menú del
    clic derecho. N no se tomó: en la app muestra y oculta el panel.*
-4. **Menú contextual y atajos.**
+4. **Menú contextual y atajos.** *Hecha el 2026-10-07: el clic derecho sin arrastrar abre un
+   menú según lo que hay debajo: cara (editar lo que la creó, sketch en la cara si es plana,
+   vaciar, desmoldar, mirar de frente, acercar), arista (redondear, chaflán, editar las
+   operaciones de sus caras, acercar) o vacío (encuadrar todo y vistas). Si lo de debajo ya
+   estaba elegido, la acción usa toda la selección de ese tipo. Las acciones las registra el
+   panel en `ui.actions`. Atajos: Mayús+S (sketch con lo elegido), Inicio (encuadrar todo).
+   Ocultar y aislar esperan a las varias piezas (plan 5).*
 5. **Filtros y selección por caja.**
 6. **Vista de corte** con tapa.
 
