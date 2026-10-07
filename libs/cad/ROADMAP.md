@@ -436,3 +436,8 @@ cargo test -p cad-model
   queda separado del resto del programa: las piezas del CAD no aparecen en el Outliner. Hoy
   solo se pasan con "Usar como modelo". Hay que integrarlas (cada pieza como objeto del
   outliner, actualizado al recalcular).
+- **Pendiente pedido por el usuario (2026-10-07), segundo en la próxima sesión:** reordenar la
+  interfaz de Diseñar. El panel vertical unificado (todo apilado) no es usable; buscar algo
+  profesional e intuitivo al estilo Blender, Onshape o FreeCAD: barra de herramientas por
+  categorías arriba del visor, árbol de operaciones a un lado, diálogo de la operación y
+  propiedades en sus propios paneles.
