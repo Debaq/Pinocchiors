@@ -92,6 +92,8 @@ pub struct CadResult {
     pub bindings: Vec<cad_model::ResolvedValue>,
     /// Cambia con cada recálculo: el visor vuelve a pedir la malla
     pub version: u64,
+    /// Operaciones que se calcularon en este recálculo (las demás, de la caché)
+    pub recomputed: usize,
 }
 
 fn doc_hash(doc: &Document) -> u64 {
@@ -138,7 +140,8 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         }
         old => {
             let previous = old.map(|c| (c.doc_hash, c.eval));
-            *cache = Some(CadCache { doc_hash: hash, eval: doc.evaluate(), previous });
+            let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+            *cache = Some(CadCache { doc_hash: hash, eval, previous });
         }
     }
     let eval = &cache.as_ref().unwrap().eval;
@@ -176,6 +179,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         parameters: eval.parameters.clone(),
         bindings: eval.bindings.clone(),
         version: hash,
+        recomputed: eval.recomputed,
     })
 }
 

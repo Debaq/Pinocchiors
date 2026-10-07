@@ -63,7 +63,19 @@ que la interfaz nunca se congele mientras OpenCASCADE trabaja.
 
 1. **Medición**: registrar el tiempo de cada operación y de teselar (`FeatureStatus.ms`) y
    mostrarlo en el árbol (útil para ver qué es lento). Banco con un documento de 30 operaciones.
+   *Hecha el 2026-10-07: `FeatureStatus.ms` (en centésimas, para que el JSON se relea
+   exacto); el árbol muestra lo que tarda cada operación de 100 ms o más. Banco:
+   `cargo test --release -p cad-model --test cache bench -- --ignored --nocapture`.*
 2. **Caché por operación** en `cad-model` con huellas; la app la mantiene entre comandos.
+   *Hecha el 2026-10-07: `EvalCache` (mapa huella → estado después de la operación, con
+   límite de 128 y descarte de lo menos usado) y `evaluate_with`. La huella encadena la
+   anterior con id, suprimida, detrás de la barra y el JSON de la operación ya resuelta
+   (fórmulas aplicadas); el nombre no entra. Como es un mapa y no una lista, la vista previa
+   y el documento guardado comparten el prefijo. `AppState::cad_ops` la guarda entre
+   comandos; `CadResult.recomputed` dice cuántas se calcularon. Prueba: con y sin caché dan
+   idénticos estados, volumen y orígenes de caras tras cambiar cada operación de un
+   documento de 8; cambiar la i-ésima recalcula n − i. Banco de 30 operaciones: todo 506 ms;
+   cambiar el chaflán final con caché 9–10 ms.*
 3. **Hilo de cálculo** con cola y descarte de pedidos viejos; eventos al frontend.
 4. **Cancelación** dentro de OCCT para booleanas, redondeos y vaciados.
 5. **Teselado por cara** con reutilización.

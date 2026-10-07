@@ -688,6 +688,9 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
 
 // ─── Árbol ────────────────────────────────────────────────────────────────
 
+/** Duración corta: "120 ms", "1,4 s" */
+const formatMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} s`);
+
 /** Mensaje de error o advertencia de una operación (nada si está bien) */
 const problem = (st: FeatureState | undefined) => (st?.state === "error" || st?.state === "warning" ? st.message : undefined);
 
@@ -907,6 +910,12 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                       />
                     </Show>
                     <span class={clsx("flex-1 truncate", f().suppressed && "line-through")}>{f().name}</span>
+                    {/* Las lentas dicen cuánto tardan (para saber qué frena el diseño) */}
+                    <Show when={(state()?.ms ?? 0) >= 100}>
+                      <span class="text-[10px] font-mono text-text-dim group-hover:hidden" title="Lo que tardó la última vez que se calculó">
+                        {formatMs(state()!.ms!)}
+                      </span>
+                    </Show>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
                       <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
                         <Icons.CaretDown size={10} class="rotate-180" />

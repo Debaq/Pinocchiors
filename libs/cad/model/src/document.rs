@@ -183,6 +183,11 @@ impl Document {
         crate::eval::evaluate(self)
     }
 
+    /// Recalcula reutilizando lo que `cache` ya tiene (ver `EvalCache`).
+    pub fn evaluate_with(&self, cache: &mut crate::eval::EvalCache) -> Evaluation {
+        crate::eval::evaluate_with(self, cache)
+    }
+
     /// Valores de los parámetros (en cualquier orden de dependencia) y el
     /// resultado de cada uno, con su error si no se pudo calcular.
     pub fn parameter_values(&self) -> (HashMap<String, f64>, Vec<ResolvedValue>) {

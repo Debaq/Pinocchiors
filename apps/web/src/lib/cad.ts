@@ -263,7 +263,8 @@ export type FeatureState =
   | { state: "suppressed" }
   | { state: "rolled_back" };
 
-export type FeatureStatus = { id: number } & FeatureState;
+/** `ms`: lo que tardó la última vez que se calculó */
+export type FeatureStatus = { id: number; ms?: number } & FeatureState;
 
 export interface Loop {
   pieces: { entity: number; reversed: boolean }[];
@@ -318,6 +319,8 @@ export interface CadResult {
   parameters: ResolvedValue[];
   bindings: ResolvedValue[];
   version: number;
+  /** Operaciones calculadas en este recálculo (las demás salieron de la caché) */
+  recomputed: number;
 }
 
 export interface CadStatus {
@@ -1890,7 +1893,7 @@ export function createCadStore() {
       void send(next);
     },
 
-    stateOf(id: number): FeatureState | undefined {
+    stateOf(id: number): FeatureStatus | undefined {
       return result()?.status.find((s) => s.id === id);
     },
 

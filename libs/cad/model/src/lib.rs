@@ -19,7 +19,7 @@ pub mod sketch;
 
 pub use cad_occt::{self as occt, Shape};
 pub use document::{Document, Folder, Material, ModelError, Parameter, Resolution, ResolvedValue};
-pub use eval::{Evaluation, FeatureState, FeatureStatus, MissingRef, SketchResult};
+pub use eval::{EvalCache, Evaluation, FeatureState, FeatureStatus, MissingRef, SketchResult};
 pub use feature::*;
 pub use geom::{P2, P3, Plane};
 pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};

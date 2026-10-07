@@ -373,3 +373,8 @@ cargo test -p cad-model
 - **2026-10-07 Carpetas** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 6, con lo que el plan 2
   queda completo): tramos de operaciones agrupados, plegables y con nombre; solo presentación
   (no recalculan). Mayús+clic elige un tramo en el árbol.
+- **2026-10-07 Recálculo incremental** ([PLAN_RECALCULO.md](PLAN_RECALCULO.md), fases 1 y 2):
+  caché por operación con huellas encadenadas; cambiar algo al final de 30 operaciones pasa de
+  506 ms a 10 ms. El árbol muestra el tiempo de las operaciones lentas. El driver del e2e ahora
+  mata el grupo de procesos de Chromium y borra su perfil al cerrar (los `chrome-*` habían
+  llenado `/tmp`).

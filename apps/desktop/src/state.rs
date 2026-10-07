@@ -167,6 +167,8 @@ pub struct AppState {
     pub cad_preview: Mutex<Option<cad_model::Document>>,
     /// Último recálculo del diseño
     pub cad_cache: Mutex<Option<crate::cad::CadCache>>,
+    /// Estado después de cada operación ya calculada (recálculo incremental)
+    pub cad_ops: Mutex<cad_model::EvalCache>,
     /// Modelo preparado para escaneo → CAD
     pub cad_scan: Mutex<Option<crate::cad::ScanCache>>,
 }
@@ -205,6 +207,7 @@ impl AppState {
             cad_document: Mutex::new(None),
             cad_preview: Mutex::new(None),
             cad_cache: Mutex::new(None),
+            cad_ops: Mutex::new(cad_model::EvalCache::default()),
             cad_scan: Mutex::new(None),
         }
     }
@@ -229,6 +232,7 @@ impl AppState {
         *self.cad_document.lock().unwrap() = None;
         *self.cad_preview.lock().unwrap() = None;
         *self.cad_cache.lock().unwrap() = None;
+        self.cad_ops.lock().unwrap().clear();
         *self.cad_scan.lock().unwrap() = None;
     }
 

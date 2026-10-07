@@ -43,6 +43,9 @@ pub struct FeatureStatus {
     pub id: FeatureId,
     #[serde(flatten)]
     pub state: FeatureState,
+    /// Milisegundos que tardó la última vez que se calculó (de la caché, el de entonces).
+    #[serde(default)]
+    pub ms: f64,
 }
 
 /// Sketch ya resuelto y ubicado.
@@ -73,6 +76,90 @@ pub struct Evaluation {
     /// Parámetros y campos vinculados, ya calculados.
     pub parameters: Vec<ResolvedValue>,
     pub bindings: Vec<ResolvedValue>,
+    /// Cuántas operaciones se calcularon (las demás salieron de la caché).
+    pub recomputed: usize,
+}
+
+/// Estado después de una operación, guardado por la huella de todo lo que
+/// llevó hasta ahí (la operación y las anteriores).
+#[derive(Debug, Clone)]
+struct CacheEntry {
+    body: Option<Shape>,
+    face_tags: Vec<Vec<FaceTag>>,
+    state: FeatureState,
+    ms: f64,
+    sketch: Option<SketchResult>,
+    tool: Option<(Tagged, BodyOp)>,
+    /// Para descartar las menos usadas.
+    used: u64,
+}
+
+/// Caché del recálculo por operación: cambiar algo al final de un historial
+/// largo solo recalcula desde ahí. Las huellas encadenan cada operación con
+/// las anteriores, así se reutiliza cualquier prefijo ya calculado (la vista
+/// previa de una operación y el documento guardado comparten el comienzo).
+#[derive(Debug)]
+pub struct EvalCache {
+    entries: HashMap<u64, CacheEntry>,
+    clock: u64,
+    /// Máximo de estados guardados.
+    pub capacity: usize,
+}
+
+impl Default for EvalCache {
+    fn default() -> Self {
+        Self { entries: HashMap::new(), clock: 0, capacity: 128 }
+    }
+}
+
+impl EvalCache {
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn get(&mut self, key: u64) -> Option<&CacheEntry> {
+        self.clock += 1;
+        let clock = self.clock;
+        let e = self.entries.get_mut(&key)?;
+        e.used = clock;
+        Some(e)
+    }
+
+    fn put(&mut self, key: u64, mut e: CacheEntry) {
+        self.clock += 1;
+        e.used = self.clock;
+        self.entries.insert(key, e);
+        if self.entries.len() > self.capacity {
+            // Fuera la cuarta parte menos usada
+            let mut by_use: Vec<(u64, u64)> = self.entries.iter().map(|(k, e)| (e.used, *k)).collect();
+            by_use.sort_unstable();
+            for (_, k) in by_use.iter().take(self.entries.len() / 4) {
+                self.entries.remove(k);
+            }
+        }
+    }
+}
+
+/// Huella de una operación encadenada con la anterior: todo lo que el cálculo
+/// lee (la operación ya resuelta, si está suprimida o detrás de la barra). El
+/// nombre no entra: renombrar no recalcula.
+fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    prev.hash(&mut h);
+    f.id.hash(&mut h);
+    f.suppressed.hash(&mut h);
+    rolled_back.hash(&mut h);
+    serde_json::to_string(&f.kind).unwrap_or_default().hash(&mut h);
+    h.finish()
 }
 
 impl Evaluation {
@@ -231,6 +318,11 @@ struct Ctx<'a> {
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
+    evaluate_with(doc, &mut EvalCache::default())
+}
+
+/// Como `evaluate`, reutilizando lo que la caché ya tiene calculado.
+pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
     // Primero las fórmulas: el árbol se calcula con los números que dan
     let res = doc.resolve();
     let doc = &res.document;
@@ -241,12 +333,28 @@ pub fn evaluate(doc: &Document) -> Evaluation {
         warnings: RefCell::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
+    let mut key = 0u64;
     for (i, f) in doc.features.iter().enumerate() {
+        key = fingerprint(key, f, i >= limit);
+        if let Some(e) = cache.get(key) {
+            ctx.ev.body = e.body.clone();
+            ctx.ev.face_tags = e.face_tags.clone();
+            if let Some(s) = &e.sketch {
+                ctx.ev.sketches.insert(f.id, s.clone());
+            }
+            if let Some(t) = &e.tool {
+                ctx.ev.tools.insert(f.id, t.clone());
+            }
+            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms });
+            continue;
+        }
+        let start = std::time::Instant::now();
         let state = if i >= limit {
             FeatureState::RolledBack
         } else if f.suppressed {
             FeatureState::Suppressed
         } else {
+            ctx.ev.recomputed += 1;
             let result = ctx.feature(f);
             let missing = ctx.missing.take();
             let warnings = ctx.warnings.take();
@@ -256,7 +364,21 @@ pub fn evaluate(doc: &Document) -> Evaluation {
                 Err(message) => FeatureState::Error { message, missing },
             }
         };
-        ctx.ev.status.push(FeatureStatus { id: f.id, state });
+        // En centésimas: el JSON queda corto y se vuelve a leer exacto
+        let ms = (start.elapsed().as_secs_f64() * 100_000.0).round() / 100.0;
+        cache.put(
+            key,
+            CacheEntry {
+                body: ctx.ev.body.clone(),
+                face_tags: ctx.ev.face_tags.clone(),
+                state: state.clone(),
+                ms,
+                sketch: ctx.ev.sketches.get(&f.id).cloned(),
+                tool: ctx.ev.tools.get(&f.id).cloned(),
+                used: 0,
+            },
+        );
+        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms });
     }
     ctx.ev
 }

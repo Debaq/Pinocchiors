@@ -1,7 +1,7 @@
 // Driver CDP mínimo para Chromium headless (Node 22: WebSocket nativo, sin
 // puppeteer). Lo usan las pruebas de punta a punta de e2e/.
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 
 // Capturas y perfil de Chromium
 const OUT = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
@@ -9,10 +9,13 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
   mkdirSync(OUT, { recursive: true });
   // Puerto propio: otro Chromium de pruebas en un puerto fijo se confundiría con este
   const port = 9400 + Math.floor(Math.random() * 500);
+  // Perfil desechable: se borra al cerrar (si no, llenan /tmp, que es tmpfs)
+  const profile = `${OUT}/chrome-${port}`;
   const chrome = spawn("chromium", [
     "--headless=new", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", `--remote-debugging-port=${port}`,
-    `--window-size=${width},${height}`, `--user-data-dir=${OUT}/chrome-${port}`, "--no-first-run", "about:blank",
-  ], { stdio: "ignore" });
+    `--window-size=${width},${height}`, `--user-data-dir=${profile}`, "--no-first-run", "about:blank",
+  ], { stdio: "ignore", detached: true });
+  const exited = new Promise((r) => chrome.once("exit", r));
   let targets;
   for (let i = 0; i < 50; i++) {
     try { targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json(); if (targets.length) break; } catch {}
@@ -93,7 +96,23 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
       const r = await send("Page.captureScreenshot", { format: "png" });
       writeFileSync(`${OUT}/${name}.png`, Buffer.from(r.result.data, "base64"));
     },
-    close() { ws.close(); chrome.kill(); },
+    /** Cierra Chromium y borra su perfil (esperar la promesa antes de salir del proceso) */
+    async close() {
+      ws.close();
+      // Todo el grupo (sus procesos hijos también escriben en el perfil)
+      try {
+        process.kill(-chrome.pid, "SIGKILL");
+      } catch {
+        chrome.kill("SIGKILL");
+      }
+      await Promise.race([exited, sleep(3000)]);
+      await sleep(300);
+      // Sus procesos hijos pueden seguir escribiendo un momento: reintentar, y
+      // que la limpieza nunca haga fallar la prueba
+      try {
+        rmSync(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      } catch {}
+    },
   };
   return api;
 }

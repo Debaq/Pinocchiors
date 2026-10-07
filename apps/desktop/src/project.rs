@@ -511,6 +511,7 @@ fn restore(state: &AppState, p: ProjectState) -> Result<(), String> {
     *state.cad_document.lock().unwrap() = p.cad;
     *state.cad_preview.lock().unwrap() = None;
     *state.cad_cache.lock().unwrap() = None;
+    state.cad_ops.lock().unwrap().clear();
     *state.cad_scan.lock().unwrap() = None;
     Ok(())
 }

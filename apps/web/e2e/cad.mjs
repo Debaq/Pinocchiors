@@ -1517,7 +1517,7 @@ for (const [name, run] of Object.entries(scenarios)) {
     console.log(`✗ ${name}: ${e.message}`);
     await b.shot(name.replace(/\W+/g, "_"));
   } finally {
-    b.close();
+    await b.close();
   }
 }
 process.exit(failed ? 1 : 0);
