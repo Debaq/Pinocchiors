@@ -60,6 +60,20 @@ pub struct Document {
     /// Material del sólido (para la masa); no cambia la geometría.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<Material>,
+    /// Carpetas del árbol: solo presentación, no cambian el recálculo.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folders: Vec<Folder>,
+}
+
+/// Carpeta del árbol: las operaciones desde `first` hasta `last` en el orden
+/// actual (así reordenar no la rompe).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Folder {
+    pub name: String,
+    pub first: FeatureId,
+    pub last: FeatureId,
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 /// Material con su densidad en kg/m³.

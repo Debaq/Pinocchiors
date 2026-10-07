@@ -370,3 +370,6 @@ cargo test -p cad-model
   vista por los planos base, con posición regulable, invertir y la sección rellena (tapa con
   stencil); lo cortado no se elige. Con esto el plan 3 queda hecho salvo el plano de corte por
   una cara y su manipulador.
+- **2026-10-07 Carpetas** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 6, con lo que el plan 2
+  queda completo): tramos de operaciones agrupados, plegables y con nombre; solo presentación
+  (no recalculan). Mayús+clic elige un tramo en el árbol.

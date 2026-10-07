@@ -533,6 +533,63 @@ const scenarios = {
     if (orange(await pixel(...(await at([7, -10, 4]))))) throw new Error("quedó la tapa");
   },
 
+  async "carpetas en el árbol"(b) {
+    const row = (name) =>
+      b.eval(`(() => { const e = [...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === ${JSON.stringify(name)}); if (!e || !e.offsetParent) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const folders = async () => (await call("cad_get_document")).folders ?? [];
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    doc.features.push(
+      { id: box.id + 1, name: "Agujero", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 3, height: 40 }, origin: [0, 0, -20], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } },
+      { ...structuredClone(box), id: box.id + 2, name: "Caja arriba", kind: { ...structuredClone(box.kind), origin: [0, 0, 30] } },
+    );
+    doc.next_id = box.id + 3;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const version = await b.eval(`window.__cadStore.result().version`);
+    // Clic en "Caja 1", Mayús+clic en "Agujero" y agrupar
+    await b.click(...(await row("Caja 1")), { wait: 1200 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    await b.click(...(await row("Caja 1")), { wait: 800 });
+    await b.click(...(await row("Agujero")), { wait: 800, modifiers: 8 });
+    await b.clickText("Agrupar en carpeta");
+    await sleep(1200);
+    let f = await folders();
+    if (f.length !== 1 || f[0].first !== box.id || f[0].last !== box.id + 1) throw new Error(`carpeta: ${JSON.stringify(f)}`);
+    // Plegar: sus filas se esconden, la de afuera no
+    await b.eval(`document.querySelector("[data-folder]").click()`);
+    await sleep(1000);
+    if ((await row("Caja 1")) || (await row("Agujero"))) throw new Error("no se plegó");
+    if (!(await row("Caja arriba"))) throw new Error("se escondió una de afuera");
+    // Renombrar con doble clic
+    await b.eval(`document.querySelector("[data-folder] span.truncate").dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))`);
+    await sleep(500);
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Nombre de la carpeta"]'); i.value = "Base"; i.blur(); })()`);
+    await sleep(1000);
+    f = await folders();
+    if (f[0]?.name !== "Base" || !f[0].collapsed) throw new Error(`renombrar: ${JSON.stringify(f)}`);
+    // Nada de esto recalculó
+    if ((await b.eval(`window.__cadStore.result().version`)) !== version) throw new Error("las carpetas recalcularon el árbol");
+    // Desplegar, borrar la última de la carpeta: queda con la primera
+    await b.eval(`document.querySelector("[data-folder]").click()`);
+    await sleep(800);
+    await b.eval(`(() => { const s = [...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === "Agujero"); s.closest("[data-feature-row]").querySelector('[aria-label="Borrar"]').click(); })()`);
+    await sleep(1500);
+    f = await folders();
+    if (f.length !== 1 || f[0].first !== box.id || f[0].last !== box.id) throw new Error(`tras borrar: ${JSON.stringify(f)}`);
+    // Desagrupar
+    await b.eval(`document.querySelector('[data-folder] [aria-label="Desagrupar"]').click()`);
+    await sleep(1000);
+    if ((await folders()).length) throw new Error("no se desagrupó");
+    if ((await call("cad_get_document")).features.length !== 2) throw new Error("desagrupar tocó las operaciones");
+  },
+
   async "caja de regiones al editar una extrusión"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

@@ -177,6 +177,48 @@ export interface CadDocument {
   bindings?: Record<string, string>;
   /** Material del sólido (densidad en kg/m³), para la masa */
   material?: Material | null;
+  /** Carpetas del árbol (solo presentación) */
+  folders?: Folder[];
+}
+
+/** Carpeta: las operaciones de `first` a `last` en el orden actual */
+export interface Folder {
+  name: string;
+  first: number;
+  last: number;
+  collapsed?: boolean;
+}
+
+/** Posiciones [desde, hasta] de una carpeta en el documento (null si sus extremos ya no están) */
+export function folderRange(doc: CadDocument, f: Folder): [number, number] | null {
+  const a = doc.features.findIndex((x) => x.id === f.first);
+  const b = doc.features.findIndex((x) => x.id === f.last);
+  if (a < 0 || b < 0) return null;
+  return a <= b ? [a, b] : [b, a];
+}
+
+/**
+ * Ajusta las carpetas tras sacar o mover la operación `id` (`next` = orden
+ * nuevo de ids, sin ella si se borró): si sale del tramo deja la carpeta; si
+ * cae entre dos de sus operaciones, entra. Una carpeta que se queda vacía se va,
+ * salvo que se mueva sola con ella.
+ */
+export function fixFolders(doc: CadDocument, id: number, next: number[]): Folder[] {
+  const before = doc.features.map((f) => f.id);
+  const out: Folder[] = [];
+  for (const f of doc.folders ?? []) {
+    const r = folderRange(doc, f);
+    if (!r) continue;
+    const members = before.slice(r[0], r[1] + 1);
+    const others = members.filter((x) => x !== id);
+    if (!others.length) {
+      if (next.includes(id)) out.push({ ...f, first: id, last: id });
+      continue;
+    }
+    const pos = others.map((x) => next.indexOf(x));
+    out.push({ ...f, first: next[Math.min(...pos)], last: next[Math.max(...pos)] });
+  }
+  return out;
 }
 
 export interface Material {
@@ -1748,6 +1790,7 @@ export function createCadStore() {
       void commit((n) => {
         const i = n.features.findIndex((f) => f.id === id);
         if (i < 0) return;
+        if (n.folders?.length) n.folders = fixFolders(n, id, n.features.filter((f) => f.id !== id).map((f) => f.id));
         n.features.splice(i, 1);
         if (n.rollback != null && i < n.rollback) n.rollback -= 1;
         // Sus campos vinculados se van con ella
@@ -1783,9 +1826,38 @@ export function createCadStore() {
       const broken = order.some((f, k) => dependencies(f.kind).some((dep) => pos(dep) < 0 || pos(dep) > k));
       if (broken) return false;
       void commit((n) => {
+        if (n.folders?.length) n.folders = fixFolders(n, id, order.map((f) => f.id));
         n.features = order.map((f) => n.features.find((x) => x.id === f.id)!);
       });
       return true;
+    },
+
+    /** Agrupa en una carpeta las operaciones de `a` a `b` (posiciones); `false` si pisa otra carpeta */
+    addFolder(a: number, b: number, name = "Carpeta"): boolean {
+      if (draft()) void acceptDraft();
+      const d = committed();
+      if (!d || a < 0 || b >= d.features.length) return false;
+      const [lo, hi] = a <= b ? [a, b] : [b, a];
+      const overlaps = (d.folders ?? []).some((f) => {
+        const r = folderRange(d, f);
+        return r && r[0] <= hi && lo <= r[1];
+      });
+      if (overlaps) return false;
+      void commit((n) => {
+        n.folders = [...(n.folders ?? []), { name, first: n.features[lo].id, last: n.features[hi].id }];
+      });
+      return true;
+    },
+
+    /** Cambia una carpeta (por su posición en la lista); `null` la deshace (las operaciones quedan) */
+    updateFolder(index: number, change: Partial<Folder> | null) {
+      return commit((n) => {
+        const list = [...(n.folders ?? [])];
+        if (!list[index]) return;
+        if (change === null) list.splice(index, 1);
+        else list[index] = { ...list[index], ...change };
+        n.folders = list;
+      });
     },
 
     setRollback(index: number | null) {

@@ -104,7 +104,13 @@ nuevo.
    primero; la barra de retroceso está siempre (gris al final, ámbar puesta) y se arrastra
    entre filas; las filas se arrastran para reordenar (`moveFeatureTo`, valida dependencias por
    id). Lo nuevo se inserta en la barra (ya pasaba; ahora lo dice su ayuda).*
-6. **Carpetas.**
+6. **Carpetas.** *Hecha el 2026-10-07: `Document.folders` con `Folder { name, first, last,
+   collapsed }` (tramo por ids: reordenar no la rompe; borrar o mover un extremo la ajusta con
+   `fixFolders`; lo que se suelta entre dos de sus operaciones entra). Mayús+clic elige un
+   tramo de filas, "Agrupar en carpeta" la crea; la cabecera pliega, se renombra con doble
+   clic, avisa si algo de adentro tiene problemas y se desagrupa con ✗. No entran en el hash
+   del recálculo. De paso el árbol itera por id: las filas no se rehacen con cada clon del
+   documento.*
 
 ## Pruebas
 

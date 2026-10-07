@@ -936,3 +936,13 @@ fn material_is_optional_and_roundtrips() {
     let old: Document = serde_json::from_str(r#"{"features":[]}"#).unwrap();
     assert_eq!(old.material, None);
 }
+
+#[test]
+fn folders_roundtrip_and_are_optional() {
+    let mut doc = Document::new();
+    let a = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: Sketch::default() });
+    doc.folders.push(Folder { name: "Base".into(), first: a, last: a, collapsed: false });
+    let back: Document = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+    assert_eq!(back.folders, doc.folders);
+    assert!(!serde_json::to_string(&Document::new()).unwrap().contains("folders"));
+}

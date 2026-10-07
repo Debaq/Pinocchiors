@@ -96,9 +96,9 @@ pub struct CadResult {
 
 fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // El JSON es estable y cubre todo el documento; el material no cambia la
-    // geometría (la masa la calcula la interfaz): cambiarlo no recalcula
-    let doc = Document { material: None, ..doc.clone() };
+    // El JSON es estable y cubre todo el documento; el material y las carpetas
+    // no cambian la geometría: cambiarlos no recalcula
+    let doc = Document { material: None, folders: Vec::new(), ..doc.clone() };
     serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }
@@ -865,6 +865,17 @@ mod tests {
         // Sin cambios: misma versión (caché)
         assert_eq!(evaluate(&state).unwrap().version, v);
         assert!(errors_text(&evaluate(&state).unwrap(), &box_doc()).is_empty());
+    }
+
+    #[test]
+    fn material_and_folders_do_not_recalculate() {
+        let mut doc = box_doc();
+        let h = doc_hash(&doc);
+        doc.material = Some(cad_model::Material { name: "PLA".into(), density: 1240.0 });
+        doc.folders = vec![cad_model::Folder { name: "Base".into(), first: doc.features[0].id, last: doc.features[0].id, collapsed: true }];
+        assert_eq!(doc_hash(&doc), h);
+        doc.rollback = Some(0);
+        assert_ne!(doc_hash(&doc), h);
     }
 
     #[test]

@@ -30,6 +30,7 @@ import {
   type Feature,
   type FeatureKind,
   type FeatureState,
+  folderRange,
   type Material,
   type MissingRef,
   type P2,
@@ -709,11 +710,16 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   // Tras arrastrar una fila, el click que sigue no la abre
   let swallowClick = false;
   const gapAt = (y: number) => {
-    const rows = [...(list?.querySelectorAll<HTMLElement>("[data-feature-row]") ?? [])];
-    return rows.filter((r) => {
-      const b = r.getBoundingClientRect();
-      return b.top + b.height / 2 < y;
-    }).length;
+    // Las filas de una carpeta plegada no se ven: cuentan como su cabecera
+    let ref = -Infinity;
+    let n = 0;
+    for (const el of list?.querySelectorAll<HTMLElement>("[data-feature-row], [data-folder]") ?? []) {
+      const b = el.getBoundingClientRect();
+      const visible = !("hidden" in el.dataset);
+      if (visible) ref = b.top + b.height / 2;
+      if ("featureRow" in el.dataset && ref < y) n++;
+    }
+    return n;
   };
   /** Sigue el puntero hasta soltar; `start` decide qué se arrastra al pasar el umbral */
   const track = (e: PointerEvent, start: () => TreeDrag, drop: (d: TreeDrag) => void) => {
@@ -744,6 +750,26 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     if (!store.moveFeatureTo(d.id, d.to)) props.ui.setMessage("No se puede: quedaría antes de lo que necesita o después de lo que la usa");
   };
   const dropBar = (d: TreeDrag) => void store.setRollback(d.to >= count() ? null : d.to);
+  // Carpetas: tramo [desde, hasta] de cada una y en cuál está cada fila
+  const folders = createMemo(() => {
+    const d = doc();
+    return d ? (d.folders ?? []).map((f, index) => ({ f, index, range: folderRange(d, f) })).filter((x) => x.range) : [];
+  });
+  const folderAt = (i: number) => folders().find((x) => x.range![0] <= i && i <= x.range![1]);
+  // Mayús+clic: tramo de filas desde la elegida (para agrupar)
+  const [rangeTo, setRangeTo] = createSignal<number>();
+  const selRange = (): [number, number] | null => {
+    const d = doc();
+    const a = d?.features.findIndex((f) => f.id === store.selected()) ?? -1;
+    if (a < 0) return null;
+    const b = rangeTo() !== undefined ? d!.features.findIndex((f) => f.id === rangeTo()) : a;
+    return b < 0 ? [a, a] : a <= b ? [a, b] : [b, a];
+  };
+  const inRange = (i: number) => {
+    const r = selRange();
+    return rangeTo() !== undefined && r !== null && r[0] <= i && i <= r[1];
+  };
+  const [renaming, setRenaming] = createSignal<number>();
   /** Dónde se dibuja la línea del hueco mientras se arrastra */
   const dropGap = () => {
     const d = drag();
@@ -786,29 +812,93 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
     <Section title="Operaciones">
       <Show when={count() > 0} fallback={<p class="text-xs text-text-dim">Todavía no hay operaciones</p>}>
         <div class="space-y-0.5" ref={list}>
-          <For each={doc()?.features ?? []}>
-            {(f, i) => {
-              const state = () => store.stateOf(f.id);
+          {/* Por id: las filas no se rehacen cuando el documento se clona (un
+              clic entre mousedown y mouseup se perdería) */}
+          <For each={doc()?.features.map((x) => x.id) ?? []}>
+            {(id, i) => {
+              const f = () => doc()?.features[i()] ?? ({ id, name: "", suppressed: false, kind: { type: "sketch" } } as unknown as Feature);
+              const state = () => store.stateOf(f().id);
               const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
+              const folder = () => folderAt(i());
+              const hidden = () => !!folder()?.f.collapsed && folder()!.range![0] !== undefined;
               return (
                 <>
+                  <Show when={folder() && folder()!.range![0] === i() && folder()}>
+                    {(fo) => (
+                      <div
+                        data-folder
+                        class="group flex items-center gap-1.5 px-1 py-1 rounded text-xs text-text hover:bg-surface cursor-pointer select-none"
+                        onClick={() => void store.updateFolder(fo().index, { collapsed: !fo().f.collapsed })}
+                      >
+                        <Icons.CaretDown size={10} class={clsx("shrink-0 transition-transform", fo().f.collapsed && "-rotate-90")} />
+                        <Icons.Folder size={13} class="shrink-0 text-text-muted" />
+                        <Show
+                          when={renaming() === fo().index}
+                          fallback={
+                            <span class="flex-1 truncate" onDblClick={(e) => (e.stopPropagation(), setRenaming(fo().index))}>
+                              {fo().f.name}
+                            </span>
+                          }
+                        >
+                          <input
+                            aria-label="Nombre de la carpeta"
+                            class="flex-1 min-w-0 px-1 rounded bg-surface/40 border border-accent text-xs text-text outline-none"
+                            value={fo().f.name}
+                            ref={(el) => setTimeout(() => el.select())}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                            onBlur={(e) => {
+                              const name = e.currentTarget.value.trim();
+                              setRenaming(undefined);
+                              if (name && name !== fo().f.name) void store.updateFolder(fo().index, { name });
+                            }}
+                          />
+                        </Show>
+                        {/* Plegada: avisa si algo de adentro tiene problemas */}
+                        <Show
+                          when={
+                            fo().f.collapsed &&
+                            doc()!
+                              .features.slice(fo().range![0], fo().range![1] + 1)
+                              .some((x) => problem(store.stateOf(x.id)))
+                          }
+                        >
+                          <Icons.Warning size={12} class="text-warning shrink-0" aria-label="Algo de la carpeta tiene problemas" />
+                        </Show>
+                        <span class="hidden group-hover:flex" onClick={(e) => e.stopPropagation()}>
+                          <IconButton aria-label="Desagrupar" size="sm" variant="ghost" onClick={() => void store.updateFolder(fo().index, null)}>
+                            <Icons.X size={10} />
+                          </IconButton>
+                        </span>
+                      </div>
+                    )}
+                  </Show>
                   <Gap index={i()} />
                   <div
                     data-feature-row
+                    data-hidden={hidden() ? "" : undefined}
                     class={clsx(
                       "group flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer select-none",
-                      store.selected() === f.id ? "bg-accent/20 text-text" : "hover:bg-surface text-text-muted",
-                      (f.suppressed || rolled()) && "opacity-50",
-                      drag()?.kind === "feature" && (drag() as { id: number }).id === f.id && "ring-1 ring-accent",
+                      folder() && "ml-3",
+                      hidden() && "hidden",
+                      store.selected() === f().id || inRange(i()) ? "bg-accent/20 text-text" : "hover:bg-surface text-text-muted",
+                      (f().suppressed || rolled()) && "opacity-50",
+                      drag()?.kind === "feature" && (drag() as { id: number }).id === f().id && "ring-1 ring-accent",
                     )}
-                    onPointerDown={(e) => track(e, () => ({ kind: "feature", id: f.id, from: i(), to: i() }), dropFeature)}
-                    onClick={() => !swallowClick && store.select(store.selected() === f.id ? undefined : f.id)}
-                    onDblClick={() => f.kind.type === "sketch" && void store.settled().then(() => props.ui.editSketch(f.id))}
+                    onPointerDown={(e) => track(e, () => ({ kind: "feature", id: f().id, from: i(), to: i() }), dropFeature)}
+                    onClick={(e) => {
+                      if (swallowClick) return;
+                      // Mayús: tramo desde la elegida, sin abrir el diálogo
+                      if (e.shiftKey && store.selected() !== undefined && store.selected() !== f().id) return setRangeTo(f().id);
+                      setRangeTo(undefined);
+                      store.select(store.selected() === f().id ? undefined : f().id);
+                    }}
+                    onDblClick={() => f().kind.type === "sketch" && void store.settled().then(() => props.ui.editSketch(f().id))}
                     title={problem(state())}
                   >
                     <Show
                       when={problem(state())}
-                      fallback={<span class="w-3.5 text-center text-text-dim">{FEATURE_LABELS[f.kind.type][0]}</span>}
+                      fallback={<span class="w-3.5 text-center text-text-dim">{FEATURE_LABELS[f().kind.type][0]}</span>}
                     >
                       <Icons.Warning
                         size={14}
@@ -816,41 +906,41 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                         class={clsx("shrink-0", state()?.state === "warning" ? "text-warning" : "text-error")}
                       />
                     </Show>
-                    <span class={clsx("flex-1 truncate", f.suppressed && "line-through")}>{f.name}</span>
+                    <span class={clsx("flex-1 truncate", f().suppressed && "line-through")}>{f().name}</span>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
-                      <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f.id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
+                      <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
                         <Icons.CaretDown size={10} class="rotate-180" />
                       </IconButton>
-                      <IconButton aria-label="Bajar" size="sm" variant="ghost" onClick={() => !store.moveFeature(f.id, 1) && props.ui.setMessage("No se puede: otra operación la necesita antes")}>
+                      <IconButton aria-label="Bajar" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, 1) && props.ui.setMessage("No se puede: otra operación la necesita antes")}>
                         <Icons.CaretDown size={10} />
                       </IconButton>
                       <Show
-                        when={f.kind.type === "sketch"}
+                        when={f().kind.type === "sketch"}
                         fallback={
                           <IconButton
-                            aria-label={f.suppressed ? "Activar" : "Suprimir"}
+                            aria-label={f().suppressed ? "Activar" : "Suprimir"}
                             size="sm"
                             variant="ghost"
-                            onClick={() => void store.updateFeature(f.id, (x) => (x.suppressed = !x.suppressed))}
+                            onClick={() => void store.updateFeature(f().id, (x) => (x.suppressed = !x.suppressed))}
                           >
-                            {f.suppressed ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                            {f().suppressed ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
                           </IconButton>
                         }
                       >
                         <IconButton
-                          aria-label={props.ui.hiddenSketches().includes(f.id) ? "Mostrar en el visor" : "Ocultar en el visor"}
+                          aria-label={props.ui.hiddenSketches().includes(f().id) ? "Mostrar en el visor" : "Ocultar en el visor"}
                           size="sm"
                           variant="ghost"
-                          onClick={() => props.ui.toggleSketchVisible(f.id)}
+                          onClick={() => props.ui.toggleSketchVisible(f().id)}
                         >
-                          {props.ui.hiddenSketches().includes(f.id) ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
+                          {props.ui.hiddenSketches().includes(f().id) ? <Icons.EyeSlash size={12} /> : <Icons.Eye size={12} />}
                         </IconButton>
                       </Show>
                       <IconButton
                         aria-label="Borrar"
                         size="sm"
                         variant="ghost"
-                        onClick={() => !store.removeFeature(f.id) && props.ui.setMessage("Otras operaciones dependen de esta: borrarlas primero")}
+                        onClick={() => !store.removeFeature(f().id) && props.ui.setMessage("Otras operaciones dependen de esta: borrarlas primero")}
                       >
                         <Icons.Trash size={12} />
                       </IconButton>
@@ -862,7 +952,7 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
           </For>
           <Gap index={count()} />
         </div>
-        <div class="flex gap-1.5">
+        <div class="flex flex-wrap gap-1.5">
           <Show when={store.selected() !== undefined}>
             <Button
               size="sm"
@@ -874,6 +964,20 @@ const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             >
               Retroceder hasta acá
             </Button>
+            <Tooltip content="Mayús+clic en otra fila elige un tramo">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  const r = selRange();
+                  if (!r) return;
+                  if (!store.addFolder(r[0], r[1])) return props.ui.setMessage("Se pisa con otra carpeta");
+                  setRangeTo(undefined);
+                }}
+              >
+                Agrupar en carpeta
+              </Button>
+            </Tooltip>
           </Show>
           <Show when={rollback() !== null}>
             <Button size="sm" variant="ghost" onClick={() => void store.setRollback(null)}>
