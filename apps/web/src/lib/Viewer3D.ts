@@ -592,6 +592,8 @@ export class Viewer3D {
   private cloudGroup = new THREE.Group();
   /** Objetos de la escena que no están activos: en gris translúcido, no se eligen */
   private ghostGroup = new THREE.Group();
+  /** Vista previa de un remallado en alambre (ver `setPreviewOverlay`) */
+  private previewOverlay: THREE.Mesh | null = null;
   /** Con la nube a la vista se ocultan el modelo y el esqueleto */
   private cloudFocus = false;
   private cloudPointSize = 2;
@@ -1889,6 +1891,43 @@ export class Viewer3D {
     this.attachGizmo();
     this.applyHiddenToOverlays();
     this.updateNodeHighlight();
+  }
+
+  /** Vista previa de un remallado: hay una en alambre sobre el modelo (para las pruebas) */
+  get hasPreviewOverlay(): boolean {
+    return this.previewOverlay !== null;
+  }
+
+  /**
+   * Resultado de un remallado en alambre sobre el modelo (vista previa), o
+   * nada. Se despega un poco por las normales: las dos superficies casi
+   * coinciden y la del modelo taparía la mitad de las aristas.
+   */
+  setPreviewOverlay(data?: MeshData): void {
+    if (this.previewOverlay) {
+      this.meshGroup.remove(this.previewOverlay);
+      this.previewOverlay.geometry.dispose();
+      (this.previewOverlay.material as THREE.Material).dispose();
+      this.previewOverlay = null;
+    }
+    if (!data) return;
+    const positions = new Float32Array(data.positions);
+    const box = new THREE.Box3().setFromArray(positions);
+    const lift = 0.002 * box.getSize(new THREE.Vector3()).length();
+    for (let i = 0; i < positions.length; i++) positions[i] += data.normals[i] * lift;
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+    const material = new THREE.MeshBasicMaterial({
+      color: themeHex("accent"),
+      wireframe: true,
+      transparent: true,
+      opacity: 0.9,
+      depthWrite: false,
+    });
+    this.previewOverlay = new THREE.Mesh(geometry, material);
+    this.previewOverlay.renderOrder = 2;
+    this.meshGroup.add(this.previewOverlay);
   }
 
   /** Cuántos objetos en gris hay (para las pruebas) */

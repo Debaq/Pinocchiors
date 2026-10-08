@@ -3452,7 +3452,7 @@ fn undo_repair_impl(state: &AppState) -> Result<UndoRepairInfo, String> {
 /// topología (reparar o deshacerlo; `state.mesh` ya es la nueva): la
 /// retopología se descarta y el rig pasa a la malla nueva desde la malla donde
 /// se calculó (`previous` o los quads). Devuelve si el rig se conservó.
-fn mesh_replaced(state: &AppState, previous: &Mesh) -> bool {
+pub(crate) fn mesh_replaced(state: &AppState, previous: &Mesh) -> bool {
     use std::sync::atomic::Ordering;
     let rig = state.result.lock().unwrap().take();
     let source = if state.rig_on_quad.load(Ordering::SeqCst) {
@@ -3793,7 +3793,7 @@ fn get_bone_names(skeleton_type: &SkeletonType) -> Vec<String> {
     }
 }
 
-fn calculate_scene_stats(scene: &Scene) -> (usize, usize, bool, bool) {
+pub(crate) fn calculate_scene_stats(scene: &Scene) -> (usize, usize, bool, bool) {
     let prims = scene.world_primitives();
     let vertices = prims.iter().map(|p| p.positions.len()).sum();
     let faces = prims.iter().map(|p| p.triangles.len()).sum();
@@ -3802,7 +3802,7 @@ fn calculate_scene_stats(scene: &Scene) -> (usize, usize, bool, bool) {
     (vertices, faces, has_normals, has_uvs)
 }
 
-fn calculate_scene_bounds(scene: &Scene) -> BoundingBox {
+pub(crate) fn calculate_scene_bounds(scene: &Scene) -> BoundingBox {
     match scene.compute_bounding_box() {
         Some((min, max)) => BoundingBox { min, max },
         None => BoundingBox { min: [0.0; 3], max: [1.0; 3] },

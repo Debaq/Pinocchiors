@@ -259,7 +259,9 @@ import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from
 import { DESIGN_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
-import { REMESH_MODES, type RemeshMode } from "./components/steps/RemeshStep";
+import { REMESH_MODES, type RemeshMode, type RemeshStats } from "./components/steps/RemeshStep";
+import { DEFAULT_SIMPLIFY, simplifyParams, type SimplifyConfig } from "./components/panels/SimplifyPanel";
+import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
@@ -435,6 +437,7 @@ const REPLAYABLE = new Set([
   "scale_mesh_for_print",
   "undo_print_scale",
   "subdivide_mesh",
+  "remesh_apply",
 ]);
 
 /** Pasos deshacibles en curso que graban sus comandos (el último es el que graba) */
@@ -766,6 +769,12 @@ export const App: Component = () => {
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
   // Remallar: el modo elegido (la retopología es uno de ellos)
   const [remeshMode, setRemeshMode] = createSignal<RemeshMode>("retopology");
+  const [simplifyConfig, setSimplifyConfig] = createSignal<SimplifyConfig>(DEFAULT_SIMPLIFY);
+  /** Vista previa del remallado (el modelo no cambió) o lo último aplicado */
+  const [remeshStats, setRemeshStats] = createSignal<{ kind: "preview" | "applied"; stats: RemeshStats }>();
+  const [remeshPreviewData, setRemeshPreviewData] = createSignal<MeshData>();
+  /** Con vista previa, qué muestra el visor */
+  const [previewView, setPreviewView] = createSignal<PreviewView>("both");
   const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
   /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
   const [exportBoneShapes, setExportBoneShapes] = createSignal(false);
@@ -5288,6 +5297,102 @@ export const App: Component = () => {
     });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // REMALLAR (los modos que no son la retopología)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** Descarta la vista previa (lo aplicado se sigue mostrando) */
+  const discardRemeshPreview = () => {
+    if (!remeshPreviewData() && remeshStats()?.kind !== "preview") return;
+    setRemeshPreviewData(undefined);
+    setRemeshStats((s) => (s?.kind === "preview" ? undefined : s));
+    rawInvoke("remesh_discard").catch(() => {});
+  };
+  // La vista previa deja de valer si cambia la malla o las opciones, o al salir de Simplificar
+  createEffect(
+    on(
+      meshData,
+      () => {
+        discardRemeshPreview();
+        setRemeshStats(undefined);
+      },
+      { defer: true }
+    )
+  );
+  createEffect(on(simplifyConfig, discardRemeshPreview, { defer: true }));
+  createEffect(
+    on([() => pipeline.activeStep(), remeshMode], ([step, mode]) => {
+      if (step !== "remesh" || mode !== "simplify") discardRemeshPreview();
+    })
+  );
+  // "Los dos": el resultado en alambre sobre el modelo
+  createEffect(() => viewer()?.setPreviewOverlay(previewView() === "both" ? remeshPreviewData() : undefined));
+  /** El visor muestra el resultado en lugar del modelo */
+  const showsPreview = () => previewView() === "result" && !!remeshPreviewData();
+
+  const handleRemeshPreview = async () => {
+    try {
+      setIsProcessing(true);
+      const params = simplifyParams(simplifyConfig());
+      const stats = await busy("Calculando la vista previa...", async () => {
+        const stats = await invoke<RemeshStats>("remesh_preview", { params, onProgress: progressChannel() });
+        setRemeshPreviewData(decodeMesh(await invoke<ArrayBuffer>("get_remesh_preview_data")));
+        return stats;
+      });
+      setRemeshStats({ kind: "preview", stats });
+      setStatusMessage(
+        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")})`
+      );
+    } catch (e) {
+      console.error("Remesh preview error:", e);
+      setStatusMessage(`Error: ${e}`);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleRemeshApply = () =>
+    undoable(async (done) => {
+      try {
+        setIsProcessing(true);
+        const config = simplifyConfig();
+        const result = await busy("Simplificando...", () =>
+          invoke<{ mesh_info: MeshInfo; stats: RemeshStats; rig_kept: boolean }>("remesh_apply", {
+            params: simplifyParams(config),
+            onProgress: progressChannel(),
+          })
+        );
+        done(`Simplificar malla (${config.percent.toLocaleString("es")} %)`);
+
+        // La retopología, los respaldos de reparar/desplegar/escalar y el
+        // diagnóstico eran de la malla anterior; el rig pasa a la nueva
+        dropWeights();
+        clearQuadMesh();
+        setCanUndoRepair(false);
+        setCanUndoUnwrap(false);
+        setCanUndoPrintScale(false);
+        setDiagnostics(undefined);
+        setRepairResult(undefined);
+        setMeshData(await fetchMeshData());
+        setMeshInfo({
+          vertices: result.mesh_info.num_vertices,
+          faces: result.mesh_info.num_faces,
+          format: meshInfo().format,
+        });
+        if (result.rig_kept) await keepRig();
+        setRemeshStats({ kind: "applied", stats: result.stats });
+        pipeline.markCompleted("remesh");
+        setStatusMessage(
+          `Malla simplificada: ${result.stats.after.triangles.toLocaleString("es")} triángulos${result.rig_kept ? " (los pesos pasaron a la malla nueva)" : ""}`
+        );
+      } catch (e) {
+        console.error("Remesh apply error:", e);
+        setStatusMessage(`Error: ${e}`);
+      } finally {
+        setIsProcessing(false);
+      }
+    });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // PRINT3D HANDLERS
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -5999,7 +6104,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
-      remesh: { mode: remeshMode() },
+      remesh: { mode: remeshMode(), simplify: simplifyConfig() },
       uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
@@ -6028,6 +6133,7 @@ export const App: Component = () => {
     autorig: autorigConfig(),
     paint: paintConfig(),
     retopology: retopologyConfig(),
+    simplify: simplifyConfig(),
     uv: uvConfig(),
     repairAnalysis: repairAnalysisConfig(),
     repair: repairOptions(),
@@ -6090,6 +6196,7 @@ export const App: Component = () => {
     setQuadMeshInfo(ui.retopology?.info ?? { vertices: 0, quads: 0 });
     setQuadQuality(ui.retopology?.quality);
     if (REMESH_MODES.some((m) => m.id === ui.remesh?.mode)) setRemeshMode(ui.remesh.mode);
+    if (ui.remesh?.simplify) setSimplifyConfig(withDefaults(configDefaults.simplify, ui.remesh.simplify));
     if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
     if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
@@ -6696,7 +6803,7 @@ export const App: Component = () => {
               onPaintSettingsChanged={(change) => setPaintConfig((prev) => ({ ...prev, ...change }))}
               onWeightsPainted={handleWeightsPainted}
               paintSettings={paintSettings()}
-              meshData={displayQuad() ? quadMeshData() : meshData()}
+              meshData={showsPreview() ? remeshPreviewData() : displayQuad() ? quadMeshData() : meshData()}
               sceneMaterials={viewerMaterials()}
               lights={lights()}
               onLightsChanged={setLights}
@@ -6704,8 +6811,24 @@ export const App: Component = () => {
               skeletonData={skeletonData()}
               weightsData={weightsData()}
               settings={viewSettings()}
-              vertices={displayQuad() ? quadMeshInfo().vertices : (meshLoaded() ? meshInfo().vertices : undefined)}
-              faces={displayQuad() ? quadMeshInfo().quads : (meshLoaded() ? meshInfo().faces : undefined)}
+              vertices={
+                showsPreview()
+                  ? remeshStats()?.stats.after.vertices
+                  : displayQuad()
+                    ? quadMeshInfo().vertices
+                    : meshLoaded()
+                      ? meshInfo().vertices
+                      : undefined
+              }
+              faces={
+                showsPreview()
+                  ? remeshStats()?.stats.after.triangles
+                  : displayQuad()
+                    ? quadMeshInfo().quads
+                    : meshLoaded()
+                      ? meshInfo().faces
+                      : undefined
+              }
               placementMode={placementMode()}
               floorCandidates={floorCandidates()}
               boneEditMode={boneEditMode()}
@@ -6725,6 +6848,7 @@ export const App: Component = () => {
                     hasWeights={autorigComplete()}
                     boneNames={skeletonBoneNames()}
                     onSelectBone={selectWeightsBone}
+                    preview={remeshPreviewData() ? { view: previewView(), onChange: setPreviewView } : undefined}
                   />
                 </Show>
               }
@@ -6947,6 +7071,17 @@ export const App: Component = () => {
               useForNextSteps: activeQuad(),
               onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),
+              },
+              simplify: {
+                config: simplifyConfig(),
+                onChange: setSimplifyConfig,
+                onPreview: handleRemeshPreview,
+                onApply: handleRemeshApply,
+                onDiscard: discardRemeshPreview,
+                canExecute: meshLoaded(),
+                isProcessing: isProcessing(),
+                stats: remeshStats()?.stats,
+                statsKind: remeshStats()?.kind,
               },
             }}
             uvProps={{

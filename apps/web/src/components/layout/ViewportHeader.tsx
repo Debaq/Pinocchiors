@@ -16,7 +16,18 @@ export interface ViewportHeaderProps {
   boneNames: string[];
   /** Elegir el hueso cuyos pesos se ven (−1: todos) */
   onSelectBone: (index: number) => void;
+  /** Hay una vista previa de remallado: qué se ve */
+  preview?: { view: PreviewView; onChange: (view: PreviewView) => void };
 }
+
+/** Con una vista previa de remallado: el modelo, el resultado o el resultado en alambre sobre el modelo */
+export type PreviewView = "original" | "result" | "both";
+
+const PREVIEW_VIEWS: { id: PreviewView; label: string }[] = [
+  { id: "original", label: "Original" },
+  { id: "result", label: "Resultado" },
+  { id: "both", label: "Los dos" },
+];
 
 type Shading = "wireframe" | "solid" | "material";
 
@@ -106,6 +117,23 @@ export const ViewportHeader: Component<ViewportHeaderProps> = (props) => {
 
   return (
     <div class="h-8 shrink-0 flex items-center gap-2 px-2 bg-bg-darker border-b border-border text-xs select-none">
+      {/* Vista previa de Remallar */}
+      <Show when={props.preview}>
+        {(preview) => (
+          <>
+            <span class="text-text-muted">Vista previa</span>
+            <div data-preview-view class="flex rounded border border-border overflow-hidden">
+              <For each={PREVIEW_VIEWS}>
+                {(v) => (
+                  <button data-view={v.id} class={segmented(preview().view === v.id)} onClick={() => preview().onChange(v.id)}>
+                    {v.label}
+                  </button>
+                )}
+              </For>
+            </div>
+          </>
+        )}
+      </Show>
       {/* Esqueleto: forma de los huesos y qué pesos se ven */}
       <Show when={props.hasSkeleton}>
         <span class="text-text-muted">Huesos</span>

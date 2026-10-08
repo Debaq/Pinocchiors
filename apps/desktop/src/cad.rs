@@ -1587,6 +1587,13 @@ pub mod bridge {
             "get_placement_info" => ok(crate::placement::placement_info(state)?),
             "apply_placement" => ok(crate::placement::apply_placement_impl(state, arg(args, "matrix")?)?),
             "get_supported_formats" => ok(crate::commands::get_supported_formats()),
+            "remesh_preview" => ok(crate::remesh::preview_impl(state, arg(args, "params")?, &Channel::new(|_| Ok(())))?),
+            "get_remesh_preview_data" => crate::remesh::preview_bytes(state).map(Reply::Bytes),
+            "remesh_discard" => {
+                *state.remesh_preview.lock().unwrap() = None;
+                ok(())
+            }
+            "remesh_apply" => ok(crate::remesh::apply_impl(state, arg(args, "params")?, &Channel::new(|_| Ok(())))?),
             _ => Ok(Reply::Json(json!(null))),
         }
     }

@@ -3751,6 +3751,7 @@ dependencies = [
 name = "quadriflow-core"
 version = "0.1.0"
 dependencies = [
+ "meshopt",
  "pinocchio-math",
  "pinocchio-mesh",
  "pinocchio-spatial",

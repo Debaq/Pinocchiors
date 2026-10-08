@@ -8,6 +8,7 @@ pub mod imported_rig;
 pub mod commands;
 pub mod placement;
 pub mod project;
+pub mod remesh;
 pub mod scan_cloud;
 pub mod scanner;
 pub mod state;
@@ -97,6 +98,10 @@ pub fn run() {
             // Retopología
             commands::run_retopology,
             commands::get_quad_mesh_data,
+            remesh::remesh_preview,
+            remesh::get_remesh_preview_data,
+            remesh::remesh_discard,
+            remesh::remesh_apply,
             commands::set_active_mesh,
             commands::get_active_mesh,
             // UV / Piel

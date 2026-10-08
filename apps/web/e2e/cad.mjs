@@ -2787,6 +2787,53 @@ const scenarios = {
     if (await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`)) throw new Error("el panel de retopología sigue a la vista");
   },
 
+  async "remallar: simplificar con vista previa, aplicar y deshacer"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Bola", kind: { type: "primitive", shape: { type: "sphere", radius: 20 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 51;
+    })`);
+    await sleep(2500);
+    // Triángulos del modelo en el backend (cabecera de get_mesh_data: vértices, índices…)
+    const triangles = async () => new Uint32Array(await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer(), 0, 4)[1] / 3;
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="simplify"]').click()`);
+    await sleep(300);
+    if (!(await b.eval(`!!document.querySelector("[data-simplify]")`))) throw new Error("sin el panel de Simplificar");
+    if (await b.eval(`!!document.querySelector("[data-remesh-pending]")`)) throw new Error("Simplificar sigue marcado como pendiente");
+    const before = await triangles();
+    if (!(before > 500)) throw new Error(`la esfera tiene pocos triángulos: ${before}`);
+
+    // Vista previa: el modelo no cambia; el resultado se ve en alambre encima
+    await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-remesh-deviation]")`)); t++) await sleep(250);
+    const after = await b.eval(`parseInt(document.querySelector("[data-remesh-after]").textContent.split(" ")[0].replace(/\\D/g, ""))`);
+    near(after, before / 4, before * 0.05, "triángulos de la vista previa");
+    if ((await triangles()) !== before) throw new Error("la vista previa cambió el modelo");
+    if (!(await b.eval(`window.__viewer().hasPreviewOverlay`))) throw new Error("sin el alambre de la vista previa");
+    if (!(await b.eval(`!!document.querySelector("[data-preview-view]")`))) throw new Error("sin el selector de la vista previa en el visor");
+    await b.eval(`document.querySelector('[data-preview-view] [data-view="result"]').click()`);
+    await sleep(300);
+    if (await b.eval(`window.__viewer().hasPreviewOverlay`)) throw new Error("con Resultado no debería haber alambre encima");
+    await b.shot("simplificar-vista-previa");
+
+    // Aplicar: la malla cambia y la vista previa se va
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 40 && (await triangles()) === before; t++) await sleep(250);
+    const applied = await triangles();
+    near(applied, after, 1, "triángulos aplicados");
+    for (let t = 0; t < 20 && (await b.eval(`!!document.querySelector("[data-preview-view]")`)); t++) await sleep(250);
+    if (await b.eval(`!!document.querySelector("[data-preview-view]") || window.__viewer().hasPreviewOverlay`)) throw new Error("la vista previa sigue después de aplicar");
+    if (!(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`))) throw new Error("sin el resumen de lo aplicado");
+
+    // Deshacer: vuelve la malla de antes
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
+    for (let t = 0; t < 40 && (await triangles()) !== before; t++) await sleep(250);
+    if ((await triangles()) !== before) throw new Error(`deshacer no devolvió la malla: ${await triangles()} (antes ${before})`);
+  },
+
   async "objetos: las piezas pasan solas a Fabricar"(b) {
     await begin(b);
     await b.clickText("Caja");

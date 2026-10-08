@@ -53,6 +53,7 @@ mod integer;
 mod quad;
 pub mod quality;
 mod rebuild;
+pub mod remesh;
 mod sizing;
 mod smooth;
 mod symmetry;

@@ -1,6 +1,7 @@
 import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { RetopologyStep, type RetopologyStepProps } from "./RetopologyStep";
+import { SimplifyPanel, type SimplifyPanelProps } from "../panels/SimplifyPanel";
 
 /** Formas de ordenar la malla (ver libs/quadriflow/PLAN_REMALLAR.md) */
 export type RemeshMode = "retopology" | "simplify" | "isotropic" | "voxel" | "quads" | "smooth";
@@ -18,7 +19,7 @@ export const REMESH_MODES: { id: RemeshMode; label: string; what: string; use: s
     label: "Simplificar",
     what: "Quita triángulos manteniendo la forma; conserva UV y pesos.",
     use: "Escaneos pesados para web, juegos o el laminador.",
-    ready: false,
+    ready: true,
   },
   {
     id: "isotropic",
@@ -58,19 +59,48 @@ export interface MeshCount {
   faceLabel: string;
 }
 
+/** Cuánto se aleja el resultado del original (del backend) */
+export interface RemeshDeviation {
+  max_percent: number;
+  mean_percent: number;
+  max_mm: number;
+  mean_mm: number;
+}
+
+/** Antes → después de un remallado (del backend) */
+export interface RemeshStats {
+  before: { vertices: number; triangles: number };
+  after: { vertices: number; triangles: number };
+  deviation: RemeshDeviation;
+}
+
+const num = (v: number) => v.toLocaleString("es");
+const short = (v: number) => v.toLocaleString("es", { maximumSignificantDigits: 2 });
+/** Milímetros con pocas cifras (o micras si es menos de 0,1 mm) */
+const mm = (v: number) => (v > 0 && v < 0.1 ? `${short(v * 1000)} µm` : `${short(v)} mm`);
+
 /** Antes → después de un remallado, con la desviación al original */
-export const RemeshSummary: Component<{ before: MeshCount; after: MeshCount; deviationPercent?: number | null }> = (props) => {
-  const num = (v: number) => v.toLocaleString("es");
-  const pct = (a: number, b: number) => (a > 0 ? ` (${Math.round((b / a) * 100)} %)` : "");
+export const RemeshSummary: Component<{
+  before: MeshCount;
+  after: MeshCount;
+  deviationPercent?: number | null;
+  deviation?: RemeshDeviation;
+  /** "Vista previa", "Aplicado"… */
+  title?: string;
+}> = (props) => {
+  const pct = (a: number, b: number) => (a > 0 ? ` (${short((b / a) * 100)} %)` : "");
   return (
     <div data-remesh-summary class="rounded-md border border-border bg-surface/30 p-2 text-xs space-y-1">
+      <Show when={props.title}>
+        <p class="text-text-dim">{props.title}</p>
+      </Show>
       <div class="grid grid-cols-[auto_1fr_auto_1fr] gap-x-2 gap-y-0.5 items-baseline">
         <span class="text-text-dim">Antes</span>
         <span class="text-text">
           {num(props.before.faces)} {props.before.faceLabel}
         </span>
         <span class="text-text-dim">→</span>
-        <span class="text-text">
+        <span data-remesh-after class="text-text">
           {num(props.after.faces)} {props.after.faceLabel}
           <span class="text-text-dim">{pct(props.before.faces, props.after.faces)}</span>
         </span>
@@ -79,7 +109,15 @@ export const RemeshSummary: Component<{ before: MeshCount; after: MeshCount; dev
         <span />
         <span class="text-text-muted">{num(props.after.vertices)} vértices</span>
       </div>
-      <Show when={props.deviationPercent != null}>
+      <Show when={props.deviation}>
+        {(d) => (
+          <p data-remesh-deviation class="text-text-muted">
+            Se aleja del original hasta <span class="text-text">{mm(d().max_mm)}</span> ({short(d().max_percent)} % del tamaño); en
+            promedio {mm(d().mean_mm)}
+          </p>
+        )}
+      </Show>
+      <Show when={!props.deviation && props.deviationPercent != null}>
         <p class="text-text-muted">
           Se aleja del original hasta un <span class="text-text">{props.deviationPercent!.toLocaleString("es", { maximumFractionDigits: 2 })} %</span> del
           tamaño
@@ -95,6 +133,11 @@ export interface RemeshStepProps {
   /** La malla de ahora (triángulos) */
   mesh: { vertices: number; faces: number };
   retopology: RetopologyStepProps & { result?: { vertices: number; quads: number } };
+  simplify: Omit<SimplifyPanelProps, "triangles" | "hasPreview"> & {
+    /** Vista previa calculada, o lo último aplicado */
+    stats?: RemeshStats;
+    statsKind?: "preview" | "applied";
+  };
 }
 
 /**
@@ -135,14 +178,25 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
         <p class="text-xs text-text-muted leading-relaxed">
           {current().what} <span class="text-text-dim">{current().use}</span>
         </p>
-        <Show
-          when={current().id === "retopology"}
-          fallback={
-            <p data-remesh-pending class="text-xs text-text-dim leading-relaxed">
-              Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.
-            </p>
-          }
-        >
+        <Show when={!current().ready}>
+          <p data-remesh-pending class="text-xs text-text-dim leading-relaxed">
+            Este modo todavía no está: llega en las próximas etapas. Mientras, la retopología y la reparación siguen disponibles.
+          </p>
+        </Show>
+        <Show when={current().id === "simplify"}>
+          <SimplifyPanel {...props.simplify} triangles={props.mesh.faces} hasPreview={props.simplify.statsKind === "preview"} />
+          <Show when={props.simplify.stats}>
+            {(s) => (
+              <RemeshSummary
+                title={props.simplify.statsKind === "preview" ? "Vista previa (el modelo no cambió)" : "Aplicado"}
+                before={{ vertices: s().before.vertices, faces: s().before.triangles, faceLabel: "triángulos" }}
+                after={{ vertices: s().after.vertices, faces: s().after.triangles, faceLabel: "triángulos" }}
+                deviation={s().deviation}
+              />
+            )}
+          </Show>
+        </Show>
+        <Show when={current().id === "retopology"}>
           <RetopologyStep {...props.retopology} />
           <Show when={props.retopology.hasResult && props.retopology.result}>
             {(r) => (

@@ -11,6 +11,12 @@ pinocchio-mesh = { workspace = true }
 pinocchio-spatial = { workspace = true }
 thiserror = { workspace = true }
 rayon = { workspace = true }
+# Simplificar (Remallar): meshoptimizer es C++ compilado con cc; detrás de una
+# feature para que wasm no lo compile
+meshopt = { workspace = true, optional = true }
+
+[features]
+simplify = ["dep:meshopt"]
 
 [dev-dependencies]
 pinocchio-mesh = { workspace = true, features = ["converter"] }

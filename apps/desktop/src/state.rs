@@ -137,6 +137,10 @@ pub struct AppState {
     /// Backup de escena antes de reparación
     pub scene_before_repair: Mutex<Option<Scene>>,
 
+    // ── Remallar ──
+    /// Vista previa calculada, a la espera de aplicarse o descartarse
+    pub remesh_preview: Mutex<Option<crate::remesh::Preview>>,
+
     // ── UV de la malla original ──
     /// Backup de malla antes de desplegar la malla original
     pub mesh_before_unwrap: Mutex<Option<Mesh>>,
@@ -201,6 +205,7 @@ impl AppState {
             diagnostics: Mutex::new(None),
             mesh_before_repair: Mutex::new(None),
             scene_before_repair: Mutex::new(None),
+            remesh_preview: Mutex::new(None),
             mesh_before_unwrap: Mutex::new(None),
             scene_before_unwrap: Mutex::new(None),
             print3d_pieces: Mutex::new(None),
@@ -296,6 +301,7 @@ impl AppState {
         *self.original_parts.lock().unwrap() = None;
         *self.joint_centering.lock().unwrap() = None;
         *self.diagnostics.lock().unwrap() = None;
+        *self.remesh_preview.lock().unwrap() = None;
         *self.mesh_before_repair.lock().unwrap() = None;
         *self.scene_before_repair.lock().unwrap() = None;
         *self.mesh_before_unwrap.lock().unwrap() = None;

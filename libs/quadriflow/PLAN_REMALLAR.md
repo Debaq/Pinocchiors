@@ -118,6 +118,29 @@ etapas siguientes", que es el "usar como malla del modelo" del plan) y la tarjet
 en el proyecto (`ui.json` → `remesh.mode`). Prueba: e2e "remallar: los modos con la
 retopología adentro" (la caja de Diseñar pasa sola a malla al ir a Preparar).
 
+*Fase 2 hecha el 2026-10-08*: `quadriflow_core::remesh` (público) con `simplify` (feature
+`simplify` = meshopt; la app la activa) y `deviation` (BVH, en los dos sentidos: vértices de
+cada malla contra la otra y centros de los triángulos nuevos; al simplificar los vértices que
+quedan están sobre el original, así que mirar solo el resultado daría cero). Desvío del plan:
+`simplify` no toma un `Mesh` sino búferes con atributos (posición, UV, normales, grupo por
+vértice) y devuelve índices a los vértices de entrada, para conservar la piel; suelda antes los
+vértices idénticos (STL sin índices) y el límite de error se **verifica midiendo**: el error de
+meshoptimizer (cuádricas) se quedaba corto hasta la mitad, así que si se pasa se busca por
+bisección el límite que da el resultado más chico que cumple (hasta 5 intentos más; la BVH del
+original se arma una vez, `deviation::Reference`). Banco (scratchpad, puente `cad_http`):
+gonfoterio 500k → 2 % en 1,3 s (máx 0,26 %), con límite 0,2 % → 2,6 % en 4,8 s; conejo,
+audiómetro y molde < 0,3 s. La app (`apps/desktop/src/remesh.rs`) simplifica cada malla
+de la escena en su espacio local con todas sus primitivas juntas (el límite entre primitivas
+queda como costura, sin rajarse) y reparte los triángulos de vuelta; UV, normales, pesos y
+colores se conservan porque cada vértice es uno del original. Comandos `remesh_preview` (guarda
+la vista previa con la huella de la malla), `get_remesh_preview_data`, `remesh_discard` y
+`remesh_apply` (reusa la vista previa si la malla y los parámetros son los mismos; si no,
+recalcula: así se rehace sola en los objetos de Diseñar, está en `REPLAYABLE`). Deshacer = copia
+del historial (`undoable`). Visor: "Original / Resultado / Los dos" en la barra del visor
+mientras hay vista previa; "Los dos" dibuja el resultado en alambre despegado un poco por las
+normales. Sin Cancelar: meshoptimizer es una sola llamada y tarda poco. Prueba e2e
+"remallar: simplificar con vista previa, aplicar y deshacer".
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.

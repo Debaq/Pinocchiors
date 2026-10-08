@@ -37,7 +37,7 @@ pinocchio-repair = { workspace = true, features = ["parallel"] }
 pinocchio-print3d = { workspace = true }
 
 # QuadriFlow - Retopology
-quadriflow-core = { workspace = true }
+quadriflow-core = { workspace = true, features = ["simplify"] }
 
 # UV y texturas con capas (GIMP, Krita, Photoshop)
 uv-core = { workspace = true }
