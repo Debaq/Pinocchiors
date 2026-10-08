@@ -33,6 +33,7 @@ import {
   type CadStore,
   type ChamferSecond,
   type Configuration,
+  nextVersionName,
   type Detection,
   type EdgeRef,
   type Extent,
@@ -259,6 +260,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                 <Show when={!ui.assemblyMode()} fallback={<AssemblyPanel store={store} ui={ui} />}>
                   <ParametersSection store={store} />
                   <ConfigurationsSection store={store} />
+                  <VersionsSection store={store} />
                 </Show>
               }>
                 <SketchPanel ui={ui} />
@@ -456,6 +458,112 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
  * reemplaza parámetros y suprime operaciones; la elegida es la que se ve y
  * se exporta.
  */
+/** Fecha corta: "8 oct 2026, 14:05" */
+const versionDate = (iso: string) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("es", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+};
+
+/** Versiones con nombre: instantáneas del diseño para volver a verlas, compararlas o restaurarlas */
+const VersionsSection: Component<{ store: CadStore }> = (props) => {
+  const store = props.store;
+  const versions = () => store.committed()?.versions ?? [];
+  const [name, setName] = createSignal("");
+  const [note, setNote] = createSignal("");
+  const save = () => {
+    void store.saveVersion(name() || nextVersionName(versions()), note());
+    setName("");
+    setNote("");
+  };
+  const input = "min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent";
+  return (
+    <Section title="Versiones">
+      <div class="space-y-1.5" data-versions>
+        <div class="flex gap-1">
+          <input
+            aria-label="Nombre de la versión"
+            placeholder={nextVersionName(versions())}
+            value={name()}
+            class={clsx(input, "flex-1")}
+            onInput={(e) => setName(e.currentTarget.value)}
+            onKeyDown={(e) => e.key === "Enter" && save()}
+          />
+          <Button size="sm" onClick={save} disabled={store.viewing() !== undefined}>
+            Guardar versión
+          </Button>
+        </div>
+        <input
+          aria-label="Nota de la versión"
+          placeholder="Nota (opcional)"
+          value={note()}
+          class={clsx(input, "w-full")}
+          onInput={(e) => setNote(e.currentTarget.value)}
+          onKeyDown={(e) => e.key === "Enter" && save()}
+        />
+        <Show
+          when={versions().length > 0}
+          fallback={
+            <p class="text-[11px] text-text-dim leading-relaxed">
+              Guarda cómo está el diseño ("v1 enviada a imprimir") para verlo después, compararlo con el de ahora o volver a él.
+            </p>
+          }
+        >
+          <For each={versions().map((v, i) => ({ v, i })).reverse()}>
+            {(row) => (
+              <div
+                data-version={row.v.name}
+                class={clsx(
+                  "rounded border px-1.5 py-1 space-y-0.5",
+                  store.viewing() === row.i ? "border-warning/70 bg-warning/5" : "border-border",
+                )}
+              >
+                <div class="flex items-center gap-1">
+                  <input
+                    aria-label={`Nombre de ${row.v.name}`}
+                    value={row.v.name}
+                    class={clsx(input, "flex-1 border-transparent bg-transparent font-medium")}
+                    onChange={(e) => void store.renameVersion(row.i, e.currentTarget.value)}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <span class="text-[10px] text-text-dim shrink-0">{versionDate(row.v.created)}</span>
+                </div>
+                <Show when={row.v.note}>
+                  <p class="text-[11px] text-text-muted px-1.5">{row.v.note}</p>
+                </Show>
+                <div class="flex items-center gap-0.5 -mx-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Ver ${row.v.name}`}
+                    onClick={() => void store.viewVersion(store.viewing() === row.i ? undefined : row.i)}
+                  >
+                    {store.viewing() === row.i ? "Volver" : "Ver"}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label={`Comparar con ${row.v.name}`}
+                    onClick={() => void store.compareVersion(store.comparison()?.version === row.i ? undefined : row.i)}
+                  >
+                    {store.comparison()?.version === row.i ? "Ocultar" : "Comparar"}
+                  </Button>
+                  <Button size="sm" variant="ghost" aria-label={`Restaurar ${row.v.name}`} onClick={() => void store.restoreVersion(row.i)}>
+                    Restaurar
+                  </Button>
+                  <span class="flex-1" />
+                  <IconButton aria-label={`Quitar ${row.v.name}`} size="sm" variant="ghost" onClick={() => void store.deleteVersion(row.i)}>
+                    <Icons.X size={10} />
+                  </IconButton>
+                </div>
+              </div>
+            )}
+          </For>
+        </Show>
+      </div>
+    </Section>
+  );
+};
+
 const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
   const store = props.store;
   const configs = () => store.doc()?.configurations ?? [];

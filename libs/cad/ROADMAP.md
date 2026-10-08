@@ -491,3 +491,8 @@ cargo test -p cad-model
   ángulo, medidos desde una cara o la otra: `BRepFilletAPI_MakeChamfer::Add(d1, d2, E, F)` /
   `AddDA`) y `Fillet.radius2` (de un radio al otro a lo largo de la arista). En el diálogo:
   "Tipo" del chaflán y "Radio variable".
+- **2026-10-08 Versiones con nombre** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): instantáneas del
+  documento con nombre, fecha y nota; ver en solo lectura, comparar (booleanas entre el sólido de
+  ahora y el de la versión, verde lo agregado y rojo lo quitado) y restaurar deshacible. Pruebas:
+  `cad::tests::compare_with_an_older_version` y e2e "versiones: guardar, ver, comparar y
+  restaurar".

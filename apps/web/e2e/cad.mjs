@@ -1693,6 +1693,54 @@ const scenarios = {
     if ((await call("cad_get_document")).active_configuration !== 0) throw new Error("no volvió a la variante elegida");
   },
 
+  async "versiones: guardar, ver, comparar y restaurar"(b) {
+    const vol = async () => (await body()).volume;
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    near(await vol(), 8000, 1e-6, "caja");
+    // Guardar «v1» desde el panel
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Nota de la versión"]'); i.value = "enviada a imprimir"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await b.clickText("Guardar versión");
+    await sleep(1000);
+    const saved = (await call("cad_get_document")).versions;
+    if (saved?.length !== 1 || saved[0].name !== "v1" || saved[0].note !== "enviada a imprimir") throw new Error(`versiones: ${JSON.stringify(saved?.map((v) => [v.name, v.note]))}`);
+    if (saved[0].document.versions) throw new Error("la versión guarda versiones adentro");
+    // Más ancha: 30 × 20 × 20
+    await b.eval(`window.__cadStore.commit((d) => (d.features[0].kind.shape.dx = 30))`);
+    await sleep(1500);
+    near(await vol(), 12000, 1e-6, "más ancha");
+    // Ver v1 en solo lectura: el visor muestra la vieja y no se puede editar
+    await b.eval(`document.querySelector('[aria-label="Ver v1"]').click()`);
+    await sleep(1500);
+    near(await vol(), 8000, 1e-6, "viendo v1");
+    if (!(await b.eval(`!!document.querySelector("[data-viewing]")`))) throw new Error("sin aviso de solo lectura");
+    await b.eval(`window.__cadStore.commit((d) => (d.features[0].kind.shape.dx = 50))`);
+    await sleep(500);
+    if ((await call("cad_get_document")).features[0].kind.shape.dx !== 30) throw new Error("se pudo editar viendo una versión");
+    await b.shot("version_viendo");
+    await b.clickText("Volver al diseño");
+    await sleep(1500);
+    near(await vol(), 12000, 1e-6, "de vuelta");
+    // Comparar: se agregaron 4000 mm³ y no se quitó nada
+    await b.eval(`document.querySelector('[aria-label="Comparar con v1"]').click()`);
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadStore.comparison()`)); t++) await sleep(250);
+    const c = await b.eval(`(() => { const c = window.__cadStore.comparison(); return { added: c.added, removed: c.removed, mesh: !!c.addedMesh, none: !c.removedMesh }; })()`);
+    near(c.added, 4000, 1e-6, "agregado");
+    near(c.removed, 0, 1e-6, "quitado");
+    if (!c.mesh || !c.none) throw new Error(`mallas: ${JSON.stringify(c)}`);
+    await b.shot("version_comparar");
+    // Restaurar: vuelve a 20 de ancho, la versión sigue y se puede deshacer
+    await b.eval(`document.querySelector('[aria-label="Restaurar v1"]').click()`);
+    await sleep(1500);
+    near(await vol(), 8000, 1e-6, "restaurada");
+    if ((await call("cad_get_document")).versions?.length !== 1) throw new Error("restaurar borró las versiones");
+    await b.eval(`window.__cadStore.undo()`);
+    await sleep(1500);
+    near(await vol(), 12000, 1e-6, "deshacer restaurar");
+  },
+
   async "chaflán de dos distancias y redondeo variable"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);

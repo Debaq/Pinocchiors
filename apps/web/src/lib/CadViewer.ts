@@ -132,6 +132,7 @@ export class CadViewer {
   private bodyEdges?: THREE.LineSegments;
   private bodyData: CadMesh | null = null;
   private tool?: THREE.Group;
+  private compare?: THREE.Group;
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
   private sketchGroup = new THREE.Group();
@@ -503,43 +504,76 @@ export class CadViewer {
    * si suma, roja si resta, ámbar si interseca.
    */
   setTool(data: CadMesh | null, op: BodyOp = "join") {
-    if (this.tool) {
-      this.scene.remove(this.tool);
-      this.tool.traverse((o) => {
-        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
-          o.geometry.dispose();
-          (o.material as THREE.Material).dispose();
-        }
-      });
-      this.tool = undefined;
-    }
+    if (this.tool) this.dropGroup(this.tool);
+    this.tool = undefined;
     if (data) {
-      const color = themeHex(op === "join" ? "green" : op === "cut" ? "red" : op === "new" ? "cyan" : "warning");
-      const g = new THREE.BufferGeometry();
-      g.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
-      g.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
-      g.setIndex(new THREE.BufferAttribute(data.indices, 1));
-      g.computeBoundingSphere();
-      const mesh = new THREE.Mesh(
-        g,
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }),
-      );
-      mesh.renderOrder = 4;
-      const segs: number[] = [];
-      let start = 0;
-      for (const end of data.edgeEnds) {
-        for (let i = start; i < end - 1; i++) segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
-        start = end;
-      }
-      const eg = new THREE.BufferGeometry();
-      eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
-      const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false }));
-      lines.renderOrder = 4;
-      this.tool = new THREE.Group();
-      this.tool.add(mesh, lines);
+      this.tool = this.ghost(data, themeHex(op === "join" ? "green" : op === "cut" ? "red" : op === "new" ? "cyan" : "warning"));
       this.scene.add(this.tool);
     }
     this.requestRender();
+  }
+
+  /**
+   * Comparación con una versión: lo agregado desde entonces en verde y lo
+   * quitado en rojo, translúcidos sobre el sólido.
+   */
+  setComparison(added: CadMesh | null, removed: CadMesh | null) {
+    if (this.compare) this.dropGroup(this.compare);
+    this.compare = undefined;
+    if (added || removed) {
+      this.compare = new THREE.Group();
+      if (added) this.compare.add(this.ghost(added, themeHex("green"), 0.45));
+      if (removed) this.compare.add(this.ghost(removed, themeHex("red"), 0.45));
+      this.scene.add(this.compare);
+    }
+    this.requestRender();
+  }
+
+  private dropGroup(group: THREE.Group) {
+    this.scene.remove(group);
+    group.traverse((o) => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+        o.geometry.dispose();
+        (o.material as THREE.Material).dispose();
+      }
+    });
+  }
+
+  /** Malla translúcida con sus aristas siempre visibles */
+  private ghost(data: CadMesh, color: number, opacity = 0.22): THREE.Group {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
+    g.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+    g.setIndex(new THREE.BufferAttribute(data.indices, 1));
+    g.computeBoundingSphere();
+    // Desplazada hacia la cámara: lo agregado coincide con las caras del sólido
+    const mesh = new THREE.Mesh(
+      g,
+      new THREE.MeshBasicMaterial({
+        color,
+        transparent: true,
+        opacity,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -1,
+        polygonOffsetUnits: -4,
+      }),
+    );
+    mesh.renderOrder = 4;
+    const segs: number[] = [];
+    let start = 0;
+    for (const end of data.edgeEnds) {
+      for (let i = start; i < end - 1; i++) segs.push(...data.edgePoints.slice(i * 3, i * 3 + 6));
+      start = end;
+    }
+    const eg = new THREE.BufferGeometry();
+    eg.setAttribute("position", new THREE.BufferAttribute(new Float32Array(segs), 3));
+    const lines = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, depthTest: false }));
+    lines.renderOrder = 4;
+    const group = new THREE.Group();
+    group.add(mesh, lines);
+    return group;
   }
 
   /**
@@ -1246,9 +1280,10 @@ export class CadViewer {
   private applySection() {
     const planes = this.section ? [this.section] : [];
     for (const o of [this.body, this.bodyEdges]) if (o) (o.material as THREE.Material).clippingPlanes = planes;
-    this.tool?.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) (o.material as THREE.Material).clippingPlanes = planes;
-    });
+    for (const group of [this.tool, this.compare])
+      group?.traverse((o) => {
+        if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) (o.material as THREE.Material).clippingPlanes = planes;
+      });
     // Tapa: las caras de atrás suman y las de adelante restan en el stencil;
     // donde queda distinto de cero el plano corta material y se pinta la tapa
     for (const o of [...this.sectionGroup.children]) {
@@ -1491,6 +1526,7 @@ export class CadViewer {
     this.controls.dispose();
     this.setBody(null);
     this.setTool(null);
+    this.setComparison(null, null);
     this.setScan(null);
     this.setSketch(null);
     this.viewCube.dispose();

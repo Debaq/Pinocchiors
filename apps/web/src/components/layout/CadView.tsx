@@ -17,6 +17,9 @@ import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 
+/** mm³ o cm³ según el tamaño */
+const formatVolume = (v: number) => (v >= 1000 ? `${(v / 1000).toLocaleString("es", { maximumFractionDigits: 2 })} cm³` : `${v.toLocaleString("es", { maximumFractionDigits: 1 })} mm³`);
+
 export interface CadViewProps {
   store: CadStore;
   ui: CadUi;
@@ -413,6 +416,11 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => {
     const t = store.tool();
     viewer?.setTool(t?.mesh ?? null, t?.op);
+  });
+  // Comparación con una versión: lo agregado en verde y lo quitado en rojo
+  createEffect(() => {
+    const c = store.comparison();
+    viewer?.setComparison(c?.addedMesh ?? null, c?.removedMesh ?? null);
   });
   createEffect(() => viewer?.setScanHighlight(ui.scanHighlight()));
   createEffect(() => {
@@ -1895,6 +1903,34 @@ export const CadView: Component<CadViewProps> = (props) => {
 
       {/* Mensajes y errores */}
       <div class="absolute bottom-2 left-2 right-2 flex flex-col gap-1 items-start pointer-events-none">
+        {/* Versión abierta en solo lectura */}
+        <Show when={store.viewing() !== undefined && store.committed()?.versions?.[store.viewing()!]}>
+          {(v) => (
+            <div data-viewing class="flex items-center gap-3 rounded-md border border-warning/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
+              <Icons.Eye size={14} class="text-warning" />
+              Viendo «{v().name}» (solo lectura)
+              <button class="text-accent hover:underline" onClick={() => void store.restoreVersion(store.viewing()!)}>
+                Restaurar
+              </button>
+              <button class="text-text-muted hover:text-text" onClick={() => void store.viewVersion(undefined)}>
+                Volver al diseño
+              </button>
+            </div>
+          )}
+        </Show>
+        {/* Comparación con una versión */}
+        <Show when={store.comparison()}>
+          {(c) => (
+            <div data-comparison class="flex items-center gap-3 rounded-md border border-border bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
+              <span>Desde «{store.committed()?.versions?.[c().version]?.name}»:</span>
+              <span class="text-green">+{formatVolume(c().added)}</span>
+              <span class="text-red">−{formatVolume(c().removed)}</span>
+              <button class="text-text-muted hover:text-text" onClick={() => void store.compareVersion(undefined)}>
+                Quitar
+              </button>
+            </div>
+          )}
+        </Show>
         {/* Lo que se espera que el usuario elija (abajo: arriba tapaba la barra) */}
         <Show when={promptText()}>
           <div class="flex items-center gap-3 rounded-md border border-accent/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">

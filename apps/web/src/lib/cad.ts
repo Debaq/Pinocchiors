@@ -320,6 +320,50 @@ export interface CadDocument {
   configurations?: Configuration[];
   /** La que se calcula (ninguna: lo de base) */
   active_configuration?: number | null;
+  /** Instantáneas con nombre (el documento de ese momento, sin sus versiones) */
+  versions?: NamedVersion[];
+}
+
+export interface NamedVersion {
+  name: string;
+  /** Fecha ISO 8601 */
+  created: string;
+  note?: string | null;
+  document: CadDocument;
+}
+
+/** Diferencias del diseño actual con una versión (mallas en coordenadas del visor) */
+export interface VersionComparison {
+  version: number;
+  /** mm³ que están ahora y no estaban */
+  added: number;
+  /** mm³ que estaban y ya no están */
+  removed: number;
+  addedMesh: CadMesh | null;
+  removedMesh: CadMesh | null;
+}
+
+/** Bytes de `cad_compare`: volúmenes (f64), largo de la primera malla y las dos mallas */
+export function decodeComparison(buffer: ArrayBuffer, version: number): VersionComparison {
+  const v = new DataView(buffer);
+  const added = v.getFloat64(0, true);
+  const removed = v.getFloat64(8, true);
+  const len = v.getUint32(16, true);
+  return {
+    version,
+    added,
+    removed,
+    addedMesh: decodeCadMesh(buffer.slice(20, 20 + len)),
+    removedMesh: decodeCadMesh(buffer.slice(20 + len)),
+  };
+}
+
+/** Siguiente nombre libre "v1", "v2"… */
+export function nextVersionName(versions: NamedVersion[] | undefined): string {
+  const used = new Set((versions ?? []).map((v) => v.name));
+  let n = (versions?.length ?? 0) + 1;
+  while (used.has(`v${n}`)) n++;
+  return `v${n}`;
 }
 
 export interface Configuration {
@@ -1942,8 +1986,16 @@ export function createCadStore() {
   const [draft, setDraft] = createSignal<Draft>();
   // Herramienta de la operación en el diálogo (vista previa verde/roja)
   const [tool, setTool] = createSignal<{ mesh: CadMesh; op: BodyOp } | null>(null);
-  // Con un diálogo abierto, todo lo que lee el documento ve el borrador
-  const doc = () => draft()?.doc ?? committed();
+  // Versión abierta en solo lectura (índice en `versions`)
+  const [viewing, setViewing] = createSignal<number>();
+  const [comparison, setComparison] = createSignal<VersionComparison | null>(null);
+  const viewed = () => {
+    const i = viewing();
+    return i === undefined ? undefined : committed()?.versions?.[i]?.document;
+  };
+  // Con un diálogo abierto, todo lo que lee el documento ve el borrador; con
+  // una versión abierta, esa versión
+  const doc = () => draft()?.doc ?? viewed() ?? committed();
   const [result, setResult] = createSignal<CadResult | null>(null);
   const [mesh, setMesh] = createSignal<CadMesh | null>(null);
   const [busy, setBusy] = createSignal(false);
@@ -2026,6 +2078,11 @@ export function createCadStore() {
 
   /** Cambia el documento (deshacible) y recalcula; con un diálogo abierto, cambia el borrador */
   const commit = (mutate: (d: CadDocument) => void) => {
+    if (viewing() !== undefined) {
+      setError("Estás viendo una versión guardada: vuelve al diseño o restáurala para editar");
+      return lastSend;
+    }
+    setComparison(null);
     const d = draft();
     if (d) {
       const next = clone(d.doc);
@@ -2046,6 +2103,7 @@ export function createCadStore() {
   };
 
   const openDraft = (d: Draft) => {
+    if (viewing() !== undefined) return lastSend;
     batch(() => {
       setDraft(d);
       setSelected(d.feature);
@@ -2140,6 +2198,8 @@ export function createCadStore() {
     /** Trae el documento del backend (al abrir un proyecto o empezar uno nuevo) */
     async reload() {
       const d = await invoke<CadDocument | null>("cad_get_document");
+      setViewing(undefined);
+      setComparison(null);
       undoStack.length = 0;
       redoStack.length = 0;
       setHistoryVersion((v) => v + 1);
@@ -2302,6 +2362,7 @@ export function createCadStore() {
 
     /** Con un diálogo abierto, deshacer lo cancela */
     undo() {
+      if (viewing() !== undefined) return;
       if (draft()) return void cancelDraft();
       const prev = undoStack.pop();
       if (!prev) return;
@@ -2313,7 +2374,7 @@ export function createCadStore() {
     },
 
     redo() {
-      if (draft()) return;
+      if (draft() || viewing() !== undefined) return;
       const next = redoStack.pop();
       if (!next) return;
       const current = doc();
@@ -2321,6 +2382,81 @@ export function createCadStore() {
       setHistoryVersion((v) => v + 1);
       setDoc(next);
       void send(next);
+    },
+
+    // ─── Versiones con nombre ───
+    /** Índice de la versión abierta en solo lectura */
+    viewing,
+    /** Diferencias con una versión (lo agregado y lo quitado), para el visor */
+    comparison,
+    /** Guarda el diseño de ahora como versión con nombre */
+    saveVersion(name: string, note?: string) {
+      if (draft()) void acceptDraft();
+      return commit((d) => {
+        const { versions, ...rest } = d;
+        const snapshot = clone(rest as CadDocument);
+        d.versions = [
+          ...(versions ?? []),
+          { name: name.trim() || nextVersionName(versions), created: new Date().toISOString(), note: note?.trim() || undefined, document: snapshot },
+        ];
+      });
+    },
+    renameVersion(i: number, name: string, note?: string) {
+      return commit((d) => {
+        const v = d.versions?.[i];
+        if (!v) return;
+        if (name.trim()) v.name = name.trim();
+        if (note !== undefined) v.note = note.trim() || undefined;
+      });
+    },
+    deleteVersion(i: number) {
+      if (viewing() === i) void store.viewVersion(undefined);
+      return commit((d) => {
+        d.versions?.splice(i, 1);
+        if (d.versions?.length === 0) delete d.versions;
+      });
+    },
+    /** Abre una versión en solo lectura (`undefined` vuelve al diseño) */
+    viewVersion(i: number | undefined) {
+      if (draft()) void acceptDraft();
+      const v = i === undefined ? undefined : committed()?.versions?.[i];
+      batch(() => {
+        setViewing(v ? i : undefined);
+        setSelected(undefined);
+        setComparison(null);
+      });
+      return send(v ? v.document : null, true);
+    },
+    /** Vuelve el diseño a una versión (deshacible); las versiones se conservan */
+    restoreVersion(i: number) {
+      const v = committed()?.versions?.[i];
+      if (!v) return lastSend;
+      if (draft()) void acceptDraft();
+      batch(() => {
+        setViewing(undefined);
+        setSelected(undefined);
+      });
+      return commit((d) => {
+        const versions = d.versions;
+        for (const k of Object.keys(d)) delete (d as unknown as Record<string, unknown>)[k];
+        Object.assign(d, clone(v.document), { versions });
+      });
+    },
+    /** Compara el diseño guardado con una versión (`undefined` quita la comparación) */
+    async compareVersion(i: number | undefined) {
+      const v = i === undefined ? undefined : committed()?.versions?.[i];
+      if (!v) return void setComparison(null);
+      if (viewing() !== undefined) await store.viewVersion(undefined);
+      await lastSend;
+      setBusy(true);
+      try {
+        const buf = await invoke<ArrayBuffer>("cad_compare", { document: v.document });
+        setComparison(decodeComparison(buf, i!));
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setBusy(false);
+      }
     },
 
     stateOf(id: number): FeatureStatus | undefined {

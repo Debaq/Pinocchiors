@@ -79,6 +79,20 @@ pub struct Document {
     /// La que se calcula (ninguna = lo de base).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_configuration: Option<usize>,
+    /// Instantáneas con nombre ("v1 enviada a imprimir"): el documento entero
+    /// de ese momento, sin sus propias versiones. No cambian el diseño.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub versions: Vec<NamedVersion>,
+}
+
+/// Una versión guardada: nombre, fecha (ISO 8601), nota y el documento.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NamedVersion {
+    pub name: String,
+    pub created: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+    pub document: Document,
 }
 
 /// Una variante: parámetro → expresión que lo reemplaza, y operaciones que se

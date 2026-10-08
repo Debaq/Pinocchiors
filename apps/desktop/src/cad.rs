@@ -147,7 +147,7 @@ fn doc_hash(doc: &Document) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     // El JSON es estable y cubre todo el documento; el material, las carpetas
     // y los nombres y colores de piezas no cambian la geometría: no recalculan
-    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, ..doc.clone() };
+    let doc = Document { material: None, folders: Vec::new(), parts: Vec::new(), assembly: None, drawing: None, versions: Vec::new(), ..doc.clone() };
     serde_json::to_string(&doc).unwrap_or_default().hash(&mut h);
     h.finish()
 }
@@ -500,6 +500,44 @@ fn tool_mesh_impl(state: &AppState, feature: cad_model::FeatureId) -> Result<Vec
         Some((shape, _)) => encode_view_mesh(shape, scale),
         None => Ok(vec![0; 16]),
     }
+}
+
+/// Diferencias entre el diseño guardado y otra versión: lo que se agregó
+/// (está ahora y no estaba) y lo que se quitó (estaba y ya no está). Bytes:
+/// volumen agregado y quitado (f64), largo de la primera malla (u32) y las dos
+/// mallas en el formato de [`cad_mesh`].
+#[tauri::command]
+pub async fn cad_compare(app: AppHandle, document: Document) -> Result<Response, String> {
+    require_occt()?;
+    in_background(app, move |state| compare_impl(state, &document).map(Response::new)).await
+}
+
+fn compare_impl(state: &AppState, other: &Document) -> Result<Vec<u8>, String> {
+    evaluate_committed(state)?;
+    let now = state.cad_cache.lock().unwrap().as_ref().and_then(|c| c.eval.body.clone());
+    let then = other.evaluate_with(&mut state.cad_ops.lock().unwrap()).body;
+    let scale = 1.0 / mm_per_unit(state);
+    let diff = |a: &Option<cad_model::Shape>, b: &Option<cad_model::Shape>| -> Result<Option<cad_model::Shape>, String> {
+        match (a, b) {
+            (None, _) => Ok(None),
+            (Some(a), None) => Ok(Some(a.clone())),
+            (Some(a), Some(b)) => a.cut(b).map(Some).map_err(|e| e.to_string()),
+        }
+    };
+    let volume = |s: &Option<cad_model::Shape>| s.as_ref().and_then(|s| s.mass().ok()).map_or(0.0, |m| m.volume);
+    let mesh = |s: &Option<cad_model::Shape>| match s {
+        Some(s) if s.mass().is_ok_and(|m| m.volume > 1e-9) => encode_view_mesh(s, scale),
+        _ => Ok(vec![0; 16]),
+    };
+    let (added, removed) = (diff(&now, &then)?, diff(&then, &now)?);
+    let (a, r) = (mesh(&added)?, mesh(&removed)?);
+    let mut out = Vec::with_capacity(20 + a.len() + r.len());
+    out.extend_from_slice(&volume(&added).to_le_bytes());
+    out.extend_from_slice(&volume(&removed).to_le_bytes());
+    out.extend_from_slice(&(a.len() as u32).to_le_bytes());
+    out.extend(a);
+    out.extend(r);
+    Ok(out)
 }
 
 /// Teselado para el visor: posiciones y normales (Y arriba, unidades de la
@@ -1363,6 +1401,7 @@ pub mod bridge {
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
+            "cad_compare" => compare_impl(state, &arg::<Document>(args, "document")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
@@ -1480,6 +1519,31 @@ mod tests {
         let text = String::from_utf8_lossy(&pdf);
         let mb = text.find("MediaBox").map(|i| text[i..i + 60].to_string());
         assert!(text.contains("841.8") && text.contains("595.2"), "tamaño de página: {mb:?}");
+    }
+
+    #[test]
+    fn compare_with_an_older_version() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        // Antes 10×20×30; ahora 10×20×40: se agregaron 2000 mm³ y no se quitó nada
+        let old = box_doc();
+        let mut now = box_doc();
+        if let FeatureKind::Primitive(p) = &mut now.features[0].kind {
+            p.shape = cad_model::PrimitiveShape::Box { dx: 10.0, dy: 20.0, dz: 40.0, centered: false, centered_z: false };
+        }
+        now.versions.push(cad_model::NamedVersion { name: "v1".into(), created: "2026-10-08T10:00:00Z".into(), note: None, document: old.clone() });
+        let h = doc_hash(&now);
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(now);
+        let out = compare_impl(&state, &old).unwrap();
+        let f = |i: usize| f64::from_le_bytes(out[i..i + 8].try_into().unwrap());
+        assert!((f(0) - 2000.0).abs() < 1e-6, "agregado {}", f(0));
+        assert!(f(8).abs() < 1e-6, "quitado {}", f(8));
+        // Las versiones no cambian el diseño
+        let mut doc = state.cad_document.lock().unwrap().clone().unwrap();
+        doc.versions.clear();
+        assert_eq!(doc_hash(&doc), h);
     }
 
     #[test]

@@ -34,6 +34,13 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
 - **Por dónde empezar**: lista de versiones con nombre dentro del proyecto, "abrir versión" en
   solo lectura y "restaurar". Comparar dos versiones = mapa de diferencias de volumen (booleana
   entre ambos sólidos). Las ramas y la fusión, mucho después.
+- *Hecho el 2026-10-08*: `Document.versions: Vec<NamedVersion { name, created (ISO), note,
+  document }>` (la instantánea va sin sus propias versiones; no entran al hash del recálculo, así
+  que guardar una no recalcula). Sección Versiones en la pestaña Diseño: guardar con nombre y
+  nota, **Ver** (el visor y el árbol muestran esa versión en solo lectura; editar avisa y no
+  cambia nada; aviso con Restaurar / Volver al diseño), **Comparar** (`cad_compare`: ahora − antes
+  en verde y antes − ahora en rojo, translúcidos, con los volúmenes) y **Restaurar** (deshacible;
+  las versiones se conservan). Se guardan en el `.pinocchio` con el documento.
 
 ## Configuraciones
 
