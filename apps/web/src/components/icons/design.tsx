@@ -238,6 +238,28 @@ export const Thread = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Bolt = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M6 3 H18 V8 H6 Z" {...soft} />
+    <path d="M9 8 V19 L12 21 L15 19 V8" />
+    <path d="M9 11 L15 12.5 M9 14 L15 15.5 M9 17 L15 18.5" />
+  </DesignIcon>
+);
+
+export const Nut = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M12 3 L19.8 7.5 V16.5 L12 21 L4.2 16.5 V7.5 Z" {...soft} />
+    <circle cx="12" cy="12" r="3.5" />
+  </DesignIcon>
+);
+
+export const Washer = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <circle cx="12" cy="12" r="8.5" {...soft} />
+    <circle cx="12" cy="12" r="3.5" />
+  </DesignIcon>
+);
+
 export const Rib = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M3 20 H21 M5 20 V6 H8 V20" />

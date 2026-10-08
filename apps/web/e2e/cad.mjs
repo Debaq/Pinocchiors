@@ -1741,6 +1741,56 @@ const scenarios = {
     near(await vol(), 12000, 1e-6, "deshacer restaurar");
   },
 
+  async "piezas estándar: tornillo en un agujero y tuerca roscada"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const filter = (label) => b.eval(`[...document.querySelectorAll('[role=radio]')].find((e) => e.textContent === ${JSON.stringify(label)}).click()`);
+    const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1)))`);
+    await begin(b);
+    // Placa de 40×40×10 con un agujero pasante de 6,6 (M6)
+    const doc = await call("cad_get_document");
+    const prim = (shape, origin, op) => ({ id: doc.next_id++, name: shape.type, suppressed: false, kind: { type: "primitive", shape, origin, z: [0, 0, 1], x: [1, 0, 0], op } });
+    doc.features.push(prim({ type: "box", dx: 40, dy: 40, dz: 10, centered: true }, [0, 0, 0], "join"));
+    doc.features.push(prim({ type: "cylinder", radius: 3.3, height: 20 }, [0, 0, -5], "cut"));
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    await sleep(500);
+    // Borde de arriba del agujero → Tornillo: M6, apoyado en la cara, largo para placa + tuerca
+    await filter("Aristas");
+    await b.click(...(await at([-3.3, 0, 10])), { wait: 800 });
+    const picked = await b.eval(`window.__cadUi.picks().map((p) => p.kind)`);
+    if (picked.join() !== "edge") throw new Error(`elegido: ${picked}`);
+    await b.clickText("Tornillo");
+    for (let t = 0; t < 20 && (await last()).kind.shape.type !== "bolt"; t++) await sleep(250);
+    await sleep(1500);
+    const bolt = (await last()).kind;
+    if (bolt.shape.size !== "M6" || bolt.shape.length !== 20 || bolt.op !== "new") throw new Error(`tornillo: ${JSON.stringify(bolt)}`);
+    near(bolt.origin[2], 10, 1e-6, "apoyo");
+    near(bolt.z[2], 1, 1e-6, "eje");
+    await accept(b, 2000);
+    let parts = (await evaluate()).parts;
+    if (parts.length !== 2 || parts[1].name !== "Tornillo Allen M6×20") throw new Error(`piezas: ${parts.map((p) => p.name)}`);
+    await b.shot("tornillo_en_agujero");
+    // Tuerca suelta, y con rosca modelada pierde el filete
+    await filter("Todo");
+    await b.clickText("Tuerca");
+    for (let t = 0; t < 20 && (await last()).kind.shape.type !== "nut"; t++) await sleep(250);
+    await sleep(1500);
+    await b.eval(`window.__cadStore.commit((d) => (d.features.at(-1).kind.origin = [0, 0, -12]))`);
+    await sleep(1500);
+    const plain = (await evaluate()).parts[2].volume;
+    await b.clickText("Rosca modelada");
+    for (let t = 0; t < 40 && !(await b.eval(`!!window.__cadStore.doc().features.at(-1).kind.shape.modeled && !window.__cadStore.busy()`)); t++) await sleep(250);
+    await sleep(500);
+    await accept(b, 3000);
+    parts = (await evaluate()).parts;
+    if (parts[2]?.name !== "Tuerca M6") throw new Error(`tuerca: ${parts.map((p) => p.name)}`);
+    // Lo que queda entre el agujero liso de 6 y el macho M6: unos 5,3 mm³ por mm de alto (≈ 27,6)
+    if (!(parts[2].volume > plain + 22 && parts[2].volume < plain + 33)) throw new Error(`tuerca roscada ${parts[2].volume} vs lisa ${plain}`);
+    await b.shot("tuerca_roscada");
+  },
+
   async "chaflán de dos distancias y redondeo variable"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);

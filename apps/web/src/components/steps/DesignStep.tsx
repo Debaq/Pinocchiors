@@ -9,6 +9,8 @@ import {
   MATERIALS,
   MATE_LABELS,
   METRIC_HOLES,
+  BOLT_HEADS,
+  type BoltHead,
   designMass,
   partColor,
   partHidden,
@@ -1291,9 +1293,39 @@ export const FeatureEditor: Component<{
                 cone: [["r1", "Radio abajo"], ["r2", "Radio arriba"], ["height", "Alto"]],
                 sphere: [["radius", "Radio"]],
                 torus: [["major", "Radio mayor"], ["minor", "Radio menor"]],
+                bolt: [["length", "Largo"]],
+                nut: [],
+                washer: [],
               };
+              type Standard = Extract<PrimitiveShape, { type: "bolt" | "nut" | "washer" }>;
+              const standard = () => (["bolt", "nut", "washer"].includes(k().shape.type) ? (k().shape as Standard) : undefined);
               return (
                 <>
+                  {/* Pieza estándar: medida, cabeza y rosca */}
+                  <Show when={standard()}>
+                    {(st) => (
+                      <>
+                        <Row label="Medida">
+                          <Select
+                            options={METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))}
+                            value={st().size}
+                            onChange={(v) => update((x) => x.type === "primitive" && "size" in x.shape && (x.shape.size = v))}
+                          />
+                        </Row>
+                        <Show when={st().type === "bolt" && (st() as Extract<PrimitiveShape, { type: "bolt" }>)}>
+                          {(b) => (
+                            <Row label="Cabeza">
+                              <Select
+                                options={BOLT_HEADS}
+                                value={b().head ?? "socket"}
+                                onChange={(v) => update((x) => x.type === "primitive" && x.shape.type === "bolt" && (x.shape.head = v as BoltHead))}
+                              />
+                            </Row>
+                          )}
+                        </Show>
+                      </>
+                    )}
+                  </Show>
                   <For each={fields[k().shape.type]}>
                     {([key, label]) => (
                       field(label, `kind.shape.${key}`, (k().shape as unknown as Record<string, number>)[key], (x, v) => {
@@ -1301,6 +1333,20 @@ export const FeatureEditor: Component<{
                       }, "mm")
                     )}
                   </For>
+                  <Show when={k().shape.type === "bolt" || k().shape.type === "nut"}>
+                    <Tooltip content="El filete de verdad (para imprimir); sin marcar, un cilindro liso, más rápido">
+                      <Checkbox
+                        small
+                        label="Rosca modelada"
+                        checked={!!(standard() as { modeled?: boolean } | undefined)?.modeled}
+                        onChange={(c) =>
+                          update((x) => {
+                            if (x.type === "primitive" && (x.shape.type === "bolt" || x.shape.type === "nut")) x.shape.modeled = c || undefined;
+                          })
+                        }
+                      />
+                    </Tooltip>
+                  </Show>
                   <Show when={k().shape.type === "box" && (k().shape as Extract<PrimitiveShape, { type: "box" }>)}>
                     {(bx) => (
                       <Row label="Origen en">

@@ -307,7 +307,17 @@ void record(BRepBuilderAPI_MakeShape& mk, const std::vector<TopoDS_Shape>& input
 }
 
 TopoDS_Shape boolean_op(const TopoDS_Shape& a, const TopoDS_Shape& b, int32_t op) {
+    // Armada vacía: el constructor con las dos formas ya calcula, y el Build
+    // de abajo la volvía a calcular entera (cada booleana costaba el doble)
     auto finish = [&](BRepAlgoAPI_BooleanOperation& algo) {
+        TopTools_ListOfShape args, tools;
+        args.Append(a);
+        tools.Append(b);
+        algo.SetArguments(args);
+        algo.SetTools(tools);
+        // Sin cajas orientadas: con un medio espacio (cortar por plano) es
+        // infinito y la caja lo dejaba fuera (el resultado salía vacío)
+        algo.SetRunParallel(Standard_True);
         algo.Build();
         if (algo.HasErrors() || !algo.IsDone()) throw Standard_Failure("la operación booleana falló");
         algo.SimplifyResult();
@@ -316,15 +326,15 @@ TopoDS_Shape boolean_op(const TopoDS_Shape& a, const TopoDS_Shape& b, int32_t op
         return r;
     };
     if (op == 0) {
-        BRepAlgoAPI_Fuse f(a, b);
+        BRepAlgoAPI_Fuse f;
         return finish(f);
     }
     if (op == 1) {
-        BRepAlgoAPI_Cut c(a, b);
+        BRepAlgoAPI_Cut c;
         return finish(c);
     }
     if (op == 2) {
-        BRepAlgoAPI_Common c(a, b);
+        BRepAlgoAPI_Common c;
         return finish(c);
     }
     throw Standard_Failure("operación booleana desconocida");
@@ -568,6 +578,7 @@ CadShape* cad_fuse_many(const CadShape* const* shapes, int32_t n) {
         BRepAlgoAPI_Fuse f;
         f.SetArguments(args);
         f.SetTools(tools);
+        f.SetRunParallel(Standard_True);
         f.Build();
         if (f.HasErrors() || !f.IsDone()) throw Standard_Failure("la unión falló");
         f.SimplifyResult();
@@ -1039,7 +1050,7 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
 }
 
 CadShape* cad_make_thread(const double* origin, const double* dir, double r_minor, double r_major, double pitch,
-                          double length, int32_t left) {
+                          double length, int32_t left, int32_t chamfer) {
     return guard("rosca", (CadShape*)nullptr, [&] {
         if (!(r_minor > 0 && r_major > r_minor && pitch > 0 && length > 0))
             throw Standard_Failure("la rosca necesita radio menor < mayor, paso y largo positivos");
@@ -1090,9 +1101,45 @@ CadShape* cad_make_thread(const double* origin, const double* dir, double r_mino
         if (!mk.MakeSolid()) throw Standard_Failure("el filete no cierra un sólido");
         gp_Ax2 core_ax(ax.Location(), z, ax.XDirection());
         TopoDS_Shape core = BRepPrimAPI_MakeCylinder(core_ax, r_minor, length + 2 * pitch).Shape();
-        TopoDS_Shape rod = BRepAlgoAPI_Fuse(core, mk.Shape()).Shape();
-        gp_Ax2 clip_ax(base.Location(), z, base.XDirection());
-        TopoDS_Shape clip = BRepPrimAPI_MakeCylinder(clip_ax, r_major * 1.5, length).Shape();
+        // La unión hélice-núcleo es lo caro (cada flanco corta al cilindro en
+        // una hélice): en paralelo y con cajas orientadas, un 30 % menos
+        BRepAlgoAPI_Fuse fu;
+        {
+            TopTools_ListOfShape args, tools;
+            args.Append(core);
+            tools.Append(mk.Shape());
+            fu.SetArguments(args);
+            fu.SetTools(tools);
+            fu.SetRunParallel(Standard_True);
+            fu.SetUseOBB(Standard_True);
+            fu.Build();
+        }
+        if (!fu.IsDone()) throw Standard_Failure("no se pudo unir el filete al núcleo");
+        TopoDS_Shape rod = fu.Shape();
+        // Recorte al largo; con `chamfer`, la punta del comienzo achaflanada a
+        // 45° desde el diámetro menor (como la punta de un tornillo), en la
+        // misma booleana
+        TopoDS_Shape clip;
+        double big = r_major * 1.5;
+        if (chamfer) {
+            double r0 = std::max(r_minor - eps, 0.1 * r_minor);
+            double rise = std::min(big - r0, length);
+            gp_Pnt o = base.Location();
+            gp_Vec bx(base.XDirection());
+            auto q = [&](double r, double a) { return o.Translated(bx * r + zv * a); };
+            BRepBuilderAPI_MakePolygon prof;
+            prof.Add(q(0, 0));
+            prof.Add(q(r0, 0));
+            prof.Add(q(r0 + rise, rise));
+            if (rise < length) prof.Add(q(r0 + rise, length));
+            prof.Add(q(0, length));
+            prof.Close();
+            TopoDS_Face pf = BRepBuilderAPI_MakeFace(prof.Wire(), Standard_True).Face();
+            clip = BRepPrimAPI_MakeRevol(pf, gp_Ax1(o, z), 2 * M_PI).Shape();
+        } else {
+            gp_Ax2 clip_ax(base.Location(), z, base.XDirection());
+            clip = BRepPrimAPI_MakeCylinder(clip_ax, big, length).Shape();
+        }
         return wrap_checked(BRepAlgoAPI_Common(rod, clip).Shape(), "rosca");
     });
 }

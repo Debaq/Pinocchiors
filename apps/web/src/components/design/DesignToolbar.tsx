@@ -123,6 +123,10 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Cono", icon: D.Cone, run: () => a.addPrimitive({ type: "cone", r1: 10, r2: 0, height: 20 }) },
     { label: "Toro", icon: D.Torus, run: () => a.addPrimitive({ type: "torus", major: 15, minor: 4 }) },
     "-",
+    { label: "Tornillo", icon: D.Bolt, run: () => void a.addStandard("bolt"), tip: "Tornillo métrico ISO; con el borde de un agujero elegido se coloca ahí con la medida y el largo que calzan" },
+    { label: "Tuerca", icon: D.Nut, run: () => void a.addStandard("nut"), tip: "Tuerca hexagonal ISO 4032; en el borde de un agujero elegido" },
+    { label: "Arandela", icon: D.Washer, run: () => void a.addStandard("washer"), tip: "Arandela plana ISO 7089; en el borde de un agujero elegido" },
+    "-",
     { label: "STEP...", icon: D.Import, run: () => void a.importStep(), tip: "Traer un sólido de un archivo STEP" },
   ];
   const modify: (Tool | "-")[] = [

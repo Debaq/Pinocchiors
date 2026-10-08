@@ -194,7 +194,34 @@ export type PrimitiveShape =
   | { type: "cylinder"; radius: number; height: number }
   | { type: "cone"; r1: number; r2: number; height: number }
   | { type: "sphere"; radius: number }
-  | { type: "torus"; major: number; minor: number };
+  | { type: "torus"; major: number; minor: number }
+  /** Tornillo métrico: largo bajo la cabeza (el total en el avellanado) */
+  | { type: "bolt"; size: string; length: number; head?: BoltHead; modeled?: boolean }
+  | { type: "nut"; size: string; modeled?: boolean }
+  | { type: "washer"; size: string };
+
+/** Hexagonal (ISO 4017), Allen (ISO 4762) o avellanada Allen (ISO 10642) */
+export type BoltHead = "hex" | "socket" | "countersunk";
+
+export const BOLT_HEADS: { value: BoltHead; label: string }[] = [
+  { value: "socket", label: "Allen (ISO 4762)" },
+  { value: "hex", label: "Hexagonal (ISO 4017)" },
+  { value: "countersunk", label: "Avellanada (ISO 10642)" },
+];
+
+/** Largos normales de tornillos (mm) */
+export const BOLT_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 80, 90, 100, 110, 120];
+
+/** Dónde apoyar una pieza estándar en el borde de un agujero (`cad_edge_seat`) */
+export interface Seat {
+  origin: P3;
+  z: P3;
+  x: P3;
+  diameter: number;
+  size: string;
+  /** Material atravesado al lado del agujero */
+  depth?: number | null;
+}
 
 export type PatternKind =
   | { type: "linear"; direction: P3; count: number; spacing: number }
@@ -822,7 +849,21 @@ export const METRIC_HOLES: { size: string; nominal: number; pitch: number; tap: 
   { size: "M8", nominal: 8, pitch: 1.25, tap: 6.8, clearance: 9, cbore: 15, cboreDepth: 8, csink: 16.4 },
   { size: "M10", nominal: 10, pitch: 1.5, tap: 8.5, clearance: 11, cbore: 18, cboreDepth: 10, csink: 20.4 },
   { size: "M12", nominal: 12, pitch: 1.75, tap: 10.2, clearance: 13.5, cbore: 20, cboreDepth: 12, csink: 24.4 },
+  { size: "M16", nominal: 16, pitch: 2, tap: 14, clearance: 17.5, cbore: 26, cboreDepth: 16, csink: 32.4 },
 ];
+
+/** Alto de la tuerca hexagonal ISO 4032 por medida */
+export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4, M4: 3.2, M5: 4.7, M6: 5.2, M8: 6.8, M10: 8.4, M12: 10.8, M16: 14.8 };
+
+/**
+ * Largo de tornillo para atravesar `depth` mm: con tuerca (pasante) suma la
+ * tuerca y dos pasos; si no, el largo normal más cercano por arriba.
+ */
+export function boltLengthFor(size: string, depth: number, withNut: boolean): number {
+  const m = METRIC_HOLES.find((h) => h.size === size);
+  const need = depth + (withNut && m ? (NUT_HEIGHT[size] ?? m.nominal) + 2 * m.pitch : 0);
+  return BOLT_LENGTHS.find((l) => l >= need - 1e-6) ?? Math.ceil(need);
+}
 
 export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };
 
@@ -850,7 +891,16 @@ function nextFeatureId(doc: CadDocument): number {
   return Math.max(max, doc.next_id ?? 0);
 }
 
-const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = { box: "Caja", cylinder: "Cilindro", cone: "Cono", sphere: "Esfera", torus: "Toro" };
+const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
+  box: "Caja",
+  cylinder: "Cilindro",
+  cone: "Cono",
+  sphere: "Esfera",
+  torus: "Toro",
+  bolt: "Tornillo",
+  nut: "Tuerca",
+  washer: "Arandela",
+};
 
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
@@ -2165,6 +2215,8 @@ export function createCadStore() {
       setDraft(nd);
       return send(previewDocument(nd), true);
     },
+    /** Apoyo para una pieza estándar en el borde circular `edge` */
+    edgeSeat: (edge: number) => invoke<Seat>("cad_edge_seat", { edge }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
     result,
     mesh,

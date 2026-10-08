@@ -1317,16 +1317,22 @@ impl Ctx<'_> {
             }
             FeatureKind::Primitive(p) => {
                 let frame = Frame { origin: p.origin, z: p.z, x: p.x };
-                let tool = match p.shape {
+                let tool = match &p.shape {
                     PrimitiveShape::Box { dx, dy, dz, centered, centered_z } => {
+                        let (dx, dy, dz, centered, centered_z) = (*dx, *dy, *dz, *centered, *centered_z);
                         let frame = if centered { box_centered(frame, dx, dy) } else { frame };
                         let frame = if centered_z { Frame { origin: sub(frame.origin, scale(normalize(frame.z), dz / 2.0)), ..frame } } else { frame };
                         Shape::make_box(frame, dx, dy, dz)
                     }
-                    PrimitiveShape::Cylinder { radius, height } => Shape::cylinder(frame, radius, height),
-                    PrimitiveShape::Cone { r1, r2, height } => Shape::cone(frame, r1, r2, height),
-                    PrimitiveShape::Sphere { radius } => Shape::sphere(p.origin, radius),
-                    PrimitiveShape::Torus { major, minor } => Shape::torus(frame, major, minor),
+                    PrimitiveShape::Cylinder { radius, height } => Shape::cylinder(frame, *radius, *height),
+                    PrimitiveShape::Cone { r1, r2, height } => Shape::cone(frame, *r1, *r2, *height),
+                    PrimitiveShape::Sphere { radius } => Shape::sphere(p.origin, *radius),
+                    PrimitiveShape::Torus { major, minor } => Shape::torus(frame, *major, *minor),
+                    PrimitiveShape::Bolt { size, length, head, modeled } => {
+                        Ok(crate::standard::bolt(frame, size, *length, *head, *modeled)?)
+                    }
+                    PrimitiveShape::Nut { size, modeled } => Ok(crate::standard::nut(frame, size, *modeled)?),
+                    PrimitiveShape::Washer { size } => Ok(crate::standard::washer(frame, size)?),
                 }
                 .map_err(err)?;
                 let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
@@ -2055,6 +2061,11 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
     let z = normalize(p.z);
     let x = normalize(sub(p.x, scale(z, dot(p.x, z))));
     let y = cross(z, x);
+    // Las piezas estándar se nombran por índice: sin medir cada cara (el área
+    // de las caras de una rosca se integra y tardaba segundos)
+    if matches!(p.shape, PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. }) {
+        return (0..shape.face_count()).map(|i| vec![tag(id, format!("cara:{i}"))]).collect();
+    }
     (0..shape.face_count())
         .map(|i| {
             let Ok(info) = shape.face_info(i) else { return vec![] };
@@ -2075,6 +2086,7 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
                     .to_string(),
                 ),
                 PrimitiveShape::Sphere { .. } | PrimitiveShape::Torus { .. } => Some("lado".to_string()),
+                PrimitiveShape::Bolt { .. } | PrimitiveShape::Nut { .. } | PrimitiveShape::Washer { .. } => unreachable!(),
             };
             name.map(|n| vec![tag(id, n)]).unwrap_or_default()
         })

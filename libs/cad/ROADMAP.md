@@ -496,3 +496,19 @@ cargo test -p cad-model
   ahora y el de la versión, verde lo agregado y rojo lo quitado) y restaurar deshacible. Pruebas:
   `cad::tests::compare_with_an_older_version` y e2e "versiones: guardar, ver, comparar y
   restaurar".
+- **2026-10-08 Piezas estándar** (`cad_model::standard`): primitivas `Bolt` (cabeza hexagonal
+  ISO 4017, Allen ISO 4762, avellanada ISO 10642), `Nut` (ISO 4032) y `Washer` (ISO 7089), M2 a
+  M16, con la rosca modelada como opción (la punta del tornillo se achaflana en el mismo recorte
+  de la rosca: `Shape::thread_pointed`). Marco: origen en la cara de apoyo y Z saliendo del
+  material. En Sólidos → Tornillo / Tuerca / Arandela; con el borde de un agujero elegido,
+  `cad_edge_seat` da el apoyo, la medida (pasante ISO 273, broca o diámetro menor) y el espesor
+  (el largo del tornillo alcanza para la tuerca). Van como pieza nueva y se llaman por catálogo
+  ("Tornillo Allen M6×20") en piezas, ensamble y lista de materiales.
+  - Rendimiento, de paso: `boolean_op` armaba la booleana con el constructor de dos formas (que
+    ya calcula) y después llamaba a `Build()`: **todas las booleanas se calculaban dos veces**.
+    Ahora se arma vacía y en paralelo (sin cajas orientadas: con el medio espacio de "cortar por
+    plano" el resultado salía vacío). La masa del sólido y de las piezas se guarda por huella
+    (con roscas tardaba ~0,7 s y se recalculaba en cada clic) y las caras de las piezas estándar
+    se etiquetan sin medirlas. Tuerca M8 roscada 4,2 → 2,2 s; tornillo M8×25 roscado 7,3 → 4,4 s;
+    documento con los dos 16 → 6,5 s. Lo que queda es la unión hélice-núcleo de la rosca.
+

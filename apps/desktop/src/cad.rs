@@ -37,6 +37,35 @@ pub struct CadCache {
     /// El recálculo anterior: ir y volver entre el borrador de una operación y
     /// el documento (cancelar, exportar con el diálogo abierto) no recalcula
     pub previous: Option<(u64, cad_model::Evaluation)>,
+    /// Medidas ya calculadas por huella (con roscas, la masa tarda casi un
+    /// segundo y se pedía en cada clic)
+    pub measures: Vec<(u64, Measures)>,
+}
+
+/// Masa del sólido y de cada pieza, que solo dependen de la geometría.
+#[derive(Clone)]
+pub struct Measures {
+    body: Option<BodyInfo>,
+    parts: Vec<Option<cad_model::occt::MassInfo>>,
+}
+
+fn measures(eval: &cad_model::Evaluation) -> Measures {
+    let body = eval.body.as_ref().and_then(|b| {
+        let m = b.mass().ok()?;
+        Some(BodyInfo {
+            volume: m.volume,
+            area: m.area,
+            bbox_min: m.bbox_min,
+            bbox_max: m.bbox_max,
+            faces: b.face_count(),
+            edges: b.edge_count(),
+            valid: b.is_valid(),
+            center: m.center,
+            inertia: m.inertia,
+            axes: m.axes,
+        })
+    });
+    Measures { body, parts: eval.parts.iter().map(|p| p.shape.mass().ok()).collect() }
 }
 
 /// Malla del escaneo preparada para elegir zonas (cara a cara con el visor).
@@ -138,9 +167,14 @@ fn hex_rgb(s: &str) -> Option<[f64; 3]> {
     Some([c(0)?, c(2)?, c(4)?])
 }
 
-/// Nombre de cada pieza: el que le puso el usuario o "Pieza n".
+/// Nombre de cada pieza: el que le puso el usuario, el de catálogo o "Pieza n".
 fn part_name(doc: &Document, id: cad_model::PartId, n: usize) -> String {
-    doc.parts.iter().find(|p| p.part == id).and_then(|p| p.name.clone()).unwrap_or_else(|| format!("Pieza {n}"))
+    // Sin nombre puesto: las piezas estándar se llaman por su catálogo
+    let standard = || match doc.get(id.feature).map(|f| &f.kind) {
+        Some(FeatureKind::Primitive(p)) if id.index == 0 => cad_model::standard::describe(&p.shape),
+        _ => None,
+    };
+    doc.parts.iter().find(|p| p.part == id).and_then(|p| p.name.clone()).or_else(standard).unwrap_or_else(|| format!("Pieza {n}"))
 }
 
 fn doc_hash(doc: &Document) -> u64 {
@@ -182,16 +216,28 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     let mut cache = state.cad_cache.lock().unwrap();
     match cache.take() {
         Some(c) if c.doc_hash == hash => *cache = Some(c),
-        Some(CadCache { doc_hash, eval, previous: Some((h, prev)) }) if h == hash => {
-            *cache = Some(CadCache { doc_hash: h, eval: prev, previous: Some((doc_hash, eval)) });
+        Some(CadCache { doc_hash, eval, previous: Some((h, prev)), measures }) if h == hash => {
+            *cache = Some(CadCache { doc_hash: h, eval: prev, previous: Some((doc_hash, eval)), measures });
         }
         old => {
+            let measures = old.as_ref().map(|c| c.measures.clone()).unwrap_or_default();
             let previous = old.map(|c| (c.doc_hash, c.eval));
             let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
-            *cache = Some(CadCache { doc_hash: hash, eval, previous });
+            *cache = Some(CadCache { doc_hash: hash, eval, previous, measures });
         }
     }
-    let eval = &cache.as_ref().unwrap().eval;
+    let c = cache.as_mut().unwrap();
+    let m = match c.measures.iter().find(|(h, _)| *h == hash) {
+        Some((_, m)) => m.clone(),
+        None => {
+            let m = measures(&c.eval);
+            // Las dos últimas (documento y borrador)
+            c.measures.insert(0, (hash, m.clone()));
+            c.measures.truncate(2);
+            m
+        }
+    };
+    let eval = &c.eval;
     let mut sketches: Vec<SketchView> = eval
         .sketches
         .iter()
@@ -204,22 +250,8 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         })
         .collect();
     sketches.sort_by_key(|s| doc.index_of(s.id));
-    let body = eval.body.as_ref().and_then(|b| {
-        let m = b.mass().ok()?;
-        Some(BodyInfo {
-            volume: m.volume,
-            area: m.area,
-            bbox_min: m.bbox_min,
-            bbox_max: m.bbox_max,
-            faces: b.face_count(),
-            edges: b.edge_count(),
-            valid: b.is_valid(),
-            center: m.center,
-            inertia: m.inertia,
-            axes: m.axes,
-        })
-    });
-    let parts = part_views(doc, eval);
+    let body = m.body;
+    let parts = part_views(doc, eval, &m.parts);
     let assembly = doc.assembly.as_ref().map(|a| {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         hash.hash(&mut h);
@@ -644,6 +676,54 @@ pub struct ResolvedRefs {
 
 /// Resuelve referencias contra el sólido que se ve (el borrador, si hay): para
 /// resaltar lo elegido en una caja de selección y marcar lo que ya no está.
+/// Dónde apoyar una pieza estándar en el borde de un agujero.
+#[derive(Debug, Clone, Serialize)]
+pub struct Seat {
+    /// Centro del borde, sobre la cara plana
+    pub origin: [f64; 3],
+    /// Normal saliente de la cara (la pieza sale hacia ahí)
+    pub z: [f64; 3],
+    pub x: [f64; 3],
+    pub diameter: f64,
+    /// Medida que mejor calza ("M6")
+    pub size: String,
+    /// Material atravesado al lado del agujero (para el largo del tornillo)
+    pub depth: Option<f64>,
+}
+
+#[tauri::command]
+pub async fn cad_edge_seat(app: AppHandle, edge: usize) -> Result<Seat, String> {
+    in_background(app, move |state| edge_seat_impl(state, edge)).await
+}
+
+fn edge_seat_impl(state: &AppState, edge: usize) -> Result<Seat, String> {
+    use cad_model::geom::{add, cross, dot, normalize, scale};
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("No hay sólido")?;
+    let info = body.edge_info(edge).map_err(|e| e.to_string())?;
+    let Some((center, axis, r)) = info.circle else {
+        return Err("Elige el borde circular de un agujero".into());
+    };
+    let axis = normalize(axis);
+    // La cara plana del borde da hacia dónde sale la pieza
+    let z = body
+        .edge_faces(edge)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter_map(|f| body.face_info(f).ok())
+        .find(|f| f.surface == cad_model::occt::SurfaceKind::Plane && dot(f.normal, axis).abs() > 0.99)
+        .map(|f| normalize(f.normal))
+        .ok_or("El borde tiene que estar sobre una cara plana")?;
+    let x = normalize(cross(z, if z[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }));
+    let x = cross(x, z);
+    // Espesor: un rayo hacia adentro, apenas por fuera del agujero
+    let start = add(add(center, scale(x, r + (0.05 * r).max(0.2))), scale(z, -1e-3));
+    let depth = body.ray_hit(start, scale(z, -1.0)).map(|d| d + 1e-3);
+    let size = cad_model::standard::size_for_hole(2.0 * r).name.to_string();
+    Ok(Seat { origin: center, z, x, diameter: 2.0 * r, size, depth })
+}
+
 #[tauri::command]
 pub async fn cad_resolve_refs(app: AppHandle, faces: Vec<FaceRef>, edges: Vec<EdgeRef>) -> Result<ResolvedRefs, String> {
     in_background(app, move |state| resolve_refs_impl(state, &faces, &edges)).await
@@ -701,16 +781,17 @@ fn parts_at_impl(state: &AppState, mut doc: Document, index: usize) -> Result<Ve
     require_occt()?;
     doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
     let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
-    Ok(part_views(&doc, &eval))
+    let masses: Vec<_> = eval.parts.iter().map(|p| p.shape.mass().ok()).collect();
+    Ok(part_views(&doc, &eval, &masses))
 }
 
-fn part_views(doc: &Document, eval: &cad_model::Evaluation) -> Vec<PartView> {
+fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad_model::occt::MassInfo>]) -> Vec<PartView> {
     eval.part_ranges()
         .into_iter()
-        .zip(&eval.parts)
+        .zip(masses)
         .enumerate()
-        .map(|(i, ((id, f, e), p))| {
-            let m = p.shape.mass().ok();
+        .map(|(i, ((id, f, e), m))| {
+            let m = *m;
             PartView {
                 id,
                 name: part_name(doc, id, i + 1),
@@ -1401,6 +1482,7 @@ pub mod bridge {
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
+            "cad_edge_seat" => ok(edge_seat_impl(state, arg(args, "edge")?)?),
             "cad_compare" => compare_impl(state, &arg::<Document>(args, "document")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
@@ -1544,6 +1626,38 @@ mod tests {
         let mut doc = state.cad_document.lock().unwrap().clone().unwrap();
         doc.versions.clear();
         assert_eq!(doc_hash(&doc), h);
+    }
+
+    #[test]
+    fn seat_on_a_clearance_hole() {
+        if !cad_model::occt::available() {
+            return;
+        }
+        // Placa de 40×40×10 con un agujero pasante de 6,6 (M6)
+        let mut doc = Document::new();
+        for (shape, op) in [
+            (cad_model::PrimitiveShape::Box { dx: 40.0, dy: 40.0, dz: 10.0, centered: true, centered_z: false }, BodyOp::Join),
+            (cad_model::PrimitiveShape::Cylinder { radius: 3.3, height: 20.0 }, BodyOp::Cut),
+        ] {
+            let origin = if op == BodyOp::Cut { [0.0, 0.0, -5.0] } else { [0.0; 3] };
+            doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op }));
+        }
+        let state = AppState::new();
+        *state.cad_document.lock().unwrap() = Some(doc);
+        evaluate(&state).unwrap();
+        let edges = {
+            let cache = state.cad_cache.lock().unwrap();
+            let body = cache.as_ref().unwrap().eval.body.clone().unwrap();
+            body.edges().unwrap()
+        };
+        let rim = |zv: f64| edges.iter().position(|e| e.circle.is_some_and(|(c, _, _)| (c[2] - zv).abs() < 1e-6)).unwrap();
+        let top = edge_seat_impl(&state, rim(10.0)).unwrap();
+        assert_eq!(top.size, "M6");
+        assert!((top.diameter - 6.6).abs() < 1e-9 && (top.z[2] - 1.0).abs() < 1e-9);
+        assert!((top.depth.unwrap() - 10.0).abs() < 1e-3, "{:?}", top.depth);
+        // Del otro lado sale hacia abajo
+        let bottom = edge_seat_impl(&state, rim(0.0)).unwrap();
+        assert!((bottom.z[2] + 1.0).abs() < 1e-9 && bottom.origin[2].abs() < 1e-9);
     }
 
     #[test]

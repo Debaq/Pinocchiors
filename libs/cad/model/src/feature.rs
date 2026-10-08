@@ -241,6 +241,37 @@ pub enum PrimitiveShape {
     Cone { r1: f64, r2: f64, height: f64 },
     Sphere { radius: f64 },
     Torus { major: f64, minor: f64 },
+    /// Tornillo métrico (ver [`crate::standard`]): `size` "M6", largo bajo la
+    /// cabeza (el total en el avellanado); `modeled` lleva la rosca de verdad.
+    Bolt {
+        size: String,
+        length: f64,
+        #[serde(default)]
+        head: BoltHead,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        modeled: bool,
+    },
+    /// Tuerca hexagonal métrica.
+    Nut {
+        size: String,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        modeled: bool,
+    },
+    /// Arandela plana métrica.
+    Washer { size: String },
+}
+
+/// Cabeza del tornillo.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BoltHead {
+    /// Hexagonal (ISO 4017)
+    Hex,
+    /// Cilíndrica con hexágono interior (ISO 4762)
+    #[default]
+    Socket,
+    /// Avellanada con hexágono interior (ISO 10642)
+    Countersunk,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -606,6 +637,9 @@ impl FeatureKind {
                 PrimitiveShape::Cone { .. } => "Cono",
                 PrimitiveShape::Sphere { .. } => "Esfera",
                 PrimitiveShape::Torus { .. } => "Toro",
+                PrimitiveShape::Bolt { .. } => "Tornillo",
+                PrimitiveShape::Nut { .. } => "Tuerca",
+                PrimitiveShape::Washer { .. } => "Arandela",
             },
             FeatureKind::Fillet { .. } => "Redondeo",
             FeatureKind::Chamfer { .. } => "Chaflán",

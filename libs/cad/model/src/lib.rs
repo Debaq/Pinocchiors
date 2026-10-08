@@ -17,6 +17,7 @@ pub mod geom;
 pub mod measure;
 pub mod regions;
 pub mod sketch;
+pub mod standard;
 
 pub use cad_occt::{self as occt, Shape};
 pub use assembly::{Assembly, AssemblySolution, Connector, Instance, Mate, MateKind};

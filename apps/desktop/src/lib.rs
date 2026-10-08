@@ -175,6 +175,7 @@ pub fn run() {
             cad::cad_export,
             cad::cad_project_edge,
             cad::cad_compare,
+            cad::cad_edge_seat,
             cad::cad_import_step,
             cad::cad_part_to_model,
             cad::cad_scan_pick,

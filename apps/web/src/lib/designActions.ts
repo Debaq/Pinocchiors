@@ -6,6 +6,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   METRIC_HOLES,
+  boltLengthFor,
+  type P3,
   emptySketch,
   offsetPlane,
   samePart,
@@ -325,6 +327,46 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   const addPrimitive = (shape: PrimitiveShape) => void store.addFeature(primitive(shape));
 
+  /**
+   * Tornillo, tuerca o arandela como pieza nueva. Con el borde de un agujero
+   * elegido se apoya ahí (medida y largo según el agujero); con una cara plana,
+   * sobre ella; si no, en el origen.
+   */
+  const addStandard = async (kind: "bolt" | "nut" | "washer") => {
+    const edge = ui.picks().find((p) => p.kind === "edge");
+    const face = ui.picks().find((p) => p.kind === "face");
+    let place: { origin: P3; z: P3; x: P3 } = { origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0] };
+    let size = "M6";
+    let depth: number | undefined;
+    try {
+      if (edge?.kind === "edge") {
+        const seat = await store.edgeSeat(edge.edge);
+        place = { origin: seat.origin, z: seat.z, x: seat.x };
+        size = seat.size;
+        depth = seat.depth ?? undefined;
+      } else if (face?.kind === "face") {
+        const f = await invoke<{ surface: string; point: P3; normal: P3 }>("cad_face_info", { face: face.face });
+        if (f.surface !== "plane") return say("Elige el borde de un agujero o una cara plana");
+        const n = f.normal;
+        const a: P3 = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+        // X: perpendicular a la normal
+        const c: P3 = [a[1] * n[2] - a[2] * n[1], a[2] * n[0] - a[0] * n[2], a[0] * n[1] - a[1] * n[0]];
+        const l = Math.hypot(...c);
+        place = { origin: f.point, z: n, x: [c[0] / l, c[1] / l, c[2] / l] };
+      }
+    } catch (e) {
+      return say(String(e));
+    }
+    ui.clearPicks();
+    const shape: PrimitiveShape =
+      kind === "bolt"
+        ? { type: "bolt", size, length: depth ? boltLengthFor(size, depth, true) : 20, head: "socket" }
+        : kind === "nut"
+          ? { type: "nut", size }
+          : { type: "washer", size };
+    void store.addFeature({ type: "primitive", shape, ...place, op: "new" });
+  };
+
   return {
     notice,
     say,
@@ -335,6 +377,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addLoft,
     addHole,
     addPrimitive,
+    addStandard,
     startEdges,
     startFaces,
     addPattern,
