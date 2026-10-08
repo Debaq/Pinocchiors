@@ -122,9 +122,12 @@ infer(sketch, cursor, { tolerancia, puntoAnterior?, entidadDeOrigen?, geometría
      (proyectados), y "sobre la arista" solo para las que están en el plano. Vértice, medio y
      centro dejan el punto **fijo** (no sigue al sólido si cambia); sobre la arista no deja
      restricción. La Línea no pone cota de largo entre dos anclajes de este tipo.
-   - Segunda versión, "Usar arista": entidad de construcción ligada a la arista del sólido (por
-     su origen, como los redondeos) que se recalcula si el sólido cambia; los anclajes a ella sí
-     dejan restricción.
+   - Segunda versión, "Usar arista": *hecha el 2026-10-08.* Herramienta «Usar arista» (J) del
+     sketch: clic en una arista recta o circular (paralela al plano) del sólido →
+     `cad_project_edge` la proyecta y crea la línea, círculo o arco (antihorario), guardada en
+     `Sketch.uses` con su `EdgeRef`. Al recalcular, `project_uses` la lleva a la arista
+     proyectada (si la arista ya no está, avisa y queda donde estaba); para el solver sus puntos
+     (y el radio) son fijos, así que lo acotado o anclado contra ella sigue al sólido.
 5. **Ajustes.** Mayús para desactivar, tolerancia en píxeles configurable, y opcional: anclar a
    la grilla.
 

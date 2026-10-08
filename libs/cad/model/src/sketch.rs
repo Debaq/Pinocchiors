@@ -240,6 +240,16 @@ pub struct Sketch {
     /// Textos insertados como curvas (se mueven en bloque y se pueden rehacer).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub texts: Vec<SketchText>,
+    /// Aristas del sólido traídas al sketch ("Usar"): la entidad sigue a la
+    /// arista proyectada cada vez que se recalcula; para el solver, fija.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<SketchUse>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchUse {
+    pub edge: crate::feature::EdgeRef,
+    pub entity: u32,
 }
 
 /// Texto del sketch: sus curvas se mueven en bloque con `anchor` (el comienzo
@@ -260,6 +270,13 @@ pub struct SketchText {
 impl Sketch {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Mueve un punto (sin resolver).
+    pub fn set_point(&mut self, id: u32, p: P2) -> Result<(), SketchError> {
+        let q = self.points.iter_mut().find(|q| q.id == id).ok_or(SketchError::NoPoint(id))?;
+        (q.x, q.y) = (p[0], p[1]);
+        Ok(())
     }
 
     fn fresh_id(&mut self) -> u32 {
@@ -517,6 +534,17 @@ impl Sketch {
         }
         if let Some(o) = self.origin {
             sys.add_constraint(Constraint::Fixed { p_idx: ix(o)?, position: Point2::new(0.0, 0.0) });
+        }
+        // Aristas usadas: quedan donde las dejó la proyección (con su radio)
+        for u in &self.uses {
+            let Ok(e) = self.entity(u.entity) else { continue };
+            let mut fixed: Vec<usize> = e.geometry.point_ids().iter().filter_map(|id| index.get(id).copied()).collect();
+            fixed.extend(rims.get(&u.entity));
+            for i in fixed {
+                let p = &sys.points[i];
+                let at = Point2::new(p.x(), p.y());
+                sys.add_constraint(Constraint::Fixed { p_idx: i, position: at });
+            }
         }
         // Textos rígidos: cada punto guarda su distancia al ancla (la de ahora)
         for t in &self.texts {

@@ -483,3 +483,5 @@ cargo test -p cad-model
   recortado al largo. Gotchas: la herramienta pasa 1 µm de las tapas y, sin holgura, la cresta
   sobresale 1 µm de la cara (superficies coincidentes hacían fallar la booleana sin avisar).
   Pruebas: volumen del macho por Pappus (exacto), agujero pasante, eje y agujero roscados.
+- **2026-10-08 Usar arista en el sketch** ([PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fase 4 v2): aristas
+  del sólido traídas al sketch y ligadas a él (si cambia la pieza, se mueven con ella).

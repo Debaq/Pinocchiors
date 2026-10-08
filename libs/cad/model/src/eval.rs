@@ -1032,6 +1032,55 @@ impl Ctx<'_> {
         Ok(Tagged { shape, tags })
     }
 
+    /// Lleva cada entidad usada a su arista proyectada en el plano del sketch
+    /// (si la arista ya no está, queda donde estaba y la operación avisa).
+    fn project_uses(&self, plane: &Plane, sketch: &mut Sketch) {
+        let Ok(body) = self.body().cloned() else {
+            self.warn("las aristas usadas necesitan un sólido antes del sketch".into());
+            return;
+        };
+        let mut lost = 0;
+        for (k, u) in sketch.uses.clone().iter().enumerate() {
+            let Ok(i) = self.ev.resolve_edge(&u.edge) else {
+                self.miss("uses", k);
+                lost += 1;
+                continue;
+            };
+            let (Ok(info), Ok(e)) = (body.edge_info(i), sketch.entity(u.entity)) else { continue };
+            let local = |p: P3| plane.to_local(p);
+            match e.geometry.clone() {
+                Geometry::Line { start, end } => {
+                    let _ = sketch.set_point(start, local(info.start));
+                    let _ = sketch.set_point(end, local(info.end));
+                }
+                Geometry::Circle { center, .. } => {
+                    if let Some((c, _, r)) = info.circle {
+                        let _ = sketch.set_point(center, local(c));
+                        if let Some(Geometry::Circle { radius, .. }) = sketch.entities.iter_mut().find(|x| x.id == u.entity).map(|x| &mut x.geometry) {
+                            *radius = r;
+                        }
+                    }
+                }
+                Geometry::Arc { center, start, end } => {
+                    if let Some((c, _, _)) = info.circle {
+                        // Los arcos del sketch van antihorario: si la arista gira al revés
+                        // en este plano, se dan vuelta sus extremos
+                        let (c, a, m, b) = (local(c), local(info.start), local(info.mid), local(info.end));
+                        let ccw = (a[0] - c[0]) * (m[1] - c[1]) - (a[1] - c[1]) * (m[0] - c[0]) > 0.0;
+                        let (a, b) = if ccw { (a, b) } else { (b, a) };
+                        let _ = sketch.set_point(center, c);
+                        let _ = sketch.set_point(start, a);
+                        let _ = sketch.set_point(end, b);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if lost > 0 {
+            self.warn(format!("faltan {lost} de {} aristas usadas", sketch.uses.len()));
+        }
+    }
+
     /// Pared del nervio: por cada línea del sketch, rayos en el plano hasta el
     /// sólido; el polígono entre la línea y lo que tocan, con espesor centrado.
     fn rib_tool(&self, id: FeatureId, sketch: FeatureId, thickness: f64, flip: bool) -> R<Tagged> {
@@ -1225,6 +1274,9 @@ impl Ctx<'_> {
             FeatureKind::Sketch { plane, offset, sketch } => {
                 let plane = self.plane("plane", plane)?.offset(*offset);
                 let mut solved = sketch.clone();
+                if !solved.uses.is_empty() {
+                    self.project_uses(&plane, &mut solved);
+                }
                 let report = solved.solve().map_err(err)?;
                 let regions = find_regions(&solved).map_err(err)?;
                 self.ev.sketches.insert(f.id, SketchResult { plane, sketch: solved, report, regions });

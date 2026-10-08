@@ -169,3 +169,11 @@ export const Extend = (p: IconProps) => (
     <path d="M20 4 L20 20" />
   </SketchIcon>
 );
+
+/** Usar arista: la del sólido proyectada al plano, ligada a él */
+export const Use = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 8 L12 4 L20 8 L20 16 L12 20 L4 16 Z" stroke-dasharray="2 2" />
+    <path d="M4 16 L12 20 L20 16" stroke-width="2.4" />
+  </SketchIcon>
+);

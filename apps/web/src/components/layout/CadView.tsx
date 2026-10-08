@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -47,6 +47,7 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon:
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T", icon: SketchIcons.Trim, group: 2 },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E", icon: SketchIcons.Extend, group: 2 },
+  { id: "use", short: "Usar arista", label: "Usar arista del sólido (queda ligada: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
 ];
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
@@ -624,6 +625,29 @@ export const CadView: Component<CadViewProps> = (props) => {
       boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey, before: [] };
       sketchBoxBefore = ui.selection();
       if (!e.shiftKey) ui.setSelection([]);
+      return;
+    }
+    if (t === "use") {
+      // La arista del sólido bajo el cursor, proyectada al plano y ligada a él
+      const pick = viewer.pick(e.clientX, e.clientY, { edges: true });
+      if (pick?.kind !== "edge") return ui.setMessage("Clic sobre una arista del sólido");
+      store
+        .projectEdge(pick.edge, s.plane)
+        .then((pe) => {
+          ui.change((sk) => {
+            const p = pe.points.map((q) => addPoint(sk, q));
+            const geometry: Geometry =
+              pe.kind === "line"
+                ? { type: "line", start: p[0], end: p[1] }
+                : pe.kind === "circle"
+                  ? { type: "circle", center: p[0], radius: pe.radius }
+                  : { type: "arc", center: p[0], start: p[1], end: p[2] };
+            const entity = ui.addEntity(sk, geometry);
+            sk.uses = [...(sk.uses ?? []), { edge: pe.ref, entity }];
+          });
+          ui.setMessage(undefined);
+        })
+        .catch((err) => ui.setMessage(String(err)));
       return;
     }
     // Cotas de la forma recién dibujada (se piden enseguida)

@@ -162,6 +162,16 @@ export interface Sketch {
   origin?: number;
   /** Textos insertados como curvas: se mueven en bloque con su ancla y se pueden rehacer */
   texts?: SketchText[];
+  /** Aristas del sólido usadas: la entidad sigue a la arista proyectada (para el solver, fija) */
+  uses?: { edge: EdgeRef; entity: number }[];
+}
+
+/** Arista del sólido proyectada al plano de un sketch */
+export interface ProjectedEdge {
+  kind: "line" | "circle" | "arc";
+  points: P2[];
+  radius: number;
+  ref: EdgeRef;
 }
 
 /** Texto del sketch: el ancla es el comienzo de la línea base */
@@ -1213,6 +1223,8 @@ export function removeEntity(s: Sketch, id: number): void {
   const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !anchors.has(p) && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
   s.points = s.points.filter((p) => !loose.includes(p.id));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set(loose)));
+  // Una arista usada deja de estarlo con su entidad
+  if (s.uses) s.uses = s.uses.filter((u) => u.entity !== id);
   // Los textos se quedan con lo que les queda
   for (const t of s.texts ?? []) {
     t.entities = t.entities.filter((x) => x !== id);
@@ -2378,6 +2390,7 @@ export function createCadStore() {
     /** Medidas de una o dos cosas elegidas en el sólido mostrado */
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
+    projectEdge: (edge: number, plane: Plane) => invoke<ProjectedEdge>("cad_project_edge", { edge, plane }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */

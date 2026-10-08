@@ -988,3 +988,45 @@ fn sketch_text_keeps_its_regions() {
     s.solve().unwrap();
     assert_eq!(find_regions(&s).unwrap().len(), 1);
 }
+
+#[test]
+fn used_edge_follows_the_solid() {
+    if !occt() {
+        return;
+    }
+    // Caja 20×20×20 centrada (arriba en z = 10); el sketch de arriba usa la arista del frente
+    let mut doc = Document::new();
+    let bx = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 20.0, centered: true, centered_z: true },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    let ev = doc.evaluate();
+    let (edge, _) = ev.body.as_ref().unwrap().closest_edge([0.0, -10.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
+    let mut s = Sketch::new();
+    let a = s.add_point(-10.0, -10.0);
+    let b = s.add_point(10.0, -10.0);
+    let l = s.add_line(a, b);
+    s.uses.push(SketchUse { edge: ev.edge_ref(edge).unwrap(), entity: l });
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 10.0, sketch: s });
+    // Más ancha: la línea usada se estira con la arista
+    if let FeatureKind::Primitive(p) = &mut doc.get_mut(bx).unwrap().kind
+        && let PrimitiveShape::Box { dx, .. } = &mut p.shape
+    {
+        *dx = 30.0;
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let solved = &ev.sketches[&sk].sketch;
+    let (pa, pb) = (solved.point(a).unwrap(), solved.point(b).unwrap());
+    let xs = [pa[0].min(pb[0]), pa[0].max(pb[0])];
+    assert_relative_eq!(xs[0], -15.0, epsilon = 1e-6);
+    assert_relative_eq!(xs[1], 15.0, epsilon = 1e-6);
+    assert_relative_eq!(pa[1], -10.0, epsilon = 1e-6);
+    // Para el solver es fija: arrastrarla no la mueve
+    let mut moved = solved.clone();
+    moved.solve_drag(a, [0.0, 0.0]).unwrap();
+    assert_relative_eq!(moved.point(a).unwrap()[1], -10.0, epsilon = 1e-6);
+}

@@ -74,7 +74,8 @@ export type SketchTool =
   | "slot"
   | "trim"
   | "tangent"
-  | "extend";
+  | "extend"
+  | "use";
 
 /** Qué hace un clic en el visor */
 export type PickMode =

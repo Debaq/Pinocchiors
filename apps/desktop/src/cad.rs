@@ -554,6 +554,49 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
+/// Arista del sólido proyectada al plano de un sketch ("Usar"): línea, círculo
+/// o arco (antihorario), en coordenadas del plano.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectedEdge {
+    pub kind: &'static str,
+    /// Línea: inicio y fin; círculo: centro; arco: centro, inicio y fin.
+    pub points: Vec<[f64; 2]>,
+    pub radius: f64,
+    #[serde(rename = "ref")]
+    pub edge_ref: EdgeRef,
+}
+
+#[tauri::command]
+pub async fn cad_project_edge(app: AppHandle, edge: usize, plane: cad_model::Plane) -> Result<ProjectedEdge, String> {
+    in_background(app, move |state| project_edge_impl(state, edge, &plane)).await
+}
+
+fn project_edge_impl(state: &AppState, edge: usize, plane: &cad_model::Plane) -> Result<ProjectedEdge, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
+    let body = eval.body.as_ref().ok_or("No hay sólido")?;
+    let info = body.edge_info(edge).map_err(|e| e.to_string())?;
+    let edge_ref = eval.edge_ref(edge).ok_or("Esa arista no existe")?;
+    let l = |p: [f64; 3]| plane.to_local(p);
+    let n = cad_model::geom::normalize(plane.normal);
+    Ok(match (info.curve, info.circle) {
+        (cad_model::occt::CurveKind::Line, _) => ProjectedEdge { kind: "line", points: vec![l(info.start), l(info.end)], radius: 0.0, edge_ref },
+        // Solo los círculos paralelos al plano siguen siendo círculos al proyectarlos
+        (cad_model::occt::CurveKind::Circle, Some((c, axis, r))) if cad_model::geom::dot(cad_model::geom::normalize(axis), n).abs() > 1.0 - 1e-6 => {
+            if info.closed {
+                ProjectedEdge { kind: "circle", points: vec![l(c)], radius: r, edge_ref }
+            } else {
+                let (c, a, m, b) = (l(c), l(info.start), l(info.mid), l(info.end));
+                let ccw = (a[0] - c[0]) * (m[1] - c[1]) - (a[1] - c[1]) * (m[0] - c[0]) > 0.0;
+                let (a, b) = if ccw { (a, b) } else { (b, a) };
+                ProjectedEdge { kind: "arc", points: vec![c, a, b], radius: r, edge_ref }
+            }
+        }
+        _ => return Err("Por ahora se usan aristas rectas y circulares paralelas al plano".into()),
+    })
+}
+
 /// Qué cara o arista del sólido mostrado es cada referencia (`None` = no se encontró).
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ResolvedRefs {
@@ -1347,6 +1390,7 @@ pub mod bridge {
                 ok(resolve_refs_impl(state, &faces, &edges)?)
             }
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
+            "cad_project_edge" => ok(project_edge_impl(state, arg(args, "edge")?, &arg::<cad_model::Plane>(args, "plane")?)?),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
                 ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false))?)

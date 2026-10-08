@@ -1617,6 +1617,41 @@ const scenarios = {
     await b.shot("eje_roscado");
   },
 
+  async "usar arista del sólido en el sketch"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Sketch sobre la cara de arriba (z = 10)
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Sketch");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()`)); t++) await sleep(250);
+    await b.clickText("Usar arista");
+    await b.click(...(await at([0, -10, 10])), { wait: 1500 });
+    const sk = await b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    if (sk.uses?.length !== 1) throw new Error(`usadas: ${JSON.stringify(sk.uses)}`);
+    const line = sk.entities.find((e) => e.id === sk.uses[0].entity);
+    if (line?.geometry.type !== "line") throw new Error(`entidad: ${JSON.stringify(line)}`);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // La caja más ancha: la línea usada se estira con la arista
+    const doc = await call("cad_get_document");
+    doc.features[0].kind.shape.dx = 30;
+    const id = doc.features.find((f) => f.kind.type === "sketch").id;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const xs = await b.eval(`(() => {
+      const v = window.__cadStore.sketchView(${id});
+      const l = v.sketch.entities.find((e) => e.id === ${line.id}).geometry;
+      return [l.start, l.end].map((p) => v.sketch.points.find((q) => q.id === p).x).sort((a, b) => a - b);
+    })()`);
+    near(xs[0], -15, 1e-6, "extremo izquierdo");
+    near(xs[1], 15, 1e-6, "extremo derecho");
+    await b.shot("usar_arista");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

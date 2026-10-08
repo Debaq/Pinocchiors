@@ -173,6 +173,7 @@ pub fn run() {
             cad::cad_write_text,
             cad::cad_write_pdf,
             cad::cad_export,
+            cad::cad_project_edge,
             cad::cad_import_step,
             cad::cad_part_to_model,
             cad::cad_scan_pick,
