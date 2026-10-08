@@ -238,6 +238,28 @@ export const Thread = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const SheetMetal = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M3 15 L12 19 L21 13 L12 9 Z" {...soft} />
+    <path d="M3 15 V16.5 L12 20.5 L21 14.5 V13" />
+  </DesignIcon>
+);
+
+export const Flange = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M3 18 H13 A3 3 0 0 0 16 15 V4" />
+    <path d="M3 20.5 H13 A5.5 5.5 0 0 0 18.5 15 V4" />
+    <path d="M16 4 H18.5" />
+  </DesignIcon>
+);
+
+export const FlatPattern = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <rect x="3" y="4" width="18" height="16" {...soft} />
+    <path d="M3 9 H21 M3 15 H21" stroke-dasharray="3 1.5" />
+  </DesignIcon>
+);
+
 export const Bolt = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M6 3 H18 V8 H6 Z" {...soft} />

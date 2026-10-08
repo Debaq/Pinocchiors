@@ -197,6 +197,33 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     });
   };
 
+  /** Chapa: las regiones elegidas o todo el último sketch, de 2 mm (radio 2, K 0,44) */
+  const addSheetMetal = () => {
+    const picked = pickedRegions();
+    const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
+    if (!s) return say("Primero hace falta un sketch con una región cerrada");
+    ui.clearPicks();
+    void store.addFeature({
+      type: "sheet_metal",
+      sketch: s.id,
+      regions: picked ? { type: "points", points: picked.points } : { type: "all" },
+      thickness: 2,
+      radius: 2,
+      k_factor: 0.44,
+      flip: false,
+      op: store.result()?.body ? "new" : "join",
+    });
+  };
+
+  /** Pestaña en la arista elegida (si no hay, se elige en el diálogo) */
+  const startFlange = async () => {
+    if (!store.result()?.body) return say("Primero hace falta una chapa");
+    const pick = ui.picks().find((p) => p.kind === "edge");
+    const edge = pick?.kind === "edge" ? await store.edgeRef(pick.edge) : undefined;
+    ui.clearPicks();
+    void store.addFeature({ type: "flange", edge: edge ?? null, length: 20, angle: 90, flip: false });
+  };
+
   const addRevolve = () => {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
@@ -377,6 +404,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addLoft,
     addHole,
     addPrimitive,
+    addSheetMetal,
+    startFlange,
     addStandard,
     startEdges,
     startFaces,

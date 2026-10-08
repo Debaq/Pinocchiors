@@ -15,6 +15,19 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   sólido de paredes delgadas en chapa + desarrollo + DXF; después pestaña en arista y doblez
   por línea.
 - **Valor para el laboratorio**: corte láser de cajas y soportes.
+- *Primera versión hecha el 2026-10-08*: operación **Chapa** (`SheetMetal`: regiones de un sketch
+  al espesor, con radio interior de doblez y factor K) y **Pestaña** (`Flange`: desde una arista
+  recta del borde; el canto se revoluciona alrededor del eje de doblez —a un radio del borde, del
+  lado hacia donde dobla— y la pared es ese canto girado y extruido; ángulo, largo, radio propio
+  y lado; sirve sobre otra pestaña). **Desarrollo** (`cad_model::sheet::flat_pattern`): se calcula
+  de la geometría, así respeta agujeros y cortes hechos después y sirve para cualquier sólido de
+  paredes planas y dobleces cilíndricos: recorre un lado de la chapa desde la cara plana más
+  grande pasando solo por aristas tangentes (pared → doblez → pared), lleva cada pared al plano
+  con un movimiento rígido y estira cada doblez a θ·(R + K·t). El contorno es lo que queda en
+  el borde de ese lado; las líneas de doblez van al medio de cada zona con su ángulo, radio y
+  lado. Vista "Desarrollo" (menú Chapa) a 1:1 con cotas, y DXF (capas CONTORNO y DOBLEZ), SVG y
+  PDF. Faltan: alivios en las esquinas, pestañas en aristas que no son rectas, dobleces sobre
+  una línea dibujada y convertir un sólido macizo en chapa.
 
 ## Superficies
 

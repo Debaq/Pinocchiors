@@ -16,6 +16,7 @@ pub mod feature;
 pub mod geom;
 pub mod measure;
 pub mod regions;
+pub mod sheet;
 pub mod sketch;
 pub mod standard;
 

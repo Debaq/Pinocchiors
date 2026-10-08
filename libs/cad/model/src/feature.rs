@@ -439,6 +439,47 @@ pub enum FeatureKind {
         #[serde(default)]
         clearance: f64,
     },
+    /// Chapa metálica: las regiones de un sketch extruidas al espesor. Guarda
+    /// el radio interior de doblez y el factor K que usan sus pestañas y el
+    /// desarrollo (ver [`crate::sheet`]).
+    SheetMetal {
+        sketch: FeatureId,
+        #[serde(default)]
+        regions: RegionSelection,
+        thickness: f64,
+        radius: f64,
+        #[serde(default = "default_k_factor")]
+        k_factor: f64,
+        /// Hacia el lado contrario de la normal del sketch
+        #[serde(default)]
+        flip: bool,
+        #[serde(default)]
+        op: BodyOp,
+    },
+    /// Pestaña: una pared doblada desde una arista del borde de la chapa.
+    /// Dobla hacia el lado de la cara de la arista (el otro con `flip`);
+    /// `length` es la pared después del doblez.
+    Flange {
+        /// Sin elegir todavía: la operación avisa
+        #[serde(default)]
+        edge: Option<EdgeRef>,
+        length: f64,
+        #[serde(default = "default_flange_angle")]
+        angle: f64,
+        #[serde(default)]
+        flip: bool,
+        /// Radio interior (sin él, el de la chapa)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius: Option<f64>,
+    },
+}
+
+fn default_k_factor() -> f64 {
+    0.44
+}
+
+fn default_flange_angle() -> f64 {
+    90.0
 }
 
 /// La otra medida de un chaflán asimétrico; `distance` se mide sobre una de
@@ -600,6 +641,7 @@ impl FeatureKind {
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => vec![h.sketch],
             FeatureKind::Rib { sketch, .. } => vec![*sketch],
+            FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => {
@@ -663,6 +705,8 @@ impl FeatureKind {
             FeatureKind::Rib { .. } => "Nervio",
             FeatureKind::ReplaceFace { .. } => "Reemplazar cara",
             FeatureKind::Thread { .. } => "Rosca",
+            FeatureKind::SheetMetal { .. } => "Chapa",
+            FeatureKind::Flange { .. } => "Pestaña",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
         }

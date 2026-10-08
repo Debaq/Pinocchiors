@@ -16,7 +16,7 @@ const VIEW: KeyHint[] = [
 ];
 
 export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
-  if (ui.drawingOpen()) return [];
+  if (ui.drawingOpen() || ui.flatOpen()) return [];
   if (ui.session())
     return [
       { keys: "Clic", label: "dibujar" },

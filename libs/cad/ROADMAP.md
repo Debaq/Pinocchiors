@@ -70,7 +70,7 @@ Decisiones (2026-10-05):
       elegidas con clic, puntos libres marcados, recortar (líneas, círculos y arcos), extender,
       equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones
       que resalta y elige lo que restringe.
-- [ ] **F9 — Más adelante**: planos 2D (proyección + cotas), ensambles, chapa.
+- [~] **F9 — Más adelante**: planos 2D, ensambles y chapa hechos en una primera versión (ver abajo).
 
 ## Compilar
 
@@ -514,4 +514,8 @@ cargo test -p cad-model
 - **2026-10-08 Planos 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md)): cotas de radio (arcos) y de
   ángulo, vistas de detalle ampliadas y recortadas, y plano de corte movible. Pruebas: node
   `e2e/drawing.test.mjs` (14) y e2e "plano 2D: radio, ángulo, detalle y corte movido".
+- **2026-10-08 Chapa metálica** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): Chapa, Pestaña y Desarrollo
+  con DXF para corte láser. Pruebas: `tests/sheet.rs` (canal en U, pestaña a 45° hacia abajo con
+  un agujero, pestaña sobre pestaña: volúmenes y desarrollo contra la cuenta), node
+  `e2e/flatPattern.test.mjs` y e2e "chapa: pestañas y desarrollo en DXF".
 

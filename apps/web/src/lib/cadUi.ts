@@ -128,6 +128,8 @@ export function createCadUi(store: CadStore) {
   const [assemblyMode, setAssemblyMode] = createSignal(false);
   // Plano 2D abierto sobre el visor
   const [drawingOpen, setDrawingOpen] = createSignal(false);
+  // Desarrollo de chapa abierto sobre el visor
+  const [flatOpen, setFlatOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
   const [showCenterOfMass, setShowCenterOfMass] = createSignal(false);
   const [showPlanes, setShowPlanes] = createSignal(true);
@@ -205,6 +207,8 @@ export function createCadUi(store: CadStore) {
     setSection,
     drawingOpen,
     setDrawingOpen,
+    flatOpen,
+    setFlatOpen,
     assemblyMode,
     setAssemblyMode,
     deviation,

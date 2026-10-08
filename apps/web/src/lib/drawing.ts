@@ -581,7 +581,7 @@ function radiusSvg(d: RadiusDimension): string {
   );
 }
 
-function dimensionSvg(d: AnyDimension): string {
+export function dimensionSvg(d: AnyDimension): string {
   if (d.kind === "angle") return angleSvg(d);
   if (d.kind === "radius") return radiusSvg(d);
   const [ox, oy] = d.offset;

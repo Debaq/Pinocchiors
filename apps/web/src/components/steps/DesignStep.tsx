@@ -1841,6 +1841,66 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "sheet_metal" && (f().kind as Extract<FeatureKind, { type: "sheet_metal" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sheet_metal" && (x.sketch = +v))} />
+                </Row>
+                <RegionBox
+                  ui={props.ui}
+                  store={props.store}
+                  owner={`${f().id}:regiones`}
+                  lost={lost("regions")}
+                  sketch={k().sketch}
+                  value={k().regions}
+                  onChange={(r) => update((x) => x.type === "sheet_metal" && (x.regions = r))}
+                />
+                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "sheet_metal" && (x.thickness = v), "mm")}
+                {field("Radio de doblez", "kind.radius", k().radius, (x, v) => x.type === "sheet_metal" && (x.radius = v), "mm")}
+                {field("Factor K", "kind.k_factor", k().k_factor, (x, v) => x.type === "sheet_metal" && (x.k_factor = v))}
+                <Checkbox small label="Hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "sheet_metal" && (x.flip = c))} />
+                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sheet_metal" && (x.op = o)))}</Row>
+                <p class="text-[11px] text-text-dim">
+                  El radio es el interior de los dobleces de sus pestañas. El factor K dice dónde queda la fibra neutra (0,44 para acero y aluminio
+                  doblados en plegadora; 0,5 si el radio es grande): con él se calcula el largo del desarrollo.
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "flange" && (f().kind as Extract<FeatureKind, { type: "flange" }>)}>
+            {(k) => {
+              // El radio de la chapa de la que sale (la última antes)
+              const sheetRadius = () => {
+                const list = props.store.doc()?.features ?? [];
+                const before = list.slice(0, list.findIndex((x) => x.id === f().id));
+                const sm = [...before].reverse().find((x) => x.kind.type === "sheet_metal");
+                return sm?.kind.type === "sheet_metal" ? sm.kind.radius : undefined;
+              };
+              return (
+                <>
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:arista`}
+                    kind="edges"
+                    label="Arista del borde"
+                    refs={k().edge ? [k().edge!] : []}
+                    lost={lost("edge")}
+                    onChange={(refs) => update((x) => x.type === "flange" && (x.edge = (refs[refs.length - 1] as EdgeRef | undefined) ?? null))}
+                  />
+                  {field("Largo", "kind.length", k().length, (x, v) => x.type === "flange" && (x.length = v), "mm")}
+                  {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "flange" && (x.angle = v), "°")}
+                  {field("Radio", "kind.radius", k().radius ?? sheetRadius() ?? 0, (x, v) => x.type === "flange" && (x.radius = v), "mm")}
+                  <Checkbox small label="Doblar hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "flange" && (x.flip = c))} />
+                  <p class="text-[11px] text-text-dim">
+                    Dobla hacia el lado de la cara de la arista elegida. El largo es la pared después del doblez; el radio, el interior (el de la chapa si
+                    no se cambia).
+                  </p>
+                </>
+              );
+            }}
+          </Match>
           <Match when={f().kind.type === "thread" && (f().kind as Extract<FeatureKind, { type: "thread" }>)}>
             {(k) => (
               <>

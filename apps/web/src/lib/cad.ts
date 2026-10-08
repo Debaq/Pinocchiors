@@ -297,6 +297,10 @@ export type FeatureKind =
     }
   /** Rosca sobre una cara cilíndrica: exterior en un eje, interior en un agujero */
   | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number }
+  /** Chapa metálica: regiones de un sketch al espesor; radio interior de doblez y factor K para pestañas y desarrollo */
+  | { type: "sheet_metal"; sketch: number; regions: RegionSelection; thickness: number; radius: number; k_factor: number; flip: boolean; op: BodyOp }
+  /** Pestaña: pared doblada desde una arista del borde de la chapa (`length` después del doblez) */
+  | { type: "flange"; edge?: EdgeRef | null; length: number; angle: number; flip: boolean; radius?: number | null }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
@@ -324,6 +328,16 @@ export interface Feature {
 export interface Parameter {
   name: string;
   expr: string;
+}
+
+/** Desarrollo de chapa (`cad_flat_pattern`), en mm con la esquina en (0, 0) */
+export interface FlatPattern {
+  outline: P2[][];
+  bends: { line: [P2, P2]; angle: number; radius: number; up: boolean }[];
+  thickness: number;
+  k_factor: number;
+  min: P2;
+  max: P2;
 }
 
 export interface CadDocument {
@@ -830,6 +844,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   move_face: "Mover cara",
   rib: "Nervio",
   thread: "Rosca",
+  sheet_metal: "Chapa",
+  flange: "Pestaña",
   replace_face: "Reemplazar cara",
   scale: "Escala",
 };
@@ -947,6 +963,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "hole":
       return [kind.sketch];
     case "extrude":
+    case "sheet_metal":
       return [kind.sketch];
     case "revolve":
       return [kind.sketch, ...axis(kind.axis)];
@@ -2215,6 +2232,8 @@ export function createCadStore() {
       setDraft(nd);
       return send(previewDocument(nd), true);
     },
+    /** Desarrollo de chapa de una pieza (sin ella: la de la chapa) */
+    flatPattern: (part?: PartId) => invoke<FlatPattern>("cad_flat_pattern", { part: part ?? null }),
     /** Apoyo para una pieza estándar en el borde circular `edge` */
     edgeSeat: (edge: number) => invoke<Seat>("cad_edge_seat", { edge }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),

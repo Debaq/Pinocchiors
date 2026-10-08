@@ -676,6 +676,39 @@ pub struct ResolvedRefs {
 
 /// Resuelve referencias contra el sólido que se ve (el borrador, si hay): para
 /// resaltar lo elegido en una caja de selección y marcar lo que ya no está.
+/// Desarrollo de chapa de una pieza (sin `part`: la primera que sea de chapa,
+/// o la única). Espesor y factor K de la última chapa del diseño (si no hay,
+/// se mide el espesor y K = 0,44).
+#[tauri::command]
+pub async fn cad_flat_pattern(app: AppHandle, part: Option<cad_model::PartId>) -> Result<cad_model::sheet::FlatPattern, String> {
+    require_occt()?;
+    in_background(app, move |state| flat_pattern_impl(state, part)).await
+}
+
+fn flat_pattern_impl(state: &AppState, part: Option<cad_model::PartId>) -> Result<cad_model::sheet::FlatPattern, String> {
+    evaluate_committed(state)?;
+    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+    let cache = state.cad_cache.lock().unwrap();
+    let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
+    let sheet = doc.features.iter().rev().find_map(|f| match &f.kind {
+        FeatureKind::SheetMetal { thickness, k_factor, .. } if !f.suppressed => Some((f.id, *thickness, *k_factor)),
+        _ => None,
+    });
+    let chosen = match part {
+        Some(id) => eval.parts.iter().find(|p| p.id == id).ok_or("Esa pieza ya no existe")?,
+        // La pieza que nace de la chapa, o la primera
+        None => sheet
+            .and_then(|(id, ..)| eval.parts.iter().find(|p| p.id.feature == id))
+            .or(eval.parts.first())
+            .ok_or("Todavía no hay piezas")?,
+    };
+    let (thickness, k) = match sheet {
+        Some((_, t, k)) => (Some(t), k),
+        None => (None, 0.44),
+    };
+    cad_model::sheet::flat_pattern(&chosen.shape, k, thickness, None)
+}
+
 /// Dónde apoyar una pieza estándar en el borde de un agujero.
 #[derive(Debug, Clone, Serialize)]
 pub struct Seat {
@@ -1482,6 +1515,7 @@ pub mod bridge {
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
+            "cad_flat_pattern" => ok(flat_pattern_impl(state, arg::<Option<cad_model::PartId>>(args, "part").unwrap_or(None))?),
             "cad_edge_seat" => ok(edge_seat_impl(state, arg(args, "edge")?)?),
             "cad_compare" => compare_impl(state, &arg::<Document>(args, "document")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),

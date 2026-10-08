@@ -151,6 +151,12 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Cortar por plano", icon: D.SplitPlane, run: a.addSplit, needsBody: true },
     { label: "Borrar pieza", icon: D.DeleteParts, run: a.addDeleteParts, needsBody: true },
   ];
+  const sheet: (Tool | "-")[] = [
+    { label: "Chapa", icon: D.SheetMetal, run: a.addSheetMetal, tip: "Las regiones elegidas (o el último sketch) como chapa: espesor, radio de doblez y factor K" },
+    { label: "Pestaña", icon: D.Flange, run: () => void a.startFlange(), needsBody: true, tip: "Pared doblada desde una arista del borde de la chapa (elegir la arista)" },
+    "-",
+    { label: "Desarrollo", icon: D.FlatPattern, run: () => ui.setFlatOpen(true), needsBody: true, tip: "La chapa plana para cortar, con las líneas de doblez; DXF 1:1" },
+  ];
   const refs: (Tool | "-")[] = [
     { label: "Plano", icon: D.Plane, run: () => void a.addReference("plane"), tip: "Plano de referencia: desplazado, en ángulo, medio o por tres puntos" },
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
@@ -191,6 +197,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
           <ToolMenu label="Modificar" tools={modify} hasBody={hasBody()} />
           <ToolMenu label="Patrones" tools={patterns} hasBody={hasBody()} />
           <ToolMenu label="Piezas" tools={parts} hasBody={hasBody()} />
+          <ToolMenu label="Chapa" tools={sheet} hasBody={hasBody()} />
           <ToolMenu label="Referencias" tools={refs} hasBody={hasBody()} />
           <Sep />
           <ToolButton tool={{ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" }} disabled={!hasBody()} />

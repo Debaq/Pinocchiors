@@ -11,6 +11,7 @@ import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { DrawingView } from "./DrawingView";
+import { FlatPatternView } from "./FlatPatternView";
 import { DesignToolbar } from "../design/DesignToolbar";
 import { FeatureEditor, pickSummary } from "../steps/DesignStep";
 import type { DesignActions } from "../../lib/designActions";
@@ -1896,6 +1897,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       {/* Plano 2D encima del visor */}
       <Show when={ui.drawingOpen()}>
         <DrawingView store={store} ui={ui} />
+      </Show>
+      {/* Desarrollo de chapa encima del visor */}
+      <Show when={ui.flatOpen()}>
+        <FlatPatternView store={store} ui={ui} />
       </Show>
 
       {/* Medidas de lo elegido */}

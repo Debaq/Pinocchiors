@@ -1666,6 +1666,35 @@ impl Ctx<'_> {
                 self.scope = saved;
                 r
             }
+            FeatureKind::SheetMetal { sketch, regions, thickness, radius, k_factor, flip, op } => {
+                if *thickness <= 0.0 {
+                    return Err("el espesor tiene que ser mayor que cero".into());
+                }
+                if *radius < 0.0 || !(0.0..=1.0).contains(k_factor) {
+                    return Err("el radio no puede ser negativo y el factor K va de 0 a 1".into());
+                }
+                let e = Extrude {
+                    sketch: *sketch,
+                    regions: regions.clone(),
+                    extent: Extent::Blind { distance: *thickness },
+                    reverse: *flip,
+                    op: *op,
+                    draft: 0.0,
+                    thin: None,
+                };
+                let tool = self.extrude_dir(f.id, &e, *flip)?;
+                self.ev.tools.insert(f.id, (tool.clone(), *op));
+                self.apply(f.id, tool, *op)
+            }
+            FeatureKind::Flange { edge, length, angle, flip, radius } => {
+                let edge = edge.as_ref().ok_or("elegir la arista del borde de la chapa")?;
+                let (tool, part) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
+                self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
+                let saved = std::mem::replace(&mut self.scope, vec![part]);
+                let r = self.apply(f.id, tool, BodyOp::Join);
+                self.scope = saved;
+                r
+            }
             FeatureKind::Hole(h) => {
                 let tool = self.hole_tool(f.id, h)?;
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Cut));
@@ -1826,6 +1855,72 @@ impl Ctx<'_> {
 
     /// Extrusión. Si resta o interseca y hacia ese lado no toca el sólido (un
     /// bolsillo dibujado sobre una cara apunta hacia afuera), se da vuelta sola.
+    /// Chapa de la que sale una operación: la última antes de `id`.
+    fn sheet_params(&self, id: FeatureId) -> Option<(f64, f64, f64)> {
+        let end = self.doc.index_of(id)?;
+        self.doc.features[..end].iter().rev().find_map(|f| match &f.kind {
+            FeatureKind::SheetMetal { thickness, radius, k_factor, .. } if !f.suppressed => Some((*thickness, *radius, *k_factor)),
+            _ => None,
+        })
+    }
+
+    /// Doblez y pared de una pestaña desde la arista `edge` (recta, entre la
+    /// cara grande de la chapa y su canto). Devuelve la herramienta y la pieza.
+    fn flange_tool(&self, id: FeatureId, edge: &EdgeRef, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId)> {
+        if !(angle > 0.0 && angle < 180.0) {
+            return Err("el ángulo va entre 0 y 180°".into());
+        }
+        if length < 0.0 {
+            return Err("el largo no puede ser negativo".into());
+        }
+        let i = self.edge("edge", edge)?;
+        let body = self.body()?;
+        let info = body.edge_info(i).map_err(err)?;
+        if info.curve != cad_occt::CurveKind::Line {
+            return Err("la pestaña sale de una arista recta".into());
+        }
+        let dir = normalize(sub(info.end, info.start));
+        let faces: Vec<(usize, cad_occt::FaceInfo)> =
+            body.edge_faces(i).map_err(err)?.into_iter().filter_map(|k| body.face_info(k).ok().map(|x| (k, x))).collect();
+        if faces.len() != 2 || faces.iter().any(|(_, x)| x.surface != cad_occt::SurfaceKind::Plane) {
+            return Err("la arista tiene que estar entre dos caras planas de la chapa".into());
+        }
+        // El canto es la cara angosta (su ancho es el espesor)
+        let width = |x: &cad_occt::FaceInfo| x.area / info.length.max(1e-9);
+        let (side, top) = if width(&faces[0].1) <= width(&faces[1].1) { (&faces[0], &faces[1]) } else { (&faces[1], &faces[0]) };
+        let t = self.sheet_params(id).map(|p| p.0).unwrap_or_else(|| width(&side.1));
+        let r = radius.or(self.sheet_params(id).map(|p| p.1)).unwrap_or(t);
+        if r < 0.0 {
+            return Err("el radio no puede ser negativo".into());
+        }
+        let n = normalize(top.1.normal);
+        let m = normalize(side.1.normal);
+        if dot(n, m).abs() > 1e-3 || dot(n, dir).abs() > 1e-3 || dot(m, dir).abs() > 1e-3 {
+            return Err("la arista tiene que ser de un canto recto de la chapa".into());
+        }
+        // Hacia dónde dobla: el lado de la cara de la arista, o el otro
+        let b = if flip { scale(n, -1.0) } else { n };
+        // El eje queda a un radio del borde del canto de ese lado
+        let edge_on_b = if flip { sub(info.start, scale(n, t)) } else { info.start };
+        let axis = Axis { origin: add(edge_on_b, scale(b, r)), dir };
+        // Girar el canto del lado del material (−b) hacia afuera (m)
+        let sign = if dot(cross(dir, scale(b, -1.0)), m) >= 0.0 { 1.0 } else { -1.0 };
+        let a = sign * angle.to_radians();
+        let face = body.face_shape(side.0).map_err(err)?;
+        let bend = face.revolve(axis, a).map_err(err)?;
+        let shape = if length > 0.0 {
+            let rot = cad_occt::rotation_matrix(axis, a);
+            let d = [0, 1, 2].map(|k| rot[k][0] * m[0] + rot[k][1] * m[1] + rot[k][2] * m[2]);
+            let wall = face.rotate(axis, a).map_err(err)?.prism(scale(d, length)).map_err(err)?;
+            bend.union(&wall).map_err(err)?
+        } else {
+            bend
+        };
+        let part = self.ev.part_of_face(side.0).ok_or("la arista no es de ninguna pieza")?;
+        let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("pestaña:{k}"))]).collect();
+        Ok((Tagged { shape, tags }, part))
+    }
+
     fn extrude(&self, id: FeatureId, e: &Extrude) -> R<Tagged> {
         let tool = self.extrude_dir(id, e, e.reverse)?;
         let auto_flip = matches!(e.op, BodyOp::Cut | BodyOp::Intersect)

@@ -1858,6 +1858,63 @@ const scenarios = {
     await b.shot("tuerca_roscada");
   },
 
+  async "chapa: pestañas y desarrollo en DXF"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const filter = (label) => b.eval(`[...document.querySelectorAll('[role=radio]')].find((e) => e.textContent === ${JSON.stringify(label)}).click()`);
+    await begin(b);
+    // Chapa de 100 × 50 × 2 (radio 2, K 0,44)
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [100, 0], [100, 50], [0, 50]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const sketch = { points, entities: [line(5, 1, 2), line(6, 2, 3), line(7, 3, 4), line(8, 4, 1)], constraints: [], next_id: 9, origin: 0 };
+    const sk = doc.next_id++;
+    doc.features.push({ id: sk, name: "Contorno", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.features.push({ id: doc.next_id++, name: "Chapa", suppressed: false, kind: { type: "sheet_metal", sketch: sk, regions: { type: "all" }, thickness: 2, radius: 2, k_factor: 0.44, flip: false, op: "join" } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    await sleep(500);
+    near((await body()).volume, 10000, 1e-6, "chapa");
+    // Arista de arriba del borde largo de adelante → Pestaña (sube 20)
+    await filter("Aristas");
+    await b.click(...(await at([60, 0, 2])), { wait: 800 });
+    const picked = await b.eval(`window.__cadUi.picks().map((p) => p.kind)`);
+    if (picked.join() !== "edge") throw new Error(`elegido: ${picked}`);
+    await b.clickText("Pestaña");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "flange"; t++) await sleep(250);
+    await sleep(1500);
+    await accept(b, 2000);
+    const bend = (Math.PI / 4) * (16 - 4) * 100;
+    near((await body()).volume, 10000 + bend + 4000, 1e-3, "con una pestaña");
+    // La segunda del otro lado, hacia el mismo lado (por documento, la arista de y = 50)
+    await filter("Aristas");
+    await b.click(...(await at([60, 50, 2])), { wait: 800 });
+    await b.clickText("Pestaña");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.filter((f) => f.kind.type === "flange").length`)) !== 2; t++) await sleep(250);
+    await sleep(1500);
+    await accept(b, 2000);
+    near((await body()).volume, 10000 + 2 * (bend + 4000), 1e-3, "canal en U");
+    await b.shot("chapa_canal");
+    // Desarrollo: 100 × (50 + 2·π/2·2,88 + 40) = 100 × 99,05
+    await filter("Todo");
+    await b.clickText("Desarrollo");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-flat] svg")`)); t++) await sleep(300);
+    const size = await b.eval(`document.querySelector("[data-flat-size]")?.textContent ?? ""`);
+    if (!size.startsWith("100 × 99,05 mm") || !size.includes("2 dobleces")) throw new Error(`desarrollo: ${size}`);
+    if ((await b.eval(`document.querySelectorAll("[data-flat] [data-bend]").length`)) !== 2) throw new Error("líneas de doblez");
+    await b.shot("chapa_desarrollo");
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const path = `${out}/canal.dxf`;
+    rmSync(path, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.clickText("Exportar DXF");
+    await sleep(1500);
+    const dxf = existsSync(path) ? readFileSync(path, "utf8") : "";
+    if (!dxf.includes("CONTORNO") || (dxf.match(/\nDOBLEZ\n/g) ?? []).length < 2) throw new Error("DXF del desarrollo");
+  },
+
   async "chaflán de dos distancias y redondeo variable"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);
