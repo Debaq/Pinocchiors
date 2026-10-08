@@ -1580,6 +1580,41 @@ const scenarios = {
     if (!(Number(chosen) > 0)) throw new Error(`gestor: elegido ${chosen}`);
   },
 
+  async "barra de estado: atajos según lo que se hace"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const hints = () => b.eval(`[...document.querySelectorAll("[data-hints] > span")].map((s) => s.querySelector("kbd").textContent + ": " + s.lastChild.textContent.trim())`);
+    const has = async (want, what) => {
+      const h = await hints();
+      if (!want.every((w) => h.includes(w))) throw new Error(`${what}: ${JSON.stringify(h)}`);
+    };
+    await begin(b);
+    await has(["Clic: elegir", "Arrastrar: caja", "Mayús+1…7: vistas"], "sin nada");
+    if (await b.eval(`document.body.innerText.includes("Importa un modelo para comenzar")`)) throw new Error("quedó el mensaje de importar");
+    await b.clickText("Caja");
+    await sleep(1500);
+    await has(["Enter: aceptar", "Esc: cancelar"], "con el diálogo");
+    await accept(b);
+    await b.click(...(await at([0, 0, 10])), { wait: 800 });
+    await has(["Mayús+clic: sumar o quitar", "Esc: limpiar"], "con algo elegido");
+    await b.key("Escape", "Escape", 27);
+    // Al pedir dónde va el sketch, el aviso no tapa la barra de herramientas
+    await b.clickText("Sketch");
+    await sleep(500);
+    await has(["Clic: elegir", "Esc: cancelar"], "eligiendo");
+    const overlap = await b.eval(`(() => {
+      const cancel = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Cancelar (Esc)");
+      const prompt = cancel.parentElement.getBoundingClientRect();
+      const bar = Math.max(...[...document.querySelectorAll("[data-toolbar-menu]")].map((m) => m.getBoundingClientRect().bottom));
+      return prompt.top < bar;
+    })()`);
+    if (overlap) throw new Error("el aviso tapa la barra");
+    await b.shot("barra_de_estado_eligiendo");
+    await b.key("Escape", "Escape", 27);
+    await sleep(300);
+    await sketchOn(b);
+    await has(["Clic: dibujar", "Enter: terminar"], "en el sketch");
+  },
+
   async "selección como Onshape: región, cara y arista"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

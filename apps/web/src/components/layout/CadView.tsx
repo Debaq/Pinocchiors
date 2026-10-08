@@ -1678,17 +1678,6 @@ export const CadView: Component<CadViewProps> = (props) => {
         </Show>
       </div>
 
-      {/* Lo que se espera que el usuario elija */}
-      <Show when={promptText()}>
-        <div class="absolute top-14 left-1/2 -translate-x-1/2 flex items-center gap-3 rounded-md border border-accent/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
-          <Icons.Cursor size={14} class="text-accent" />
-          {promptText()}
-          <button class="text-text-muted hover:text-text" onClick={() => ui.cancelPick()}>
-            Cancelar (Esc)
-          </button>
-        </div>
-      </Show>
-
       {/* Cota que sobre-define el sketch: dejarla de referencia o quitarla */}
       <Show when={ui.extraDimension()}>
         {(i) => (
@@ -1731,6 +1720,16 @@ export const CadView: Component<CadViewProps> = (props) => {
 
       {/* Mensajes y errores */}
       <div class="absolute bottom-2 left-2 right-2 flex flex-col gap-1 items-start pointer-events-none">
+        {/* Lo que se espera que el usuario elija (abajo: arriba tapaba la barra) */}
+        <Show when={promptText()}>
+          <div class="flex items-center gap-3 rounded-md border border-accent/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text pointer-events-auto">
+            <Icons.Cursor size={14} class="text-accent" />
+            {promptText()}
+            <button class="text-text-muted hover:text-text" onClick={() => ui.cancelPick()}>
+              Cancelar (Esc)
+            </button>
+          </div>
+        </Show>
         <Show when={store.busy()}>
           <span class="text-xs text-text-muted bg-bg-lighter/90 rounded px-2 py-0.5">Recalculando...</span>
         </Show>
@@ -1751,15 +1750,7 @@ export const CadView: Component<CadViewProps> = (props) => {
             </button>
           </span>
         </Show>
-        <Show when={!ui.session() && store.draft()}>
-          <span class="text-[11px] text-text-dim">Enter: aceptar la operación · Esc: cancelar · arrastrar el borde de arriba del diálogo para moverlo</span>
-        </Show>
-        <Show when={ui.session()}>
-          <span class="text-[11px] text-text-dim">
-            Clic: dibujar · Mayús: sin anclajes · Esc: cortar la herramienta · Supr: borrar lo elegido · Enter: terminar · Alt+arrastrar o botón del medio: girar la
-            vista
-          </span>
-        </Show>
+        {/* Los atajos del momento van en la barra de estado (lib/designHints.ts) */}
       </div>
     </div>
   );

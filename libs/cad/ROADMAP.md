@@ -435,7 +435,7 @@ cargo test -p cad-model
 - **Hecho (2026-10-07):** las piezas del diseño son objetos del Outliner y pasan solas a
   Preparar, Rig y Fabricar; lo hecho sobre su malla se rehace si cambia el diseño. Ver
   `PLAN_OBJETOS.md`. El Outliner va en tres grupos: Planos, Operaciones y Objetos.
-- **Rediseño de la interfaz de Diseñar (2026-10-07, EN CURSO).** Decisiones del usuario: árbol de
+- **Rediseño de la interfaz de Diseñar (2026-10-07, hecho 2026-10-08).** Decisiones del usuario: árbol de
   operaciones en el Outliner (no columna aparte) y botones con ícono y texto.
   - Hecho: fase 1, barra de herramientas arriba del visor (`components/design/DesignToolbar.tsx`,
     íconos en `icons/design.tsx`; principales a la vista, el resto en menús Sólidos / Modificar /
@@ -448,5 +448,9 @@ cargo test -p cad-model
     como función: con el valor suelto el `<Match>` la leía una vez y la pestaña cambiaba el
     título pero no el contenido. Suite e2e completa 54/54 (2026-10-08); el arnés abre solo los
     menús de la barra y las pestañas (`clickText`, `clickContains`, `tab()`).
-  - Falta: fase 4, línea de ayuda abajo del visor (ya muestra lo elegido, avisos y Enter/Esc; revisar).
+  - Fase 4 (2026-10-08): los atajos del momento van en la barra de estado de la app, con las
+    teclas resaltadas como en Blender (`lib/designHints.ts`: sin nada, eligiendo, con diálogo,
+    con algo elegido, en el sketch); los mensajes de la app se ven 6 s a la derecha. El aviso
+    "elegir …" bajó a la pila de mensajes del visor (arriba tapaba la segunda fila de la barra).
+    Ya no aparece "Importa un modelo para comenzar" en Diseñar.
   - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.

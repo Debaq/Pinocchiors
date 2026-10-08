@@ -265,6 +265,7 @@ import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
 import { createCadStore, partColor, partHidden, PLANE_LABELS } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
+import { designHints } from "./lib/designHints";
 import { createScanCloud } from "./lib/scanCloud";
 import type { BodyPlan, BodyShape } from "./lib/bodyPlan";
 import { BodyBuilder } from "./components/layout/BodyBuilder";
@@ -585,6 +586,20 @@ export const App: Component = () => {
   // State
   const [fps, setFps] = createSignal(0);
   const [statusMessage, setStatusMessage] = createSignal("Listo - Importa un modelo para comenzar");
+  // En Diseñar la barra muestra atajos; los mensajes nuevos se ven unos segundos a la derecha
+  const [freshStatus, setFreshStatus] = createSignal(false);
+  let freshTimer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(
+    on(
+      statusMessage,
+      () => {
+        clearTimeout(freshTimer);
+        setFreshStatus(true);
+        freshTimer = setTimeout(() => setFreshStatus(false), 6000);
+      },
+      { defer: true },
+    ),
+  );
   // value ausente = progreso indeterminado (solo etiqueta)
   const [progress, setProgress] = createSignal<{ value?: number; label?: string } | undefined>();
 
@@ -7003,9 +7018,10 @@ export const App: Component = () => {
 
         {/* Status Bar */}
         <StatusBar
-          message={statusMessage()}
+          message={showCad() && !freshStatus() ? undefined : statusMessage()}
           progress={progress()}
           info={animating() ? poseInfo() : undefined}
+          hints={showCad() ? designHints(cad, cadUi) : undefined}
         />
       </div>
 
