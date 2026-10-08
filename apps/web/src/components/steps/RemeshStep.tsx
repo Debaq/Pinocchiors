@@ -2,6 +2,7 @@ import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { RetopologyStep, type RetopologyStepProps } from "./RetopologyStep";
 import { SimplifyPanel, type SimplifyPanelProps } from "../panels/SimplifyPanel";
+import { SmoothPanel, type SmoothPanelProps } from "../panels/SmoothPanel";
 
 /** Formas de ordenar la malla (ver libs/quadriflow/PLAN_REMALLAR.md) */
 export type RemeshMode = "retopology" | "simplify" | "isotropic" | "voxel" | "quads" | "smooth";
@@ -47,7 +48,7 @@ export const REMESH_MODES: { id: RemeshMode; label: string; what: string; use: s
     label: "Suavizar",
     what: "Empareja los vértices sin cambiar la conectividad ni encoger.",
     use: "Quitar el ruido de un escaneo.",
-    ready: false,
+    ready: true,
   },
 ];
 
@@ -133,11 +134,10 @@ export interface RemeshStepProps {
   /** La malla de ahora (triángulos) */
   mesh: { vertices: number; faces: number };
   retopology: RetopologyStepProps & { result?: { vertices: number; quads: number } };
-  simplify: Omit<SimplifyPanelProps, "triangles" | "hasPreview"> & {
-    /** Vista previa calculada, o lo último aplicado */
-    stats?: RemeshStats;
-    statsKind?: "preview" | "applied";
-  };
+  /** Vista previa calculada, o lo último aplicado, y de qué modo */
+  remeshStats?: { mode: RemeshMode; kind: "preview" | "applied"; stats: RemeshStats };
+  simplify: Omit<SimplifyPanelProps, "triangles" | "hasPreview">;
+  smooth: Omit<SmoothPanelProps, "hasPreview">;
 }
 
 /**
@@ -146,6 +146,9 @@ export interface RemeshStepProps {
  */
 export const RemeshStep: Component<RemeshStepProps> = (props) => {
   const current = () => REMESH_MODES.find((m) => m.id === props.mode) ?? REMESH_MODES[0];
+  /** El antes → después del modo elegido */
+  const stats = () => (props.remeshStats?.mode === props.mode ? props.remeshStats : undefined);
+  const hasPreview = () => stats()?.kind === "preview";
   return (
     <div class="space-y-4">
       <div>
@@ -184,17 +187,20 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
           </p>
         </Show>
         <Show when={current().id === "simplify"}>
-          <SimplifyPanel {...props.simplify} triangles={props.mesh.faces} hasPreview={props.simplify.statsKind === "preview"} />
-          <Show when={props.simplify.stats}>
-            {(s) => (
-              <RemeshSummary
-                title={props.simplify.statsKind === "preview" ? "Vista previa (el modelo no cambió)" : "Aplicado"}
-                before={{ vertices: s().before.vertices, faces: s().before.triangles, faceLabel: "triángulos" }}
-                after={{ vertices: s().after.vertices, faces: s().after.triangles, faceLabel: "triángulos" }}
-                deviation={s().deviation}
-              />
-            )}
-          </Show>
+          <SimplifyPanel {...props.simplify} triangles={props.mesh.faces} hasPreview={hasPreview()} />
+        </Show>
+        <Show when={current().id === "smooth"}>
+          <SmoothPanel {...props.smooth} hasPreview={hasPreview()} />
+        </Show>
+        <Show when={stats()}>
+          {(s) => (
+            <RemeshSummary
+              title={s().kind === "preview" ? "Vista previa (el modelo no cambió)" : "Aplicado"}
+              before={{ vertices: s().stats.before.vertices, faces: s().stats.before.triangles, faceLabel: "triángulos" }}
+              after={{ vertices: s().stats.after.vertices, faces: s().stats.after.triangles, faceLabel: "triángulos" }}
+              deviation={s().stats.deviation}
+            />
+          )}
         </Show>
         <Show when={current().id === "retopology"}>
           <RetopologyStep {...props.retopology} />

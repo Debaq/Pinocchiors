@@ -261,6 +261,7 @@ import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./c
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { REMESH_MODES, type RemeshMode, type RemeshStats } from "./components/steps/RemeshStep";
 import { DEFAULT_SIMPLIFY, simplifyParams, type SimplifyConfig } from "./components/panels/SimplifyPanel";
+import { DEFAULT_SMOOTH, smoothParams, type SmoothConfig } from "./components/panels/SmoothPanel";
 import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
@@ -770,8 +771,9 @@ export const App: Component = () => {
   // Remallar: el modo elegido (la retopología es uno de ellos)
   const [remeshMode, setRemeshMode] = createSignal<RemeshMode>("retopology");
   const [simplifyConfig, setSimplifyConfig] = createSignal<SimplifyConfig>(DEFAULT_SIMPLIFY);
+  const [smoothConfig, setSmoothConfig] = createSignal<SmoothConfig>(DEFAULT_SMOOTH);
   /** Vista previa del remallado (el modelo no cambió) o lo último aplicado */
-  const [remeshStats, setRemeshStats] = createSignal<{ kind: "preview" | "applied"; stats: RemeshStats }>();
+  const [remeshStats, setRemeshStats] = createSignal<{ mode: RemeshMode; kind: "preview" | "applied"; stats: RemeshStats }>();
   const [remeshPreviewData, setRemeshPreviewData] = createSignal<MeshData>();
   /** Con vista previa, qué muestra el visor */
   const [previewView, setPreviewView] = createSignal<PreviewView>("both");
@@ -5307,7 +5309,7 @@ export const App: Component = () => {
     setRemeshStats((s) => (s?.kind === "preview" ? undefined : s));
     rawInvoke("remesh_discard").catch(() => {});
   };
-  // La vista previa deja de valer si cambia la malla o las opciones, o al salir de Simplificar
+  // La vista previa deja de valer si cambia la malla, las opciones o el modo
   createEffect(
     on(
       meshData,
@@ -5318,29 +5320,56 @@ export const App: Component = () => {
       { defer: true }
     )
   );
-  createEffect(on(simplifyConfig, discardRemeshPreview, { defer: true }));
+  createEffect(on([simplifyConfig, smoothConfig, remeshMode], discardRemeshPreview, { defer: true }));
   createEffect(
-    on([() => pipeline.activeStep(), remeshMode], ([step, mode]) => {
-      if (step !== "remesh" || mode !== "simplify") discardRemeshPreview();
-    })
+    on(
+      () => pipeline.activeStep(),
+      (step) => {
+        if (step !== "remesh") discardRemeshPreview();
+      }
+    )
   );
   // "Los dos": el resultado en alambre sobre el modelo
   createEffect(() => viewer()?.setPreviewOverlay(previewView() === "both" ? remeshPreviewData() : undefined));
   /** El visor muestra el resultado en lugar del modelo */
   const showsPreview = () => previewView() === "result" && !!remeshPreviewData();
 
+  /** Parámetros, mensaje y paso del historial del modo elegido */
+  const remeshJob = () => {
+    const mode = remeshMode();
+    if (mode === "smooth") {
+      const config = smoothConfig();
+      const passes = Math.round(config.iterations);
+      return {
+        mode,
+        params: smoothParams(config),
+        busy: "Suavizando...",
+        step: `Suavizar malla (${passes} ${passes === 1 ? "pasada" : "pasadas"})`,
+        done: (stats: RemeshStats) => `Malla suavizada: se movió hasta ${stats.deviation.max_percent.toLocaleString("es", { maximumSignificantDigits: 2 })} % del tamaño`,
+      };
+    }
+    const config = simplifyConfig();
+    return {
+      mode,
+      params: simplifyParams(config),
+      busy: "Simplificando...",
+      step: `Simplificar malla (${config.percent.toLocaleString("es")} %)`,
+      done: (stats: RemeshStats) => `Malla simplificada: ${stats.after.triangles.toLocaleString("es")} triángulos`,
+    };
+  };
+
   const handleRemeshPreview = async () => {
     try {
       setIsProcessing(true);
-      const params = simplifyParams(simplifyConfig());
+      const { mode, params } = remeshJob();
       const stats = await busy("Calculando la vista previa...", async () => {
         const stats = await invoke<RemeshStats>("remesh_preview", { params, onProgress: progressChannel() });
         setRemeshPreviewData(decodeMesh(await invoke<ArrayBuffer>("get_remesh_preview_data")));
         return stats;
       });
-      setRemeshStats({ kind: "preview", stats });
+      setRemeshStats({ mode, kind: "preview", stats });
       setStatusMessage(
-        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")})`
+        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")}), se aleja hasta ${stats.deviation.max_percent.toLocaleString("es", { maximumSignificantDigits: 2 })} %`
       );
     } catch (e) {
       console.error("Remesh preview error:", e);
@@ -5354,14 +5383,14 @@ export const App: Component = () => {
     undoable(async (done) => {
       try {
         setIsProcessing(true);
-        const config = simplifyConfig();
-        const result = await busy("Simplificando...", () =>
+        const job = remeshJob();
+        const result = await busy(job.busy, () =>
           invoke<{ mesh_info: MeshInfo; stats: RemeshStats; rig_kept: boolean }>("remesh_apply", {
-            params: simplifyParams(config),
+            params: job.params,
             onProgress: progressChannel(),
           })
         );
-        done(`Simplificar malla (${config.percent.toLocaleString("es")} %)`);
+        done(job.step);
 
         // La retopología, los respaldos de reparar/desplegar/escalar y el
         // diagnóstico eran de la malla anterior; el rig pasa a la nueva
@@ -5379,11 +5408,9 @@ export const App: Component = () => {
           format: meshInfo().format,
         });
         if (result.rig_kept) await keepRig();
-        setRemeshStats({ kind: "applied", stats: result.stats });
+        setRemeshStats({ mode: job.mode, kind: "applied", stats: result.stats });
         pipeline.markCompleted("remesh");
-        setStatusMessage(
-          `Malla simplificada: ${result.stats.after.triangles.toLocaleString("es")} triángulos${result.rig_kept ? " (los pesos pasaron a la malla nueva)" : ""}`
-        );
+        setStatusMessage(`${job.done(result.stats)}${result.rig_kept ? " (los pesos pasaron a la malla nueva)" : ""}`);
       } catch (e) {
         console.error("Remesh apply error:", e);
         setStatusMessage(`Error: ${e}`);
@@ -6104,7 +6131,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
-      remesh: { mode: remeshMode(), simplify: simplifyConfig() },
+      remesh: { mode: remeshMode(), simplify: simplifyConfig(), smooth: smoothConfig() },
       uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
@@ -6134,6 +6161,7 @@ export const App: Component = () => {
     paint: paintConfig(),
     retopology: retopologyConfig(),
     simplify: simplifyConfig(),
+    smooth: smoothConfig(),
     uv: uvConfig(),
     repairAnalysis: repairAnalysisConfig(),
     repair: repairOptions(),
@@ -6197,6 +6225,7 @@ export const App: Component = () => {
     setQuadQuality(ui.retopology?.quality);
     if (REMESH_MODES.some((m) => m.id === ui.remesh?.mode)) setRemeshMode(ui.remesh.mode);
     if (ui.remesh?.simplify) setSimplifyConfig(withDefaults(configDefaults.simplify, ui.remesh.simplify));
+    if (ui.remesh?.smooth) setSmoothConfig(withDefaults(configDefaults.smooth, ui.remesh.smooth));
     if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
     if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
@@ -7072,6 +7101,7 @@ export const App: Component = () => {
               onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),
               },
+              remeshStats: remeshStats(),
               simplify: {
                 config: simplifyConfig(),
                 onChange: setSimplifyConfig,
@@ -7080,8 +7110,15 @@ export const App: Component = () => {
                 onDiscard: discardRemeshPreview,
                 canExecute: meshLoaded(),
                 isProcessing: isProcessing(),
-                stats: remeshStats()?.stats,
-                statsKind: remeshStats()?.kind,
+              },
+              smooth: {
+                config: smoothConfig(),
+                onChange: setSmoothConfig,
+                onPreview: handleRemeshPreview,
+                onApply: handleRemeshApply,
+                onDiscard: discardRemeshPreview,
+                canExecute: meshLoaded(),
+                isProcessing: isProcessing(),
               },
             }}
             uvProps={{

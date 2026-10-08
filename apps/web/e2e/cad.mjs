@@ -3070,6 +3070,59 @@ const scenarios = {
     if ((await triangles()) !== before) throw new Error(`deshacer no devolvió la malla: ${await triangles()} (antes ${before})`);
   },
 
+  async "remallar: suavizar sin cambiar la conectividad, aplicar y deshacer"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Bola", kind: { type: "primitive", shape: { type: "sphere", radius: 20 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 51;
+    })`);
+    await sleep(2500);
+    // Cabecera de get_mesh_data (vértices, índices…) y una huella de las posiciones
+    const mesh = async () => {
+      const buf = await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let h = 0;
+      for (let i = 0; i < bytes.length; i++) h = (h * 31 + bytes[i]) | 0;
+      return { triangles: new Uint32Array(buf, 0, 4)[1] / 3, hash: h };
+    };
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="smooth"]').click()`);
+    await sleep(300);
+    if (!(await b.eval(`!!document.querySelector("[data-smooth]")`))) throw new Error("sin el panel de Suavizar");
+    if (await b.eval(`!!document.querySelector("[data-remesh-pending]")`)) throw new Error("Suavizar sigue marcado como pendiente");
+    const before = await mesh();
+
+    // Vista previa: mismos triángulos y el modelo no cambia
+    await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-remesh-deviation]")`)); t++) await sleep(250);
+    const after = await b.eval(`parseInt(document.querySelector("[data-remesh-after]").textContent.split(" ")[0].replace(/\\D/g, ""))`);
+    if (after !== before.triangles) throw new Error(`suavizar cambió los triángulos: ${before.triangles} → ${after}`);
+    if ((await mesh()).hash !== before.hash) throw new Error("la vista previa cambió el modelo");
+    if (!(await b.eval(`window.__viewer().hasPreviewOverlay`))) throw new Error("sin el alambre de la vista previa");
+    await b.shot("suavizar-vista-previa");
+
+    // Cambiar una opción descarta la vista previa
+    await b.eval(`[...document.querySelectorAll("[data-smooth] label")].find((x) => x.textContent.includes("Sin deslizar")).click()`);
+    for (let t = 0; t < 20 && (await b.eval(`!!document.querySelector("[data-preview-view]")`)); t++) await sleep(250);
+    if (await b.eval(`window.__viewer().hasPreviewOverlay`)) throw new Error("cambiar la opción no descartó la vista previa");
+
+    // Aplicar: cambian las posiciones, no los triángulos
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 40 && (await mesh()).hash === before.hash; t++) await sleep(250);
+    const applied = await mesh();
+    if (applied.hash === before.hash) throw new Error("aplicar no movió nada");
+    if (applied.triangles !== before.triangles) throw new Error(`aplicar cambió los triángulos: ${applied.triangles}`);
+    for (let t = 0; t < 20 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
+    if (!(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`))) throw new Error("sin el resumen de lo aplicado");
+
+    // Deshacer: vuelve la malla de antes
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
+    for (let t = 0; t < 40 && (await mesh()).hash !== before.hash; t++) await sleep(250);
+    if ((await mesh()).hash !== before.hash) throw new Error("deshacer no devolvió la malla");
+  },
+
   async "objetos: las piezas pasan solas a Fabricar"(b) {
     await begin(b);
     await b.clickText("Caja");

@@ -1,6 +1,6 @@
 import { Component, Show } from "solid-js";
-import { Button, Checkbox, Slider } from "../ui";
-import * as Icons from "../icons";
+import { Checkbox, Slider } from "../ui";
+import { RemeshActions, type RemeshActionsProps } from "./RemeshActions";
 
 /** Opciones de Simplificar (Remallar) */
 export interface SimplifyConfig {
@@ -37,17 +37,11 @@ export const simplifyParams = (c: SimplifyConfig) => ({
   aggressive: c.aggressive,
 });
 
-export interface SimplifyPanelProps {
+export interface SimplifyPanelProps extends RemeshActionsProps {
   config: SimplifyConfig;
   onChange: (config: SimplifyConfig) => void;
   /** Triángulos del modelo ahora */
   triangles: number;
-  hasPreview: boolean;
-  onPreview: () => void;
-  onApply: () => void;
-  onDiscard: () => void;
-  canExecute: boolean;
-  isProcessing: boolean;
 }
 
 export const SimplifyPanel: Component<SimplifyPanelProps> = (props) => {
@@ -123,32 +117,7 @@ export const SimplifyPanel: Component<SimplifyPanelProps> = (props) => {
         Las UV, la textura y los pesos se conservan: cada vértice que queda es uno del original.
       </p>
 
-      <div class="flex gap-2">
-        <Button
-          data-remesh-preview
-          class="flex-1"
-          onClick={() => props.onPreview()}
-          disabled={!props.canExecute || props.isProcessing}
-          icon={<Icons.Eye size={14} />}
-        >
-          Vista previa
-        </Button>
-        <Button
-          data-remesh-apply
-          variant="primary"
-          class="flex-1"
-          onClick={() => props.onApply()}
-          disabled={!props.canExecute || props.isProcessing}
-          loading={props.isProcessing}
-        >
-          Aplicar
-        </Button>
-      </div>
-      <Show when={props.hasPreview}>
-        <Button data-remesh-discard variant="ghost" size="sm" fullWidth onClick={() => props.onDiscard()} disabled={props.isProcessing}>
-          Descartar la vista previa
-        </Button>
-      </Show>
+      <RemeshActions {...props} />
     </div>
   );
 };

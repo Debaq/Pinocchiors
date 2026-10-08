@@ -1,5 +1,5 @@
 //! Remallar: los modos que no son la retopología (ver
-//! `libs/quadriflow/PLAN_REMALLAR.md`). Por ahora, Simplificar.
+//! `libs/quadriflow/PLAN_REMALLAR.md`). Por ahora, Simplificar y Suavizar.
 //!
 //! La vista previa calcula sin tocar el modelo y queda guardada hasta
 //! aplicarla o descartarla; aplicar con los mismos parámetros sobre la misma
@@ -13,7 +13,7 @@ use crate::commands::{
 use crate::state::AppState;
 use converter_scene::{IndexData, Primitive, Scene, VertexAttribute};
 use pinocchio_mesh::Mesh;
-use quadriflow_core::remesh::{self, SimplifyInput, SimplifyOptions};
+use quadriflow_core::remesh::{self, SimplifyInput, SimplifyOptions, SmoothOptions};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use tauri::ipc::{Channel, Response};
@@ -24,6 +24,7 @@ use tauri::{AppHandle, State};
 #[serde(tag = "mode", rename_all = "snake_case")]
 pub enum RemeshParams {
     Simplify(SimplifyParams),
+    Smooth(SmoothParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -41,6 +42,23 @@ pub struct SimplifyParams {
     /// Llegar al objetivo aunque cambie la topología
     #[serde(default)]
     pub aggressive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SmoothParams {
+    /// Pasadas del filtro
+    pub iterations: usize,
+    /// Cuánto se acerca cada vértice al promedio de sus vecinos (0–1)
+    pub strength: f64,
+    /// Respetar las aristas vivas desde este ángulo entre caras, en grados
+    #[serde(default)]
+    pub sharp_angle: Option<f64>,
+    /// No mover los bordes abiertos
+    #[serde(default)]
+    pub fix_borders: bool,
+    /// Mover los vértices solo según la normal (la textura no se corre)
+    #[serde(default = "yes")]
+    pub normal_only: bool,
 }
 
 fn yes() -> bool {
@@ -203,6 +221,10 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
             report(progress, "simplify", 5, "Simplificando...");
             simplify_scene(scene, p, &before)
         }
+        RemeshParams::Smooth(p) => {
+            report(progress, "smooth", 5, "Suavizando...");
+            smooth_scene(scene, p)
+        }
     };
     report(progress, "deviation", 70, "Midiendo cuánto se aleja del original...");
     let after = WorldSurface::of(&result);
@@ -320,6 +342,108 @@ fn simplify_scene(scene: &Scene, params: &SimplifyParams, world: &WorldSurface) 
         mesh.primitives = joined.split(&mesh.primitives, &result.indices);
     }
     out
+}
+
+/// Suaviza cada malla de la escena (en su espacio local). Las primitivas de
+/// una malla se suavizan juntas, así el límite entre ellas no se raja; la
+/// conectividad, las UV y los pesos no cambian. Las normales se rehacen.
+fn smooth_scene(scene: &Scene, params: &SmoothParams) -> Scene {
+    let options = SmoothOptions {
+        iterations: params.iterations,
+        strength: params.strength as f32,
+        sharp_angle: params.sharp_angle.map(|a| a as f32),
+        fix_borders: params.fix_borders,
+        normal_only: params.normal_only,
+    };
+    let mut out = scene.clone();
+    for mesh in &mut out.meshes {
+        let joined = Joined::of(&mesh.primitives);
+        if joined.indices.is_empty() {
+            continue;
+        }
+        let smoothed = remesh::smooth(&joined.positions, &joined.indices, &options);
+        let new_normals = recompute_normals(&mesh.primitives, &joined, &smoothed);
+        for (k, prim) in mesh.primitives.iter_mut().enumerate() {
+            let offset = joined.offsets[k] as usize;
+            for a in &mut prim.attributes {
+                match a {
+                    VertexAttribute::Positions(p) => {
+                        let n = p.len();
+                        p.copy_from_slice(&smoothed[offset..offset + n]);
+                    }
+                    VertexAttribute::Normals(nr) => {
+                        for (v, n) in nr.iter_mut().enumerate() {
+                            *n = new_normals[offset + v];
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Las tangentes siguen perpendiculares a la normal nueva
+            let prim_normals: Vec<[f32; 3]> = normals(prim).cloned().unwrap_or_default();
+            for a in &mut prim.attributes {
+                if let VertexAttribute::Tangents(t) = a {
+                    for (v, t) in t.iter_mut().enumerate() {
+                        if let Some(n) = prim_normals.get(v) {
+                            *t = orthogonal_tangent(*t, *n);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Normales de los vértices sobre las posiciones nuevas. Los vértices con la
+/// misma posición y la misma normal de antes comparten la nueva (suave a
+/// través de las costuras de UV y entre primitivas); los que tenían normales
+/// distintas siguen partidos (aristas vivas).
+fn recompute_normals(primitives: &[Primitive], joined: &Joined, positions: &[[f32; 3]]) -> Vec<[f32; 3]> {
+    let old: Vec<[f32; 3]> = primitives
+        .iter()
+        .flat_map(|prim| {
+            let n = self::positions(prim).map_or(0, Vec::len);
+            (0..n).map(move |v| normals(prim).and_then(|nr| nr.get(v)).copied().unwrap_or([0.0; 3]))
+        })
+        .collect();
+    let bits = |v: [f32; 3]| v.map(|f| if f == 0.0 { 0 } else { f.to_bits() });
+    let mut group_of = std::collections::HashMap::new();
+    let groups: Vec<usize> = (0..positions.len())
+        .map(|v| {
+            let next = group_of.len();
+            *group_of.entry((bits(joined.positions[v]), bits(old[v]))).or_insert(next)
+        })
+        .collect();
+    let mut sum = vec![[0.0f64; 3]; group_of.len()];
+    for t in joined.indices.chunks_exact(3) {
+        let [a, b, c] = [t[0], t[1], t[2]].map(|i| positions[i as usize].map(f64::from));
+        let (u, w) = ([0, 1, 2].map(|k| b[k] - a[k]), [0, 1, 2].map(|k| c[k] - a[k]));
+        let n = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
+        for &v in t {
+            let g = &mut sum[groups[v as usize]];
+            for k in 0..3 {
+                g[k] += n[k];
+            }
+        }
+    }
+    groups
+        .iter()
+        .enumerate()
+        .map(|(v, &g)| {
+            let n = sum[g];
+            let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            if len > 0.0 { n.map(|c| (c / len) as f32) } else { old[v] }
+        })
+        .collect()
+}
+
+/// La tangente sin su componente según la normal (conserva el signo en w)
+fn orthogonal_tangent(t: [f32; 4], n: [f32; 3]) -> [f32; 4] {
+    let d = t[0] * n[0] + t[1] * n[1] + t[2] * n[2];
+    let v = [t[0] - d * n[0], t[1] - d * n[1], t[2] - d * n[2]];
+    let len = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if len > 1e-12 { [v[0] / len, v[1] / len, v[2] / len, t[3]] } else { t }
 }
 
 /// Las primitivas de una malla en un solo búfer
@@ -543,8 +667,51 @@ mod tests {
     }
 
     #[test]
+    fn smoothing_keeps_connectivity_and_attributes() {
+        let scene = two_part_scene(20);
+        let p = SmoothParams { iterations: 10, strength: 0.5, sharp_angle: None, fix_borders: false, normal_only: true };
+        let out = smooth_scene(&scene, &p);
+        for (a, b) in scene.meshes[0].primitives.iter().zip(&out.meshes[0].primitives) {
+            assert_eq!(indices_u32(a, 0), indices_u32(b, 0));
+            assert_eq!(uv0(a), uv0(b));
+            assert_eq!(positions(a).unwrap().len(), positions(b).unwrap().len());
+            assert_ne!(positions(a), positions(b), "las ondas se suavizan");
+        }
+        // El límite entre las primitivas se mueve igual de los dos lados
+        let column = |prim: &Primitive| {
+            let mut c: Vec<[u32; 3]> = positions(prim).unwrap().iter().filter(|p| (p[0] - 0.5).abs() < 1e-3).map(|p| p.map(f32::to_bits)).collect();
+            c.sort();
+            c
+        };
+        let [left, right] = [0, 1].map(|k| column(&out.meshes[0].primitives[k]));
+        assert_eq!(left.len(), 21);
+        assert_eq!(left, right);
+    }
+
+    #[test]
+    fn recomputed_normals_follow_the_new_surface() {
+        let mut scene = two_part_scene(10);
+        // Normales hacia arriba (planas) en la entrada
+        for prim in &mut scene.meshes[0].primitives {
+            let n = positions(prim).unwrap().len();
+            prim.attributes.push(VertexAttribute::Normals(vec![[0.0, 0.0, 1.0]; n]));
+        }
+        let p = SmoothParams { iterations: 1, strength: 0.1, sharp_angle: None, fix_borders: false, normal_only: true };
+        let out = smooth_scene(&scene, &p);
+        let prim = &out.meshes[0].primitives[0];
+        let nr = normals(prim).unwrap();
+        assert!(nr.iter().all(|n| (n[0] * n[0] + n[1] * n[1] + n[2] * n[2] - 1.0).abs() < 1e-4 && n[2] > 0.5));
+        assert!(nr.iter().any(|n| n[0].abs() > 0.01), "la grilla ondulada no es plana");
+    }
+
+    #[test]
     fn params_deserialize_with_defaults() {
         let p: RemeshParams = serde_json::from_str(r#"{"mode":"simplify","ratio":0.5,"max_error_percent":null}"#).unwrap();
         assert_eq!(p, RemeshParams::Simplify(SimplifyParams { keep_seams: true, ..params(0.5) }));
+        let p: RemeshParams = serde_json::from_str(r#"{"mode":"smooth","iterations":5,"strength":0.4}"#).unwrap();
+        assert_eq!(
+            p,
+            RemeshParams::Smooth(SmoothParams { iterations: 5, strength: 0.4, sharp_angle: None, fix_borders: false, normal_only: true })
+        );
     }
 }

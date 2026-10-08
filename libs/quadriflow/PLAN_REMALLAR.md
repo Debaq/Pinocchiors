@@ -141,6 +141,24 @@ mientras hay vista previa; "Los dos" dibuja el resultado en alambre despegado un
 normales. Sin Cancelar: meshoptimizer es una sola llamada y tarda poco. Prueba e2e
 "remallar: simplificar con vista previa, aplicar y deshacer".
 
+*Fase 3 hecha el 2026-10-08*: `quadriflow_core::remesh::smooth` (Taubin, sin C++): suelda por
+posición (costuras y STL se mueven juntos), en aristas vivas y bordes abiertos suaviza solo a lo
+largo de la línea y deja quietas las esquinas (donde se juntan más de dos o donde la línea dobla
+más que el ángulo vivo), opción "sin deslizar por la superficie" (solo según la normal: la
+textura no se corre; es lo predeterminado). Desvío del plan: k_PB = 0,02 en lugar del 0,1 del
+artículo, que hace crecer las frecuencias bajas (esfera +2 % de volumen en 50 pasadas; con 0,02,
++0,25 %). La app suaviza cada malla con sus primitivas juntas y rehace las normales agrupando
+por posición y normal vieja (suave a través de costuras de UV, partidas donde ya lo estaban) y
+endereza las tangentes. Mismo armazón que Simplificar (`RemeshParams::Smooth`); en la web,
+`RemeshActions` compartido y el antes → después recuerda de qué modo es. Prueba e2e
+"remallar: suavizar sin cambiar la conectividad, aplicar y deshacer".
+Las normales de "sin deslizar" se calculan una vez sobre la entrada: recalculadas en cada paso,
+en las esquinas de piezas CAD las caras se daban vuelta y el filtro divergía (molde: 230 % del
+tamaño en 50 pasadas). Aun así, sin aristas vivas una pieza CAD (abanicos de triángulos largos)
+se hunde en las esquinas (audiómetro 26 %, molde 51 %), por eso la web respeta aristas vivas
+desde 60° por defecto. Banco (release, 10 pasadas, 60°): gonfoterio 500k 2,4 s, máx 0,03 %;
+conejo 12k 0,03 s, 0,27 %; audiómetro 0,2 s, 1,5 %; molde 0,09 s, 0,003 %.
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.
