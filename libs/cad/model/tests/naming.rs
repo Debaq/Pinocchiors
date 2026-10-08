@@ -56,7 +56,7 @@ fn fillet_follows_top_edge_when_height_doubles() {
     let ev = doc.evaluate();
     let edge = front_edge(&ev, 10.0);
     assert_eq!(edge.sides.len(), 2, "la arista lleva el origen de sus caras");
-    doc.add(FeatureKind::Fillet { edges: vec![edge.clone()], radius: 1.0 });
+    doc.add(FeatureKind::Fillet { edges: vec![edge.clone()], radius: 1.0, radius2: None });
     assert_relative_eq!(fillet_axis_z(&doc.evaluate()), 9.0, epsilon = 1e-9);
 
     // Con el doble de alto, la arista de arriba y la de abajo quedan a la misma
@@ -104,7 +104,7 @@ fn origin_survives_booleans_that_split_faces() {
         })
         .unwrap();
     let r = ev.edge_ref(e).unwrap();
-    doc.add(FeatureKind::Fillet { edges: vec![r], radius: 1.0 });
+    doc.add(FeatureKind::Fillet { edges: vec![r], radius: 1.0, radius2: None });
     // Más alta pero con la ranura (z 8..12) todavía partiendo la tapa
     set_box_height(&mut doc, b, 11.0);
     let ev = doc.evaluate();
@@ -197,7 +197,7 @@ fn refs_with_origins_roundtrip_json() {
     doc.add(caja(10.0));
     let ev = doc.evaluate();
     let edge = front_edge(&ev, 10.0);
-    doc.add(FeatureKind::Fillet { edges: vec![edge], radius: 1.0 });
+    doc.add(FeatureKind::Fillet { edges: vec![edge], radius: 1.0, radius2: None });
     let json = serde_json::to_string(&doc).unwrap();
     assert!(json.contains("\"sides\""));
     let back: Document = serde_json::from_str(&json).unwrap();
@@ -231,7 +231,7 @@ fn lost_edges_are_reported_and_the_rest_still_applies() {
     let ev = doc.evaluate();
     let a = edge_near(&ev, [5.0, 0.0, 10.0]);
     let b = edge_near(&ev, [105.0, 0.0, 10.0]);
-    let fillet = doc.add(FeatureKind::Fillet { edges: vec![a.clone(), b], radius: 1.0 });
+    let fillet = doc.add(FeatureKind::Fillet { edges: vec![a.clone(), b], radius: 1.0, radius2: None });
     assert_eq!(doc.evaluate().state(fillet), Some(&FeatureState::Ok));
 
     // Sin la caja lejana, su arista ya no está: advertencia y se redondea la otra

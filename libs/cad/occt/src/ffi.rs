@@ -101,8 +101,8 @@ unsafe extern "C" {
     pub fn cad_boolean(a: *const CadShape, b: *const CadShape, op: i32) -> *mut CadShape;
     pub fn cad_fuse_many(shapes: *const *const CadShape, n: i32) -> *mut CadShape;
     pub fn cad_compound(shapes: *const *const CadShape, n: i32) -> *mut CadShape;
-    pub fn cad_fillet(s: *const CadShape, edges: *const i32, n: i32, radius: f64) -> *mut CadShape;
-    pub fn cad_chamfer(s: *const CadShape, edges: *const i32, n: i32, distance: f64) -> *mut CadShape;
+    pub fn cad_fillet(s: *const CadShape, edges: *const i32, n: i32, radius: f64, radius2: f64) -> *mut CadShape;
+    pub fn cad_chamfer(s: *const CadShape, edges: *const i32, n: i32, distance: f64, second: f64, mode: i32, flip: i32) -> *mut CadShape;
     pub fn cad_shell(s: *const CadShape, faces: *const i32, n: i32, thickness: f64) -> *mut CadShape;
     pub fn cad_draft(
         s: *const CadShape,

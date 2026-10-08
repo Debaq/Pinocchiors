@@ -1693,6 +1693,39 @@ const scenarios = {
     if ((await call("cad_get_document")).active_configuration !== 0) throw new Error("no volvió a la variante elegida");
   },
 
+  async "chaflán de dos distancias y redondeo variable"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Chaflán en la arista de arriba al frente: d y 2d
+    await b.click(...(await at([0, -10, 10])), { wait: 800 });
+    await b.clickText("Chaflán");
+    await sleep(1500);
+    await b.clickText("Igual a los dos lados");
+    await sleep(400);
+    await b.clickText("Dos distancias");
+    await sleep(2000);
+    const k = await last();
+    if (k.second?.type !== "distance") throw new Error(`chaflán: ${JSON.stringify(k)}`);
+    near((await body()).volume, 8000 - (k.distance * k.second.distance) / 2 * 20, 1e-3, "chaflán asimétrico");
+    await accept(b);
+    // Redondeo variable en la arista de arriba atrás
+    await b.click(...(await at([0, 10, 10])), { wait: 800 });
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    const before = (await body()).volume;
+    await b.clickText("Radio variable");
+    await sleep(2500);
+    const f = await last();
+    if (!(f.radius2 > f.radius)) throw new Error(`redondeo: ${JSON.stringify(f)}`);
+    if (!((await body()).volume < before)) throw new Error("el radio variable no quitó más");
+    await accept(b);
+    await b.shot("chaflan_y_redondeo_variable");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

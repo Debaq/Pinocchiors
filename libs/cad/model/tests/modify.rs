@@ -164,3 +164,48 @@ fn replace_face_up_to_a_plane() {
     }
     assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 600.0, max_relative = 1e-9);
 }
+
+fn top_front_edge(doc: &Document) -> EdgeRef {
+    let ev = doc.evaluate();
+    let (e, _) = ev.body.as_ref().unwrap().closest_edge([5.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
+    ev.edge_ref(e).unwrap()
+}
+
+#[test]
+fn asymmetric_chamfers() {
+    if !occt() {
+        return;
+    }
+    // Arista de arriba al frente del cubo de 10: se quita un prisma triangular de 10 de largo
+    let mut doc = cube();
+    let edge = top_front_edge(&doc);
+    let ch = doc.add(FeatureKind::Chamfer { edges: vec![edge], distance: 2.0, second: Some(ChamferSecond::Distance { distance: 4.0, flip: false }) });
+    assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 1000.0 - 2.0 * 4.0 / 2.0 * 10.0, max_relative = 1e-9);
+    // Distancia 3 y 45°: las dos patas iguales
+    if let FeatureKind::Chamfer { second, distance, .. } = &mut doc.get_mut(ch).unwrap().kind {
+        *distance = 3.0;
+        *second = Some(ChamferSecond::Angle { degrees: 45.0, flip: false });
+    }
+    assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 1000.0 - 3.0 * 3.0 / 2.0 * 10.0, max_relative = 1e-6);
+    // 2 y 60°: la otra pata mide 2·tan 60°
+    if let FeatureKind::Chamfer { second, distance, .. } = &mut doc.get_mut(ch).unwrap().kind {
+        *distance = 2.0;
+        *second = Some(ChamferSecond::Angle { degrees: 60.0, flip: false });
+    }
+    let other = 2.0 * 60f64.to_radians().tan();
+    assert_relative_eq!(eval_ok(&doc).body.unwrap().mass().unwrap().volume, 1000.0 - 2.0 * other / 2.0 * 10.0, max_relative = 1e-6);
+}
+
+#[test]
+fn variable_fillet() {
+    if !occt() {
+        return;
+    }
+    // De radio 1 a radio 3 a lo largo de la arista: quita entre lo de un radio fijo de 1 y de 3
+    let mut doc = cube();
+    let edge = top_front_edge(&doc);
+    doc.add(FeatureKind::Fillet { edges: vec![edge], radius: 1.0, radius2: Some(3.0) });
+    let v = eval_ok(&doc).body.unwrap().mass().unwrap().volume;
+    let removed = |r: f64| (1.0 - std::f64::consts::PI / 4.0) * r * r * 10.0;
+    assert!(v < 1000.0 - removed(1.0) && v > 1000.0 - removed(3.0), "{v}");
+}

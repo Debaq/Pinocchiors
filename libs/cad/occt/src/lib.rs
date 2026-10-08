@@ -444,13 +444,31 @@ impl Shape {
     }
 
     pub fn fillet(&self, edges: &[usize], radius: f64) -> Result<Shape> {
+        self.fillet_variable(edges, radius, radius)
+    }
+
+    /// Redondeo de radio variable: `start` al comienzo de cada arista, `end` al final.
+    pub fn fillet_variable(&self, edges: &[usize], start: f64, end: f64) -> Result<Shape> {
         let e = idx(edges);
-        wrap(unsafe { ffi::cad_fillet(self.ptr(), e.as_ptr(), e.len() as i32, radius) })
+        wrap(unsafe { ffi::cad_fillet(self.ptr(), e.as_ptr(), e.len() as i32, start, end) })
     }
 
     pub fn chamfer(&self, edges: &[usize], distance: f64) -> Result<Shape> {
         let e = idx(edges);
-        wrap(unsafe { ffi::cad_chamfer(self.ptr(), e.as_ptr(), e.len() as i32, distance) })
+        wrap(unsafe { ffi::cad_chamfer(self.ptr(), e.as_ptr(), e.len() as i32, distance, distance, 0, 0) })
+    }
+
+    /// Chaflán asimétrico: `distance` sobre una cara (la otra con `flip`) y
+    /// `distance2` sobre la otra.
+    pub fn chamfer_two(&self, edges: &[usize], distance: f64, distance2: f64, flip: bool) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_chamfer(self.ptr(), e.as_ptr(), e.len() as i32, distance, distance2, 1, flip as i32) })
+    }
+
+    /// Chaflán por distancia (sobre una cara; la otra con `flip`) y ángulo en grados.
+    pub fn chamfer_angle(&self, edges: &[usize], distance: f64, degrees: f64, flip: bool) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_chamfer(self.ptr(), e.as_ptr(), e.len() as i32, distance, degrees, 2, flip as i32) })
     }
 
     /// Ahueca quitando `open_faces`; grosor negativo crece hacia adentro.

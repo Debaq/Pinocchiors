@@ -76,8 +76,11 @@ CadShape* cad_boolean(const CadShape* a, const CadShape* b, int32_t op);
 CadShape* cad_fuse_many(const CadShape* const* shapes, int32_t n);
 CadShape* cad_compound(const CadShape* const* shapes, int32_t n);
 
-CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double radius);
-CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double distance);
+/** Redondeo; con `radius2` distinto, variable del comienzo al final de cada arista */
+CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double radius, double radius2);
+/** Chaflán: `mode` 0 igual, 1 dos distancias (`second`), 2 distancia y ángulo en grados (`second`) */
+CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double distance, double second, int32_t mode,
+                      int32_t flip);
 // Ahueca el sólido quitando las caras indicadas; grosor negativo = hacia adentro.
 CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double thickness);
 // Ángulo de desmolde (rad) a las caras indicadas respecto de `dir`, con plano neutro.

@@ -1344,21 +1344,31 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
-            FeatureKind::Fillet { edges, radius } => {
+            FeatureKind::Fillet { edges, radius, radius2 } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
                 let groups = self.by_part(&idx, true);
-                self.per_part(groups, |s, e| s.fillet(e, *radius), |k| Some(tag(f.id, format!("redondeo:{k}"))))
+                let end = radius2.unwrap_or(*radius);
+                self.per_part(groups, |s, e| s.fillet_variable(e, *radius, end), |k| Some(tag(f.id, format!("redondeo:{k}"))))
             }
-            FeatureKind::Chamfer { edges, distance } => {
+            FeatureKind::Chamfer { edges, distance, second } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
                 let groups = self.by_part(&idx, true);
-                self.per_part(groups, |s, e| s.chamfer(e, *distance), |k| Some(tag(f.id, format!("chaflan:{k}"))))
+                let second = *second;
+                self.per_part(
+                    groups,
+                    |s, e| match second {
+                        None => s.chamfer(e, *distance),
+                        Some(ChamferSecond::Distance { distance: d2, flip }) => s.chamfer_two(e, *distance, d2, flip),
+                        Some(ChamferSecond::Angle { degrees, flip }) => s.chamfer_angle(e, *distance, degrees, flip),
+                    },
+                    |k| Some(tag(f.id, format!("chaflan:{k}"))),
+                )
             }
             FeatureKind::Shell { faces, thickness } => {
                 if faces.is_empty() {

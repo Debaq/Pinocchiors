@@ -294,8 +294,20 @@ pub enum FeatureKind {
     Extrude(Extrude),
     Revolve(Revolve),
     Primitive(Primitive),
-    Fillet { edges: Vec<EdgeRef>, radius: f64 },
-    Chamfer { edges: Vec<EdgeRef>, distance: f64 },
+    /// Redondeo; con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final.
+    Fillet {
+        edges: Vec<EdgeRef>,
+        radius: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius2: Option<f64>,
+    },
+    /// Chaflán: `distance` en las dos caras, o asimétrico con `second`.
+    Chamfer {
+        edges: Vec<EdgeRef>,
+        distance: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        second: Option<ChamferSecond>,
+    },
     /// Ahuecar dejando paredes de `thickness` y abriendo `faces`.
     Shell { faces: Vec<FaceRef>, thickness: f64 },
     /// Desmolde: inclina `faces` respecto de la normal de `neutral`.
@@ -395,6 +407,23 @@ pub enum FeatureKind {
         left: bool,
         #[serde(default)]
         clearance: f64,
+    },
+}
+
+/// La otra medida de un chaflán asimétrico; `distance` se mide sobre una de
+/// las dos caras de la arista (la otra con `flip`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ChamferSecond {
+    Distance {
+        distance: f64,
+        #[serde(default)]
+        flip: bool,
+    },
+    Angle {
+        degrees: f64,
+        #[serde(default)]
+        flip: bool,
     },
 }
 

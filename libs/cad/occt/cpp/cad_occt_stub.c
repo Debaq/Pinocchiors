@@ -27,8 +27,8 @@ CadShape* cad_loft(const CadShape* const* w, int32_t n, int32_t s, int32_t r) { 
 CadShape* cad_boolean(const CadShape* a, const CadShape* b, int32_t op) { (void)a; (void)b; (void)op; FAIL_PTR; }
 CadShape* cad_fuse_many(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
 CadShape* cad_compound(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
-CadShape* cad_fillet(const CadShape* s, const int32_t* e, int32_t n, double r) { (void)s; (void)e; (void)n; (void)r; FAIL_PTR; }
-CadShape* cad_chamfer(const CadShape* s, const int32_t* e, int32_t n, double d) { (void)s; (void)e; (void)n; (void)d; FAIL_PTR; }
+CadShape* cad_fillet(const CadShape* s, const int32_t* e, int32_t n, double r, double r2) { (void)s; (void)e; (void)n; (void)r; (void)r2; FAIL_PTR; }
+CadShape* cad_chamfer(const CadShape* s, const int32_t* e, int32_t n, double d, double d2, int32_t m, int32_t f) { (void)s; (void)e; (void)n; (void)d; (void)d2; (void)m; (void)f; FAIL_PTR; }
 CadShape* cad_shell(const CadShape* s, const int32_t* f, int32_t n, double t) { (void)s; (void)f; (void)n; (void)t; FAIL_PTR; }
 CadShape* cad_draft(const CadShape* s, const int32_t* f, int32_t n, const double* d, double a, const double* o, const double* nn) { (void)s; (void)f; (void)n; (void)d; (void)a; (void)o; (void)nn; FAIL_PTR; }
 CadShape* cad_transform(const CadShape* s, const double* m) { (void)s; (void)m; FAIL_PTR; }

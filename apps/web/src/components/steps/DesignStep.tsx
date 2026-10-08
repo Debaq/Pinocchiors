@@ -31,6 +31,7 @@ import {
   type AxisSpec,
   type BodyOp,
   type CadStore,
+  type ChamferSecond,
   type Configuration,
   type Detection,
   type EdgeRef,
@@ -1245,10 +1246,53 @@ export const FeatureEditor: Component<{
               const value = () => (kind.type === "fillet" ? kind.radius : kind.distance);
               return (
                 <>
-                  {field(kind.type === "fillet" ? "Radio" : "Distancia", kind.type === "fillet" ? "kind.radius" : "kind.distance", value(), (x, v) => {
+                  <Show when={kind.type === "chamfer"}>
+                    <Row label="Tipo">
+                      <Select
+                        options={[
+                          { value: "equal", label: "Igual a los dos lados" },
+                          { value: "distance", label: "Dos distancias" },
+                          { value: "angle", label: "Distancia y ángulo" },
+                        ]}
+                        value={(k() as { second?: ChamferSecond | null }).second?.type ?? "equal"}
+                        onChange={(v) =>
+                          update((x) => {
+                            if (x.type !== "chamfer" || v === (x.second?.type ?? "equal")) return;
+                            const flip = x.second?.flip ?? false;
+                            x.second = v === "distance" ? { type: "distance", distance: x.distance * 2, flip } : v === "angle" ? { type: "angle", degrees: 45, flip } : null;
+                          })
+                        }
+                      />
+                    </Row>
+                  </Show>
+                  {field(kind.type === "fillet" ? ((k() as { radius2?: number | null }).radius2 != null ? "Radio al comienzo" : "Radio") : "Distancia", kind.type === "fillet" ? "kind.radius" : "kind.distance", value(), (x, v) => {
                     if (x.type === "fillet") x.radius = v;
                     else if (x.type === "chamfer") x.distance = v;
                   }, "mm")}
+                  <Show when={kind.type === "fillet"}>
+                    <Checkbox
+                      small
+                      label="Radio variable"
+                      checked={(k() as { radius2?: number | null }).radius2 != null}
+                      onChange={(c) => update((x) => x.type === "fillet" && (x.radius2 = c ? x.radius * 2 : null))}
+                    />
+                    <Show when={(k() as { radius2?: number | null }).radius2 != null}>
+                      {field("Radio al final", "kind.radius2", (k() as { radius2: number }).radius2, (x, v) => x.type === "fillet" && (x.radius2 = v), "mm")}
+                    </Show>
+                  </Show>
+                  <Show when={kind.type === "chamfer" && (k() as { second?: ChamferSecond | null }).second}>
+                    {(sec) => (
+                      <>
+                        <Show
+                          when={sec().type === "angle"}
+                          fallback={field("Otra distancia", "kind.second.distance", (sec() as { distance: number }).distance, (x, v) => x.type === "chamfer" && x.second?.type === "distance" && (x.second.distance = v), "mm")}
+                        >
+                          {field("Ángulo", "kind.second.degrees", (sec() as { degrees: number }).degrees, (x, v) => x.type === "chamfer" && x.second?.type === "angle" && (x.second.degrees = v), "°")}
+                        </Show>
+                        <Checkbox small label="Medir desde la otra cara" checked={sec().flip} onChange={(c) => update((x) => x.type === "chamfer" && !!x.second && (x.second.flip = c))} />
+                      </>
+                    )}
+                  </Show>
                   <SelectionBox
                     store={props.store}
                     ui={props.ui}

@@ -487,3 +487,7 @@ cargo test -p cad-model
   del sólido traídas al sketch y ligadas a él (si cambia la pieza, se mueven con ella).
 - **2026-10-08 Configuraciones** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): variantes de la pieza que
   cambian parámetros y apagan operaciones; se exportan todas juntas.
+- **2026-10-08 Chaflán asimétrico y redondeo variable**: `Chamfer.second` (otra distancia o un
+  ángulo, medidos desde una cara o la otra: `BRepFilletAPI_MakeChamfer::Add(d1, d2, E, F)` /
+  `AddDA`) y `Fillet.radius2` (de un radio al otro a lo largo de la arista). En el diálogo:
+  "Tipo" del chaflán y "Radio variable".

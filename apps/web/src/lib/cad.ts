@@ -218,8 +218,10 @@ export type FeatureKind =
     }
   | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp }
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp }
-  | { type: "fillet"; edges: EdgeRef[]; radius: number }
-  | { type: "chamfer"; edges: EdgeRef[]; distance: number }
+  /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
+  | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null }
+  /** Con `second`, asimétrico: otra distancia o un ángulo (`distance` va sobre una cara; `flip`, la otra) */
+  | { type: "chamfer"; edges: EdgeRef[]; distance: number; second?: ChamferSecond | null }
   | { type: "shell"; faces: FaceRef[]; thickness: number }
   | { type: "draft"; faces: FaceRef[]; neutral: PlaneSpec; angle: number }
   | { type: "pattern"; features: number[]; pattern: PatternKind }
@@ -271,6 +273,8 @@ export type FeatureKind =
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
+
+export type ChamferSecond = { type: "distance"; distance: number; flip: boolean } | { type: "angle"; degrees: number; flip: boolean };
 
 /** Rosca métrica ISO (60°); `clearance` agranda las interiores y achica las exteriores (mm en el diámetro) */
 export interface ThreadSpec {

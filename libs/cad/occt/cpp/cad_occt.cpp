@@ -588,14 +588,16 @@ CadShape* cad_compound(const CadShape* const* shapes, int32_t n) {
     });
 }
 
-CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double radius) {
+CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double radius, double radius2) {
     return guard("redondeo", (CadShape*)nullptr, [&] {
         auto m = map_of(s->s, TopAbs_EDGE);
         BRepFilletAPI_MakeFillet mk(s->s);
         std::vector<TopoDS_Shape> chosen;
         for (int32_t i = 0; i < n; i++) {
             if (edges[i] < 0 || edges[i] >= m.Extent()) throw Standard_Failure("arista inexistente");
-            mk.Add(radius, TopoDS::Edge(m(edges[i] + 1)));
+            // Radio variable: de `radius` al comienzo de la arista a `radius2` al final
+            if (std::fabs(radius2 - radius) > 1e-12) mk.Add(radius, radius2, TopoDS::Edge(m(edges[i] + 1)));
+            else mk.Add(radius, TopoDS::Edge(m(edges[i] + 1)));
             chosen.push_back(m(edges[i] + 1));
         }
         mk.Build();
@@ -605,14 +607,27 @@ CadShape* cad_fillet(const CadShape* s, const int32_t* edges, int32_t n, double 
     });
 }
 
-CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double distance) {
+CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double distance, double second,
+                      int32_t mode, int32_t flip) {
     return guard("chaflán", (CadShape*)nullptr, [&] {
         auto m = map_of(s->s, TopAbs_EDGE);
+        TopTools_IndexedDataMapOfShapeListOfShape anc;
+        TopExp::MapShapesAndAncestors(s->s, TopAbs_EDGE, TopAbs_FACE, anc);
         BRepFilletAPI_MakeChamfer mk(s->s);
         std::vector<TopoDS_Shape> chosen;
         for (int32_t i = 0; i < n; i++) {
             if (edges[i] < 0 || edges[i] >= m.Extent()) throw Standard_Failure("arista inexistente");
-            mk.Add(distance, TopoDS::Edge(m(edges[i] + 1)));
+            TopoDS_Edge e = TopoDS::Edge(m(edges[i] + 1));
+            if (mode == 0) {
+                mk.Add(distance, e);
+            } else {
+                // La primera distancia se mide sobre una de las dos caras (`flip`: la otra)
+                const TopTools_ListOfShape& faces = anc.FindFromKey(e);
+                if (faces.Extent() < 2) throw Standard_Failure("la arista no separa dos caras");
+                TopoDS_Face f = TopoDS::Face(flip ? faces.Last() : faces.First());
+                if (mode == 1) mk.Add(distance, second, e, f);
+                else mk.AddDA(distance, second * M_PI / 180.0, e, f);
+            }
             chosen.push_back(m(edges[i] + 1));
         }
         mk.Build();

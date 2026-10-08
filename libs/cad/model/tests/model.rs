@@ -164,7 +164,7 @@ fn extrude_plate_with_hole_and_change_parameters() {
     let body = ev.body.as_ref().unwrap();
     let (edge, _) = body.closest_edge([50.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.9).unwrap();
     let r = ev.edge_ref(edge).unwrap();
-    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0 });
+    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0, radius2: None });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     let with_fillet = volume(&ev);
@@ -343,6 +343,7 @@ fn errors_stay_local_rollback_and_suppress() {
     let bad = doc.add(FeatureKind::Fillet {
         edges: vec![EdgeRef { point: [50.0, 0.0, 10.0], direction: [1.0, 0.0, 0.0], ..Default::default() }],
         radius: 50.0,
+        radius2: None,
     });
     let cut = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 30.0, centered: false, centered_z: false },

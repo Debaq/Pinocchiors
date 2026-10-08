@@ -43,8 +43,8 @@ fn sample() -> Document {
     let (top, _) = body.closest_edge([10.0, 0.0, 8.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let (corner, _) = body.closest_edge([0.0, 40.0, 4.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
     let (top, corner) = (ev.edge_ref(top).unwrap(), ev.edge_ref(corner).unwrap());
-    doc.add(FeatureKind::Fillet { edges: vec![top], radius: 1.5 });
-    doc.add(FeatureKind::Chamfer { edges: vec![corner], distance: 2.0 });
+    doc.add(FeatureKind::Fillet { edges: vec![top], radius: 1.5, radius2: None });
+    doc.add(FeatureKind::Chamfer { edges: vec![corner], distance: 2.0, second: None });
     doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Yz });
     doc
 }
@@ -156,8 +156,8 @@ fn bench_thirty_operations() {
     let body = ev.body.as_ref().unwrap();
     let (e1, _) = body.closest_edge([100.0, 0.0, 20.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let (e2, _) = body.closest_edge([100.0, 200.0, 20.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
-    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e1).unwrap()], radius: 3.0 });
-    doc.add(FeatureKind::Chamfer { edges: vec![ev.edge_ref(e2).unwrap()], distance: 2.0 });
+    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e1).unwrap()], radius: 3.0, radius2: None });
+    doc.add(FeatureKind::Chamfer { edges: vec![ev.edge_ref(e2).unwrap()], distance: 2.0, second: None });
     assert_eq!(doc.features.len(), 30);
 
     let t = std::time::Instant::now();
