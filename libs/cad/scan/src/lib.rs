@@ -234,6 +234,92 @@ pub fn detect_all(mesh: &ScanMesh, opts: &DetectOptions) -> Vec<Detection> {
             }
         }
     }
+    let mut out = merge_coplanar(mesh, out, tol);
     out.sort_by(|a, b| b.area.total_cmp(&a.area));
+    out
+}
+
+/// Une los planos del mismo plano que se tocan, directo o por caras sin zona
+/// que caen en su banda (las tiras de triángulos finos de un teselado de CAD
+/// cortan la segmentación y una cara grande salía en 2 o 3 zonas).
+fn merge_coplanar(mesh: &ScanMesh, dets: Vec<Detection>, tol: f64) -> Vec<Detection> {
+    let plane = |d: &Detection| match &d.shape {
+        DetectedShape::Plane { plane } => Some((plane.origin, normalize(plane.normal))),
+        _ => None,
+    };
+    let band = tol * 3.0;
+    let same = |a: (P3, P3), b: (P3, P3)| dot(a.1, b.1) >= 2f64.to_radians().cos() && dot(sub(b.0, a.0), a.1).abs() <= band;
+    let mut owner = vec![usize::MAX; mesh.face_count()];
+    for (i, d) in dets.iter().enumerate() {
+        for &f in &d.faces {
+            owner[f as usize] = i;
+        }
+    }
+    let mut parent: Vec<usize> = (0..dets.len()).collect();
+    fn root(p: &mut [usize], mut i: usize) -> usize {
+        while p[i] != i {
+            p[i] = p[p[i]];
+            i = p[i];
+        }
+        i
+    }
+    // Caras sin zona que cruza cada plano para llegar a otro igual
+    let mut bridges: Vec<Vec<u32>> = vec![Vec::new(); dets.len()];
+    for (i, d) in dets.iter().enumerate() {
+        let Some(pi) = plane(d) else { continue };
+        let in_band = |f: usize| mesh.triangles[f].iter().all(|&v| dot(sub(mesh.vertices[v as usize], pi.0), pi.1).abs() <= band);
+        let mut seen: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut queue: std::collections::VecDeque<usize> = d.faces.iter().map(|&f| f as usize).collect();
+        while let Some(f) = queue.pop_front() {
+            for &g in &mesh.adjacency[f] {
+                let g = g as usize;
+                match owner[g] {
+                    j if j == i => {}
+                    usize::MAX => {
+                        if in_band(g) && seen.insert(g) {
+                            queue.push_back(g);
+                        }
+                    }
+                    j => {
+                        if let Some(pj) = plane(&dets[j])
+                            && same(pi, pj)
+                        {
+                            let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                            parent[a] = b;
+                        }
+                    }
+                }
+            }
+        }
+        bridges[i] = seen.into_iter().map(|f| f as u32).collect();
+    }
+    let mut groups: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for i in 0..dets.len() {
+        let r = root(&mut parent, i);
+        groups.entry(r).or_default().push(i);
+    }
+    let mut out = Vec::new();
+    let mut dets: Vec<Option<Detection>> = dets.into_iter().map(Some).collect();
+    for (_, members) in groups {
+        if members.len() == 1 {
+            out.push(dets[members[0]].take().unwrap());
+            continue;
+        }
+        // Las caras de todas más las que las unen (sin repetir)
+        let mut faces: Vec<u32> = Vec::new();
+        let mut used: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for &m in &members {
+            for &f in dets[m].as_ref().unwrap().faces.iter().chain(&bridges[m]) {
+                if used.insert(f) {
+                    faces.push(f);
+                }
+            }
+        }
+        match fit_region(mesh, faces, tol) {
+            Some(d) if matches!(d.shape, DetectedShape::Plane { .. }) => out.push(d),
+            // Si la unión no ajusta como plano, quedan como estaban
+            _ => out.extend(members.iter().map(|&m| dets[m].take().unwrap())),
+        }
+    }
     out
 }

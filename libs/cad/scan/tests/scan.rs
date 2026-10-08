@@ -220,3 +220,26 @@ fn outline_infers_parallel_and_perpendicular_without_conflicts() {
     // Redondeado a 0,5: las esquinas quedan en la grilla
     assert!(sk.points.iter().filter(|p| Some(p.id) != sk.origin).all(|p| (p.x * 2.0).fract().abs() < 1e-9 && (p.y * 2.0).fract().abs() < 1e-9));
 }
+
+#[test]
+fn big_planes_come_out_whole() {
+    if !occt::available() {
+        return;
+    }
+    // Las caras de arriba y de abajo de la placa (con triángulos largos y finos
+    // del teselado) salían partidas en dos zonas cada una
+    let mesh = scan_of(&part(), 0.02);
+    let found = detect_all(&mesh, &DetectOptions { tolerance: Some(0.1), ..Default::default() });
+    let planes: Vec<(P3, f64)> = found
+        .iter()
+        .filter_map(|d| match &d.shape {
+            DetectedShape::Plane { plane } => Some((plane.normal, d.area)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(planes.len(), 7, "6 de la placa + la tapa del tetón: {planes:?}");
+    let area = |nz: f64| planes.iter().filter(|(n, a)| (n[2] - nz).abs() < 0.01 && *a > 1000.0).map(|p| p.1).collect::<Vec<_>>();
+    assert_eq!(area(-1.0).len(), 1);
+    assert_relative_eq!(area(-1.0)[0], 6000.0 - PI * 64.0, max_relative = 0.01);
+    assert_relative_eq!(area(1.0)[0], 6000.0 - PI * 64.0 - PI * 100.0, max_relative = 0.01);
+}

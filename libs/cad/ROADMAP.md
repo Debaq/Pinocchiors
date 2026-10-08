@@ -117,8 +117,10 @@ cargo test -p cad-model
     rescatar planos en zonas mixtas. (3) Los ajustes de cilindro heredados dependen del
     orden de los puntos y dieron ejes falsos → `fit_cylinder_normals` (autovector menor de
     Σ n·nᵀ + círculo de Kåsa en el corte), compite con RANSAC por menor error.
-  - Pendiente: planos grandes con muchos triángulos finos se parten en 2–3 zonas en
-    `detect_all` (no afecta `pick_plane`).
+  - Arreglado (2026-10-08): planos grandes con muchos triángulos finos se partían en 2–3
+    zonas en `detect_all`. Ahora `merge_coplanar` une los planos iguales que se tocan, directo
+    o por caras sin zona dentro de su banda, y vuelve a ajustar (placa de prueba: 9 → 7 planos,
+    áreas al 1 %).
 - **2026-10-05 F5**: comandos `cad_*` en la app. El frontend edita el documento entero y lo
   manda con `cad_set_document` (deshacer = copias del documento); el recálculo queda en
   caché por huella del JSON. `cad_mesh` devuelve binario (posiciones/normales Y arriba en
