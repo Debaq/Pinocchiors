@@ -587,3 +587,36 @@ fn hidden_lines_of_a_box_with_a_hole() {
     let hid = lines.iter().filter(|l| matches!(l.kind, HlrKind::Hidden | HlrKind::HiddenOutline)).count();
     assert_eq!(hid, 2, "{lines:?}");
 }
+
+#[test]
+fn metric_thread_rod() {
+    if !require() {
+        return;
+    }
+    // M6 × 1, 10 mm: núcleo π r1² + filete por Pappus (área del trapecio × vuelta del centroide)
+    let (d, p, l) = (6.0, 1.0, 10.0);
+    let d1 = d - 1.0825 * p;
+    let (r1, h) = (d1 / 2.0, (d - d1) / 2.0);
+    let (top, bottom) = (p / 8.0, p / 8.0 + 2.0 * h * (PI / 6.0).tan());
+    let area = (top + bottom) / 2.0 * h;
+    let rc = r1 + h * (bottom + 2.0 * top) / (3.0 * (bottom + top));
+    let expected = (PI * r1 * r1 + area / p * 2.0 * PI * rc) * l;
+    let t = std::time::Instant::now();
+    let axis = Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] };
+    let rod = Shape::thread(axis, r1, d / 2.0, p, l, false).unwrap();
+    eprintln!("rosca M6 en {:?}", t.elapsed());
+
+    assert!(rod.is_valid());
+    let m = rod.mass().unwrap();
+    assert_relative_eq!(m.volume, expected, max_relative = 0.01);
+    assert_relative_eq!(m.bbox_min[2], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(m.bbox_max[2], l, epsilon = 1e-6);
+    assert_relative_eq!(m.bbox_max[0], d / 2.0, epsilon = 0.01);
+    // Restado de una placa: queda un agujero roscado válido
+    let t = std::time::Instant::now();
+    let plate = Shape::make_box(Frame::at([-10.0, -10.0, 0.0]), 20.0, 20.0, l).unwrap();
+    let nut = plate.cut(&rod).unwrap();
+    eprintln!("placa roscada en {:?}", t.elapsed());
+    assert!(nut.is_valid());
+    assert_relative_eq!(nut.mass().unwrap().volume, 4000.0 - expected, max_relative = 0.01);
+}

@@ -31,7 +31,7 @@ fn plate() -> (Document, FeatureId) {
 }
 
 fn hole(sketch: FeatureId, diameter: f64, depth: HoleDepth, style: HoleStyle) -> FeatureKind {
-    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None })
+    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None })
 }
 
 fn vol(doc: &Document) -> f64 {
@@ -79,6 +79,7 @@ fn blind_with_tip_and_no_points() {
         style: HoleStyle::Simple,
         tip_angle: 118.0,
         thread: Some("M6".into()),
+        modeled: None,
     }));
     let tip = 2.5 / (59.0f64).to_radians().tan();
     let one = PI * 6.25 * 6.0 + PI * 6.25 * tip / 3.0;
@@ -93,4 +94,88 @@ fn blind_with_tip_and_no_points() {
     let h2 = doc2.add(hole(empty, 5.0, HoleDepth::ThroughAll, HoleStyle::Simple));
     assert!(matches!(doc2.evaluate().state(h2), Some(FeatureState::Error { .. })));
     let _ = h;
+}
+
+/// Volumen por mm de un macho M`d` × `p` (perfil ISO básico): núcleo + filete por Pappus.
+fn rod_per_mm(d: f64, p: f64) -> f64 {
+    let d1 = d - 1.082_532 * p;
+    let (r1, h) = (d1 / 2.0, (d - d1) / 2.0);
+    let (top, bottom) = (p / 8.0, p / 8.0 + 2.0 * h * (PI / 6.0).tan());
+    let rc = r1 + h * (bottom + 2.0 * top) / (3.0 * (bottom + top));
+    PI * r1 * r1 + (top + bottom) / 2.0 * h / p * 2.0 * PI * rc
+}
+
+#[test]
+fn modeled_thread_through_hole() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, sk) = plate();
+    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None };
+    h.modeled = Some(ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false });
+    doc.add(FeatureKind::Hole(h));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let body = ev.body.unwrap();
+    assert!(body.is_valid());
+    // Lo que se va en 10 mm es el macho entero (por vuelta el volumen no depende de la fase)
+    assert_relative_eq!(body.mass().unwrap().volume, 16000.0 - 2.0 * 10.0 * rod_per_mm(6.0, 1.0), max_relative = 1e-4);
+}
+
+fn cylinder_doc(r: f64, h: f64) -> Document {
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: r, height: h },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+    }));
+    doc
+}
+
+fn side_face(doc: &Document, at: P3, normal: P3) -> FaceRef {
+    let ev = doc.evaluate();
+    let (f, _) = ev.body.as_ref().unwrap().closest_face(at, Some(normal), 0.9).unwrap();
+    ev.face_ref(f).unwrap()
+}
+
+#[test]
+fn external_thread_on_a_pin() {
+    if !occt() {
+        return;
+    }
+    // Eje de Ø6 × 10: queda el macho M6
+    let mut doc = cylinder_doc(3.0, 10.0);
+    let face = side_face(&doc, [3.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
+    let th = doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0 });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // (sin holgura la cresta sobresale 1 µm para no coincidir con la cara: 0,06 % de más)
+    assert_relative_eq!(ev.body.unwrap().mass().unwrap().volume, 10.0 * rod_per_mm(6.0, 1.0), max_relative = 1e-3);
+    // Solo 4 mm desde arriba: el resto queda liso
+    if let FeatureKind::Thread { length, flip, .. } = &mut doc.get_mut(th).unwrap().kind {
+        *length = 4.0;
+        *flip = true;
+    }
+    let v = doc.evaluate().body.unwrap().mass().unwrap().volume;
+    assert_relative_eq!(v, 6.0 * PI * 9.0 + 4.0 * rod_per_mm(6.0, 1.0), max_relative = 1e-3);
+}
+
+#[test]
+fn internal_thread_on_a_hole() {
+    if !occt() {
+        return;
+    }
+    // Placa con un agujero al diámetro menor de M6: la rosca lo talla
+    let (mut doc, sk) = plate();
+    let d1 = 6.0 - 1.082_532;
+    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None }));
+    let face = side_face(&doc, [-10.0 + d1 / 2.0, 0.0, 5.0], [-1.0, 0.0, 0.0]);
+    doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0 });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // Uno de los dos agujeros roscado, el otro liso
+    let plain = PI * d1 * d1 / 4.0 * 10.0;
+    assert_relative_eq!(ev.body.unwrap().mass().unwrap().volume, 16000.0 - plain - 10.0 * rod_per_mm(6.0, 1.0), max_relative = 1e-4);
 }

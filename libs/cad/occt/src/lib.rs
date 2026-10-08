@@ -648,6 +648,12 @@ impl Shape {
         wrap(unsafe { ffi::cad_make_helix(axis.origin.as_ptr(), axis.dir.as_ptr(), radius, pitch, turns, left as i32) })
     }
 
+    /// Macho roscado: núcleo de `r_minor` más el filete ISO de 60° hasta
+    /// `r_major`, de `length` a lo largo de `axis` (puntas planas).
+    pub fn thread(axis: Axis, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_make_thread(axis.origin.as_ptr(), axis.dir.as_ptr(), r_minor, r_major, pitch, length, left as i32) })
+    }
+
     /// Sólido de espesor `thickness` a partir de esta cara (o caras), hacia su normal.
     pub fn thicken(&self, thickness: f64) -> Result<Shape> {
         wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })

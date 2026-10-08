@@ -253,10 +253,22 @@ export type FeatureKind =
       style: { type: "simple" } | { type: "counterbore"; diameter: number; depth: number } | { type: "countersink"; diameter: number; angle: number };
       tip_angle: number;
       thread?: string | null;
+      /** Rosca modelada (el filete de verdad, para imprimir) */
+      modeled?: ThreadSpec | null;
     }
+  /** Rosca sobre una cara cilíndrica: exterior en un eje, interior en un agujero */
+  | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
+
+/** Rosca métrica ISO (60°); `clearance` agranda las interiores y achica las exteriores (mm en el diámetro) */
+export interface ThreadSpec {
+  nominal: number;
+  pitch: number;
+  clearance: number;
+  left: boolean;
+}
 
 export interface Feature {
   id: number;
@@ -722,6 +734,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   thicken: "Engrosar",
   move_face: "Mover cara",
   rib: "Nervio",
+  thread: "Rosca",
   replace_face: "Reemplazar cara",
   scale: "Escala",
 };
@@ -730,16 +743,17 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
  * Tornillos métricos ISO: broca para roscar, agujero pasante (ajuste medio),
  * caja para cabeza cilíndrica (ISO 4762) y avellanado a 90° (ISO 10642).
  */
-export const METRIC_HOLES: { size: string; tap: number; clearance: number; cbore: number; cboreDepth: number; csink: number }[] = [
-  { size: "M2", tap: 1.6, clearance: 2.4, cbore: 4.4, cboreDepth: 2, csink: 4.4 },
-  { size: "M2.5", tap: 2.05, clearance: 2.9, cbore: 5.5, cboreDepth: 2.5, csink: 5.5 },
-  { size: "M3", tap: 2.5, clearance: 3.4, cbore: 6.5, cboreDepth: 3, csink: 6.3 },
-  { size: "M4", tap: 3.3, clearance: 4.5, cbore: 8, cboreDepth: 4, csink: 8.4 },
-  { size: "M5", tap: 4.2, clearance: 5.5, cbore: 10, cboreDepth: 5, csink: 10.4 },
-  { size: "M6", tap: 5, clearance: 6.6, cbore: 11, cboreDepth: 6, csink: 12.4 },
-  { size: "M8", tap: 6.8, clearance: 9, cbore: 15, cboreDepth: 8, csink: 16.4 },
-  { size: "M10", tap: 8.5, clearance: 11, cbore: 18, cboreDepth: 10, csink: 20.4 },
-  { size: "M12", tap: 10.2, clearance: 13.5, cbore: 20, cboreDepth: 12, csink: 24.4 },
+/** Tornillos métricos ISO: paso grueso, broca para roscar, pasante, caja y avellanado */
+export const METRIC_HOLES: { size: string; nominal: number; pitch: number; tap: number; clearance: number; cbore: number; cboreDepth: number; csink: number }[] = [
+  { size: "M2", nominal: 2, pitch: 0.4, tap: 1.6, clearance: 2.4, cbore: 4.4, cboreDepth: 2, csink: 4.4 },
+  { size: "M2.5", nominal: 2.5, pitch: 0.45, tap: 2.05, clearance: 2.9, cbore: 5.5, cboreDepth: 2.5, csink: 5.5 },
+  { size: "M3", nominal: 3, pitch: 0.5, tap: 2.5, clearance: 3.4, cbore: 6.5, cboreDepth: 3, csink: 6.3 },
+  { size: "M4", nominal: 4, pitch: 0.7, tap: 3.3, clearance: 4.5, cbore: 8, cboreDepth: 4, csink: 8.4 },
+  { size: "M5", nominal: 5, pitch: 0.8, tap: 4.2, clearance: 5.5, cbore: 10, cboreDepth: 5, csink: 10.4 },
+  { size: "M6", nominal: 6, pitch: 1, tap: 5, clearance: 6.6, cbore: 11, cboreDepth: 6, csink: 12.4 },
+  { size: "M8", nominal: 8, pitch: 1.25, tap: 6.8, clearance: 9, cbore: 15, cboreDepth: 8, csink: 16.4 },
+  { size: "M10", nominal: 10, pitch: 1.5, tap: 8.5, clearance: 11, cbore: 18, cboreDepth: 10, csink: 20.4 },
+  { size: "M12", nominal: 12, pitch: 1.75, tap: 10.2, clearance: 13.5, cbore: 20, cboreDepth: 12, csink: 24.4 },
 ];
 
 export const OP_LABELS: Record<BodyOp, string> = { join: "Unir", cut: "Restar", intersect: "Intersecar", new: "Nueva pieza" };

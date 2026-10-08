@@ -473,3 +473,13 @@ cargo test -p cad-model
   (`cad_export` con `assembly`).
 - **2026-10-08 Texto del sketch como bloque editable** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 7):
   se mueve entero con su ancla y se puede cambiar lo que dice y el tamaño.
+- **2026-10-08 Roscas modeladas** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md)): el Agujero tiene
+  "Roscar (rosca modelada)" (`Hole.modeled: ThreadSpec { nominal, pitch, clearance, left }`; el
+  taladro pasa a ser un macho ISO de 60°) y la operación nueva **Rosca** (`Thread`) talla una cara
+  cilíndrica: exterior en un eje (el cilindro es el nominal), interior en un agujero (es el menor),
+  con largo, extremo, mano y holgura para imprimir. `cad_make_thread`: filete barrido por la
+  hélice con binormal fija en el eje, partida en tramos de una vuelta (una sola cara para toda la
+  hélice hacía crecer la unión más que lineal: 40 mm de M6, 8,5 → 4,5 s), unido al núcleo y
+  recortado al largo. Gotchas: la herramienta pasa 1 µm de las tapas y, sin holgura, la cresta
+  sobresale 1 µm de la cara (superficies coincidentes hacían fallar la booleana sin avisar).
+  Pruebas: volumen del macho por Pappus (exacto), agujero pasante, eje y agujero roscados.

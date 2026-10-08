@@ -1337,20 +1337,24 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "hole" && (f().kind as Extract<FeatureKind, { type: "hole" }>)}>
             {(k) => {
               // Tamaño estándar que corresponde a los diámetros actuales (si alguno)
-              const fit = (): { size: string; mode: "clearance" | "tap" } | null => {
+              const fit = (): { size: string; mode: "clearance" | "tap" | "modeled" } | null => {
+                const mod = k().modeled;
+                if (mod) return { size: METRIC_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6)?.size ?? "", mode: "modeled" };
                 for (const m of METRIC_HOLES) {
                   if (Math.abs(m.clearance - k().diameter) < 1e-6) return { size: m.size, mode: "clearance" };
                   if (Math.abs(m.tap - k().diameter) < 1e-6) return { size: m.size, mode: "tap" };
                 }
                 return null;
               };
-              const applySize = (size: string, mode: "clearance" | "tap") => {
+              const applySize = (size: string, mode: "clearance" | "tap" | "modeled") => {
                 const m = METRIC_HOLES.find((x) => x.size === size);
                 if (!m) return;
                 update((x) => {
                   if (x.type !== "hole") return;
-                  x.diameter = mode === "tap" ? m.tap : m.clearance;
-                  x.thread = mode === "tap" ? m.size : null;
+                  x.diameter = mode === "clearance" ? m.clearance : m.tap;
+                  x.thread = mode === "clearance" ? null : m.size;
+                  // Al cambiar de medida la rosca modelada toma el paso grueso y conserva la holgura
+                  x.modeled = mode === "modeled" ? { nominal: m.nominal, pitch: m.pitch, clearance: x.modeled?.clearance ?? 0, left: x.modeled?.left ?? false } : null;
                   if (x.style.type === "counterbore") x.style = { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth };
                   if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: 90 };
                 });
@@ -1405,14 +1409,30 @@ export const FeatureEditor: Component<{
                           options={[
                             { value: "clearance", label: "Que pase el tornillo" },
                             { value: "tap", label: "Roscar (rosca cosmética)" },
+                            { value: "modeled", label: "Roscar (rosca modelada)" },
                           ]}
                           value={fi().mode}
-                          onChange={(v) => applySize(fi().size, v as "clearance" | "tap")}
+                          onChange={(v) => applySize(fi().size || "M6", v as "clearance" | "tap" | "modeled")}
                         />
                       </Row>
                     )}
                   </Show>
-                  {field("Diámetro", "kind.diameter", k().diameter, (x, v) => x.type === "hole" && (x.diameter = v), "mm")}
+                  <Show
+                    when={k().modeled}
+                    fallback={field("Diámetro", "kind.diameter", k().diameter, (x, v) => x.type === "hole" && (x.diameter = v), "mm")}
+                  >
+                    {(t) => (
+                      <>
+                        {field("Paso", "kind.modeled.pitch", t().pitch, (x, v) => x.type === "hole" && x.modeled && (x.modeled.pitch = v), "mm")}
+                        {field("Holgura", "kind.modeled.clearance", t().clearance, (x, v) => x.type === "hole" && x.modeled && (x.modeled.clearance = v), "mm")}
+                        <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
+                        <p class="text-[11px] text-text-dim">
+                          M{t().nominal} × {t().pitch}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
+                          una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.
+                        </p>
+                      </>
+                    )}
+                  </Show>
                   <Row label="Profundidad">
                     <Select
                       options={[
@@ -1443,7 +1463,7 @@ export const FeatureEditor: Component<{
                       </>
                     )}
                   </Show>
-                  <Show when={k().thread}>
+                  <Show when={k().thread && !k().modeled}>
                     <p class="text-[11px] text-text-dim">Rosca {k().thread} (cosmética: no se modela)</p>
                   </Show>
                 </>
@@ -1477,6 +1497,38 @@ export const FeatureEditor: Component<{
                 />
                 {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "move_face" && (x.distance = v), "mm")}
                 <p class="text-[11px] text-text-dim">Positiva: hacia afuera (suma material); negativa: hacia adentro.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "thread" && (f().kind as Extract<FeatureKind, { type: "thread" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:cara`}
+                  kind="face"
+                  label="Cara cilíndrica"
+                  refs={[k().face]}
+                  lost={lost("face")}
+                  onChange={(refs) => refs.length && update((x) => x.type === "thread" && (x.face = refs[refs.length - 1] as FaceRef))}
+                />
+                <Row label="Medida">
+                  <Select
+                    options={[{ value: "", label: "Paso a medida" }, ...METRIC_HOLES.map((m) => ({ value: String(m.pitch), label: `${m.size} × ${String(m.pitch).replace(".", ",")}` }))]}
+                    value={METRIC_HOLES.some((m) => m.pitch === k().pitch) ? String(k().pitch) : ""}
+                    onChange={(v) => v && update((x) => x.type === "thread" && (x.pitch = +v))}
+                  />
+                </Row>
+                {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "thread" && (x.pitch = v), "mm")}
+                {field("Largo", "kind.length", k().length, (x, v) => x.type === "thread" && (x.length = v), "mm")}
+                {field("Holgura", "kind.clearance", k().clearance, (x, v) => x.type === "thread" && (x.clearance = v), "mm")}
+                <Checkbox small label="Desde el otro extremo" checked={k().flip} onChange={(c) => update((x) => x.type === "thread" && (x.flip = c))} />
+                <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "thread" && (x.left = c))} />
+                <p class="text-[11px] text-text-dim">
+                  En un eje, el cilindro es el diámetro nominal (Ø6 para M6); en un agujero, el diámetro menor (5 mm para M6). Largo 0: toda la cara. La
+                  holgura achica la rosca de un eje y agranda la de un agujero (0,2–0,4 mm para imprimir en FDM).
+                </p>
               </>
             )}
           </Match>

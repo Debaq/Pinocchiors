@@ -231,6 +231,13 @@ export const MoveFace = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Thread = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M8 3 V21 M16 3 V21" {...dashed} />
+    <path d="M7 6 L17 8 M7 10 L17 12 M7 14 L17 16 M7 18 L17 20" />
+  </DesignIcon>
+);
+
 export const Rib = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M3 20 H21 M5 20 V6 H8 V20" />

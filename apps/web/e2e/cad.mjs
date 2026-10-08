@@ -1559,6 +1559,64 @@ const scenarios = {
     await b.shot("caja_en_el_sketch");
   },
 
+  async "agujero con rosca modelada"(b) {
+    // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
+    const rodPerMm = (d, p) => {
+      const d1 = d - 1.082532 * p, r1 = d1 / 2, h = (d - d1) / 2;
+      const top = p / 8, bottom = top + 2 * h * Math.tan(Math.PI / 6);
+      const rc = r1 + (h * (bottom + 2 * top)) / (3 * (bottom + top));
+      return Math.PI * r1 * r1 + (((top + bottom) / 2) * h * 2 * Math.PI * rc) / p;
+    };
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un punto en la cara de arriba (z = 10) para el centro
+    const doc = await call("cad_get_document");
+    const sketch = { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }], entities: [{ id: 2, geometry: { type: "point", point: 1 } }], constraints: [], next_id: 3, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Centro", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 10, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Agujero");
+    await sleep(2000);
+    await b.clickText("Que pase el tornillo");
+    await sleep(400);
+    await b.clickText("Roscar (rosca modelada)");
+    for (let t = 0; t < 40 && !(await b.eval(`window.__cadStore.doc().features.at(-1).kind.modeled?.pitch === 1 && !window.__cadStore.busy()`)); t++) await sleep(500);
+    await sleep(1000);
+    await accept(b, 4000);
+    // Pasante por 20 mm: se va el macho entero
+    near((await body()).volume, 8000 - 20 * rodPerMm(6, 1), 0.5, "caja con M6 roscado");
+    await b.shot("agujero_roscado");
+  },
+
+  async "rosca exterior en un eje"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    // Eje de Ø6 × 10 parado en el origen
+    const doc = await call("cad_get_document");
+    doc.features.push({ id: doc.next_id, name: "Eje", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 3, height: 10 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "join" } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    await sleep(500);
+    await b.click(...(await at([0, -3, 5])), { wait: 800 });
+    await b.clickText("Rosca");
+    for (let t = 0; t < 40 && !(await b.eval(`window.__cadStore.doc().features.at(-1).kind.type === "thread" && !window.__cadStore.busy()`)); t++) await sleep(500);
+    await sleep(1000);
+    const k = await b.eval(`window.__cadStore.doc().features.at(-1).kind`);
+    if (k.pitch !== 1) throw new Error(`paso: ${k.pitch}`);
+    await accept(b, 4000);
+    const v = (await body()).volume;
+    // El macho M6 de 10 mm: 229,6 mm³ (contra 282,7 del eje liso)
+    near(v, 229.6, 0.5, "eje roscado");
+    await b.shot("eje_roscado");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

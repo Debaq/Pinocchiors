@@ -2,6 +2,7 @@
 // la barra de herramientas del visor, el menú del clic derecho y el panel.
 
 import { createSignal } from "solid-js";
+import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   METRIC_HOLES,
@@ -113,6 +114,26 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
     void store.addFeature({ type: "move_face", faces, distance: 5 });
+  };
+
+  /**
+   * Rosca en la cara cilíndrica elegida: un eje (el cilindro es el diámetro
+   * nominal) o un agujero (es el menor). El paso sale del métrico más cercano.
+   */
+  const startThread = async () => {
+    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    const face = ui.picks().find((p) => p.kind === "face");
+    if (!face || face.kind !== "face") return say("Elegir primero la cara cilíndrica: el eje o el agujero que se rosca");
+    const info = await invoke<{ surface: string; radius?: number | null }>("cad_face_info", { face: face.face });
+    if (info.surface !== "cylinder" || !info.radius) return say("La rosca va sobre una cara cilíndrica");
+    const d = 2 * info.radius;
+    const near = METRIC_HOLES.reduce((best, m) => {
+      const err = Math.min(Math.abs(m.nominal - d), Math.abs(m.nominal - 1.082532 * m.pitch - d));
+      return err < best.err ? { m, err } : best;
+    }, { m: METRIC_HOLES[0], err: Infinity });
+    const ref = await store.faceRef(face.face);
+    ui.clearPicks();
+    void store.addFeature({ type: "thread", face: ref, pitch: near.err < 0.3 ? near.m.pitch : 1, length: 0, flip: false, left: false, clearance: 0 });
   };
 
   /** Nervio con el sketch elegido en el árbol (o el último): sus líneas hasta el sólido */
@@ -325,6 +346,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startThicken,
     startMoveFace,
     startRib,
+    startThread,
     startReplaceFace,
     importStep,
     addSplit: () => void store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false }),

@@ -960,13 +960,39 @@ impl Ctx<'_> {
                 self.diag() * 2.0 + 2.0 * norm(sub(center, s.plane.origin))
             }
         };
+        if let Some(t) = &h.modeled
+            && !(t.pitch > 0.0 && t.minor() > 0.0)
+        {
+            return Err("la rosca necesita un paso positivo y menor que el diámetro".into());
+        }
+        // Con rosca modelada el taladro es el diámetro menor (más la holgura)
+        let r = h.modeled.map_or(r, |t| (t.minor() + t.clearance) / 2.0);
+        let bbox = self.body().ok().and_then(|b| b.mass().ok()).map(|m| (m.bbox_min, m.bbox_max));
         let mut parts = Vec::new();
         let mut probes: Vec<(P3, String)> = Vec::new();
         for (k, pid) in ids.iter().enumerate() {
             let c = s.plane.to_world(s.sketch.point(*pid).map_err(err)?);
             let top = sub(c, scale(down, lift));
             let frame = |o: P3| Frame { origin: o, z: down, x };
-            parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?);
+            match &h.modeled {
+                Some(t) => {
+                    // Pasante: hasta donde termina el sólido (no el largo de sobra de
+                    // siempre: cada vuelta del filete cuesta)
+                    let len = match (&h.depth, bbox) {
+                        (HoleDepth::ThroughAll, Some((lo, hi))) => (0..8)
+                            .map(|i| {
+                                let corner = [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+                                dot(sub(corner, c), down)
+                            })
+                            .fold(0.0, f64::max)
+                            + t.pitch,
+                        _ => depth,
+                    };
+                    let axis = Axis { origin: top, dir: down };
+                    parts.push(Shape::thread(axis, r, (t.nominal + t.clearance) / 2.0, t.pitch, len + lift, t.left).map_err(err)?);
+                }
+                None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
+            }
             probes.push((add(add(c, scale(down, depth / 2.0)), scale(x, r)), format!("agujero:{k}:pared")));
             // Punta de broca en los ciegos
             if matches!(h.depth, HoleDepth::Blind { .. }) && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
@@ -1518,6 +1544,59 @@ impl Ctx<'_> {
                 }
                 self.scope = saved;
                 Ok(())
+            }
+            FeatureKind::Thread { face, pitch, length, flip, left, clearance } => {
+                let i = self.faces("face", std::slice::from_ref(face))?[0];
+                let body = self.body()?.clone();
+                let info = body.face_info(i).map_err(err)?;
+                let (Some(ax), Some(radius)) = (info.axis.filter(|_| info.surface == SurfaceKind::Cylinder), info.radius) else {
+                    return Err("la rosca va sobre una cara cilíndrica".into());
+                };
+                if *pitch <= 0.0 {
+                    return Err("el paso tiene que ser mayor que cero".into());
+                }
+                let dir = normalize(ax.dir);
+                // Hasta dónde llega la cara a lo largo del eje
+                let along: Vec<f64> = body.face_shape(i).and_then(|fc| fc.vertices()).map_err(err)?.iter().map(|v| dot(sub(*v, ax.origin), dir)).collect();
+                let (lo, hi) = along.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(a, b), &t| (a.min(t), b.max(t)));
+                if !(hi > lo) {
+                    return Err("no se pudo medir el largo de la cara".into());
+                }
+                let len = if *length > 0.0 { length.min(hi - lo) } else { hi - lo };
+                let (start, dir) = if *flip { (add(ax.origin, scale(dir, hi)), scale(dir, -1.0)) } else { (add(ax.origin, scale(dir, lo)), dir) };
+                // ¿Eje o agujero? La normal saliente apunta afuera del eje en un eje
+                let foot = add(ax.origin, scale(normalize(ax.dir), dot(sub(info.point, ax.origin), normalize(ax.dir))));
+                let outside = dot(info.normal, sub(info.point, foot)) > 0.0;
+                let h = 1.082_532 * pitch / 2.0;
+                let margin = (self.diag() * 1e-4).max(1e-3);
+                // Un poco más allá de cada punta: con las tapas justo en el mismo
+                // plano que las del cilindro la booleana fallaba sin avisar
+                let from = sub(start, scale(dir, margin));
+                let span = len + 2.0 * margin;
+                let tool = if outside {
+                    // Eje: el cilindro es el diámetro mayor; se quita todo lo que no es
+                    // filete. Sin holgura la cresta queda apenas afuera (sobre la cara
+                    // misma la booleana no resuelve superficies que coinciden) y la
+                    // cara del cilindro hace de cresta
+                    let major = radius - clearance / 2.0;
+                    let crest = if *clearance > 2.0 * margin { major } else { radius + margin };
+                    let rod = Shape::thread(Axis { origin: from, dir }, major - h, crest, *pitch, span, *left).map_err(err)?;
+                    let x = normalize(cross(dir, if dir[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }));
+                    let sleeve = Shape::cylinder(Frame { origin: from, z: dir, x }, radius + pitch, span).map_err(err)?;
+                    sleeve.cut(&rod).map_err(err)?
+                } else {
+                    // Agujero: el agujero es el diámetro menor; el macho lo talla
+                    let minor = radius + clearance / 2.0;
+                    Shape::thread(Axis { origin: from, dir }, minor - margin, minor + h, *pitch, span, *left).map_err(err)?
+                };
+                let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                let tags = (0..tool.face_count()).map(|k| vec![tag(f.id, format!("cara:{k}"))]).collect();
+                let tool = Tagged { shape: tool, tags };
+                self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Cut));
+                let saved = std::mem::replace(&mut self.scope, vec![part]);
+                let r = self.apply(f.id, tool, BodyOp::Cut);
+                self.scope = saved;
+                r
             }
             FeatureKind::Hole(h) => {
                 let tool = self.hole_tool(f.id, h)?;

@@ -1023,6 +1023,65 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
     });
 }
 
+CadShape* cad_make_thread(const double* origin, const double* dir, double r_minor, double r_major, double pitch,
+                          double length, int32_t left) {
+    return guard("rosca", (CadShape*)nullptr, [&] {
+        if (!(r_minor > 0 && r_major > r_minor && pitch > 0 && length > 0))
+            throw Standard_Failure("la rosca necesita radio menor < mayor, paso y largo positivos");
+        gp_Dir z(dir[0], dir[1], dir[2]);
+        gp_Ax3 base(pnt(origin), z);
+        // El filete arranca una vuelta antes y termina una después: al final se
+        // recorta al largo pedido y las puntas quedan planas
+        gp_Ax3 ax(base.Location().Translated(gp_Vec(z) * -pitch), z, base.XDirection());
+        // La hélice va apenas adentro del núcleo, para que la unión no quede rozando
+        double eps = std::min(0.02 * (r_major - r_minor), 0.01);
+        double rh = r_minor - eps;
+        double turns = length / pitch + 2.0;
+        Handle(Geom_CylindricalSurface) cyl = new Geom_CylindricalSurface(ax, rh);
+        double du = left ? -2 * M_PI : 2 * M_PI;
+        Handle(Geom2d_Line) line = new Geom2d_Line(gp_Pnt2d(0, 0), gp_Dir2d(du, pitch));
+        // Un tramo por vuelta: el barrido sale en caras chicas (una sola cara para
+        // toda la hélice es una superficie enorme y unirla crecía más que lineal:
+        // 40 mm de M6 tardaba 8 s)
+        double per_turn = std::sqrt(du * du + pitch * pitch);
+        BRepBuilderAPI_MakeWire wire;
+        int pieces = (int)std::ceil(turns - 1e-9);
+        for (int k = 0; k < pieces; k++) {
+            double a = k * per_turn, b = std::min(turns, k + 1.0) * per_turn;
+            TopoDS_Edge e = BRepBuilderAPI_MakeEdge(line, cyl, a, b).Edge();
+            BRepLib::BuildCurves3d(e);
+            wire.Add(e);
+        }
+        TopoDS_Wire spine = wire.Wire();
+        // Perfil ISO básico en el plano que contiene al eje: flancos de 60°,
+        // cresta de P/8 en el radio mayor y fondo de P/4 entre filetes
+        double t30 = std::tan(M_PI / 6);
+        double top = pitch / 8, bottom = top + 2 * (r_major - rh) * t30;
+        gp_Pnt c0 = ax.Location();
+        gp_Vec x(ax.XDirection()), zv(z);
+        auto at = [&](double r, double a) { return c0.Translated(x * r + zv * a); };
+        BRepBuilderAPI_MakePolygon poly;
+        poly.Add(at(rh, -bottom / 2));
+        poly.Add(at(r_major, -top / 2));
+        poly.Add(at(r_major, top / 2));
+        poly.Add(at(rh, bottom / 2));
+        poly.Close();
+        BRepOffsetAPI_MakePipeShell mk(spine);
+        // Binormal fija en el eje: el perfil no se tuerce a lo largo de la hélice
+        mk.SetMode(z);
+        mk.Add(poly.Wire(), Standard_False, Standard_False);
+        mk.Build();
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el filete");
+        if (!mk.MakeSolid()) throw Standard_Failure("el filete no cierra un sólido");
+        gp_Ax2 core_ax(ax.Location(), z, ax.XDirection());
+        TopoDS_Shape core = BRepPrimAPI_MakeCylinder(core_ax, r_minor, length + 2 * pitch).Shape();
+        TopoDS_Shape rod = BRepAlgoAPI_Fuse(core, mk.Shape()).Shape();
+        gp_Ax2 clip_ax(base.Location(), z, base.XDirection());
+        TopoDS_Shape clip = BRepPrimAPI_MakeCylinder(clip_ax, r_major * 1.5, length).Shape();
+        return wrap_checked(BRepAlgoAPI_Common(rod, clip).Shape(), "rosca");
+    });
+}
+
 CadShape* cad_thicken(const CadShape* faces, double thickness) {
     return guard("engrosar", (CadShape*)nullptr, [&] {
         if (std::fabs(thickness) < 1e-9) throw Standard_Failure("espesor cero");

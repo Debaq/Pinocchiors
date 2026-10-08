@@ -60,6 +60,7 @@ int32_t cad_count_solids(const CadShape* s) { (void)s; FAIL_INT; }
 double cad_ray_hit(const CadShape* s, const double* o, const double* d) { (void)s; (void)o; (void)d; return -1.0; }
 int32_t cad_wire_sample(const CadShape* w, int32_t n, double* p, double* t) { (void)w; (void)n; (void)p; (void)t; FAIL_INT; }
 CadShape* cad_make_helix(const double* o, const double* d, double r, double p, double t, int32_t l) { (void)o; (void)d; (void)r; (void)p; (void)t; (void)l; FAIL_PTR; }
+CadShape* cad_make_thread(const double* o, const double* d, double a, double b, double p, double l, int32_t h) { (void)o; (void)d; (void)a; (void)b; (void)p; (void)l; (void)h; FAIL_PTR; }
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }
 CadShape* cad_offset_face(const CadShape* f, double d) { (void)f; (void)d; FAIL_PTR; }

@@ -381,6 +381,21 @@ pub enum FeatureKind {
     /// Lleva caras planas hasta un plano (una cara plana del sólido o uno de
     /// referencia): suma o resta lo que hay entre la cara y el plano.
     ReplaceFace { faces: Vec<FaceRef>, target: PlaneSpec },
+    /// Rosca sobre una cara cilíndrica: exterior en un eje (el cilindro es el
+    /// diámetro nominal), interior en un agujero (el agujero es el diámetro
+    /// menor). `length` 0 = toda la cara; arranca en un extremo (`flip`: el otro).
+    Thread {
+        face: FaceRef,
+        pitch: f64,
+        #[serde(default)]
+        length: f64,
+        #[serde(default)]
+        flip: bool,
+        #[serde(default)]
+        left: bool,
+        #[serde(default)]
+        clearance: f64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -401,6 +416,30 @@ pub struct Hole {
     /// Rosca cosmética (solo dato, p. ej. "M6").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<String>,
+    /// Rosca modelada: el agujero sale con el filete de verdad (para imprimir).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modeled: Option<ThreadSpec>,
+}
+
+/// Rosca métrica ISO (perfil de 60°).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ThreadSpec {
+    /// Diámetro nominal (el mayor), p. ej. 6 para M6.
+    pub nominal: f64,
+    pub pitch: f64,
+    /// Holgura en el diámetro: agranda las roscas interiores y achica las
+    /// exteriores (impresas a medida exacta no entran; 0,2–0,4 mm en FDM).
+    #[serde(default)]
+    pub clearance: f64,
+    #[serde(default)]
+    pub left: bool,
+}
+
+impl ThreadSpec {
+    /// Diámetro menor del perfil básico ISO: d − 1,0825 P.
+    pub fn minor(&self) -> f64 {
+        self.nominal - 1.082_532 * self.pitch
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -560,6 +599,7 @@ impl FeatureKind {
             FeatureKind::Thicken { .. } => "Engrosar",
             FeatureKind::Rib { .. } => "Nervio",
             FeatureKind::ReplaceFace { .. } => "Reemplazar cara",
+            FeatureKind::Thread { .. } => "Rosca",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
         }
