@@ -7,14 +7,19 @@ import type { CadUi } from "../../lib/cadUi";
 import {
   SCALES,
   SHEETS,
+  asArc,
   asCircle,
   asSegment,
+  bounds,
+  detailScale,
   layout,
   lineNear,
+  placeDetails,
   scaleLabel,
   sheetDxf,
   sheetSvg,
   viewSpec,
+  type Detail,
   type DrawingLine,
   type P2,
   type Projection,
@@ -39,10 +44,15 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   // Cotas del usuario (guardadas en el documento) y herramienta activa
   const userDims = () => props.store.doc()?.drawing?.dims ?? [];
   const setUserDims = (dims: UserDim[]) => void props.store.commit((d) => (d.drawing = { ...(d.drawing ?? {}), dims }));
-  const [tool, setTool] = createSignal<"" | "dim" | "distance">("");
-  let firstLine: { view: ViewName; ref: P2 } | null = null;
+  // Vistas de detalle (también en el documento)
+  const details = () => props.store.doc()?.drawing?.details ?? [];
+  const setDetails = (list: Detail[]) => void props.store.commit((d) => (d.drawing = { ...(d.drawing ?? {}), details: list }));
+  const [tool, setTool] = createSignal<"" | "dim" | "distance" | "angle" | "detail">("");
+  let firstLine: { view: string; ref: P2 } | null = null;
   // Frente en corte por el plano medio (A-A), marcado en la planta
   const [section, setSection] = createSignal(false);
+  // Dónde corta (Y del modelo, mm); vacío: por el medio
+  const [sectionY, setSectionY] = createSignal<number>();
   const [title, setTitle] = createSignal("Diseño");
   const [author, setAuthor] = createSignal("");
   const [views, setViews] = createSignal<Partial<Record<ViewName, DrawingLine[]>>>();
@@ -53,14 +63,14 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   let seq = 0;
 
   createEffect(
-    on([() => props.store.result()?.version, projection, iso, section], async () => {
+    on([() => props.store.result()?.version, projection, iso, section, sectionY], async () => {
       const names: ViewName[] = ["front", "top", "side", ...(iso() ? (["iso"] as const) : [])];
       const n = ++seq;
       setBusy(true);
       try {
         // El corte va por el medio del sólido, paralelo al frente: se queda la mitad de atrás
         const body = props.store.result()?.body;
-        const at = body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0;
+        const at = sectionY() ?? (body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0);
         const specs = names.map((v) => {
           const spec = viewSpec(v, projection());
           return v === "front" && section() ? { ...spec, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : spec;
@@ -84,7 +94,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const result = createMemo(() => {
     const v = views();
     if (!v) return null;
-    return layout(v, sheet(), projection(), scaleChoice() === "auto" ? undefined : Number(scaleChoice()), hatch());
+    const r = layout(v, sheet(), projection(), scaleChoice() === "auto" ? undefined : Number(scaleChoice()), hatch());
+    return { ...r, placed: [...r.placed, ...placeDetails(r.placed, details(), sheet())] };
   });
   const svg = createMemo(() => {
     const r = result();
@@ -159,23 +170,39 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const m = svgEl?.getScreenCTM();
     if (!svgEl || !m) return;
     const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse());
-    for (const v of r.placed) {
+    // Primero los detalles (están encima, ampliados)
+    const order = [...r.placed].sort((a, b) => Number(!!b.detail) - Number(!!a.detail));
+    for (const v of order) {
       if (v.name === "iso") continue;
       const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
+      if (v.detail && Math.hypot(p[0] - v.detail.center[0], p[1] - v.detail.center[1]) > v.detail.radius) continue;
+      if (t === "detail") {
+        if (v.detail) return setMessage("El detalle se marca sobre una vista");
+        const b = bounds(v.lines);
+        if (p[0] < b.min[0] || p[0] > b.max[0] || p[1] < b.min[1] || p[1] > b.max[1]) continue;
+        // Radio inicial: un octavo de la vista; letras desde la B (la A es del corte)
+        const radius = Math.round(Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1]) / 8 * 10) / 10 || 5;
+        const used = new Set(details().map((d) => d.label));
+        const label = "BCDEFGHJKLMNPQRSTUVWXYZ".split("").find((l) => !used.has(l)) ?? `${details().length + 1}`;
+        setDetails([...details(), { label, view: v.name as ViewName, center: p, radius }]);
+        setMessage(undefined);
+        return;
+      }
       const line = lineNear(v, p, 3 / v.scale);
       if (!line) continue;
       if (t === "dim") {
         if (asCircle(line)) setUserDims([...userDims(), { view: v.name, kind: "diameter", refs: [p] }]);
         else if (asSegment(line)) setUserDims([...userDims(), { view: v.name, kind: "length", refs: [p] }]);
-        else setMessage("Esa línea no es recta ni un círculo");
+        else if (asArc(line)) setUserDims([...userDims(), { view: v.name, kind: "radius", refs: [p] }]);
+        else setMessage("Esa línea no es recta, ni un círculo, ni un arco");
         return;
       }
-      if (!asSegment(line)) return setMessage("Elegir rectas para la distancia");
+      if (!asSegment(line)) return setMessage(t === "angle" ? "Elegir rectas para el ángulo" : "Elegir rectas para la distancia");
       if (!firstLine || firstLine.view !== v.name) {
         firstLine = { view: v.name, ref: p };
-        return setMessage("Ahora la recta paralela");
+        return setMessage(t === "angle" ? "Ahora la otra recta del ángulo" : "Ahora la recta paralela");
       }
-      setUserDims([...userDims(), { view: v.name, kind: "distance", refs: [firstLine.ref, p] }]);
+      setUserDims([...userDims(), { view: v.name, kind: t === "angle" ? "angle" : "distance", refs: [firstLine.ref, p] }]);
       firstLine = null;
       setMessage(undefined);
       return;
@@ -218,14 +245,38 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         {check("Isométrica", iso, setIso)}
         {check("Cotas", dimensions, setDimensions)}
         {check("Corte A-A", section, setSection)}
+        <Show when={section()}>
+          <label class="flex items-center gap-1 text-xs text-text-muted" title="Dónde corta, paralelo al frente (vacío: por el medio)">
+            en Y
+            <input
+              aria-label="Posición del corte"
+              type="number"
+              step="1"
+              placeholder="medio"
+              class="w-16 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+              value={sectionY() ?? ""}
+              onChange={(e) => {
+                const v = e.currentTarget.value.trim().replace(",", ".");
+                setSectionY(v === "" || !isFinite(Number(v)) ? undefined : Number(v));
+              }}
+            />
+          </label>
+        </Show>
         <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Herramienta de cotas">
-          <For each={[["dim", "Cota"], ["distance", "Distancia"]] as const}>
+          <For each={[["dim", "Cota"], ["distance", "Distancia"], ["angle", "Ángulo"], ["detail", "Detalle"]] as const}>
             {([id, label]) => (
               <button
                 role="radio"
                 aria-checked={tool() === id}
                 class={clsx("px-1.5 py-0.5 rounded text-[11px]", tool() === id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
-                title={id === "dim" ? "Clic en una recta (largo) o un círculo (diámetro)" : "Clic en dos rectas paralelas"}
+                title={
+                  {
+                    dim: "Clic en una recta (largo), un círculo (diámetro) o un arco (radio)",
+                    distance: "Clic en dos rectas paralelas",
+                    angle: "Clic en dos rectas que se cruzan",
+                    detail: "Clic en una vista: amplía esa zona aparte",
+                  }[id]
+                }
                 onClick={() => {
                   firstLine = null;
                   setTool(tool() === id ? "" : id);
@@ -241,6 +292,49 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
             </button>
           </Show>
         </div>
+        {/* Detalles: radio y escala de cada uno */}
+        <For each={details()}>
+          {(d, i) => {
+            const edit = (change: (x: Detail) => void) =>
+              setDetails(
+                details().map((x, j) => {
+                  if (j !== i()) return x;
+                  const y = { ...x };
+                  change(y);
+                  return y;
+                }),
+              );
+            const auto = () => detailScale(result()?.scale ?? 1);
+            return (
+              <div data-detail-chip={d.label} class="flex items-center gap-1 rounded border border-border px-1 py-0.5 text-[11px] text-text-muted">
+                <span class="text-text">Detalle {d.label}</span>
+                <span>R</span>
+                <input
+                  aria-label={`Radio del detalle ${d.label}`}
+                  type="number"
+                  min="0.5"
+                  step="0.5"
+                  class="w-12 px-1 rounded bg-surface/40 border border-border text-text outline-none focus:border-accent"
+                  value={d.radius}
+                  onChange={(e) => {
+                    const v = Number(e.currentTarget.value.replace(",", "."));
+                    if (v > 0) edit((x) => (x.radius = v));
+                  }}
+                />
+                <div class="w-20">
+                  <Select
+                    options={[{ value: "auto", label: `Auto (${scaleLabel(auto())})` }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))]}
+                    value={d.scale ? String(d.scale) : "auto"}
+                    onChange={(v) => edit((x) => (x.scale = v === "auto" ? undefined : Number(v)))}
+                  />
+                </div>
+                <button aria-label={`Quitar detalle ${d.label}`} class="hover:text-text" onClick={() => setDetails(details().filter((_, j) => j !== i()))}>
+                  ×
+                </button>
+              </div>
+            );
+          }}
+        </For>
         <input
           aria-label="Título del plano"
           class="w-36 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"

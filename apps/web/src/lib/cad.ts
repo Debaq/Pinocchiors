@@ -342,7 +342,7 @@ export interface CadDocument {
   /** Ensamble de las piezas */
   assembly?: Assembly | null;
   /** Cotas del plano 2D (ver lib/drawing.ts) */
-  drawing?: { dims?: import("./drawing").UserDim[] } | null;
+  drawing?: { dims?: import("./drawing").UserDim[]; details?: import("./drawing").Detail[] } | null;
   /** Variantes: parámetro → expresión que lo reemplaza y operaciones suprimidas */
   configurations?: Configuration[];
   /** La que se calcula (ninguna: lo de base) */

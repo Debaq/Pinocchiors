@@ -85,7 +85,8 @@ export const TITLE_W = 130;
 const GAP = 18;
 
 export interface Placed {
-  name: ViewName;
+  /** La vista ("front"…) o un detalle ("detalle-B") */
+  name: string;
   /** Traslado en la hoja (mm) del origen de la vista y escala */
   x: number;
   y: number;
@@ -93,6 +94,21 @@ export interface Placed {
   lines: DrawingLine[];
   /** Triángulos de la cara cortada (vista en corte), para rayar */
   hatch?: [P2, P2, P2][];
+  /** Vista de detalle: de qué vista sale y qué círculo amplía */
+  detail?: Detail;
+}
+
+/**
+ * Vista de detalle: un círculo de una vista (centro en coordenadas de la
+ * vista, radio en mm de la pieza) ampliado aparte. `scale` es la escala del
+ * detalle en la hoja (sin ella, el doble de la de la hoja, normalizada).
+ */
+export interface Detail {
+  label: string;
+  view: ViewName;
+  center: P2;
+  radius: number;
+  scale?: number;
 }
 
 /** Corte A-A: el frente cortado por un plano paralelo a él; `at` es la Y del plano (mm del modelo) */
@@ -170,6 +186,7 @@ const n = (v: number) => (Math.round(v * 1000) / 1000).toString();
 
 /** Cota en la hoja: de `a` a `b` (mm de hoja), corrida `offset` hacia afuera, con su valor en mm de la pieza */
 export interface Dimension {
+  kind?: "linear";
   a: P2;
   b: P2;
   /** Hacia dónde se corre la línea de cota (perpendicular, en mm de hoja) */
@@ -179,6 +196,29 @@ export interface Dimension {
   prefix?: string;
 }
 
+/** Cota de ángulo: arco de radio `r` con centro `c` entre los ángulos `a0` y `a1` (radianes, coordenadas de hoja) */
+export interface AngleDimension {
+  kind: "angle";
+  c: P2;
+  r: number;
+  a0: number;
+  a1: number;
+  /** Grados */
+  value: number;
+  /** Extremos de las rectas acotadas (para las líneas de referencia hasta el arco) */
+  ends: [P2, P2];
+}
+
+/** Cota de radio: flecha del centro `c` al arco en `p` */
+export interface RadiusDimension {
+  kind: "radius";
+  c: P2;
+  p: P2;
+  value: number;
+}
+
+export type AnyDimension = Dimension | AngleDimension | RadiusDimension;
+
 /**
  * Cota puesta por el usuario sobre líneas de una vista. Las líneas se
  * recuerdan por un punto sobre ellas (coordenadas de la vista, mm de la
@@ -186,9 +226,13 @@ export interface Dimension {
  * valor se actualiza.
  */
 export interface UserDim {
-  view: ViewName;
-  /** "length": largo de una recta; "diameter": de un círculo; "distance": entre dos rectas paralelas */
-  kind: "length" | "diameter" | "distance";
+  /** La vista o el detalle ("detalle-B") */
+  view: string;
+  /**
+   * "length": largo de una recta; "diameter": de un círculo; "radius": de un
+   * arco; "distance": entre dos rectas paralelas; "angle": entre dos rectas
+   */
+  kind: "length" | "diameter" | "distance" | "radius" | "angle";
   refs: P2[];
 }
 
@@ -232,6 +276,24 @@ export function asCircle(l: DrawingLine): { c: P2; r: number } | null {
   return rs.every((x) => Math.abs(x - r) < r * 0.03) ? { c, r } : null;
 }
 
+/** ¿Es un arco (abierto)? Centro, radio, ángulos de los extremos y punto medio */
+export function asArc(l: DrawingLine): { c: P2; r: number; mid: P2 } | null {
+  const pts = l.points;
+  if (pts.length < 4 || asCircle(l) || asSegment(l)) return null;
+  const [a, m, b] = [pts[0], pts[Math.floor(pts.length / 2)], pts[pts.length - 1]];
+  // Circunferencia por tres puntos
+  const d = 2 * (a[0] * (m[1] - b[1]) + m[0] * (b[1] - a[1]) + b[0] * (a[1] - m[1]));
+  if (Math.abs(d) < 1e-12) return null;
+  const sq = (p: P2) => p[0] * p[0] + p[1] * p[1];
+  const c: P2 = [
+    (sq(a) * (m[1] - b[1]) + sq(m) * (b[1] - a[1]) + sq(b) * (a[1] - m[1])) / d,
+    (sq(a) * (b[0] - m[0]) + sq(m) * (a[0] - b[0]) + sq(b) * (m[0] - a[0])) / d,
+  ];
+  const r = Math.hypot(a[0] - c[0], a[1] - c[1]);
+  if (!pts.every((p) => Math.abs(Math.hypot(p[0] - c[0], p[1] - c[1]) - r) < r * 0.02)) return null;
+  return { c, r, mid: m };
+}
+
 /** ¿Es una recta? Sus extremos */
 export function asSegment(l: DrawingLine): [P2, P2] | null {
   const pts = l.points;
@@ -242,8 +304,8 @@ export function asSegment(l: DrawingLine): [P2, P2] | null {
 }
 
 /** Cotas del usuario resueltas contra las vistas actuales (las que ya no encuentran su línea se omiten) */
-export function userDimensions(placed: Placed[], dims: UserDim[]): Dimension[] {
-  const out: Dimension[] = [];
+export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[] {
+  const out: AnyDimension[] = [];
   for (const d of dims) {
     const v = placed.find((x) => x.name === d.view);
     if (!v) continue;
@@ -254,10 +316,37 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): Dimension[] {
     // Primero donde se hizo clic; si el modelo cambió, la más cercana a una
     // distancia razonable (la arista se movió)
     const far = Math.hypot(b.max[0] - b.min[0], b.max[1] - b.min[1]) * 0.15;
-    const shape = d.kind === "diameter" ? (l: DrawingLine) => !!asCircle(l) : (l: DrawingLine) => !!asSegment(l);
+    const shape =
+      d.kind === "diameter" ? (l: DrawingLine) => !!asCircle(l) : d.kind === "radius" ? (l: DrawingLine) => !!asArc(l) : (l: DrawingLine) => !!asSegment(l);
     const lines = d.refs.map((r) => lineNear(v, r, tol, shape) ?? lineNear(v, r, far, shape));
     if (lines.some((l) => !l)) continue;
-    if (d.kind === "diameter") {
+    if (d.kind === "radius") {
+      const arc = asArc(lines[0]!);
+      if (!arc) continue;
+      // La flecha a 45° (arriba a la derecha o a la izquierda…) si el arco
+      // pasa por ahí: por el medio del arco solía pisar rótulos
+      const pts = lines[0]!.points;
+      const toward = (deg: number) => {
+        const t = (deg * Math.PI) / 180;
+        const best = pts.reduce((a, p) => {
+          const q = Math.atan2(p[1] - arc.c[1], p[0] - arc.c[0]);
+          const diff = Math.abs(Math.atan2(Math.sin(q - t), Math.cos(q - t)));
+          return diff < a.diff ? { p, diff } : a;
+        }, { p: arc.mid, diff: Infinity });
+        return best.diff < 0.2 ? best.p : undefined;
+      };
+      const at = toward(45) ?? toward(135) ?? toward(-45) ?? toward(-135) ?? arc.mid;
+      out.push({ kind: "radius", c: sheet(arc.c), p: sheet([arc.c[0] + ((at[0] - arc.c[0]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1]), arc.c[1] + ((at[1] - arc.c[1]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1])]), value: arc.r });
+    } else if (d.kind === "angle") {
+      const [s1, s2] = [asSegment(lines[0]!), asSegment(lines[1]!)];
+      if (!s1 || !s2) continue;
+      const a = angleBetween(s1, s2, d.refs[0], d.refs[1]);
+      if (!a) continue;
+      // En la hoja Y va hacia abajo: los ángulos cambian de signo
+      const c = sheet(a.x);
+      const r = Math.max(8, a.reach * v.scale);
+      out.push({ kind: "angle", c, r, a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [sheet(a.far0), sheet(a.far1)] });
+    } else if (d.kind === "diameter") {
       const circ = asCircle(lines[0]!);
       if (!circ) continue;
       out.push({ a: sheet([circ.c[0] - circ.r, circ.c[1]]), b: sheet([circ.c[0] + circ.r, circ.c[1]]), offset: [0, 0], value: 2 * circ.r, prefix: "Ø" });
@@ -296,13 +385,135 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): Dimension[] {
 }
 
 /**
+ * Ángulo entre dos rectas que se cortan: el vértice, el ángulo de cada rayo
+ * (del vértice hacia el lado de la recta donde se hizo clic), los grados, el
+ * radio del arco (la distancia media a los clics) y el extremo más lejano de
+ * cada recta. `null` si son paralelas.
+ */
+export function angleBetween(s1: [P2, P2], s2: [P2, P2], ref1: P2, ref2: P2) {
+  const d1: P2 = [s1[1][0] - s1[0][0], s1[1][1] - s1[0][1]];
+  const d2: P2 = [s2[1][0] - s2[0][0], s2[1][1] - s2[0][1]];
+  const den = d1[0] * d2[1] - d1[1] * d2[0];
+  if (Math.abs(den) < 1e-9 * Math.hypot(...d1) * Math.hypot(...d2)) return null;
+  const t = ((s2[0][0] - s1[0][0]) * d2[1] - (s2[0][1] - s1[0][1]) * d2[0]) / den;
+  const x: P2 = [s1[0][0] + t * d1[0], s1[0][1] + t * d1[1]];
+  // La dirección de la recta, hacia el lado del clic (el clic no cae justo
+  // sobre ella; si cae en el vértice, hacia el medio de la recta)
+  const ray = (seg: [P2, P2], ref: P2): P2 => {
+    const l = Math.hypot(seg[1][0] - seg[0][0], seg[1][1] - seg[0][1]);
+    const d: P2 = [(seg[1][0] - seg[0][0]) / l, (seg[1][1] - seg[0][1]) / l];
+    let side = (ref[0] - x[0]) * d[0] + (ref[1] - x[1]) * d[1];
+    if (Math.abs(side) < 1e-9) side = ((seg[0][0] + seg[1][0]) / 2 - x[0]) * d[0] + ((seg[0][1] + seg[1][1]) / 2 - x[1]) * d[1];
+    return side >= 0 ? d : [-d[0], -d[1]];
+  };
+  const [u1, u2] = [ray(s1, ref1), ray(s2, ref2)];
+  const far = (seg: [P2, P2]) => (Math.hypot(seg[0][0] - x[0], seg[0][1] - x[1]) > Math.hypot(seg[1][0] - x[0], seg[1][1] - x[1]) ? seg[0] : seg[1]);
+  const degrees = (Math.acos(Math.max(-1, Math.min(1, u1[0] * u2[0] + u1[1] * u2[1]))) * 180) / Math.PI;
+  const reach = (Math.hypot(ref1[0] - x[0], ref1[1] - x[1]) + Math.hypot(ref2[0] - x[0], ref2[1] - x[1])) / 2;
+  return { x, t0: Math.atan2(u1[1], u1[0]), t1: Math.atan2(u2[1], u2[0]), degrees, reach, far0: far(s1), far1: far(s2) };
+}
+
+// ─── Detalles ───────────────────────────────────────────────────────────────
+
+/** Partes de una polilínea dentro del círculo (`c`, `r`) */
+export function clipToCircle(pts: P2[], c: P2, r: number): P2[][] {
+  const inside = (p: P2) => Math.hypot(p[0] - c[0], p[1] - c[1]) <= r;
+  const out: P2[][] = [];
+  let cur: P2[] = [];
+  const flush = () => {
+    if (cur.length > 1) out.push(cur);
+    cur = [];
+  };
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [a, b] = [pts[i], pts[i + 1]];
+    const d: P2 = [b[0] - a[0], b[1] - a[1]];
+    const f: P2 = [a[0] - c[0], a[1] - c[1]];
+    // |a + t·d − c|² = r²
+    const A = d[0] * d[0] + d[1] * d[1];
+    const B = 2 * (f[0] * d[0] + f[1] * d[1]);
+    const C = f[0] * f[0] + f[1] * f[1] - r * r;
+    const disc = B * B - 4 * A * C;
+    let t0 = 0;
+    let t1 = 1;
+    if (A < 1e-18) {
+      if (!inside(a)) continue;
+    } else if (disc <= 0) {
+      flush();
+      continue;
+    } else {
+      const sq = Math.sqrt(disc);
+      t0 = Math.max(0, (-B - sq) / (2 * A));
+      t1 = Math.min(1, (-B + sq) / (2 * A));
+      if (t0 >= t1) {
+        flush();
+        continue;
+      }
+    }
+    const at = (t: number): P2 => [a[0] + t * d[0], a[1] + t * d[1]];
+    if (t0 > 0) flush();
+    if (!cur.length) cur.push(at(t0));
+    cur.push(at(t1));
+    if (t1 < 1) flush();
+  }
+  flush();
+  return out;
+}
+
+/** Escala de un detalle: la normalizada que sea al menos el doble de la de la hoja */
+export function detailScale(sheetScale: number): number {
+  const bigger = SCALES.filter((s) => s >= 2 * sheetScale - 1e-9);
+  return bigger.length ? bigger[bigger.length - 1] : 2 * sheetScale;
+}
+
+/**
+ * Los detalles como vistas más: las líneas de la vista recortadas al círculo,
+ * a su escala, en el primer hueco libre de la hoja (de arriba a la derecha
+ * hacia abajo, sin pisar vistas, cotas ni el cajetín).
+ */
+export function placeDetails(placed: Placed[], details: Detail[], sheet: SheetSize): Placed[] {
+  type Rect = [number, number, number, number];
+  const busy: Rect[] = placed.map((v) => {
+    const b = bounds(v.lines);
+    // Lugar para las cotas alrededor
+    return [v.x + b.min[0] * v.scale - 12, v.y - b.max[1] * v.scale - 8, v.x + b.max[0] * v.scale + 8, v.y - b.min[1] * v.scale + 14];
+  });
+  busy.push([sheet.width - MARGIN - TITLE_W - 2, sheet.height - MARGIN - TITLE_H - 2, sheet.width, sheet.height]);
+  const overlaps = (r: Rect) => busy.some((q) => r[0] < q[2] && r[2] > q[0] && r[1] < q[3] && r[3] > q[1]);
+  const out: Placed[] = [];
+  for (const d of details) {
+    const parent = placed.find((v) => v.name === d.view);
+    if (!parent) continue;
+    const scale = d.scale ?? detailScale(parent.scale);
+    const lines: DrawingLine[] = parent.lines.flatMap((l) => clipToCircle(l.points, d.center, d.radius).map((points) => ({ kind: l.kind, points })));
+    // El rayado entero: en el SVG se recorta al círculo
+    const D = 2 * d.radius * scale;
+    // Círculo + rótulo debajo
+    const [w, h] = [D + 4, D + 12];
+    let spot: [number, number] | undefined;
+    for (let y = MARGIN + 4; !spot && y + h <= sheet.height - MARGIN; y += 2)
+      for (let x = sheet.width - MARGIN - 4 - w; x >= MARGIN + 4; x -= 2) {
+        if (!overlaps([x, y, x + w, y + h])) {
+          spot = [x, y];
+          break;
+        }
+      }
+    // Sin lugar: abajo a la izquierda (encima de lo que haya)
+    const [x0, y0] = spot ?? [MARGIN + 4, sheet.height - MARGIN - h];
+    busy.push([x0, y0, x0 + w, y0 + h]);
+    const [cx, cy] = [x0 + w / 2, y0 + 2 + D / 2];
+    out.push({ name: `detalle-${d.label}`, scale, lines, hatch: parent.hatch, x: cx - d.center[0] * scale, y: cy + d.center[1] * scale, detail: { ...d, scale } });
+  }
+  return out;
+}
+
+/**
  * Cotas generales de cada vista (no la isométrica): ancho abajo y alto a la
  * izquierda, del rectángulo que ocupa la vista. Se recalculan con el modelo.
  */
 export function overallDimensions(placed: Placed[]): Dimension[] {
   const dims: Dimension[] = [];
   for (const v of placed) {
-    if (v.name === "iso") continue;
+    if (v.name === "iso" || v.detail) continue;
     const b = bounds(v.lines);
     const [x0, x1] = [v.x + b.min[0] * v.scale, v.x + b.max[0] * v.scale];
     const [yTop, yBot] = [v.y - b.max[1] * v.scale, v.y - b.min[1] * v.scale];
@@ -315,7 +526,64 @@ export function overallDimensions(placed: Placed[]): Dimension[] {
 /** Texto de una cota: hasta 2 decimales, coma decimal */
 export const dimText = (v: number) => v.toLocaleString("es", { maximumFractionDigits: 2 });
 
-function dimensionSvg(d: Dimension): string {
+const arrowSvg = (p: P2, ux: number, uy: number) => {
+  // Punta en `p`, apuntando hacia −u
+  const [bx, by] = [p[0] + ux * 2.5, p[1] + uy * 2.5];
+  const [px, py] = [-uy * 0.8, ux * 0.8];
+  return `<polygon points="${n(p[0])},${n(p[1])} ${n(bx + px)},${n(by + py)} ${n(bx - px)},${n(by - py)}" fill="#000" stroke="none"/>`;
+};
+
+/** Ángulos de un arco de cota llevados al tramo corto (≤ 180°) de a0 a a1 */
+function shortSweep(a0: number, a1: number): [number, number] {
+  let d = a1 - a0;
+  while (d > Math.PI) d -= 2 * Math.PI;
+  while (d < -Math.PI) d += 2 * Math.PI;
+  return [a0, a0 + d];
+}
+
+function angleSvg(d: AngleDimension): string {
+  const [a0, a1] = shortSweep(d.a0, d.a1);
+  const at = (a: number, r = d.r): P2 => [d.c[0] + r * Math.cos(a), d.c[1] + r * Math.sin(a)];
+  const [p0, p1] = [at(a0), at(a1)];
+  const sweep = a1 > a0 ? 1 : 0;
+  const mid = (a0 + a1) / 2;
+  const t = at(mid, d.r + 3);
+  // Flechas tangentes al arco, hacia adentro
+  const s = sweep ? 1 : -1;
+  const tan = (a: number, k: number): [number, number] => [-Math.sin(a) * k * s, Math.cos(a) * k * s];
+  // Líneas de referencia: de la punta de cada recta hasta el arco, si no llega
+  const ext = (end: P2, p: P2) =>
+    Math.hypot(end[0] - d.c[0], end[1] - d.c[1]) < d.r - 0.5 ? `<line x1="${n(end[0])}" y1="${n(end[1])}" x2="${n(p[0])}" y2="${n(p[1])}"/>` : "";
+  return (
+    `<g data-dimension="" data-angle="" stroke="#000" stroke-width="0.18" fill="none">` +
+    ext(d.ends[0], p0) +
+    ext(d.ends[1], p1) +
+    `<path d="M ${n(p0[0])} ${n(p0[1])} A ${n(d.r)} ${n(d.r)} 0 0 ${sweep} ${n(p1[0])} ${n(p1[1])}"/>` +
+    arrowSvg(p0, ...tan(a0, 1)) +
+    arrowSvg(p1, ...tan(a1, -1)) +
+    `<text x="${n(t[0])}" y="${n(t[1] + 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc(dimText(d.value) + "°")}</text>` +
+    `</g>`
+  );
+}
+
+function radiusSvg(d: RadiusDimension): string {
+  const len = Math.hypot(d.p[0] - d.c[0], d.p[1] - d.c[1]) || 1;
+  const [ux, uy] = [(d.p[0] - d.c[0]) / len, (d.p[1] - d.c[1]) / len];
+  // El texto sale por afuera del arco, en la dirección de la flecha
+  const tip: P2 = [d.p[0] + ux * 6, d.p[1] + uy * 6];
+  const right = ux >= 0;
+  return (
+    `<g data-dimension="" data-radius="" stroke="#000" stroke-width="0.18">` +
+    `<line x1="${n(d.c[0])}" y1="${n(d.c[1])}" x2="${n(tip[0])}" y2="${n(tip[1])}"/>` +
+    arrowSvg(d.p, -ux, -uy) +
+    `<text x="${n(tip[0] + (right ? 1 : -1))}" y="${n(tip[1] + 1)}" font-size="3" text-anchor="${right ? "start" : "end"}" stroke="none" fill="#000">${esc("R" + dimText(d.value))}</text>` +
+    `</g>`
+  );
+}
+
+function dimensionSvg(d: AnyDimension): string {
+  if (d.kind === "angle") return angleSvg(d);
+  if (d.kind === "radius") return radiusSvg(d);
   const [ox, oy] = d.offset;
   const a2: P2 = [d.a[0] + ox, d.a[1] + oy];
   const b2: P2 = [d.b[0] + ox, d.b[1] + oy];
@@ -327,11 +595,7 @@ function dimensionSvg(d: Dimension): string {
     const [ex, ey] = [ox / ol, oy / ol];
     return `<line x1="${n(p[0] + ex)}" y1="${n(p[1] + ey)}" x2="${n(q[0] + ex * 1.5)}" y2="${n(q[1] + ey * 1.5)}"/>`;
   };
-  const arrow = (p: P2, dir: number) => {
-    const [bx, by] = [p[0] + dir * ux * 2.5, p[1] + dir * uy * 2.5];
-    const [px, py] = [-uy * 0.8, ux * 0.8];
-    return `<polygon points="${n(p[0])},${n(p[1])} ${n(bx + px)},${n(by + py)} ${n(bx - px)},${n(by - py)}" fill="#000" stroke="none"/>`;
-  };
+  const arrow = (p: P2, dir: number) => arrowSvg(p, dir * ux, dir * uy);
   const mid: P2 = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
   const vertical = Math.abs(uy) > Math.abs(ux);
   const text = vertical
@@ -368,7 +632,13 @@ export function sheetSvg(
   out.push(`<rect x="${MARGIN}" y="${MARGIN}" width="${n(sheet.width - 2 * MARGIN)}" height="${n(sheet.height - 2 * MARGIN)}" fill="none" stroke="#000" stroke-width="0.7"/>`);
   for (const v of placed) {
     if (v.hatch?.length) {
-      out.push(`<g data-hatch="${v.name}" fill="url(#rayado)" stroke="none">`);
+      // En un detalle, solo lo que cae en su círculo
+      const clip = v.detail ? `clip-${v.name}` : "";
+      if (v.detail)
+        out.push(
+          `<clipPath id="${clip}"><circle cx="${n(v.x + v.detail.center[0] * v.scale)}" cy="${n(v.y - v.detail.center[1] * v.scale)}" r="${n(v.detail.radius * v.scale)}"/></clipPath>`,
+        );
+      out.push(`<g data-hatch="${v.name}" fill="url(#rayado)" stroke="none"${clip ? ` clip-path="url(#${clip})"` : ""}>`);
       for (const t of v.hatch) out.push(`<polygon points="${t.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}"/>`);
       out.push("</g>");
     }
@@ -381,6 +651,24 @@ export function sheetSvg(
       out.push(`<polyline data-kind="${l.kind}" points="${pts}" ${STYLE[l.kind]}/>`);
     }
     out.push("</g>");
+  }
+  // Detalles: el círculo con su letra en la vista y el rótulo bajo la ampliación
+  for (const v of placed) {
+    const d = v.detail;
+    if (!d) continue;
+    const parent = placed.find((p) => p.name === d.view);
+    if (parent) {
+      const [cx, cy, r] = [parent.x + d.center[0] * parent.scale, parent.y - d.center[1] * parent.scale, d.radius * parent.scale];
+      out.push(
+        `<g data-detail-mark="${esc(d.label)}"><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}" fill="none" stroke="#000" stroke-width="0.35"/>` +
+          `<text x="${n(cx + r * 0.75 + 1)}" y="${n(cy - r * 0.75 - 1)}" font-size="4" fill="#000">${esc(d.label)}</text></g>`,
+      );
+    }
+    const [cx, cy, r] = [v.x + d.center[0] * v.scale, v.y - d.center[1] * v.scale, d.radius * v.scale];
+    out.push(
+      `<g data-detail="${esc(d.label)}"><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}" fill="none" stroke="#000" stroke-width="0.25"/>` +
+        `<text x="${n(cx)}" y="${n(cy + r + 6)}" font-size="3.5" text-anchor="middle" fill="#000">Detalle ${esc(d.label)} (${scaleLabel(v.scale)})</text></g>`,
+    );
   }
   if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
   for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", 'data-dimension="" data-user-dim=""'));
@@ -434,7 +722,7 @@ export function sheetSvg(
  * corte). `view` exporta solo esa vista a escala 1:1 con sus coordenadas
  * (para láser o CNC); sin ella, la hoja entera con el recuadro.
  */
-export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: ViewName; dimensions?: boolean; userDims?: UserDim[] }): string {
+export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[] }): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
   const section = (name: string, body: () => void) => {
@@ -513,23 +801,65 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
     if (!opts.view && (opts.dimensions || (opts.userDims ?? []).length)) {
       // Cotas generales como líneas y texto (Y hacia arriba)
       const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
-      for (const d of [...overallDimensions(placed), ...userDimensions(placed, opts.userDims ?? [])]) {
+      const text = (at: P2, value: string, rotate = false) => {
+        pair(0, "TEXT");
+        pair(8, "COTAS");
+        pair(10, at[0]);
+        pair(20, at[1]);
+        pair(30, 0);
+        pair(40, 3);
+        pair(1, value);
+        if (rotate) pair(50, 90);
+      };
+      for (const d of [...(opts.dimensions ? overallDimensions(placed) : []), ...userDimensions(placed, opts.userDims ?? [])]) {
+        if (d.kind === "angle") {
+          // El arco en tramos de ~3°
+          const [a0, a1] = shortSweep(d.a0, d.a1);
+          const k = Math.max(4, Math.ceil(Math.abs(a1 - a0) / 0.05));
+          const at = (a: number, r = d.r): P2 => [d.c[0] + r * Math.cos(a), d.c[1] + r * Math.sin(a)];
+          for (let i = 0; i < k; i++) line("COTAS", up(at(a0 + ((a1 - a0) * i) / k)), up(at(a0 + ((a1 - a0) * (i + 1)) / k)));
+          text(up(at((a0 + a1) / 2, d.r + 3)), dimText(d.value) + "°");
+          continue;
+        }
+        if (d.kind === "radius") {
+          const len = Math.hypot(d.p[0] - d.c[0], d.p[1] - d.c[1]) || 1;
+          const tip: P2 = [d.p[0] + ((d.p[0] - d.c[0]) / len) * 6, d.p[1] + ((d.p[1] - d.c[1]) / len) * 6];
+          line("COTAS", up(d.c), up(tip));
+          text(up(tip), "R" + dimText(d.value));
+          continue;
+        }
         const a2: P2 = [d.a[0] + d.offset[0], d.a[1] + d.offset[1]];
         const b2: P2 = [d.b[0] + d.offset[0], d.b[1] + d.offset[1]];
         line("COTAS", up(d.a), up(a2));
         line("COTAS", up(d.b), up(b2));
         line("COTAS", up(a2), up(b2));
         const mid = up([(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2]);
-        pair(0, "TEXT");
-        pair(8, "COTAS");
-        pair(10, mid[0]);
-        pair(20, mid[1] + 1);
-        pair(30, 0);
-        pair(40, 3);
-        pair(1, (d.prefix ?? "") + dimText(d.value));
-        if (Math.abs(d.offset[0]) > Math.abs(d.offset[1])) pair(50, 90);
+        text([mid[0], mid[1] + 1], (d.prefix ?? "") + dimText(d.value), Math.abs(d.offset[0]) > Math.abs(d.offset[1]));
       }
     }
+    // Círculos de los detalles (en la vista y en la ampliación) y su rótulo
+    if (!opts.view)
+      for (const v of placed) {
+        const d = v.detail;
+        if (!d) continue;
+        const ring = (cx: number, cy: number, r: number) => {
+          for (let i = 0; i < 72; i++) {
+            const [t0, t1] = [(i / 72) * 2 * Math.PI, ((i + 1) / 72) * 2 * Math.PI];
+            line("VISIBLE", [cx + r * Math.cos(t0), cy + r * Math.sin(t0)], [cx + r * Math.cos(t1), cy + r * Math.sin(t1)]);
+          }
+        };
+        const parent = placed.find((p) => p.name === d.view);
+        if (parent) ring(parent.x + d.center[0] * parent.scale, sheet.height - (parent.y - d.center[1] * parent.scale), d.radius * parent.scale);
+        const [cx, cy, r] = [v.x + d.center[0] * v.scale, sheet.height - (v.y - d.center[1] * v.scale), d.radius * v.scale];
+        ring(cx, cy, r);
+        pair(0, "TEXT");
+        pair(8, "COTAS");
+        pair(10, cx - r);
+        pair(20, cy - r - 6);
+        pair(30, 0);
+        pair(40, 3.5);
+        pair(1, `Detalle ${d.label} (${scaleLabel(v.scale)})`);
+      }
     if (!opts.view) {
       const [x0, y0, x1, y1] = [MARGIN, MARGIN, sheet.width - MARGIN, sheet.height - MARGIN];
       line("VISIBLE", [x0, y0], [x1, y0]);

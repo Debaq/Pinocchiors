@@ -1102,6 +1102,73 @@ const scenarios = {
     if (await b.eval(`!!document.querySelector('[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");
   },
 
+  async "plano 2D: radio, ángulo, detalle y corte movido"(b) {
+    await begin(b);
+    // Medio cono (r 10 → 5, alto 10) cortado en y < 0: arcos en la planta, trapecio en el frente
+    const doc = await call("cad_get_document");
+    const prim = (shape, origin, op) => ({ id: doc.next_id++, name: shape.type, suppressed: false, kind: { type: "primitive", shape, origin, z: [0, 0, 1], x: [1, 0, 0], op } });
+    doc.features.push(prim({ type: "cone", r1: 10, r2: 5, height: 10 }, [0, 0, 0], "join"));
+    doc.features.push(prim({ type: "box", dx: 30, dy: 15, dz: 30, centered: true }, [0, -7.5, -10], "cut"));
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await sleep(500);
+    const toolBtn = (name) => b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === ${JSON.stringify(name)}).click()`);
+    // Punto de la hoja (coordenadas del SVG) → pantalla
+    const at = (sel, pick) =>
+      b.eval(`(() => {
+        const svg = document.querySelector("[data-sheet] svg");
+        const lines = [...svg.querySelectorAll(${JSON.stringify(sel)})].map((l) => l.getAttribute("points").split(" ").map((p) => p.split(",").map(Number)));
+        const pts = (${pick})(lines);
+        const p = new DOMPoint(pts[0], pts[1]).matrixTransform(svg.getScreenCTM());
+        return [p.x, p.y];
+      })()`);
+    // Radio: el arco más largo de la planta, en su medio
+    await toolBtn("Cota");
+    await sleep(300);
+    await b.click(...(await at('[data-view="top"] polyline[data-kind="visible"]', "(ls) => { const l = ls.sort((a, b) => b.length - a.length)[0]; return l[Math.floor(l.length / 2)]; }")), { wait: 1000 });
+    // Ángulo: la base del frente y un costado inclinado
+    await toolBtn("Ángulo");
+    await sleep(300);
+    const seg = (kind) =>
+      `(ls) => { const s = ls.filter((l) => l.length === 2).map((l) => ({ l, dx: l[1][0] - l[0][0], dy: l[1][1] - l[0][1] })); const k = ${JSON.stringify(kind)} === "h" ? s.filter((x) => Math.abs(x.dy) < 1e-6).sort((a, b) => Math.abs(b.dx) - Math.abs(a.dx))[0] : s.find((x) => Math.abs(x.dx) > 1e-6 && Math.abs(x.dy) > 1e-6); const l = k.l; return [l[0][0] * 0.7 + l[1][0] * 0.3, l[0][1] * 0.7 + l[1][1] * 0.3]; }`;
+    await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', seg("h"))), { wait: 600 });
+    await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', seg("s"))), { wait: 1000 });
+    const texts = await b.eval(`[...document.querySelectorAll("[data-sheet] [data-user-dim] text, [data-sheet] [data-radius] text, [data-sheet] [data-angle] text")].map((t) => t.textContent)`);
+    if (!texts.includes("R10")) throw new Error(`radio: ${texts}`);
+    // atan(10 / 5) = 63,43° (o su suplemento si se eligió el otro lado)
+    if (!texts.some((t) => t === "63,43°" || t === "116,57°")) throw new Error(`ángulo: ${texts}`);
+    // Detalle en el frente
+    await toolBtn("Detalle");
+    await sleep(300);
+    await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', seg("s"))), { wait: 1000 });
+    const det = await b.eval(`(() => {
+      const svg = document.querySelector("[data-sheet] svg");
+      return { view: svg.querySelectorAll('[data-view="detalle-B"] polyline').length, mark: !!svg.querySelector('[data-detail-mark="B"]'), label: svg.querySelector('[data-detail="B"] text')?.textContent, chip: !!document.querySelector('[data-detail-chip="B"]') };
+    })()`);
+    if (!(det.view > 0) || !det.mark || !det.chip || !/^Detalle B \(\d+:1\)$/.test(det.label ?? "")) throw new Error(`detalle: ${JSON.stringify(det)}`);
+    if ((await call("cad_get_document")).drawing?.details?.length !== 1) throw new Error("no se guardó el detalle");
+    await toolBtn("Detalle");
+    // Corte A-A por el medio (Y = 5) y después en Y = 2: el rayado es el ancho del cono ahí
+    const hatchW = () =>
+      b.eval(`(() => {
+        const ps = [...document.querySelectorAll('[data-sheet] [data-hatch="front"] polygon')].flatMap((p) => p.getAttribute("points").split(" ").map((q) => Number(q.split(",")[0])));
+        return ps.length ? Math.max(...ps) - Math.min(...ps) : 0;
+      })()`);
+    await b.eval(`[...document.querySelectorAll('[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    for (let t = 0; t < 30 && !(await hatchW()); t++) await sleep(500);
+    await sleep(800);
+    const mid = await hatchW();
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Posición del corte"]'); i.value = "2"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    for (let t = 0; t < 30 && Math.abs((await hatchW()) - mid) < 1e-6; t++) await sleep(500);
+    await sleep(800);
+    // 2·√(100 − 4) contra 2·√(100 − 25)
+    near((await hatchW()) / mid, Math.sqrt(96 / 75), 0.01, "ancho del corte en Y = 2 contra el medio");
+    await b.shot("plano_2d_detalle");
+  },
+
   async "ensamble: instancias, bisagra, grados libres y choques"(b) {
     await begin(b);
     await b.clickText("Caja");

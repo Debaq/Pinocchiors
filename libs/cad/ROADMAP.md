@@ -511,4 +511,7 @@ cargo test -p cad-model
     (con roscas tardaba ~0,7 s y se recalculaba en cada clic) y las caras de las piezas estándar
     se etiquetan sin medirlas. Tuerca M8 roscada 4,2 → 2,2 s; tornillo M8×25 roscado 7,3 → 4,4 s;
     documento con los dos 16 → 6,5 s. Lo que queda es la unión hélice-núcleo de la rosca.
+- **2026-10-08 Planos 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md)): cotas de radio (arcos) y de
+  ángulo, vistas de detalle ampliadas y recortadas, y plano de corte movible. Pruebas: node
+  `e2e/drawing.test.mjs` (14) y e2e "plano 2D: radio, ángulo, detalle y corte movido".
 

@@ -124,3 +124,99 @@ test("cotas del usuario: largo, diámetro y distancia entre paralelas, y siguen 
   assert.equal((svg.match(/data-user-dim/g) ?? []).length, 3);
   assert.ok(svg.includes(">Ø8<"));
 });
+
+import { asArc, angleBetween, clipToCircle, placeDetails, detailScale } from "../src/lib/drawing.ts";
+
+/** Arco de radio r con centro c de a0 a a1 (grados) */
+const arc = (c, r, a0, a1, k = 24) => ({
+  kind: "visible",
+  points: Array.from({ length: k + 1 }, (_, i) => {
+    const t = ((a0 + ((a1 - a0) * i) / k) * Math.PI) / 180;
+    return [c[0] + r * Math.cos(t), c[1] + r * Math.sin(t)];
+  }),
+});
+
+test("arcos: centro y radio; las rectas y los círculos no son arcos", () => {
+  const a = asArc(arc([5, 3], 4, 0, 90));
+  assert.ok(a && Math.abs(a.r - 4) < 1e-9 && Math.abs(a.c[0] - 5) < 1e-9 && Math.abs(a.c[1] - 3) < 1e-9);
+  assert.equal(asArc({ kind: "visible", points: [[0, 0], [1, 0], [2, 0], [3, 0]] }), null);
+  assert.equal(asArc(arc([0, 0], 4, 0, 360, 36)), null);
+});
+
+test("ángulo entre dos rectas: hacia el lado de los clics", () => {
+  const h = [[0, 0], [10, 0]];
+  const d = [[0, 0], [10, 10]];
+  const a = angleBetween(h, d, [8, 0], [5, 5]);
+  assert.ok(Math.abs(a.degrees - 45) < 1e-9);
+  assert.deepEqual(a.x, [0, 0]);
+  // El suplemento si el clic va del otro lado del vértice
+  const b = angleBetween([[-10, 0], [10, 0]], d, [-8, 0], [5, 5]);
+  assert.ok(Math.abs(b.degrees - 135) < 1e-9);
+  assert.equal(angleBetween(h, [[0, 2], [10, 2]], [1, 0], [1, 2]), null);
+});
+
+test("cotas de radio y de ángulo resueltas en la hoja", () => {
+  const views = { front: [...rect(40, 10), arc([40, 10], 5, 90, 180)] };
+  const { placed } = layout(views, SHEETS[0], "first", 1);
+  const dims = userDimensions(placed, [
+    { view: "front", kind: "radius", refs: [[40 - 5 * Math.SQRT1_2, 10 + 5 * Math.SQRT1_2]] },
+    { view: "front", kind: "angle", refs: [[20, 0], [40, 5]] },
+  ]);
+  assert.equal(dims.length, 2);
+  assert.equal(dims[0].kind, "radius");
+  assert.ok(Math.abs(dims[0].value - 5) < 1e-9);
+  assert.equal(dims[1].kind, "angle");
+  assert.ok(Math.abs(dims[1].value - 90) < 1e-9);
+  const svg = sheetSvg(placed, SHEETS[0], { title: "x", date: "2026-10-08", scale: "1:1", projection: "first", sheet: "A4" }, {
+    hidden: true,
+    smooth: false,
+    userDims: [
+      { view: "front", kind: "radius", refs: [[40 - 5 * Math.SQRT1_2, 10 + 5 * Math.SQRT1_2]] },
+      { view: "front", kind: "angle", refs: [[20, 0], [40, 5]] },
+    ],
+  });
+  assert.ok(svg.includes(">R5<"), "radio");
+  assert.ok(svg.includes(">90°<"), "ángulo");
+  const dxf = sheetDxf(placed, SHEETS[0], { hidden: true, smooth: false, userDims: [{ view: "front", kind: "angle", refs: [[20, 0], [40, 5]] }] });
+  assert.ok(dxf.includes("\n90°\n"));
+});
+
+test("detalle: recorta al círculo, amplía y no pisa las vistas", () => {
+  // Recorte: una recta que cruza el círculo de radio 1 queda de −1 a 1
+  const parts = clipToCircle([[-5, 0], [5, 0]], [0, 0], 1);
+  assert.equal(parts.length, 1);
+  assert.deepEqual(parts[0].map((p) => p.map((x) => Math.round(x * 1e9) / 1e9)), [[-1, 0], [1, 0]]);
+  assert.equal(clipToCircle([[-5, 3], [5, 3]], [0, 0], 1).length, 0);
+  // Una polilínea que entra y sale dos veces: dos tramos
+  assert.equal(clipToCircle([[-5, 0], [5, 0], [5, 0.5], [-5, 0.5]], [0, 0], 1).length, 2);
+  assert.equal(detailScale(1), 2);
+  assert.equal(detailScale(1 / 2), 1);
+  assert.equal(detailScale(2), 5);
+  const views = { front: rect(40, 10), top: rect(40, 20), side: rect(20, 10) };
+  const { placed, scale } = layout(views, SHEETS[1], "first");
+  const det = placeDetails(placed, [{ label: "B", view: "front", center: [40, 10], radius: 4 }], SHEETS[1]);
+  assert.equal(det.length, 1);
+  assert.equal(det[0].scale, detailScale(scale));
+  // Solo lo que cae dentro del círculo: dos tramos de 4 mm en la esquina
+  const len = det[0].lines.reduce((a, l) => a + Math.hypot(l.points[1][0] - l.points[0][0], l.points[1][1] - l.points[0][1]), 0);
+  assert.ok(Math.abs(len - 8) < 1e-9, String(len));
+  // No se superpone con ninguna vista
+  const box = (v) => {
+    const b = bounds(v.lines);
+    return [v.x + b.min[0] * v.scale, v.y - b.max[1] * v.scale, v.x + b.max[0] * v.scale, v.y - b.min[1] * v.scale];
+  };
+  const d = box(det[0]);
+  for (const v of placed) {
+    const q = box(v);
+    assert.ok(!(d[0] < q[2] && d[2] > q[0] && d[1] < q[3] && d[3] > q[1]), `pisa ${v.name}`);
+  }
+  const svg = sheetSvg([...placed, ...det], SHEETS[1], { title: "x", date: "2026-10-08", scale: "1:1", projection: "first", sheet: "A3" }, { hidden: true, smooth: false, dimensions: true });
+  assert.ok(svg.includes('data-detail-mark="B"') && svg.includes(`Detalle B (${scaleLabel(det[0].scale)})`));
+  // Las cotas generales no van en el detalle
+  assert.equal(overallDimensions([...placed, ...det]).length, overallDimensions(placed).length);
+});
+
+test("ángulo: un clic un poco fuera de la recta no cambia el valor", () => {
+  const a = angleBetween([[10, 0], [-10, 0]], [[-10, 0], [-5, 10]], [-4, 0.8], [-8.3, 4.1]);
+  assert.ok(Math.abs(a.degrees - (Math.atan2(10, 5) * 180) / Math.PI) < 1e-9, String(a.degrees));
+});

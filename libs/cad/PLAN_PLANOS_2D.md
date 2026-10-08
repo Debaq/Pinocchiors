@@ -87,12 +87,20 @@ cuando cambia el modelo y se exporta a PDF, SVG y DXF.
    de la vista y al cambiar el modelo buscan la línea de la misma forma más cercana (primero
    a 3 mm de hoja, si no dentro del 15 % de la vista), así siguen a la arista y el valor se
    actualiza. Se guardan en `Document.drawing` (fuera del hash del recálculo), salen en el
-   SVG, el PDF y el DXF. Faltan ángulos y radios de arcos.*
+   SVG, el PDF y el DXF. Ángulos y radios hechos el 2026-10-08: "Cota" sobre un arco da el
+   radio (flecha a 45° si el arco pasa por ahí, para no pisar rótulos) y "Ángulo" entre dos
+   rectas que se cortan (arco de cota del lado donde se hizo clic, con líneas de referencia;
+   la dirección sale de la recta, no del clic). Un corte que no pasa por el eje de un cono da
+   una hipérbola: ahí no hay recta y la cota se omite.*
 4. **Cortes** con rayado y línea de corte A-A; **detalles**. *Corte hecho el 2026-10-07: "Corte A-A" muestra el frente
    cortado por el plano medio paralelo a él (`split_keep` en el backend, se proyecta la mitad
    de atrás); las caras del sólido sobre el plano se devuelven como triángulos proyectados y
    se rayan a 45° (patrón SVG); rótulo "Corte A-A" bajo la vista y la línea de corte con
-   flechas y letras en la planta. Faltan los detalles y elegir otro plano de corte.*
+   flechas y letras en la planta. 2026-10-08: el plano de corte se puede correr ("en Y") y
+   **detalles**: herramienta "Detalle", clic en una vista → círculo con letra (B, C…) y la
+   ampliación aparte (escala normalizada ≥ 2× la de la hoja, o la elegida), recortada al
+   círculo (`clipToCircle`; el rayado con `clipPath`), en el primer hueco libre de la hoja
+   (`placeDetails`), con rótulo "Detalle B (5:1)"; se puede acotar encima y va al DXF.*
 5. **DXF** (vista 1:1 para láser primero, hoja completa después). *Hecha el 2026-10-07: `sheetDxf` en `lib/drawing.ts` (R12
    de texto, mm, capas VISIBLE, OCULTA con línea punteada y TANGENTE, cada tramo como LINE);
    la hoja entera o una vista sola a 1:1 con sus coordenadas. Validado con ezdxf (0 errores
