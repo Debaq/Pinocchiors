@@ -125,6 +125,7 @@ fn spring_along_a_helix_and_thicken() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let ev = doc.evaluate();
     let (top, _) = ev.body.as_ref().unwrap().closest_face([5.0, 5.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();

@@ -19,6 +19,7 @@ pub mod regions;
 pub mod sheet;
 pub mod sketch;
 pub mod standard;
+pub mod threads;
 
 pub use cad_occt::{self as occt, Shape};
 pub use assembly::{Assembly, AssemblySolution, Connector, Instance, Mate, MateKind};
@@ -28,4 +29,5 @@ pub use feature::*;
 pub use geom::{P2, P3, Plane};
 pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};
 pub use regions::{Loop, LoopPiece, Region, find_regions};
+pub use threads::ThreadAxis;
 pub use sketch::{Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, SolveReport};

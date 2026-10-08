@@ -17,6 +17,7 @@ fn plate() -> (Document, FeatureId) {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let ev = doc.evaluate();
     let (top, _) = ev.body.as_ref().unwrap().closest_face([0.0, 0.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
@@ -31,7 +32,7 @@ fn plate() -> (Document, FeatureId) {
 }
 
 fn hole(sketch: FeatureId, diameter: f64, depth: HoleDepth, style: HoleStyle) -> FeatureKind {
-    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None })
+    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None, link: None })
 }
 
 fn vol(doc: &Document) -> f64 {
@@ -80,6 +81,7 @@ fn blind_with_tip_and_no_points() {
         tip_angle: 118.0,
         thread: Some("M6".into()),
         modeled: None,
+        link: None,
     }));
     let tip = 2.5 / (59.0f64).to_radians().tan();
     let one = PI * 6.25 * 6.0 + PI * 6.25 * tip / 3.0;
@@ -111,7 +113,7 @@ fn modeled_thread_through_hole() {
         return;
     }
     let (mut doc, sk) = plate();
-    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None };
+    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None, link: None };
     h.modeled = Some(ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false });
     doc.add(FeatureKind::Hole(h));
     let ev = doc.evaluate();
@@ -130,6 +132,7 @@ fn cylinder_doc(r: f64, h: f64) -> Document {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     doc
 }
@@ -148,7 +151,7 @@ fn external_thread_on_a_pin() {
     // Eje de Ø6 × 10: queda el macho M6
     let mut doc = cylinder_doc(3.0, 10.0);
     let face = side_face(&doc, [3.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
-    let th = doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0 });
+    let th = doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0, link: None });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     // (sin holgura la cresta sobresale 1 µm para no coincidir con la cara: 0,06 % de más)
@@ -170,9 +173,9 @@ fn internal_thread_on_a_hole() {
     // Placa con un agujero al diámetro menor de M6: la rosca lo talla
     let (mut doc, sk) = plate();
     let d1 = 6.0 - 1.082_532;
-    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None }));
+    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None, link: None }));
     let face = side_face(&doc, [-10.0 + d1 / 2.0, 0.0, 5.0], [-1.0, 0.0, 0.0]);
-    doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0 });
+    doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0, link: None });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     // Uno de los dos agujeros roscado, el otro liso

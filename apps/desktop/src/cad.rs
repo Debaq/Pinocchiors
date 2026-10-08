@@ -129,6 +129,9 @@ pub struct CadResult {
     pub references: Vec<RefView>,
     /// Ensamble resuelto (si el documento tiene)
     pub assembly: Option<AssemblyView>,
+    /// Roscas (agujeros roscados, roscas, tornillos y tuercas): para
+    /// coordinarlas entre sí
+    pub threads: Vec<cad_model::ThreadAxis>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -271,6 +274,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         bindings: eval.bindings.clone(),
         version: hash,
         recomputed: eval.recomputed,
+        threads: eval.threads.clone(),
     })
 }
 
@@ -1611,6 +1615,7 @@ mod tests {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::Join,
+            link: None,
         }));
         doc
     }
@@ -1681,7 +1686,7 @@ mod tests {
             (cad_model::PrimitiveShape::Cylinder { radius: 3.3, height: 20.0 }, BodyOp::Cut),
         ] {
             let origin = if op == BodyOp::Cut { [0.0, 0.0, -5.0] } else { [0.0; 3] };
-            doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op }));
+            doc.add(FeatureKind::Primitive(cad_model::Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None }));
         }
         let state = AppState::new();
         *state.cad_document.lock().unwrap() = Some(doc);
@@ -1809,6 +1814,7 @@ mod tests {
             z: [0.0, 0.0, 1.0],
             x: [1.0, 0.0, 0.0],
             op: BodyOp::Join,
+            link: None,
         });
         let changed = part_to_model_impl(&state, part, Some(first.hash), &channel).unwrap();
         assert!(changed.changed, "la pieza cambió: malla nueva");

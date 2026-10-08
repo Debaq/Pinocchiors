@@ -519,3 +519,18 @@ cargo test -p cad-model
   un agujero, pestaña sobre pestaña: volúmenes y desarrollo contra la cuenta), node
   `e2e/flatPattern.test.mjs` y e2e "chapa: pestañas y desarrollo en DXF".
 
+- **2026-10-08 Roscas coordinadas** (pedido: "no es un booleano, es una coordinación de
+  características y alineación"): `ThreadLink { feature, index, flip, offset }` en tornillos y
+  tuercas (`Primitive.link`), agujeros (`Hole.link`) y la operación Rosca. La evaluación publica
+  cada rosca (`Evaluation.threads: ThreadAxis`: medida, hembra/macho, hélice origen/dir/x, boca y
+  largo; en la caché por operación). El seguidor toma diámetro, paso y mano de la rosca anterior
+  (la holgura es la suya), un tornillo o tuerca va en su eje desde la boca, y el filete se gira
+  para estar en la misma hélice: `ThreadAxis::phase_x` (la X del marco de `cad_make_thread` ahora
+  es la fase; con el eje al revés la fórmula es la misma). Un agujero de varios centros alinea el
+  que está en el eje (si ninguno: aviso y solo la medida); la Rosca en una cara fuera del eje es
+  error. UI: `ThreadLinkBox` en los diálogos (tornillo/tuerca preguntan siempre que haya roscas
+  que calcen; agujero y rosca, si hay una en su eje), "Coordinar", lista o "Elegir en el visor"
+  (por los orígenes de la cara). Pruebas: `tests/threads.rs` (hélice seguidora sobre la fuente;
+  tornillo en agujero roscado y rosca alrededor de un tornillo: 0 mm³ en común alineados contra
+  ~17 corridos medio paso; errores y dependencias) y e2e "roscas coordinadas". El arnés e2e acepta
+  `?bridge=` / `E2E_BRIDGE_PORT` para no pisar el puente de otra sesión.

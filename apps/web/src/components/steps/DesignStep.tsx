@@ -63,6 +63,17 @@ import {
   type ScanPick,
   type Sketch,
   type SketchConstraint,
+  type ThreadAxis,
+  type ThreadLink,
+  type ThreadWant,
+  coaxialThreads,
+  threadCandidates,
+  threadLabel,
+  threadName,
+  threadOfFace,
+  boltLengthFor,
+  BOLT_LENGTHS,
+  NUT_HEIGHT,
 } from "../../lib/cad";
 import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
@@ -1299,19 +1310,71 @@ export const FeatureEditor: Component<{
               };
               type Standard = Extract<PrimitiveShape, { type: "bolt" | "nut" | "washer" }>;
               const standard = () => (["bolt", "nut", "washer"].includes(k().shape.type) ? (k().shape as Standard) : undefined);
+              const threaded = () => k().shape.type === "bolt" || k().shape.type === "nut";
+              const linked = () => threaded() && !!k().link;
+              /** Asociar a otra rosca: la medida y un largo (o una posición) que calzan; soltar deja la pieza donde está */
+              const setLink = (link: ThreadLink | null, src: ThreadAxis | null) => {
+                const placed = props.store.result()?.threads?.find((t) => t.feature === f().id)?.placed;
+                update((x) => {
+                  if (x.type !== "primitive" || (x.shape.type !== "bolt" && x.shape.type !== "nut")) return;
+                  if (!link || !src) {
+                    if (placed) [x.origin, x.z, x.x] = placed;
+                    x.link = null;
+                    return;
+                  }
+                  const m = METRIC_HOLES.find((h) => Math.abs(h.nominal - src.spec.nominal) < 1e-6);
+                  if (m) x.shape.size = m.size;
+                  const size = x.shape.size;
+                  let offset = 0;
+                  if (x.shape.type === "bolt") {
+                    // Ciego: el más largo que entra; pasante o tuerca: el que llega al otro lado
+                    x.shape.length = src.blind
+                      ? ([...BOLT_LENGTHS].reverse().find((l) => l <= src.length + 1e-6) ?? BOLT_LENGTHS[0])
+                      : boltLengthFor(size, src.length, false);
+                  } else if (src.placed) {
+                    // Tuerca en un tornillo: cerca de la punta
+                    offset = Math.max(0, +(src.length - (NUT_HEIGHT[size] ?? src.spec.nominal) - 2 * src.spec.pitch).toFixed(2));
+                  }
+                  x.shape.modeled = src.modeled || undefined;
+                  // Por la boca más cercana a donde estaba la pieza (p. ej. el borde elegido al crearla)
+                  let flip: boolean | undefined;
+                  if (placed) {
+                    const d = (a: P3, b: P3) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+                    const far: P3 = [0, 1, 2].map((i) => src.mouth[i] - src.out[i] * src.length) as P3;
+                    // (solo si ya estaba apoyada en la otra boca, mirando hacia afuera de ella)
+                    const back = placed[1][0] * src.out[0] + placed[1][1] * src.out[1] + placed[1][2] * src.out[2] < -0.9;
+                    flip = (back && d(placed[0], far) < Math.min(d(placed[0], src.mouth), src.spec.nominal)) || undefined;
+                  }
+                  x.link = { ...link, offset, flip };
+                });
+              };
               return (
                 <>
                   {/* Pieza estándar: medida, cabeza y rosca */}
+                  <Show when={threaded()}>
+                    <ThreadLinkBox
+                      store={props.store}
+                      ui={props.ui}
+                      feature={f().id}
+                      value={k().link}
+                      want={k().shape.type === "bolt" ? "internal" : "external"}
+                      what={k().shape.type === "bolt" ? "el tornillo" : "la tuerca"}
+                      askAlways
+                      onChange={setLink}
+                    />
+                  </Show>
                   <Show when={standard()}>
                     {(st) => (
                       <>
-                        <Row label="Medida">
-                          <Select
-                            options={METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))}
-                            value={st().size}
-                            onChange={(v) => update((x) => x.type === "primitive" && "size" in x.shape && (x.shape.size = v))}
-                          />
-                        </Row>
+                        <Show when={!linked()}>
+                          <Row label="Medida">
+                            <Select
+                              options={METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))}
+                              value={st().size}
+                              onChange={(v) => update((x) => x.type === "primitive" && "size" in x.shape && (x.shape.size = v))}
+                            />
+                          </Row>
+                        </Show>
                         <Show when={st().type === "bolt" && (st() as Extract<PrimitiveShape, { type: "bolt" }>)}>
                           {(b) => (
                             <Row label="Cabeza">
@@ -1368,6 +1431,26 @@ export const FeatureEditor: Component<{
                       </Row>
                     )}
                   </Show>
+                  <Show when={linked() && k().link}>
+                    {(l) => (
+                      <>
+                        {field(
+                          k().shape.type === "bolt" ? "Hundido" : "Hasta",
+                          "kind.link.offset",
+                          l().offset ?? 0,
+                          (x, v) => x.type === "primitive" && x.link && (x.link.offset = v),
+                          "mm",
+                        )}
+                        <Checkbox small label="Por la otra boca" checked={!!l().flip} onChange={(c) => update((x) => x.type === "primitive" && !!x.link && (x.link.flip = c || undefined))} />
+                        <p class="text-[11px] text-text-dim">
+                          {k().shape.type === "bolt"
+                            ? "Va en el eje de la rosca, con la cabeza en la boca; «Hundido» lo mete más (negativo: queda afuera)."
+                            : "Va en el eje de la rosca; «Hasta» es cuánto avanza desde la boca."}
+                        </p>
+                      </>
+                    )}
+                  </Show>
+                  <Show when={!linked()}>
                   <div class="space-y-1">
                     <span class="text-xs text-text-muted">Posición (mm)</span>
                     <div class="grid grid-cols-3 gap-1">
@@ -1389,6 +1472,7 @@ export const FeatureEditor: Component<{
                       }
                     />
                   </Row>
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "primitive" && (x.op = o)))}</Row>
                 </>
               );
@@ -1736,6 +1820,29 @@ export const FeatureEditor: Component<{
                       }}
                     />
                   </Row>
+                  <Show when={k().thread || k().modeled}>
+                    <ThreadLinkBox
+                      store={props.store}
+                      ui={props.ui}
+                      feature={f().id}
+                      value={k().link}
+                      want="any"
+                      what="el agujero"
+                      onChange={(link, src) =>
+                        update((x) => {
+                          if (x.type !== "hole") return;
+                          x.link = link;
+                          if (!src) return;
+                          if (x.modeled) x.modeled = { ...src.spec, clearance: x.modeled.clearance };
+                          else {
+                            x.thread = threadName(src.spec);
+                            x.diameter = src.spec.nominal - src.spec.pitch;
+                          }
+                        })
+                      }
+                    />
+                  </Show>
+                  <Show when={!k().link}>
                   <Row label="Tamaño">
                     <Select
                       options={[{ value: "", label: "A medida" }, ...METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))]}
@@ -1743,6 +1850,7 @@ export const FeatureEditor: Component<{
                       onChange={(v) => v && applySize(v, fit()?.mode ?? "clearance")}
                     />
                   </Row>
+                  </Show>
                   <Show when={fit()}>
                     {(fi) => (
                       <Row label="Para">
@@ -1764,9 +1872,13 @@ export const FeatureEditor: Component<{
                   >
                     {(t) => (
                       <>
-                        {field("Paso", "kind.modeled.pitch", t().pitch, (x, v) => x.type === "hole" && x.modeled && (x.modeled.pitch = v), "mm")}
+                        <Show when={!k().link}>
+                          {field("Paso", "kind.modeled.pitch", t().pitch, (x, v) => x.type === "hole" && x.modeled && (x.modeled.pitch = v), "mm")}
+                        </Show>
                         {field("Holgura", "kind.modeled.clearance", t().clearance, (x, v) => x.type === "hole" && x.modeled && (x.modeled.clearance = v), "mm")}
-                        <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
+                        <Show when={!k().link}>
+                          <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
+                        </Show>
                         <p class="text-[11px] text-text-dim">
                           M{t().nominal} × {t().pitch}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
                           una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.
@@ -1914,6 +2026,29 @@ export const FeatureEditor: Component<{
                   lost={lost("face")}
                   onChange={(refs) => refs.length && update((x) => x.type === "thread" && (x.face = refs[refs.length - 1] as FaceRef))}
                 />
+                <ThreadLinkBox
+                  store={props.store}
+                  ui={props.ui}
+                  feature={f().id}
+                  value={k().link}
+                  want={(() => {
+                    // Un agujero se coordina con un macho y un eje con una hembra
+                    const own = props.store.result()?.threads?.find((t) => t.feature === f().id);
+                    return own ? (own.internal ? "external" : "internal") : "any";
+                  })()}
+                  what="la rosca"
+                  onChange={(link, src) =>
+                    update((x) => {
+                      if (x.type !== "thread") return;
+                      x.link = link;
+                      if (src) {
+                        x.pitch = src.spec.pitch;
+                        x.left = src.spec.left;
+                      }
+                    })
+                  }
+                />
+                <Show when={!k().link}>
                 <Row label="Medida">
                   <Select
                     options={[{ value: "", label: "Paso a medida" }, ...METRIC_HOLES.map((m) => ({ value: String(m.pitch), label: `${m.size} × ${String(m.pitch).replace(".", ",")}` }))]}
@@ -1922,10 +2057,13 @@ export const FeatureEditor: Component<{
                   />
                 </Row>
                 {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "thread" && (x.pitch = v), "mm")}
+                </Show>
                 {field("Largo", "kind.length", k().length, (x, v) => x.type === "thread" && (x.length = v), "mm")}
                 {field("Holgura", "kind.clearance", k().clearance, (x, v) => x.type === "thread" && (x.clearance = v), "mm")}
                 <Checkbox small label="Desde el otro extremo" checked={k().flip} onChange={(c) => update((x) => x.type === "thread" && (x.flip = c))} />
-                <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "thread" && (x.left = c))} />
+                <Show when={!k().link}>
+                  <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "thread" && (x.left = c))} />
+                </Show>
                 <p class="text-[11px] text-text-dim">
                   En un eje, el cilindro es el diámetro nominal (Ø6 para M6); en un agujero, el diámetro menor (5 mm para M6). Largo 0: toda la cara. La
                   holgura achica la rosca de un eje y agranda la de un agujero (0,2–0,4 mm para imprimir en FDM).
@@ -2545,6 +2683,117 @@ const PROMPTS = {
  * el visor va ahí (y se ve el sólido de antes de la operación); la lista
  * resalta cada ítem al pasar el mouse y lo quita con ✗.
  */
+/** Operaciones a las que ya se les contestó "no" a coordinar la rosca (no se vuelve a preguntar) */
+const [threadDeclined, setThreadDeclined] = createSignal<number[]>([]);
+
+/**
+ * Rosca asociada: con qué otra rosca se coordina la operación (medida, eje y
+ * fase del filete). Sin asociar y con roscas que calzan, pregunta; la que está
+ * en el mismo eje va primero. También se elige con un clic en el visor.
+ */
+const ThreadLinkBox: Component<{
+  store: CadStore;
+  ui: CadUi;
+  feature: number;
+  value: ThreadLink | null | undefined;
+  want: ThreadWant;
+  /** Qué se coordina ("el tornillo", "la rosca"…), para la pregunta */
+  what: string;
+  /** Preguntar con cualquier rosca que calce (si no, solo con una en el mismo eje) */
+  askAlways?: boolean;
+  onChange: (link: ThreadLink | null, source: ThreadAxis | null) => void;
+}> = (props) => {
+  const owner = () => `${props.feature}:rosca`;
+  const threads = () => props.store.result()?.threads ?? [];
+  const doc = () => props.store.doc();
+  const own = () => threads().filter((t) => t.feature === props.feature);
+  const candidates = createMemo(() => {
+    const list = threadCandidates(doc(), threads(), props.feature, props.want);
+    // Las que están en el eje propio, primero
+    const onAxis = (t: ThreadAxis) => own().some((o) => coaxialThreads(t, o));
+    return [...list.filter(onAxis), ...list.filter((t) => !onAxis(t))];
+  });
+  const suggested = () => candidates().find((t) => own().some((o) => coaxialThreads(t, o)));
+  const key = (l: { feature: number; index: number }) => `${l.feature}:${l.index}`;
+  const source = () => (props.value ? threads().find((t) => key(t) === key(props.value!)) : undefined);
+  const choose = (t: ThreadAxis | undefined) => props.onChange(t ? { feature: t.feature, index: t.index } : null, t ?? null);
+  const label = (t: ThreadAxis) => `${threadLabel(doc(), threads(), t)}${own().some((o) => coaxialThreads(t, o)) ? " (en el eje)" : ""}`;
+  const asking = () => !props.value && candidates().length > 0 && !threadDeclined().includes(props.feature) && (props.askAlways || !!suggested());
+  const picking = () => (props.ui.pick() as { owner?: string }).owner === owner();
+  const pick = () => {
+    if (picking()) return props.ui.cancelPick();
+    void props.store.setSelecting(true);
+    props.ui.setPick({
+      kind: "face",
+      owner: owner(),
+      prompt: "Clic en la rosca con la que se coordina: el agujero, el tornillo, la tuerca o el eje",
+      done: (face) => {
+        void props.store.setSelecting(false);
+        const t = threadOfFace(face, candidates());
+        if (t) choose(t);
+        else props.ui.setMessage(`Ahí no hay una rosca ${props.want === "internal" ? "interior " : props.want === "external" ? "exterior " : ""}anterior a esta operación`);
+      },
+    });
+  };
+  onCleanup(() => {
+    if (picking()) props.ui.cancelPick();
+  });
+  const pickButton = (text: string) => (
+    <Button size="sm" variant={picking() ? "primary" : "default"} onClick={pick}>
+      {text}
+    </Button>
+  );
+  return (
+    <Show
+      when={!asking()}
+      fallback={
+        <div class="space-y-2 rounded border border-accent/60 bg-accent/10 p-2 text-xs" data-thread-question>
+          <p class="text-text">
+            {suggested() ? `¿Coordinar ${props.what} con la rosca de ${threadLabel(doc(), threads(), suggested()!)}?` : `¿Coordinar ${props.what} con una rosca existente?`}
+          </p>
+          <p class="text-[11px] text-text-dim">Toma su medida y su eje y alinea el filete para que calcen. No las une: cada una sigue siendo lo que es.</p>
+          <Show when={!suggested()}>
+            <Select options={candidates().map((t) => ({ value: key(t), label: label(t) }))} value="" placeholder="Elegir la rosca" onChange={(v) => choose(candidates().find((t) => key(t) === v))} />
+          </Show>
+          <div class="flex flex-wrap gap-1">
+            <Show when={suggested()}>
+              {(t) => (
+                <Button size="sm" variant="primary" onClick={() => choose(t())}>
+                  Coordinar
+                </Button>
+              )}
+            </Show>
+            {pickButton("Elegir en el visor")}
+            <Button size="sm" variant="ghost" onClick={() => setThreadDeclined((d) => [...d, props.feature])}>
+              No
+            </Button>
+          </div>
+        </div>
+      }
+    >
+      <div class="space-y-1">
+        <Row label="Rosca asociada">
+          <Select
+            options={[{ value: "", label: "Ninguna" }, ...candidates().map((t) => ({ value: key(t), label: label(t) })), ...(props.value && !source() ? [{ value: key(props.value), label: "(ya no está)" }] : [])]}
+            value={props.value ? key(props.value) : ""}
+            onChange={(v) => choose(v ? candidates().find((t) => key(t) === v) : undefined)}
+          />
+        </Row>
+        <Show when={props.value || candidates().length > 0}>
+          <div class="flex justify-end">{pickButton(props.value ? "Elegir otra en el visor" : "Elegir en el visor")}</div>
+        </Show>
+        <Show when={source()}>
+          {(t) => (
+            <p class="text-[11px] text-text-dim">
+              {threadName(t().spec)} × {String(t().spec.pitch).replace(".", ",")}: medida, eje y fase del filete de {threadLabel(doc(), threads(), t()).split(" · ")[0]}. Si cambia, esta lo sigue.
+            </p>
+          )}
+        </Show>
+      </div>
+    </Show>
+  );
+};
+
 const SelectionBox: Component<{
   store: CadStore;
   ui: CadUi;

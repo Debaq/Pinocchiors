@@ -5,7 +5,8 @@
     <title>Arnés CAD</title>
     <script>
       // Reemplazo de Tauri: los comandos van al puente HTTP con el backend real
-      const BRIDGE = "http://127.0.0.1:8766/invoke/";
+      // (?bridge=8767: otro puerto, para no pisar el puente de otra sesión)
+      const BRIDGE = `http://127.0.0.1:${new URLSearchParams(location.search).get("bridge") ?? "8766"}/invoke/`;
       let cb = 1;
       window.__invokeLog = [];
       window.__TAURI_INTERNALS__ = {

@@ -602,7 +602,7 @@ fn metric_thread_rod() {
     let rc = r1 + h * (bottom + 2.0 * top) / (3.0 * (bottom + top));
     let expected = (PI * r1 * r1 + area / p * 2.0 * PI * rc) * l;
     let t = std::time::Instant::now();
-    let axis = Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] };
+    let axis = Frame { origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] };
     let rod = Shape::thread(axis, r1, d / 2.0, p, l, false).unwrap();
     eprintln!("rosca M6 en {:?}", t.elapsed());
 

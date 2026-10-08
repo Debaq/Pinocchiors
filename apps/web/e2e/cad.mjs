@@ -1,7 +1,7 @@
 // Pruebas de punta a punta del espacio Diseñar con el backend CAD real, sin
 // Tauri: el arnés (cad-harness.html) manda los comandos al puente HTTP.
 //
-//   cargo run -p pinocchio-app --example cad_http        # backend en :8766
+//   cargo run -p pinocchio-app --example cad_http        # backend en :8766 (E2E_BRIDGE_PORT: otro)
 //   (cd apps/web && npx vite --port 5173)                 # frontend
 //   node apps/web/e2e/cad.mjs [filtro]                    # Chromium headless
 //
@@ -11,8 +11,9 @@
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { launch, sleep } from "./cdp.mjs";
 
-const URL = "http://localhost:5173/e2e/cad-harness.html";
-const BRIDGE = "http://127.0.0.1:8766/invoke/";
+const PORT = process.env.E2E_BRIDGE_PORT ?? "8766";
+const URL = `http://localhost:5173/e2e/cad-harness.html?bridge=${PORT}`;
+const BRIDGE = `http://127.0.0.1:${PORT}/invoke/`;
 const call = (cmd, args = {}) => fetch(BRIDGE + cmd, { method: "POST", body: JSON.stringify(args) }).then((r) => r.json());
 const SPECULUM = process.env.E2E_STL ?? `${process.env.HOME}/Descargas/macho_especulo.stl`;
 
@@ -1856,6 +1857,93 @@ const scenarios = {
     // Lo que queda entre el agujero liso de 6 y el macho M6: unos 5,3 mm³ por mm de alto (≈ 27,6)
     if (!(parts[2].volume > plain + 22 && parts[2].volume < plain + 33)) throw new Error(`tuerca roscada ${parts[2].volume} vs lisa ${plain}`);
     await b.shot("tuerca_roscada");
+  },
+
+  async "roscas coordinadas: tornillo en agujero roscado y rosca alrededor de un tornillo"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1)))`);
+    const idle = async (cond) => {
+      for (let t = 0; t < 60 && !(await b.eval(`(${cond}) && !window.__cadStore.busy()`)); t++) await sleep(500);
+      await sleep(800);
+    };
+    const question = () => b.eval(`document.querySelector("[data-thread-question]")?.textContent ?? ""`);
+    await begin(b);
+    // 1) Placa con un agujero M6 roscado (modelado, holgura 0,2) y después un tornillo
+    const doc = await call("cad_get_document");
+    const sketch = { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }], entities: [{ id: 2, geometry: { type: "point", point: 1 } }], constraints: [], next_id: 3, origin: 0 };
+    const add = (name, kind) => {
+      const id = doc.next_id++;
+      doc.features.push({ id, name, suppressed: false, kind });
+      return id;
+    };
+    add("Placa", { type: "primitive", shape: { type: "box", dx: 40, dy: 40, dz: 10, centered: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "join" });
+    const sk = add("Centro", { type: "sketch", plane: { type: "xy" }, offset: 10, sketch });
+    const hole = add("Agujero roscado", {
+      type: "hole", sketch: sk, points: [], diameter: 5, depth: { type: "through_all" }, style: { type: "simple" }, tip_angle: 0, thread: "M6",
+      modeled: { nominal: 6, pitch: 1, clearance: 0.2, left: false },
+    });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    // Tornillo M8 suelto en el origen: pregunta si va en la rosca del agujero (está en su eje)
+    await b.clickText("Tornillo");
+    await idle(`window.__cadStore.doc().features.at(-1).kind.shape?.type === "bolt"`);
+    const q = await question();
+    if (!q.includes("Agujero roscado")) throw new Error(`pregunta: ${q}`);
+    await b.shot("pregunta_rosca");
+    await b.clickText("Coordinar");
+    await idle(`!!window.__cadStore.doc().features.at(-1).kind.link`);
+    const bolt = (await last()).kind;
+    if (bolt.link.feature !== hole || bolt.shape.size !== "M6" || bolt.shape.length !== 10 || !bolt.shape.modeled) throw new Error(`tornillo: ${JSON.stringify(bolt)}`);
+    await accept(b, 4000);
+    let r = await evaluate();
+    const errs = r.status.filter((s) => s.state === "error");
+    if (errs.length) throw new Error(`errores: ${JSON.stringify(errs)}`);
+    const placed = r.threads.find((t) => !t.internal).placed;
+    near(placed[0][2], 10, 1e-6, "cabeza en la boca");
+    near(Math.hypot(placed[0][0], placed[0][1]), 0, 1e-6, "en el eje");
+    if (r.parts.length !== 2) throw new Error(`piezas: ${r.parts.length}`);
+    await b.shot("tornillo_coordinado");
+
+    // 2) Al revés: el tornillo primero, una placa con un agujero liso alrededor y
+    //    la rosca del agujero toma la del tornillo (elegido con un clic)
+    const doc2 = await call("cad_get_document");
+    doc2.features = [];
+    const add2 = (name, kind, scope) => {
+      const id = doc2.next_id++;
+      doc2.features.push({ id, name, suppressed: false, kind, ...(scope ? { scope } : {}) });
+      return id;
+    };
+    add2("Perno", { type: "primitive", shape: { type: "bolt", size: "M6", length: 12, head: "socket", modeled: true }, origin: [0, 0, 10.5], z: [0, 0, 1], x: [0.3, 0.8, 0], op: "new" });
+    const plate = add2("Bloque", { type: "primitive", shape: { type: "box", dx: 40, dy: 40, dz: 10, centered: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" });
+    const sk2 = add2("Centro", { type: "sketch", plane: { type: "xy" }, offset: 10, sketch });
+    const d1 = 6 - 1.082532;
+    add2("Agujero liso", { type: "hole", sketch: sk2, points: [], diameter: d1, depth: { type: "through_all" }, style: { type: "simple" }, tip_angle: 0, thread: null }, [{ feature: plate, index: 0 }]);
+    await call("cad_set_document", { document: doc2 });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    // La rosca en la pared del agujero (paso 1,5 a propósito: el del tornillo manda)
+    await b.eval(`window.__cadStore.addFeature({ type: "thread", face: { point: [${d1 / 2}, 0, 5], normal: [-1, 0, 0], tags: [] }, pitch: 1.5, length: 0, flip: false, left: false, clearance: 0.2 })`);
+    await idle(`window.__cadStore.doc().features.at(-1).kind.type === "thread"`);
+    for (let t = 0; t < 20 && !(await question()); t++) await sleep(500);
+    const q2 = await question();
+    if (!q2.includes("Perno")) throw new Error(`pregunta de la rosca: ${q2}`);
+    await b.clickText("Elegir en el visor");
+    await sleep(1500);
+    // Clic en la cabeza del tornillo (su costado, arriba de la placa)
+    await b.click(...(await at([0, -5, 14])), { wait: 1500 });
+    await idle(`!!window.__cadStore.doc().features.at(-1).kind.link`);
+    const th = (await last()).kind;
+    if (th.link?.feature !== doc2.features[0].id || th.pitch !== 1) throw new Error(`rosca: ${JSON.stringify(th)}`);
+    await accept(b, 5000);
+    r = await evaluate();
+    const errs2 = r.status.filter((s) => s.state === "error");
+    if (errs2.length) throw new Error(`errores: ${JSON.stringify(errs2)}`);
+    const it = r.threads.find((t) => t.internal);
+    if (!it || it.spec.pitch !== 1 || it.spec.nominal !== 6) throw new Error(`rosca calculada: ${JSON.stringify(it)}`);
+    await b.shot("rosca_coordinada");
   },
 
   async "chapa: pestañas y desarrollo en DXF"(b) {

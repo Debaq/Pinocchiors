@@ -16,6 +16,7 @@ fn caja(dz: f64) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     })
 }
 
@@ -88,6 +89,7 @@ fn origin_survives_booleans_that_split_faces() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
+        link: None,
     }));
     let ev = doc.evaluate();
     // Las dos mitades de la tapa conservan el origen "+z" de la caja

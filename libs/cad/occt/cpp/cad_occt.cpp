@@ -1049,13 +1049,18 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
     });
 }
 
-CadShape* cad_make_thread(const double* origin, const double* dir, double r_minor, double r_major, double pitch,
-                          double length, int32_t left, int32_t chamfer) {
+CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major,
+                          double pitch, double length, int32_t left, int32_t chamfer) {
     return guard("rosca", (CadShape*)nullptr, [&] {
         if (!(r_minor > 0 && r_major > r_minor && pitch > 0 && length > 0))
             throw Standard_Failure("la rosca necesita radio menor < mayor, paso y largo positivos");
         gp_Dir z(dir[0], dir[1], dir[2]);
-        gp_Ax3 base(pnt(origin), z);
+        // X fija la fase: el filete arranca en origin + r·X (roscas que calzan
+        // comparten la misma hélice)
+        gp_Vec xv(xdir[0], xdir[1], xdir[2]);
+        xv -= gp_Vec(z) * xv.Dot(gp_Vec(z));
+        if (xv.Magnitude() < 1e-9) throw Standard_Failure("la X de la rosca no puede ser paralela al eje");
+        gp_Ax3 base(pnt(origin), z, gp_Dir(xv));
         // El filete arranca una vuelta antes y termina una después: al final se
         // recorta al largo pedido y las puntas quedan planas
         gp_Ax3 ax(base.Location().Translated(gp_Vec(z) * -pitch), z, base.XDirection());

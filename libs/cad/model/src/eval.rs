@@ -12,6 +12,8 @@ use crate::feature::*;
 use crate::geom::*;
 use crate::regions::{Loop, LoopPiece, Region, arc_sweep, find_regions};
 use crate::sketch::{Geometry, Sketch, SolveReport};
+use crate::standard::Threading;
+use crate::threads::{ThreadAxis, default_x, spec_name};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
@@ -106,6 +108,8 @@ pub struct Evaluation {
     pub bindings: Vec<ResolvedValue>,
     /// Cuántas operaciones se calcularon (las demás salieron de la caché).
     pub recomputed: usize,
+    /// Roscas (agujeros roscados, roscas, tornillos y tuercas), en orden.
+    pub threads: Vec<ThreadAxis>,
 }
 
 /// Estado después de una operación, guardado por la huella de todo lo que
@@ -121,6 +125,7 @@ struct CacheEntry {
     reference: Option<RefGeom>,
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
+    threads: Vec<ThreadAxis>,
     /// Para descartar las menos usadas.
     used: u64,
 }
@@ -407,6 +412,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(t) = &e.tool {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
+            ctx.ev.threads.extend(e.threads.iter().cloned());
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms });
             continue;
         }
@@ -441,6 +447,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 reference: ctx.ev.references.get(&f.id).cloned(),
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
+                threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
                 used: 0,
             },
         );
@@ -918,7 +925,9 @@ impl Ctx<'_> {
 
     /// Herramienta de los agujeros: por cada centro, el cilindro (con punta en
     /// los ciegos) más la caja o el avellanado; entra contra la normal del plano.
-    fn hole_tool(&self, id: FeatureId, h: &Hole) -> R<Tagged> {
+    /// Con `src`, el filete del centro que está en su eje sale alineado con
+    /// ella. Devuelve también las roscas (una por centro, si es roscado).
+    fn hole_tool(&self, id: FeatureId, h: &Hole, src: Option<&ThreadAxis>) -> R<(Tagged, Vec<ThreadAxis>)> {
         let s = self.ev.sketches.get(&h.sketch).ok_or("el sketch de los centros no está calculado")?;
         let ids: Vec<u32> = if !h.points.is_empty() {
             h.points.clone()
@@ -970,26 +979,60 @@ impl Ctx<'_> {
         let bbox = self.body().ok().and_then(|b| b.mass().ok()).map(|m| (m.bbox_min, m.bbox_max));
         let mut parts = Vec::new();
         let mut probes: Vec<(P3, String)> = Vec::new();
+        let mut threads = Vec::new();
+        // Rosca cosmética: la medida sale de la tabla
+        let cosmetic = match src {
+            Some(t) => Some(ThreadSpec { clearance: 0.0, ..t.spec }),
+            None => h.thread.as_deref().and_then(crate::standard::size).map(|m| ThreadSpec { nominal: m.d, pitch: m.pitch, clearance: 0.0, left: false }),
+        };
+        let mut aligned = false;
         for (k, pid) in ids.iter().enumerate() {
             let c = s.plane.to_world(s.sketch.point(*pid).map_err(err)?);
             let top = sub(c, scale(down, lift));
             let frame = |o: P3| Frame { origin: o, z: down, x };
+            // La fase del filete: la de la rosca asociada si este centro está en su eje
+            let hx = match src {
+                Some(t) if t.coaxial(c, down) => {
+                    aligned = true;
+                    t.phase_x(top, down)
+                }
+                _ => x,
+            };
+            let through_len = |pitch: f64| match (&h.depth, bbox) {
+                (HoleDepth::ThroughAll, Some((lo, hi))) => (0..8)
+                    .map(|i| {
+                        let corner = [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+                        dot(sub(corner, c), down)
+                    })
+                    .fold(0.0, f64::max)
+                    + pitch,
+                _ => depth,
+            };
+            if let Some(spec) = h.modeled.or(cosmetic) {
+                threads.push(ThreadAxis {
+                    feature: id,
+                    index: k as u32,
+                    spec,
+                    internal: true,
+                    modeled: h.modeled.is_some(),
+                    origin: top,
+                    dir: down,
+                    x: hx,
+                    mouth: c,
+                    out: scale(down, -1.0),
+                    length: through_len(0.0),
+                    blind: matches!(h.depth, HoleDepth::Blind { .. }),
+                    placed: None,
+                    link: h.link,
+                });
+            }
             match &h.modeled {
                 Some(t) => {
                     // Pasante: hasta donde termina el sólido (no el largo de sobra de
                     // siempre: cada vuelta del filete cuesta)
-                    let len = match (&h.depth, bbox) {
-                        (HoleDepth::ThroughAll, Some((lo, hi))) => (0..8)
-                            .map(|i| {
-                                let corner = [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
-                                dot(sub(corner, c), down)
-                            })
-                            .fold(0.0, f64::max)
-                            + t.pitch,
-                        _ => depth,
-                    };
-                    let axis = Axis { origin: top, dir: down };
-                    parts.push(Shape::thread(axis, r, (t.nominal + t.clearance) / 2.0, t.pitch, len + lift, t.left).map_err(err)?);
+                    let len = through_len(t.pitch);
+                    let helix = Frame { origin: top, z: down, x: hx };
+                    parts.push(Shape::thread(helix, r, (t.nominal + t.clearance) / 2.0, t.pitch, len + lift, t.left).map_err(err)?);
                 }
                 None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
             }
@@ -1019,6 +1062,12 @@ impl Ctx<'_> {
                 }
             }
         }
+        if let Some(t) = src
+            && !aligned
+        {
+            self.miss("link", 0);
+            self.warn(format!("ningún centro está en el eje de la rosca {}: se tomó solo la medida", spec_name(&t.spec)));
+        }
         let shape = fuse(parts)?;
         let mut tags = vec![Vec::new(); shape.face_count()];
         for (p, name) in probes {
@@ -1029,7 +1078,60 @@ impl Ctx<'_> {
                 slot.push(tag(id, format!("cara:{i}")));
             }
         }
-        Ok(Tagged { shape, tags })
+        Ok((Tagged { shape, tags }, threads))
+    }
+
+    /// Marco y forma de una primitiva. Un tornillo o una tuerca asociados a
+    /// otra rosca van en su eje, desde su boca, con su medida y el filete
+    /// girado para calzar; también devuelve el paso y la mano de la rosca.
+    fn place_standard(&self, p: &Primitive) -> R<(Frame, PrimitiveShape, Threading)> {
+        let frame = Frame { origin: p.origin, z: p.z, x: p.x };
+        let Some(link) = &p.link else {
+            return Ok((frame, p.shape.clone(), Threading::default()));
+        };
+        let t = self.thread_source(link)?;
+        let name = spec_name(&t.spec);
+        let m = crate::standard::size_by_nominal(t.spec.nominal).ok_or_else(|| format!("no hay piezas estándar para la rosca {name}"))?;
+        let (mouth, out) = t.entry(link.flip);
+        let origin = sub(mouth, scale(out, link.offset));
+        let mut shape = p.shape.clone();
+        let (z, helix) = match &mut shape {
+            PrimitiveShape::Bolt { size, length, .. } => {
+                if !t.internal {
+                    return Err(format!("un tornillo va en una rosca interior (agujero o tuerca), no en {name} exterior"));
+                }
+                *size = m.name.to_string();
+                let f = Frame { origin, z: out, x: default_x(out) };
+                (out, crate::standard::bolt_helix(f, *length, None))
+            }
+            PrimitiveShape::Nut { size, .. } => {
+                if t.internal {
+                    return Err(format!("una tuerca va en una rosca exterior (tornillo o eje), no en {name} interior"));
+                }
+                *size = m.name.to_string();
+                let z = scale(out, -1.0);
+                (z, crate::standard::nut_helix(Frame { origin, z, x: default_x(z) }, t.spec.pitch, None))
+            }
+            _ => return Err("solo los tornillos y las tuercas se asocian a una rosca".into()),
+        };
+        let x = t.phase_x(helix[0], helix[1]);
+        Ok((Frame { origin, z, x }, shape, Threading { pitch: Some(t.spec.pitch), left: t.spec.left, x: None }))
+    }
+
+    /// La rosca a la que apunta un vínculo (tiene que estar antes en el historial).
+    fn thread_source(&self, link: &ThreadLink) -> R<ThreadAxis> {
+        if let Some(t) = self.ev.threads.iter().find(|t| t.feature == link.feature && t.index == link.index) {
+            return Ok(t.clone());
+        }
+        let Some(f) = self.doc.get(link.feature) else {
+            return Err("la rosca asociada ya no existe".into());
+        };
+        let name = &f.name;
+        Err(match self.ev.state(link.feature) {
+            None => format!("{name} está después en el historial: la rosca asociada tiene que ir antes"),
+            Some(FeatureState::Ok | FeatureState::Warning { .. }) => format!("{name} no tiene esa rosca"),
+            Some(_) => format!("{name} no está calculada: sin ella no hay rosca que seguir"),
+        })
     }
 
     /// Lleva cada entidad usada a su arista proyectada en el plano del sketch
@@ -1316,8 +1418,8 @@ impl Ctx<'_> {
                 self.apply(f.id, tool, r.op)
             }
             FeatureKind::Primitive(p) => {
-                let frame = Frame { origin: p.origin, z: p.z, x: p.x };
-                let tool = match &p.shape {
+                let (frame, shape, threading) = self.place_standard(p)?;
+                let tool = match &shape {
                     PrimitiveShape::Box { dx, dy, dz, centered, centered_z } => {
                         let (dx, dy, dz, centered, centered_z) = (*dx, *dy, *dz, *centered, *centered_z);
                         let frame = if centered { box_centered(frame, dx, dy) } else { frame };
@@ -1329,15 +1431,17 @@ impl Ctx<'_> {
                     PrimitiveShape::Sphere { radius } => Shape::sphere(p.origin, *radius),
                     PrimitiveShape::Torus { major, minor } => Shape::torus(frame, *major, *minor),
                     PrimitiveShape::Bolt { size, length, head, modeled } => {
-                        Ok(crate::standard::bolt(frame, size, *length, *head, *modeled)?)
+                        Ok(crate::standard::bolt_with(frame, size, *length, *head, modeled.then_some(threading))?)
                     }
-                    PrimitiveShape::Nut { size, modeled } => Ok(crate::standard::nut(frame, size, *modeled)?),
+                    PrimitiveShape::Nut { size, modeled } => Ok(crate::standard::nut_with(frame, size, modeled.then_some(threading))?),
                     PrimitiveShape::Washer { size } => Ok(crate::standard::washer(frame, size)?),
                 }
                 .map_err(err)?;
                 let tool = Tagged { tags: primitive_tags(f.id, p, &tool), shape: tool };
                 self.ev.tools.insert(f.id, (tool.clone(), p.op));
-                self.apply(f.id, tool, p.op)
+                self.apply(f.id, tool, p.op)?;
+                self.ev.threads.extend(standard_thread(f.id, &shape, frame, threading, p.link));
+                Ok(())
             }
             FeatureKind::Import { format, data, op } => {
                 let tool = match format {
@@ -1613,7 +1717,12 @@ impl Ctx<'_> {
                 self.scope = saved;
                 Ok(())
             }
-            FeatureKind::Thread { face, pitch, length, flip, left, clearance } => {
+            FeatureKind::Thread { face, pitch, length, flip, left, clearance, link } => {
+                let src = link.as_ref().map(|l| self.thread_source(l)).transpose()?;
+                let (pitch, left) = match &src {
+                    Some(t) => (&t.spec.pitch, &t.spec.left),
+                    None => (pitch, left),
+                };
                 let i = self.faces("face", std::slice::from_ref(face))?[0];
                 let body = self.body()?.clone();
                 let info = body.face_info(i).map_err(err)?;
@@ -1641,21 +1750,60 @@ impl Ctx<'_> {
                 // plano que las del cilindro la booleana fallaba sin avisar
                 let from = sub(start, scale(dir, margin));
                 let span = len + 2.0 * margin;
+                // Diámetro nominal: el de la rosca asociada o el que da la cara
+                let nominal = match &src {
+                    Some(t) => t.spec.nominal,
+                    None if outside => 2.0 * radius,
+                    None => 2.0 * (radius + h),
+                };
+                if let Some(t) = &src {
+                    let name = spec_name(&t.spec);
+                    if !t.coaxial(from, dir) {
+                        return Err(format!("la cara no está en el eje de la rosca {name}"));
+                    }
+                    if outside && radius < (nominal / 2.0 - h) + margin {
+                        return Err(format!("el eje (Ø{:.2}) es más fino que el núcleo de la rosca {name}", 2.0 * radius));
+                    }
+                    if !outside && radius > nominal / 2.0 + clearance / 2.0 - margin {
+                        return Err(format!("el agujero (Ø{:.2}) es más ancho que la rosca {name}", 2.0 * radius));
+                    }
+                }
+                // La fase: la de la rosca asociada, para que calcen
+                let x = match &src {
+                    Some(t) => t.phase_x(from, dir),
+                    None => default_x(dir),
+                };
+                let helix = Frame { origin: from, z: dir, x };
                 let tool = if outside {
-                    // Eje: el cilindro es el diámetro mayor; se quita todo lo que no es
-                    // filete. Sin holgura la cresta queda apenas afuera (sobre la cara
-                    // misma la booleana no resuelve superficies que coinciden) y la
-                    // cara del cilindro hace de cresta
-                    let major = radius - clearance / 2.0;
-                    let crest = if *clearance > 2.0 * margin { major } else { radius + margin };
-                    let rod = Shape::thread(Axis { origin: from, dir }, major - h, crest, *pitch, span, *left).map_err(err)?;
-                    let x = normalize(cross(dir, if dir[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] }));
+                    // Eje: se quita todo lo que no es filete. Sin holgura y con la cara
+                    // justo en el diámetro mayor, la cresta queda apenas afuera (sobre
+                    // la cara misma la booleana no resuelve superficies que coinciden)
+                    // y la cara del cilindro hace de cresta
+                    let major = nominal / 2.0 - clearance / 2.0;
+                    let crest = if radius - major > 2.0 * margin { major } else { radius + margin };
+                    let rod = Shape::thread(helix, major - h, crest, *pitch, span, *left).map_err(err)?;
                     let sleeve = Shape::cylinder(Frame { origin: from, z: dir, x }, radius + pitch, span).map_err(err)?;
                     sleeve.cut(&rod).map_err(err)?
                 } else {
-                    // Agujero: el agujero es el diámetro menor; el macho lo talla
-                    let minor = radius + clearance / 2.0;
-                    Shape::thread(Axis { origin: from, dir }, minor - margin, minor + h, *pitch, span, *left).map_err(err)?
+                    // Agujero: el macho talla desde el diámetro menor (más la holgura)
+                    let minor = nominal / 2.0 - h + clearance / 2.0;
+                    Shape::thread(helix, minor - margin, minor + h, *pitch, span, *left).map_err(err)?
+                };
+                let thread = ThreadAxis {
+                    feature: f.id,
+                    index: 0,
+                    spec: ThreadSpec { nominal, pitch: *pitch, clearance: *clearance, left: *left },
+                    internal: !outside,
+                    modeled: true,
+                    origin: from,
+                    dir,
+                    x,
+                    mouth: start,
+                    out: scale(dir, -1.0),
+                    length: len,
+                    blind: false,
+                    placed: None,
+                    link: *link,
                 };
                 let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
                 let tags = (0..tool.face_count()).map(|k| vec![tag(f.id, format!("cara:{k}"))]).collect();
@@ -1664,7 +1812,9 @@ impl Ctx<'_> {
                 let saved = std::mem::replace(&mut self.scope, vec![part]);
                 let r = self.apply(f.id, tool, BodyOp::Cut);
                 self.scope = saved;
-                r
+                r?;
+                self.ev.threads.push(thread);
+                Ok(())
             }
             FeatureKind::SheetMetal { sketch, regions, thickness, radius, k_factor, flip, op } => {
                 if *thickness <= 0.0 {
@@ -1696,9 +1846,24 @@ impl Ctx<'_> {
                 r
             }
             FeatureKind::Hole(h) => {
-                let tool = self.hole_tool(f.id, h)?;
+                // Asociado a otra rosca: su medida (la holgura es la propia)
+                let src = h.link.as_ref().map(|l| self.thread_source(l)).transpose()?;
+                let mut h = h.clone();
+                if let Some(t) = &src {
+                    let spec = ThreadSpec { clearance: h.modeled.map_or(0.0, |m| m.clearance), ..t.spec };
+                    if h.modeled.is_some() {
+                        h.modeled = Some(spec);
+                    } else {
+                        // Cosmética: la broca para roscar
+                        h.thread = Some(spec_name(&spec));
+                        h.diameter = spec.nominal - spec.pitch;
+                    }
+                }
+                let (tool, threads) = self.hole_tool(f.id, &h, src.as_ref())?;
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Cut));
-                self.apply(f.id, tool, BodyOp::Cut)
+                self.apply(f.id, tool, BodyOp::Cut)?;
+                self.ev.threads.extend(threads);
+                Ok(())
             }
             FeatureKind::Loft(l) => {
                 if l.sections.len() < 2 {
@@ -2186,6 +2351,37 @@ fn primitive_tags(id: FeatureId, p: &Primitive, shape: &Shape) -> Vec<Vec<FaceTa
             name.map(|n| vec![tag(id, n)]).unwrap_or_default()
         })
         .collect()
+}
+
+/// Rosca de un tornillo o una tuerca ya ubicados (`None` para las demás primitivas).
+fn standard_thread(id: FeatureId, shape: &PrimitiveShape, frame: Frame, t: Threading, link: Option<ThreadLink>) -> Option<ThreadAxis> {
+    let (size, modeled) = match shape {
+        PrimitiveShape::Bolt { size, modeled, .. } | PrimitiveShape::Nut { size, modeled } => (size, *modeled),
+        _ => return None,
+    };
+    let m = crate::standard::size(size)?;
+    let spec = ThreadSpec { nominal: m.d, pitch: t.pitch.unwrap_or(m.pitch), clearance: 0.0, left: t.left };
+    let z = normalize(frame.z);
+    let ([origin, dir, x], internal, out, length) = match shape {
+        PrimitiveShape::Bolt { length, .. } => (crate::standard::bolt_helix(frame, *length, None), false, z, *length),
+        _ => (crate::standard::nut_helix(frame, spec.pitch, None), true, scale(z, -1.0), m.nut_m),
+    };
+    Some(ThreadAxis {
+        feature: id,
+        index: 0,
+        spec,
+        internal,
+        modeled,
+        origin,
+        dir,
+        x,
+        mouth: frame.origin,
+        out,
+        length,
+        blind: false,
+        placed: Some([frame.origin, z, x]),
+        link,
+    })
 }
 
 /// Une sólidos etiquetados en uno, propagando los orígenes.

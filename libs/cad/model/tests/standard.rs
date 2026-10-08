@@ -10,7 +10,7 @@ fn occt() -> bool {
 
 fn part(shape: PrimitiveShape) -> Shape {
     let mut doc = Document::new();
-    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join }));
+    doc.add(FeatureKind::Primitive(Primitive { shape, origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::Join, link: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let body = ev.body.unwrap();
@@ -128,6 +128,7 @@ fn unknown_size_is_an_error() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     if occt() {
         assert!(matches!(doc.evaluate().state(id), Some(FeatureState::Error { .. })));
@@ -143,7 +144,7 @@ fn timing() {
     use std::time::Instant;
     let f = cad_occt::Frame::WORLD;
     let runs: Vec<(&str, Box<dyn Fn() -> Result<Shape, String>>)> = vec![
-        ("rod M8 L22", Box::new(|| Shape::thread(cad_occt::Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] }, 3.3, 4.0, 1.25, 22.0, false).map_err(|e| e.to_string()))),
+        ("rod M8 L22", Box::new(|| Shape::thread(cad_occt::Frame { origin: [0.0; 3], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] }, 3.3, 4.0, 1.25, 22.0, false).map_err(|e| e.to_string()))),
         ("bolt M8x25 hex mod", Box::new(move || standard::bolt(f, "M8", 25.0, BoltHead::Hex, true))),
         ("bolt M6x20 socket mod", Box::new(move || standard::bolt(f, "M6", 20.0, BoltHead::Socket, true))),
         ("nut M8 mod", Box::new(move || standard::nut(f, "M8", true))),
@@ -159,7 +160,7 @@ fn timing() {
         (PrimitiveShape::Bolt { size: "M8".into(), length: 25.0, head: BoltHead::Hex, modeled: true }, 0.0),
         (PrimitiveShape::Nut { size: "M8".into(), modeled: true }, 20.0),
     ] {
-        doc.add(FeatureKind::Primitive(Primitive { shape, origin: [x, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New }));
+        doc.add(FeatureKind::Primitive(Primitive { shape, origin: [x, 0.0, 0.0], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op: BodyOp::New, link: None }));
     }
     let t = Instant::now();
     let ev = doc.evaluate();

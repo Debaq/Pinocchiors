@@ -87,6 +87,7 @@ impl CylinderPick {
             z: self.direction,
             x: perpendicular(self.direction),
             op: if self.hole { BodyOp::Cut } else { BodyOp::Join },
+            link: None,
         })
     }
 

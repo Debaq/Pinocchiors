@@ -14,6 +14,7 @@ fn cube(x: f64, size: f64, op: BodyOp) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op,
+        link: None,
     })
 }
 
@@ -24,6 +25,7 @@ fn hole(x: f64, y: f64, r: f64) -> FeatureKind {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
+        link: None,
     })
 }
 
@@ -82,6 +84,7 @@ fn join_merges_what_it_touches_and_otherwise_makes_a_part() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let ev = doc.evaluate();
     assert_eq!(ev.parts.len(), 1);
@@ -140,6 +143,7 @@ fn cutting_a_whole_part_removes_it_and_intersect_drops_untouched() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
+        link: None,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
@@ -153,6 +157,7 @@ fn cutting_a_whole_part_removes_it_and_intersect_drops_untouched() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Intersect,
+        link: None,
     }));
     let ev = doc.evaluate();
     assert_eq!(ev.parts.len(), 1);
@@ -178,6 +183,7 @@ fn explicit_scope_limits_join_cut_and_intersect() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
+        link: None,
     }));
     doc.get_mut(h).unwrap().scope = vec![part(a)];
     let ev = doc.evaluate();
@@ -241,6 +247,7 @@ fn boolean_split_and_delete_parts() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
+        link: None,
     }));
     assert_eq!(doc.evaluate().parts.len(), 1);
     let sp = doc.add(FeatureKind::SplitParts { parts: vec![] });

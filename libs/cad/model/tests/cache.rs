@@ -8,7 +8,7 @@ fn occt() -> bool {
 }
 
 fn prim(shape: PrimitiveShape, origin: P3, op: BodyOp) -> FeatureKind {
-    FeatureKind::Primitive(Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op })
+    FeatureKind::Primitive(Primitive { shape, origin, z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0], op, link: None })
 }
 
 /// Placa con agujero, caja encima, agujero pasante, patrón del agujero,

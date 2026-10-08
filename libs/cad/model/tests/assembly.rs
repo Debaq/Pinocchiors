@@ -92,6 +92,7 @@ fn instances_and_interference() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let ev = doc.evaluate();
     // Dos copias de la misma pieza, la segunda corrida 9 mm: chocan 1 × 10 × 10

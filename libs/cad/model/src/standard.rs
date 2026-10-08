@@ -9,7 +9,7 @@
 
 use crate::feature::BoltHead;
 use crate::geom::{P3, add, cross, normalize, scale, sub};
-use cad_occt::{Axis, Frame, Shape};
+use cad_occt::{Frame, Shape};
 
 /// Medidas de una rosca métrica gruesa y de sus piezas (mm).
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -80,6 +80,33 @@ pub fn size(name: &str) -> Option<&'static MetricSize> {
     SIZES.iter().find(|s| s.name.eq_ignore_ascii_case(name.trim()))
 }
 
+/// La medida de diámetro nominal `d` (las cabezas y tuercas salen de ella).
+pub fn size_by_nominal(d: f64) -> Option<&'static MetricSize> {
+    SIZES.iter().find(|s| (s.d - d).abs() < 1e-6)
+}
+
+/// Rosca modelada de una pieza estándar: el paso (el grueso si no se dice) y
+/// la mano. `x` gira el filete alrededor del eje (la fase de la hélice; sin
+/// ella, la X del marco): así calza con otra rosca.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Threading {
+    pub pitch: Option<f64>,
+    pub left: bool,
+    pub x: Option<P3>,
+}
+
+/// Hélice de la rosca de un tornillo o una tuerca (origen, Z y X; ver
+/// [`crate::threads`]) en el marco `frame`.
+pub fn bolt_helix(frame: Frame, length: f64, x: Option<P3>) -> [P3; 3] {
+    let l = Local::new(Frame { x: x.unwrap_or(frame.x), ..frame });
+    [l.p(0.0, 0.0, -length), l.z, l.x]
+}
+
+pub fn nut_helix(frame: Frame, pitch: f64, x: Option<P3>) -> [P3; 3] {
+    let l = Local::new(Frame { x: x.unwrap_or(frame.x), ..frame });
+    [l.p(0.0, 0.0, -pitch / 2.0), l.z, l.x]
+}
+
 fn unknown(name: &str) -> String {
     format!("medida desconocida: {name} (hay {})", SIZES.iter().map(|s| s.name).collect::<Vec<_>>().join(", "))
 }
@@ -123,8 +150,9 @@ impl Local {
     fn at(&self, w: f64, down: bool) -> Frame {
         Frame { origin: self.p(0.0, 0.0, w), z: if down { scale(self.z, -1.0) } else { self.z }, x: self.x }
     }
-    fn axis(&self, w: f64) -> Axis {
-        Axis { origin: self.p(0.0, 0.0, w), dir: self.z }
+    /// Marco de una hélice que arranca en la altura `w` (con X propia)
+    fn helix(&self, w: f64, x: P3) -> Frame {
+        Frame { origin: self.p(0.0, 0.0, w), z: self.z, x }
     }
 }
 
@@ -164,19 +192,24 @@ fn chamfered_hex(l: &Local, s: f64, w0: f64, w1: f64, both: bool) -> R<Shape> {
 const MARGIN: f64 = 1e-3;
 
 /// Caña de `w0` (punta) a `w1`, con la punta achaflanada a 45° del diámetro
-/// menor al nominal; roscada desde la punta (2·d + 6) si `modeled`.
-fn shank(l: &Local, m: &MetricSize, w0: f64, w1: f64, modeled: bool) -> R<Shape> {
+/// menor al nominal; roscada desde la punta (2·d + 6) con `thread`.
+fn shank(l: &Local, m: &MetricSize, w0: f64, w1: f64, thread: Option<Threading>) -> R<Shape> {
     let r = m.d / 2.0;
     let len = w1 - w0;
-    if !modeled {
+    let Some(t) = thread else {
         let r1 = m.minor() / 2.0;
         let c = (r - r1).min(len / 2.0);
         let tip = Shape::cone(l.at(w0, false), r - c, r, c).map_err(e)?;
         return tip.union(&Shape::cylinder(l.at(w0 + c, false), r, len - c).map_err(e)?).map_err(e);
+    };
+    let pitch = t.pitch.unwrap_or(m.pitch);
+    if !(pitch > 0.0 && pitch < m.d / 2.0) {
+        return Err(format!("paso {pitch} imposible para {}", m.name));
     }
     // El chaflán sale en el mismo recorte de la rosca (una booleana menos)
     let lt = m.thread_length(len);
-    let rod = Shape::thread_pointed(l.axis(w0), m.minor() / 2.0, r, m.pitch, lt, false).map_err(e)?;
+    let minor = m.d - 1.082_532 * pitch;
+    let rod = Shape::thread_pointed(l.helix(w0, t.x.unwrap_or(l.x)), minor / 2.0, r, pitch, lt, t.left).map_err(e)?;
     if lt < len - 1e-9 { rod.union(&Shape::cylinder(l.at(w0 + lt, false), r, len - lt).map_err(e)?).map_err(e) } else { Ok(rod) }
 }
 
@@ -187,6 +220,11 @@ fn socket(l: &Local, s: f64, t: f64, top: f64) -> R<Shape> {
 
 /// Tornillo de largo `length` (bajo la cabeza; en el avellanado, el total).
 pub fn bolt(frame: Frame, size_name: &str, length: f64, head: BoltHead, modeled: bool) -> R<Shape> {
+    bolt_with(frame, size_name, length, head, modeled.then(Threading::default))
+}
+
+/// Como [`bolt`], con la rosca modelada a medida (`None`: lisa).
+pub fn bolt_with(frame: Frame, size_name: &str, length: f64, head: BoltHead, modeled: Option<Threading>) -> R<Shape> {
     let m = size(size_name).ok_or_else(|| unknown(size_name))?;
     let l = Local::new(frame);
     if length <= 0.0 {
@@ -216,14 +254,24 @@ pub fn bolt(frame: Frame, size_name: &str, length: f64, head: BoltHead, modeled:
 
 /// Tuerca hexagonal; con `modeled` el agujero lleva la rosca interior.
 pub fn nut(frame: Frame, size_name: &str, modeled: bool) -> R<Shape> {
+    nut_with(frame, size_name, modeled.then(Threading::default))
+}
+
+/// Como [`nut`], con la rosca modelada a medida (`None`: lisa).
+pub fn nut_with(frame: Frame, size_name: &str, modeled: Option<Threading>) -> R<Shape> {
     let m = size(size_name).ok_or_else(|| unknown(size_name))?;
     let l = Local::new(frame);
     let blank = chamfered_hex(&l, m.hex_s, 0.0, m.nut_m, true)?;
+    let pitch = modeled.and_then(|t| t.pitch).unwrap_or(m.pitch);
+    if !(pitch > 0.0 && pitch < m.d / 2.0) {
+        return Err(format!("paso {pitch} imposible para {}", m.name));
+    }
     // Sobresale medio paso de cada lado: las puntas del macho lejos de las caras
-    let (from, span) = (-m.pitch / 2.0, m.nut_m + m.pitch);
-    let hole = if modeled {
+    let (from, span) = (-pitch / 2.0, m.nut_m + pitch);
+    let hole = if let Some(t) = modeled {
         // El macho con el núcleo al diámetro menor: lo que se quita es justo la rosca hembra
-        Shape::thread(l.axis(from), m.minor() / 2.0, m.d / 2.0, m.pitch, span, false).map_err(e)?
+        let minor = m.d - 1.082_532 * pitch;
+        Shape::thread(l.helix(from, t.x.unwrap_or(l.x)), minor / 2.0, m.d / 2.0, pitch, span, t.left).map_err(e)?
     } else {
         Shape::cylinder(l.at(from, false), m.d / 2.0, span).map_err(e)?
     };

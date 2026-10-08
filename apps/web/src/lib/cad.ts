@@ -244,7 +244,8 @@ export type FeatureKind =
       thin?: number | null;
     }
   | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp }
-  | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp }
+  /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
+  | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
   | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null }
   /** Con `second`, asimétrico: otra distancia o un ángulo (`distance` va sobre una cara; `flip`, la otra) */
@@ -294,9 +295,11 @@ export type FeatureKind =
       thread?: string | null;
       /** Rosca modelada (el filete de verdad, para imprimir) */
       modeled?: ThreadSpec | null;
+      /** Medida de otra rosca, con el filete alineado en el centro que está en su eje */
+      link?: ThreadLink | null;
     }
   /** Rosca sobre una cara cilíndrica: exterior en un eje, interior en un agujero */
-  | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number }
+  | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number; link?: ThreadLink | null }
   /** Chapa metálica: regiones de un sketch al espesor; radio interior de doblez y factor K para pestañas y desarrollo */
   | { type: "sheet_metal"; sketch: number; regions: RegionSelection; thickness: number; radius: number; k_factor: number; flip: boolean; op: BodyOp }
   /** Pestaña: pared doblada desde una arista del borde de la chapa (`length` después del doblez) */
@@ -313,6 +316,41 @@ export interface ThreadSpec {
   pitch: number;
   clearance: number;
   left: boolean;
+}
+
+/**
+ * Coordinación entre roscas: toma la medida de otra rosca anterior y alinea el
+ * filete con el suyo. En tornillos y tuercas también la posición: van en su
+ * eje desde la boca (`flip`: la otra), `offset` mm hacia adentro.
+ */
+export interface ThreadLink {
+  feature: number;
+  index: number;
+  flip?: boolean;
+  offset?: number;
+}
+
+/** Rosca calculada (agujero roscado, rosca, tornillo o tuerca) */
+export interface ThreadAxis {
+  feature: number;
+  /** Cuál de la operación (un agujero tiene una por centro) */
+  index: number;
+  spec: ThreadSpec;
+  /** Hembra (agujero, tuerca) o macho (eje, tornillo) */
+  internal: boolean;
+  modeled: boolean;
+  /** Hélice: el filete pasa por origin + r·x y avanza hacia dir */
+  origin: P3;
+  dir: P3;
+  x: P3;
+  /** Boca (sobre el eje) y hacia afuera */
+  mouth: P3;
+  out: P3;
+  length: number;
+  blind: boolean;
+  /** Marco del tornillo o la tuerca: origen, Z, X */
+  placed?: [P3, P3, P3] | null;
+  link?: ThreadLink | null;
 }
 
 export interface Feature {
@@ -681,6 +719,8 @@ export interface CadResult {
   parts: PartView[];
   references: RefView[];
   assembly: AssemblyView | null;
+  /** Roscas, para coordinarlas */
+  threads?: ThreadAxis[];
 }
 
 export interface CadStatus {
@@ -875,6 +915,63 @@ export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4,
  * Largo de tornillo para atravesar `depth` mm: con tuerca (pasante) suma la
  * tuerca y dos pasos; si no, el largo normal más cercano por arriba.
  */
+/** "M6", "M8×1", "M6 izq." */
+export function threadName(s: ThreadSpec): string {
+  const coarse = METRIC_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-9);
+  const d = String(+s.nominal.toFixed(3)).replace(".", ",");
+  return `${coarse ? coarse.size : `M${d}×${String(s.pitch).replace(".", ",")}`}${s.left ? " izq." : ""}`;
+}
+
+const v3 = {
+  sub: (a: P3, b: P3): P3 => [a[0] - b[0], a[1] - b[1], a[2] - b[2]],
+  dot: (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2],
+  len: (a: P3) => Math.hypot(a[0], a[1], a[2]),
+};
+
+/** Distancia del punto al eje de la rosca */
+export function distanceToThreadAxis(t: ThreadAxis, p: P3): number {
+  const d = v3.len(t.dir) || 1;
+  const v = v3.sub(p, t.origin);
+  const a = v3.dot(v, t.dir) / d;
+  return Math.sqrt(Math.max(0, v3.dot(v, v) - a * a));
+}
+
+/** ¿Las dos roscas están en el mismo eje? (paralelas y a menos de un cuarto del diámetro) */
+export function coaxialThreads(a: ThreadAxis, b: ThreadAxis): boolean {
+  const cos = Math.abs(v3.dot(a.dir, b.dir)) / ((v3.len(a.dir) || 1) * (v3.len(b.dir) || 1));
+  return cos > 0.999 && distanceToThreadAxis(a, b.origin) < 0.25 * Math.max(a.spec.nominal, 0.4);
+}
+
+/** Qué rosca necesita una operación para coordinarse: tornillos, interiores; tuercas, exteriores */
+export type ThreadWant = "internal" | "external" | "any";
+
+/** Roscas anteriores a la operación `id` con las que se puede coordinar */
+export function threadCandidates(doc: CadDocument | null | undefined, threads: ThreadAxis[], id: number, want: ThreadWant): ThreadAxis[] {
+  const order = new Map((doc?.features ?? []).map((f, i) => [f.id, i]));
+  const at = order.get(id) ?? Infinity;
+  return threads.filter(
+    (t) => t.feature !== id && (order.get(t.feature) ?? Infinity) < at && (want === "any" || t.internal === (want === "internal")),
+  );
+}
+
+/** "Agujero 1 · centro 2 · M6" */
+export function threadLabel(doc: CadDocument | null | undefined, threads: ThreadAxis[], t: ThreadAxis): string {
+  const f = doc?.features.find((x) => x.id === t.feature);
+  const many = threads.filter((x) => x.feature === t.feature).length > 1;
+  return [f?.name ?? `#${t.feature}`, many ? `centro ${t.index + 1}` : "", threadName(t.spec)].filter(Boolean).join(" · ");
+}
+
+/** La rosca de una cara elegida: la de la operación que la hizo (por sus orígenes) o la más cercana a su eje */
+export function threadOfFace(face: FaceRef, threads: ThreadAxis[]): ThreadAxis | undefined {
+  const owners = new Set((face.tags ?? []).map((t) => t.feature));
+  const near = (list: ThreadAxis[]) =>
+    list
+      .map((t) => ({ t, d: distanceToThreadAxis(t, face.point) }))
+      .filter(({ t, d }) => d < t.spec.nominal)
+      .sort((a, b) => a.d - b.d)[0]?.t;
+  return near(threads.filter((t) => owners.has(t.feature))) ?? near(threads);
+}
+
 export function boltLengthFor(size: string, depth: number, withNut: boolean): number {
   const m = METRIC_HOLES.find((h) => h.size === size);
   const need = depth + (withNut && m ? (NUT_HEIGHT[size] ?? m.nominal) + 2 * m.pitch : 0);

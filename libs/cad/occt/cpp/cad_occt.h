@@ -180,8 +180,9 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
                          int32_t left);
 // Engrosa una cara (o un conjunto de caras) hasta un sólido de espesor `thickness`
 // (hacia su normal; negativo = hacia atrás).
-/** Macho roscado: núcleo de radio menor + filete ISO (60°) de `length` desde `origin` hacia `dir` */
-CadShape* cad_make_thread(const double* origin, const double* dir, double r_minor, double r_major, double pitch,
+/** Macho roscado: núcleo de radio menor + filete ISO (60°) de `length` desde `origin` hacia `dir`;
+ *  la cresta pasa por `origin + r·xdir` (la fase de la hélice) */
+CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major, double pitch,
                           double length, int32_t left, int32_t chamfer);
 CadShape* cad_thicken(const CadShape* faces, double thickness);
 

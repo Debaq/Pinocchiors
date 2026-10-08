@@ -134,6 +134,7 @@ fn reference_axes_and_points() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let ev = doc.evaluate();
     let body = ev.body.as_ref().unwrap();

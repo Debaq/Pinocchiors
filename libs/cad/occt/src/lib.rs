@@ -667,15 +667,21 @@ impl Shape {
     }
 
     /// Macho roscado: núcleo de `r_minor` más el filete ISO de 60° hasta
-    /// `r_major`, de `length` a lo largo de `axis` (puntas planas).
-    pub fn thread(axis: Axis, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: bool) -> Result<Shape> {
-        wrap(unsafe { ffi::cad_make_thread(axis.origin.as_ptr(), axis.dir.as_ptr(), r_minor, r_major, pitch, length, left as i32, 0) })
+    /// `r_major`, de `length` desde el origen del marco a lo largo de su Z
+    /// (puntas planas). La cresta pasa por `origin + r·x`: la X del marco es
+    /// la fase de la hélice.
+    pub fn thread(frame: Frame, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: bool) -> Result<Shape> {
+        wrap(unsafe {
+            ffi::cad_make_thread(frame.origin.as_ptr(), frame.z.as_ptr(), frame.x.as_ptr(), r_minor, r_major, pitch, length, left as i32, 0)
+        })
     }
 
     /// Como [`Shape::thread`] pero con la punta del comienzo achaflanada a 45°
     /// desde el diámetro menor (la punta de un tornillo).
-    pub fn thread_pointed(axis: Axis, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: bool) -> Result<Shape> {
-        wrap(unsafe { ffi::cad_make_thread(axis.origin.as_ptr(), axis.dir.as_ptr(), r_minor, r_major, pitch, length, left as i32, 1) })
+    pub fn thread_pointed(frame: Frame, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: bool) -> Result<Shape> {
+        wrap(unsafe {
+            ffi::cad_make_thread(frame.origin.as_ptr(), frame.z.as_ptr(), frame.x.as_ptr(), r_minor, r_major, pitch, length, left as i32, 1)
+        })
     }
 
     /// Sólido de espesor `thickness` a partir de esta cara (o caras), hacia su normal.

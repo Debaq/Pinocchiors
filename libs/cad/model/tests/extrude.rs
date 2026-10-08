@@ -54,6 +54,7 @@ fn two_sides_and_up_to_next() {
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Join,
+        link: None,
     }));
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(10.0) });
     doc.add(FeatureKind::Extrude(extrude(sk, Extent::UpToNext)));

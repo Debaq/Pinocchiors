@@ -285,6 +285,29 @@ pub struct Primitive {
     pub x: P3,
     #[serde(default)]
     pub op: BodyOp,
+    /// Tornillo o tuerca puesto en otra rosca: toma su medida y su eje (el
+    /// marco de arriba no se usa) y gira el filete para que calce.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<ThreadLink>,
+}
+
+/// Coordinación entre roscas: la operación que la lleva toma la medida (diámetro,
+/// paso, mano) de otra rosca anterior del historial y alinea su filete con el
+/// de ella, para que calcen. No es una booleana: cada una sigue siendo lo que es.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ThreadLink {
+    /// Agujero roscado, rosca, tornillo o tuerca
+    pub feature: FeatureId,
+    /// Cuál de sus roscas (un agujero tiene una por centro)
+    #[serde(default)]
+    pub index: u32,
+    /// Tornillos y tuercas: entran por la otra boca
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub flip: bool,
+    /// Tornillos y tuercas: cuánto entran desde la boca a lo largo de la
+    /// rosca (negativo: quedan afuera)
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: f64,
 }
 
 fn default_z() -> P3 {
@@ -438,6 +461,9 @@ pub enum FeatureKind {
         left: bool,
         #[serde(default)]
         clearance: f64,
+        /// Paso, mano y diámetro de otra rosca, con el filete alineado
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        link: Option<ThreadLink>,
     },
     /// Chapa metálica: las regiones de un sketch extruidas al espesor. Guarda
     /// el radio interior de doblez y el factor K que usan sus pestañas y el
@@ -520,6 +546,10 @@ pub struct Hole {
     /// Rosca modelada: el agujero sale con el filete de verdad (para imprimir).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub modeled: Option<ThreadSpec>,
+    /// Rosca (cosmética o modelada) con la medida de otra y el filete alineado
+    /// en el centro que está en su eje
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<ThreadLink>,
 }
 
 /// Rosca métrica ISO (perfil de 60°).
@@ -639,7 +669,9 @@ impl FeatureKind {
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
             FeatureKind::Scale { center, .. } => point_deps(center),
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
-            FeatureKind::Hole(h) => vec![h.sketch],
+            FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
+            FeatureKind::Primitive(p) => p.link.iter().map(|l| l.feature).collect(),
+            FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
             FeatureKind::Rib { sketch, .. } => vec![*sketch],
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
