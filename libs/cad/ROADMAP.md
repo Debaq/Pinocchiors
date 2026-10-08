@@ -443,9 +443,10 @@ cargo test -p cad-model
     flotante y arrastrable en `CadView` (`FeatureEditor` exportado de DesignStep). Las acciones
     salieron a `lib/designActions.ts` (`createDesignActions`, una vez en App). Fase 2, el árbol de
     operaciones (`FeatureTree`, exportado) vive en el grupo Operaciones del Outliner (`SceneNode.content`).
-  - Fase 3 a medio probar: el panel en pestañas Diseño / Pieza / Inspección / Desde el escaneo
-    (secciones `design*` en `lib/pipeline.ts`, `DesignStep` recibe `section`). Compila; falta correr
-    la suite e2e completa (`node e2e/cad.mjs`, ~25 min) y mirar capturas. El arnés de cad.mjs abre
-    solo los menús de la barra y las pestañas cuando un texto no está a la vista.
+  - Fase 3: el panel en pestañas Diseño / Pieza / Inspección / Desde el escaneo (secciones
+    `design*` en `lib/pipeline.ts`, `DesignStep` recibe `section`). `ContextPanel` pasa la sección
+    como función: con el valor suelto el `<Match>` la leía una vez y la pestaña cambiaba el
+    título pero no el contenido. Suite e2e completa 54/54 (2026-10-08); el arnés abre solo los
+    menús de la barra y las pestañas (`clickText`, `clickContains`, `tab()`).
   - Falta: fase 4, línea de ayuda abajo del visor (ya muestra lo elegido, avisos y Enter/Esc; revisar).
   - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.

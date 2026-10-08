@@ -6803,7 +6803,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section} hasModel={meshLoaded()} />}
+            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} hasModel={meshLoaded()} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

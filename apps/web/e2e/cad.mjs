@@ -51,10 +51,16 @@ async function accept(b, wait = 1500) {
   await b.eval(`document.querySelector('[aria-label="Aceptar"]')?.click()`);
   await sleep(wait);
 }
+/** Abre una pestaña del panel de Diseñar (Diseño, Pieza, Inspección, Desde el escaneo) */
+async function tab(b, name) {
+  if (!(await b.eval(`(() => { const t = document.querySelector('nav button[aria-label=${JSON.stringify(name)}]'); t?.click(); return !!t; })()`)))
+    throw new Error("no encontré la pestaña " + name);
+  await sleep(400);
+}
 /** Clic en una fila del árbol de operaciones por su nombre */
 async function clickRow(b, name) {
   const r = await b.eval(`(() => {
-    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null));
+    const e = [...document.querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(name)} && x.offsetParent !== null);
     if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2];
   })()`);
   if (!r) throw new Error("no encontré la operación " + name);
@@ -184,7 +190,7 @@ const scenarios = {
     near((await body()).volume, 16000 - fillet(), 0.2, "dos cajas, dos redondeos");
     // Sin la caja de arriba su arista ya no está: advertencia y se redondea la otra
     await b.eval(`(() => {
-      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba"));
+      const s = [...document.querySelectorAll("span")].find((x) => x.textContent === "Caja arriba");
       s.parentElement.querySelector('[aria-label="Suprimir"]').click();
     })()`);
     await sleep(2000);
@@ -333,6 +339,7 @@ const scenarios = {
     await b.clickText("Caja");
     await sleep(1500);
     await accept(b);
+    await tab(b, "Inspección");
     if ((await line("Masa")) !== undefined) throw new Error("masa sin material");
     if ((await line("Centro de masa")) !== "0,00, 0,00, 0,00 mm") throw new Error(`centro: ${await line("Centro de masa")}`);
     // Acero: 8 cm³ × 7,85 g/cm³
@@ -652,6 +659,7 @@ const scenarios = {
     if (!(ps[0].volume < 8000)) throw new Error("no se redondeó la caja");
     // Color y nombre de la segunda (no recalculan)
     const version = await b.eval(`__cadStore.result().version`);
+    await tab(b, "Pieza");
     await b.eval(`(() => { const i = document.querySelector('[aria-label="Color de Pieza 2"]'); i.value = "#ff0000"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
     await sleep(800);
     await b.eval(`document.querySelector('[data-part="${ps[1].id.feature}:0"] span.truncate').dispatchEvent(new MouseEvent("dblclick", { bubbles: true }))`);
@@ -740,6 +748,7 @@ const scenarios = {
     if (ps.length !== 2) throw new Error(`separar: ${ps.length} piezas`);
     // Borrar la segunda desde la lista de piezas
     const total = ps[0].volume + ps[1].volume;
+    await tab(b, "Pieza");
     await b.eval(`document.querySelector('[aria-label="Borrar Pieza 2"]').click()`);
     await sleep(1500);
     await accept(b);
@@ -768,8 +777,10 @@ const scenarios = {
     await b.eval(`window.__cadStore.reload()`);
     await sleep(2000);
     // 8 cm³ + 1 cm³ de PLA
+    await tab(b, "Inspección");
     if ((await line("Masa")) !== "11,16 g") throw new Error(`masa con PLA: ${await line("Masa")}`);
     // La segunda de acero: 8 × 1,24 + 1 × 7,85
+    await tab(b, "Pieza");
     await b.eval(`[...document.querySelectorAll("[data-part] span.truncate")].find((s) => s.textContent === "Pieza 2").click()`);
     await sleep(800);
     const panel = `document.querySelector('[aria-label="Datos de Pieza 2"]')`;
@@ -778,6 +789,7 @@ const scenarios = {
     await b.clickText("Acero (7850 kg/m³)");
     await sleep(1500);
     if ((await line("Masa", panel)) !== "7,85 g (Acero)") throw new Error(`masa de la pieza: ${await line("Masa", panel)}`);
+    await tab(b, "Inspección");
     if ((await line("Masa")) !== "17,77 g") throw new Error(`masa total: ${await line("Masa")}`);
     // Con densidades distintas no hay una inercia del cuerpo
     if ((await line("Inercia")) !== undefined) throw new Error("mostró la inercia con materiales distintos");
@@ -999,7 +1011,7 @@ const scenarios = {
     await call("cad_set_document", { document: doc });
     await b.eval(`window.__cadStore.reload()`);
     await sleep(1500);
-    await b.clickText("Plano 2D (vistas, ocultas, cajetín)");
+    await b.clickText("Plano 2D");
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
     const info = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
@@ -1133,7 +1145,7 @@ const scenarios = {
     // Volver al diseño
     await b.clickText("Diseño");
     await sleep(800);
-    if (!(await b.eval(`document.body.innerText.includes("Agregar") || document.body.innerText.includes("AGREGAR")`))) throw new Error("no volvió al diseño");
+    if (await b.eval(`window.__cadUi.assemblyMode()`)) throw new Error("no volvió al diseño");
   },
 
   async "caja de regiones al editar una extrusión"(b) {
@@ -1586,7 +1598,11 @@ const scenarios = {
     await sleep(1500);
     // Elegir solo la región del primer círculo y extruir
     await b.click(...(await at([-15, -15, 0])), { wait: 500 });
-    const summary = await b.eval(`[...document.querySelectorAll("span")].map((x) => x.textContent).find((t) => t?.startsWith("Elegido"))`);
+    // Sin el texto del botón Limpiar
+    const summary = await b.eval(`(() => {
+      const e = [...document.querySelectorAll("span")].find((x) => x.textContent?.startsWith("Elegido"));
+      return [...(e?.childNodes ?? [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
+    })()`);
     if (summary !== "Elegido: 1 región") throw new Error(`selección: ${summary}`);
     await b.clickText("Extrusión");
     await sleep(2000);
@@ -2214,6 +2230,20 @@ for (const [name, run] of Object.entries(scenarios)) {
   const b = await launch(URL);
   // Las herramientas de los menús de la barra: si no está a la vista, se abre su menú
   const clickText = b.clickText.bind(b);
+  const clickContains = b.clickContains.bind(b);
+  b.clickContains = async (text) => {
+    try {
+      return await clickContains(text);
+    } catch (e) {
+      for (const name of ["Diseño", "Pieza", "Inspección", "Desde el escaneo"]) {
+        try {
+          await tab(b, name);
+          return await clickContains(text);
+        } catch {}
+      }
+      throw e;
+    }
+  };
   b.clickText = async (text, nth = 0) => {
     try {
       return await clickText(text, nth);
