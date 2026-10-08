@@ -14,7 +14,7 @@ import { HistoryPanel } from "../panels/HistoryPanel";
 import type { HistoryStore } from "../../lib/history";
 import { ObjectTab, type ObjectTabProps } from "../panels/ObjectTab";
 import { StructureStep, type StructureStepProps } from "../steps/StructureStep";
-import { RetopologyStep, type RetopologyStepProps } from "../steps/RetopologyStep";
+import { RemeshStep, type RemeshStepProps } from "../steps/RemeshStep";
 import { SkeletonStep, type SkeletonStepProps } from "../steps/SkeletonStep";
 import { UvStep, type UvStepProps } from "../steps/UvStep";
 import { ExportStep, type ExportStepProps } from "../steps/ExportStep";
@@ -37,8 +37,8 @@ export interface ContextPanelProps {
   // Repair
   repairProps: RepairStepProps;
 
-  // Retopology
-  retopologyProps: RetopologyStepProps;
+  // Remallar (la retopología es uno de sus modos)
+  remeshProps: RemeshStepProps;
 
   // UV / Piel
   uvProps: UvStepProps;
@@ -331,8 +331,8 @@ const StepContent: Component<ContextPanelProps> = (props) => (
     <Match when={props.activeStep === "repair"}>
       <RepairStep {...props.repairProps} />
     </Match>
-    <Match when={props.activeStep === "retopology"}>
-      <RetopologyStep {...props.retopologyProps} />
+    <Match when={props.activeStep === "remesh"}>
+      <RemeshStep {...props.remeshProps} />
     </Match>
     <Match when={props.activeStep === "uv"}>
       <UvStep {...props.uvProps} />

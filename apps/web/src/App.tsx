@@ -259,6 +259,7 @@ import type { MeshAnalysis, SubdivideResult, ScaleParams, SubdivideConfig } from
 import { DESIGN_FORMATS, SKELETON_FORMATS, defaultExportOptions, formatBytes, type ExportOptions } from "./components/steps/ExportStep";
 import { defaultUvConfig, type UvConfig, type UvInfo, type UvPreview } from "./components/steps/UvStep";
 import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
+import { REMESH_MODES, type RemeshMode } from "./components/steps/RemeshStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
@@ -763,6 +764,8 @@ export const App: Component = () => {
   const [quadMeshLoaded, setQuadMeshLoaded] = createSignal(false);
   const [quadMeshInfo, setQuadMeshInfo] = createSignal({ vertices: 0, quads: 0 });
   const [showQuadMesh, setShowQuadMesh] = createSignal(false);
+  // Remallar: el modo elegido (la retopología es uno de ellos)
+  const [remeshMode, setRemeshMode] = createSignal<RemeshMode>("retopology");
   const [exportIncludeRig, setExportIncludeRig] = createSignal(true);
   /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
   const [exportBoneShapes, setExportBoneShapes] = createSignal(false);
@@ -5164,7 +5167,7 @@ export const App: Component = () => {
         );
 
         // Pipeline: mark retopology as completed
-        pipeline.markCompleted("retopology");
+        pipeline.markCompleted("remesh");
       } catch (e) {
         console.error("Retopology error:", e);
         setStatusMessage(`Error: ${e}`);
@@ -5996,6 +5999,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
+      remesh: { mode: remeshMode() },
       uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
@@ -6085,6 +6089,7 @@ export const App: Component = () => {
     if (ui.retopology?.config) setRetopologyConfig(withDefaults(configDefaults.retopology, ui.retopology.config));
     setQuadMeshInfo(ui.retopology?.info ?? { vertices: 0, quads: 0 });
     setQuadQuality(ui.retopology?.quality);
+    if (REMESH_MODES.some((m) => m.id === ui.remesh?.mode)) setRemeshMode(ui.remesh.mode);
     if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
     if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
@@ -6925,7 +6930,12 @@ export const App: Component = () => {
               repairOptions: repairOptions(),
               onRepairOptionsChange: setRepairOptions,
             }}
-            retopologyProps={{
+            remeshProps={{
+              mode: remeshMode(),
+              onModeChange: setRemeshMode,
+              mesh: { vertices: meshInfo().vertices, faces: meshInfo().faces },
+              retopology: {
+              result: quadMeshInfo(),
               config: retopologyConfig(),
               onChange: setRetopologyConfig,
               onExecute: handleRetopology,
@@ -6937,6 +6947,7 @@ export const App: Component = () => {
               useForNextSteps: activeQuad(),
               onUseForNextStepsChange: handleActiveMesh,
               quality: quadQuality(),
+              },
             }}
             uvProps={{
               config: uvConfig(),

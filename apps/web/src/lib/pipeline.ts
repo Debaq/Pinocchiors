@@ -9,7 +9,7 @@ export type PipelineStepId =
   | "import"
   | "structure"
   | "repair"
-  | "retopology"
+  | "remesh"
   | "uv"
   | "skeleton"
   | "animate"
@@ -50,8 +50,8 @@ export const PIPELINE_STEPS: PipelineStep[] = [
     icon: Icons.Wrench,
   },
   {
-    id: "retopology",
-    label: "Retopología",
+    id: "remesh",
+    label: "Remallar",
     icon: Icons.GridFour,
   },
   {
@@ -125,7 +125,7 @@ export interface Workspace {
 }
 
 export const WORKSPACES: Workspace[] = [
-  { id: "prepare", label: "Preparar", sections: ["structure", "repair", "retopology", "uv"] },
+  { id: "prepare", label: "Preparar", sections: ["structure", "repair", "remesh", "uv"] },
   // Sin modelo se puede armar y animar un esqueleto solo, y exportarlo
   { id: "rig", label: "Rig y animación", sections: ["skeleton", "animate"], withoutModel: true },
   { id: "print", label: "Fabricar", sections: ["print3d"] },
@@ -133,6 +133,16 @@ export const WORKSPACES: Workspace[] = [
   // CAD paramétrico: se diseña desde cero o calcando el modelo cargado
   { id: "design", label: "Diseñar", sections: ["design", "design_part", "design_inspect", "design_scan"], withoutModel: true },
 ];
+
+/**
+ * Secciones de proyectos viejos: "import" ya no es una sección y
+ * "retopology" ahora es un modo de Remallar.
+ */
+export function legacyStep(step: PipelineStepId | "retopology"): PipelineStepId {
+  if (step === "import") return "structure";
+  if (step === "retopology") return "remesh";
+  return step;
+}
 
 export const stepInfo = (id: PipelineStepId) => PIPELINE_STEPS.find((s) => s.id === id) ?? PIPELINE_STEPS[0];
 
@@ -151,8 +161,7 @@ export function createPipelineStore() {
   const lastSection: Partial<Record<WorkspaceId, PipelineStepId>> = {};
 
   const setActiveStep = (step: PipelineStepId) => {
-    // "import" ya no es una sección (proyectos viejos)
-    const next = step === "import" ? "structure" : step;
+    const next = legacyStep(step);
     const ws = workspaceOf(next);
     if (ws) lastSection[ws.id] = next;
     setActive(next);
@@ -167,7 +176,7 @@ export function createPipelineStore() {
   };
 
   /** Reemplaza los pasos hechos (al abrir un proyecto) */
-  const setCompleted = (steps: PipelineStepId[]) => setCompletedSteps(new Set(steps));
+  const setCompleted = (steps: PipelineStepId[]) => setCompletedSteps(new Set(steps.map(legacyStep)));
 
   const openWorkspace = (id: WorkspaceId) => {
     const ws = WORKSPACES.find((w) => w.id === id)!;

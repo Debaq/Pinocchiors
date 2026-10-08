@@ -1,5 +1,7 @@
 export { RetopologyStep } from "./RetopologyStep";
 export type { RetopologyStepProps } from "./RetopologyStep";
+export { RemeshStep, REMESH_MODES } from "./RemeshStep";
+export type { RemeshStepProps, RemeshMode } from "./RemeshStep";
 
 export { UvStep, defaultUvConfig } from "./UvStep";
 export type { UvStepProps, UvConfig, UvInfo, UvPreview } from "./UvStep";

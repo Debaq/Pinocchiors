@@ -2764,6 +2764,29 @@ const scenarios = {
     await b.shot("outliner");
   },
 
+  async "remallar: los modos con la retopología adentro"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // La caja pasa sola a malla al ir a Preparar
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    const tabs = await b.eval(`[...document.querySelectorAll("nav button[aria-label]")].map((t) => t.getAttribute("aria-label"))`);
+    if (tabs.includes("Retopología") || !tabs.includes("Remallar")) throw new Error(`pestañas: ${tabs}`);
+    await tab(b, "Remallar");
+    const modes = await b.eval(`[...document.querySelectorAll('[aria-label="Modo de remallado"] [data-mode]')].map((x) => x.dataset.mode + (x.getAttribute("aria-checked") === "true" ? "*" : ""))`);
+    if (modes.join() !== "retopology*,simplify,isotropic,voxel,quads,smooth") throw new Error(`modos: ${modes}`);
+    // La retopología está adentro, con su botón
+    if (!(await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`))) throw new Error("sin el panel de retopología");
+    await b.shot("remallar");
+    // Un modo que todavía no está: lo dice, y sin el panel de la retopología
+    await b.eval(`document.querySelector('[data-mode="voxel"]').click()`);
+    await sleep(300);
+    if (!(await b.eval(`!!document.querySelector("[data-remesh-pending]")`))) throw new Error("vóxeles sin aviso");
+    if (await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`)) throw new Error("el panel de retopología sigue a la vista");
+  },
+
   async "objetos: las piezas pasan solas a Fabricar"(b) {
     await begin(b);
     await b.clickText("Caja");

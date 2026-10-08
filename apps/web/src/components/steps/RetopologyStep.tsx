@@ -20,10 +20,9 @@ export interface RetopologyStepProps {
 export const RetopologyStep: Component<RetopologyStepProps> = (props) => {
   return (
     <div class="space-y-5">
-      <h3 class="text-sm font-semibold text-text">Retopologia</h3>
       <p class="text-xs text-text-muted leading-relaxed">
-        Genera una malla de quads limpia, alineada a la forma. Las mallas rotas se reparan
-        solas; la simetría deja un loop de aristas en la línea media, útil para el rig.
+        Las mallas rotas se reparan solas; la simetría deja un loop de aristas en la línea
+        media, útil para el rig.
       </p>
       <RetopologyPanel
         config={props.config}

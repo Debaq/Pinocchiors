@@ -109,6 +109,15 @@ cancelación como `remesh_with_callback`. La app agrega un comando `remesh_previ
 
 ## Fases
 
+*Fase 1 hecha el 2026-10-08*: sección `remesh` ("Remallar") en lugar de `retopology`
+(`legacyStep` abre ahí los proyectos viejos, también en los pasos hechos); `RemeshStep` con
+los seis modos en dos columnas (los que faltan marcados "pronto" y con su aviso), el "qué hace
+/ para qué" del elegido, la Retopología adentro tal cual (ya tenía "Usar esta malla en las
+etapas siguientes", que es el "usar como malla del modelo" del plan) y la tarjeta común
+`RemeshSummary` (antes → después y desviación), que hoy usa la retopología. El modo se guarda
+en el proyecto (`ui.json` → `remesh.mode`). Prueba: e2e "remallar: los modos con la
+retopología adentro" (la caja de Diseñar pasa sola a malla al ir a Preparar).
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.
