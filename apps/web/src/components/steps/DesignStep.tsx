@@ -205,7 +205,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
   const [detections, setDetections] = createSignal<Detection[]>();
 
   const actions = props.actions;
-  const { say, exportAs } = actions;
+  const { say } = actions;
 
   // ─── Escaneo → CAD ────────────────────────────────────────────────────
 
@@ -262,13 +262,13 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
               </Show>
             </Match>
             <Match when={props.section === "design_part"}>
-              <PartsSection store={store} ui={ui} onExport={(f, part) => void exportAs(f, part)} />
+              <PartsSection store={store} ui={ui} />
               <Show when={!store.result()?.parts.length}>
                 <p class="text-xs text-text-dim">Todavía no hay piezas: crea un sólido con la barra de arriba del visor.</p>
               </Show>
             </Match>
             <Match when={props.section === "design_inspect"}>
-              <BodySection store={store} ui={ui} onExport={(f) => void exportAs(f)} />
+              <BodySection store={store} ui={ui} />
               <Show when={!store.result()?.body}>
                 <p class="text-xs text-text-dim">Todavía no hay sólido para inspeccionar.</p>
               </Show>
@@ -2654,7 +2654,7 @@ const ScanResultCard: Component<{ result: { pick: ScanPick; triangle: number }; 
 // ─── Sólido ───────────────────────────────────────────────────────────────
 
 /** Piezas del diseño: color, nombre, visibilidad y exportar cada una */
-const PartsSection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf", part: PartView) => void }> = (props) => {
+const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
   const parts = () => props.store.result()?.parts ?? [];
   const [renaming, setRenaming] = createSignal<string>();
   const key = (p: PartView) => `${p.id.feature}:${p.id.index}`;
@@ -2712,19 +2712,6 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step"
                   </Show>
                   <span class="font-mono text-[10px] text-text-dim group-hover:hidden">
                     {partMass(props.store.doc(), p) !== null ? fmtMass(partMass(props.store.doc(), p)!) : `${fmt(p.volume / 1000)} cm³`}
-                  </span>
-                  <span class="hidden group-hover:flex items-center gap-0.5">
-                    <For each={["stl", "3mf", "step"] as const}>
-                      {(f) => (
-                        <button
-                          class="px-1 rounded text-[10px] text-text-muted hover:text-text hover:bg-bg-lighter"
-                          aria-label={`Exportar ${p.name} como ${f.toUpperCase()}`}
-                          onClick={() => props.onExport(f, p)}
-                        >
-                          {f.toUpperCase()}
-                        </button>
-                      )}
-                    </For>
                   </span>
                   <span class="hidden group-hover:flex">
                     <IconButton
@@ -2814,7 +2801,7 @@ const Line = (p: { label: string; children: JSX.Element }) => (
   </div>
 );
 
-const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" | "stl" | "3mf") => void }> = (props) => (
+const BodySection: Component<{ store: CadStore; ui: CadUi }> = (props) => (
   <Show when={props.store.result()?.body}>
     {(b) => {
       const size = () => b().bbox_max.map((v, i) => v - b().bbox_min[i]);
@@ -2854,17 +2841,6 @@ const BodySection: Component<{ store: CadStore; ui: CadUi; onExport: (f: "step" 
           <Button size="sm" fullWidth onClick={() => props.ui.setDrawingOpen(true)}>
             Plano 2D (vistas, ocultas, cajetín)
           </Button>
-          <div class="grid grid-cols-3 gap-1.5">
-            <Button size="sm" onClick={() => props.onExport("step")}>
-              STEP
-            </Button>
-            <Button size="sm" onClick={() => props.onExport("stl")}>
-              STL
-            </Button>
-            <Button size="sm" onClick={() => props.onExport("3mf")}>
-              3MF
-            </Button>
-          </div>
         </Section>
       );
     }}

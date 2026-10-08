@@ -453,4 +453,8 @@ cargo test -p cad-model
     con algo elegido, en el sketch); los mensajes de la app se ven 6 s a la derecha. El aviso
     "elegir …" bajó a la pila de mensajes del visor (arriba tapaba la segunda fila de la barra).
     Ya no aparece "Importa un modelo para comenzar" en Diseñar.
+  - Pedidos del usuario (2026-10-08): exportar el diseño solo desde el área Exportar (salieron
+    los botones STEP/STL/3MF de las pestañas Pieza e Inspección; ahí se elige "Qué exportar":
+    todo el diseño o una pieza), y la selección por caja arrastrando desde cualquier lado, también
+    sobre el sólido (un clic sin arrastrar sigue eligiendo uno).
   - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.

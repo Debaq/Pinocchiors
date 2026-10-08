@@ -2,7 +2,7 @@
 // la barra de herramientas del visor, el menú del clic derecho y el panel.
 
 import { createSignal } from "solid-js";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   METRIC_HOLES,
   emptySketch,
@@ -14,17 +14,14 @@ import {
   type FeatureKind,
   type P2,
   type PartId,
-  type PartView,
   type PlaneSpec,
   type PrimitiveShape,
   type RegionSelection,
 } from "./cad";
 import type { CadUi } from "./cadUi";
 
-const fmt = (v: number, d = 2) => v.toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
-
 export function createDesignActions(store: CadStore, ui: CadUi) {
-  // Aviso corto (falta un sketch, exportado…); lo muestra el visor
+  // Aviso corto (falta un sketch…); lo muestra el visor
   const [notice, setNotice] = createSignal<string>();
 
   const features = () => store.doc()?.features ?? [];
@@ -275,19 +272,6 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   // ─── Archivos ─────────────────────────────────────────────────────────
 
-  const exportAs = async (format: "step" | "stl" | "3mf", part?: PartView) => {
-    const names = { step: "STEP", stl: "STL", "3mf": "3MF" };
-    const base = part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : "diseno";
-    const path = await save({ filters: [{ name: names[format], extensions: [format === "step" ? "step" : format] }], defaultPath: `${base}.${format}` });
-    if (!path) return;
-    try {
-      const bytes = await store.exportDesign(path, format, part?.id);
-      say(`Exportado (${fmt(bytes / 1024, 0)} KB)`);
-    } catch (e) {
-      say(String(e));
-    }
-  };
-
   const importStep = async () => {
     const path = await open({ filters: [{ name: "STEP", extensions: ["step", "stp"] }], multiple: false });
     if (typeof path !== "string") return;
@@ -321,7 +305,6 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addReference,
     startThicken,
     startMoveFace,
-    exportAs,
     importStep,
     addSplit: () => void store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false }),
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),

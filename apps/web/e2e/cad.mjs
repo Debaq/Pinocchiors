@@ -697,6 +697,20 @@ const scenarios = {
     rmSync(one, { force: true });
     await call("cad_export", { path: one, format: "stl", part: ps[1].id });
     if (!existsSync(one)) throw new Error("no se exportó la pieza sola");
+    // Desde el área Exportar: elegir la pieza y exportarla como STL
+    await b.clickContains("Exportar");
+    await sleep(800);
+    await b.clickText("Todo el diseño");
+    await sleep(400);
+    await b.clickText("Eje");
+    await sleep(400);
+    await b.clickText("STL");
+    const ui = `${out}/eje-ui.stl`;
+    rmSync(ui, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(ui)}`);
+    await b.clickText("Exportar STL");
+    await sleep(2000);
+    if (!existsSync(ui) || statSync(ui).size !== statSync(one).size) throw new Error("Exportar no sacó la pieza sola");
   },
 
   async "piezas: booleana, separar y borrar"(b) {
@@ -1578,6 +1592,25 @@ const scenarios = {
     if (sk.entities.some((e) => e.geometry.type === "circle")) throw new Error("el círculo no pasó a arco");
     if (!regions.startsWith("2")) throw new Error(`regiones: ${regions}`);
     if (!(Number(chosen) > 0)) throw new Error(`gestor: elegido ${chosen}`);
+  },
+
+  async "caja de selección empezando sobre el sólido"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const picks = () => b.eval(`window.__cadUi.picks().map((p) => p.kind)`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un clic sin arrastrar elige solo la cara de arriba
+    const [x, y] = await at([0, 0, 10]);
+    await b.click(x, y, { wait: 800 });
+    if ((await picks()).join() !== "face") throw new Error(`clic: ${await picks()}`);
+    // Arrastrar desde la cara hacia la izquierda (cruce): todo lo que toca, sin la del clic suelto
+    const [x1, y1] = await at([-14, 14, -14]);
+    await b.drag(x, y, Math.min(x1, x - 150), Math.max(y1, y + 150));
+    const got = await picks();
+    if (!(got.length > 2 && got.includes("edge"))) throw new Error(`caja sobre el sólido: ${got}`);
+    await b.shot("caja_sobre_el_solido");
   },
 
   async "barra de estado: atajos según lo que se hace"(b) {

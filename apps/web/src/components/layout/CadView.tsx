@@ -937,8 +937,6 @@ export const CadView: Component<CadViewProps> = (props) => {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (!hit || hit.kind === "scan") {
           if (!additive) ui.clearPicks();
-          // En vacío: arrastrar elige por caja
-          boxStart = { x: e.clientX, y: e.clientY, additive };
           return ui.setMessage(undefined);
         }
         if (hit.kind === "face") ui.pickToggle({ kind: "face", face: hit.face }, additive);
@@ -958,13 +956,17 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (e.button === 2) rightDown = { x: e.clientX, y: e.clientY };
     if (e.button !== 0 || e.altKey) return;
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
-    if (ui.session()) sketchClick(e);
-    else void pickClick(e);
+    if (ui.session()) return sketchClick(e);
+    // Arrastrar desde cualquier lado elige por caja (como la herramienta de selección de
+    // Blender); si no se arrastra queda el clic
+    if (ui.pick().kind === "none") boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey || e.ctrlKey || e.metaKey, before: ui.picks() };
+    void pickClick(e);
   };
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
-    if (boxStart && (e.buttons & 1) === 1) {
+    // La caja aparece recién al arrastrar de verdad (un clic tiembla un par de píxeles)
+    if (boxStart && (e.buttons & 1) === 1 && Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y) >= 5) {
       const r = container.getBoundingClientRect();
       setBox({ x0: boxStart.x - r.left, y0: boxStart.y - r.top, x1: e.clientX - r.left, y1: e.clientY - r.top });
     }
@@ -992,7 +994,7 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const [overCube, setOverCube] = createSignal(false);
   // Selección por caja: desde dónde y el rectángulo que se ve mientras se arrastra
-  let boxStart: { x: number; y: number; additive: boolean } | undefined;
+  let boxStart: { x: number; y: number; additive: boolean; before: Pick3d[] } | undefined;
   const [box, setBox] = createSignal<{ x0: number; y0: number; x1: number; y1: number }>();
   const finishBox = (x: number, y: number) => {
     const s = boxStart;
@@ -1009,8 +1011,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       ...got.regions.map((r): Pick3d => ({ kind: "region", ...r })),
     ];
     const key = (p: Pick3d) => JSON.stringify(p);
-    ui.setPicks((cur) => {
-      const base = s.additive ? cur : [];
+    // Lo que eligió el clic al empezar a arrastrar no cuenta
+    ui.setPicks(() => {
+      const base = s.additive ? s.before : [];
       const seen = new Set(base.map(key));
       return [...base, ...found.filter((p) => !seen.has(key(p)))];
     });

@@ -494,9 +494,13 @@ export const App: Component = () => {
   const hasDesignBody = () => !!cad.committed() && !!cad.result()?.body;
   // Exportar desde Diseñar (o sin modelo) exporta el sólido del diseño
   const [exportDesign, setExportDesign] = createSignal(false);
+  /** Pieza del diseño que se exporta ("operación:índice"); sin ella, todo */
+  const [exportPart, setExportPart] = createSignal<string>();
+  const designParts = () => (cad.result()?.parts ?? []).map((p) => ({ key: `${p.id.feature}:${p.id.index}`, name: p.name, id: p.id }));
   const openExport = () => {
     const design = hasDesignBody() && (inDesign() || !hasWork());
     setExportDesign(design);
+    setExportPart(undefined);
     if (design && !DESIGN_FORMATS.includes(exportOptions().format)) setExportOptions({ ...exportOptions(), format: "step" });
     pipeline.setActiveStep("export");
   };
@@ -4709,15 +4713,17 @@ export const App: Component = () => {
       const format = exportOptions().format;
       const extensions = format === "step" ? ["step", "stp"] : [format];
       const name = format.toUpperCase();
+      const part = designParts().find((p) => p.key === exportPart());
+      const base = part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : (fileName() ?? "diseño").replace(/\.[^.]+$/, "");
       const selected = await save({
         title: `Exportar ${name}`,
-        defaultPath: `${(fileName() ?? "diseño").replace(/\.[^.]+$/, "")}.${extensions[0]}`,
+        defaultPath: `${base}.${extensions[0]}`,
         filters: [{ name, extensions }],
       });
       if (!selected) return;
       const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${extensions[0]}`;
       const file = path.split("/").pop();
-      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format));
+      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format, part?.id));
       setLastExport({ bytes, files: [path] });
       setStatusMessage(`Diseño exportado: ${file} (${formatBytes(bytes)})`);
       pipeline.markCompleted("export");
@@ -6974,6 +6980,9 @@ export const App: Component = () => {
               onExport: () => void (exportDesign() ? handleExportDesign() : handleExport()),
               canExport: exportDesign() ? hasDesignBody() : hasWork(),
               design: exportDesign(),
+              designParts: designParts(),
+              designPart: exportPart(),
+              onDesignPartChange: setExportPart,
               skeletonOnly: !meshLoaded(),
               hasSkeleton: !!skeletonData(),
               boneShapes: exportBoneShapes(),

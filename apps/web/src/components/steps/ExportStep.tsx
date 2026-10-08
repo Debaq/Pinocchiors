@@ -112,6 +112,10 @@ export interface ExportStepProps {
   skeletonOnly?: boolean;
   /** Se exporta el sólido de Diseñar */
   design?: boolean;
+  /** Piezas del diseño (clave "operación:índice") y la elegida; sin elegir, todo el diseño */
+  designParts?: { key: string; name: string }[];
+  designPart?: string;
+  onDesignPartChange?: (key: string | undefined) => void;
   hasSkeleton?: boolean;
   /** Esqueleto solo: un octaedro por hueso para verlo en cualquier visor */
   boneShapes?: boolean;
@@ -181,10 +185,20 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
       </div>
 
       <Show when={props.design}>
-        <p class="text-[10px] text-text-dim leading-relaxed p-3 rounded-md bg-surface/30 border border-border">
-          Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales); los demás
-          formatos, como una malla fina.
-        </p>
+        <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
+          <Show when={(props.designParts?.length ?? 0) > 1}>
+            <Select
+              label="Qué exportar"
+              options={[{ value: "all", label: "Todo el diseño" }, ...(props.designParts ?? []).map((p) => ({ value: p.key, label: p.name }))]}
+              value={props.designPart ?? "all"}
+              onChange={(v) => props.onDesignPartChange?.(v === "all" ? undefined : v)}
+            />
+          </Show>
+          <p class="text-[10px] text-text-dim leading-relaxed">
+            Se exporta el sólido de Diseñar en milímetros. STEP lo guarda exacto (caras y aristas reales), con cada pieza
+            con su nombre y color; 3MF lleva un objeto por pieza; los demás formatos, una malla fina.
+          </p>
+        </div>
       </Show>
 
       {/* Esqueleto solo */}
