@@ -115,6 +115,25 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "move_face", faces, distance: 5 });
   };
 
+  /** Nervio con el sketch elegido en el árbol (o el último): sus líneas hasta el sólido */
+  const startRib = () => {
+    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    const sel = selectedFeature();
+    const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
+    if (!sketch) return say("Primero un sketch con la línea del nervio, en un plano que corte el sólido");
+    void store.addFeature({ type: "rib", sketch: sketch.id, thickness: 2, flip: false });
+  };
+
+  /** Reemplazar cara: las caras elegidas; con dos o más, la última es hasta dónde llegan */
+  const startReplaceFace = async () => {
+    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const refs = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    const target: PlaneSpec = refs.length >= 2 ? { type: "face", face: refs.pop()! } : { type: "xy" };
+    void store.addFeature({ type: "replace_face", faces: refs, target });
+  };
+
   /** Patrón a lo largo del último sketch (o de la operación elegida, si tiene herramienta) */
   const addCurvePattern = () => {
     const sel = selectedFeature();
@@ -305,6 +324,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addReference,
     startThicken,
     startMoveFace,
+    startRib,
+    startReplaceFace,
     importStep,
     addSplit: () => void store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false }),
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),

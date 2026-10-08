@@ -1463,6 +1463,48 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "rib" && (f().kind as Extract<FeatureKind, { type: "rib" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "rib" && (x.sketch = +v))} />
+                </Row>
+                {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "rib" && (x.thickness = v), "mm")}
+                <Checkbox small label="Hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "rib" && (x.flip = c))} />
+                <p class="text-[11px] text-text-dim">
+                  Cada línea del sketch se lleva hasta el sólido, en su plano, con el espesor repartido a los dos lados. El sketch tiene que estar en un
+                  plano que corte el sólido.
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "replace_face" && (f().kind as Extract<FeatureKind, { type: "replace_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras planas"
+                  refs={k().faces}
+                  lost={lost("faces")}
+                  onChange={(refs) => update((x) => x.type === "replace_face" && (x.faces = refs as FaceRef[]))}
+                />
+                <PlaneField
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:hasta`}
+                  label="Hasta"
+                  value={k().target}
+                  except={f().id}
+                  lost={lost("target").length > 0}
+                  onChange={(p) => update((x) => x.type === "replace_face" && (x.target = p))}
+                />
+                <p class="text-[11px] text-text-dim">Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "scale" && (f().kind as Extract<FeatureKind, { type: "scale" }>)}>
             {(k) => {
               const uniform = () => k().factor[0] === k().factor[1] && k().factor[1] === k().factor[2];

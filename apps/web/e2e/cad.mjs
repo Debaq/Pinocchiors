@@ -1440,6 +1440,42 @@ const scenarios = {
     near(r.volume, w * h * 10 - (100 - (Math.PI * 100) / 4) * 10, 0.01, "volumen con esquina redondeada");
   },
 
+  async "nervio desde una línea hasta el sólido"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Sketch vertical por el medio de la caja con una línea a z = 20 (la caja llega a z = 10)
+    const doc = await call("cad_get_document");
+    const sketch = { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: -6, y: 20 }, { id: 2, x: 6, y: 20 }], entities: [{ id: 3, geometry: { type: "line", start: 1, end: 2 } }], constraints: [], next_id: 4, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Línea del nervio", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Nervio");
+    await sleep(2000);
+    await accept(b);
+    // Pared de 12 × 10 × 2 encima de la caja de 20
+    near((await body()).volume, 8000 + 240, 1e-6, "caja con nervio");
+    await b.shot("nervio");
+  },
+
+  async "reemplazar cara hasta un plano"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // La cara de arriba (z = 10) hasta la planta (z = 0): queda la mitad
+    await b.click(...(await at([0, 0, 10])), { wait: 800 });
+    await b.clickText("Reemplazar cara");
+    await sleep(2000);
+    await accept(b);
+    near((await body()).volume, 4000, 1e-6, "hasta la planta");
+    await b.shot("reemplazar_cara");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

@@ -107,9 +107,14 @@ se puede elegir como plano de sketch, eje de revolución o patrón, y se oculta 
    2026-10-07: `FeatureKind::Helix { axis, radius, pitch, turns, left }` (alambre sobre un
    cilindro, `cad_make_helix`; se ve como curva y es camino de barridos con
    `SweepPath::Curve`; un resorte = círculo en el arranque + barrido) y `Thicken { faces,
-   thickness, op }` (`BRepOffset_MakeOffset` en modo engrosar). El nervio queda pendiente:
-   `BRepFeat_MakeLinearForm` necesita el contorno abierto llevado hasta el sólido.*
-6. **Mover y reemplazar cara**, **escala**, **patrón en curva**. *Hecha el 2026-10-07 salvo reemplazar cara:
+   thickness, op }` (`BRepOffset_MakeOffset` en modo engrosar). Nervio hecho el 2026-10-08 sin
+   `BRepFeat_MakeLinearForm`: `Rib { sketch, thickness, flip }`, por cada línea del sketch 33
+   rayos en su plano hasta el sólido (`ray_hit`), el polígono entre la línea y lo que tocan
+   (un poco adentro para que la unión no quede apenas tocando) con el espesor centrado en el
+   plano; prueba el otro lado si de uno no llega, y si no llega en todo el largo es error.*
+6. **Mover y reemplazar cara**, **escala**, **patrón en curva**. *Hecha el 2026-10-07 (reemplazar cara el 2026-10-08: `ReplaceFace { faces, target }`, la cara
+   barrida de sobra hacia el plano y recortada en él con `split_keep`; suma o resta según el lado;
+   plano destino = cara plana, de referencia o propio, también inclinado):
    `MoveFace { faces, distance }` (caras planas: el prisma que barre la cara se suma o se
    resta de su pieza; conserva historia y orígenes; caras no planas, error claro),
    `Scale { factor: [sx, sy, sz], center }` (transformación general; el puente ahora detecta

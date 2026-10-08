@@ -369,6 +369,18 @@ pub enum FeatureKind {
         #[serde(default)]
         op: BodyOp,
     },
+    /// Nervio: pared de `thickness` centrada en el plano del sketch, desde sus
+    /// líneas hasta el sólido (del lado donde lo encuentra; `flip` prueba
+    /// primero el otro).
+    Rib {
+        sketch: FeatureId,
+        thickness: f64,
+        #[serde(default)]
+        flip: bool,
+    },
+    /// Lleva caras planas hasta un plano (una cara plana del sólido o uno de
+    /// referencia): suma o resta lo que hay entre la cara y el plano.
+    ReplaceFace { faces: Vec<FaceRef>, target: PlaneSpec },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -488,6 +500,8 @@ impl FeatureKind {
             FeatureKind::Scale { center, .. } => point_deps(center),
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => vec![h.sketch],
+            FeatureKind::Rib { sketch, .. } => vec![*sketch],
+            FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
             FeatureKind::Extrude(e) => vec![e.sketch],
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
@@ -544,6 +558,8 @@ impl FeatureKind {
             FeatureKind::Hole(_) => "Agujero",
             FeatureKind::Helix { .. } => "Hélice",
             FeatureKind::Thicken { .. } => "Engrosar",
+            FeatureKind::Rib { .. } => "Nervio",
+            FeatureKind::ReplaceFace { .. } => "Reemplazar cara",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
         }

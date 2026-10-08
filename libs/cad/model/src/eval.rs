@@ -1006,6 +1006,66 @@ impl Ctx<'_> {
         Ok(Tagged { shape, tags })
     }
 
+    /// Pared del nervio: por cada línea del sketch, rayos en el plano hasta el
+    /// sólido; el polígono entre la línea y lo que tocan, con espesor centrado.
+    fn rib_tool(&self, id: FeatureId, sketch: FeatureId, thickness: f64, flip: bool) -> R<Tagged> {
+        if thickness <= 0.0 {
+            return Err("el espesor tiene que ser mayor que cero".into());
+        }
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch del nervio no está calculado")?;
+        let body = self.body()?.clone();
+        let n = normalize(s.plane.normal);
+        // Un poco adentro del sólido, para que la unión no quede apenas tocando
+        let overlap = (self.diag() * 1e-4).max(1e-3);
+        let mut walls = Vec::new();
+        for e in &s.sketch.entities {
+            let Geometry::Line { start, end } = e.geometry else { continue };
+            if e.construction {
+                continue;
+            }
+            let a = s.plane.to_world(s.sketch.point(start).map_err(err)?);
+            let b = s.plane.to_world(s.sketch.point(end).map_err(err)?);
+            let len = norm(sub(b, a));
+            if len < 1e-9 {
+                continue;
+            }
+            let side = normalize(cross(n, sub(b, a)));
+            let sides = if flip { [scale(side, -1.0), side] } else { [side, scale(side, -1.0)] };
+            // Muestras a lo largo de la línea (las puntas, apenas adentro)
+            const N: usize = 32;
+            let inset = (len * 1e-4).max(1e-6);
+            let samples: Vec<P3> = (0..=N)
+                .map(|k| {
+                    let t = inset + (len - 2.0 * inset) * k as f64 / N as f64;
+                    add(a, scale(sub(b, a), t / len))
+                })
+                .collect();
+            let hits = sides.iter().find_map(|&dir| {
+                let ts: Option<Vec<f64>> = samples.iter().map(|&p| body.ray_hit(p, dir)).collect();
+                ts.map(|ts| (dir, ts))
+            });
+            let Some((dir, ts)) = hits else {
+                return Err("el nervio no llega al sólido en todo el largo de la línea".into());
+            };
+            // El polígono va de punta a punta (los rayos salen apenas adentro)
+            let at = |k: usize| add(a, scale(sub(b, a), k as f64 / N as f64));
+            let mut poly = vec![a, b];
+            poly.extend(ts.iter().enumerate().rev().map(|(k, &t)| add(at(k), scale(dir, t + overlap))));
+            let face = Shape::polygon(&poly).map_err(err)?;
+            let wall = face
+                .translate(scale(n, -thickness / 2.0))
+                .and_then(|f| f.prism(scale(n, thickness)))
+                .map_err(err)?;
+            walls.push(wall);
+        }
+        if walls.is_empty() {
+            return Err("el sketch no tiene líneas para el nervio".into());
+        }
+        let shape = fuse(walls)?;
+        let tags = (0..shape.face_count()).map(|i| vec![tag(id, format!("cara:{i}"))]).collect();
+        Ok(Tagged { shape, tags })
+    }
+
     /// Alambre del camino de un barrido: las entidades encadenadas por sus
     /// extremos, empezando por la punta más cercana a `near` (el perfil: el
     /// barrido arranca en el comienzo del alambre).
@@ -1405,6 +1465,59 @@ impl Ctx<'_> {
                 let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
+            }
+            FeatureKind::Rib { sketch, thickness, flip } => {
+                let tool = self.rib_tool(f.id, *sketch, *thickness, *flip)?;
+                self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
+                self.apply(f.id, tool, BodyOp::Join)
+            }
+            FeatureKind::ReplaceFace { faces, target } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let t = self.plane("target", target)?;
+                let tn = normalize(t.normal);
+                let body = self.body()?.clone();
+                let far = self.diag() * 4.0;
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("por ahora solo se reemplazan caras planas".into());
+                    }
+                    let n = normalize(info.normal);
+                    let along = dot(n, tn);
+                    if along.abs() < 1e-6 {
+                        return Err("el plano es paralelo a la dirección de la cara: no la corta".into());
+                    }
+                    // Cuánto hay que moverla (en su centro) para llegar al plano
+                    let d = dot(sub(t.origin, info.point), tn) / along;
+                    if d.abs() < 1e-9 {
+                        continue;
+                    }
+                    // La cara barrida de sobra hacia el plano, recortada en él (del lado de la cara)
+                    let keep = if dot(sub(info.point, t.origin), tn) >= 0.0 { tn } else { scale(tn, -1.0) };
+                    let prism = body
+                        .face_shape(i)
+                        .and_then(|fc| fc.prism(scale(n, far.copysign(d))))
+                        .and_then(|p| p.split_keep(t.origin, keep))
+                        .map_err(err)?;
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    jobs.push((part, prism, d > 0.0));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                for (k, (part, prism, out)) in jobs.into_iter().enumerate() {
+                    let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; prism.face_count()];
+                    self.scope = vec![part];
+                    let r = self.apply(f.id, Tagged { shape: prism, tags }, if out { BodyOp::Join } else { BodyOp::Cut });
+                    if r.is_err() {
+                        self.scope = saved;
+                        return r;
+                    }
+                }
+                self.scope = saved;
+                Ok(())
             }
             FeatureKind::Hole(h) => {
                 let tool = self.hole_tool(f.id, h)?;

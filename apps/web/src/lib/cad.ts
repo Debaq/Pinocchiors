@@ -222,6 +222,10 @@ export type FeatureKind =
   | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
   | { type: "move_face"; faces: FaceRef[]; distance: number }
+  /** Pared desde las líneas de un sketch hasta el sólido, centrada en su plano */
+  | { type: "rib"; sketch: number; thickness: number; flip: boolean }
+  /** Caras planas llevadas hasta un plano (cara plana o plano de referencia) */
+  | { type: "replace_face"; faces: FaceRef[]; target: PlaneSpec }
   /** Escala por eje alrededor de un punto */
   | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
@@ -470,7 +474,7 @@ export interface ResolvedValue {
 
 /** Referencia que no se encontró: campo de la operación y posición en su lista */
 export interface MissingRef {
-  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def";
+  field: "edges" | "faces" | "regions" | "plane" | "neutral" | "axis" | "extent" | "targets" | "tools" | "parts" | "scope" | "base" | "a" | "b" | "edge" | "face" | "points" | "def" | "target";
   index: number;
 }
 
@@ -704,6 +708,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   helix: "Hélice",
   thicken: "Engrosar",
   move_face: "Mover cara",
+  rib: "Nervio",
+  replace_face: "Reemplazar cara",
   scale: "Escala",
 };
 

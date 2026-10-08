@@ -458,3 +458,8 @@ cargo test -p cad-model
     todo el diseño o una pieza), y la selección por caja arrastrando desde cualquier lado, también
     sobre el sólido (un clic sin arrastrar sigue eligiendo uno).
   - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.
+- **2026-10-08 Línea desde el centro, nervio y reemplazar cara** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md),
+  fases 5 y 6 completas): la línea del sketch crece igual a los dos lados del primer clic (punto
+  medio); el nervio lleva las líneas de un sketch hasta el sólido con espesor centrado; reemplazar
+  cara lleva caras planas hasta un plano o una cara (con dos o más caras elegidas, la última es el
+  destino). Pruebas en `model/tests/modify.rs` y e2e.

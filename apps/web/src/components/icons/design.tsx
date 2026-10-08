@@ -231,6 +231,21 @@ export const MoveFace = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Rib = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M3 20 H21 M5 20 V6 H8 V20" />
+    <path d="M8 9 L18 20 H8 Z" {...soft} />
+  </DesignIcon>
+);
+
+export const ReplaceFace = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <Box x={3} y={10} s={10} />
+    <path d="M19 3 V21" {...dashed} />
+    <path d="M14 15 H18 M16 13 L18 15 L16 17" />
+  </DesignIcon>
+);
+
 export const Scale = (p: IconProps) => (
   <DesignIcon {...p}>
     <rect x="3" y="11" width="8" height="8" {...soft} />
