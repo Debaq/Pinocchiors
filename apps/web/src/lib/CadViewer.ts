@@ -974,10 +974,21 @@ export class CadViewer {
   // ─── Cámara ─────────────────────────────────────────────────────────────
 
   /** Mira el plano de frente (para dibujar) */
-  lookAtPlane(plane: Plane) {
-    const target = this.toView(plane.origin);
+  /** Mira el plano de frente; con `fit` (centro y tamaño en mm, en coordenadas del plano) encuadra eso */
+  lookAtPlane(plane: Plane, fit?: { center: [number, number]; size: number }) {
+    const y = [
+      plane.normal[1] * plane.x_dir[2] - plane.normal[2] * plane.x_dir[1],
+      plane.normal[2] * plane.x_dir[0] - plane.normal[0] * plane.x_dir[2],
+      plane.normal[0] * plane.x_dir[1] - plane.normal[1] * plane.x_dir[0],
+    ];
+    const at = fit
+      ? ([0, 1, 2].map((i) => plane.origin[i] + plane.x_dir[i] * fit.center[0] + y[i] * fit.center[1]) as [number, number, number])
+      : plane.origin;
+    const target = this.toView(at);
     const n = this.dirToView(plane.normal);
-    const dist = this.camera.position.distanceTo(this.controls.target) || 200 / this.mmPerUnit;
+    const dist = fit
+      ? (Math.max(fit.size, 10) / 2 / this.mmPerUnit / Math.tan((this.camera.fov * Math.PI) / 360)) * 1.4
+      : this.camera.position.distanceTo(this.controls.target) || 200 / this.mmPerUnit;
     this.controls.target.copy(target);
     this.camera.position.copy(target).addScaledVector(n, dist);
     // Que la "y" del sketch quede hacia arriba en pantalla

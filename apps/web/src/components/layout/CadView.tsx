@@ -433,7 +433,14 @@ export const CadView: Component<CadViewProps> = (props) => {
         const s = ui.session();
         if (feature !== undefined && s) {
           viewer.saveView();
-          viewer.lookAtPlane(s.plane);
+          // Un sketch con algo dibujado se encuadra entero (puede estar lejos del origen)
+          const pts = s.sketch.points.filter((p) => p.id !== s.sketch.origin);
+          if (s.sketch.entities.length && pts.length) {
+            const xs = pts.map((p) => p.x);
+            const ys = pts.map((p) => p.y);
+            const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+            viewer.lookAtPlane(s.plane, { center: [(x0 + x1) / 2, (y0 + y1) / 2], size: Math.max(x1 - x0, y1 - y0) });
+          } else viewer.lookAtPlane(s.plane);
         } else viewer.restoreView();
       },
     ),
@@ -446,9 +453,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!s) {
       // Eligiendo regiones: el sketch de esa operación con las elegidas resaltadas
       const mode = ui.pick();
-      if (mode.kind === "region") {
+      if (mode.kind === "region" || mode.kind === "axis") {
         const view = store.sketchView(mode.sketch);
-        viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.chosen() } : null);
+        viewer.setSketch(view ? { plane: view.plane, sketch: view.sketch, regions: view.regions, chosen: mode.kind === "region" ? mode.chosen() : [] } : null);
         return;
       }
       // Fuera de la edición los sketches se ven como sketches visibles
@@ -956,6 +963,21 @@ export const CadView: Component<CadViewProps> = (props) => {
         const view = store.sketchView(mode.sketch);
         const p = view && viewer.planePoint(e.clientX, e.clientY, view.plane);
         if (p) mode.toggle(p);
+      } else if (mode.kind === "axis") {
+        // Primero una línea del sketch (se ve mientras se elige); si no, una arista del sólido
+        const view = store.sketchView(mode.sketch);
+        const p = view && viewer.planePoint(e.clientX, e.clientY, view.plane);
+        const h = view && p ? hitTest(view.sketch, p, viewer.pixelSizeMm() * 8, false) : {};
+        const line = view?.sketch.entities.find((x) => x.id === h.entity && x.geometry.type === "line");
+        if (line) {
+          ui.setPick({ kind: "none" });
+          return mode.done({ type: "sketch_line", sketch: mode.sketch, line: line.id });
+        }
+        const hit = viewer.pick(e.clientX, e.clientY, { edges: true });
+        if (hit?.kind !== "edge") return;
+        const edge = await store.edgeRef(hit.edge);
+        ui.setPick({ kind: "none" });
+        mode.done({ type: "edge", edge });
       } else if (mode.kind === "scan") {
         const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
         if (hit?.kind !== "scan") return;

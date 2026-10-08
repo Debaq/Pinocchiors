@@ -141,8 +141,10 @@ cargo test -p cad-model
     objeto sesión entero), caída de la interfaz por carrera entre estado de herramienta y
     sketch, bolsillos sobre caras que apuntaban hacia afuera (ahora una extrusión que resta
     y no toca el sólido se da vuelta sola).
-  - Pendiente de UI: cotas dibujadas en el visor (hoy se editan en el panel), encuadre del
-    sketch al entrar, elegir regiones sueltas con clic, ejes de revolución con clic.
+  - Pendiente de UI (todo hecho): cotas dibujadas en el visor y regiones con clic (F8,
+    2026-10-05); encuadre del sketch al entrar y eje de revolución con clic (2026-10-08: al
+    editar un sketch con dibujo se encuadra su contenido; la Revolución tiene "Elegir el eje en
+    el visor": una línea del sketch, que se ve mientras se elige, o una arista del sólido).
 - **2026-10-05 F8 (parcial)**: polígono regular (círculo de construcción + lados iguales),
   ranura (arcos tangentes), cotas como etiquetas editables en el visor, puntos pegados a
   curvas, regiones sueltas elegidas con clic para extruir/revolucionar, zonas detectadas del

@@ -980,6 +980,7 @@ export const FeatureEditor: Component<{
                   <Row label="Eje">
                     <Select
                       options={[
+                        ...(k().axis.type === "edge" ? [{ value: "edge", label: "Arista del sólido" }] : []),
                         { value: "x", label: "X" },
                         { value: "y", label: "Y" },
                         { value: "z", label: "Z" },
@@ -999,6 +1000,22 @@ export const FeatureEditor: Component<{
                       }
                     />
                   </Row>
+                  <Button
+                    size="sm"
+                    fullWidth
+                    variant={(props.ui.pick() as { owner?: string }).owner === `${f().id}:eje` ? "primary" : "default"}
+                    onClick={() =>
+                      props.ui.setPick({
+                        kind: "axis",
+                        owner: `${f().id}:eje`,
+                        sketch: k().sketch,
+                        prompt: "Clic en la línea del sketch (o la arista del sólido) que hace de eje",
+                        done: (axis) => update((x) => x.type === "revolve" && (x.axis = axis)),
+                      })
+                    }
+                  >
+                    Elegir el eje en el visor
+                  </Button>
                   <RegionBox
                     ui={props.ui}
                     store={props.store}

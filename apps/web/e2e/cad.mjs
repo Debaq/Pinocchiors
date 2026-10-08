@@ -1498,6 +1498,34 @@ const scenarios = {
     await b.shot("reemplazar_cara");
   },
 
+  async "revolución con el eje elegido en el visor"(b) {
+    await begin(b);
+    // En el frente: rectángulo x 10..15, z 0..20 y una línea vertical en x = −5 (el eje)
+    const doc = await call("cad_get_document");
+    const P = [[10, 0], [15, 0], [15, 20], [10, 20], [-5, 0], [-5, 20]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, b) => ({ id, geometry: { type: "line", start: a, end: b } });
+    const sketch = { points, entities: [line(7, 1, 2), line(8, 2, 3), line(9, 3, 4), line(10, 4, 1), line(11, 5, 6)], constraints: [], next_id: 12, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Revolución");
+    await sleep(2000);
+    // Alrededor de Z (por defecto) es un anillo de radios 10 y 15
+    near((await body()).volume, Math.PI * (15 ** 2 - 10 ** 2) * 20, 1e-3, "alrededor de Z");
+    await b.clickText("Elegir el eje en el visor");
+    await sleep(500);
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([-5, 0, 10])`)), { wait: 2000 });
+    const axis = (await b.eval(`JSON.stringify(window.__cadStore.doc().features.at(-1).kind.axis)`));
+    if (!axis.includes('"sketch_line"') || !axis.includes('"line":11')) throw new Error(`eje: ${axis}`);
+    // Alrededor de la línea: radios 15 y 20
+    near((await body()).volume, Math.PI * (20 ** 2 - 15 ** 2) * 20, 1e-3, "alrededor de la línea");
+    await accept(b);
+    await b.shot("revolucion_eje_con_clic");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

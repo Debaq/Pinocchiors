@@ -15,6 +15,7 @@ import {
   ensureOrigin,
   removeEntity,
   removeText,
+  type AxisSpec,
   type CadStore,
   type EdgeRef,
   type FaceRef,
@@ -88,6 +89,8 @@ export type PickMode =
   | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void }
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
   | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
+  /** Un eje: una línea del sketch `sketch` o una arista del sólido */
+  | { kind: "axis"; prompt: string; owner?: string; sketch: number; done: (axis: AxisSpec) => void }
   /** Dónde va un sketch nuevo: un plano base o una cara plana */
   | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void }
   /** Una cara de la malla del ensamble (su índice) */
