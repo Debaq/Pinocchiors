@@ -1160,6 +1160,28 @@ const scenarios = {
     await b.clickText("Diseño");
     await sleep(800);
     if (await b.eval(`window.__cadUi.assemblyMode()`)) throw new Error("no volvió al diseño");
+    // Exportar el ensamble: cada instancia en su lugar, con su nombre
+    const names = (await call("cad_get_document")).assembly.instances.map((i) => i.name);
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    await b.clickContains("Exportar");
+    await sleep(800);
+    await b.clickText("Todo el diseño");
+    await sleep(400);
+    await b.clickText("Ensamble (2 instancias)");
+    await sleep(400);
+    for (const [fmt, label] of [["step", "Exportar STEP"], ["3mf", "Exportar 3MF"]]) {
+      await b.clickText(fmt.toUpperCase());
+      const path = `${out}/ensamble.${fmt}`;
+      rmSync(path, { force: true });
+      await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+      await b.clickText(label);
+      await sleep(2500);
+      if (!existsSync(path)) throw new Error(`no se exportó ${path}`);
+      const { execSync } = await import("node:child_process");
+      const text = fmt === "step" ? readFileSync(path, "latin1") : execSync(`unzip -p ${path} 3D/3dmodel.model`).toString();
+      if (!names.every((n) => text.includes(n))) throw new Error(`${fmt} sin los nombres ${names}`);
+      if (fmt === "3mf" && (text.match(/<object /g) ?? []).length !== 2) throw new Error("3MF sin un objeto por instancia");
+    }
   },
 
   async "caja de regiones al editar una extrusión"(b) {

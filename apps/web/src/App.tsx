@@ -262,7 +262,7 @@ import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
 import { DesignStep, FeatureTree } from "./components/steps/DesignStep";
-import { createCadStore, partColor, partHidden, PLANE_LABELS } from "./lib/cad";
+import { createCadStore, partColor, partHidden, PLANE_LABELS, type PartId } from "./lib/cad";
 import { createCadUi } from "./lib/cadUi";
 import { createDesignActions } from "./lib/designActions";
 import { designHints } from "./lib/designHints";
@@ -496,7 +496,13 @@ export const App: Component = () => {
   const [exportDesign, setExportDesign] = createSignal(false);
   /** Pieza del diseño que se exporta ("operación:índice"); sin ella, todo */
   const [exportPart, setExportPart] = createSignal<string>();
-  const designParts = () => (cad.result()?.parts ?? []).map((p) => ({ key: `${p.id.feature}:${p.id.index}`, name: p.name, id: p.id }));
+  const designParts = () => {
+    const parts: { key: string; name: string; id?: PartId }[] = (cad.result()?.parts ?? []).map((p) => ({ key: `${p.id.feature}:${p.id.index}`, name: p.name, id: p.id }));
+    // El ensamble: cada instancia en su lugar (STEP con nombres, 3MF con un objeto por instancia)
+    const n = cad.committed()?.assembly?.instances.length ?? 0;
+    if (n > 0) parts.push({ key: "assembly", name: `Ensamble (${n} ${n === 1 ? "instancia" : "instancias"})` });
+    return parts;
+  };
   const openExport = () => {
     const design = hasDesignBody() && (inDesign() || !hasWork());
     setExportDesign(design);
@@ -4714,7 +4720,8 @@ export const App: Component = () => {
       const extensions = format === "step" ? ["step", "stp"] : [format];
       const name = format.toUpperCase();
       const part = designParts().find((p) => p.key === exportPart());
-      const base = part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : (fileName() ?? "diseño").replace(/\.[^.]+$/, "");
+      const assembly = part?.key === "assembly";
+      const base = assembly ? "ensamble" : part ? part.name.replace(/[^\p{L}\p{N}_-]+/gu, "_") : (fileName() ?? "diseño").replace(/\.[^.]+$/, "");
       const selected = await save({
         title: `Exportar ${name}`,
         defaultPath: `${base}.${extensions[0]}`,
@@ -4723,7 +4730,7 @@ export const App: Component = () => {
       if (!selected) return;
       const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${extensions[0]}`;
       const file = path.split("/").pop();
-      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format, part?.id));
+      const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format, part?.id, assembly));
       setLastExport({ bytes, files: [path] });
       setStatusMessage(`Diseño exportado: ${file} (${formatBytes(bytes)})`);
       pipeline.markCompleted("export");

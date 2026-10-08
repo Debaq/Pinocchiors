@@ -799,14 +799,27 @@ fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) ->
     if eval.parts.is_empty() {
         return Err("El diseño todavía no tiene un sólido".into());
     }
-    let mut scene = Scene::new();
     let several = eval.parts.len() > 1;
-    for (i, p) in eval.parts.iter().enumerate() {
-        if only.is_some_and(|o| o != p.id) {
-            continue;
-        }
+    let items: Vec<(&cad_model::Shape, String)> = eval
+        .parts
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| only.is_none_or(|o| o == p.id))
+        // Una pieza sola conserva el nombre del diseño
+        .map(|(i, p)| (&p.shape, if several || only.is_some() { part_name(&doc, p.id, i + 1) } else { name.to_string() }))
+        .collect();
+    if items.is_empty() {
+        return Err("Esa pieza ya no existe".into());
+    }
+    shapes_scene(&items)
+}
+
+/// Escena con una malla por forma, con su nombre (milímetros, Y arriba).
+fn shapes_scene(items: &[(&cad_model::Shape, String)]) -> Result<Scene, String> {
+    let mut scene = Scene::new();
+    for (shape, label) in items {
         // Más fino que el del visor: es lo que se imprime o se exporta
-        let t = p.shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
+        let t = shape.tessellate(0.01, 0.1).map_err(|e| e.to_string())?;
         let positions: Vec<[f32; 3]> = t
             .positions
             .iter()
@@ -817,8 +830,6 @@ fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) ->
             .iter()
             .map(|n| converter_scene::z_up_to_y_up([n[0] as f32, n[1] as f32, n[2] as f32]))
             .collect();
-        // Una pieza sola conserva el nombre del diseño
-        let label = if several || only.is_some() { part_name(&doc, p.id, i + 1) } else { name.to_string() };
         let mesh = scene.meshes.len();
         scene.meshes.push(SceneMesh {
             name: label.clone(),
@@ -829,23 +840,61 @@ fn parts_scene(state: &AppState, name: &str, only: Option<cad_model::PartId>) ->
             }],
         });
         scene.root_nodes.push(scene.nodes.len());
-        scene.nodes.push(Node { name: label, transform: Transform::identity(), mesh: Some(mesh), skin: None, children: Vec::new() });
-    }
-    if scene.meshes.is_empty() {
-        return Err("Esa pieza ya no existe".into());
+        scene.nodes.push(Node { name: label.clone(), transform: Transform::identity(), mesh: Some(mesh), skin: None, children: Vec::new() });
     }
     scene.meters_per_unit = 0.001;
     Ok(scene)
 }
 
-/// Exporta el sólido: STEP (exacto) o malla (STL, 3MF, OBJ, PLY, GLB).
-#[tauri::command]
-pub async fn cad_export(app: AppHandle, path: String, format: String, part: Option<cad_model::PartId>) -> Result<u64, String> {
-    require_occt()?;
-    in_background(app, move |state| export_impl(state, &path, &format, part)).await
+/// Instancias del ensamble en su lugar con su nombre y el color de su pieza.
+fn assembly_items(state: &AppState) -> Result<Vec<(cad_model::Shape, String, Option<[f64; 3]>)>, String> {
+    let (asm, shapes) = assembly_shapes(state)?;
+    let doc = state.cad_document.lock().unwrap().clone().unwrap_or_default();
+    let items: Vec<_> = shapes
+        .into_iter()
+        .filter_map(|(id, shape)| {
+            let inst = asm.instances.iter().find(|i| i.id == id)?;
+            let color = doc.parts.iter().find(|q| q.part == inst.part).and_then(|q| q.color.as_deref()).and_then(hex_rgb);
+            Some((shape, inst.name.clone(), color))
+        })
+        .collect();
+    if items.is_empty() {
+        return Err("El ensamble no tiene instancias".into());
+    }
+    Ok(items)
 }
 
-fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>) -> Result<u64, String> {
+/// Exporta el sólido: STEP (exacto) o malla (STL, 3MF, OBJ, PLY, GLB).
+#[tauri::command]
+pub async fn cad_export(
+    app: AppHandle,
+    path: String,
+    format: String,
+    part: Option<cad_model::PartId>,
+    assembly: Option<bool>,
+) -> Result<u64, String> {
+    require_occt()?;
+    in_background(app, move |state| export_impl(state, &path, &format, part, assembly.unwrap_or(false))).await
+}
+
+fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_model::PartId>, assembly: bool) -> Result<u64, String> {
+    // El ensamble: cada instancia en su lugar, con su nombre
+    if assembly {
+        let p = std::path::Path::new(path);
+        let items = assembly_items(state)?;
+        match format {
+            "step" | "stp" => {
+                let list: Vec<_> = items.iter().map(|(s, n, c)| (s, n.as_str(), *c)).collect();
+                let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
+                std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+            }
+            _ => {
+                let scene = shapes_scene(&items.iter().map(|(s, n, _)| (s, n.clone())).collect::<Vec<_>>())?;
+                export_scene(&scene, p, format)?;
+            }
+        }
+        return Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0));
+    }
     {
         let p = std::path::Path::new(path);
         let scene = || parts_scene(state, "Diseño", part);
@@ -873,15 +922,21 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
                 let bytes = cad_model::Shape::parts_to_step(&list).map_err(|e| e.to_string())?;
                 std::fs::write(p, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
             }
-            "stl" => converter_stl::export_stl(&scene()?, p).map_err(|e| format!("Error exportando STL: {e:?}"))?,
-            "3mf" => converter_3mf::export_3mf(&scene()?, p).map_err(|e| format!("Error exportando 3MF: {e}"))?,
-            "obj" => converter_obj::export_obj(&scene()?, p).map_err(|e| format!("Error exportando OBJ: {e:?}"))?,
-            "ply" => converter_ply::export_ply(&scene()?, p).map_err(|e| format!("Error exportando PLY: {e}"))?,
-            "glb" => converter_gltf_io::export_glb(&scene()?, p, &Default::default())
-                .map_err(|e| format!("Error exportando GLB: {e}"))?,
-            other => return Err(format!("Formato no soportado para el diseño: {other}")),
+            other => export_scene(&scene()?, p, other)?,
         }
         Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+    }
+}
+
+/// Malla del diseño a un archivo según el formato.
+fn export_scene(scene: &Scene, p: &std::path::Path, format: &str) -> Result<(), String> {
+    match format {
+        "stl" => converter_stl::export_stl(scene, p).map_err(|e| format!("Error exportando STL: {e:?}")),
+        "3mf" => converter_3mf::export_3mf(scene, p).map_err(|e| format!("Error exportando 3MF: {e}")),
+        "obj" => converter_obj::export_obj(scene, p).map_err(|e| format!("Error exportando OBJ: {e:?}")),
+        "ply" => converter_ply::export_ply(scene, p).map_err(|e| format!("Error exportando PLY: {e}")),
+        "glb" => converter_gltf_io::export_glb(scene, p, &Default::default()).map_err(|e| format!("Error exportando GLB: {e}")),
+        other => Err(format!("Formato no soportado para el diseño: {other}")),
     }
 }
 
@@ -1294,7 +1349,7 @@ pub mod bridge {
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
-                ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?)?)
+                ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false))?)
             }
             "cad_eval_expr" => ok(cad_eval_expr(arg(args, "expr")?, arg(args, "parameters")?)?),
             "cad_scan_pick" => {

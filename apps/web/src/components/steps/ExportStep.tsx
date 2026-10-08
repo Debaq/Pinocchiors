@@ -112,7 +112,7 @@ export interface ExportStepProps {
   skeletonOnly?: boolean;
   /** Se exporta el sólido de Diseñar */
   design?: boolean;
-  /** Piezas del diseño (clave "operación:índice") y la elegida; sin elegir, todo el diseño */
+  /** Piezas del diseño (clave "operación:índice", o "assembly" para el ensamble) y la elegida; sin elegir, todo el diseño */
   designParts?: { key: string; name: string }[];
   designPart?: string;
   onDesignPartChange?: (key: string | undefined) => void;
@@ -186,7 +186,7 @@ export const ExportStep: Component<ExportStepProps> = (props) => {
 
       <Show when={props.design}>
         <div class="space-y-3 p-3 rounded-md bg-surface/30 border border-border">
-          <Show when={(props.designParts?.length ?? 0) > 1}>
+          <Show when={(props.designParts?.length ?? 0) > 1 || props.designParts?.some((p) => p.key === "assembly")}>
             <Select
               label="Qué exportar"
               options={[{ value: "all", label: "Todo el diseño" }, ...(props.designParts ?? []).map((p) => ({ value: p.key, label: p.name }))]}

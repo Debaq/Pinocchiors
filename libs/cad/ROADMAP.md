@@ -463,3 +463,7 @@ cargo test -p cad-model
   medio); el nervio lleva las líneas de un sketch hasta el sólido con espesor centrado; reemplazar
   cara lleva caras planas hasta un plano o una cara (con dos o más caras elegidas, la última es el
   destino). Pruebas en `model/tests/modify.rs` y e2e.
+- **2026-10-08 Exportar el ensamble** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md)): en Exportar, "Qué
+  exportar" ofrece el ensamble cuando tiene instancias; STEP con cada instancia en su lugar, su
+  nombre y el color de su pieza, y en malla (3MF, STL, OBJ, PLY, GLB) un objeto por instancia
+  (`cad_export` con `assembly`).

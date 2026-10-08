@@ -2324,7 +2324,8 @@ export function createCadStore() {
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
-    exportDesign: (path: string, format: string, part?: PartId) => invoke<number>("cad_export", { path, format, part: part ?? null }),
+    /** Con `assembly`, las instancias del ensamble en su lugar */
+    exportDesign: (path: string, format: string, part?: PartId, assembly = false) => invoke<number>("cad_export", { path, format, part: part ?? null, assembly }),
 
     // ─── Ensamble ─────────────────────────────────────────────────────
     assemblyMesh: async () => decodeCadMesh(await invoke<ArrayBuffer>("cad_assembly_mesh")),
