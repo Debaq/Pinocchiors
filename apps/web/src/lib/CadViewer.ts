@@ -89,7 +89,7 @@ export function planeToWorld(plane: Plane, p: P2): P3 {
 }
 
 /** Polilínea de una entidad del sketch (para dibujarla) */
-function entityPolyline(g: Sketch["entities"][number]["geometry"], point: Map<number, P2>): P2[] | undefined {
+export function entityPolyline(g: Sketch["entities"][number]["geometry"], point: Map<number, P2>): P2[] | undefined {
   if (g.type === "line") {
     const [a, b] = [point.get(g.start), point.get(g.end)];
     return a && b ? [a, b] : undefined;

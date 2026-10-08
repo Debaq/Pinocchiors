@@ -1,7 +1,7 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { CadViewer, planeToWorld } from "../../lib/CadViewer";
+import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
@@ -620,6 +620,9 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setSelection((sel) => (e.shiftKey ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
         return;
       }
+      // En vacío: arrastrar elige por caja (Mayús suma)
+      boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey, before: [] };
+      sketchBoxBefore = ui.selection();
       if (!e.shiftKey) ui.setSelection([]);
       return;
     }
@@ -1078,6 +1081,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     boxStart = undefined;
     setBox(undefined);
     if (!s || !viewer || Math.hypot(x - s.x, y - s.y) < 5) return;
+    if (ui.session()) return sketchBox(s.x, s.y, x, y, s.additive);
     const f = ui.pickFilter();
     const want = BOX_WANT[f];
     const got = viewer.boxSelect(s.x, s.y, x, y, want, x >= s.x);
@@ -1094,6 +1098,37 @@ export const CadView: Component<CadViewProps> = (props) => {
       const seen = new Set(base.map(key));
       return [...base, ...found.filter((p) => !seen.has(key(p)))];
     });
+  };
+  // Selección del sketch antes de empezar la caja (con Mayús se suma a ella)
+  let sketchBoxBefore: number[] = [];
+  /**
+   * Caja dentro del sketch: de izquierda a derecha, lo que queda entero
+   * adentro; de derecha a izquierda, lo que toca (como en el sólido)
+   */
+  const sketchBox = (x0: number, y0: number, x1: number, y1: number, additive: boolean) => {
+    const s = ui.session();
+    if (!s || !viewer) return;
+    const [l, r, t, b] = [Math.min(x0, x1), Math.max(x0, x1), Math.min(y0, y1), Math.max(y0, y1)];
+    const window = x1 >= x0;
+    const scr = (p: P2) => viewer!.screenOf(planeToWorld(s.plane, p));
+    const inside = ([x, y]: [number, number]) => x >= l && x <= r && y >= t && y <= b;
+    // Un tramo que cruza la caja sin tener puntos adentro
+    const crosses = (a: [number, number], c: [number, number]) => {
+      const edges: [[number, number], [number, number]][] = [[[l, t], [r, t]], [[r, t], [r, b]], [[r, b], [l, b]], [[l, b], [l, t]]];
+      const side = (p: [number, number], q: [number, number], o: [number, number]) => Math.sign((q[0] - p[0]) * (o[1] - p[1]) - (q[1] - p[1]) * (o[0] - p[0]));
+      return edges.some(([p, q]) => side(a, c, p) !== side(a, c, q) && side(p, q, a) !== side(p, q, c));
+    };
+    const point = new Map(s.sketch.points.map((q) => [q.id, [q.x, q.y] as P2]));
+    const found: number[] = [];
+    for (const e of s.sketch.entities) {
+      const poly = e.geometry.type === "point" ? [point.get(e.geometry.point)].filter((p): p is P2 => !!p) : entityPolyline(e.geometry, point);
+      if (!poly?.length) continue;
+      const sp = poly.map(scr);
+      const hit = window ? sp.every(inside) : sp.some(inside) || sp.some((p, i) => i > 0 && crosses(sp[i - 1], p));
+      if (hit) found.push(e.id);
+    }
+    for (const q of s.sketch.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
+    ui.setSelection(additive ? [...new Set([...sketchBoxBefore, ...found])] : found);
   };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;

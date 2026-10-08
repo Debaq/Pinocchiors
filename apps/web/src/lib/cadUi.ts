@@ -246,7 +246,8 @@ export function createCadUi(store: CadStore) {
       }
       ui.cancelPick();
       setSelection([]);
-      setTool("line");
+      // Uno nuevo se empieza a dibujar; uno con dibujo se abre para elegir y editar
+      setTool(view.sketch.entities.length ? "select" : "line");
       // El sketch ya resuelto (con las fórmulas aplicadas); cada cota vinculada
       // lleva su fórmula mientras se edita
       const sketch = clone(view.sketch);

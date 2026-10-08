@@ -1526,6 +1526,39 @@ const scenarios = {
     await b.shot("revolucion_eje_con_clic");
   },
 
+  async "caja de selección dentro del sketch"(b) {
+    await begin(b);
+    await sketchOn(b);
+    // Un rectángulo a la izquierda y un círculo a la derecha
+    await b.clickText("Rectángulo");
+    await b.click(380, 320);
+    await b.click(520, 460);
+    await b.clickText("Círculo");
+    await b.click(680, 390);
+    await b.click(730, 390);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Elegir");
+    const kinds = () => b.eval(`(() => {
+      const s = window.__cadUi.session().sketch;
+      return window.__cadUi.selection().map((id) => s.entities.find((e) => e.id === id)?.geometry.type ?? "punto").filter((k) => k !== "punto").sort().join(",");
+    })()`);
+    // De izquierda a derecha, solo lo que queda entero adentro: el rectángulo
+    await b.drag(350, 290, 600, 490);
+    if ((await kinds()) !== "line,line,line,line") throw new Error(`ventana: ${await kinds()}`);
+    // De derecha a izquierda, lo que toca: el círculo (sin tenerlo entero adentro)
+    await b.drag(760, 370, 700, 410);
+    if ((await kinds()) !== "circle") throw new Error(`cruce: ${await kinds()}`);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // Al volver a abrir un sketch con dibujo, la herramienta es Elegir
+    const id = await b.eval(`window.__cadStore.doc().features.find((f) => f.kind.type === "sketch").id`);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1000);
+    if ((await b.eval(`window.__cadUi.tool()`)) !== "select") throw new Error(`herramienta al editar: ${await b.eval(`window.__cadUi.tool()`)}`);
+    await b.shot("caja_en_el_sketch");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);
