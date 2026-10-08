@@ -6,6 +6,7 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { NavDrag } from "./navDrag";
 import { THEME_EVENT, themeHex } from "./theme";
 import { deviationColor, ellipsePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
@@ -124,6 +125,8 @@ export class CadViewer {
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
+  /** Girar y desplazar sin tope en los polos (el zoom queda en `controls`) */
+  private nav: NavDrag;
   private raycaster = new THREE.Raycaster();
   private resizeObserver: ResizeObserver;
   private frame = 0;
@@ -132,6 +135,8 @@ export class CadViewer {
   private bodyEdges?: THREE.LineSegments;
   private bodyData: CadMesh | null = null;
   private tool?: THREE.Group;
+  /** Flecha de la operación en edición: el grupo y la punta (se escala con la distancia) */
+  private handle?: { group: THREE.Group; tip: THREE.Object3D; origin: THREE.Vector3; dir: THREE.Vector3 };
   private compare?: THREE.Group;
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
@@ -185,14 +190,19 @@ export class CadViewer {
     this.camera.position.set(150, 120, 200);
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = false;
-    // Como el visor principal: botón del medio orbita, Mayús+medio desplaza
-    this.controls.mouseButtons = { LEFT: null as unknown as THREE.MOUSE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
+    // Girar y desplazar van por `nav`; los controles solo hacen zoom con la rueda
+    const none = null as unknown as THREE.MOUSE;
+    this.controls.mouseButtons = { LEFT: none, MIDDLE: none, RIGHT: none };
     this.controls.addEventListener("change", () => this.requestRender());
-    // Alt + izquierdo también orbita (el izquierdo solo queda para elegir y dibujar)
+    this.nav = new NavDrag(this.camera, this.controls, this.renderer.domElement, () => this.requestRender());
+    // Como el visor principal: botón del medio orbita, Mayús+medio desplaza, el
+    // derecho desplaza; Alt + izquierdo también orbita (el izquierdo solo queda
+    // para elegir y dibujar)
     this.renderer.domElement.addEventListener(
       "pointerdown",
       (e) => {
-        this.controls.mouseButtons.LEFT = e.altKey ? THREE.MOUSE.ROTATE : (null as unknown as THREE.MOUSE);
+        if (e.button === 1 || (e.button === 0 && e.altKey)) this.nav.start(e, e.shiftKey ? "pan" : "rotate");
+        else if (e.button === 2) this.nav.start(e, "pan");
       },
       { capture: true },
     );
@@ -252,6 +262,7 @@ export class CadViewer {
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
       this.stepViewTransition();
+      this.scaleHandle();
       this.renderer.render(this.scene, this.camera);
       this.viewCube.render(this.renderer, this.camera, this.controls.target);
       this.onRender?.();
@@ -514,6 +525,78 @@ export class CadViewer {
   }
 
   /**
+   * Flecha de la operación (mm, Z arriba): desde `origin` hacia `dir` hasta
+   * `length`, con la punta del mismo tamaño en pantalla; `hot` la resalta
+   * (bajo el puntero o arrastrándola). `null` la quita.
+   */
+  setHandle(h: { origin: P3; dir: P3; length: number } | null, hot = false) {
+    if (this.handle) this.dropGroup(this.handle.group);
+    this.handle = undefined;
+    if (h) {
+      const origin = this.toView(h.origin);
+      const dir = this.dirToView(h.dir);
+      const tipAt = origin.clone().addScaledVector(dir, h.length / this.mmPerUnit);
+      const color = themeHex(hot ? "warning" : "accent");
+      const group = new THREE.Group();
+      const shaft = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([origin, tipAt]),
+        new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }),
+      );
+      shaft.renderOrder = 10;
+      // Punta de alto 1 apuntando a +Y, con su base en el origen; la escala la pone del tamaño en pantalla
+      const cone = new THREE.ConeGeometry(0.32, 1, 20);
+      cone.translate(0, 0.5, 0);
+      const tip = new THREE.Mesh(cone, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true }));
+      tip.position.copy(tipAt);
+      tip.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      tip.renderOrder = 11;
+      // Para pinchar: una esfera invisible más grande que la punta
+      const hit = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
+      hit.position.y = 0.5;
+      tip.add(hit);
+      group.add(shaft, tip);
+      this.scene.add(group);
+      this.handle = { group, tip, origin, dir };
+    }
+    this.requestRender();
+  }
+
+  /** La punta de la flecha mide unos 30 px de alto en pantalla */
+  private scaleHandle() {
+    if (!this.handle) return;
+    const h = this.renderer.domElement.clientHeight || 1;
+    const dist = this.camera.position.distanceTo(this.handle.tip.position);
+    const px = (2 * dist * Math.tan((this.camera.fov * Math.PI) / 360)) / h;
+    this.handle.tip.scale.setScalar(30 * px);
+  }
+
+  /** ¿El puntero está sobre la punta de la flecha? */
+  handleHit(clientX: number, clientY: number): boolean {
+    if (!this.handle) return false;
+    this.scaleHandle();
+    this.handle.tip.updateMatrixWorld(true);
+    this.setRay(clientX, clientY);
+    return this.raycaster.intersectObject(this.handle.tip, true).length > 0;
+  }
+
+  /**
+   * Dónde queda el puntero a lo largo de la línea de la flecha: mm desde su
+   * origen (negativo, del otro lado); `null` si la línea apunta a la cámara.
+   */
+  handleParam(clientX: number, clientY: number): number | null {
+    if (!this.handle) return null;
+    this.setRay(clientX, clientY);
+    const { origin: o, dir: d } = this.handle;
+    const { origin: r, direction: v } = this.raycaster.ray;
+    // Punto de la línea más cercano al rayo
+    const w = o.clone().sub(r);
+    const b = d.dot(v);
+    const den = 1 - b * b;
+    if (den < 1e-4) return null;
+    return ((b * v.dot(w) - d.dot(w)) / den) * this.mmPerUnit;
+  }
+
+  /**
    * Comparación con una versión: lo agregado desde entonces en verde y lo
    * quitado en rojo, translúcidos sobre el sólido.
    */
@@ -532,7 +615,7 @@ export class CadViewer {
   private dropGroup(group: THREE.Group) {
     this.scene.remove(group);
     group.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+      if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
         o.geometry.dispose();
         (o.material as THREE.Material).dispose();
       }
@@ -1090,6 +1173,8 @@ export class CadViewer {
     this.camera.position.copy(this.controls.target).add(t0.from.clone().applyQuaternion(turn));
     // De un sketch se puede venir con la cámara inclinada: vuelve a Y arriba
     this.camera.up.copy(t0.up).lerp(new THREE.Vector3(0, 1, 0), eased).normalize();
+    // Desde una vista de cabeza el promedio pasa por cero
+    if (this.camera.up.lengthSq() < 0.5) this.camera.up.set(0, 1, 0);
     this.camera.lookAt(this.controls.target);
     this.controls.update();
     // Se llama dentro del cuadro (con `frame` ya en 0): pide el siguiente
@@ -1526,6 +1611,7 @@ export class CadViewer {
     this.controls.dispose();
     this.setBody(null);
     this.setTool(null);
+    this.setHandle(null);
     this.setComparison(null, null);
     this.setScan(null);
     this.setSketch(null);

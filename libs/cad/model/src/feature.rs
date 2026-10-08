@@ -528,8 +528,7 @@ pub enum ChamferSecond {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Hole {
     /// Sketch de los centros: sus puntos sueltos (o los de `points`); si no
-    /// tiene, los centros de sus círculos. El agujero entra contra la normal
-    /// del plano (en un sketch sobre una cara, hacia adentro del material).
+    /// tiene, los centros de sus círculos. El sentido lo da `reverse`.
     pub sketch: FeatureId,
     #[serde(default)]
     pub points: Vec<u32>,
@@ -550,6 +549,11 @@ pub struct Hole {
     /// en el centro que está en su eje
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link: Option<ThreadLink>,
+    /// Sentido: `false` contra la normal del plano (en un sketch sobre una
+    /// cara, hacia adentro del material), `true` a favor; sin elegir, hacia
+    /// el lado donde hay material (contra la normal si hay de los dos).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reverse: Option<bool>,
 }
 
 /// Rosca métrica ISO (perfil de 60°).
@@ -752,7 +756,8 @@ pub struct Feature {
     #[serde(default)]
     pub suppressed: bool,
     pub kind: FeatureKind,
-    /// Con qué piezas une, resta o interseca (vacío = las que toca).
+    /// Con qué piezas une, resta o interseca (vacío = las que toca; en los
+    /// agujeros, la más cercana a cada centro).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scope: Vec<PartId>,
 }

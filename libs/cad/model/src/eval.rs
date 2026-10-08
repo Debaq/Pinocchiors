@@ -48,6 +48,40 @@ pub struct FeatureStatus {
     /// Milisegundos que tardó la última vez que se calculó (de la caché, el de entonces).
     #[serde(default)]
     pub ms: f64,
+    /// Piezas que eligió sola (sin alcance elegido; p. ej. la más cercana a un agujero).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auto_scope: Vec<PartId>,
+    /// Flecha para el visor (extrusiones, chapas y agujeros).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<Handle>,
+}
+
+/// Flecha de una operación en el visor: hacia dónde va y hasta dónde llega.
+/// Al pincharla se invierte; al arrastrarla cambia el largo (según `kind`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Handle {
+    pub origin: P3,
+    /// Sentido en que avanza (unitario).
+    pub dir: P3,
+    /// Hasta dónde llega la punta (mm desde `origin`).
+    pub length: f64,
+    /// Sentido efectivo: en la extrusión y la chapa, el `reverse`/`flip` con
+    /// que se calculó; en el agujero, si va a favor de la normal del plano.
+    pub reversed: bool,
+    pub kind: HandleKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandleKind {
+    /// La punta es la distancia (o la profundidad).
+    Blind,
+    /// La punta es la mitad de la distancia.
+    Symmetric,
+    /// La punta es la distancia del primer lado.
+    TwoSides,
+    /// El largo no se cambia arrastrando (pasante, hasta una cara...).
+    Fixed,
 }
 
 /// Sketch ya resuelto y ubicado.
@@ -126,6 +160,8 @@ struct CacheEntry {
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
+    auto_scope: Vec<PartId>,
+    handle: Option<Handle>,
     /// Para descartar las menos usadas.
     used: u64,
 }
@@ -366,6 +402,9 @@ fn occt_err(e: String) -> cad_occt::Error {
     cad_occt::Error(e)
 }
 
+/// Aviso de un corte que no se lleva nada.
+const NOTHING_CUT: &str = "no toca ninguna pieza: prueba invertir el sentido";
+
 struct Ctx<'a> {
     doc: &'a Document,
     ev: Evaluation,
@@ -373,7 +412,10 @@ struct Ctx<'a> {
     missing: RefCell<Vec<MissingRef>>,
     warnings: RefCell<Vec<String>>,
     /// Alcance de la operación en curso (vacío = las piezas que toca).
-    scope: Vec<PartId>,
+    scope: Vec<PartId>,    /// Piezas que la operación en curso eligió sola.
+    auto_scope: Vec<PartId>,
+    /// Flecha de la operación en curso (la última herramienta calculada).
+    handle: RefCell<Option<Handle>>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -391,6 +433,8 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         missing: RefCell::default(),
         warnings: RefCell::default(),
         scope: Vec::new(),
+        auto_scope: Vec::new(),
+        handle: RefCell::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     let mut key = 0u64;
@@ -413,10 +457,12 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
             ctx.ev.threads.extend(e.threads.iter().cloned());
-            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms });
+            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handle: e.handle.clone() });
             continue;
         }
         let start = std::time::Instant::now();
+        ctx.auto_scope.clear();
+        ctx.handle.take();
         let state = if i >= limit {
             FeatureState::RolledBack
         } else if f.suppressed {
@@ -428,7 +474,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             let missing = ctx.missing.take();
             let warnings = ctx.warnings.take();
             match result {
-                Ok(()) if missing.is_empty() => FeatureState::Ok,
+                Ok(()) if missing.is_empty() && warnings.is_empty() => FeatureState::Ok,
                 Ok(()) => FeatureState::Warning { message: warnings.join("; "), missing },
                 Err(message) => FeatureState::Error { message, missing },
             }
@@ -448,10 +494,12 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
+                auto_scope: ctx.auto_scope.clone(),
+                handle: ctx.handle.borrow().clone(),
                 used: 0,
             },
         );
-        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms });
+        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handle: ctx.handle.take() });
     }
     ctx.ev
 }
@@ -501,6 +549,25 @@ impl Ctx<'_> {
             })
             .map(|(i, _)| i)
             .collect()
+    }
+
+    /// Por cada punto, la pieza más cercana entre las que toca la herramienta.
+    fn nearest_parts(&self, tool: &Shape, points: &[P3]) -> Vec<PartId> {
+        let touched = self.touching(tool);
+        let mut out = Vec::new();
+        for &p in points {
+            let Ok(v) = Shape::vertex(p) else { continue };
+            let best = touched
+                .iter()
+                .filter_map(|&i| self.ev.parts[i].shape.min_distance(&v).map(|(d, _, _)| (d, i)))
+                .min_by(|a, b| a.0.total_cmp(&b.0));
+            if let Some((_, i)) = best
+                && !out.contains(&self.ev.parts[i].id)
+            {
+                out.push(self.ev.parts[i].id);
+            }
+        }
+        out
     }
 
     /// Reemplaza la pieza `i` por el resultado de una operación sobre ella:
@@ -590,7 +657,11 @@ impl Ctx<'_> {
                 }
             }
             BodyOp::Cut => {
-                for i in self.targets(&tool.shape)?.into_iter().rev() {
+                let targets = self.targets(&tool.shape)?;
+                if targets.is_empty() {
+                    self.warn(NOTHING_CUT.into());
+                }
+                for i in targets.into_iter().rev() {
                     let part = self.ev.parts[i].shape.clone();
                     let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
                     let n = new.face_count();
@@ -924,10 +995,12 @@ impl Ctx<'_> {
     }
 
     /// Herramienta de los agujeros: por cada centro, el cilindro (con punta en
-    /// los ciegos) más la caja o el avellanado; entra contra la normal del plano.
+    /// los ciegos) más la caja o el avellanado; entra contra la normal del plano
+    /// (o a favor, si solo de ese lado hay material).
     /// Con `src`, el filete del centro que está en su eje sale alineado con
-    /// ella. Devuelve también las roscas (una por centro, si es roscado).
-    fn hole_tool(&self, id: FeatureId, h: &Hole, src: Option<&ThreadAxis>) -> R<(Tagged, Vec<ThreadAxis>)> {
+    /// ella. Devuelve también las roscas (una por centro, si es roscado) y los
+    /// centros.
+    fn hole_tool(&self, id: FeatureId, h: &Hole, src: Option<&ThreadAxis>) -> R<(Tagged, Vec<ThreadAxis>, Vec<P3>)> {
         let s = self.ev.sketches.get(&h.sketch).ok_or("el sketch de los centros no está calculado")?;
         let ids: Vec<u32> = if !h.points.is_empty() {
             h.points.clone()
@@ -957,7 +1030,7 @@ impl Ctx<'_> {
             return Err("el diámetro tiene que ser mayor que cero".into());
         }
         let r = h.diameter / 2.0;
-        let down = scale(normalize(s.plane.normal), -1.0);
+        let mut down = scale(normalize(s.plane.normal), -1.0);
         let x = normalize(s.plane.x_dir);
         // Un poco por encima del plano: que la herramienta no quede pegada a la cara
         let lift = (self.diag() * 1e-4).max(1e-3);
@@ -976,7 +1049,52 @@ impl Ctx<'_> {
         }
         // Con rosca modelada el taladro es el diámetro menor (más la holgura)
         let r = h.modeled.map_or(r, |t| (t.minor() + t.clearance) / 2.0);
+        let centers = ids.iter().map(|pid| s.sketch.point(*pid).map(|p| s.plane.to_world(p))).collect::<Result<Vec<P3>, _>>().map_err(err)?;
+        // Sin sentido elegido: si contra la normal no hay material y del otro
+        // lado sí (un sketch en un plano con el sólido encima), hacia allá
+        if h.reverse == Some(true) {
+            down = scale(down, -1.0);
+        }
+        if !self.ev.parts.is_empty() {
+            // Pieza por pieza: con varias, el cuerpo es un compuesto y la intersección falla
+            let cuts = |dir: P3| {
+                centers.iter().any(|&c| {
+                    let Ok(cyl) = Shape::cylinder(Frame { origin: sub(c, scale(dir, lift)), z: dir, x }, r, depth + lift) else {
+                        return false;
+                    };
+                    self.ev.parts.iter().any(|p| {
+                        cyl.intersect(&p.shape)
+                            .and_then(|i| i.mass())
+                            // Más que lo que sobresale del plano (`lift`)
+                            .is_ok_and(|m| m.volume > 3.0 * std::f64::consts::PI * r * r * lift)
+                    })
+                })
+            };
+            if !cuts(down) {
+                if h.reverse.is_none() && cuts(scale(down, -1.0)) {
+                    down = scale(down, -1.0);
+                } else {
+                    self.warn(NOTHING_CUT.into());
+                }
+            }
+        }
         let bbox = self.body().ok().and_then(|b| b.mass().ok()).map(|m| (m.bbox_min, m.bbox_max));
+        // La flecha, desde el primer centro hasta el fondo (o hasta donde termina el sólido)
+        let c0 = centers[0];
+        let (length, kind) = match (&h.depth, bbox) {
+            (HoleDepth::Blind { .. }, _) => (depth, HandleKind::Blind),
+            (HoleDepth::ThroughAll, Some((lo, hi))) => {
+                let far = (0..8)
+                    .map(|i| {
+                        let corner = [if i & 1 == 0 { lo[0] } else { hi[0] }, if i & 2 == 0 { lo[1] } else { hi[1] }, if i & 4 == 0 { lo[2] } else { hi[2] }];
+                        dot(sub(corner, c0), down)
+                    })
+                    .fold(0.0, f64::max);
+                (far, HandleKind::Fixed)
+            }
+            _ => (depth, HandleKind::Fixed),
+        };
+        *self.handle.borrow_mut() = Some(Handle { origin: c0, dir: down, length, reversed: dot(down, s.plane.normal) > 0.0, kind });
         let mut parts = Vec::new();
         let mut probes: Vec<(P3, String)> = Vec::new();
         let mut threads = Vec::new();
@@ -986,8 +1104,7 @@ impl Ctx<'_> {
             None => h.thread.as_deref().and_then(crate::standard::size).map(|m| ThreadSpec { nominal: m.d, pitch: m.pitch, clearance: 0.0, left: false }),
         };
         let mut aligned = false;
-        for (k, pid) in ids.iter().enumerate() {
-            let c = s.plane.to_world(s.sketch.point(*pid).map_err(err)?);
+        for (k, &c) in centers.iter().enumerate() {
             let top = sub(c, scale(down, lift));
             let frame = |o: P3| Frame { origin: o, z: down, x };
             // La fase del filete: la de la rosca asociada si este centro está en su eje
@@ -1078,7 +1195,7 @@ impl Ctx<'_> {
                 slot.push(tag(id, format!("cara:{i}")));
             }
         }
-        Ok((Tagged { shape, tags }, threads))
+        Ok((Tagged { shape, tags }, threads, centers))
     }
 
     /// Marco y forma de una primitiva. Un tornillo o una tuerca asociados a
@@ -1859,9 +1976,21 @@ impl Ctx<'_> {
                         h.diameter = spec.nominal - spec.pitch;
                     }
                 }
-                let (tool, threads) = self.hole_tool(f.id, &h, src.as_ref())?;
+                let (tool, threads, centers) = self.hole_tool(f.id, &h, src.as_ref())?;
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Cut));
-                self.apply(f.id, tool, BodyOp::Cut)?;
+                // Hacia afuera del material no se aplica: rasparía lo que sobresale del plano
+                if self.warnings.borrow().iter().any(|w| w == NOTHING_CUT) {
+                    return Ok(());
+                }
+                // Sin alcance elegido: solo la pieza más cercana a cada centro
+                let saved = self.scope.clone();
+                if self.scope.is_empty() {
+                    self.scope = self.nearest_parts(&tool.shape, &centers);
+                    self.auto_scope = self.scope.clone();
+                }
+                let r = self.apply(f.id, tool, BodyOp::Cut);
+                self.scope = saved;
+                r?;
                 self.ev.threads.extend(threads);
                 Ok(())
             }
@@ -2160,6 +2289,22 @@ impl Ctx<'_> {
         if segments.iter().all(|(_, l)| l.abs() < 1e-9) {
             return Err("distancia cero".into());
         }
+        // La flecha, desde el centro del perfil (de la caja que lo envuelve)
+        let boxes: Vec<_> = faces.iter().filter_map(|f| f.mass().ok()).collect();
+        let origin = if boxes.is_empty() {
+            plane.origin
+        } else {
+            let lo = boxes.iter().fold([f64::INFINITY; 3], |a, m| [0, 1, 2].map(|k| a[k].min(m.bbox_min[k])));
+            let hi = boxes.iter().fold([f64::NEG_INFINITY; 3], |a, m| [0, 1, 2].map(|k| a[k].max(m.bbox_max[k])));
+            scale(add(lo, hi), 0.5)
+        };
+        let (length, kind) = match &e.extent {
+            Extent::Blind { distance } => (*distance, HandleKind::Blind),
+            Extent::Symmetric { distance } => (distance / 2.0, HandleKind::Symmetric),
+            Extent::TwoSides { distance, .. } => (*distance, HandleKind::TwoSides),
+            _ => (segments.iter().map(|(s, l)| s + l).fold(0.0, f64::max), HandleKind::Fixed),
+        };
+        *self.handle.borrow_mut() = Some(Handle { origin, dir: n, length, reversed: reverse, kind });
         let mut solids = Vec::new();
         for f in &faces {
             for &(start, length) in &segments {

@@ -32,7 +32,7 @@ fn plate() -> (Document, FeatureId) {
 }
 
 fn hole(sketch: FeatureId, diameter: f64, depth: HoleDepth, style: HoleStyle) -> FeatureKind {
-    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None, link: None })
+    FeatureKind::Hole(Hole { sketch, points: vec![], diameter, depth, style, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None })
 }
 
 fn vol(doc: &Document) -> f64 {
@@ -82,6 +82,7 @@ fn blind_with_tip_and_no_points() {
         thread: Some("M6".into()),
         modeled: None,
         link: None,
+        reverse: None,
     }));
     let tip = 2.5 / (59.0f64).to_radians().tan();
     let one = PI * 6.25 * 6.0 + PI * 6.25 * tip / 3.0;
@@ -113,7 +114,7 @@ fn modeled_thread_through_hole() {
         return;
     }
     let (mut doc, sk) = plate();
-    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None, link: None };
+    let mut h = Hole { sketch: sk, points: vec![], diameter: 5.0, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: Some("M6".into()), modeled: None, link: None, reverse: None };
     h.modeled = Some(ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false });
     doc.add(FeatureKind::Hole(h));
     let ev = doc.evaluate();
@@ -173,7 +174,7 @@ fn internal_thread_on_a_hole() {
     // Placa con un agujero al diámetro menor de M6: la rosca lo talla
     let (mut doc, sk) = plate();
     let d1 = 6.0 - 1.082_532;
-    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None, link: None }));
+    doc.add(FeatureKind::Hole(Hole { sketch: sk, points: vec![], diameter: d1, depth: HoleDepth::ThroughAll, style: HoleStyle::Simple, tip_angle: 0.0, thread: None, modeled: None, link: None, reverse: None }));
     let face = side_face(&doc, [-10.0 + d1 / 2.0, 0.0, 5.0], [-1.0, 0.0, 0.0]);
     doc.add(FeatureKind::Thread { face, pitch: 1.0, length: 0.0, flip: false, left: false, clearance: 0.0, link: None });
     let ev = doc.evaluate();
@@ -181,4 +182,107 @@ fn internal_thread_on_a_hole() {
     // Uno de los dos agujeros roscado, el otro liso
     let plain = PI * d1 * d1 / 4.0 * 10.0;
     assert_relative_eq!(ev.body.unwrap().mass().unwrap().volume, 16000.0 - plain - 10.0 * rod_per_mm(6.0, 1.0), max_relative = 1e-4);
+}
+
+#[test]
+fn hole_cuts_only_the_nearest_part_unless_scope_says_otherwise() {
+    if !occt() {
+        return;
+    }
+    // Otra placa debajo, separada: el pasante entra solo en la de arriba
+    let (mut doc, sk) = plate();
+    let below = doc.insert(
+        0,
+        FeatureKind::Primitive(Primitive {
+            shape: PrimitiveShape::Box { dx: 40.0, dy: 40.0, dz: 10.0, centered: true, centered_z: false },
+            origin: [0.0, 0.0, -20.0],
+            z: [0.0, 0.0, 1.0],
+            x: [1.0, 0.0, 0.0],
+            op: BodyOp::New,
+            link: None,
+        }),
+    );
+    let h = doc.add(hole(sk, 6.0, HoleDepth::ThroughAll, HoleStyle::Simple));
+    let full = 40.0 * 40.0 * 10.0;
+    let cut = 2.0 * PI * 9.0 * 10.0;
+    let volumes = |doc: &Document| {
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+        let mut v: Vec<(f64, f64)> = ev.parts.iter().map(|p| { let m = p.shape.mass().unwrap(); (m.bbox_min[2], m.volume) }).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.into_iter().map(|(_, v)| v).collect::<Vec<_>>()
+    };
+    let v = volumes(&doc);
+    assert_relative_eq!(v[0], full, max_relative = 1e-9);
+    assert_relative_eq!(v[1], full - cut, max_relative = 1e-6);
+    // El estado dice cuál eligió: la de arriba (no la de `below`)
+    let ev = doc.evaluate();
+    let auto = &ev.status.iter().find(|s| s.id == h).unwrap().auto_scope;
+    assert_eq!(auto.len(), 1);
+    assert_ne!(auto[0].feature, below);
+    // Eligiendo las dos piezas, atraviesa ambas
+    let ev = doc.evaluate();
+    let ids: Vec<PartId> = ev.parts.iter().map(|p| p.id).collect();
+    assert!(ids.iter().any(|p| p.feature == below));
+    doc.get_mut(h).unwrap().scope = ids;
+    let v = volumes(&doc);
+    assert_relative_eq!(v[0], full - cut, max_relative = 1e-6);
+    assert_relative_eq!(v[1], full - cut, max_relative = 1e-6);
+}
+
+#[test]
+fn hole_from_a_base_plane_goes_into_the_block_above() {
+    if !occt() {
+        return;
+    }
+    // Sketch en la planta con un cuadrado y un círculo; el bloque sale hacia
+    // arriba con las dos regiones y el agujero usa el mismo sketch (el centro
+    // del círculo): contra la normal no hay material, entra hacia arriba
+    let mut doc = Document::new();
+    let mut s = Sketch::default();
+    let c = [(-20.0, -20.0), (20.0, -20.0), (20.0, 20.0), (-20.0, 20.0)].map(|(x, y)| s.add_point(x, y));
+    for k in 0..4 {
+        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Line { start: c[k], end: c[(k + 1) % 4] }, construction: false });
+        s.next_id += 1;
+    }
+    let o = s.add_point(0.0, 0.0);
+    s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Circle { center: o, radius: 8.0 }, construction: false });
+    s.next_id += 1;
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        // El anillo del cuadrado y el disco del círculo
+        regions: RegionSelection::Points { points: vec![[15.0, 15.0], [0.0, 0.0]] },
+        extent: Extent::Blind { distance: 10.0 },
+        reverse: false,
+        op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
+    }));
+    assert_relative_eq!(vol(&doc), 40.0 * 40.0 * 10.0, max_relative = 1e-6);
+    let h = doc.add(hole(sk, 6.0, HoleDepth::ThroughAll, HoleStyle::Simple));
+    assert_relative_eq!(vol(&doc), 40.0 * 40.0 * 10.0 - PI * 9.0 * 10.0, max_relative = 1e-6);
+    // Flechas: el bloque sube 10 desde el medio de las regiones; el agujero
+    // sube desde el centro (a favor de la normal) hasta la tapa
+    let ev = doc.evaluate();
+    let handle = |id| ev.status.iter().find(|s| s.id == id).unwrap().handle.clone().unwrap();
+    let e = handle(doc.features[1].id);
+    assert_eq!((e.dir, e.length, e.reversed, e.kind), ([0.0, 0.0, 1.0], 10.0, false, HandleKind::Blind));
+    assert!(e.origin.iter().all(|v| v.abs() < 1e-6), "{:?}", e.origin);
+    let k = handle(h);
+    assert_eq!((k.origin, k.dir, k.reversed, k.kind), ([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], true, HandleKind::Fixed));
+    assert_relative_eq!(k.length, 10.0, epsilon = 1e-6);
+    // Hacia abajo a la fuerza: no corta nada y lo dice
+    if let FeatureKind::Hole(x) = &mut doc.get_mut(h).unwrap().kind {
+        x.reverse = Some(false);
+        x.depth = HoleDepth::Blind { depth: 5.0 };
+    }
+    let ev = doc.evaluate();
+    assert_relative_eq!(ev.body.as_ref().unwrap().mass().unwrap().volume, 40.0 * 40.0 * 10.0, max_relative = 1e-12);
+    match &ev.status.iter().find(|s| s.id == h).unwrap().state {
+        FeatureState::Warning { message, .. } => assert!(message.contains("no toca ninguna pieza"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    let k = ev.status.iter().find(|s| s.id == h).unwrap().handle.clone().unwrap();
+    assert_eq!((k.dir, k.length, k.reversed, k.kind), ([0.0, 0.0, -1.0], 5.0, false, HandleKind::Blind));
 }

@@ -283,7 +283,7 @@ export type FeatureKind =
   | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
   | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
-  /** Agujeros en los puntos de un sketch (o sus círculos), contra la normal del plano */
+  /** Agujeros en los puntos de un sketch (o sus círculos); `reverse`: a favor de la normal del plano (sin elegir, hacia el material) */
   | {
       type: "hole";
       sketch: number;
@@ -297,6 +297,7 @@ export type FeatureKind =
       modeled?: ThreadSpec | null;
       /** Medida de otra rosca, con el filete alineado en el centro que está en su eje */
       link?: ThreadLink | null;
+      reverse?: boolean | null;
     }
   /** Rosca sobre una cara cilíndrica: exterior en un eje, interior en un agujero */
   | { type: "thread"; face: FaceRef; pitch: number; length: number; flip: boolean; left: boolean; clearance: number; link?: ThreadLink | null }
@@ -659,7 +660,59 @@ export type FeatureState =
   | { state: "rolled_back" };
 
 /** `ms`: lo que tardó la última vez que se calculó */
-export type FeatureStatus = { id: number; ms?: number } & FeatureState;
+/** `auto_scope`: piezas que eligió sola, sin alcance elegido (la más cercana a un agujero) */
+export type FeatureStatus = { id: number; ms?: number; auto_scope?: PartId[]; handle?: FeatureHandle } & FeatureState;
+
+/**
+ * Flecha de una operación en el visor (extrusión, chapa, agujero): desde
+ * `origin` hacia `dir` hasta `length` mm. `reversed`: el sentido con que se
+ * calculó (el `reverse`/`flip` de la operación).
+ */
+export interface FeatureHandle {
+  origin: P3;
+  dir: P3;
+  length: number;
+  reversed: boolean;
+  kind: "blind" | "symmetric" | "two_sides" | "fixed";
+}
+
+/** Campo que cambia al arrastrar la flecha (ruta para los vínculos), o nada */
+export function handleField(k: FeatureKind, h: FeatureHandle): string | undefined {
+  if (h.kind === "fixed") return undefined;
+  if (k.type === "extrude") return "kind.extent.distance";
+  if (k.type === "hole") return "kind.depth.depth";
+  if (k.type === "sheet_metal") return "kind.thickness";
+  return undefined;
+}
+
+/** Clic en la flecha: hacia el otro lado */
+export function flipByHandle(k: FeatureKind, h: FeatureHandle) {
+  if (k.type === "extrude" || k.type === "hole") k.reverse = !h.reversed;
+  else if (k.type === "sheet_metal") k.flip = !h.reversed;
+}
+
+/**
+ * Arrastrar la flecha `h` (la del comienzo) hasta `t` mm a lo largo de ella:
+ * el largo nuevo; pasando del origen, se da vuelta (salvo simétrica y dos direcciones).
+ */
+export function dragByHandle(k: FeatureKind, h: FeatureHandle, t: number) {
+  const len = Math.max(Math.abs(t), 0.01);
+  const reversed = h.reversed !== t < 0;
+  if (k.type === "extrude" && "distance" in k.extent) {
+    if (h.kind === "symmetric") k.extent.distance = 2 * len;
+    else if (h.kind === "two_sides") k.extent.distance = len;
+    else {
+      k.extent.distance = len;
+      k.reverse = reversed;
+    }
+  } else if (k.type === "hole" && k.depth.type === "blind") {
+    k.depth.depth = len;
+    k.reverse = reversed;
+  } else if (k.type === "sheet_metal") {
+    k.thickness = len;
+    k.flip = reversed;
+  }
+}
 
 export interface Loop {
   pieces: { entity: number; reversed: boolean }[];
@@ -2189,7 +2242,7 @@ export function createCadStore() {
   const refreshTool = async (seq: number) => {
     const d = draft();
     const f = d && !d.selecting ? d.doc.features.find((x) => x.id === d.feature) : undefined;
-    const op = f && "op" in f.kind && f.kind.type !== "boolean" ? f.kind.op : undefined;
+    const op = f?.kind.type === "hole" ? "cut" : f && "op" in f.kind && f.kind.type !== "boolean" ? f.kind.op : undefined;
     if (!d || !op) return setTool(null);
     const mesh = decodeCadMesh(await invoke<ArrayBuffer>("cad_tool_mesh", { feature: d.feature }));
     if (seq === sendSeq) setTool(mesh ? { mesh, op } : null);

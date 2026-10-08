@@ -969,6 +969,154 @@ const scenarios = {
     if (p[""] !== "Cara cilíndrica" || p["Diámetro"] !== "6.6 mm") throw new Error(`medida: ${JSON.stringify(p)}`);
   },
 
+  async "agujero: la pieza más cercana y cambiarla"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Otra caja suelta debajo, en la línea del agujero
+    const doc = await call("cad_get_document");
+    const box = doc.features[0];
+    doc.features.unshift({ ...structuredClone(box), id: doc.next_id, name: "Caja abajo", kind: { ...structuredClone(box.kind), op: "new", origin: [0, 0, -40] } });
+    doc.next_id++;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    near((await body()).volume, 16000, 1e-6, "dos cajas");
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Sketch");
+    await sleep(2000);
+    await b.clickText("Punto");
+    await b.click(...(await at([0, 0, 10])), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.clickText("Agujero");
+    await sleep(2000);
+    // Pasante, pero solo en la de arriba (la más cercana), y el panel la muestra marcada
+    const hole = Math.PI * 3.3 * 3.3 * 20;
+    near((await body()).volume, 16000 - hole, 0.05, "solo la de arriba");
+    const boxes = () =>
+      b.eval(`[...document.querySelectorAll('[aria-label="En las piezas"] input[type=checkbox]')].map((i) => [i.closest("label, div")?.textContent ?? "", i.checked])`);
+    const list = await boxes();
+    if (list.length !== 2 || list.filter(([, c]) => c).length !== 1) throw new Error(`piezas: ${JSON.stringify(list)}`);
+    // Marcar también la de abajo: atraviesa las dos
+    await b.eval(`(() => { const i = [...document.querySelectorAll('[aria-label="En las piezas"] input[type=checkbox]')].find((i) => !i.checked); i.click(); })()`);
+    await sleep(2000);
+    near((await body()).volume, 16000 - 2 * hole, 0.05, "las dos");
+    if ((await boxes()).some(([, c]) => !c)) throw new Error("la de abajo no quedó marcada");
+    await accept(b);
+  },
+
+  async "flecha: invertir y arrastrar la extrusión; el agujero avisa si no corta"(b) {
+    await begin(b);
+    // Sketch en la planta: cuadrado de 40 con un círculo de radio 8; bloque con las dos regiones
+    const pts = [[-20, -20], [20, -20], [20, 20], [-20, 20], [0, 0]].map(([x, y], i) => ({ id: i + 1, x, y }));
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, ...pts],
+      entities: [line(6, 1, 2), line(7, 2, 3), line(8, 3, 4), line(9, 4, 1), { id: 10, geometry: { type: "circle", center: 5, radius: 8 } }],
+      constraints: [],
+      next_id: 11,
+      origin: 0,
+    };
+    const doc = await call("cad_get_document");
+    doc.features = [
+      { id: 1, name: "Sketch 1", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } },
+      { id: 2, name: "Bloque", suppressed: false, kind: { type: "extrude", sketch: 1, regions: { type: "points", points: [[15, 15], [0, 0]] }, extent: { type: "blind", distance: 10 }, reverse: false, op: "join" } },
+    ];
+    doc.next_id = 3;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    near((await body()).volume, 16000, 1e-6, "bloque");
+    const handle = (id) => b.eval(`window.__cadStore.stateOf(${id})?.handle ?? null`);
+    const tip = (h) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(h.origin.map((o, i) => o + h.dir[i] * h.length))})`);
+    const kind = (id) => b.eval(`window.__cadStore.doc().features.find((f) => f.id === ${id}).kind`);
+    // Abrir el bloque: su flecha sube 10 desde el centro
+    await b.eval(`window.__cadStore.select(2)`);
+    await sleep(2000);
+    let h = await handle(2);
+    if (!h || h.dir[2] !== 1 || h.length !== 10 || h.reversed) throw new Error(`flecha del bloque: ${JSON.stringify(h)}`);
+    // Clic en la punta: hacia abajo
+    const [x, y] = await tip(h);
+    if (!(await b.eval(`window.__cadViewer.handleHit(${x}, ${y})`))) throw new Error("la punta no se puede pinchar");
+    await b.click(x, y, { wait: 2000 });
+    if (!(await kind(2)).reverse) throw new Error("no se dio vuelta");
+    let r = await body();
+    near(r.volume, 16000, 1e-6, "invertido");
+    near(r.bbox_max[2], 0, 1e-6, "invertido: hacia abajo");
+    // Arrastrar la punta hasta 25 mm hacia abajo
+    h = await handle(2);
+    const [x0, y0] = await tip(h);
+    const [x1, y1] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(h.origin.map((o, i) => o + h.dir[i] * 25))})`);
+    await b.drag(x0, y0, x1, y1, 15);
+    await sleep(2500);
+    const k = await kind(2);
+    near(k.extent.distance, 25, 0.5, "distancia arrastrada");
+    if (!k.reverse) throw new Error("arrastrar cambió el sentido");
+    near((await body()).volume, 1600 * k.extent.distance, 1e-3, "bloque más alto");
+    await accept(b);
+    // Agujero con el centro del círculo: va solo hacia el bloque (abajo, contra la normal)
+    await b.eval(`window.__cadStore.select(undefined)`);
+    await b.clickText("Agujero");
+    await sleep(2500);
+    const hid = await b.eval(`window.__cadStore.draft().feature`);
+    if ((await kind(hid)).sketch !== 1) throw new Error("el agujero no tomó el sketch del bloque");
+    const area = 1600 * k.extent.distance;
+    near((await body()).volume, area - Math.PI * 3.3 * 3.3 * k.extent.distance, 0.05, "agujero en el bloque");
+    // Clic en su flecha: hacia afuera del material; no corta y lo dice
+    h = await handle(hid);
+    await b.click(...(await tip(h)), { wait: 2500 });
+    if ((await kind(hid)).reverse !== !h.reversed) throw new Error("el agujero no se dio vuelta");
+    near((await body()).volume, area, 1e-6, "agujero hacia afuera");
+    const st = await b.eval(`window.__cadStore.stateOf(${hid})`);
+    if (st.state !== "warning" || !st.message.includes("no toca ninguna pieza")) throw new Error(`estado: ${JSON.stringify(st)}`);
+    if (!(await b.eval(`document.body.innerText.includes("no toca ninguna pieza")`))) throw new Error("el aviso no se ve");
+    // "Automático" lo devuelve al material
+    await b.clickText("Automático");
+    await sleep(2500);
+    near((await body()).volume, area - Math.PI * 3.3 * 3.3 * k.extent.distance, 0.05, "de vuelta al material");
+    await accept(b);
+  },
+
+  async "cámara: girar por encima del polo y desplazar"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const cam = () => b.eval(`(() => { const v = window.__cadViewer; return { up: v.camera.up.toArray(), pos: v.camera.position.toArray(), target: v.controls.target.toArray() }; })()`);
+    const rect = await b.eval(`(() => { const r = window.__cadViewer.canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()`);
+    const [cx, cy] = [rect[0] + rect[2] / 2, rect[1] + rect[3] * 0.2];
+    const drag = async (button, buttons, dy, modifiers = 0) => {
+      await b.mouse("mouseMoved", cx, cy, { buttons: 0 });
+      await b.mouse("mousePressed", cx, cy, { button, buttons, modifiers });
+      for (let i = 1; i <= 20; i++) {
+        await b.mouse("mouseMoved", cx, cy + (dy * i) / 20, { button, buttons, modifiers });
+        await sleep(20);
+      }
+      await b.mouse("mouseReleased", cx, cy + dy, { button, buttons: 0, modifiers });
+      await sleep(300);
+    };
+    // Media altura del visor = media vuelta hacia abajo: pasa por encima y queda de cabeza
+    const before = await cam();
+    await drag("middle", 4, rect[3] * 0.55);
+    const after = await cam();
+    if (!(after.up[1] < 0)) throw new Error(`no pasó el polo: ${JSON.stringify(after)}`);
+    const dist = (c) => Math.hypot(...c.pos.map((p, i) => p - c.target[i]));
+    near(dist(after), dist(before), 1e-6 * dist(before), "misma distancia");
+    // El cubo de vistas lo endereza
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 1])`);
+    await sleep(800);
+    if (!((await cam()).up[1] > 0.99)) throw new Error("no se enderezó");
+    // Botón derecho desplaza: el centro se mueve con la cámara
+    const t0 = (await cam()).target;
+    await drag("right", 2, 80);
+    const t1 = (await cam()).target;
+    if (!(Math.hypot(...t1.map((v, i) => v - t0[i])) > 1e-3)) throw new Error("no desplazó");
+  },
+
   async "hélice y engrosar"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     await begin(b);

@@ -1896,6 +1896,24 @@ export const FeatureEditor: Component<{
                       onChange={(v) => v !== k().depth.type && update((x) => x.type === "hole" && (x.depth = v === "blind" ? { type: "blind", depth: 10 } : { type: "through_all" }))}
                     />
                   </Row>
+                  {/* Sin elegir, hacia el lado donde hay material; la flecha del visor también lo da vuelta */}
+                  <div class="flex items-center justify-between gap-2">
+                    <Checkbox
+                      small
+                      label="Hacia el otro lado"
+                      checked={k().reverse ?? state()?.handle?.reversed ?? false}
+                      onChange={(c) => update((x) => x.type === "hole" && (x.reverse = c))}
+                    />
+                    <Show when={k().reverse != null} fallback={<span class="text-[11px] text-text-dim">Automático</span>}>
+                      <button
+                        class="text-[11px] text-text-muted hover:text-text"
+                        title="Que vuelva a ir hacia el lado donde hay material"
+                        onClick={() => update((x) => x.type === "hole" && (x.reverse = null))}
+                      >
+                        Automático
+                      </button>
+                    </Show>
+                  </div>
                   <Show when={k().depth.type === "blind"}>
                     {field("Hasta", "kind.depth.depth", (k().depth as { depth: number }).depth, (x, v) => x.type === "hole" && x.depth.type === "blind" && (x.depth.depth = v), "mm")}
                     {field("Punta", "kind.tip_angle", k().tip_angle, (x, v) => x.type === "hole" && (x.tip_angle = v), "°")}
@@ -2434,14 +2452,15 @@ export const FeatureEditor: Component<{
             )}
           </Match>
         </Switch>
-        {/* Unir, restar o intersecar: con qué piezas (sin elegir, las que toca) */}
-        <Show when={"op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new"}>
+        {/* Unir, restar o intersecar: con qué piezas (sin elegir, las que toca; el agujero, la más cercana) */}
+        <Show when={f().kind.type === "hole" || ("op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new")}>
           <PartChecklist
             store={props.store}
             featureId={f().id}
-            label="Con las piezas"
-            empty="Las que toca"
+            label={f().kind.type === "hole" ? "En las piezas" : "Con las piezas"}
+            empty={f().kind.type === "hole" ? "La más cercana" : "Las que toca"}
             value={f().scope ?? []}
+            auto={state()?.auto_scope}
             missing={lost("scope")}
             onChange={(v) => void props.store.updateFeature(f().id, (x) => (x.scope = v.length ? v : undefined))}
           />
@@ -2623,6 +2642,8 @@ const PartChecklist: Component<{
   /** Qué significa no elegir ninguna */
   empty: string;
   value: PartId[];
+  /** Las que eligió sola sin `value`: se ven marcadas y desde ahí se cambia */
+  auto?: PartId[];
   /** Posiciones de `value` que el último cálculo no encontró */
   missing?: number[];
   onChange: (v: PartId[]) => void;
@@ -2634,7 +2655,8 @@ const PartChecklist: Component<{
     const n = ++seq;
     void props.store.partsBefore(props.featureId).then((p) => n === seq && setParts(p));
   });
-  const has = (id: PartId) => props.value.some((x) => samePart(x, id));
+  const shown = () => (props.value.length > 0 ? props.value : (props.auto ?? []));
+  const has = (id: PartId) => shown().some((x) => samePart(x, id));
   const gone = () => props.value.filter((v, i) => (props.missing ?? []).includes(i) || (parts().length > 0 && !parts().some((p) => samePart(p.id, v))));
   return (
     <div class="space-y-1" aria-label={props.label}>
@@ -2646,7 +2668,7 @@ const PartChecklist: Component<{
               small
               label={p.name}
               checked={has(p.id)}
-              onChange={(c) => props.onChange(c ? [...props.value, p.id] : props.value.filter((x) => !samePart(x, p.id)))}
+              onChange={(c) => props.onChange(c ? [...shown(), p.id] : shown().filter((x) => !samePart(x, p.id)))}
             />
           )}
         </For>

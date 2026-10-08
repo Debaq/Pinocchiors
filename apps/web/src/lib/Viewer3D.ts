@@ -6,6 +6,7 @@
 import * as THREE from "three";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { NavDrag } from "./navDrag";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
@@ -430,6 +431,8 @@ export class Viewer3D {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
+  /** Girar y desplazar sin tope en los polos (el zoom queda en `controls`) */
+  private nav!: NavDrag;
 
   // Groups
   private meshGroup: THREE.Group;
@@ -540,7 +543,7 @@ export class Viewer3D {
   /** Cursor del lienzo antes de pasar sobre el cubo */
   private cursorBeforeCube: string | null = null;
   /** Giro animado de la cámara hacia una vista del cubo */
-  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; start: number } | null = null;
+  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; up: THREE.Vector3; start: number } | null = null;
 
   // Callbacks
   private callbacks: ViewerCallbacks = {};
@@ -723,6 +726,7 @@ export class Viewer3D {
     this.controls.update();
     // También durante la amortiguación, tras soltar el botón
     this.controls.addEventListener("change", () => this.requestRender());
+    this.nav = new NavDrag(this.camera, this.controls, this.canvas, () => this.requestRender());
 
     // Groups
     this.meshGroup = new THREE.Group();
@@ -927,13 +931,15 @@ export class Viewer3D {
    * cámara: selecciona, pinta o confirma.
    */
   private configureNavigation(e: PointerEvent): void {
-    // OrbitControls ya cambia ROTATE por PAN si hay Shift (o Ctrl, por eso
-    // Ctrl va aparte como DOLLY, que no mira modificadores)
-    const action = (e.ctrlKey || e.metaKey) && !e.shiftKey ? THREE.MOUSE.DOLLY : THREE.MOUSE.ROTATE;
+    // Girar y desplazar van por `nav` (sin tope en los polos); Ctrl hace zoom
+    // con OrbitControls
+    const dolly = (e.ctrlKey || e.metaKey) && !e.shiftKey;
+    const button = e.button === 1 || (e.button === 0 && e.altKey && !this.modal);
+    if (button && !dolly && this.controls.enabled) this.nav.start(e, e.shiftKey ? "pan" : "rotate");
     const none = null as unknown as THREE.MOUSE;
     this.controls.mouseButtons = {
-      LEFT: e.altKey && !this.modal ? action : none,
-      MIDDLE: action,
+      LEFT: e.altKey && !this.modal && dolly ? THREE.MOUSE.DOLLY : none,
+      MIDDLE: dolly ? THREE.MOUSE.DOLLY : none,
       RIGHT: none,
     };
   }
@@ -981,7 +987,7 @@ export class Viewer3D {
     if (dir.x === 0 && dir.z === 0) dir.z = 1e-3;
     const from = this.camera.position.clone().sub(this.controls.target);
     const turn = new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), dir.normalize());
-    this.viewTransition = { from, turn, start: performance.now() };
+    this.viewTransition = { from, turn, up: this.camera.up.clone(), start: performance.now() };
   }
 
   private updateViewCubeHover(e: PointerEvent): void {
@@ -1006,6 +1012,10 @@ export class Viewer3D {
     const eased = 1 - Math.pow(1 - t, 3);
     const turn = new THREE.Quaternion().slerp(transition.turn, eased);
     this.camera.position.copy(this.controls.target).add(transition.from.clone().applyQuaternion(turn));
+    // Si se había dado la vuelta por encima, vuelve con Y arriba
+    this.camera.up.copy(transition.up).lerp(new THREE.Vector3(0, 1, 0), eased).normalize();
+    if (this.camera.up.lengthSq() < 0.5) this.camera.up.set(0, 1, 0);
+    this.camera.lookAt(this.controls.target);
     if (t < 1) this.requestRender();
     else this.viewTransition = null;
   }
@@ -4802,6 +4812,7 @@ export class Viewer3D {
       center.y + distance * 0.5,
       center.z + distance
     );
+    this.camera.up.set(0, 1, 0);
     this.controls.target.copy(center);
     this.controls.update();
     // Las luces se ubican alrededor del modelo

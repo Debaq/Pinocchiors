@@ -135,6 +135,7 @@ fn bolt_follows_a_threaded_hole() {
         thread: None,
         modeled: Some(t),
         link: None,
+        reverse: None,
     }));
     // Un M8 cualquiera en el origen: el vínculo lo lleva al agujero de x = 10
     // como M6, con la cabeza medio milímetro afuera
@@ -189,10 +190,13 @@ fn thread_in_a_hole_follows_an_existing_bolt() {
         thread: None,
         modeled: None,
         link: None,
+        reverse: None,
     }));
     doc.get_mut(hid).unwrap().scope = vec![PartId { feature: p, index: 0 }];
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // Con el tornillo como otra pieza el agujero igual ve el material de la placa
+    assert_eq!(ev.status.iter().find(|s| s.id == hid).unwrap().state, FeatureState::Ok);
     let body = ev.body.as_ref().unwrap();
     let (face, _) = body.closest_face([10.0 + d1 / 2.0, 0.0, 5.0], Some([-1.0, 0.0, 0.0]), 0.9).unwrap();
     let face = ev.face_ref(face).unwrap();

@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -417,6 +417,28 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => {
     const t = store.tool();
     viewer?.setTool(t?.mesh ?? null, t?.op);
+  });
+  // Flecha de la operación del diálogo (extrusión, chapa, agujero), como en
+  // Onshape: clic la da vuelta; arrastrándola cambia la distancia
+  const handleOf = createMemo(() => {
+    const d = store.draft();
+    if (!d || d.selecting || ui.session()) return undefined;
+    const f = d.doc.features.find((x) => x.id === d.feature);
+    const h = f && store.stateOf(f.id)?.handle;
+    return f && h && ["extrude", "hole", "sheet_metal"].includes(f.kind.type) ? { id: f.id, h } : undefined;
+  });
+  const [handleHot, setHandleHot] = createSignal(false);
+  // Arrastre en curso: la flecha del comienzo y dónde va la punta (mm, con signo)
+  let handleDrag: { id: number; h: FeatureHandle; x: number; y: number; moved: boolean; canDrag: boolean } | undefined;
+  const [dragAt, setDragAt] = createSignal<{ h: FeatureHandle; t: number }>();
+  createEffect(() => {
+    const drag = dragAt();
+    const cur = handleOf()?.h;
+    // Mientras se arrastra sigue al puntero (el recálculo llega después)
+    const h = drag
+      ? { origin: drag.h.origin, dir: drag.h.dir.map((v) => (drag.t < 0 ? -v : v)) as P3, length: Math.abs(drag.t) }
+      : cur;
+    viewer?.setHandle(h ?? null, handleHot() || !!drag);
   });
   // Comparación con una versión: lo agregado en verde y lo quitado en rojo
   createEffect(() => {
@@ -1070,6 +1092,16 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (e.button !== 0 || e.altKey) return;
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
     if (ui.session()) return sketchClick(e);
+    const handle = handleOf();
+    if (handle && viewer?.handleHit(e.clientX, e.clientY)) {
+      const f = store.doc()?.features.find((x) => x.id === handle.id);
+      const field = f && handleField(f.kind, handle.h);
+      // Con la distancia dada por una fórmula, la flecha solo se da vuelta
+      const canDrag = !!field && !store.bindingOf(`${handle.id}.${field}`);
+      handleDrag = { id: handle.id, h: handle.h, x: e.clientX, y: e.clientY, moved: false, canDrag };
+      container.setPointerCapture(e.pointerId);
+      return;
+    }
     // Arrastrar desde cualquier lado elige por caja (como la herramienta de selección de
     // Blender); si no se arrastra queda el clic
     if (ui.pick().kind === "none") boxStart = { x: e.clientX, y: e.clientY, additive: e.shiftKey || e.ctrlKey || e.metaKey, before: ui.picks() };
@@ -1078,6 +1110,21 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    if (handleDrag) {
+      const d = handleDrag;
+      if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
+      d.moved = true;
+      const raw = d.canDrag ? viewer?.handleParam(e.clientX, e.clientY) : null;
+      if (raw == null || !viewer) return;
+      // Redondeado a lo que se distingue en pantalla (1, 0,1, 0,01 mm...)
+      const step = 10 ** Math.ceil(Math.log10(viewer.pixelSizeMm() * 2));
+      const t = Math.round(raw / step) * step || step;
+      if (dragAt()?.t === t) return;
+      setDragAt({ h: d.h, t });
+      void store.updateFeature(d.id, (f) => dragByHandle(f.kind, d.h, t));
+      return;
+    }
+    if (e.buttons === 0) setHandleHot(!!handleOf() && !!viewer?.handleHit(e.clientX, e.clientY));
     // La caja aparece recién al arrastrar de verdad (un clic tiembla un par de píxeles)
     if (boxStart && (e.buttons & 1) === 1 && Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y) >= 5) {
       const r = container.getBoundingClientRect();
@@ -1168,6 +1215,13 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
+    if (handleDrag) {
+      const d = handleDrag;
+      handleDrag = undefined;
+      setDragAt(undefined);
+      if (!d.moved) void store.updateFeature(d.id, (f) => flipByHandle(f.kind, d.h));
+      return;
+    }
     if (e.button === 0 && boxStart) finishBox(e.clientX, e.clientY);
     const down = rightDown;
     rightDown = undefined;
@@ -1514,7 +1568,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         ref={container}
         class={clsx(
           "absolute inset-0",
-          overCube() ? "cursor-pointer" : (ui.session() && ui.tool() !== "select") || ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
+          overCube() || handleHot() ? "cursor-pointer" : (ui.session() && ui.tool() !== "select") || ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -1987,9 +2041,9 @@ const FILTER_WANT: Record<PickFilter, Parameters<CadViewer["pick"]>[2]> = {
   vertices: { vertices: true },
   sketches: { regions: true, planes: true, refPlanes: true },
 };
-/** Por caja, "Todo" elige caras y aristas (los vértices, con su filtro) */
+/** Por caja, "Todo" elige caras, aristas y regiones (los vértices, con su filtro) */
 const BOX_WANT: Record<PickFilter, Parameters<CadViewer["boxSelect"]>[4]> = {
-  all: { faces: true, edges: true },
+  all: { faces: true, edges: true, regions: true },
   faces: { faces: true },
   edges: { edges: true },
   vertices: { vertices: true },
