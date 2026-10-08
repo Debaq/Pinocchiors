@@ -145,3 +145,35 @@ fn parameters_roundtrip_json() {
     let plain = Document::new();
     assert!(!serde_json::to_string(&plain).unwrap().contains("parameters"));
 }
+
+#[test]
+fn configurations_change_parameters_and_suppression() {
+    if !occt::available() {
+        return;
+    }
+    // Caja de ancho «ancho» y un cubo aparte que una variante suprime
+    let mut doc = Document::new();
+    let b = doc.add(caja());
+    let extra = doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 2.0, dy: 2.0, dz: 2.0, centered: false, centered_z: false },
+        origin: [100.0, 0.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+    }));
+    doc.parameters = vec![param("ancho", "40")];
+    doc.bindings.insert(format!("{}.kind.shape.dx", b.0), "ancho".into());
+    doc.configurations = vec![
+        Configuration { name: "Chica".into(), values: [("ancho".to_string(), "10".to_string())].into(), suppressed: vec![] },
+        Configuration { name: "Sin cubo".into(), values: Default::default(), suppressed: vec![extra] },
+    ];
+    let vol = |doc: &Document| volume(&doc.evaluate());
+    assert_relative_eq!(vol(&doc), 400.0 + 8.0, epsilon = 1e-6);
+    doc.active_configuration = Some(0);
+    assert_relative_eq!(vol(&doc), 100.0 + 8.0, epsilon = 1e-6);
+    doc.active_configuration = Some(1);
+    assert_relative_eq!(vol(&doc), 400.0, epsilon = 1e-6);
+    // Lo de base no cambió
+    assert_eq!(doc.parameters[0].expr, "40");
+    assert!(!doc.get(extra).unwrap().suppressed);
+}

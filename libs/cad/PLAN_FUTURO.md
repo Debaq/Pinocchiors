@@ -41,9 +41,11 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   agujero) que cambian parámetros y supresión de operaciones.
 - **Necesita**: parámetros con nombre (ya existen, `Document.parameters`) y supresión por
   operación (ya existe). Falta la tabla.
-- **Por dónde empezar**: `Document.configurations: Vec<Config { nombre, valores: {parámetro →
-  expresión}, suprimidas: Vec<FeatureId> }>` y un selector en el panel; exportar todas las
-  variantes de una vez. Es de los más baratos de esta lista.
+- *Hecho el 2026-10-08*: `Document.configurations: Vec<Configuration { name, values: {parámetro →
+  expresión}, suppressed }>` y `active_configuration`; `Document::resolve` aplica la activa antes
+  de las fórmulas (lo de base no cambia). Panel: sección Configuraciones (Base + variantes, valores
+  vacíos = los de base, operaciones apagadas); Exportar: "Todas las configuraciones" saca un
+  archivo por variante (nombre-variante.ext) y vuelve a la elegida.
 
 ## Otros
 

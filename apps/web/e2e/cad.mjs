@@ -1652,6 +1652,47 @@ const scenarios = {
     await b.shot("usar_arista");
   },
 
+  async "configuraciones: variante, valores y exportar todas"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Ancho por parámetro y una variante «Chica»
+    const doc = await call("cad_get_document");
+    doc.parameters = [{ name: "ancho", expr: "20" }];
+    doc.bindings = { [`${doc.features[0].id}.kind.shape.dx`]: "ancho" };
+    doc.configurations = [{ name: "Chica", values: { ancho: "10" }, suppressed: [] }];
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    near((await body()).volume, 8000, 1e-6, "base");
+    await b.eval(`document.querySelector('[aria-label="Usar Chica"]').click()`);
+    await sleep(2000);
+    near((await body()).volume, 4000, 1e-6, "variante chica");
+    // Cambiar su valor desde el panel
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="ancho en Chica"]'); i.value = "5"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(2000);
+    near((await body()).volume, 2000, 1e-6, "variante con 5");
+    if ((await call("cad_get_document")).parameters[0].expr !== "20") throw new Error("cambió lo de base");
+    await b.shot("configuraciones");
+    // Exportar todas: un STL por variante
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    await b.clickContains("Exportar");
+    await sleep(800);
+    await b.clickText("Todo el diseño");
+    await sleep(400);
+    await b.clickText("Todas las configuraciones (2 archivos)");
+    await sleep(400);
+    await b.clickText("STL");
+    for (const f of ["caja-base.stl", "caja-Chica.stl"]) rmSync(`${out}/${f}`, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(`${out}/caja.stl`)}`);
+    await b.clickText("Exportar STL");
+    await sleep(5000);
+    for (const f of ["caja-base.stl", "caja-Chica.stl"]) if (!existsSync(`${out}/${f}`)) throw new Error(`no se exportó ${f}`);
+    // Vuelve a la variante que estaba
+    if ((await call("cad_get_document")).active_configuration !== 0) throw new Error("no volvió a la variante elegida");
+  },
+
   async "línea desde el centro"(b) {
     await begin(b);
     await sketchOn(b);

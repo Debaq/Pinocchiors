@@ -501,6 +501,9 @@ export const App: Component = () => {
     // El ensamble: cada instancia en su lugar (STEP con nombres, 3MF con un objeto por instancia)
     const n = cad.committed()?.assembly?.instances.length ?? 0;
     if (n > 0) parts.push({ key: "assembly", name: `Ensamble (${n} ${n === 1 ? "instancia" : "instancias"})` });
+    // Un archivo por variante (nombre-variante.ext)
+    const c = cad.committed()?.configurations?.length ?? 0;
+    if (c > 0) parts.push({ key: "configs", name: `Todas las configuraciones (${c + 1} archivos)` });
     return parts;
   };
   const openExport = () => {
@@ -4730,6 +4733,32 @@ export const App: Component = () => {
       if (!selected) return;
       const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${extensions[0]}`;
       const file = path.split("/").pop();
+      if (part?.key === "configs") {
+        // Cada variante (y la base) calculada y exportada; al final vuelve la que estaba
+        const doc = cad.committed();
+        const before = doc?.active_configuration ?? null;
+        const variants: { index: number | null; name: string }[] = [
+          { index: null, name: "base" },
+          ...(doc?.configurations ?? []).map((c, i) => ({ index: i, name: c.name })),
+        ];
+        const files: string[] = [];
+        let total = 0;
+        try {
+          for (const v of variants) {
+            const p = path.replace(/(\.[^./]+)$/, `-${v.name.replace(/[^\p{L}\p{N}_-]+/gu, "_")}$1`);
+            await cad.commit((d) => (d.active_configuration = v.index));
+            await cad.settled();
+            total += await busy(`Exportando ${v.name}...`, () => cad.exportDesign(p, format));
+            files.push(p);
+          }
+        } finally {
+          await cad.commit((d) => (d.active_configuration = before));
+        }
+        setLastExport({ bytes: total, files });
+        setStatusMessage(`Exportadas ${files.length} variantes (${formatBytes(total)})`);
+        pipeline.markCompleted("export");
+        return;
+      }
       const bytes = await busy(`Exportando a ${file}...`, () => cad.exportDesign(path, format, part?.id, assembly));
       setLastExport({ bytes, files: [path] });
       setStatusMessage(`Diseño exportado: ${file} (${formatBytes(bytes)})`);

@@ -31,6 +31,7 @@ import {
   type AxisSpec,
   type BodyOp,
   type CadStore,
+  type Configuration,
   type Detection,
   type EdgeRef,
   type Extent,
@@ -256,6 +257,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
               <Show when={ui.session()} fallback={
                 <Show when={!ui.assemblyMode()} fallback={<AssemblyPanel store={store} ui={ui} />}>
                   <ParametersSection store={store} />
+                  <ConfigurationsSection store={store} />
                 </Show>
               }>
                 <SketchPanel ui={ui} />
@@ -443,6 +445,147 @@ const ParametersSection: Component<{ store: CadStore }> = (props) => {
       </Show>
       <Show when={problem()}>
         <p class="text-[11px] text-error">{problem()}</p>
+      </Show>
+    </Section>
+  );
+};
+
+/**
+ * Configuraciones: variantes de la misma pieza (M3, M4, M5…). Cada una
+ * reemplaza parámetros y suprime operaciones; la elegida es la que se ve y
+ * se exporta.
+ */
+const ConfigurationsSection: Component<{ store: CadStore }> = (props) => {
+  const store = props.store;
+  const configs = () => store.doc()?.configurations ?? [];
+  const active = () => store.doc()?.active_configuration ?? null;
+  const params = () => store.doc()?.parameters ?? [];
+  const features = () => store.doc()?.features ?? [];
+  const add = () => {
+    let n = configs().length + 1;
+    while (configs().some((c) => c.name === `Variante ${n}`)) n++;
+    const index = configs().length;
+    void store.commit((d) => {
+      d.configurations = [...(d.configurations ?? []), { name: `Variante ${n}`, values: {}, suppressed: [] }];
+      d.active_configuration = index;
+    });
+  };
+  const edit = (index: number, change: (c: Configuration) => void) =>
+    void store.commit((d) => {
+      const c = d.configurations?.[index];
+      if (c) change(c);
+    });
+  return (
+    <Section
+      title="Configuraciones"
+      right={
+        <IconButton aria-label="Agregar configuración" size="sm" variant="ghost" onClick={add}>
+          <Icons.Plus size={12} />
+        </IconButton>
+      }
+    >
+      <Show
+        when={configs().length > 0}
+        fallback={
+          <p class="text-[11px] text-text-dim leading-relaxed">
+            Variantes de la misma pieza (M3, M4, M5; con o sin un agujero): cada una cambia parámetros y apaga operaciones. Se pueden exportar
+            todas juntas.
+          </p>
+        }
+      >
+        <div class="space-y-1" data-configs>
+          <For each={[{ name: "Base", index: null as number | null }, ...configs().map((c, i) => ({ name: c.name, index: i as number | null }))]}>
+            {(row) => (
+              <div class="flex items-center gap-1.5">
+                <button
+                  class={clsx(
+                    "w-3 h-3 shrink-0 rounded-full border",
+                    active() === row.index ? "bg-accent border-accent" : "border-border hover:border-accent",
+                  )}
+                  aria-label={`Usar ${row.name}`}
+                  onClick={() => void store.commit((d) => (d.active_configuration = row.index))}
+                />
+                <Show when={row.index !== null} fallback={<span class="flex-1 text-xs text-text-muted">Base</span>}>
+                  <input
+                    value={row.name}
+                    class="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                    onChange={(e) => {
+                      const name = e.currentTarget.value.trim();
+                      if (name && name !== row.name) edit(row.index!, (c) => (c.name = name));
+                    }}
+                    onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                  />
+                  <IconButton
+                    aria-label={`Quitar ${row.name}`}
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      void store.commit((d) => {
+                        d.configurations = (d.configurations ?? []).filter((_, i) => i !== row.index);
+                        const a = d.active_configuration;
+                        if (a === row.index) d.active_configuration = null;
+                        else if (a != null && a > row.index!) d.active_configuration = a - 1;
+                      })
+                    }
+                  >
+                    <Icons.X size={10} />
+                  </IconButton>
+                </Show>
+              </div>
+            )}
+          </For>
+        </div>
+        {/* La elegida: qué cambia respecto de lo de base */}
+        <Show when={active() !== null && configs()[active()!]}>
+          {(c) => (
+            <div class="space-y-1.5 rounded-md border border-border p-2" data-config-editor>
+              <Show when={params().length} fallback={<p class="text-[11px] text-text-dim">Sin parámetros: crear alguno arriba para variar medidas.</p>}>
+                <For each={params()}>
+                  {(p) => (
+                    <label class="flex items-center gap-1.5 text-xs text-text-muted">
+                      <span class="w-20 shrink-0 font-mono truncate">{p.name}</span>
+                      <input
+                        value={c().values?.[p.name] ?? ""}
+                        placeholder={p.expr}
+                        aria-label={`${p.name} en ${c().name}`}
+                        class="flex-1 min-w-0 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent placeholder:text-text-dim"
+                        onChange={(e) => {
+                          const v = e.currentTarget.value.trim();
+                          edit(active()!, (x) => {
+                            x.values = { ...(x.values ?? {}) };
+                            if (v) x.values[p.name] = v;
+                            else delete x.values[p.name];
+                          });
+                        }}
+                        onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+                      />
+                    </label>
+                  )}
+                </For>
+              </Show>
+              <p class="text-[11px] text-text-dim">Vacío: el valor de base. Operaciones apagadas en esta variante:</p>
+              <div class="max-h-40 overflow-y-auto space-y-0.5">
+                <For each={features()}>
+                  {(f) => (
+                    <Checkbox
+                      small
+                      label={f.name}
+                      checked={(c().suppressed ?? []).includes(f.id)}
+                      onChange={(on) =>
+                        edit(active()!, (x) => {
+                          const s = new Set(x.suppressed ?? []);
+                          if (on) s.add(f.id);
+                          else s.delete(f.id);
+                          x.suppressed = [...s];
+                        })
+                      }
+                    />
+                  )}
+                </For>
+              </div>
+            </div>
+          )}
+        </Show>
       </Show>
     </Section>
   );

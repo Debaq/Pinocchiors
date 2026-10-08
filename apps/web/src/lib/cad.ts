@@ -312,6 +312,16 @@ export interface CadDocument {
   assembly?: Assembly | null;
   /** Cotas del plano 2D (ver lib/drawing.ts) */
   drawing?: { dims?: import("./drawing").UserDim[] } | null;
+  /** Variantes: parámetro → expresión que lo reemplaza y operaciones suprimidas */
+  configurations?: Configuration[];
+  /** La que se calcula (ninguna: lo de base) */
+  active_configuration?: number | null;
+}
+
+export interface Configuration {
+  name: string;
+  values?: Record<string, string>;
+  suppressed?: number[];
 }
 
 // ─── Ensamble ─────────────────────────────────────────────────────────────
@@ -2367,6 +2377,13 @@ export function createCadStore() {
         if (change.name && change.name !== old.name) {
           for (const p of params) p.expr = renameInExpr(p.expr, old.name, change.name);
           for (const k of Object.keys(d.bindings ?? {})) d.bindings![k] = renameInExpr(d.bindings![k], old.name, change.name);
+          // Las configuraciones lo reemplazan por nombre
+          for (const c of d.configurations ?? []) {
+            if (c.values && old.name in c.values) {
+              c.values[change.name] = c.values[old.name];
+              delete c.values[old.name];
+            }
+          }
         }
         d.parameters = params;
       });

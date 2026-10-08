@@ -485,3 +485,5 @@ cargo test -p cad-model
   Pruebas: volumen del macho por Pappus (exacto), agujero pasante, eje y agujero roscados.
 - **2026-10-08 Usar arista en el sketch** ([PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fase 4 v2): aristas
   del sólido traídas al sketch y ligadas a él (si cambia la pieza, se mueven con ella).
+- **2026-10-08 Configuraciones** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): variantes de la pieza que
+  cambian parámetros y apagan operaciones; se exportan todas juntas.

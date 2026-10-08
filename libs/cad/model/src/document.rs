@@ -72,6 +72,24 @@ pub struct Document {
     /// Ajustes y cotas del plano 2D (los maneja la interfaz; no cambian el diseño).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub drawing: Option<serde_json::Value>,
+    /// Variantes de la pieza (M3, M4, M5…): cada una cambia parámetros y
+    /// suprime operaciones sobre lo de base.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub configurations: Vec<Configuration>,
+    /// La que se calcula (ninguna = lo de base).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_configuration: Option<usize>,
+}
+
+/// Una variante: parámetro → expresión que lo reemplaza, y operaciones que se
+/// suprimen (además de las suprimidas en lo de base).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Configuration {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub values: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub suppressed: Vec<crate::feature::FeatureId>,
 }
 
 /// Lo que el usuario le cambió a una pieza.
@@ -290,6 +308,22 @@ impl Document {
     /// Aplica las fórmulas: el documento resultante tiene los números
     /// calculados en cada campo vinculado.
     pub fn resolve(&self) -> Resolution {
+        // Con una configuración activa se calcula la variante
+        if let Some(cfg) = self.active_configuration.and_then(|i| self.configurations.get(i)) {
+            let mut d = self.clone();
+            for p in &mut d.parameters {
+                if let Some(e) = cfg.values.get(&p.name) {
+                    p.expr = e.clone();
+                }
+            }
+            for f in &mut d.features {
+                if cfg.suppressed.contains(&f.id) {
+                    f.suppressed = true;
+                }
+            }
+            d.active_configuration = None;
+            return d.resolve();
+        }
         let (values, parameters) = self.parameter_values();
         if self.bindings.is_empty() {
             return Resolution { document: self.clone(), parameters, bindings: vec![] };
