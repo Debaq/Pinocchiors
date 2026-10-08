@@ -58,6 +58,7 @@ const samePick = (a: Pick3d, b: Pick3d) => JSON.stringify(a) === JSON.stringify(
 export type SketchTool =
   | "select"
   | "line"
+  | "line_mid"
   | "rect"
   | "rect_center"
   | "circle"

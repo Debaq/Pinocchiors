@@ -1440,6 +1440,29 @@ const scenarios = {
     near(r.volume, w * h * 10 - (100 - (Math.PI * 100) / 4) * 10, 0.01, "volumen con esquina redondeada");
   },
 
+  async "línea desde el centro"(b) {
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Línea centro");
+    await b.click(550, 400);
+    await b.click(700, 403);
+    await sleep(800);
+    const sk = await b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const lines = sk.entities.filter((e) => e.geometry.type === "line");
+    if (lines.length !== 1) throw new Error(`líneas: ${lines.length}`);
+    const g = lines[0].geometry;
+    const kinds = sk.constraints.map((c) => c.type);
+    if (!kinds.includes("midpoint") || !kinds.includes("horizontal")) throw new Error(`restricciones: ${kinds}`);
+    // El centro queda en el medio de los dos extremos
+    const P = (id) => sk.points.find((q) => q.id === id);
+    const mid = sk.constraints.find((c) => c.type === "midpoint");
+    const [a, e, c] = [P(g.start), P(g.end), P(mid.point)];
+    near((a.x + e.x) / 2, c.x, 1e-6, "medio en x");
+    near((a.y + e.y) / 2, c.y, 1e-6, "medio en y");
+    near(a.y, e.y, 1e-6, "horizontal");
+    await b.shot("linea_desde_el_centro");
+  },
+
   async "recortar y equidistante"(b) {
     await begin(b);
     await sketchOn(b);

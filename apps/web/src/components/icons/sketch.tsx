@@ -43,6 +43,16 @@ export const Line = (p: IconProps) => (
   </SketchIcon>
 );
 
+/** Línea desde el centro: el punto del medio y los dos extremos */
+export const LineMid = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 18 L20 6" />
+    <circle cx="12" cy="12" r="2.4" />
+    <Dot x={4} y={18} />
+    <Dot x={20} y={6} />
+  </SketchIcon>
+);
+
 export const Rect = (p: IconProps) => (
   <SketchIcon {...p}>
     <rect x="4" y="6" width="16" height="12" />

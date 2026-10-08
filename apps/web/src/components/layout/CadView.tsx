@@ -32,6 +32,7 @@ export interface CadViewProps {
 const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon: (p: { size?: number }) => JSX.Element; group: number }[] = [
   { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S", icon: SketchIcons.Select, group: 0 },
   { id: "line", short: "Línea", label: "Línea", key: "L", icon: SketchIcons.Line, group: 1 },
+  { id: "line_mid", short: "Línea centro", label: "Línea desde el centro (centro, extremo: crece igual a los dos lados)", key: "M", icon: SketchIcons.LineMid, group: 1 },
   { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1 },
   { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1 },
   { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1 },
@@ -434,6 +435,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const t = ui.tool();
       const from = ch && pt(ch.last);
       if (t === "line" && from) preview.push([from, c]);
+      if (t === "line_mid" && from) preview.push([[2 * from[0] - c[0], 2 * from[1] - c[1]], c]);
       if (t === "rect" && an.length === 1) {
         const [a] = an;
         preview.push([a, [c[0], a[1]], c, [a[0], c[1]], a]);
@@ -526,7 +528,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!p) return undefined;
     if (e.shiftKey) return { p, kind: "free" };
     // Dibujando una línea: puede salir paralela, perpendicular o tangente
-    const from = ui.tool() === "line" ? chain()?.last : undefined;
+    // (la línea desde el centro sale del centro con la misma dirección)
+    const from = ui.tool() === "line" || ui.tool() === "line_mid" ? chain()?.last : undefined;
     return infer(s.sketch, p, viewer.pixelSizeMm() * 8, {
       exclude: dragging !== undefined ? [dragging] : [],
       from,
@@ -607,6 +610,26 @@ export const CadView: Component<CadViewProps> = (props) => {
         // El tramo que cierra queda determinado por los demás: sin cota propia
         if (!closed && !between) dims.push(dim(sk, { type: "length", line, value: round(dist([a.x, a.y], hit.p)) }));
         setChain(closed ? undefined : { first: ch.first, last: id, lastSnapped: snappedToPoint });
+      });
+      askDims(dims);
+      return;
+    }
+    if (t === "line_mid") {
+      const ch = chain();
+      ui.change((sk) => {
+        const id = placeSnap(sk, hit);
+        // Primer clic: el centro (queda como punto del sketch)
+        if (!ch) return void setChain({ first: id, last: id, lastSnapped: false });
+        if (id === ch.last) return;
+        const c = sk.points.find((q) => q.id === ch.last)!;
+        const other = addPoint(sk, [2 * c.x - hit.p[0], 2 * c.y - hit.p[1]]);
+        const line = ui.addEntity(sk, { type: "line", start: other, end: id });
+        sk.constraints.push({ type: "midpoint", point: ch.last, line });
+        const dir = hit.direction;
+        if (hit.axis) sk.constraints.push({ type: hit.axis, line });
+        else if (dir && dir.kind !== "tangent") sk.constraints.push({ type: dir.kind, a: dir.entity, b: line });
+        if (hit.id === undefined && !isSolidPoint(hit)) dims.push(dim(sk, { type: "length", line, value: round(2 * dist([c.x, c.y], hit.p)) }));
+        setChain(undefined);
       });
       askDims(dims);
       return;
