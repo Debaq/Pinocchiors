@@ -237,6 +237,24 @@ pub struct Sketch {
     /// viejos no lo tienen hasta que se editan.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<u32>,
+    /// Textos insertados como curvas (se mueven en bloque y se pueden rehacer).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<SketchText>,
+}
+
+/// Texto del sketch: sus curvas se mueven en bloque con `anchor` (el comienzo
+/// de la línea base), que se puede arrastrar, acotar o anclar como cualquier
+/// punto. El texto, el tamaño y la fuente sirven para rehacerlo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchText {
+    pub id: u32,
+    pub text: String,
+    pub size: f64,
+    #[serde(default)]
+    pub font: String,
+    pub anchor: u32,
+    pub entities: Vec<u32>,
+    pub points: Vec<u32>,
 }
 
 impl Sketch {
@@ -391,6 +409,74 @@ impl Sketch {
     }
 
     fn run_solver(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
+        if self.texts.is_empty() {
+            return self.solve_system(drag);
+        }
+        // Los puntos de los textos que no toca nada más no entran al solver (un
+        // texto tiene cientos y haría lento cada arrastre): se mueven con su ancla
+        let order: HashMap<u32, usize> = self.points.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+        let held = self.hold_text_points();
+        // Arrastrar uno de esos puntos es arrastrar el texto entero
+        let drag = drag.map(|(p, t)| match held.iter().find(|h| h.0 == p) {
+            Some(&(_, a, d)) => (a, [t[0] - d[0], t[1] - d[1]]),
+            None => (p, t),
+        });
+        let result = self.solve_system(drag);
+        for &(id, a, d) in &held {
+            let at = self.point(a)?;
+            self.points.push(SketchPoint { id, x: at[0] + d[0], y: at[1] + d[1] });
+        }
+        self.points.sort_by_key(|p| order.get(&p.id).copied().unwrap_or(usize::MAX));
+        let mut report = result?;
+        // Si el ancla está libre, el texto entero lo está
+        for t in &self.texts {
+            if report.free_points.contains(&t.anchor) {
+                report.free_points.extend(&t.points);
+                report.free_entities.extend(&t.entities);
+            }
+        }
+        report.free_points.sort_unstable();
+        report.free_points.dedup();
+        report.free_entities.sort_unstable();
+        report.free_entities.dedup();
+        Ok(report)
+    }
+
+    /// Saca de `points` los puntos de textos que no usa ninguna restricción ni
+    /// otra entidad; devuelve cada uno con su ancla y su distancia a ella.
+    fn hold_text_points(&mut self) -> Vec<(u32, u32, P2)> {
+        let mut keep: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for e in &self.entities {
+            let in_text = self.texts.iter().any(|t| t.entities.contains(&e.id));
+            if !in_text || self.constraints.iter().any(|c| c.mentions(None, Some(e.id))) {
+                keep.extend(e.geometry.point_ids());
+            }
+        }
+        for p in &self.points {
+            if self.constraints.iter().any(|c| c.mentions(Some(p.id), None)) {
+                keep.insert(p.id);
+            }
+        }
+        keep.extend(self.origin);
+        keep.extend(self.texts.iter().map(|t| t.anchor));
+        let mut held = Vec::new();
+        for t in &self.texts {
+            let Ok(a) = self.point(t.anchor) else { continue };
+            for &q in &t.points {
+                if !keep.contains(&q)
+                    && let Ok(p) = self.point(q)
+                {
+                    held.push((q, t.anchor, [p[0] - a[0], p[1] - a[1]]));
+                    keep.insert(q);
+                }
+            }
+        }
+        let gone: std::collections::HashSet<u32> = held.iter().map(|h| h.0).collect();
+        self.points.retain(|p| !gone.contains(&p.id));
+        held
+    }
+
+    fn solve_system(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
         let index: HashMap<u32, usize> = self.points.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
         let mut sys = ConstraintSystem::new();
         for p in &self.points {
@@ -431,6 +517,19 @@ impl Sketch {
         }
         if let Some(o) = self.origin {
             sys.add_constraint(Constraint::Fixed { p_idx: ix(o)?, position: Point2::new(0.0, 0.0) });
+        }
+        // Textos rígidos: cada punto guarda su distancia al ancla (la de ahora)
+        for t in &self.texts {
+            let Some(&a) = index.get(&t.anchor) else { continue };
+            for q in &t.points {
+                let Some(&i) = index.get(q) else { continue };
+                if i == a {
+                    continue;
+                }
+                let (pq, pa) = (&self.points[i], &self.points[a]);
+                sys.add_constraint(Constraint::HorizontalDist { p1_idx: i, p2_idx: a, distance: pq.x - pa.x });
+                sys.add_constraint(Constraint::VerticalDist { p1_idx: i, p2_idx: a, distance: pq.y - pa.y });
+            }
         }
         // Qué restricción de alto nivel generó cada ecuación del solver
         let implicit = sys.constraints.len();

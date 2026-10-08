@@ -14,6 +14,7 @@ import {
   addRectangle,
   ensureOrigin,
   removeEntity,
+  removeText,
   type CadStore,
   type EdgeRef,
   type FaceRef,
@@ -349,6 +350,8 @@ export function createCadUi(store: CadStore) {
     deleteSelection() {
       const ids = new Set(selection());
       ui.change((s) => {
+        // Un texto se borra entero (alcanza con elegir una de sus curvas o su ancla)
+        for (const t of [...(s.texts ?? [])]) if ([t.anchor, ...t.entities].some((x) => ids.has(x))) removeText(s, t);
         // Un punto suelto se elige por su punto
         for (const e of [...s.entities]) if (ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point))) removeEntity(s, e.id);
       });

@@ -467,3 +467,5 @@ cargo test -p cad-model
   exportar" ofrece el ensamble cuando tiene instancias; STEP con cada instancia en su lugar, su
   nombre y el color de su pieza, y en malla (3MF, STL, OBJ, PLY, GLB) un objeto por instancia
   (`cad_export` con `assembly`).
+- **2026-10-08 Texto del sketch como bloque editable** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 7):
+  se mueve entero con su ancla y se puede cambiar lo que dice y el tamaño.

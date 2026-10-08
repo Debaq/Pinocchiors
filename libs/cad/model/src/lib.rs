@@ -26,4 +26,4 @@ pub use feature::*;
 pub use geom::{P2, P3, Plane};
 pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};
 pub use regions::{Loop, LoopPiece, Region, find_regions};
-pub use sketch::{Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SolveReport};
+pub use sketch::{Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SolveReport};

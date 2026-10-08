@@ -4,7 +4,7 @@ import { clsx } from "clsx";
 import { CadViewer, planeToWorld } from "../../lib/CadViewer";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addTextContours, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, partColor, partHidden, samePart, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -173,6 +173,38 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
   const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
+  /** Texto elegido con «Elegir» (una de sus curvas o su ancla): se puede rehacer */
+  const selectedText = () => {
+    const s = ui.session();
+    if (!s || ui.tool() !== "select") return undefined;
+    for (const id of ui.selection()) {
+      const t = textOf(s.sketch, id);
+      if (t) return t;
+    }
+    return undefined;
+  };
+  /** Rehace las curvas de un texto en su ancla (mismo ancla y mismo id) */
+  const rewriteText = async (id: number, text: string, size: number) => {
+    try {
+      const font = await loadTextFont();
+      const s = ui.session();
+      const t = s?.sketch.texts?.find((x) => x.id === id);
+      const a = t && s!.sketch.points.find((p) => p.id === t.anchor);
+      if (!t || !a || !text.trim()) return;
+      const at: P2 = [a.x, a.y];
+      const contours = outlineContours(font.getPath(text, 0, 0, size).commands, at);
+      ui.change((sk) => {
+        const cur = sk.texts?.find((x) => x.id === id);
+        if (!cur) return;
+        removeText(sk, cur, true);
+        addText(sk, contours, at, { text, size, font: fontName() }, cur.anchor, cur.id);
+      });
+      ui.setSelection([t.anchor]);
+      ui.setMessage(undefined);
+    } catch (err) {
+      ui.setMessage(`No se pudo leer la fuente: ${err}`);
+    }
+  };
   const [textValue, setTextValue] = createSignal("Texto");
   const [textSize, setTextSize] = createSignal(10);
   const [fontName, setFontName] = createSignal("Liberation Sans");
@@ -703,7 +735,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       loadTextFont()
         .then((font) => {
           const contours = outlineContours(font.getPath(text, 0, 0, textSize()).commands, at);
-          ui.change((sk) => addTextContours(sk, contours));
+          ui.change((sk) => addText(sk, contours, at, { text, size: textSize(), font: fontName() }));
           ui.setMessage(undefined);
         })
         .catch((err) => ui.setMessage(`No se pudo leer la fuente: ${err}`));
@@ -1670,6 +1702,42 @@ export const CadView: Component<CadViewProps> = (props) => {
                   />
                 </label>
               </Show>
+              {/* Texto elegido: cambiar lo que dice o su tamaño */}
+              <For each={selectedText() ? [selectedText()!.id] : []}>
+                {(id) => {
+                  const current = () => ui.session()?.sketch.texts?.find((t) => t.id === id);
+                  const [text, setText] = createSignal(current()?.text ?? "");
+                  const [size, setSize] = createSignal(current()?.size ?? 10);
+                  return (
+                    <>
+                      <input
+                        type="text"
+                        value={text()}
+                        aria-label="Texto elegido"
+                        class="w-32 px-1.5 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                        onInput={(e) => setText(e.currentTarget.value)}
+                        onKeyDown={(e) => e.key === "Enter" && void rewriteText(id, text(), size())}
+                      />
+                      <label class="flex items-center gap-1 text-xs text-text-muted">
+                        Tamaño
+                        <input
+                          type="number"
+                          min="0.1"
+                          step="1"
+                          value={size()}
+                          aria-label="Tamaño del texto elegido"
+                          class="w-14 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                          onChange={(e) => setSize(Math.max(0.1, parseFloat(e.currentTarget.value) || 10))}
+                        />
+                        mm
+                      </label>
+                      <Button size="sm" onClick={() => void rewriteText(id, text(), size())}>
+                        Rehacer texto
+                      </Button>
+                    </>
+                  );
+                }}
+              </For>
               <Show when={ui.tool() === "polygon"}>
                 <label class="flex items-center gap-1 text-xs text-text-muted">
                   Lados

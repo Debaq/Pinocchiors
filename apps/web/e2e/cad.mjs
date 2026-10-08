@@ -2180,8 +2180,38 @@ const scenarios = {
     })()`);
     await b.click(...(await at(0.07, 0.13)), { wait: 2000 });
     // H (1) + o (anillo y su agujero) + l (1) + a (cuerpo y agujero)
-    const regions = parseInt(await sketchText(b, "/\\d+ regiones cerradas/"));
+    let regions = 0;
+    for (let t = 0; t < 20 && !(regions >= 5); t++, await sleep(250)) regions = parseInt(await sketchText(b, "/\\d+ regiones cerradas/"));
     if (!(regions >= 5)) throw new Error(`regiones: ${regions}`);
+    // Es un bloque: le quedan solo los 2 grados de libertad de su ancla
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    let s0 = await sk();
+    if (s0.texts?.length !== 1 || s0.texts[0].text !== "Hola") throw new Error(`textos: ${JSON.stringify(s0.texts)}`);
+    if ((await b.eval(`window.__cadUi.session().report?.dof`)) !== 2) throw new Error(`grados libres: ${await b.eval(`window.__cadUi.session().report?.dof`)}`);
+    // Arrastrar el ancla lleva todo el texto
+    const t0 = s0.texts[0];
+    const P = (s, id) => s.points.find((q) => q.id === id);
+    const a0 = P(s0, t0.anchor), q0 = P(s0, t0.points[5]);
+    await b.eval(`window.__cadUi.drag(${t0.anchor}, [${a0.x + 3}, ${a0.y + 2}])`);
+    await sleep(1500);
+    let s1 = await sk();
+    near(P(s1, t0.points[5]).x - q0.x, 3, 1e-6, "el texto se movió en x");
+    near(P(s1, t0.points[5]).y - q0.y, 2, 1e-6, "el texto se movió en y");
+    // Elegir el texto y cambiar lo que dice
+    await b.clickText("Elegir");
+    await b.eval(`window.__cadUi.setSelection([${t0.anchor}])`);
+    await sleep(400);
+    await b.eval(`(() => {
+      const i = document.querySelector('input[aria-label="Texto elegido"]');
+      i.value = "Hola!";
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await b.clickText("Rehacer texto");
+    await sleep(2000);
+    s1 = await sk();
+    if (s1.texts?.length !== 1 || s1.texts[0].text !== "Hola!" || s1.texts[0].anchor !== t0.anchor) throw new Error(`rehacer: ${JSON.stringify(s1.texts?.map((t) => t.text))}`);
+    if (!(s1.texts[0].entities.length > t0.entities.length)) throw new Error("no se agregó el signo");
+    await b.shot("texto_rehecho");
     await b.clickText("Terminar sketch");
     await sleep(1500);
     await b.clickText("Extrusión");

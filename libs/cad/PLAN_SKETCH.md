@@ -105,8 +105,12 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
 5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05.*
 6. **Elipse y spline con manijas.** *Hecha el 2026-10-05 (manijas solo en los extremos; las intermedias y la curvatura quedan para más adelante).*
 7. **Texto** (después de decidir fuentes). *Hecha el 2026-10-05 con opentype.js (decisión del
-   usuario): el texto se inserta como curvas; pendiente: que quede rígido (hoy sus puntos
-   quedan libres) y poder editarlo después.*
+   usuario): el texto se inserta como curvas. Desde el 2026-10-08 queda como bloque
+   (`Sketch.texts`: texto, tamaño, fuente, ancla, curvas y puntos): sus puntos se mueven con el
+   ancla (el comienzo de la línea base), que se arrastra, acota o ancla como cualquier punto; los
+   que no toca nada más no entran al solver (se reponen con su distancia al ancla: 3 s → 15 ms
+   con "Hola"); elegido con «Elegir», la barra deja cambiar lo que dice y el tamaño y lo rehace
+   en el mismo lugar; borrar una de sus curvas borra el texto entero.*
 
 ## Pruebas
 

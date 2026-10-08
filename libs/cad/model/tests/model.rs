@@ -958,3 +958,33 @@ fn folders_roundtrip_and_are_optional() {
     assert_eq!(back.folders, doc.folders);
     assert!(!serde_json::to_string(&Document::new()).unwrap().contains("folders"));
 }
+
+#[test]
+fn sketch_text_moves_as_a_block() {
+    // Un "texto" de dos líneas: arrastrar cualquiera de sus puntos lleva todo con el ancla
+    let mut s = Sketch::new();
+    let anchor = s.add_point(0.0, 0.0);
+    let p = [s.add_point(1.0, 0.0), s.add_point(2.0, 3.0), s.add_point(4.0, 0.0)];
+    let l1 = s.add_line(p[0], p[1]);
+    let l2 = s.add_line(p[1], p[2]);
+    s.texts.push(SketchText { id: 99, text: "A".into(), size: 3.0, font: String::new(), anchor, entities: vec![l1, l2], points: p.to_vec() });
+    s.solve_drag(p[1], [12.0, 8.0]).unwrap();
+    let at = |id| s.point(id).unwrap();
+    assert_relative_eq!(at(anchor)[0], 10.0, epsilon = 1e-6);
+    assert_relative_eq!(at(anchor)[1], 5.0, epsilon = 1e-6);
+    assert_relative_eq!(at(p[2])[0], 14.0, epsilon = 1e-6);
+    assert_relative_eq!(at(p[0])[1], 5.0, epsilon = 1e-6);
+    // Sin otras restricciones solo le quedan los dos del ancla
+    assert_eq!(s.solve().unwrap().dof, 2);
+}
+
+#[test]
+fn sketch_text_keeps_its_regions() {
+    let mut s = Sketch::new();
+    let anchor = s.add_point(-1.0, -1.0);
+    let p = [s.add_point(0.0, 0.0), s.add_point(4.0, 0.0), s.add_point(4.0, 4.0), s.add_point(0.0, 4.0)];
+    let l: Vec<u32> = (0..4).map(|k| s.add_line(p[k], p[(k + 1) % 4])).collect();
+    s.texts.push(SketchText { id: 99, text: "□".into(), size: 4.0, font: String::new(), anchor, entities: l, points: p.to_vec() });
+    s.solve().unwrap();
+    assert_eq!(find_regions(&s).unwrap().len(), 1);
+}

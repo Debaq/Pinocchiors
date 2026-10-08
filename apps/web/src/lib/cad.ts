@@ -160,6 +160,19 @@ export interface Sketch {
   next_id?: number;
   /** Punto origen, fijo en (0, 0): no se borra */
   origin?: number;
+  /** Textos insertados como curvas: se mueven en bloque con su ancla y se pueden rehacer */
+  texts?: SketchText[];
+}
+
+/** Texto del sketch: el ancla es el comienzo de la línea base */
+export interface SketchText {
+  id: number;
+  text: string;
+  size: number;
+  font: string;
+  anchor: number;
+  entities: number[];
+  points: number[];
 }
 
 export type PrimitiveShape =
@@ -977,6 +990,30 @@ export function addTextContours(s: Sketch, contours: Contour[]): number[] {
   return out;
 }
 
+/** Inserta un texto (sus contornos ya armados en `at`) como bloque rígido con ancla en `at` */
+export function addText(s: Sketch, contours: Contour[], at: P2, meta: { text: string; size: number; font: string }, anchor?: number, id?: number): SketchText {
+  const ents = addTextContours(s, contours);
+  const used = new Set(ents.flatMap((e) => geometryPoints(s.entities.find((x) => x.id === e)!.geometry)));
+  const t: SketchText = { id: id ?? sketchId(s), ...meta, anchor: anchor ?? addPoint(s, at), entities: ents, points: [...used] };
+  s.texts = [...(s.texts ?? []), t];
+  return t;
+}
+
+/** El texto al que pertenece una entidad o un punto (su ancla incluida) */
+export function textOf(s: Sketch, id: number): SketchText | undefined {
+  return s.texts?.find((t) => t.anchor === id || t.entities.includes(id) || t.points.includes(id));
+}
+
+/** Saca un texto entero: sus curvas, sus puntos y (salvo `keepAnchor`) el ancla */
+export function removeText(s: Sketch, t: SketchText, keepAnchor = false): void {
+  s.texts = (s.texts ?? []).filter((x) => x.id !== t.id);
+  for (const e of t.entities) removeEntity(s, e);
+  if (!keepAnchor) {
+    s.points = s.points.filter((p) => p.id !== t.anchor);
+    s.constraints = s.constraints.filter((c) => !Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && !["value", "degrees", "x", "y"].includes(k) && v === t.anchor));
+  }
+}
+
 /** Puntos que usa una geometría */
 export function geometryPoints(g: Geometry): number[] {
   switch (g.type) {
@@ -1158,9 +1195,15 @@ export function removeEntity(s: Sketch, id: number): void {
   const pointsOf = geometryPoints;
   const mentions = (c: SketchConstraint, ids: Set<number>) => Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && k !== "value" && k !== "degrees" && k !== "x" && k !== "y" && ids.has(v));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set([id])));
-  const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
+  const anchors = new Set((s.texts ?? []).map((t) => t.anchor));
+  const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !anchors.has(p) && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
   s.points = s.points.filter((p) => !loose.includes(p.id));
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set(loose)));
+  // Los textos se quedan con lo que les queda
+  for (const t of s.texts ?? []) {
+    t.entities = t.entities.filter((x) => x !== id);
+    t.points = t.points.filter((p) => !loose.includes(p));
+  }
 }
 
 /** Líneas que llegan a un punto (para redondear esquinas) */
