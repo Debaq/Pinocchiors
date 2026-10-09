@@ -16,6 +16,12 @@ pub struct DiagnosticResult {
     pub free_points: Vec<usize>,
     /// DOF por punto: (punto_idx, dof_count)
     pub dof_per_point: Vec<(usize, i32)>,
+    /// Puntos con un solo grado libre y la dirección (unitaria) en que se
+    /// pueden mover (con dos, se mueven en cualquier dirección).
+    pub free_dirs: Vec<(usize, [f64; 2])>,
+    /// Base del espacio nulo del jacobiano (columnas): los movimientos que
+    /// las restricciones permiten.
+    pub nullspace: nalgebra::DMatrix<f64>,
     /// Resumen general
     pub status: DiagnosticStatus,
 }
@@ -53,6 +59,8 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
             minimal_conflict_set: vec![],
             free_points: (0..n_points).collect(),
             dof_per_point: (0..n_points).map(|i| (i, 2)).collect(),
+            free_dirs: vec![],
+            nullspace: nalgebra::DMatrix::identity(n_var, n_var),
             status: DiagnosticStatus::UnderConstrained,
         };
     }
@@ -109,8 +117,13 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
     // restricciones, aunque pudiera deslizarse.
     let null = nullspace(&full_jac);
     let mut dof_per_point = Vec::with_capacity(n_points);
+    let mut free_dirs = Vec::new();
     for pi in 0..n_points {
-        dof_per_point.push((pi, point_dof_in_nullspace(&null, pi)));
+        let (dof, dir) = point_dof_in_nullspace(&null, pi);
+        dof_per_point.push((pi, dof));
+        if let (1, Some(d)) = (dof, dir) {
+            free_dirs.push((pi, d));
+        }
     }
     let free_points: Vec<usize> = dof_per_point
         .iter()
@@ -134,6 +147,8 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
         minimal_conflict_set,
         free_points,
         dof_per_point,
+        free_dirs,
+        nullspace: null,
         status,
     }
 }
@@ -256,7 +271,7 @@ fn rank_without_rows(jac: &nalgebra::DMatrix<f64>, start_row: usize, n_rows: usi
 
 /// DOF de un punto: 2 - rank de las 2 columnas del Jacobiano correspondientes.
 /// Base del espacio nulo (columnas) por autovectores de JᵀJ.
-fn nullspace(jac: &nalgebra::DMatrix<f64>) -> nalgebra::DMatrix<f64> {
+pub fn nullspace(jac: &nalgebra::DMatrix<f64>) -> nalgebra::DMatrix<f64> {
     let n = jac.ncols();
     let jtj = jac.transpose() * jac;
     let eig = nalgebra::SymmetricEigen::new(jtj);
@@ -265,14 +280,31 @@ fn nullspace(jac: &nalgebra::DMatrix<f64>) -> nalgebra::DMatrix<f64> {
     nalgebra::DMatrix::from_fn(n, keep.len(), |r, c| eig.eigenvectors[(r, keep[c])])
 }
 
-fn point_dof_in_nullspace(null: &nalgebra::DMatrix<f64>, point_idx: usize) -> i32 {
+/// Grados libres de un punto y, si es uno solo, hacia dónde se mueve.
+fn point_dof_in_nullspace(null: &nalgebra::DMatrix<f64>, point_idx: usize) -> (i32, Option<[f64; 2]>) {
     let (cx, cy) = (point_idx * 2, point_idx * 2 + 1);
     if cy >= null.nrows() || null.ncols() == 0 {
-        return 0;
+        return (0, None);
     }
     let sub = nalgebra::DMatrix::from_fn(2, null.ncols(), |r, c| null[(if r == 0 { cx } else { cy }, c)]);
-    let svd = sub.svd(false, false);
-    svd.singular_values.iter().filter(|&&v| v > 1e-6).count() as i32
+    let svd = sub.svd(true, false);
+    let u = svd.u.as_ref().expect("SVD con U");
+    let keep: Vec<usize> = (0..svd.singular_values.len()).filter(|&i| svd.singular_values[i] > 1e-6).collect();
+    let dir = match keep.as_slice() {
+        [i] => Some([u[(0, *i)], u[(1, *i)]]),
+        _ => None,
+    };
+    (keep.len() as i32, dir)
+}
+
+/// Grados libres de un grupo de puntos (rango del espacio nulo en sus columnas).
+pub fn points_dof(null: &nalgebra::DMatrix<f64>, points: &[usize]) -> i32 {
+    if null.ncols() == 0 || points.is_empty() {
+        return 0;
+    }
+    let rows: Vec<usize> = points.iter().flat_map(|&p| [p * 2, p * 2 + 1]).filter(|&r| r < null.nrows()).collect();
+    let sub = nalgebra::DMatrix::from_fn(rows.len(), null.ncols(), |r, c| null[(rows[r], c)]);
+    sub.svd(false, false).singular_values.iter().filter(|&&v| v > 1e-6).count() as i32
 }
 
 #[allow(dead_code)]

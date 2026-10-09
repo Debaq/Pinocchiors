@@ -622,3 +622,10 @@ cargo test -p cad-model
   polos, peine de curvatura con inflexiones y radio mínimo, y curvatura igual (G2) con
   splines por polos. Puente C++: curvas 6 (B-spline), 7 (arco de elipse) y 8 (spline con
   tangentes por punto).
+- **2026-10-09 Solver II** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 14): flechas de grados libres
+  (dirección de cada punto que solo desliza, radio libre), grados de lo elegido, sugerir
+  restricciones (casi cumplidas y cotas que faltan, solo las independientes), definir todo con
+  cotas desde el origen (sin mover nada), cambios grandes de cota en pasos para no dar vuelta
+  la geometría y resolución parcial con conflicto (lo demás se cumple). `cad_model::sketch_assist`,
+  `Sketch::build` separado del resolver. Pruebas: Rust `model/tests/sketch_solver2.rs` (6) y e2e
+  "solver II…".

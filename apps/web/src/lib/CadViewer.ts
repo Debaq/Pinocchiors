@@ -80,6 +80,8 @@ export interface SketchOverlay {
   warnEntities?: number[];
   /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
   curvature?: { comb: [P2, P2][]; inflections: P2[] };
+  /** Grados libres: puntos con una sola dirección (y cuál), puntos libres del todo y círculos con el radio libre */
+  freedom?: { dirs: [number, P2][]; free: number[]; radius: number[] };
 }
 
 function inPolygon(p: P2, poly: P2[]): boolean {
@@ -978,6 +980,7 @@ export class CadViewer {
     const pts = new THREE.Points(pg, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true, depthTest: false }));
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
+    if (overlay.freedom) this.drawFreedom(overlay.freedom, sketch, lines);
     if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
     for (const p of overlay.problems ?? []) marker(p, themeHex("error"), 11);
     for (const p of overlay.curvature?.inflections ?? []) marker(p, themeHex("purple"), 11);
@@ -1617,6 +1620,44 @@ export class CadViewer {
   }
 
   /** Tamaño en mm de un píxel cerca del objetivo (para tolerancias de clic) */
+  /** Flechas dobles de lo que todavía se mueve: en la dirección de los puntos
+   * que solo deslizan, en cruz en los que van a cualquier lado y hacia afuera
+   * en los círculos con el radio libre (tamaño fijo en pantalla al dibujar) */
+  private drawFreedom(f: NonNullable<SketchOverlay["freedom"]>, sketch: Sketch, lines: (pts: P2[], color: number) => void) {
+    const color = themeHex("yellow");
+    const len = this.pixelSizeMm() * 13;
+    const head = len * 0.35;
+    const at = new Map(sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+    const arrow = (p: P2, d: P2) => {
+      const n: P2 = [-d[1], d[0]];
+      for (const s of [1, -1]) {
+        const tip: P2 = [p[0] + s * d[0] * len, p[1] + s * d[1] * len];
+        lines([p, tip], color);
+        const back: P2 = [-s * d[0], -s * d[1]];
+        lines([[tip[0] + (back[0] + n[0] * 0.6) * head, tip[1] + (back[1] + n[1] * 0.6) * head], tip, [tip[0] + (back[0] - n[0] * 0.6) * head, tip[1] + (back[1] - n[1] * 0.6) * head]], color);
+      }
+    };
+    const one = new Map(f.dirs);
+    for (const id of f.free) {
+      const p = at.get(id);
+      if (!p) continue;
+      const d = one.get(id);
+      if (d) arrow(p, d);
+      else {
+        arrow(p, [1, 0]);
+        arrow(p, [0, 1]);
+      }
+    }
+    for (const id of f.radius) {
+      const e = sketch.entities.find((x) => x.id === id);
+      if (e?.geometry.type !== "circle") continue;
+      const c = at.get(e.geometry.center);
+      if (!c) continue;
+      const d: P2 = [Math.SQRT1_2, Math.SQRT1_2];
+      arrow([c[0] + d[0] * e.geometry.radius, c[1] + d[1] * e.geometry.radius], d);
+    }
+  }
+
   pixelSizeMm(): number {
     const h = this.renderer.domElement.clientHeight || 1;
     const dist = this.camera.position.distanceTo(this.controls.target);

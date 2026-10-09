@@ -900,6 +900,20 @@ export interface SolveReport {
   free_points: number[];
   /** Entidades a las que les falta definir (algún punto o el radio libre) */
   free_entities?: number[];
+  /** Puntos con un solo grado libre y hacia dónde se mueven (los otros libres van a cualquier lado) */
+  free_dirs?: [number, P2][];
+  /** Grados libres de cada entidad libre */
+  entity_dof?: [number, number][];
+  /** Círculos con el radio libre */
+  free_radius?: number[];
+  /** Hubo conflicto: se resolvió todo menos las que chocan */
+  partial?: boolean;
+}
+
+/** Restricción que le falta al sketch y por qué */
+export interface SketchSuggestion {
+  constraint: SketchConstraint;
+  why: string;
 }
 
 export interface SketchView {
@@ -3363,6 +3377,10 @@ export function createCadStore() {
     /** Entidades de otro sketch (ya calculado) en este plano */
     projectSketch: (feature: number, plane: Plane) => invoke<(Projected & { entity: number })[]>("cad_project_sketch", { feature, plane }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
+    /** Relaciones casi cumplidas y cotas que faltan (solo las que restringen algo) */
+    suggestSketch: (sketch: Sketch) => invoke<SketchSuggestion[]>("cad_sketch_suggest", { sketch }),
+    /** Lo que define el sketch entero (cotas con lo que mide; con `relations`, también las relaciones casi cumplidas) */
+    defineSketch: (sketch: Sketch, relations: boolean) => invoke<SketchConstraint[]>("cad_sketch_define", { sketch, relations }),
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */
     /** Con `assembly`, las instancias del ensamble en su lugar */

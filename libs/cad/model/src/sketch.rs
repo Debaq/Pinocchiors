@@ -346,6 +346,38 @@ pub struct SolveReport {
     /// sus puntos, o su radio, está libre).
     #[serde(default)]
     pub free_entities: Vec<u32>,
+    /// Puntos con un solo grado libre y hacia dónde se mueven (unitaria); los
+    /// demás libres se mueven en cualquier dirección.
+    #[serde(default)]
+    pub free_dirs: Vec<(u32, [f64; 2])>,
+    /// Grados libres de cada entidad libre.
+    #[serde(default)]
+    pub entity_dof: Vec<(u32, i32)>,
+    /// Círculos con el radio libre.
+    #[serde(default)]
+    pub free_radius: Vec<u32>,
+    /// Hubo conflicto y se resolvió todo menos las que chocan.
+    #[serde(default)]
+    pub partial: bool,
+}
+
+/// Sistema del solver armado desde un sketch.
+pub(crate) struct Built {
+    pub sys: ConstraintSystem,
+    /// Índice en el solver de cada punto (por id)
+    pub index: HashMap<u32, usize>,
+    /// Punto de borde de cada círculo o arco (el radio)
+    pub rims: HashMap<u32, usize>,
+    /// Cuántas ecuaciones implícitas van primero en `sys.constraints`
+    pub implicit: usize,
+    /// Restricción del sketch de cada ecuación desde `implicit`
+    pub origin: Vec<usize>,
+}
+
+/// Ángulo en grados llevado a (−180, 180].
+fn wrap_degrees(d: f64) -> f64 {
+    let w = d.rem_euclid(360.0);
+    if w > 180.0 { w - 360.0 } else { w }
 }
 
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -571,7 +603,7 @@ impl Sketch {
         self.entities.iter().find(|e| e.id == id).ok_or(SketchError::NoEntity(id))
     }
 
-    fn line_points(&self, id: u32) -> Result<(u32, u32), SketchError> {
+    pub(crate) fn line_points(&self, id: u32) -> Result<(u32, u32), SketchError> {
         match self.entity(id)?.geometry {
             Geometry::Line { start, end } => Ok((start, end)),
             _ => Err(SketchError::WrongKind(id, "una línea")),
@@ -669,7 +701,9 @@ impl Sketch {
         held
     }
 
-    fn solve_system(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
+    /// Arma el sistema del solver: puntos, ecuaciones implícitas (radios,
+    /// arcos, elipses, origen, aristas usadas, textos) y las restricciones.
+    pub(crate) fn build(&self) -> Result<Built, SketchError> {
         let index: HashMap<u32, usize> = self.points.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
         let mut sys = ConstraintSystem::new();
         for p in &self.points {
@@ -753,27 +787,118 @@ impl Sketch {
             }
         }
 
+        Ok(Built { sys, index, rims, implicit, origin })
+    }
+
+    /// Copia al sketch los puntos resueltos (y los radios de los círculos).
+    fn write_back(&mut self, index: &HashMap<u32, usize>, rims: &HashMap<u32, usize>, points: &[Point2]) {
+        for (p, q) in self.points.iter_mut().zip(points) {
+            p.x = q.x();
+            p.y = q.y();
+        }
+        for e in &mut self.entities {
+            if let Geometry::Circle { center, radius } = &mut e.geometry
+                && let (Some(&rim), Some(&c)) = (rims.get(&e.id), index.get(center))
+            {
+                *radius = (points[rim].co - points[c].co).norm();
+            }
+        }
+        // El origen queda exacto (el solver lo deja a 1e-13)
+        if let Some(o) = self.points.iter_mut().find(|p| Some(p.id) == self.origin) {
+            (o.x, o.y) = (0.0, 0.0);
+        }
+    }
+
+    /// Resuelve sin diagnóstico; deja la geometría solo si cumple todo.
+    pub(crate) fn solve_quiet(&mut self) -> bool {
+        let Ok(Built { mut sys, index, rims, .. }) = self.build() else { return false };
+        match cad_solver::solve(&mut sys, &cad_solver::SolverParams::default()) {
+            Ok(r) if r.residual < 1e-6 && matches!(r.status, SolveStatus::Converged | SolveStatus::UnderConstrained) => {
+                self.write_back(&index, &rims, &r.points);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Cambio grande de una cota (más de un 25 %, o de 15°): se llega en pasos,
+    /// cada uno desde el anterior, para que la geometría no se dé vuelta ni
+    /// salte a otra solución lejos de la que había.
+    fn ease_large_changes(&mut self) {
+        let size = self.extent().max(1e-3);
+        let mut moves: Vec<(usize, f64, f64, bool)> = Vec::new();
+        let mut steps = 1.0f64;
+        for (i, c) in self.constraints.iter().enumerate() {
+            if c.is_reference() {
+                continue;
+            }
+            let (Some(to), Some(from)) = (c.value(), self.measure(c)) else { continue };
+            let angle = matches!(c, SketchConstraint::Angle { .. });
+            let n = if angle {
+                (wrap_degrees(to - from).abs() / 15.0).ceil()
+            } else if from.abs() > 1e-9 && to * from > 0.0 {
+                ((to / from).ln().abs() / 1.25f64.ln()).ceil()
+            } else {
+                ((to - from).abs() / (0.1 * size)).ceil()
+            };
+            if n > 1.0 && n.is_finite() {
+                moves.push((i, from, to, angle));
+                steps = steps.max(n);
+            }
+        }
+        if moves.is_empty() {
+            return;
+        }
+        let steps = steps.min(16.0) as usize;
+        let at = |&(_, from, to, angle): &(usize, f64, f64, bool), t: f64| {
+            if angle {
+                wrap_degrees(from + t * wrap_degrees(to - from))
+            } else if from.abs() > 1e-9 && to * from > 0.0 {
+                from * (to / from).powf(t)
+            } else {
+                from + t * (to - from)
+            }
+        };
+        for k in 1..steps {
+            let t = k as f64 / steps as f64;
+            for m in &moves {
+                self.constraints[m.0].set_value(at(m, t));
+            }
+            if !self.solve_quiet() {
+                break;
+            }
+        }
+        for m in &moves {
+            self.constraints[m.0].set_value(m.2);
+        }
+    }
+
+    /// Lado mayor de la caja de los puntos.
+    pub(crate) fn extent(&self) -> f64 {
+        let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+        for p in &self.points {
+            lo = [lo[0].min(p.x), lo[1].min(p.y)];
+            hi = [hi[0].max(p.x), hi[1].max(p.y)];
+        }
+        if lo[0] > hi[0] { 0.0 } else { (hi[0] - lo[0]).max(hi[1] - lo[1]) }
+    }
+
+    fn solve_system(&mut self, drag: Option<(u32, P2)>) -> Result<SolveReport, SketchError> {
+        if drag.is_none() {
+            self.ease_large_changes();
+        }
+        let Built { mut sys, index, rims, implicit, origin } = self.build()?;
+        let ix = |id: u32| index.get(&id).copied().ok_or(SketchError::NoPoint(id));
+        let start = sys.points.clone();
+
         let result = match drag {
             Some((p, t)) => cad_solver::solve_drag(&mut sys, ix(p)?, Point2::new(t[0], t[1])),
             None => cad_solver::solve(&mut sys, &cad_solver::SolverParams::default()),
         };
         let (status, dof, residual) = match &result {
             Ok(r) => {
-                for (p, q) in self.points.iter_mut().zip(&r.points) {
-                    p.x = q.x();
-                    p.y = q.y();
-                }
-                for e in &mut self.entities {
-                    if let Geometry::Circle { center, radius } = &mut e.geometry
-                        && let (Some(&rim), Some(&c)) = (rims.get(&e.id), index.get(center))
-                    {
-                        *radius = (r.points[rim].co - r.points[c].co).norm();
-                    }
-                }
-                // El origen queda exacto (el solver lo deja a 1e-13)
-                if let Some(o) = self.points.iter_mut().find(|p| Some(p.id) == self.origin) {
-                    (o.x, o.y) = (0.0, 0.0);
-                }
+                let pts = r.points.clone();
+                self.write_back(&index, &rims, &pts);
                 (r.status, r.dof, r.residual)
             }
             Err(_) => (SolveStatus::NotConverged, 0, f64::INFINITY),
@@ -807,6 +932,33 @@ impl Sketch {
             conflicting.push(ci);
             redundant_dim = true;
         }
+        // Resolución parcial: sin las que chocan, lo demás se cumple entero (en
+        // vez de un término medio que no cumple ninguna); las que chocan
+        // quedan marcadas
+        let mut partial = false;
+        if !conflicting.is_empty() && !redundant_dim {
+            let culprits: Vec<usize> = {
+                let min: Vec<usize> = diag.minimal_conflict_set.iter().filter(|&&i| i >= implicit).map(|&i| origin[i - implicit]).collect();
+                if min.is_empty() { conflicting.clone() } else { min }
+            };
+            let mut part = ConstraintSystem::new();
+            part.points = start;
+            for (i, c) in sys.constraints.iter().enumerate() {
+                if i < implicit || !culprits.contains(&origin[i - implicit]) {
+                    part.add_constraint(c.clone());
+                }
+            }
+            let r = match drag {
+                Some((p, t)) => cad_solver::solve_drag(&mut part, ix(p)?, Point2::new(t[0], t[1])),
+                None => cad_solver::solve(&mut part, &cad_solver::SolverParams::default()),
+            };
+            if let Ok(r) = r
+                && r.residual < 1e-6
+            {
+                self.write_back(&index, &rims, &r.points);
+                partial = true;
+            }
+        }
         let free: std::collections::HashSet<usize> = diag.dof_per_point.iter().filter(|(_, d)| *d > 0).map(|(pi, _)| *pi).collect();
         for &pi in &free {
             if pi < self.points.len() {
@@ -815,13 +967,23 @@ impl Sketch {
         }
         free_points.sort_unstable();
         let mut free_entities = Vec::new();
+        let (mut entity_dof, mut free_radius) = (Vec::new(), Vec::new());
         for e in &self.entities {
             let mut idx: Vec<usize> = e.geometry.point_ids().iter().filter_map(|id| index.get(id).copied()).collect();
             idx.extend(rims.get(&e.id));
             if idx.iter().any(|i| free.contains(i)) {
                 free_entities.push(e.id);
+                entity_dof.push((e.id, cad_solver::points_dof(&diag.nullspace, &idx)));
+                if let (Some(&rim), Geometry::Circle { center, .. }) = (rims.get(&e.id), &e.geometry)
+                    && let Some(&c) = index.get(center)
+                    && cad_solver::points_dof(&diag.nullspace, &[c, rim]) > cad_solver::points_dof(&diag.nullspace, &[c])
+                {
+                    free_radius.push(e.id);
+                }
             }
         }
+        let free_dirs: Vec<(u32, [f64; 2])> =
+            diag.free_dirs.iter().filter(|(pi, _)| *pi < self.points.len()).map(|&(pi, d)| (self.points[pi].id, d)).collect();
         // Las cotas de referencia muestran lo que mide el sketch resuelto
         for i in 0..self.constraints.len() {
             if self.constraints[i].is_reference()
@@ -839,7 +1001,7 @@ impl Sketch {
                 _ => SketchStatus::WellConstrained,
             }
         };
-        Ok(SolveReport { status, dof, residual, conflicting, free_points, free_entities })
+        Ok(SolveReport { status, dof, residual, conflicting, free_points, free_entities, free_dirs, entity_dof, free_radius, partial })
     }
 
     /// Lo que mide una cota en la geometría actual.
@@ -973,7 +1135,7 @@ impl Sketch {
     }
 
     /// Traduce una restricción a ecuaciones del solver.
-    fn lower(
+    pub(crate) fn lower(
         &self,
         c: &SketchConstraint,
         ix: &dyn Fn(u32) -> Result<usize, SketchError>,

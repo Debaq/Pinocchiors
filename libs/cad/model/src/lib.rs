@@ -19,6 +19,7 @@ pub mod project;
 pub mod regions;
 pub mod sheet;
 pub mod sketch;
+pub mod sketch_assist;
 pub mod standard;
 pub mod threads;
 
@@ -31,4 +32,5 @@ pub use geom::{P2, P3, Plane};
 pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};
 pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use threads::ThreadAxis;
+pub use sketch_assist::Suggestion;
 pub use sketch::{DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, TextStyle, SolveReport, UseSource};

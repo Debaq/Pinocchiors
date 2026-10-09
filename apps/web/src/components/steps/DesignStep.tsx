@@ -70,6 +70,7 @@ import {
   type SketchEntity,
   type Geometry,
   type SketchConstraint,
+  type SketchSuggestion,
   type ThreadAxis,
   type ThreadLink,
   type ThreadWant,
@@ -4012,6 +4013,11 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const [fillSpacing, setFillSpacing] = createSignal(10);
   const [fillMargin, setFillMargin] = createSignal(1);
   const [fillHex, setFillHex] = createSignal(false);
+  // Restricciones que faltan: se piden con el botón; cambiar el sketch deja la lista vieja
+  const [missing, setMissing] = createSignal<SketchSuggestion[]>();
+  const [defineRelations, setDefineRelations] = createSignal(true);
+  const [assistBusy, setAssistBusy] = createSignal(false);
+  createEffect(on(() => ui.sketchHistory(), () => setMissing(undefined), { defer: true }));
   const s = () => ui.session()!;
   const sketch = (): Sketch => s().sketch;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
@@ -4037,6 +4043,39 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
     return 0;
   };
   const add = (c: SketchConstraint | SketchConstraint[]) => ui.change((s) => s.constraints.push(...[c].flat()));
+  const askMissing = async () => {
+    setAssistBusy(true);
+    try {
+      setMissing(await props.store.suggestSketch(sketch()));
+    } catch (e) {
+      ui.setMessage(String(e));
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+  /** Agrega sugeridas y vuelve a preguntar qué falta (con lo nuevo puesto) */
+  const applyMissing = (list: SketchSuggestion[]) => {
+    ui.setHoverIds([]);
+    add(list.map((m) => m.constraint));
+    void askMissing();
+  };
+  const defineAll = async () => {
+    setAssistBusy(true);
+    try {
+      const more = await props.store.defineSketch(sketch(), defineRelations());
+      if (more.length === 0) ui.setMessage("No encontré qué agregar: lo que queda libre no se define con cotas simples");
+      else {
+        add(more);
+        setMissing(undefined);
+      }
+    } catch (e) {
+      ui.setMessage(String(e));
+    } finally {
+      setAssistBusy(false);
+    }
+  };
+  /** Grados libres de una entidad (undefined: ya definida) */
+  const entityDof = (id: number) => s().report?.entity_dof?.find((d) => d[0] === id)?.[1];
   const measure = (c: SketchConstraint) => +(measureConstraint(sketch(), c) ?? 0).toFixed(3);
   const isArc = (id: number) => entity(id)?.geometry.type === "arc";
 
@@ -4209,11 +4248,67 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 : r().status === "under_constrained"
                   ? `${r().dof} grados de libertad`
                   : r().status === "over_constrained"
-                    ? "Hay restricciones en conflicto (marcadas en rojo)"
+                    ? r().partial
+                      ? "Hay restricciones en conflicto (marcadas en rojo); lo demás se cumple"
+                      : "Hay restricciones en conflicto (marcadas en rojo)"
                     : "No se pudo resolver"}
               {" · "}
               {s().regions.length} regiones cerradas
             </p>
+          )}
+        </Show>
+      </Section>
+
+      <Section title="Definir">
+        <Show when={selEntities().length === 1 && entityDof(selEntities()[0]!.id)}>
+          {(n) => (
+            <p class="text-xs text-text-muted" data-entity-dof={n()}>
+              Lo elegido tiene {n()} {n() === 1 ? "grado libre" : "grados libres"} (las flechas amarillas muestran hacia dónde se mueve)
+            </p>
+          )}
+        </Show>
+        <div class="flex flex-wrap gap-1.5">
+          <Button size="sm" disabled={assistBusy()} title="Relaciones casi cumplidas (casi horizontal, casi coincidentes…) y cotas que faltan" onClick={() => void askMissing()}>
+            Sugerir restricciones
+          </Button>
+          <Button
+            size="sm"
+            disabled={assistBusy() || s().report?.status === "well_constrained"}
+            title="Agrega lo que falta para que quede totalmente definido: cotas con lo que mide ahora (nada se mueve) desde el origen"
+            onClick={() => void defineAll()}
+          >
+            Definir todo
+          </Button>
+        </div>
+        <Checkbox small label="Con las relaciones casi cumplidas" checked={defineRelations()} onChange={setDefineRelations} />
+        <Show when={missing()}>
+          {(list) => (
+            <Show when={list().length > 0} fallback={<p class="text-xs text-text-dim">No falta nada evidente</p>}>
+              <div class="space-y-0.5 max-h-56 overflow-y-auto" aria-label="Restricciones sugeridas">
+                <For each={list()}>
+                  {(m) => (
+                    <div
+                      class="flex items-center gap-2 px-1.5 py-0.5 rounded text-xs text-text-muted hover:bg-surface"
+                      data-suggestion={m.constraint.type}
+                      onMouseEnter={() => ui.setHoverIds(constraintIds(m.constraint))}
+                      onMouseLeave={() => ui.setHoverIds([])}
+                    >
+                      <span class="w-4 shrink-0 text-center text-[10px]">{GLYPHS[m.constraint.type] ?? (isDimension(m.constraint) ? "↔" : "·")}</span>
+                      <span class="flex-1 truncate" title={m.why}>
+                        {CONSTRAINT_LABELS[m.constraint.type]}
+                        <span class="text-text-dim"> · {m.why}</span>
+                      </span>
+                      <Button size="sm" variant="ghost" onClick={() => applyMissing([m])}>
+                        Agregar
+                      </Button>
+                    </div>
+                  )}
+                </For>
+              </div>
+              <Button size="sm" onClick={() => applyMissing(list())}>
+                Agregar todas ({list().length})
+              </Button>
+            </Show>
           )}
         </Show>
       </Section>

@@ -2166,6 +2166,86 @@ const scenarios = {
     await b.shot("cotas_restricciones_2");
   },
 
+  async "solver II: grados libres, sugerir, definir todo, cambio grande sin dar vuelta y conflicto parcial"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    // Rectángulo dibujado un poco torcido con una esquina en el origen, y un círculo suelto
+    const sketch = {
+      points: [P(0, 0, 0), P(1, 20, 0.25), P(2, 20.3, 10), P(3, -0.2, 10.1), P(4, 8, 5)],
+      entities: [
+        { id: 10, geometry: { type: "line", start: 0, end: 1 } },
+        { id: 11, geometry: { type: "line", start: 1, end: 2 } },
+        { id: 12, geometry: { type: "line", start: 2, end: 3 } },
+        { id: 13, geometry: { type: "line", start: 3, end: 0 } },
+        { id: 14, geometry: { type: "circle", center: 4, radius: 2.5 } },
+      ],
+      constraints: [],
+      next_id: 20,
+      origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    const id = doc.next_id;
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1200);
+    const report = () => b.eval(`window.__cadUi.session().report`);
+    const pt = (id) => b.eval(`(() => { const p = window.__cadUi.session().sketch.points.find((q) => q.id === ${id}); return [p.x, p.y]; })()`);
+    let r = await report();
+    if (r.status !== "under_constrained") throw new Error(`sin restricciones: ${r.status}`);
+    if (!(r.free_radius ?? []).includes(14)) throw new Error("el radio del círculo está libre");
+    if (!(r.entity_dof ?? []).some(([e, n]) => e === 10 && n === 2)) throw new Error(`la línea del origen tiene 2 grados libres: ${JSON.stringify(r.entity_dof)}`);
+    if (!(await b.eval(`!!document.querySelector('button[aria-label="Mostrar libres"]')`))) throw new Error("falta el botón de las flechas");
+    // Lo elegido dice cuántos grados le faltan
+    await b.eval(`window.__cadUi.setSelection([10])`);
+    await sleep(300);
+    const dof = await b.eval(`document.querySelector("[data-entity-dof]")?.getAttribute("data-entity-dof")`);
+    if (dof !== "2") throw new Error(`grados de lo elegido: ${dof}`);
+    await b.eval(`window.__cadUi.setSelection([])`);
+    await sleep(300);
+    await b.shot("solver-ii-libres");
+    await sleep(200);
+    // Sugerencias: las cuatro casi horizontales/verticales, sin paralelas que sobran
+    await b.clickText("Sugerir restricciones");
+    await sleep(1200);
+    const kinds = await b.eval(`[...document.querySelectorAll("[data-suggestion]")].map((e) => e.dataset.suggestion)`);
+    for (const k of ["horizontal", "vertical"]) {
+      if (kinds.filter((x) => x === k).length !== 2) throw new Error(`sugerencias ${k}: ${kinds}`);
+    }
+    if (kinds.includes("parallel") || kinds.includes("perpendicular")) throw new Error(`sugiere lo que sobra: ${kinds}`);
+    await b.clickContains("Agregar todas");
+    await sleep(1500);
+    near((await pt(1))[1], 0, 1e-6, "la de abajo quedó horizontal");
+    near((await pt(2))[0], (await pt(1))[0], 1e-6, "la derecha quedó vertical");
+    // Definir todo: totalmente definido
+    await b.clickText("Definir todo");
+    await sleep(1500);
+    r = await report();
+    if (r.status !== "well_constrained") throw new Error(`después de definir todo: ${r.status} (${r.dof})`);
+    // Cambio grande del ancho (×8): llega en pasos y no se da vuelta
+    const iLen = await b.eval(`window.__cadUi.session().sketch.constraints.findIndex((c) => c.type === "length" && c.line === 10)`);
+    if (iLen < 0) throw new Error("falta el largo de abajo");
+    const msg = await b.eval(`window.__cadUi.setConstraintText(${iLen}, "160")`);
+    if (msg) throw new Error(msg);
+    await sleep(1500);
+    near((await pt(1))[0], 160, 1e-5, "ancho nuevo");
+    near((await pt(2))[0], 160, 1e-5, "esquina de arriba");
+    if (!((await pt(2))[1] > 5)) throw new Error(`se dio vuelta: ${await pt(2)}`);
+    // Conflicto: un segundo largo en la derecha; lo demás se cumple entero
+    await b.eval(`window.__cadUi.change((s) => s.constraints.push({ type: "length", line: 11, value: 30 }))`);
+    await sleep(1500);
+    r = await report();
+    if (r.status !== "over_constrained" || !r.partial || r.conflicting.length === 0) throw new Error(`conflicto: ${JSON.stringify({ s: r.status, p: r.partial, c: r.conflicting })}`);
+    near((await pt(1))[1], 0, 1e-6, "sigue horizontal con el conflicto");
+    near((await pt(2))[0], 160, 1e-5, "sigue vertical con el conflicto");
+    const text = await b.eval(`document.body.innerText`);
+    if (!text.includes("lo demás se cumple")) throw new Error("el panel no dice que lo demás se cumple");
+    await b.shot("solver-ii");
+  },
+
   async "curvas: spline por polos, punto en spline, tangente en la unión, cónica, paralelogramo, arco elíptico, línea infinita, ranura por 3 puntos, convertir, peine y texto sobre curva"(b) {
     await begin(b);
     await sketchOn(b);

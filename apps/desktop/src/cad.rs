@@ -376,6 +376,19 @@ pub fn cad_solve_sketch(mut sketch: Sketch, drag: Option<(u32, [f64; 2])>) -> Re
     Ok(SolvedSketch { sketch, report, regions })
 }
 
+/// Restricciones que le faltan al sketch (casi cumplidas o cotas de tamaño).
+#[tauri::command]
+pub fn cad_sketch_suggest(sketch: Sketch) -> Result<Vec<cad_model::Suggestion>, String> {
+    sketch.suggest().map_err(|e| e.to_string())
+}
+
+/// Lo que hay que agregar para definir el sketch entero (con las relaciones
+/// casi cumplidas si `relations`).
+#[tauri::command]
+pub fn cad_sketch_define(sketch: Sketch, relations: bool) -> Result<Vec<cad_model::SketchConstraint>, String> {
+    sketch.auto_define(relations).map_err(|e| e.to_string())
+}
+
 /// mm por unidad de la escena (1 si no hay escena: el CAD solo se ve en mm).
 fn mm_per_unit(state: &AppState) -> f64 {
     state.scene.lock().unwrap().as_ref().map_or(1.0, |s| s.meters_per_unit * 1000.0)
@@ -1584,6 +1597,8 @@ pub mod bridge {
             "cad_preview" => ok(preview_impl(state, arg(args, "document")?)?),
             "cad_evaluate" => ok(evaluate(state)?),
             "cad_solve_sketch" => ok(cad_solve_sketch(arg(args, "sketch")?, arg(args, "drag")?)?),
+            "cad_sketch_suggest" => ok(cad_sketch_suggest(arg(args, "sketch")?)?),
+            "cad_sketch_define" => ok(cad_sketch_define(arg(args, "sketch")?, arg(args, "relations")?)?),
             "cad_mesh" => mesh_impl(state).map(Reply::Bytes),
             "cad_tool_mesh" => tool_mesh_impl(state, arg(args, "feature")?).map(Reply::Bytes),
             "cad_flat_pattern" => ok(flat_pattern_impl(state, arg::<Option<cad_model::PartId>>(args, "part").unwrap_or(None))?),

@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 16 y 17 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 14, 16 y 17 están hechas (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -118,6 +118,26 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     (10), unidades en `expr.rs`, node `sketchTransform.test.mjs` y `sketchGlyphs.test.mjs`, e2e
     "cotas II y restricciones II…".*
 
+14. **Solver II**: grados libres por entidad a la vista, sugerir restricciones faltantes,
+    definir completamente, cambios grandes de cota sin invertir, resolución parcial con
+    conflicto. *Hecha el 2026-10-09: el diagnóstico devuelve la base del espacio nulo y, por
+    punto con un solo grado libre, la dirección en que se mueve (`SolveReport.free_dirs`,
+    `entity_dof`, `free_radius`); el visor dibuja flechas dobles amarillas (cruz en los puntos
+    libres del todo, radial en los círculos con radio libre; botón «Libres»), y lo elegido dice
+    cuántos grados le faltan. `cad_model::sketch_assist`: candidatas casi cumplidas (coincidentes,
+    alineadas con el origen, horizontal/vertical, tangentes, perpendiculares, paralelas, mismo
+    largo o radio, concéntricas, punto sobre línea o círculo) y cotas (radio, diámetro, largo,
+    semiejes, posición desde el origen); solo pasan las que restringen algo nuevo: cada una se
+    proyecta contra el espacio nulo, que se achica al aceptarla, y las relaciones se resuelven
+    en una copia antes de seguir (sobre la geometría torcida, dos casi horizontales no son
+    paralelas «gratis»). Definir todo toma primero las cotas bien condicionadas (un 20 % de la
+    fila tiene que ser nuevo: largo + distancia horizontal de una línea casi horizontal define
+    su altura pero un redondeo la mueve mucho). Cambios grandes: más de un 25 % (o 15°) se
+    recorren en pasos geométricos (hasta 16), cada uno desde el anterior; los ángulos por el
+    lado corto. Conflicto: se vuelve a resolver sin el conjunto mínimo que choca (todo lo demás
+    se cumple entero, `partial`). Comandos `cad_sketch_suggest`, `cad_sketch_define`; sección
+    «Definir» del panel. Pruebas: Rust `model/tests/sketch_solver2.rs` (6); e2e "solver II…".*
+
 16. **Entidades II**: línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en
     arco por 3 puntos, estilo y alineación del texto, texto sobre una curva. *Hecha el
     2026-10-09: `Geometry::EllipseArc` (el solver deja los extremos sobre la elipse; OCCT
@@ -180,17 +200,6 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
   atado mientras se dibuja.
 - **Línea central / eje de revolución** como herramienta (construcción marcada como eje; la
   toman la revolución y el diámetro respecto del eje sin elegirla).
-
-### 14. Solver II (L, backend)
-
-- **Grados libres por entidad a la vista** (qué se puede mover y hacia dónde).
-- **Sugerir restricciones faltantes** (casi horizontal, casi coincidentes, cotas que faltan).
-- **Definir completamente de forma automática** (cotas desde el origen y relaciones obvias,
-  como «Fully Define» de SolidWorks).
-- **Cambios grandes de cota sin invertir la geometría** (pasos graduales cuando el salto es
-  grande, y elegir la solución más cercana a la anterior).
-- **Resolución parcial con conflicto**: resolver lo que se pueda y marcar lo que choca (hoy no
-  se mueve nada).
 
 ### 15. Plano y vista (S–M, backend)
 
@@ -269,7 +278,7 @@ total, entre círculos mín./máx., ordenadas, cadena, unidades en la cota, bloq
 nombre/valor/fórmula, reubicar el texto.
 
 **Solucionador** — ✅ tiempo real, grados de libertad, sub/total/sobredefinido, colores por
-estado, indicador global, redundantes, conflictos, lista con eliminar, arrastre estable. — 14:
+estado, indicador global, redundantes, conflictos, lista con eliminar, arrastre estable,
 sugerir restricciones, definir automáticamente, grados libres por entidad, cambios grandes sin
 invertir, resolución parcial.
 
@@ -308,7 +317,9 @@ bloques, subsketches, capas.
 - **Proyección de intersecciones y siluetas** (fase 8): curvas B-spline de OCCT a geometría
   del sketch; aproximar con splines y avisar si quedan muchas.
 - **Solver denso** (~800 incógnitas ≈ 4 s): las fases 14 y 17 suman incógnitas; si hace falta,
-  pasar a jacobiano disperso (`jacobian_sparse` ya existe en el sistema).
+  pasar a jacobiano disperso (`jacobian_sparse` ya existe en el sistema). Sugerir y definir
+  todo proyectan contra una base densa n × n (cuadrático por ecuación): con miles de
+  incógnitas tardan segundos.
 - **Glifos de restricciones** (fase 9): con sketches grandes tapan el dibujo; agrupar por
   entidad y ocultar al alejar.
 - **Sketch 3D** (fase 20): es casi un modo nuevo (solver con puntos 3D); dejarlo al final.

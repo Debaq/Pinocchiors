@@ -870,6 +870,18 @@ export const CadView: Component<CadViewProps> = (props) => {
       ],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
+      // Flechas de lo que se mueve (los puntos de un texto van con su ancla)
+      freedom:
+        s.report && ui.sketchShow().freedom && ui.sketchShow().points
+          ? (() => {
+              const inText = new Set((s.sketch.texts ?? []).flatMap((t) => t.points.filter((p) => p !== t.anchor)));
+              return {
+                dirs: (s.report.free_dirs ?? []).filter(([p]) => !inText.has(p)),
+                free: s.report.free_points.filter((p) => !inText.has(p) && p !== s.sketch.origin),
+                radius: s.report.free_radius ?? [],
+              };
+            })()
+          : undefined,
       // Peine de curvatura: dientes de hasta ~60 px
       curvature: (() => {
         const id = ui.combEntity();
@@ -2918,7 +2930,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 )}
               </Show>
               <div class="w-px h-5 bg-border mx-1" />
-              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"]] as const}>
+              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"], ["freedom", "Libres"]] as const}>
                 {([k, label]) => (
                   <button
                     aria-label={`Mostrar ${label.toLowerCase()}`}

@@ -142,6 +142,8 @@ export interface SketchShow {
   constraints: boolean;
   construction: boolean;
   points: boolean;
+  /** Flechas de lo que todavía se puede mover */
+  freedom: boolean;
 }
 /** Qué dice la etiqueta de una cota: el valor, su nombre (d1, d2… o el parámetro) o la fórmula con el valor */
 export type DimLabel = "value" | "name" | "expr";
@@ -186,7 +188,7 @@ export function createCadUi(store: CadStore) {
   const [message, setMessage] = createSignal<string>();
   // Modo construcción (como Onshape): lo que se dibuja sale de construcción
   const [constructionMode, setConstructionMode] = createSignal(false);
-  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true });
+  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
   /** Spline con el peine de curvatura a la vista */
   const [combEntity, setCombEntity] = createSignal<number>();
