@@ -102,6 +102,8 @@ pub fn run() {
             remesh::get_remesh_preview_data,
             remesh::remesh_discard,
             remesh::remesh_apply,
+            remesh::remesh_info,
+            remesh::remesh_voxel_grid,
             commands::set_active_mesh,
             commands::get_active_mesh,
             // UV / Piel

@@ -8,7 +8,7 @@
 // Capturas en $E2E_OUT (por defecto /tmp/pinocchio-e2e). Cada escenario
 // verifica volúmenes contra el valor teórico.
 
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { launch, sleep } from "./cdp.mjs";
 
 const PORT = process.env.E2E_BRIDGE_PORT ?? "8766";
@@ -19,6 +19,28 @@ const SPECULUM = process.env.E2E_STL ?? `${process.env.HOME}/Descargas/macho_esp
 
 function near(actual, expected, tol, what) {
   if (!(Math.abs(actual - expected) <= tol)) throw new Error(`${what}: ${actual} (esperado ${expected} ± ${tol})`);
+}
+
+/** STL de texto con dos cubos de 20 mm, el segundo corrido 10 mm en cada eje */
+function twoCubesStl() {
+  const quads = [
+    [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
+    [[0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]],
+    [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]],
+    [[0, 1, 0], [0, 1, 1], [1, 1, 1], [1, 1, 0]],
+    [[0, 0, 0], [0, 0, 1], [0, 1, 1], [0, 1, 0]],
+    [[1, 0, 0], [1, 1, 0], [1, 1, 1], [1, 0, 1]],
+  ];
+  let text = "solid dos\n";
+  for (const offset of [0, 10]) {
+    for (const q of quads) {
+      const v = q.map((p) => p.map((c) => c * 20 + offset));
+      for (const t of [[v[0], v[1], v[2]], [v[0], v[2], v[3]]]) {
+        text += " facet normal 0 0 0\n  outer loop\n" + t.map((p) => `   vertex ${p.join(" ")}\n`).join("") + "  endloop\n endfacet\n";
+      }
+    }
+  }
+  return text + "endsolid dos\n";
 }
 
 async function begin(b) {
@@ -3017,9 +3039,9 @@ const scenarios = {
     if (!(await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`))) throw new Error("sin el panel de retopología");
     await b.shot("remallar");
     // Un modo que todavía no está: lo dice, y sin el panel de la retopología
-    await b.eval(`document.querySelector('[data-mode="voxel"]').click()`);
+    await b.eval(`document.querySelector('[data-mode="quads"]').click()`);
     await sleep(300);
-    if (!(await b.eval(`!!document.querySelector("[data-remesh-pending]")`))) throw new Error("vóxeles sin aviso");
+    if (!(await b.eval(`!!document.querySelector("[data-remesh-pending]")`))) throw new Error("a quads sin aviso");
     if (await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`)) throw new Error("el panel de retopología sigue a la vista");
   },
 
@@ -3121,6 +3143,79 @@ const scenarios = {
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
     for (let t = 0; t < 40 && (await mesh()).hash !== before.hash; t++) await sleep(250);
     if ((await mesh()).hash !== before.hash) throw new Error("deshacer no devolvió la malla");
+  },
+
+  async "remallar: isótropo con lado en mm y aristas vivas"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Caja", kind: { type: "primitive", shape: { type: "box", dx: 30, dy: 20, dz: 10, centered: true, centered_z: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 51;
+    })`);
+    await sleep(2500);
+    const triangles = async () => new Uint32Array(await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer(), 0, 4)[1] / 3;
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="isotropic"]').click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-isotropic-estimate]")`)); t++) await sleep(250);
+    if (await b.eval(`!!document.querySelector("[data-isotropic-broken]")`)) throw new Error("la caja no debería figurar rota");
+    const before = await triangles();
+    // Lado de 2 mm: la caja de 30 × 20 × 10 (2200 mm²) da ≈ 1270 triángulos
+    await b.eval(`(() => { const i = document.querySelector("[data-isotropic] input[type=number]"); i.value = "2"; i.dispatchEvent(new InputEvent("input", { bubbles: true })); })()`);
+    await sleep(300);
+    const estimate = await b.eval(`parseInt(document.querySelector("[data-isotropic-estimate]").textContent.replace(/\\D/g, ""))`);
+    near(estimate, 1270, 30, "triángulos estimados");
+    await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
+    for (let t = 0; t < 80 && !(await b.eval(`!!document.querySelector("[data-remesh-deviation]")`)); t++) await sleep(250);
+    const after = await b.eval(`parseInt(document.querySelector("[data-remesh-after]").textContent.split(" ")[0].replace(/\\D/g, ""))`);
+    near(after, 1270, 400, "triángulos de la vista previa");
+    // Con las aristas vivas, la caja sigue siendo caja (se aleja menos de una décima de mm)
+    const stats = await call("remesh_preview", { params: { mode: "isotropic", edge_mm: 2, sharp_angle: 45, iterations: 5, thin_features: false } });
+    if (!(stats.deviation.max_mm < 0.1)) throw new Error(`la caja se deformó: ${JSON.stringify(stats.deviation)}`);
+    await b.shot("isotropo-vista-previa");
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 80 && (await triangles()) === before; t++) await sleep(250);
+    near(await triangles(), after, 1, "triángulos aplicados");
+    // (el campo del lado tiene el foco: Ctrl+Z sería su deshacer de texto)
+    await b.eval(`document.activeElement?.blur()`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
+    for (let t = 0; t < 40 && (await triangles()) !== before; t++) await sleep(250);
+    if ((await triangles()) !== before) throw new Error("deshacer no devolvió la malla");
+  },
+
+  async "remallar: vóxeles une piezas que se cruzan y avisa si es pesado"(b) {
+    // STL con dos cubos de 20 mm que se cruzan (dos cáscaras metidas una en otra)
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    mkdirSync(out, { recursive: true });
+    const path = `${out}/dos-cubos.stl`;
+    writeFileSync(path, twoCubesStl());
+    await b.eval(`window.__nextPath = [${JSON.stringify(path)}]`);
+    await b.clickContains("Abrir / importar");
+    await sleep(3000);
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="voxel"]').click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-voxel-grid]")`)); t++) await sleep(250);
+    const grid = await b.eval(`document.querySelector("[data-voxel-grid]").textContent`);
+    if (!/Vóxel de/.test(grid) || !/MB de memoria/.test(grid)) throw new Error(`sin la estimación de la grilla: ${grid}`);
+    // Volumen de las dos cajas por separado: 16000; la unión, 15000
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 120 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
+    if (!(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`))) throw new Error("no se aplicó");
+    const analysis = await call("analyze_print3d");
+    if (!analysis.is_closed) throw new Error("la superficie rehecha no es cerrada");
+    near(analysis.volume, 15000, 300, "volumen de la unión");
+    await b.shot("voxeles-aplicado");
+    // Con el detalle al máximo, pregunta antes de correr
+    await b.eval(`(() => { const s = [...document.querySelectorAll("[data-voxel] [role=slider]")][0]; s.focus(); for (let k = 0; k < 80; k++) s.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })); })()`);
+    for (let t = 0; t < 20 && !(await b.eval(`/640/.test(document.querySelector("[data-voxel] [role=slider]")?.getAttribute("aria-valuenow") ?? "")`)); t++) await sleep(150);
+    await sleep(500);
+    // (≈ 12 millones de triángulos estimados para esta pieza)
+    await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
+    await sleep(500);
+    if (!(await b.eval(`document.body.innerText.includes("Vóxeles muy finos")`))) throw new Error("no preguntó antes de una grilla pesada");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
   },
 
   async "objetos: las piezas pasan solas a Fabricar"(b) {

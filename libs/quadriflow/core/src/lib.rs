@@ -79,6 +79,10 @@ pub enum RemeshError {
     InvalidConfig(String),
     #[error("no se pudo extraer ningún quad; probar con más quads objetivo")]
     ExtractionFailed,
+    #[error("la malla tiene aristas de más de dos caras o caras dadas vuelta: repararla o usar Vóxeles")]
+    NonManifold,
+    #[error("saldrían unos {0} triángulos, demasiados: usar un tamaño mayor")]
+    TooDense(usize),
 }
 
 /// Etapa del proceso, para reportar progreso.

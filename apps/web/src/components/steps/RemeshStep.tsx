@@ -3,6 +3,8 @@ import { clsx } from "clsx";
 import { RetopologyStep, type RetopologyStepProps } from "./RetopologyStep";
 import { SimplifyPanel, type SimplifyPanelProps } from "../panels/SimplifyPanel";
 import { SmoothPanel, type SmoothPanelProps } from "../panels/SmoothPanel";
+import { IsotropicPanel, type IsotropicPanelProps } from "../panels/IsotropicPanel";
+import { VoxelPanel, type VoxelPanelProps } from "../panels/VoxelPanel";
 
 /** Formas de ordenar la malla (ver libs/quadriflow/PLAN_REMALLAR.md) */
 export type RemeshMode = "retopology" | "simplify" | "isotropic" | "voxel" | "quads" | "smooth";
@@ -27,14 +29,14 @@ export const REMESH_MODES: { id: RemeshMode; label: string; what: string; use: s
     label: "Isótropo",
     what: "Triángulos parejos, todos del mismo tamaño.",
     use: "Escaneos con triángulos alargados; una base limpia.",
-    ready: false,
+    ready: true,
   },
   {
     id: "voxel",
     label: "Vóxeles",
     what: "Rehace la superficie desde el volumen: cierra agujeros y une lo que se cruza.",
     use: "Mallas rotas o de muchas piezas, antes de imprimir.",
-    ready: false,
+    ready: true,
   },
   {
     id: "quads",
@@ -78,7 +80,9 @@ export interface RemeshStats {
 const num = (v: number) => v.toLocaleString("es");
 const short = (v: number) => v.toLocaleString("es", { maximumSignificantDigits: 2 });
 /** Milímetros con pocas cifras (o micras si es menos de 0,1 mm) */
-const mm = (v: number) => (v > 0 && v < 0.1 ? `${short(v * 1000)} µm` : `${short(v)} mm`);
+const mm = (v: number) => (v < 0.001 ? "menos de 1 µm" : v < 0.1 ? `${short(v * 1000)} µm` : `${short(v)} mm`);
+/** Porcentaje sin cifras de más */
+const percent = (v: number) => (v < 0.001 ? "menos de 0,001" : short(v));
 
 /** Antes → después de un remallado, con la desviación al original */
 export const RemeshSummary: Component<{
@@ -113,7 +117,7 @@ export const RemeshSummary: Component<{
       <Show when={props.deviation}>
         {(d) => (
           <p data-remesh-deviation class="text-text-muted">
-            Se aleja del original hasta <span class="text-text">{mm(d().max_mm)}</span> ({short(d().max_percent)} % del tamaño); en
+            Se aleja del original hasta <span class="text-text">{mm(d().max_mm)}</span> ({percent(d().max_percent)} % del tamaño); en
             promedio {mm(d().mean_mm)}
           </p>
         )}
@@ -138,6 +142,8 @@ export interface RemeshStepProps {
   remeshStats?: { mode: RemeshMode; kind: "preview" | "applied"; stats: RemeshStats };
   simplify: Omit<SimplifyPanelProps, "triangles" | "hasPreview">;
   smooth: Omit<SmoothPanelProps, "hasPreview">;
+  isotropic: Omit<IsotropicPanelProps, "hasPreview">;
+  voxel: Omit<VoxelPanelProps, "hasPreview">;
 }
 
 /**
@@ -191,6 +197,12 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
         </Show>
         <Show when={current().id === "smooth"}>
           <SmoothPanel {...props.smooth} hasPreview={hasPreview()} />
+        </Show>
+        <Show when={current().id === "isotropic"}>
+          <IsotropicPanel {...props.isotropic} hasPreview={hasPreview()} />
+        </Show>
+        <Show when={current().id === "voxel"}>
+          <VoxelPanel {...props.voxel} hasPreview={hasPreview()} />
         </Show>
         <Show when={stats()}>
           {(s) => (

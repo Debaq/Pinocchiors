@@ -262,6 +262,8 @@ import type { SkeletonFitInfo } from "./components/steps/SkeletonStep";
 import { REMESH_MODES, type RemeshMode, type RemeshStats } from "./components/steps/RemeshStep";
 import { DEFAULT_SIMPLIFY, simplifyParams, type SimplifyConfig } from "./components/panels/SimplifyPanel";
 import { DEFAULT_SMOOTH, smoothParams, type SmoothConfig } from "./components/panels/SmoothPanel";
+import { DEFAULT_ISOTROPIC, formatMm, isotropicEdge, isotropicParams, type IsotropicConfig, type RemeshInfo } from "./components/panels/IsotropicPanel";
+import { DEFAULT_VOXEL, isHeavyGrid, voxelParams, voxelSize, type VoxelConfig, type VoxelGridInfo } from "./components/panels/VoxelPanel";
 import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
 import { CadView } from "./components/layout/CadView";
@@ -772,6 +774,11 @@ export const App: Component = () => {
   const [remeshMode, setRemeshMode] = createSignal<RemeshMode>("retopology");
   const [simplifyConfig, setSimplifyConfig] = createSignal<SimplifyConfig>(DEFAULT_SIMPLIFY);
   const [smoothConfig, setSmoothConfig] = createSignal<SmoothConfig>(DEFAULT_SMOOTH);
+  const [isotropicConfig, setIsotropicConfig] = createSignal<IsotropicConfig>(DEFAULT_ISOTROPIC);
+  const [voxelConfig, setVoxelConfig] = createSignal<VoxelConfig>(DEFAULT_VOXEL);
+  /** Tamaño y arista media del modelo (para Isótropo y Vóxeles) */
+  const [remeshInfo, setRemeshInfo] = createSignal<RemeshInfo>();
+  const [voxelGrid, setVoxelGrid] = createSignal<VoxelGridInfo>();
   /** Vista previa del remallado (el modelo no cambió) o lo último aplicado */
   const [remeshStats, setRemeshStats] = createSignal<{ mode: RemeshMode; kind: "preview" | "applied"; stats: RemeshStats }>();
   const [remeshPreviewData, setRemeshPreviewData] = createSignal<MeshData>();
@@ -5320,7 +5327,43 @@ export const App: Component = () => {
       { defer: true }
     )
   );
-  createEffect(on([simplifyConfig, smoothConfig, remeshMode], discardRemeshPreview, { defer: true }));
+  createEffect(on([simplifyConfig, smoothConfig, isotropicConfig, voxelConfig, remeshMode], discardRemeshPreview, { defer: true }));
+  // Isótropo y Vóxeles proponen tamaños según el modelo
+  const needsRemeshInfo = () =>
+    pipeline.activeStep() === "remesh" && (remeshMode() === "isotropic" || remeshMode() === "voxel") && meshLoaded();
+  createEffect(
+    on([meshData, needsRemeshInfo], ([, needed]) => {
+      setRemeshInfo(undefined);
+      if (!needed) return;
+      rawInvoke<RemeshInfo>("remesh_info")
+        .then(setRemeshInfo)
+        .catch((e) => console.error("Remesh info error:", e));
+    })
+  );
+  // La grilla de Vóxeles, al dejar de mover el control
+  let voxelGridTimer: ReturnType<typeof setTimeout> | undefined;
+  createEffect(
+    on([remeshInfo, () => voxelConfig().resolution, remeshMode], ([info, , mode]) => {
+      clearTimeout(voxelGridTimer);
+      if (!info || mode !== "voxel") return setVoxelGrid(undefined);
+      voxelGridTimer = setTimeout(() => {
+        rawInvoke<VoxelGridInfo>("remesh_voxel_grid", { voxelMm: voxelSize(voxelConfig(), info) })
+          .then(setVoxelGrid)
+          .catch((e) => console.error("Voxel grid error:", e));
+      }, 150);
+    })
+  );
+  /** Vóxeles con una grilla grande: preguntar antes */
+  const confirmHeavyRemesh = async () => {
+    const grid = voxelGrid();
+    if (remeshMode() !== "voxel" || !grid || !isHeavyGrid(grid)) return true;
+    const memory = grid.memory_mb >= 1000 ? `${(grid.memory_mb / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} GB` : `${Math.ceil(grid.memory_mb)} MB`;
+    return confirmAction({
+      title: "Vóxeles muy finos",
+      message: `Con vóxeles de ${formatMm(grid.voxel_mm)} la grilla es de ${grid.dims.join(" × ")}: necesita unos ${memory} de memoria, deja cerca de ${grid.triangles.toLocaleString("es")} triángulos y puede tardar más de un minuto. ¿Seguir?`,
+      confirmLabel: "Seguir",
+    });
+  };
   createEffect(
     on(
       () => pipeline.activeStep(),
@@ -5334,9 +5377,35 @@ export const App: Component = () => {
   /** El visor muestra el resultado en lugar del modelo */
   const showsPreview = () => previewView() === "result" && !!remeshPreviewData();
 
+  /** Desviación en % del tamaño, sin cifras de más */
+  const deviationText = (percent: number) =>
+    percent < 0.001 ? "menos de 0,001 %" : `${percent.toLocaleString("es", { maximumSignificantDigits: 2 })} %`;
+
   /** Parámetros, mensaje y paso del historial del modo elegido */
   const remeshJob = () => {
     const mode = remeshMode();
+    if (mode === "isotropic") {
+      const config = isotropicConfig();
+      const edge = formatMm(isotropicEdge(config, remeshInfo()));
+      return {
+        mode,
+        params: isotropicParams(config, remeshInfo()),
+        busy: "Remallando con triángulos parejos...",
+        step: `Remallado isótropo (${edge})`,
+        done: (stats: RemeshStats) => `Malla isótropa: ${stats.after.triangles.toLocaleString("es")} triángulos de ${edge}`,
+      };
+    }
+    if (mode === "voxel") {
+      const config = voxelConfig();
+      const size = formatMm(voxelSize(config, remeshInfo()));
+      return {
+        mode,
+        params: voxelParams(config, remeshInfo()),
+        busy: "Rehaciendo la superficie desde el volumen...",
+        step: `Rehacer con vóxeles (${size})`,
+        done: (stats: RemeshStats) => `Superficie rehecha: ${stats.after.triangles.toLocaleString("es")} triángulos, cerrada`,
+      };
+    }
     if (mode === "smooth") {
       const config = smoothConfig();
       const passes = Math.round(config.iterations);
@@ -5345,7 +5414,7 @@ export const App: Component = () => {
         params: smoothParams(config),
         busy: "Suavizando...",
         step: `Suavizar malla (${passes} ${passes === 1 ? "pasada" : "pasadas"})`,
-        done: (stats: RemeshStats) => `Malla suavizada: se movió hasta ${stats.deviation.max_percent.toLocaleString("es", { maximumSignificantDigits: 2 })} % del tamaño`,
+        done: (stats: RemeshStats) => `Malla suavizada: se movió hasta ${deviationText(stats.deviation.max_percent)} del tamaño`,
       };
     }
     const config = simplifyConfig();
@@ -5359,6 +5428,7 @@ export const App: Component = () => {
   };
 
   const handleRemeshPreview = async () => {
+    if (!(await confirmHeavyRemesh())) return;
     try {
       setIsProcessing(true);
       const { mode, params } = remeshJob();
@@ -5369,7 +5439,7 @@ export const App: Component = () => {
       });
       setRemeshStats({ mode, kind: "preview", stats });
       setStatusMessage(
-        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")}), se aleja hasta ${stats.deviation.max_percent.toLocaleString("es", { maximumSignificantDigits: 2 })} %`
+        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")}), se aleja hasta ${deviationText(stats.deviation.max_percent)}`
       );
     } catch (e) {
       console.error("Remesh preview error:", e);
@@ -5379,7 +5449,12 @@ export const App: Component = () => {
     }
   };
 
-  const handleRemeshApply = () =>
+  const handleRemeshApply = async () => {
+    // Si la vista previa ya está, el cálculo pesado ya se aceptó
+    if (remeshStats()?.kind !== "preview" && !(await confirmHeavyRemesh())) return;
+    await applyRemesh();
+  };
+  const applyRemesh = () =>
     undoable(async (done) => {
       try {
         setIsProcessing(true);
@@ -5408,6 +5483,8 @@ export const App: Component = () => {
           format: meshInfo().format,
         });
         if (result.rig_kept) await keepRig();
+        // Isótropo y Vóxeles dejan una malla sin UV: el material sin texturas
+        if (job.mode === "isotropic" || job.mode === "voxel") await loadSceneAppearance();
         setRemeshStats({ mode: job.mode, kind: "applied", stats: result.stats });
         pipeline.markCompleted("remesh");
         setStatusMessage(`${job.done(result.stats)}${result.rig_kept ? " (los pesos pasaron a la malla nueva)" : ""}`);
@@ -6131,7 +6208,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
-      remesh: { mode: remeshMode(), simplify: simplifyConfig(), smooth: smoothConfig() },
+      remesh: { mode: remeshMode(), simplify: simplifyConfig(), smooth: smoothConfig(), isotropic: isotropicConfig(), voxel: voxelConfig() },
       uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
@@ -6162,6 +6239,8 @@ export const App: Component = () => {
     retopology: retopologyConfig(),
     simplify: simplifyConfig(),
     smooth: smoothConfig(),
+    isotropic: isotropicConfig(),
+    voxel: voxelConfig(),
     uv: uvConfig(),
     repairAnalysis: repairAnalysisConfig(),
     repair: repairOptions(),
@@ -6226,6 +6305,8 @@ export const App: Component = () => {
     if (REMESH_MODES.some((m) => m.id === ui.remesh?.mode)) setRemeshMode(ui.remesh.mode);
     if (ui.remesh?.simplify) setSimplifyConfig(withDefaults(configDefaults.simplify, ui.remesh.simplify));
     if (ui.remesh?.smooth) setSmoothConfig(withDefaults(configDefaults.smooth, ui.remesh.smooth));
+    if (ui.remesh?.isotropic) setIsotropicConfig(withDefaults(configDefaults.isotropic, ui.remesh.isotropic));
+    if (ui.remesh?.voxel) setVoxelConfig(withDefaults(configDefaults.voxel, ui.remesh.voxel));
     if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
     if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
@@ -7109,6 +7190,28 @@ export const App: Component = () => {
                 onApply: handleRemeshApply,
                 onDiscard: discardRemeshPreview,
                 canExecute: meshLoaded(),
+                isProcessing: isProcessing(),
+              },
+              isotropic: {
+                config: isotropicConfig(),
+                onChange: setIsotropicConfig,
+                info: remeshInfo(),
+                onUseVoxels: () => setRemeshMode("voxel"),
+                onPreview: handleRemeshPreview,
+                onApply: handleRemeshApply,
+                onDiscard: discardRemeshPreview,
+                canExecute: meshLoaded() && !!remeshInfo(),
+                isProcessing: isProcessing(),
+              },
+              voxel: {
+                config: voxelConfig(),
+                onChange: setVoxelConfig,
+                info: remeshInfo(),
+                grid: voxelGrid(),
+                onPreview: handleRemeshPreview,
+                onApply: handleRemeshApply,
+                onDiscard: discardRemeshPreview,
+                canExecute: meshLoaded() && !!remeshInfo(),
                 isProcessing: isProcessing(),
               },
               smooth: {

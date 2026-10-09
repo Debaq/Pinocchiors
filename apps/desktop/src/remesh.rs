@@ -1,5 +1,6 @@
 //! Remallar: los modos que no son la retopología (ver
-//! `libs/quadriflow/PLAN_REMALLAR.md`). Por ahora, Simplificar y Suavizar.
+//! `libs/quadriflow/PLAN_REMALLAR.md`): Simplificar, Suavizar, Isótropo y
+//! Vóxeles.
 //!
 //! La vista previa calcula sin tocar el modelo y queda guardada hasta
 //! aplicarla o descartarla; aplicar con los mismos parámetros sobre la misma
@@ -13,7 +14,7 @@ use crate::commands::{
 use crate::state::AppState;
 use converter_scene::{IndexData, Primitive, Scene, VertexAttribute};
 use pinocchio_mesh::Mesh;
-use quadriflow_core::remesh::{self, SimplifyInput, SimplifyOptions, SmoothOptions};
+use quadriflow_core::remesh::{self, IsotropicOptions, SimplifyInput, SimplifyOptions, SmoothOptions, TriMesh, VoxelOptions};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use tauri::ipc::{Channel, Response};
@@ -25,6 +26,8 @@ use tauri::{AppHandle, State};
 pub enum RemeshParams {
     Simplify(SimplifyParams),
     Smooth(SmoothParams),
+    Isotropic(IsotropicParams),
+    Voxel(VoxelParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -59,6 +62,36 @@ pub struct SmoothParams {
     /// Mover los vértices solo según la normal (la textura no se corre)
     #[serde(default = "yes")]
     pub normal_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct IsotropicParams {
+    /// Lado de los triángulos, en mm
+    pub edge_mm: f64,
+    /// Conservar las aristas vivas desde este ángulo entre caras, en grados
+    #[serde(default)]
+    pub sharp_angle: Option<f64>,
+    #[serde(default = "five")]
+    pub iterations: usize,
+    /// Triángulos más chicos en las partes delgadas
+    #[serde(default)]
+    pub thin_features: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct VoxelParams {
+    /// Lado del vóxel, en mm
+    pub voxel_mm: f64,
+    /// Pasadas de suavizado después
+    #[serde(default)]
+    pub smooth_iterations: usize,
+    /// Isótropo después con este lado, en mm
+    #[serde(default)]
+    pub isotropic_edge_mm: Option<f64>,
+}
+
+fn five() -> usize {
+    5
 }
 
 fn yes() -> bool {
@@ -97,6 +130,27 @@ pub struct RemeshStats {
     pub deviation: DeviationInfo,
 }
 
+/// La malla del modelo, para proponer parámetros (en mm)
+#[derive(Debug, Clone, Serialize)]
+pub struct RemeshInfo {
+    pub extent_mm: f64,
+    pub mean_edge_mm: f64,
+    pub area_mm2: f64,
+    pub triangles: usize,
+    /// Isótropo la necesita manifold
+    pub manifold: bool,
+}
+
+/// La grilla que usaría Vóxeles
+#[derive(Debug, Clone, Serialize)]
+pub struct VoxelGridInfo {
+    /// Lado que se usa de verdad (el pedido, dentro de los límites)
+    pub voxel_mm: f64,
+    pub dims: [usize; 3],
+    pub triangles: usize,
+    pub memory_mb: f64,
+}
+
 /// Remallado aplicado al modelo
 #[derive(Debug, Clone, Serialize)]
 pub struct RemeshApplied {
@@ -120,6 +174,18 @@ pub async fn get_remesh_preview_data(app: AppHandle) -> Result<Response, String>
     in_background(app, |state| preview_bytes(state)).await.map(Response::new)
 }
 
+/// Tamaño y arista media de la malla, y si Isótropo puede con ella
+#[tauri::command]
+pub async fn remesh_info(app: AppHandle) -> Result<RemeshInfo, String> {
+    in_background(app, info_impl).await
+}
+
+/// La grilla y la memoria que usaría Vóxeles con vóxeles de `voxel_mm`
+#[tauri::command]
+pub async fn remesh_voxel_grid(app: AppHandle, voxel_mm: f64) -> Result<VoxelGridInfo, String> {
+    in_background(app, move |state| voxel_grid_impl(state, voxel_mm)).await
+}
+
 /// Descarta la vista previa
 #[tauri::command]
 pub fn remesh_discard(state: State<'_, AppState>) {
@@ -130,6 +196,28 @@ pub fn remesh_discard(state: State<'_, AppState>) {
 #[tauri::command]
 pub async fn remesh_apply(app: AppHandle, params: RemeshParams, on_progress: Channel<Progress>) -> Result<RemeshApplied, String> {
     in_background(app, move |state| apply_impl(state, params, &on_progress)).await
+}
+
+pub(crate) fn info_impl(state: &AppState) -> Result<RemeshInfo, String> {
+    let (scene, _) = current(state)?;
+    let (positions, indices) = WorldSurface::of(&scene).buffers();
+    let s = remesh::surface_stats(&positions, &indices);
+    let mm = scene.meters_per_unit * 1000.0;
+    Ok(RemeshInfo {
+        extent_mm: s.extent * mm,
+        mean_edge_mm: s.mean_edge * mm,
+        area_mm2: s.area * mm * mm,
+        triangles: indices.len() / 3,
+        manifold: s.manifold,
+    })
+}
+
+pub(crate) fn voxel_grid_impl(state: &AppState, voxel_mm: f64) -> Result<VoxelGridInfo, String> {
+    let (scene, _) = current(state)?;
+    let (positions, indices) = WorldSurface::of(&scene).buffers();
+    let mm = scene.meters_per_unit * 1000.0;
+    let g = remesh::voxel_grid(&positions, &indices, voxel_mm / mm);
+    Ok(VoxelGridInfo { voxel_mm: g.voxel_size * mm, dims: g.dims, triangles: g.triangles, memory_mb: g.memory as f64 / 1e6 })
 }
 
 pub(crate) fn preview_impl(state: &AppState, params: RemeshParams, progress: &Channel<Progress>) -> Result<RemeshStats, String> {
@@ -225,6 +313,31 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
             report(progress, "smooth", 5, "Suavizando...");
             smooth_scene(scene, p)
         }
+        RemeshParams::Isotropic(p) => {
+            report(progress, "isotropic", 5, "Remallando con triángulos parejos...");
+            let (positions, indices) = before.buffers();
+            let mm = scene.meters_per_unit * 1000.0;
+            let options = IsotropicOptions {
+                edge_length: p.edge_mm / mm,
+                sharp_angle: p.sharp_angle,
+                iterations: p.iterations,
+                thin_features: p.thin_features,
+            };
+            let mesh = remesh::isotropic(&positions, &indices, &options).map_err(|e| e.to_string())?;
+            replace_geometry(scene, &mesh, p.sharp_angle)
+        }
+        RemeshParams::Voxel(p) => {
+            report(progress, "voxel", 5, "Rehaciendo la superficie desde el volumen...");
+            let (positions, indices) = before.buffers();
+            let mm = scene.meters_per_unit * 1000.0;
+            let options = VoxelOptions {
+                voxel_size: p.voxel_mm / mm,
+                smooth_iterations: p.smooth_iterations,
+                isotropic_edge: p.isotropic_edge_mm.map(|e| e / mm),
+            };
+            let mesh = remesh::voxel(&positions, &indices, &options).map_err(|e| e.to_string())?;
+            replace_geometry(scene, &mesh, None)
+        }
     };
     report(progress, "deviation", 70, "Midiendo cuánto se aleja del original...");
     let after = WorldSurface::of(&result);
@@ -277,6 +390,14 @@ impl WorldSurface {
         }
         let mesh_diagonals = boxes.into_iter().map(|b| b.map(|(lo, hi)| diagonal(lo, hi))).collect();
         Self { positions, triangles, mesh_diagonals }
+    }
+
+    /// Posiciones e índices para los modos que rehacen la malla
+    fn buffers(&self) -> (Vec<[f32; 3]>, Vec<u32>) {
+        (
+            self.positions.iter().map(|p| p.map(|c| c as f32)).collect(),
+            self.triangles.iter().flat_map(|t| t.map(|i| i as u32)).collect(),
+        )
     }
 
     fn diagonal(&self) -> f64 {
@@ -342,6 +463,101 @@ fn simplify_scene(scene: &Scene, params: &SimplifyParams, world: &WorldSurface) 
         mesh.primitives = joined.split(&mesh.primitives, &result.indices);
     }
     out
+}
+
+/// La escena con una sola malla nueva en lugar de todas (en espacio mundo:
+/// los nodos quedan en la identidad). Sin UV ni piel: el material del
+/// modelo queda sin texturas y el esqueleto importado y sus animaciones se
+/// descartan (el rig de la app pasa aparte, ver `mesh_replaced`). Las
+/// normales se parten donde las caras forman más de `sharp_angle` grados.
+fn replace_geometry(scene: &Scene, mesh: &TriMesh, sharp_angle: Option<f64>) -> Scene {
+    let (positions, normals, indices) = split_normals(mesh, sharp_angle);
+    let material = scene.materials.first().map(|m| converter_scene::Material {
+        base_color_texture: None,
+        metallic_roughness_texture: None,
+        normal_texture: None,
+        occlusion_texture: None,
+        emissive_texture: None,
+        ..m.clone()
+    });
+    let mut out = Scene::new();
+    out.meters_per_unit = scene.meters_per_unit;
+    out.y_up = scene.y_up;
+    out.materials.extend(material);
+    let name = scene.meshes.first().map_or_else(|| "Malla".to_string(), |m| m.name.clone());
+    out.meshes.push(converter_scene::Mesh {
+        name: name.clone(),
+        primitives: vec![Primitive {
+            attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::Normals(normals)],
+            indices: Some(IndexData::U32(indices)),
+            material: (!out.materials.is_empty()).then_some(0),
+        }],
+    });
+    out.nodes.push(converter_scene::Node {
+        name,
+        transform: converter_scene::Transform::identity(),
+        mesh: Some(0),
+        skin: None,
+        children: Vec::new(),
+    });
+    out.root_nodes.push(0);
+    out
+}
+
+/// Normales por esquina: promedio (por área) de las caras del vértice que
+/// no forman más de `sharp_angle` grados con la cara de la esquina. Cada
+/// normal distinta de un vértice da un vértice aparte.
+fn split_normals(mesh: &TriMesh, sharp_angle: Option<f64>) -> (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<u32>) {
+    let p = &mesh.positions;
+    let faces: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
+    let face_normal = |t: &[u32; 3]| {
+        let [a, b, c] = t.map(|i| p[i as usize].map(f64::from));
+        let (u, w) = ([0, 1, 2].map(|k| b[k] - a[k]), [0, 1, 2].map(|k| c[k] - a[k]));
+        [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]]
+    };
+    let normals: Vec<[f64; 3]> = faces.iter().map(face_normal).collect();
+    let unit = |n: [f64; 3]| {
+        let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+        if len > 0.0 { n.map(|c| c / len) } else { n }
+    };
+    let mut around: Vec<Vec<u32>> = vec![Vec::new(); p.len()];
+    for (f, t) in faces.iter().enumerate() {
+        for &v in t {
+            around[v as usize].push(f as u32);
+        }
+    }
+    let cos = sharp_angle.map(|a| a.to_radians().cos());
+    let mut out_p = Vec::with_capacity(p.len());
+    let mut out_n = Vec::with_capacity(p.len());
+    let mut index: std::collections::HashMap<(u32, [u32; 3]), u32> = std::collections::HashMap::with_capacity(p.len());
+    let mut out_i = Vec::with_capacity(mesh.indices.len());
+    for (f, t) in faces.iter().enumerate() {
+        let own = unit(normals[f]);
+        for &v in t {
+            let mut sum = [0.0; 3];
+            for &g in &around[v as usize] {
+                let n = normals[g as usize];
+                let smooth = cos.is_none_or(|c| {
+                    let u = unit(n);
+                    u[0] * own[0] + u[1] * own[1] + u[2] * own[2] >= c
+                });
+                if smooth {
+                    for k in 0..3 {
+                        sum[k] += n[k];
+                    }
+                }
+            }
+            let n = unit(sum).map(|c| c as f32);
+            let key = (v, n.map(f32::to_bits));
+            let i = *index.entry(key).or_insert_with(|| {
+                out_p.push(p[v as usize]);
+                out_n.push(n);
+                out_p.len() as u32 - 1
+            });
+            out_i.push(i);
+        }
+    }
+    (out_p, out_n, out_i)
 }
 
 /// Suaviza cada malla de la escena (en su espacio local). Las primitivas de
@@ -704,6 +920,81 @@ mod tests {
         assert!(nr.iter().any(|n| n[0].abs() > 0.01), "la grilla ondulada no es plana");
     }
 
+    /// Esfera UV de radio 10 (unidades = mm con `meters_per_unit` 0,001)
+    fn sphere_scene() -> Scene {
+        let (rings, segments) = (24, 48);
+        let mut positions = vec![[0.0, 10.0, 0.0]];
+        for i in 1..rings {
+            let phi = std::f32::consts::PI * i as f32 / rings as f32;
+            for s in 0..segments {
+                let theta = std::f32::consts::TAU * s as f32 / segments as f32;
+                positions.push([10.0 * phi.sin() * theta.cos(), 10.0 * phi.cos(), 10.0 * phi.sin() * theta.sin()]);
+            }
+        }
+        positions.push([0.0, -10.0, 0.0]);
+        let bottom = (positions.len() - 1) as u32;
+        let ring = |i: usize, s: usize| (1 + (i - 1) * segments + s % segments) as u32;
+        let mut indices = Vec::new();
+        for s in 0..segments {
+            indices.extend([0, ring(1, s + 1), ring(1, s)]);
+            indices.extend([bottom, ring(rings - 1, s), ring(rings - 1, s + 1)]);
+            for i in 1..rings - 1 {
+                let (a, b, c, d) = (ring(i, s), ring(i, s + 1), ring(i + 1, s), ring(i + 1, s + 1));
+                indices.extend([a, b, d, a, d, c]);
+            }
+        }
+        let uvs = positions.iter().map(|p| [p[0], p[1]]).collect();
+        let mut scene = Scene::new();
+        scene.meters_per_unit = 0.001;
+        scene.materials.push(converter_scene::Material { base_color_texture: Some(converter_scene::TextureRef { texture_index: 0, tex_coord_set: 0 }), ..Default::default() });
+        scene.meshes.push(SceneMesh {
+            name: "bola".into(),
+            primitives: vec![Primitive {
+                attributes: vec![VertexAttribute::Positions(positions), VertexAttribute::TexCoords(0, uvs)],
+                indices: Some(IndexData::U32(indices)),
+                material: Some(0),
+            }],
+        });
+        scene.nodes.push(Node {
+            name: "bola".into(),
+            transform: converter_scene::Transform::identity(),
+            mesh: Some(0),
+            skin: None,
+            children: Vec::new(),
+        });
+        scene.root_nodes.push(0);
+        scene
+    }
+
+    #[test]
+    fn isotropic_and_voxel_make_a_new_mesh_in_mm() {
+        let scene = sphere_scene();
+        let channel = Channel::new(|_| Ok(()));
+        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: 1.0, sharp_angle: None, iterations: 5, thin_features: false });
+        let (out, stats) = compute(&scene, &iso, &channel).unwrap();
+        // Esfera de área 4π·100 ≈ 1257 mm² con triángulos de 1 mm: ≈ 2900
+        assert!((2000..4000).contains(&stats.after.triangles), "{}", stats.after.triangles);
+        assert!(stats.deviation.max_mm < 0.3, "{:?}", stats.deviation);
+        assert_eq!(out.meshes.len(), 1);
+        let prim = &out.meshes[0].primitives[0];
+        assert!(uv0(prim).is_none());
+        assert_eq!(normals(prim).unwrap().len(), positions(prim).unwrap().len());
+        assert!(out.materials[0].base_color_texture.is_none(), "sin UV, el material queda sin textura");
+
+        let vox = RemeshParams::Voxel(VoxelParams { voxel_mm: 0.5, smooth_iterations: 2, isotropic_edge_mm: None });
+        let (_, stats) = compute(&scene, &vox, &channel).unwrap();
+        assert!(stats.after.triangles > 1000);
+        assert!(stats.deviation.max_mm < 0.5, "{:?}", stats.deviation);
+    }
+
+    #[test]
+    fn split_normals_part_only_sharp_edges() {
+        // Dos triángulos en ángulo recto: con 60° se parten, sin ángulo no
+        let mesh = TriMesh { positions: vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], indices: vec![0, 1, 2, 1, 0, 3] };
+        assert_eq!(split_normals(&mesh, Some(60.0)).0.len(), 6);
+        assert_eq!(split_normals(&mesh, None).0.len(), 4);
+    }
+
     #[test]
     fn params_deserialize_with_defaults() {
         let p: RemeshParams = serde_json::from_str(r#"{"mode":"simplify","ratio":0.5,"max_error_percent":null}"#).unwrap();
@@ -713,5 +1004,9 @@ mod tests {
             p,
             RemeshParams::Smooth(SmoothParams { iterations: 5, strength: 0.4, sharp_angle: None, fix_borders: false, normal_only: true })
         );
+        let p: RemeshParams = serde_json::from_str(r#"{"mode":"isotropic","edge_mm":2}"#).unwrap();
+        assert_eq!(p, RemeshParams::Isotropic(IsotropicParams { edge_mm: 2.0, sharp_angle: None, iterations: 5, thin_features: false }));
+        let p: RemeshParams = serde_json::from_str(r#"{"mode":"voxel","voxel_mm":0.5}"#).unwrap();
+        assert_eq!(p, RemeshParams::Voxel(VoxelParams { voxel_mm: 0.5, smooth_iterations: 0, isotropic_edge_mm: None }));
     }
 }

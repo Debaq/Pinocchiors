@@ -16,7 +16,7 @@ use std::collections::{HashMap, VecDeque};
 use std::f64::consts::PI;
 
 /// Lados de la grilla (en vóxeles) permitidos para el eje más largo.
-const MIN_CELLS: f64 = 48.0;
+pub(crate) const MIN_CELLS: f64 = 48.0;
 const MAX_CELLS: f64 = 320.0;
 
 /// Radio (en vóxeles) de la banda cercana a la superficie: mayor que la
@@ -86,14 +86,30 @@ fn edge_state(surface: &Surface) -> EdgeState {
 /// Reconstruye la superficie cerrada que encierra la unión de los volúmenes
 /// de `surface`, con vóxeles de lado cercano a `voxel`.
 pub(crate) fn rebuild(surface: &Surface, voxel: f64) -> Surface {
+    rebuild_with_limit(surface, voxel, MAX_CELLS)
+}
+
+/// Lado del vóxel que se usa de verdad: entre `extent / max_cells` y
+/// `extent / MIN_CELLS` (`extent`, el lado más largo de la caja).
+pub(crate) fn voxel_size(extent: f64, voxel: f64, max_cells: f64) -> f64 {
+    voxel.clamp(extent / max_cells, extent / MIN_CELLS.min(max_cells))
+}
+
+/// Puntos de la grilla de cada eje con vóxeles de lado `h` (el margen incluido).
+pub(crate) fn grid_dims(size: [f64; 3], h: f64) -> [usize; 3] {
+    size.map(|e| (e / h).ceil() as usize + 6)
+}
+
+/// Como [`rebuild`], con a lo sumo `max_cells` vóxeles en el eje más largo.
+pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64) -> Surface {
     let (lo, hi) = bounds(&surface.positions);
     let extent = (hi - lo).max();
-    let h = voxel.clamp(extent / MAX_CELLS, extent / MIN_CELLS);
+    let h = voxel_size(extent, voxel, max_cells);
     // Desfase irracional: las caras alineadas con la caja (piezas CAD) no caen
     // sobre planos de la grilla, donde el signo sería ambiguo
     let origin = lo - V3::new(2.0 + 0.5f64.sqrt() * 0.5, 2.0 + 0.3f64.sqrt() * 0.5, 2.0 + 0.7f64.sqrt() * 0.5) * h;
-    let dims = ((hi - lo) / h).map(|e| e.ceil() as usize + 6);
-    let grid = Grid { origin, h, dims: [dims.x, dims.y, dims.z] };
+    let size = hi - lo;
+    let grid = Grid { origin, h, dims: grid_dims([size.x, size.y, size.z], h) };
 
     let tree = WindingTree::build(surface);
     let flags = classify(surface, &grid, &tree);

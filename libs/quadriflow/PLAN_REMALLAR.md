@@ -159,6 +159,30 @@ se hunde en las esquinas (audiómetro 26 %, molde 51 %), por eso la web respeta 
 desde 60° por defecto. Banco (release, 10 pasadas, 60°): gonfoterio 500k 2,4 s, máx 0,03 %;
 conejo 12k 0,03 s, 0,27 %; audiómetro 0,2 s, 1,5 %; molde 0,09 s, 0,003 %.
 
+*Fase 4 hecha el 2026-10-08*: `quadriflow_core::remesh::{isotropic, voxel, voxel_grid,
+surface_stats}` sobre lo que ya usaba la retopología (`isotropic::remesh`, `rebuild`), con
+`TriMesh` (posiciones + índices) de salida. Isótropo: lado en unidades de la malla, aristas
+vivas (45° por defecto), pasadas y "más fino en las partes delgadas" (`sizing.rs` mide grosor,
+no curvatura: desvío del plan); rechaza mallas no manifold (`RemeshError::NonManifold`: el
+audiómetro y el conejo tienen piezas unidas sin fundir, cientos de aristas de 3–4 caras) y las
+que darían más de 6 M de triángulos (`TooDense`). Vóxeles: `rebuild_with_limit` con hasta 640
+vóxeles en el lado largo (la retopología sigue con 320), suavizado Taubin e isótropo después
+(lado 1,5 vóxeles en la web). `voxel_grid` estima grilla, triángulos (5,5 por vóxel² de
+superficie) y memoria (1 B por punto + 180 B por triángulo), medidos con los modelos de
+`~/Descargas`. La app arma una sola malla nueva en espacio mundo (normales partidas en las
+aristas vivas, material sin texturas, sin piel; el rig pasa con `mesh_replaced`) y agrega
+`remesh_info` (tamaño, arista media, manifold) y `remesh_voxel_grid`. Web: `IsotropicPanel`
+(lado en mm; Auto = arista media, sin pasar de 1/50 del tamaño; aviso con "Usar Vóxeles"
+si no es manifold) y `VoxelPanel` (detalle = vóxeles en el lado largo, 48–640, con la
+estimación al lado); con más de 1,5 GB o 3 M de triángulos pide confirmación. Sin Cancelar:
+los dos algoritmos son de una pasada, y cortarlos a la mitad necesita revisar su interior.
+Banco (release): Vóxeles gonfoterio 160/320/640 → 1,9/3,8/14 s, 0,09/0,23/0,64 GB; molde
+640 → 17 M triángulos, 91 s, 2,9 GB. Isótropo gonfoterio lado 1/200 → 106 k triángulos en
+5 s; molde 530 k en 23 s (≈ 40 µs por triángulo de salida: lo lento es `isotropic::remesh`).
+Pruebas e2e "remallar: isótropo con lado en mm y aristas vivas" y "remallar: vóxeles une
+piezas que se cruzan y avisa si es pesado" (STL de dos cubos que se cruzan: volumen 15000 de
+la unión, cerrada).
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.

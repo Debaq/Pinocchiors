@@ -1598,6 +1598,8 @@ pub mod bridge {
                 ok(())
             }
             "remesh_apply" => ok(crate::remesh::apply_impl(state, arg(args, "params")?, &Channel::new(|_| Ok(())))?),
+            "remesh_info" => ok(crate::remesh::info_impl(state)?),
+            "remesh_voxel_grid" => ok(crate::remesh::voxel_grid_impl(state, arg(args, "voxelMm")?)?),
             _ => Ok(Reply::Json(json!(null))),
         }
     }
