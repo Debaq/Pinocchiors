@@ -10,6 +10,10 @@ export interface RemeshInfo {
   triangles: number;
   /** Isótropo la necesita manifold */
   manifold: boolean;
+  /** Textura, colores de vértice o varios materiales */
+  has_skin: boolean;
+  /** Rig con pesos */
+  has_rig: boolean;
 }
 
 /** Opciones de Isótropo (Remallar) */
@@ -151,8 +155,8 @@ export const IsotropicPanel: Component<IsotropicPanelProps> = (props) => {
       </div>
 
       <p class="text-xs text-text-dim leading-relaxed">
-        Es una malla nueva: se pierden las UV, la textura y los pesos pintados (el esqueleto se vuelve a pegar). En mallas
-        grandes tarda: unos 20 s cada medio millón de triángulos.
+        Es una malla nueva, sin UV: al aplicar se elige si trasladar la textura (se hornea sobre un mapa nuevo) y los pesos.
+        En mallas grandes tarda: unos 20 s cada medio millón de triángulos.
       </p>
 
       <RemeshActions {...props} canExecute={props.canExecute && !broken() && !tooDense()} />

@@ -105,7 +105,7 @@ type SceneEdit =
   | { op: "transform"; node: number; name: string; before: NodeTransform; after: NodeTransform };
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
-import { ConfirmDialog, type ConfirmRequest } from "./components/layout/ConfirmDialog";
+import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
 
 interface ProjectSaved {
   written: boolean;
@@ -5477,9 +5477,47 @@ export const App: Component = () => {
   const handleRemeshApply = async () => {
     // Si la vista previa ya está, el cálculo pesado ya se aceptó
     if (remeshStats()?.kind !== "preview" && !(await confirmHeavyRemesh())) return;
-    await applyRemesh();
+    const options = await askWhatToKeep();
+    if (!options) return;
+    await applyRemesh(options);
   };
-  const applyRemesh = () =>
+
+  /** Isótropo y Vóxeles hacen una malla nueva: qué se lleva de la de ahora */
+  const askWhatToKeep = async (): Promise<{ keep_texture: boolean; keep_rig: boolean } | null> => {
+    const keepAll = { keep_texture: true, keep_rig: true };
+    const mode = remeshMode();
+    const info = remeshInfo();
+    if ((mode !== "isotropic" && mode !== "voxel") || !info || (!info.has_skin && !info.has_rig)) return keepAll;
+    const choices: ConfirmChoice[] = [];
+    if (info.has_skin)
+      choices.push({
+        id: "texture",
+        label: "Trasladar la textura",
+        description:
+          "Se despliega la malla nueva y se hornea sobre su mapa la apariencia de ahora: textura, colores y relieve. Tarda unos segundos más.",
+        checked: true,
+      });
+    if (info.has_rig)
+      choices.push({
+        id: "rig",
+        label: "Trasladar los pesos",
+        description: "Cada vértice nuevo toma los pesos del punto más cercano de la malla de ahora.",
+        checked: true,
+      });
+    const name = mode === "voxel" ? "Vóxeles" : "Isótropo";
+    const answer = await confirmChoices({
+      title: "Es una malla nueva",
+      message: `${name} rehace la malla: sus vértices no son los de ahora, así que no traen ${
+        info.has_skin && info.has_rig ? "UV ni pesos" : info.has_skin ? "UV" : "pesos"
+      }. Lo que no se traslade se descarta.`,
+      confirmLabel: "Aplicar",
+      choices,
+    });
+    if (!answer) return null;
+    return { keep_texture: answer.texture ?? true, keep_rig: answer.rig ?? true };
+  };
+
+  const applyRemesh = (options: { keep_texture: boolean; keep_rig: boolean }) =>
     undoable(async (done) => {
       try {
         setIsProcessing(true);
@@ -5487,6 +5525,7 @@ export const App: Component = () => {
         const result = await busy(job.busy, () =>
           invoke<{ mesh_info: MeshInfo; stats: RemeshStats; rig_kept: boolean }>("remesh_apply", {
             params: job.params,
+            options,
             onProgress: progressChannel(),
           })
         );
@@ -6113,18 +6152,23 @@ export const App: Component = () => {
   const [autosave, setAutosave] = createPersisted<AutosaveSettings>("settings.autosave", { enabled: false, minutes: 5 });
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   /** Pregunta pendiente del diálogo de confirmación */
-  const [confirmation, setConfirmation] = createSignal<(ConfirmRequest & { resolve: (ok: boolean) => void }) | undefined>();
-  /** Pregunta con el diálogo de la app; `true` si se confirma */
-  const confirmAction = (request: ConfirmRequest) =>
-    new Promise<boolean>((resolve) => {
+  const [confirmation, setConfirmation] = createSignal<
+    (ConfirmRequest & { resolve: (answer: Record<string, boolean> | null) => void }) | undefined
+  >();
+  /** Pregunta con el diálogo de la app; con casillas, su estado por `id`
+   * (`null` si se cancela) */
+  const confirmChoices = (request: ConfirmRequest) =>
+    new Promise<Record<string, boolean> | null>((resolve) => {
       // Una pregunta nueva reemplaza a la que estaba abierta: esa queda como "no"
-      confirmation()?.resolve(false);
+      confirmation()?.resolve(null);
       setConfirmation({ ...request, resolve });
     });
-  const answerConfirmation = (ok: boolean) => {
+  /** Pregunta con el diálogo de la app; `true` si se confirma */
+  const confirmAction = async (request: ConfirmRequest) => (await confirmChoices(request)) !== null;
+  const answerConfirmation = (answer: Record<string, boolean> | null) => {
     const pending = confirmation();
     setConfirmation(undefined);
-    pending?.resolve(ok);
+    pending?.resolve(answer);
   };
 
   /** Hay trabajo que se perdería: sin archivo propio, o con cambios desde que se guardó o abrió */
@@ -7420,12 +7464,13 @@ export const App: Component = () => {
         {(request) => <RetargetDialog {...request()} onConfirm={(r) => void confirmRetarget(r)} onCancel={() => setRetargeting(undefined)} />}
       </Show>
 
-      <Show when={confirmation()}>
+      {/* Con clave: cada pregunta nueva arma el diálogo de cero (sus casillas) */}
+      <Show when={confirmation()} keyed>
         {(request) => (
           <ConfirmDialog
-            {...request()}
-            onConfirm={() => answerConfirmation(true)}
-            onCancel={() => answerConfirmation(false)}
+            {...request}
+            onConfirm={(choices) => answerConfirmation(choices)}
+            onCancel={() => answerConfirmation(null)}
           />
         )}
       </Show>

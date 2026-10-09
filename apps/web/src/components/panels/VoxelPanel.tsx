@@ -96,8 +96,8 @@ export const VoxelPanel: Component<VoxelPanelProps> = (props) => {
 
       <p class="text-xs text-text-dim leading-relaxed">
         Cierra los agujeros, une las piezas que se cruzan y quita las caras internas: el resultado siempre es cerrado, listo
-        para imprimir. Las aristas vivas quedan redondeadas a la escala del vóxel. Es una malla nueva: se pierden las UV, la
-        textura y los pesos pintados.
+        para imprimir. Las aristas vivas quedan redondeadas a la escala del vóxel. Es una malla nueva, sin UV: al aplicar se
+        elige si trasladar la textura (horneada) y los pesos.
       </p>
 
       <RemeshActions {...props} />

@@ -153,6 +153,29 @@ pub struct RemeshInfo {
     pub triangles: usize,
     /// Isótropo la necesita manifold
     pub manifold: bool,
+    /// Tiene textura, colores de vértice o varios materiales (lo que Isótropo
+    /// y Vóxeles pierden si no se hornea)
+    pub has_skin: bool,
+    /// Tiene rig con pesos (pasan a la malla nueva si no se descartan)
+    pub has_rig: bool,
+}
+
+/// Qué conservar al aplicar un modo que hace una malla nueva
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct ApplyOptions {
+    /// Desplegar la malla nueva y hornear la apariencia de la de ahora
+    /// (Isótropo y Vóxeles)
+    #[serde(default = "yes")]
+    pub keep_texture: bool,
+    /// Llevar los pesos del rig a la malla nueva (si no, se descartan)
+    #[serde(default = "yes")]
+    pub keep_rig: bool,
+}
+
+impl Default for ApplyOptions {
+    fn default() -> Self {
+        Self { keep_texture: true, keep_rig: true }
+    }
 }
 
 /// La grilla que usaría Vóxeles
@@ -208,8 +231,13 @@ pub fn remesh_discard(state: State<'_, AppState>) {
 
 /// Reemplaza la malla del modelo por la remallada
 #[tauri::command]
-pub async fn remesh_apply(app: AppHandle, params: RemeshParams, on_progress: Channel<Progress>) -> Result<RemeshApplied, String> {
-    in_background(app, move |state| apply_impl(state, params, &on_progress)).await
+pub async fn remesh_apply(
+    app: AppHandle,
+    params: RemeshParams,
+    options: Option<ApplyOptions>,
+    on_progress: Channel<Progress>,
+) -> Result<RemeshApplied, String> {
+    in_background(app, move |state| apply_impl(state, params, options.unwrap_or_default(), &on_progress)).await
 }
 
 pub(crate) fn info_impl(state: &AppState) -> Result<RemeshInfo, String> {
@@ -223,7 +251,21 @@ pub(crate) fn info_impl(state: &AppState) -> Result<RemeshInfo, String> {
         area_mm2: s.area * mm * mm,
         triangles: indices.len() / 3,
         manifold: s.manifold,
+        has_skin: has_skin(&scene),
+        has_rig: state.result.lock().unwrap().is_some(),
     })
+}
+
+/// La apariencia depende de algo más que un color: textura con UV, colores
+/// de vértice o varios materiales
+fn has_skin(scene: &Scene) -> bool {
+    let prims = scene.world_primitives();
+    let textured = !scene.textures.is_empty() && prims.iter().any(|p| p.uvs.is_some());
+    let colored = prims.iter().any(|p| p.colors.is_some());
+    let mut materials: Vec<Option<usize>> = prims.iter().map(|p| p.material).collect();
+    materials.sort_unstable();
+    materials.dedup();
+    textured || colored || materials.len() > 1
 }
 
 pub(crate) fn voxel_grid_impl(state: &AppState, voxel_mm: f64) -> Result<VoxelGridInfo, String> {
@@ -248,14 +290,25 @@ pub(crate) fn preview_bytes(state: &AppState) -> Result<Vec<u8>, String> {
     Ok(scene_mesh_data(&preview.scene).to_bytes())
 }
 
-pub(crate) fn apply_impl(state: &AppState, params: RemeshParams, progress: &Channel<Progress>) -> Result<RemeshApplied, String> {
+pub(crate) fn apply_impl(
+    state: &AppState,
+    params: RemeshParams,
+    options: ApplyOptions,
+    progress: &Channel<Progress>,
+) -> Result<RemeshApplied, String> {
     let _guard = state.try_begin_processing().ok_or("Ya hay un proceso en curso")?;
-    let (scene, source) = current(state)?;
+    let (original, source) = current(state)?;
     let preview = state.remesh_preview.lock().unwrap().take().filter(|p| p.params == params && p.source == source);
-    let (scene, stats) = match preview {
+    let (mut scene, mut stats) = match preview {
         Some(p) => (p.scene, p.stats),
-        None => compute(&scene, &params, progress)?,
+        None => compute(&original, &params, progress)?,
     };
+    let new_mesh = matches!(params, RemeshParams::Isotropic(_) | RemeshParams::Voxel(_));
+    if new_mesh && options.keep_texture && has_skin(&original) {
+        report(progress, "bake", 80, "Desplegando la malla nueva y horneando la textura...");
+        scene = baked_skin(&original, &scene);
+        stats.after.vertices = calculate_scene_stats(&scene).0;
+    }
     report(progress, "apply", 95, "Reemplazando la malla...");
     let mesh = scene_to_pinocchio_mesh(&scene)?;
     let (num_vertices, num_faces, has_normals, has_uvs) = calculate_scene_stats(&scene);
@@ -284,8 +337,8 @@ pub(crate) fn apply_impl(state: &AppState, params: RemeshParams, progress: &Chan
     *state.mesh_before_print_scale.lock().unwrap() = None;
     *state.scene_before_print_scale.lock().unwrap() = None;
     let rig_kept = match previous {
-        Some(previous) => mesh_replaced(state, &previous),
-        None => {
+        Some(previous) if options.keep_rig => mesh_replaced(state, &previous),
+        _ => {
             state.geometry_changed();
             false
         }
@@ -500,6 +553,45 @@ fn simplify_scene(scene: &Scene, params: &SimplifyParams, world: &WorldSurface) 
         mesh.primitives = joined.split(&mesh.primitives, &result.indices);
     }
     out
+}
+
+/// La malla nueva (sin UV) desplegada, con la apariencia del original
+/// horneada en su mapa: textura, colores de vértice y materiales, y el
+/// relieve como normal map
+fn baked_skin(original: &Scene, remeshed: &Scene) -> Scene {
+    // Vértices soldados por posición (las normales partidas los duplican)
+    let world = WorldSurface::of(remeshed);
+    let mut index: std::collections::HashMap<[u64; 3], usize> = std::collections::HashMap::new();
+    let mut positions: Vec<[f64; 3]> = Vec::new();
+    let welded: Vec<usize> = world
+        .positions
+        .iter()
+        .map(|p| {
+            *index.entry(p.map(f64::to_bits)).or_insert_with(|| {
+                positions.push(*p);
+                positions.len() - 1
+            })
+        })
+        .collect();
+    let faces: Vec<[usize; 3]> = world
+        .triangles
+        .iter()
+        .map(|t| t.map(|i| welded[i]))
+        .filter(|t| t[0] != t[1] && t[1] != t[2] && t[0] != t[2])
+        .collect();
+    let surface = uv_core::scene_surface(original);
+    let size = if original.textures.is_empty() { 1024 } else { crate::commands::skin_texture_size(&original.textures).clamp(512, 4096) };
+    let options = uv_core::BakeOptions { texture_size: size, unwrap: uv_core::UnwrapOptions { texture_size: size, ..Default::default() } };
+    let skin = uv_core::unwrapped_skin(original, surface.as_ref(), &positions, &faces, &options);
+    let (mut scene, _) = uv_core::skin_scene(&positions, &faces, Some(&skin), original);
+    let name = remeshed.meshes.first().map(|m| m.name.clone()).unwrap_or_default();
+    if let Some(mesh) = scene.meshes.first_mut() {
+        mesh.name = name.clone();
+    }
+    if let Some(node) = scene.nodes.first_mut() {
+        node.name = name;
+    }
+    scene
 }
 
 /// La escena con una sola malla nueva en lugar de todas (en espacio mundo:
@@ -1240,6 +1332,32 @@ mod tests {
         assert_eq!(j[..3], [2, 1, 0]);
         assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-6);
         assert!((w[0] - 0.4).abs() < 1e-6);
+    }
+
+    #[test]
+    fn isotropic_with_texture_bakes_it_onto_the_new_mesh() {
+        // La esfera con una textura de dos colores (mitad roja, mitad azul en u)
+        let mut scene = sphere_scene();
+        let image = image::RgbaImage::from_fn(16, 16, |x, _| if x < 8 { image::Rgba([255, 0, 0, 255]) } else { image::Rgba([0, 0, 255, 255]) });
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        scene.textures.push(converter_scene::Texture { name: "dos".into(), data: png, format: converter_scene::TextureFormat::Png, width: 16, height: 16 });
+        assert!(has_skin(&scene));
+        let channel = Channel::new(|_| Ok(()));
+        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: 2.0, sharp_angle: None, iterations: 3, thin_features: false });
+        let (remeshed, _) = compute(&scene, &iso, &channel).unwrap();
+        assert!(!has_skin(&remeshed), "sin hornear, la malla nueva no tiene UV");
+        let baked = baked_skin(&scene, &remeshed);
+        assert!(has_skin(&baked));
+        assert!(!baked.textures.is_empty());
+        assert!(baked.materials.iter().any(|m| m.base_color_texture.is_some()));
+        for prim in &baked.meshes[0].primitives {
+            assert_eq!(uv0(prim).map(Vec::len), positions(prim).map(Vec::len));
+        }
+        // Misma forma: la superficie horneada es la remallada
+        let (a, b) = (WorldSurface::of(&remeshed), WorldSurface::of(&baked));
+        let d = remesh::deviation((&a.positions, &a.triangles), (&b.positions, &b.triangles));
+        assert!(d.max < 1e-4, "{d:?}");
     }
 
     #[test]

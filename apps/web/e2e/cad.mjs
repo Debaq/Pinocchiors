@@ -3261,6 +3261,55 @@ const scenarios = {
     if ((await header())[3] !== 0) throw new Error("deshacer no quitó los quads");
   },
 
+  async "remallar: isótropo traslada textura y pesos, o los descarta"(b) {
+    const model = process.env.E2E_RIGGED ?? `${process.env.HOME}/Descargas/chilesaurus_animado.glb`;
+    if (!existsSync(model)) return console.log(`  (sin ${model}: se salta)`);
+    await b.eval(`window.__nextPath = [${JSON.stringify(model)}]`);
+    await b.clickContains("Abrir / importar");
+    await sleep(4000);
+    const header = async () => new Uint32Array(await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer(), 0, 4);
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="isotropic"]').click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-isotropic-estimate]")`)); t++) await sleep(250);
+    await b.eval(`(() => { const i = document.querySelector("[data-isotropic] input[type=number]"); i.value = "12"; i.dispatchEvent(new InputEvent("input", { bubbles: true })); i.blur(); })()`);
+    await sleep(300);
+    const before = await header();
+    if (before[2] !== 1) throw new Error("el modelo no trae UV");
+    await b.shot("isotropo-antes");
+
+    // Aplicar pregunta qué trasladar: las dos casillas, marcadas
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 20 && !(await b.eval(`!!document.querySelector("[data-confirm-choices]")`)); t++) await sleep(250);
+    const choices = await b.eval(`[...document.querySelectorAll("[data-choice]")].map((c) => c.dataset.choice + (c.querySelector("input")?.checked ? "*" : ""))`);
+    if (choices.join() !== "texture*,rig*") throw new Error(`casillas: ${choices}`);
+    await b.shot("isotropo-que-trasladar");
+    await b.eval(`document.querySelector("[data-confirm]").click()`);
+    for (let t = 0; t < 240 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
+    const baked = await header();
+    if (baked[2] !== 1) throw new Error("la malla nueva quedó sin UV: no se horneó la textura");
+    if (!(await call("remesh_info")).has_rig) throw new Error("los pesos no pasaron a la malla nueva");
+    await sleep(1500);
+    await b.shot("isotropo-horneado");
+
+    // Deshacer y aplicar sin trasladar nada
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
+    for (let t = 0; t < 40 && (await header())[1] !== before[1]; t++) await sleep(250);
+    await sleep(1000);
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 20 && !(await b.eval(`!!document.querySelector("[data-confirm-choices]")`)); t++) await sleep(250);
+    await b.eval(`document.querySelectorAll("[data-choice] label").forEach((x) => x.click())`);
+    await sleep(200);
+    const unchecked = await b.eval(`[...document.querySelectorAll("[data-choice] input")].every((i) => !i.checked)`);
+    if (!unchecked) throw new Error("no se pudieron destildar las casillas");
+    await b.eval(`document.querySelector("[data-confirm]").click()`);
+    for (let t = 0; t < 120 && (await header())[1] === before[1]; t++) await sleep(250);
+    const plain = await header();
+    if (plain[2] !== 0) throw new Error("sin trasladar, la malla nueva no debería tener UV");
+    if ((await call("remesh_info")).has_rig) throw new Error("sin trasladar, los pesos deberían descartarse");
+  },
+
   async "objetos: las piezas pasan solas a Fabricar"(b) {
     await begin(b);
     await b.clickText("Caja");

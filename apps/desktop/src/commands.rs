@@ -861,7 +861,7 @@ pub(crate) fn export_model_impl(config: ExportConfig, state: &AppState) -> Resul
 const COMPACT_PADDING: u32 = 4;
 
 /// Lado de las texturas del mapa compactado: el de las que ya tiene
-fn skin_texture_size(textures: &[converter_scene::Texture]) -> u32 {
+pub(crate) fn skin_texture_size(textures: &[converter_scene::Texture]) -> u32 {
     textures
         .iter()
         .filter_map(|t| image::load_from_memory(&t.data).ok().map(|i| i.width().max(i.height())))

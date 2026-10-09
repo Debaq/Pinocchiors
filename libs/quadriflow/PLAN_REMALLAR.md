@@ -202,6 +202,24 @@ también en la vista previa). Banco (puente de depuración): gonfoterio 500 k �
 5,6 s; conejo 78 %; audiómetro 58 %. Prueba e2e "remallar: triángulos a quads y OBJ con quads"
 (caja → 6 quads, OBJ con 6 caras de 4, deshacer); el puente `cad_http` ganó `export_model`.
 
+*Fase 6 hecha el 2026-10-08*. Lo que ya estaba: los **pesos** pasan solos en todos los modos
+(`mesh_replaced` → `move_rig` → `transfer_weights`: punto más cercano del original,
+interpolado en su triángulo; los rigs importados viven en el mismo rig de la app) y la
+**Retopología** ya trasladaba UV (`transferred_skin`) y rig. Lo nuevo es para Isótropo y
+Vóxeles: `remesh_apply` recibe `ApplyOptions { keep_texture, keep_rig }`; con textura,
+`baked_skin` suelda la malla nueva, la despliega y hornea la apariencia del original
+(`uv_core::unwrapped_skin` + `skin_scene`: textura, colores de vértice, materiales y relieve
+como normal map; lado de la textura = el del original entre 512 y 4096, 1024 si no tenía);
+sin pesos, se descarta el rig. `remesh_info` dice `has_skin` (textura con UV, colores de
+vértice o varios materiales) y `has_rig`. En la web, `ConfirmDialog` admite casillas
+(`confirmChoices`; `confirmAction` sigue igual) y al aplicar Isótropo o Vóxeles sobre un
+modelo con algo que perder pregunta "Trasladar la textura" / "Trasladar los pesos" (las dos
+destildadas = descartar). Desvío del plan: en lugar de tres botones, dos casillas. Comprobado
+con `chilesaurus_animado.glb` (37 k triángulos, textura y rig): Isótropo de 12 mm → 6,8 k
+triángulos, 8 s en el puente de depuración; Vóxeles → 7,3 k, 6,8 s; renders con f3d iguales al
+original. Prueba e2e "remallar: isótropo traslada textura y pesos, o los descarta" (se salta
+si falta el modelo; `E2E_RIGGED` para otro).
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.
