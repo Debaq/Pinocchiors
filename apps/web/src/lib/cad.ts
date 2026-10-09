@@ -229,7 +229,14 @@ export type PatternKind =
   | { type: "linear"; direction: P3; count: number; spacing: number }
   | { type: "circular"; axis: AxisSpec; count: number; angle: number }
   /** Copias repartidas de punta a punta de un camino */
-  | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number };
+  | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
+  /** Copias trasladadas según una tabla de desplazamientos (mm) */
+  | { type: "table"; offsets: P3[] }
+  /** Copias en grilla (cuadrada o hexagonal) que llenan regiones de un sketch */
+  | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number };
+
+/** Con qué se parte: un plano u otra pieza (una superficie curva, por ejemplo) */
+export type SplitTool = { type: "plane"; plane: PlaneSpec } | { type: "part"; part: PartId };
 
 export type FeatureKind =
   | { type: "sketch"; plane: PlaneSpec; offset: number; sketch: Sketch }
@@ -319,6 +326,9 @@ export type FeatureKind =
       /** Donde se junta con el doblez de otra pestaña */
       corner_relief?: CornerRelief;
       corner_size?: number | null;
+      /** Esquina cerrada con otra pestaña a 90° hacia el mismo lado */
+      closed_corner?: boolean;
+      corner_gap?: number | null;
     }
   /** Superficie (sin espesor) de curvas de un sketch; `entities` vacío = todas */
   | { type: "surface_extrude"; sketch: number; entities: number[]; extent: Extent; reverse: boolean }
@@ -327,6 +337,8 @@ export type FeatureKind =
   | { type: "fill"; edges: EdgeRef[]; tangent: boolean }
   /** Une superficies por sus bordes; con `solid`, lo cerrado queda sólido */
   | { type: "sew"; parts: PartId[]; solid: boolean; tolerance: number }
+  /** Partir piezas (vacío = todos los sólidos): cada pedazo queda como pieza */
+  | { type: "split_by"; parts: PartId[]; tool: SplitTool }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
@@ -967,6 +979,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   surface_revolve: "Superficie de revolución",
   fill: "Relleno",
   sew: "Coser",
+  split_by: "Partir",
   replace_face: "Reemplazar cara",
   scale: "Escala",
 };

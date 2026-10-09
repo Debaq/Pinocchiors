@@ -144,11 +144,14 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Patrón circular", icon: D.PatternCircular, run: () => a.addPattern("circular"), needsBody: true },
     { label: "Simetría", icon: D.Mirror, run: a.addMirror, needsBody: true },
     { label: "Patrón en curva", icon: D.CurvePattern, run: a.addCurvePattern, needsBody: true, tip: "Copias a lo largo de un camino (sketch o hélice)" },
+    { label: "Patrón por tabla", icon: D.PatternLinear, run: () => a.addPattern("table"), needsBody: true, tip: "Copias en los desplazamientos de una tabla (X, Y, Z)" },
+    { label: "Patrón de relleno", icon: D.PatternLinear, run: () => a.addPattern("fill"), needsBody: true, tip: "Copias en grilla que llenan una región de un sketch (rejillas, perforados)" },
   ];
   const parts: (Tool | "-")[] = [
     { label: "Booleana", icon: D.Boolean, run: a.addBoolean, needsBody: true, tip: "Unir, restar o intersecar piezas entre sí" },
     { label: "Separar", icon: D.SplitParts, run: a.addSplitParts, needsBody: true, tip: "Cada sólido suelto de una pieza pasa a ser una pieza" },
     { label: "Cortar por plano", icon: D.SplitPlane, run: a.addSplit, needsBody: true },
+    { label: "Partir", icon: D.SplitParts, run: a.addSplitBy, needsBody: true, tip: "Parte piezas con un plano o con otra pieza (una superficie curva): cada pedazo queda como pieza" },
     { label: "Borrar pieza", icon: D.DeleteParts, run: a.addDeleteParts, needsBody: true },
   ];
   const sheet: (Tool | "-")[] = [
@@ -162,6 +165,8 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Superficie de revolución", icon: D.SurfaceRevolve, run: a.addSurfaceRevolve, tip: "Las curvas de un sketch giradas alrededor de un eje" },
     { label: "Relleno", icon: D.Fill, run: () => void a.startFill(), needsBody: true, tip: "Superficie que cierra un borde (elegir las aristas); puede seguir tangente a las caras vecinas" },
     { label: "Coser", icon: D.Sew, run: a.addSew, needsBody: true, tip: "Une superficies por sus bordes; si cierran un volumen, queda un sólido" },
+    { label: "Recortar con plano", icon: D.SplitPlane, run: () => void a.trimWithPlane(), needsBody: true, tip: "Deja de las superficies elegidas (o todas) el lado de un plano" },
+    { label: "Recortar con sólido", icon: D.Boolean, run: a.trimWithSolid, needsBody: true, tip: "Quita de las superficies lo que queda dentro de un sólido (o deja solo eso, con Intersecar)" },
     "-",
     { label: "Engrosar", icon: D.Thicken, run: () => void a.startThicken(), needsBody: true, tip: "Da espesor a una superficie (o a caras de un sólido)" },
   ];

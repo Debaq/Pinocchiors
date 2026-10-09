@@ -178,13 +178,23 @@ fn trim_a_surface_with_a_plane_and_with_a_solid() {
     let sk = circle(&mut doc, 5.0);
     let tube = doc.add(FeatureKind::SurfaceExtrude { sketch: sk, entities: vec![], extent: Extent::Blind { distance: 10.0 }, reverse: false });
     let surface = evaluate(&doc).parts[0].id;
-    // Cortar por un plano a z = 4, eligiendo la superficie: queda la parte de arriba
+    // Cortar por un plano a z = 4, eligiendo la superficie: queda la parte de arriba (y una
+    // caja aparte, de 0 a 2, no se toca)
     let mut by_plane = doc.clone();
+    by_plane.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 4.0, dy: 4.0, dz: 2.0, centered: true, centered_z: false },
+        origin: [30.0, 0.0, 0.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+    }));
     let split = by_plane.add(FeatureKind::Split { plane: PlaneSpec::Custom { plane: Plane::XY.offset(4.0) }, flip: false });
     by_plane.get_mut(split).unwrap().scope = vec![surface];
     let ev = evaluate(&by_plane);
     assert!(ev.parts[0].is_surface());
     assert_relative_eq!(area(&ev.parts[0].shape), 2.0 * PI * 5.0 * 6.0, max_relative = 1e-6);
+    assert_relative_eq!(ev.parts[1].shape.mass().unwrap().volume, 32.0, max_relative = 1e-9);
     // Con una caja que la atraviesa: restar se queda con lo de afuera, intersecar con lo de adentro
     for (op, h) in [(PartBoolean::Subtract, 7.0), (PartBoolean::Intersect, 3.0)] {
         let mut d = doc.clone();

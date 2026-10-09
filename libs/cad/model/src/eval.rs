@@ -2415,8 +2415,13 @@ impl Ctx<'_> {
                 let p = self.plane("plane", plane)?;
                 let n = if *flip { scale(p.normal, -1.0) } else { p.normal };
                 self.body()?;
-                // Después de las caras de la pieza vienen las del semiespacio: el corte
-                let groups = self.all_parts();
+                // Después de las caras de la pieza vienen las del semiespacio: el corte.
+                // Con alcance, solo esas piezas (así se recorta una superficie sola)
+                let groups = if self.scope.is_empty() {
+                    self.all_parts()
+                } else {
+                    self.find_parts("scope", &self.scope.clone())?.into_iter().map(|i| (i, vec![])).collect()
+                };
                 self.per_part(groups, |s, _| s.split_keep(p.origin, n), |_| Some(tag(f.id, "corte")))
             }
         }

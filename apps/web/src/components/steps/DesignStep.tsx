@@ -80,7 +80,8 @@ import {
 import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { Button, Checkbox, IconButton, Select, Slider, Tooltip } from "../ui";
+import { partKey } from "../../lib/objects";
+import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 
 export interface DesignStepProps {
@@ -1601,6 +1602,80 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "pattern" && (x.features = ids))} />
+                <Show when={k().pattern.type === "table" && (k().pattern as Extract<PatternKind, { type: "table" }>)}>
+                  {(t) => (
+                    <div class="space-y-1" aria-label="Tabla de copias">
+                      <span class="text-xs text-text-muted">Desplazamiento de cada copia (mm)</span>
+                      <For each={t().offsets}>
+                        {(row, i) => (
+                          <div class="flex items-center gap-1" data-table-row={i()}>
+                            <For each={[0, 1, 2]}>
+                              {(c) => (
+                                <NumberInput
+                                  value={row[c]}
+                                  step={1}
+                                  label={["X", "Y", "Z"][c]}
+                                  onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "table" && (x.pattern.offsets[i()][c] = v))}
+                                />
+                              )}
+                            </For>
+                            <IconButton
+                              aria-label={`Quitar la fila ${i() + 1}`}
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => update((x) => x.type === "pattern" && x.pattern.type === "table" && x.pattern.offsets.splice(i(), 1))}
+                            >
+                              <Icons.Trash size={11} />
+                            </IconButton>
+                          </div>
+                        )}
+                      </For>
+                      <Button
+                        size="sm"
+                        fullWidth
+                        onClick={() =>
+                          update((x) => {
+                            if (x.type !== "pattern" || x.pattern.type !== "table") return;
+                            const last = x.pattern.offsets[x.pattern.offsets.length - 1] ?? [0, 0, 0];
+                            x.pattern.offsets.push([last[0] + 10, last[1], last[2]]);
+                          })
+                        }
+                      >
+                        Agregar fila
+                      </Button>
+                    </div>
+                  )}
+                </Show>
+                <Show when={k().pattern.type === "fill" && (k().pattern as Extract<PatternKind, { type: "fill" }>)}>
+                  {(fl) => (
+                    <>
+                      <Row label="Región">
+                        <Select
+                          options={sketchOptions()}
+                          value={String(fl().sketch)}
+                          onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && ((x.pattern.sketch = +v), (x.pattern.regions = { type: "all" })))}
+                        />
+                      </Row>
+                      <RegionBox
+                        ui={props.ui}
+                        store={props.store}
+                        owner={`${f().id}:relleno`}
+                        lost={lost("regions")}
+                        sketch={fl().sketch}
+                        value={fl().regions}
+                        onChange={(r) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.regions = r))}
+                      />
+                      {field("Separación", "kind.pattern.spacing", fl().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.spacing = v), "mm")}
+                      {field("Margen al borde", "kind.pattern.margin", fl().margin, (x, v) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.margin = v), "mm")}
+                      <Checkbox small label="Grilla hexagonal" checked={fl().hex} onChange={(c) => update((x) => x.type === "pattern" && x.pattern.type === "fill" && (x.pattern.hex = c))} />
+                      <p class="text-[11px] text-text-dim">
+                        Copias a la separación elegida dentro de la región, con el centro a no menos del margen del borde. La grilla pasa por la operación
+                        original.
+                      </p>
+                    </>
+                  )}
+                </Show>
+                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill"}>
                 <Show
                   when={k().pattern.type !== "curve"}
                   fallback={
@@ -1622,7 +1697,7 @@ export const FeatureEditor: Component<{
                           }
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       <p class="text-[11px] text-text-dim">Las copias se reparten de punta a punta del camino, sin girar.</p>
                     </>
                   }
@@ -1648,7 +1723,7 @@ export const FeatureEditor: Component<{
                           }
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field("Cantidad", "kind.pattern.count", (k().pattern as { count: number }).count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       {field("Ángulo total", "kind.pattern.angle", (k().pattern as { angle: number }).angle, (x, v) => x.type === "pattern" && x.pattern.type === "circular" && (x.pattern.angle = v), "°")}
                     </>
                   }
@@ -1662,10 +1737,11 @@ export const FeatureEditor: Component<{
                           onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.direction = AXIS_DIRS[v]))}
                         />
                       </Row>
-                      {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && (x.pattern.count = Math.max(2, Math.round(v))))}
+                      {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
                     </>
                   )}
+                </Show>
                 </Show>
                 </Show>
               </>
@@ -1752,6 +1828,47 @@ export const FeatureEditor: Component<{
                 <Show when={k().op === "subtract"}>
                   <Checkbox small label="Conservar las que restan" checked={k().keep_tools} onChange={(c) => update((x) => x.type === "boolean" && (x.keep_tools = c))} />
                 </Show>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "split_by" && (f().kind as Extract<FeatureKind, { type: "split_by" }>)}>
+            {(k) => (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  featureId={f().id}
+                  label="Piezas a partir"
+                  empty="Todos los sólidos"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "split_by" && (x.parts = v))}
+                />
+                <Row label="Con">
+                  <Select
+                    options={[
+                      { value: "plane", label: "Un plano" },
+                      ...(props.store.result()?.parts ?? []).map((p) => ({ value: `part:${partKey(p.id)}`, label: `${p.name}${p.surface ? " (superficie)" : ""}` })),
+                    ]}
+                    value={k().tool.type === "plane" ? "plane" : `part:${partKey((k().tool as { part: PartId }).part)}`}
+                    onChange={(v) =>
+                      update((x) => {
+                        if (x.type !== "split_by") return;
+                        if (v === "plane") x.tool = { type: "plane", plane: { type: "custom", plane: offsetPlane("xy", 0) } };
+                        else {
+                          const part = (props.store.result()?.parts ?? []).find((p) => `part:${partKey(p.id)}` === v);
+                          if (part) x.tool = { type: "part", part: part.id };
+                        }
+                      })
+                    }
+                  />
+                </Row>
+                <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
+                  {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_by" && x.tool.type === "plane" && (x.tool.plane = p)), lost("plane").length > 0)}</Row>}
+                </Show>
+                <p class="text-[11px] text-text-dim">
+                  Cada pedazo queda como una pieza. Con otra pieza (una superficie curva, por ejemplo) se parte por su forma; la herramienta queda como
+                  estaba. Las superficies se recortan con Superficies → Recortar.
+                </p>
               </>
             )}
           </Match>
@@ -2058,6 +2175,15 @@ export const FeatureEditor: Component<{
                       onChange={(v) => update((x) => x.type === "flange" && (x.corner_relief = v as CornerRelief))}
                     />
                   </Row>
+                  <Checkbox
+                    small
+                    label="Esquina cerrada con otra pestaña"
+                    checked={!!k().closed_corner}
+                    onChange={(c) => update((x) => x.type === "flange" && (x.closed_corner = c))}
+                  />
+                  <Show when={k().closed_corner}>
+                    {field("Holgura de la esquina", "kind.corner_gap", k().corner_gap ?? 0.2, (x, v) => x.type === "flange" && (x.corner_gap = v), "mm")}
+                  </Show>
                   <Show when={(k().corner_relief ?? "none") !== "none"}>
                     {field(
                       k().corner_relief === "square" ? "Medio lado" : "Radio del alivio",

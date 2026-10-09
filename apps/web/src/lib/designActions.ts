@@ -310,14 +310,59 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     draft: () => void startFaces("draft"),
   });
 
-  const addPattern = (kind: "linear" | "circular") => {
+  const addPattern = (kind: "linear" | "circular" | "table" | "fill") => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    if (kind === "fill") {
+      // La región a llenar: el último sketch con una región cerrada que no sea el de lo que se repite
+      const own = sel && "sketch" in sel.kind ? (sel.kind as { sketch: number }).sketch : undefined;
+      // (con el diálogo de una operación abierto la vista previa llega hasta ella: los sketches de
+      // después todavía no tienen vista y cuentan)
+      const region = sketches()
+        .filter((s) => s.id !== own && (store.sketchView(s.id)?.regions.length ?? 1) > 0)
+        .pop();
+      if (!region) return say("Primero un sketch con la región a llenar (y la operación que se repite)");
+      void store.addFeature({ type: "pattern", features, pattern: { type: "fill", sketch: region.id, regions: { type: "all" }, spacing: 10, hex: false, margin: 2 } });
+      return;
+    }
     void store.addFeature({
       type: "pattern",
       features,
-      pattern: kind === "linear" ? { type: "linear", direction: [1, 0, 0], count: 3, spacing: 10 } : { type: "circular", axis: { type: "z" }, count: 6, angle: 360 },
+      pattern:
+        kind === "linear"
+          ? { type: "linear", direction: [1, 0, 0], count: 3, spacing: 10 }
+          : kind === "circular"
+            ? { type: "circular", axis: { type: "z" }, count: 6, angle: 360 }
+            : { type: "table", offsets: [[20, 0, 0], [0, 20, 0]] },
     });
+  };
+
+  /** Partir las piezas elegidas (o todas) con el plano XY; en el diálogo se cambia por otro plano o por una pieza */
+  const addSplitBy = () => {
+    void store.addFeature({ type: "split_by", parts: pickedParts(), tool: { type: "plane", plane: { type: "custom", plane: offsetPlane("xy", 0) } } });
+  };
+
+  /** Superficies elegidas (o todas) */
+  const surfaceParts = (): PartId[] => {
+    const surfaces = (store.result()?.parts ?? []).filter((p) => p.surface);
+    const picked = pickedParts().filter((id) => surfaces.some((s) => samePart(s.id, id)));
+    return picked.length > 0 ? picked : surfaces.map((s) => s.id);
+  };
+
+  /** Recortar superficies con un plano: Cortar por plano con las superficies de alcance */
+  const trimWithPlane = async () => {
+    const parts = surfaceParts();
+    if (parts.length === 0) return say("No hay superficies para recortar");
+    const id = await store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false });
+    void store.updateFeature(id, (f) => (f.scope = parts));
+  };
+
+  /** Recortar superficies con un sólido: booleana restar (en el diálogo, intersecar para quedarse con lo de adentro) */
+  const trimWithSolid = () => {
+    const parts = surfaceParts();
+    if (parts.length === 0) return say("No hay superficies para recortar");
+    const solids = pickedParts().filter((id) => !parts.some((p) => samePart(p, id)));
+    void store.addFeature({ type: "boolean", op: "subtract", targets: parts, tools: solids, keep_tools: true });
   };
 
   /** Piezas de las caras, aristas o vértices elegidos en el visor (en orden) */
@@ -461,6 +506,9 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startThread,
     startReplaceFace,
     importStep,
+    addSplitBy,
+    trimWithPlane,
+    trimWithSolid,
     addSplit: () => void store.addFeature({ type: "split", plane: { type: "custom", plane: offsetPlane("xy", 0) }, flip: false }),
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),
     addDeleteParts: () => void store.addFeature({ type: "delete_parts", parts: pickedParts() }),

@@ -38,7 +38,9 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   canto de la pestaña es una franja de la arista por el espesor (la cara del cuerpo se fundía con
   la tapa coplanar del doblez vecino y la segunda pestaña en esquina daba volumen negativo), y el
   desarrollo toma como borde final del doblez la recta más lejana (un corte en el doblez deja
-  rectas a medio camino). Falta: esquinas cerradas (paredes extendidas hasta tocarse con holgura).
+  rectas a medio camino). *Esquinas cerradas, 2026-10-09*: con dos pestañas a 90° hacia el mismo
+  lado, la segunda extiende su pared hasta tapar el canto de la primera y alarga la primera hasta
+  quedar a la holgura (0,2 mm).
 
 ## Superficies
 
@@ -60,6 +62,11 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   concha). **Engrosar** cose antes las caras elegidas de una misma superficie. Visor: con
   superficies el cuerpo se dibuja de los dos lados. Faltan: recortar y extender, barrido y
   transición de superficie, relleno con curvas de sketch y puntos, usarlo en escaneo → CAD.
+  *2026-10-09*: **Recortar** con plano (Cortar por plano con la superficie de alcance; el corte
+  ahora respeta el alcance y usa un bloque finito para conchas) y con sólido (booleana restar o
+  intersecar). **Partir** (`SplitBy`, `BRepAlgoAPI_Splitter`) con un plano o con otra pieza:
+  cada pedazo queda como pieza. Patrones **por tabla** y **de relleno** (grilla cuadrada o
+  hexagonal en regiones de un sketch, con margen).
 
 ## Versiones con nombre
 
