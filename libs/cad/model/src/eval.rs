@@ -120,6 +120,18 @@ pub struct Part {
     pub tags: Vec<Vec<FaceTag>>,
 }
 
+impl Part {
+    /// Superficie (caras sin volumen) en vez de sólido.
+    pub fn is_surface(&self) -> bool {
+        is_surface(&self.shape)
+    }
+}
+
+/// Sin sólidos adentro: caras o conchas sueltas.
+pub fn is_surface(shape: &Shape) -> bool {
+    shape.solids().is_ok_and(|s| s.is_empty())
+}
+
 #[derive(Debug, Default)]
 pub struct Evaluation {
     /// Todas las piezas juntas (la pieza misma si hay una sola): sus caras y
@@ -569,10 +581,12 @@ impl Ctx<'_> {
     fn touching(&self, tool: &Shape) -> Vec<usize> {
         let Ok(tm) = tool.mass() else { return vec![] };
         let tol = self.diag().max(norm(sub(tm.bbox_max, tm.bbox_min))) * 1e-7;
+        // Las superficies solo cambian si se eligen en el alcance
         self.ev
             .parts
             .iter()
             .enumerate()
+            .filter(|(_, p)| !p.is_surface())
             .filter(|(_, p)| {
                 let Ok(pm) = p.shape.mass() else { return false };
                 let apart = (0..3).any(|k| pm.bbox_min[k] > tm.bbox_max[k] + tol || tm.bbox_min[k] > pm.bbox_max[k] + tol);
@@ -661,6 +675,8 @@ impl Ctx<'_> {
         if self.ev.parts.is_empty() && matches!(op, BodyOp::Cut | BodyOp::Intersect) {
             return Err("no hay sólido que cortar".into());
         }
+        // Una superficie no se une ni resta: queda como pieza aparte
+        let op = if is_surface(&tool.shape) { BodyOp::New } else { op };
         match op {
             BodyOp::New => self.new_part(feature, tool),
             BodyOp::Join => {
@@ -1455,6 +1471,78 @@ impl Ctx<'_> {
         Shape::wire(&curves).map_err(err)
     }
 
+    /// Alambres de las curvas de un sketch (vacío = todas las que no son de
+    /// construcción): cada curva cerrada sola, y las abiertas encadenadas por
+    /// sus extremos (cada cadena, un alambre).
+    fn curve_wires(&self, sketch: FeatureId, entities: &[u32]) -> R<Vec<Shape>> {
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+        let ends = |id: u32| -> Option<(u32, u32)> {
+            match &s.sketch.entity(id).ok()?.geometry {
+                Geometry::Line { start, end } => Some((*start, *end)),
+                Geometry::Arc { start, end, .. } => Some((*start, *end)),
+                Geometry::Spline { points, closed: false, .. } => Some((*points.first()?, *points.last()?)),
+                _ => None,
+            }
+        };
+        let closed = |id: u32| {
+            matches!(
+                s.sketch.entity(id).map(|e| &e.geometry),
+                Ok(Geometry::Circle { .. } | Geometry::Ellipse { .. } | Geometry::Spline { closed: true, .. })
+            )
+        };
+        let ids: Vec<u32> = if entities.is_empty() {
+            s.sketch.entities.iter().filter(|e| !e.construction && (ends(e.id).is_some() || closed(e.id))).map(|e| e.id).collect()
+        } else {
+            entities.to_vec()
+        };
+        if ids.is_empty() {
+            return Err("el sketch no tiene curvas".into());
+        }
+        let mut chains: Vec<Vec<LoopPiece>> = Vec::new();
+        let mut left: Vec<(u32, (u32, u32))> = Vec::new();
+        for &id in &ids {
+            if closed(id) {
+                chains.push(vec![LoopPiece { entity: id, reversed: false }]);
+            } else {
+                left.push((id, ends(id).ok_or("las curvas tienen que ser líneas, arcos, círculos, elipses o splines")?));
+            }
+        }
+        let degree = |p: u32, l: &[(u32, (u32, u32))]| l.iter().filter(|(_, (a, b))| *a == p || *b == p).count();
+        while !left.is_empty() {
+            // Desde un extremo suelto si lo hay (si no, la cadena es un lazo)
+            let first = left.iter().position(|(_, (a, b))| degree(*a, &left) == 1 || degree(*b, &left) == 1).unwrap_or(0);
+            let (id, (a, b)) = left.remove(first);
+            let reversed = degree(a, &left) > 0 && degree(b, &left) == 0;
+            let mut pieces = vec![LoopPiece { entity: id, reversed }];
+            let mut tip = if reversed { a } else { b };
+            while let Some(k) = left.iter().position(|(_, (a, b))| *a == tip || *b == tip) {
+                let (id, (a, b)) = left.remove(k);
+                let reversed = b == tip;
+                pieces.push(LoopPiece { entity: id, reversed });
+                tip = if reversed { a } else { b };
+            }
+            chains.push(pieces);
+        }
+        chains
+            .into_iter()
+            .map(|pieces| {
+                let curves = loop_curves(&s.sketch, &s.plane, &Loop { pieces, polygon: Vec::new(), area: 0.0 })?;
+                Shape::wire(&curves).map_err(err)
+            })
+            .collect()
+    }
+
+    /// Superficies de una operación, juntas en una pieza, con un origen por cara.
+    fn surface_tool(&self, id: FeatureId, mut shapes: Vec<Shape>) -> R<Tagged> {
+        let shape = match shapes.len() {
+            0 => return Err("no quedó ninguna superficie".into()),
+            1 => shapes.pop().unwrap(),
+            _ => Shape::compound(&shapes).map_err(err)?,
+        };
+        let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("cara:{k}"))]).collect();
+        Ok(Tagged { shape, tags })
+    }
+
     fn reference_plane(&self, def: &PlaneDef) -> R<Plane> {
         Ok(match def {
             PlaneDef::Offset { base, distance } => self.plane("base", base)?.offset(*distance),
@@ -1800,12 +1888,21 @@ impl Ctx<'_> {
                     return Err("elegir al menos una cara".into());
                 }
                 let idx = self.faces("faces", faces)?;
-                let body = self.body()?.clone();
-                let solids = idx
-                    .iter()
-                    .map(|&i| body.face_shape(i).and_then(|fc| fc.thicken(*thickness)))
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(err)?;
+                let mut solids = Vec::new();
+                // Las caras de una superficie, cosidas antes: así las esquinas se
+                // engrosan juntas; las de un sólido, cada una
+                for (p, local) in self.by_part(&idx, false) {
+                    let part = &self.ev.parts[p].shape;
+                    let shapes = local.iter().map(|&i| part.face_shape(i)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                    if self.ev.parts[p].is_surface() && shapes.len() > 1 {
+                        let shell = Shape::sew(&shapes, 1e-6, false).map_err(err)?;
+                        solids.push(shell.thicken(*thickness).map_err(err)?);
+                    } else {
+                        for fc in shapes {
+                            solids.push(fc.thicken(*thickness).map_err(err)?);
+                        }
+                    }
+                }
                 let shape = fuse(solids)?;
                 let tags = (0..shape.face_count()).map(|i| vec![tag(f.id, format!("cara:{i}"))]).collect();
                 let tool = Tagged { shape, tags };
@@ -2011,6 +2108,78 @@ impl Ctx<'_> {
                 self.scope = saved;
                 r?;
                 self.ev.bends.push(BendInfo { feature: f.id, part, start: g.start, end: g.end, normal: g.n, thickness: g.t });
+                Ok(())
+            }
+            FeatureKind::SurfaceExtrude { sketch, entities, extent, reverse } => {
+                let plane = self.ev.sketches.get(sketch).ok_or("el sketch no está calculado")?.plane;
+                let n = if *reverse { scale(plane.normal, -1.0) } else { plane.normal };
+                let (from, len) = match extent {
+                    Extent::Blind { distance } => (0.0, *distance),
+                    Extent::Symmetric { distance } => (-distance / 2.0, *distance),
+                    Extent::TwoSides { distance, second } => (-second, distance + second),
+                    _ => return Err("una superficie se extruye ciega, simétrica o a los dos lados".into()),
+                };
+                if len.abs() < 1e-9 {
+                    return Err("la distancia tiene que ser mayor que cero".into());
+                }
+                let mut shapes = Vec::new();
+                for w in self.curve_wires(*sketch, entities)? {
+                    let w = if from.abs() > 0.0 { w.translate(scale(n, from)).map_err(err)? } else { w };
+                    shapes.push(w.prism(scale(n, len)).map_err(err)?);
+                }
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceRevolve { sketch, entities, axis, angle } => {
+                let axis = self.axis("axis", axis)?;
+                let a = angle.to_radians();
+                if a.abs() < 1e-9 {
+                    return Err("ángulo cero".into());
+                }
+                let shapes = self
+                    .curve_wires(*sketch, entities)?
+                    .iter()
+                    .map(|w| w.revolve(axis, a))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::Fill { edges, tangent } => {
+                if edges.is_empty() {
+                    return Err("elegir las aristas del borde".into());
+                }
+                let idx = self.edges("edges", edges)?;
+                let body = self.body()?.clone();
+                let mut boundary = Vec::new();
+                for &i in &idx {
+                    let e = body.edge_shape(i).map_err(err)?;
+                    // Tangente solo al borde de una superficie (una cara); en un
+                    // sólido la arista tiene dos y no se sabe a cuál
+                    let face = match body.edge_faces(i).map_err(err)?.as_slice() {
+                        [only] if *tangent => Some(body.face_shape(*only).map_err(err)?),
+                        _ => None,
+                    };
+                    boundary.push((e, face));
+                }
+                let shape = Shape::fill(&boundary, &[]).map_err(err)?;
+                let tool = self.surface_tool(f.id, vec![shape])?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::Sew { parts, solid, tolerance } => {
+                if parts.len() < 2 && !*solid {
+                    return Err("elegir al menos dos superficies".into());
+                }
+                let mut which = self.find_parts("parts", parts)?;
+                let shapes: Vec<Shape> = which.iter().map(|&i| self.ev.parts[i].shape.clone()).collect();
+                let shape = Shape::sew(&shapes, tolerance.max(1e-7), *solid).map_err(err)?;
+                which.sort_unstable();
+                for &i in which.iter().rev() {
+                    self.ev.parts.remove(i);
+                }
+                let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("cara:{k}"))]).collect();
+                self.new_part(f.id, Tagged { shape, tags });
+                self.sync();
                 Ok(())
             }
             FeatureKind::Hole(h) => {

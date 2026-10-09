@@ -185,6 +185,12 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
 CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major, double pitch,
                           double length, int32_t left, int32_t chamfer);
 CadShape* cad_thicken(const CadShape* faces, double thickness);
+/* Superficie que llena un borde cerrado de aristas (con `faces[i]` no nula,
+   tangente a esa cara a lo largo de la arista i) y pasa por los puntos. */
+CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,
+                   int32_t n_points);
+/* Une superficies por sus bordes; con `solid`, cada concha cerrada se vuelve sólido. */
+CadShape* cad_sew(const CadShape* const* shapes, int32_t n, double tolerance, int32_t solid);
 
 // `n` puntos a distancias iguales a lo largo de un alambre (o arista), con la
 // tangente en cada uno: out_p y out_t tienen 3n valores.

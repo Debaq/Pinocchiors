@@ -320,6 +320,13 @@ export type FeatureKind =
       corner_relief?: CornerRelief;
       corner_size?: number | null;
     }
+  /** Superficie (sin espesor) de curvas de un sketch; `entities` vacío = todas */
+  | { type: "surface_extrude"; sketch: number; entities: number[]; extent: Extent; reverse: boolean }
+  | { type: "surface_revolve"; sketch: number; entities: number[]; axis: AxisSpec; angle: number }
+  /** Superficie que cierra un borde de aristas */
+  | { type: "fill"; edges: EdgeRef[]; tangent: boolean }
+  /** Une superficies por sus bordes; con `solid`, lo cerrado queda sólido */
+  | { type: "sew"; parts: PartId[]; solid: boolean; tolerance: number }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };
@@ -548,6 +555,8 @@ export interface PartView {
   volume: number;
   area: number;
   center: P3;
+  /** Superficie (sin volumen) en vez de sólido */
+  surface?: boolean;
 }
 
 /** Colores de pieza por defecto (la primera, el de siempre) */
@@ -954,6 +963,10 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   thread: "Rosca",
   sheet_metal: "Chapa",
   flange: "Pestaña",
+  surface_extrude: "Superficie extruida",
+  surface_revolve: "Superficie de revolución",
+  fill: "Relleno",
+  sew: "Coser",
   replace_face: "Reemplazar cara",
   scale: "Escala",
 };

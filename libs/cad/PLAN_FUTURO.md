@@ -26,8 +26,19 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   con un movimiento rígido y estira cada doblez a θ·(R + K·t). El contorno es lo que queda en
   el borde de ese lado; las líneas de doblez van al medio de cada zona con su ángulo, radio y
   lado. Vista "Desarrollo" (menú Chapa) a 1:1 con cotas, y DXF (capas CONTORNO y DOBLEZ), SVG y
-  PDF. Faltan: alivios en las esquinas, pestañas en aristas que no son rectas, dobleces sobre
-  una línea dibujada y convertir un sólido macizo en chapa.
+  PDF. Faltan: pestañas en aristas que no son rectas, dobleces sobre una línea dibujada y
+  convertir un sólido macizo en chapa.
+- *Alivios, 2026-10-08*: la pestaña corta una **ranura** (recta u oblonga, ancho = espesor por
+  defecto, desde medio ancho adentro del canto hasta medio ancho pasado el doblez) en el extremo
+  donde la chapa sigue al lado del doblez (esquina hacia adentro; se detecta con un cubito de
+  prueba contra la chapa). Donde se junta con el doblez de otra pestaña (`Evaluation.bends`
+  guarda la arista de cada una) queda la **muesca** cuadrada del largo del doblez —los dobleces
+  van por fuera del borde y se tocan solo en el vértice— o un alivio redondo o cuadrado más
+  grande. El alivio se resta de la chapa y de la pestaña antes de unir. Arreglos de paso: el
+  canto de la pestaña es una franja de la arista por el espesor (la cara del cuerpo se fundía con
+  la tapa coplanar del doblez vecino y la segunda pestaña en esquina daba volumen negativo), y el
+  desarrollo toma como borde final del doblez la recta más lejana (un corte en el doblez deja
+  rectas a medio camino). Falta: esquinas cerradas (paredes extendidas hasta tocarse con holgura).
 
 ## Superficies
 
@@ -37,6 +48,18 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
   hoy asume sólido en `Tagged`. Agregar un tipo de cuerpo "superficie" a las piezas.
 - **Por dónde empezar**: relleno de superficie (`BRepFill_Filling`, en TKFill — no enlazado) y
   engrosar; útil también para cerrar agujeros de escaneos convertidos a CAD.
+- *Primera versión, 2026-10-08*: una pieza es **superficie** si no tiene sólidos
+  (`Part::is_surface`, `PartView.surface`). Las superficies van siempre como pieza aparte: no
+  se unen a sólidos ni las cortan las operaciones automáticas (solo si se eligen en el alcance).
+  Operaciones: **Superficie extruida** y **de revolución** (curvas de un sketch, abiertas o
+  cerradas; cada cadena un alambre: `curve_wires`), **Relleno** (`BRepOffsetAPI_MakeFilling`,
+  en TKOffset, ya enlazado; borde plano sin tangencia → cara plana; tangente a la cara de las
+  aristas de borde de una superficie — no sirve contra una pared perpendicular: la placa no
+  representa tangente vertical) y **Coser** (`BRepBuilderAPI_Sewing`; con "sólido", cada concha
+  cerrada → `ShapeFix_Solid::SolidFromShell`; una cara suelta, como una esfera, va en su propia
+  concha). **Engrosar** cose antes las caras elegidas de una misma superficie. Visor: con
+  superficies el cuerpo se dibuja de los dos lados. Faltan: recortar y extender, barrido y
+  transición de superficie, relleno con curvas de sketch y puntos, usarlo en escaneo → CAD.
 
 ## Versiones con nombre
 
@@ -80,5 +103,5 @@ Cada una es un proyecto en sí; aquí queda qué es, qué necesita y por dónde 
 
 1. Configuraciones (barato, reutiliza parámetros y supresión).
 2. Versiones con nombre.
-3. Chapa metálica (alto valor para láser).
-4. Superficies.
+3. Chapa metálica (alto valor para láser). *Hecho, con alivios.*
+4. Superficies. *Primera versión hecha.*

@@ -158,6 +158,8 @@ pub struct PartView {
     pub volume: f64,
     pub area: f64,
     pub center: [f64; 3],
+    /// Superficie (sin volumen) en vez de sólido
+    pub surface: bool,
 }
 
 /// "#rrggbb" → (r, g, b) en 0..1.
@@ -837,6 +839,7 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad
                 volume: m.map_or(0.0, |m| m.volume),
                 area: m.map_or(0.0, |m| m.area),
                 center: m.map_or([0.0; 3], |m| m.center),
+                surface: eval.parts.get(i).is_some_and(|p| p.is_surface()),
             }
         })
         .collect()

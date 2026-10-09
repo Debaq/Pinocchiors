@@ -20,6 +20,8 @@ export interface PartStyle {
   edges: [number, number];
   color: number;
   hidden: boolean;
+  /** Superficie sin espesor: se ve de los dos lados */
+  surface?: boolean;
 }
 
 export type CadPick =
@@ -463,6 +465,8 @@ export class CadViewer {
         vertexColors: true,
         metalness: 0.1,
         roughness: 0.55,
+        // Con superficies (abiertas) también la cara de atrás
+        side: this.partStyles.some((p) => p.surface && !p.hidden) ? THREE.DoubleSide : THREE.FrontSide,
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,

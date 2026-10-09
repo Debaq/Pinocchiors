@@ -689,6 +689,22 @@ impl Shape {
         wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })
     }
 
+    /// Superficie que llena un borde cerrado: cada arista con su cara vecina
+    /// (tangente a ella) o sola (solo pasa por el borde); y por los puntos.
+    pub fn fill(boundary: &[(Shape, Option<Shape>)], points: &[P3]) -> Result<Shape> {
+        let edges: Vec<*const ffi::CadShape> = boundary.iter().map(|(e, _)| e.ptr()).collect();
+        let faces: Vec<*const ffi::CadShape> = boundary.iter().map(|(_, f)| f.as_ref().map_or(std::ptr::null(), |f| f.ptr())).collect();
+        let pts: Vec<f64> = points.iter().flatten().copied().collect();
+        wrap(unsafe { ffi::cad_fill(edges.as_ptr(), faces.as_ptr(), edges.len() as i32, pts.as_ptr(), points.len() as i32) })
+    }
+
+    /// Une superficies por sus bordes (a `tolerance`); con `solid`, lo cerrado
+    /// se vuelve sólido (y si algo queda abierto, error).
+    pub fn sew(shapes: &[Shape], tolerance: f64, solid: bool) -> Result<Shape> {
+        let p = ptrs(shapes);
+        wrap(unsafe { ffi::cad_sew(p.as_ptr(), p.len() as i32, tolerance, solid as i32) })
+    }
+
     /// Distancia hasta la primera cara que cruza la semirrecta desde `origin` hacia `dir`.
     pub fn ray_hit(&self, origin: P3, dir: P3) -> Option<f64> {
         let t = unsafe { ffi::cad_ray_hit(self.ptr(), origin.as_ptr(), dir.as_ptr()) };

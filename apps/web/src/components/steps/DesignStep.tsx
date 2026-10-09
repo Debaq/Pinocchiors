@@ -2201,6 +2201,168 @@ export const FeatureEditor: Component<{
               );
             }}
           </Match>
+          <Match when={(f().kind.type === "surface_extrude" || f().kind.type === "surface_revolve") && f().kind}>
+            {(kk) => {
+              type SurfaceKind = Extract<FeatureKind, { type: "surface_extrude" | "surface_revolve" }>;
+              const k = () => kk() as SurfaceKind;
+              const sketch = () => props.sketches.find((s) => s.id === k().sketch);
+              const curves = () => {
+                const s = sketch();
+                return s?.kind.type === "sketch"
+                  ? s.kind.sketch.entities.filter((e) => !e.construction && ["line", "arc", "spline", "circle", "ellipse"].includes(e.geometry.type))
+                  : [];
+              };
+              const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline", circle: "Círculo", ellipse: "Elipse" };
+              const upd = (m: (x: SurfaceKind) => void) => update((x) => (x.type === "surface_extrude" || x.type === "surface_revolve") && m(x));
+              const ext = () => (k().type === "surface_extrude" ? (k() as Extract<FeatureKind, { type: "surface_extrude" }>) : undefined);
+              const rev = () => (k().type === "surface_revolve" ? (k() as Extract<FeatureKind, { type: "surface_revolve" }>) : undefined);
+              const allLines = () => {
+                const s = sketch();
+                return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => e.geometry.type === "line") : [];
+              };
+              return (
+                <>
+                  <Row label="Sketch">
+                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => upd((x) => ((x.sketch = +v), (x.entities = [])))} />
+                  </Row>
+                  <div class="space-y-1" aria-label="Curvas">
+                    <span class="text-xs text-text-muted">Curvas (sin elegir: todas)</span>
+                    <For each={curves()} fallback={<p class="text-[11px] text-text-dim">Ese sketch no tiene curvas</p>}>
+                      {(e) => (
+                        <Checkbox
+                          small
+                          label={`${NAMES[e.geometry.type]} ${e.id}`}
+                          checked={k().entities.includes(e.id)}
+                          onChange={(c) => upd((x) => (x.entities = c ? [...x.entities, e.id] : x.entities.filter((i) => i !== e.id)))}
+                        />
+                      )}
+                    </For>
+                  </div>
+                  <Show when={ext()}>
+                    {(e) => (
+                      <>
+                        <Row label="Hasta">
+                          <Select
+                            options={[
+                              { value: "blind", label: "Distancia" },
+                              { value: "symmetric", label: "Simétrica" },
+                              { value: "two_sides", label: "Dos direcciones" },
+                            ]}
+                            value={e().extent.type}
+                            onChange={(v) =>
+                              update((x) => {
+                                if (x.type !== "surface_extrude" || v === x.extent.type) return;
+                                const d = "distance" in x.extent ? x.extent.distance : 10;
+                                x.extent = v === "two_sides" ? { type: "two_sides", distance: d, second: d / 2 } : { type: v as "blind" | "symmetric", distance: d };
+                              })
+                            }
+                          />
+                        </Row>
+                        {field(
+                          "Distancia",
+                          "kind.extent.distance",
+                          (e().extent as { distance: number }).distance,
+                          (x, v) => x.type === "surface_extrude" && "distance" in x.extent && (x.extent.distance = v),
+                          "mm",
+                        )}
+                        <Show when={e().extent.type === "two_sides"}>
+                          {field(
+                            "Hacia atrás",
+                            "kind.extent.second",
+                            (e().extent as { second: number }).second,
+                            (x, v) => x.type === "surface_extrude" && x.extent.type === "two_sides" && (x.extent.second = v),
+                            "mm",
+                          )}
+                        </Show>
+                        <Checkbox small label="Hacia el otro lado" checked={e().reverse} onChange={(c) => update((x) => x.type === "surface_extrude" && (x.reverse = c))} />
+                      </>
+                    )}
+                  </Show>
+                  <Show when={rev()}>
+                    {(r) => (
+                      <>
+                        <Row label="Eje">
+                          <Select
+                            options={[
+                              ...(r().axis.type === "edge" ? [{ value: "edge", label: "Arista del sólido" }] : []),
+                              { value: "x", label: "X" },
+                              { value: "y", label: "Y" },
+                              { value: "z", label: "Z" },
+                              ...allLines().map((l) => ({ value: `line:${l.id}`, label: `Línea ${l.id}${l.construction ? " (construcción)" : ""}` })),
+                              ...refOptions(props.store, "axis"),
+                            ]}
+                            value={(() => {
+                              const a = r().axis;
+                              return a.type === "sketch_line" ? `line:${a.line}` : a.type === "reference" ? `ref:${a.feature}` : a.type;
+                            })()}
+                            onChange={(v) =>
+                              update((x) => {
+                                if (x.type !== "surface_revolve") return;
+                                x.axis = v.startsWith("line:")
+                                  ? { type: "sketch_line", sketch: x.sketch, line: +v.slice(5) }
+                                  : v.startsWith("ref:")
+                                    ? { type: "reference", feature: +v.slice(4) }
+                                    : { type: v as "x" | "y" | "z" };
+                              })
+                            }
+                          />
+                        </Row>
+                        {field("Ángulo", "kind.angle", r().angle, (x, v) => x.type === "surface_revolve" && (x.angle = v), "°")}
+                      </>
+                    )}
+                  </Show>
+                  <p class="text-[11px] text-text-dim">
+                    Una superficie no tiene espesor: no se une a los sólidos ni la cortan sin elegirla. Se cierra con Relleno y Coser, o se le da espesor
+                    con Engrosar.
+                  </p>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "fill" && (f().kind as Extract<FeatureKind, { type: "fill" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:borde`}
+                  kind="edges"
+                  label="Aristas del borde"
+                  refs={k().edges}
+                  lost={lost("edges")}
+                  onChange={(refs) => update((x) => x.type === "fill" && (x.edges = refs as EdgeRef[]))}
+                />
+                <Checkbox
+                  small
+                  label="Tangente a las caras vecinas"
+                  checked={k().tangent}
+                  onChange={(c) => update((x) => x.type === "fill" && (x.tangent = c))}
+                />
+                <p class="text-[11px] text-text-dim">
+                  El borde tiene que cerrarse. Plano y sin tangencia queda una cara plana; tangente, sigue la curvatura del borde de cada superficie
+                  (no sirve contra una pared perpendicular al relleno).
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "sew" && (f().kind as Extract<FeatureKind, { type: "sew" }>)}>
+            {(k) => (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  featureId={f().id}
+                  label="Superficies"
+                  empty="Elegir las superficies"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "sew" && (x.parts = v))}
+                />
+                <Checkbox small label="Hacer sólido si cierran" checked={k().solid} onChange={(c) => update((x) => x.type === "sew" && (x.solid = c))} />
+                {field("Separación máxima", "kind.tolerance", k().tolerance, (x, v) => x.type === "sew" && (x.tolerance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Une los bordes que están a menos de la separación máxima. Las piezas cosidas pasan a ser una.</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "thicken" && (f().kind as Extract<FeatureKind, { type: "thicken" }>)}>
             {(k) => (
               <>
@@ -3539,7 +3701,11 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
                     />
                   </Show>
                   <span class="font-mono text-[10px] text-text-dim group-hover:hidden">
-                    {partMass(props.store.doc(), p) !== null ? fmtMass(partMass(props.store.doc(), p)!) : `${fmt(p.volume / 1000)} cm³`}
+                    {p.surface
+                      ? `superficie · ${fmt(p.area / 100)} cm²`
+                      : partMass(props.store.doc(), p) !== null
+                        ? fmtMass(partMass(props.store.doc(), p)!)
+                        : `${fmt(p.volume / 1000)} cm³`}
                   </span>
                   <span class="hidden group-hover:flex">
                     <IconButton
@@ -3570,9 +3736,11 @@ const PartsSection: Component<{ store: CadStore; ui: CadUi }> = (props) => {
             return (
               <div class="space-y-1.5 rounded border border-border p-2 text-xs" aria-label={`Datos de ${p().name}`}>
                 <MaterialPicker value={own()} none="El del diseño" onChange={(m) => void props.store.setPartProps(p().id, { material: m })} />
-                <Line label="Volumen">{fmt(p().volume / 1000)} cm³</Line>
+                <Show when={!p().surface} fallback={<Line label="Tipo">Superficie (sin espesor)</Line>}>
+                  <Line label="Volumen">{fmt(p().volume / 1000)} cm³</Line>
+                </Show>
                 <Line label="Área">{fmt(p().area / 100)} cm²</Line>
-                <Show when={partMass(props.store.doc(), p()) !== null}>
+                <Show when={!p().surface && partMass(props.store.doc(), p()) !== null}>
                   <Line label="Masa">
                     {fmtMass(partMass(props.store.doc(), p())!)} ({partMaterial(props.store.doc(), p())!.name})
                   </Line>

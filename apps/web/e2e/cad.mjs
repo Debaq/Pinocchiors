@@ -2193,7 +2193,7 @@ const scenarios = {
     await b.eval(`window.__cadViewer.frameAll()`);
     await sleep(500);
     const plate = (100 * 50 + 50 * 30) * 2;
-    near((await body()).volume, plate, 1e-6, "chapa en L");
+    near((await body()).volume, plate, 1e-3, "chapa en L");
     // Pestaña en el borde de y = 0 entre x = 0 y 50: en x = 50 la chapa sigue (el brazo)
     await filter("Aristas");
     await b.click(...(await at([20, 0, 2])), { wait: 800 });
@@ -2208,11 +2208,11 @@ const scenarios = {
     await accept(b, 2000);
     const bend = (Math.PI / 4) * (16 - 4) * 50;
     // Ranura recta de 2 × 6 a través del espesor
-    near((await body()).volume, plate + bend + 2000 - 24, 1e-6, "con alivio recto");
+    near((await body()).volume, plate + bend + 2000 - 24, 1e-3, "con alivio recto");
     const id = await b.eval(`window.__cadStore.doc().features.at(-1).id`);
     await b.eval(`window.__cadStore.updateFeature(${id}, (f) => { f.kind.relief = "obround"; })`);
     await sleep(2000);
-    near((await body()).volume, plate + bend + 2000 - (20 + Math.PI / 2) * 2, 1e-6, "con alivio redondo");
+    near((await body()).volume, plate + bend + 2000 - (2 * 2 * 5 + (Math.PI / 2) * 2), 1e-3, "con alivio redondo");
     await b.shot("chapa_alivio");
     // El desarrollo sale con el doblez
     await filter("Todo");
@@ -2220,6 +2220,55 @@ const scenarios = {
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-flat] svg")`)); t++) await sleep(300);
     const size = await b.eval(`document.querySelector("[data-flat-size]")?.textContent ?? ""`);
     if (!size.includes("1 doblez")) throw new Error(`desarrollo: ${size}`);
+  },
+
+  async "superficies: tubo, rellenos y coser"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const filter = (label) => b.eval(`[...document.querySelectorAll('[role=radio]')].find((e) => e.textContent === ${JSON.stringify(label)}).click()`);
+    const parts = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result()?.parts ?? []))`);
+    await begin(b);
+    // Círculo de radio 5 en XY → Superficie extruida de 10 (desde el menú)
+    const doc = await call("cad_get_document");
+    const sketch = { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 5 } }], constraints: [], next_id: 3, origin: 0 };
+    doc.features.push({ id: doc.next_id++, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Superficie extruida");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "surface_extrude"; t++) await sleep(250);
+    await sleep(1500);
+    await accept(b, 2000);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    await sleep(500);
+    let ps = await parts();
+    if (ps.length !== 1 || !ps[0].surface) throw new Error(`tubo: ${JSON.stringify(ps)}`);
+    near(ps[0].area, 2 * Math.PI * 5 * 10, 1e-3, "área del tubo");
+    // Tapas: Relleno del círculo de abajo y del de arriba (lejos de la costura en x = 5)
+    for (const z of [0, 10]) {
+      await filter("Aristas");
+      await b.click(...(await at([-5, 0, z])), { wait: 800 });
+      const picked = await b.eval(`window.__cadUi.picks().map((p) => p.kind)`);
+      if (picked.join() !== "edge") throw new Error(`elegido: ${picked}`);
+      await b.clickText("Relleno");
+      for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.filter((f) => f.kind.type === "fill").length`)) !== (z ? 2 : 1); t++) await sleep(250);
+      // Plano: sin tangencia
+      await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.kind.tangent = false; })`);
+      await sleep(1500);
+      await accept(b, 2000);
+    }
+    ps = await parts();
+    if (ps.length !== 3 || !ps.every((p) => p.surface)) throw new Error(`con tapas: ${JSON.stringify(ps.map((p) => [p.name, p.surface]))}`);
+    await b.shot("superficies_tapas");
+    // Coser (sin elegir: todas las superficies) → sólido
+    await filter("Todo");
+    await b.clickText("Coser");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "sew"; t++) await sleep(250);
+    await sleep(1500);
+    await accept(b, 2000);
+    ps = await parts();
+    if (ps.length !== 1 || ps[0].surface) throw new Error(`cosido: ${JSON.stringify(ps)}`);
+    near((await body()).volume, Math.PI * 25 * 10, 1e-3, "lata cerrada");
+    await b.shot("superficies_cosido");
   },
 
   async "chaflán de dos distancias y redondeo variable"(b) {

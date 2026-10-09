@@ -511,6 +511,48 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         corner_size: Option<f64>,
     },
+    /// Superficie (sin espesor) que deja una curva de un sketch empujada a lo
+    /// largo de la normal del plano: ciega, simétrica o a los dos lados.
+    SurfaceExtrude {
+        sketch: FeatureId,
+        /// Curvas del sketch (vacío = todas las que no son de construcción);
+        /// abiertas o cerradas, cada cadena da una superficie
+        #[serde(default)]
+        entities: Vec<u32>,
+        extent: Extent,
+        #[serde(default)]
+        reverse: bool,
+    },
+    /// Superficie que deja una curva de un sketch girada alrededor de un eje.
+    SurfaceRevolve {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        axis: AxisSpec,
+        angle: f64,
+    },
+    /// Relleno: superficie que cierra un borde de aristas (de superficies o
+    /// sólidos). Con `tangent`, sigue tangente a la cara de cada arista que
+    /// tiene una sola (el borde de una superficie).
+    Fill {
+        edges: Vec<EdgeRef>,
+        #[serde(default)]
+        tangent: bool,
+    },
+    /// Coser: une superficies por sus bordes en una sola; con `solid`, lo que
+    /// cierra un volumen queda sólido. Las piezas cosidas dejan de estar.
+    Sew {
+        parts: Vec<PartId>,
+        #[serde(default)]
+        solid: bool,
+        /// Separación máxima entre bordes que se juntan
+        #[serde(default = "default_sew_tolerance")]
+        tolerance: f64,
+    },
+}
+
+fn default_sew_tolerance() -> f64 {
+    0.01
 }
 
 /// Forma de la ranura de alivio de un doblez.
@@ -721,6 +763,13 @@ impl FeatureKind {
                 d.extend(axis_dep(&r.axis));
                 d
             }
+            FeatureKind::SurfaceExtrude { sketch, .. } => vec![*sketch],
+            FeatureKind::SurfaceRevolve { sketch, axis, .. } => {
+                let mut d = vec![*sketch];
+                d.extend(axis_dep(axis));
+                d
+            }
+            FeatureKind::Sew { parts, .. } => parts.iter().map(|p| p.feature).collect(),
             FeatureKind::Pattern { features, pattern } => {
                 let mut d = features.clone();
                 match pattern {
@@ -779,6 +828,10 @@ impl FeatureKind {
             FeatureKind::Thread { .. } => "Rosca",
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",
+            FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
+            FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
+            FeatureKind::Fill { .. } => "Relleno",
+            FeatureKind::Sew { .. } => "Coser",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
         }

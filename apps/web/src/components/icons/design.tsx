@@ -253,6 +253,38 @@ export const Flange = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const SurfaceExtrude = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 17 C8 13 12 19 16 15 L20 9 C16 13 12 7 8 11 Z" {...soft} />
+    <path d="M4 17 C8 13 12 19 16 15" />
+  </DesignIcon>
+);
+
+export const SurfaceRevolve = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M6 5 C11 8 11 16 6 19" />
+    <ellipse cx="12" cy="5" rx="6" ry="1.6" />
+    <ellipse cx="12" cy="19" rx="6" ry="1.6" />
+    <path d="M18 5 C13 8 13 16 18 19" {...dashed} />
+  </DesignIcon>
+);
+
+export const Fill = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 15 C6 8 18 8 20 15 C16 18 8 18 4 15 Z" {...soft} />
+    <path d="M4 15 C8 18 16 18 20 15" />
+    <path d="M4 15 C6 8 18 8 20 15" {...dashed} />
+  </DesignIcon>
+);
+
+export const Sew = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M3 6 L11 9 V19 L3 16 Z" {...soft} />
+    <path d="M21 6 L13 9 V19 L21 16 Z" {...soft} />
+    <path d="M10 11 L14 12 M10 14 L14 15 M10 17 L14 18" />
+  </DesignIcon>
+);
+
 export const FlatPattern = (p: IconProps) => (
   <DesignIcon {...p}>
     <rect x="3" y="4" width="18" height="16" {...soft} />

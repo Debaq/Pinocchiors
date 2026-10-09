@@ -620,3 +620,48 @@ fn metric_thread_rod() {
     assert!(nut.is_valid());
     assert_relative_eq!(nut.mass().unwrap().volume, 4000.0 - expected, max_relative = 0.01);
 }
+
+#[test]
+fn fill_and_sew_an_open_box() {
+    if !require() {
+        return;
+    }
+    let b = cube(10.0);
+    let faces = b.faces().unwrap();
+    // Sin la tapa de arriba: cinco caras cosidas, abiertas
+    let top = faces.iter().position(|f| f.normal[2] > 0.9).unwrap();
+    let rest: Vec<Shape> = (0..faces.len()).filter(|&i| i != top).map(|i| b.face_shape(i).unwrap()).collect();
+    let open = Shape::sew(&rest, 1e-6, false).unwrap();
+    assert!(Shape::sew(&rest, 1e-6, true).is_err(), "abierta no hace sólido");
+    // El borde de arriba: las cuatro aristas a z = 10
+    let edges = b.edges().unwrap();
+    let boundary: Vec<(Shape, Option<Shape>)> =
+        (0..edges.len()).filter(|&i| edges[i].start[2] > 9.99 && edges[i].end[2] > 9.99).map(|i| (b.edge_shape(i).unwrap(), None)).collect();
+    assert_eq!(boundary.len(), 4);
+    let lid = Shape::fill(&boundary, &[]).unwrap();
+    let area: f64 = lid.faces().unwrap().iter().map(|f| f.area).sum();
+    assert!((area - 100.0).abs() < 1e-3, "tapa {area}");
+    let closed = Shape::sew(&[open, lid], 1e-4, true).unwrap();
+    assert!(closed.is_valid());
+    let v = closed.mass().unwrap().volume;
+    assert!((v - 1000.0).abs() < 1e-2, "volumen {v}");
+}
+
+#[test]
+fn surface_from_an_open_wire() {
+    if !require() {
+        return;
+    }
+    // Una L abierta extruida: dos caras, sin volumen
+    let w = Shape::wire(&[Curve::Line([0.0, 0.0, 0.0], [10.0, 0.0, 0.0]), Curve::Line([10.0, 0.0, 0.0], [10.0, 5.0, 0.0])]).unwrap();
+    let s = w.prism([0.0, 0.0, 3.0]).unwrap();
+    assert_eq!(s.face_count(), 2);
+    let area: f64 = s.faces().unwrap().iter().map(|f| f.area).sum();
+    assert!((area - 45.0).abs() < 1e-9);
+    assert!(s.solids().unwrap().is_empty());
+    // Engrosada de un lado: 3 × (10 + 5 ± 1) según hacia dónde (la esquina se pierde o se suma)
+    let t = s.thicken(1.0).unwrap();
+    assert!(!t.solids().unwrap().is_empty());
+    let v = t.mass().unwrap().volume;
+    assert!((v - 42.0).abs() < 1e-6 || (v - 48.0).abs() < 1e-6, "volumen {v}");
+}

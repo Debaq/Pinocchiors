@@ -348,6 +348,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         edges: p.edges,
         color: parseInt(partColor(doc, p, i).slice(1), 16),
         hidden: partHidden(doc, p),
+        surface: p.surface,
       })),
     );
   });

@@ -157,6 +157,14 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     "-",
     { label: "Desarrollo", icon: D.FlatPattern, run: () => ui.setFlatOpen(true), needsBody: true, tip: "La chapa plana para cortar, con las líneas de doblez; DXF 1:1" },
   ];
+  const surfaces: (Tool | "-")[] = [
+    { label: "Superficie extruida", icon: D.SurfaceExtrude, run: a.addSurfaceExtrude, tip: "Las curvas de un sketch (abiertas o cerradas) empujadas: una superficie sin espesor" },
+    { label: "Superficie de revolución", icon: D.SurfaceRevolve, run: a.addSurfaceRevolve, tip: "Las curvas de un sketch giradas alrededor de un eje" },
+    { label: "Relleno", icon: D.Fill, run: () => void a.startFill(), needsBody: true, tip: "Superficie que cierra un borde (elegir las aristas); puede seguir tangente a las caras vecinas" },
+    { label: "Coser", icon: D.Sew, run: a.addSew, needsBody: true, tip: "Une superficies por sus bordes; si cierran un volumen, queda un sólido" },
+    "-",
+    { label: "Engrosar", icon: D.Thicken, run: () => void a.startThicken(), needsBody: true, tip: "Da espesor a una superficie (o a caras de un sólido)" },
+  ];
   const refs: (Tool | "-")[] = [
     { label: "Plano", icon: D.Plane, run: () => void a.addReference("plane"), tip: "Plano de referencia: desplazado, en ángulo, medio o por tres puntos" },
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
@@ -198,6 +206,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
           <ToolMenu label="Patrones" tools={patterns} hasBody={hasBody()} />
           <ToolMenu label="Piezas" tools={parts} hasBody={hasBody()} />
           <ToolMenu label="Chapa" tools={sheet} hasBody={hasBody()} />
+          <ToolMenu label="Superficies" tools={surfaces} hasBody={hasBody()} />
           <ToolMenu label="Referencias" tools={refs} hasBody={hasBody()} />
           <Sep />
           <ToolButton tool={{ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" }} disabled={!hasBody()} />

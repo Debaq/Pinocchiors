@@ -215,6 +215,42 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     });
   };
 
+  /** Superficie extruida con todas las curvas del sketch elegido (o del último) */
+  const addSurfaceExtrude = () => {
+    const s = targetSketch();
+    if (!s) return say("Primero hace falta un sketch con curvas (abiertas o cerradas)");
+    ui.clearPicks();
+    void store.addFeature({ type: "surface_extrude", sketch: s.id, entities: [], extent: { type: "blind", distance: 10 }, reverse: false });
+  };
+
+  /** Superficie de revolución: eje = la primera línea de construcción del sketch, o Z */
+  const addSurfaceRevolve = () => {
+    const s = targetSketch();
+    if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con curvas (abiertas o cerradas)");
+    ui.clearPicks();
+    const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
+    const axis: AxisSpec = axisLine ? { type: "sketch_line", sketch: s.id, line: axisLine.id } : { type: "z" };
+    void store.addFeature({ type: "surface_revolve", sketch: s.id, entities: [], axis, angle: 360 });
+  };
+
+  /** Relleno del borde de aristas elegido (si no hay, se elige en el diálogo) */
+  const startFill = async () => {
+    if (!store.result()?.body) return say("Primero hace falta una superficie o un sólido con un borde que cerrar");
+    const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
+    const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
+    ui.clearPicks();
+    void store.addFeature({ type: "fill", edges, tangent: picked.length > 0 });
+  };
+
+  /** Coser las piezas elegidas (sin elegir: todas las superficies) */
+  const addSew = () => {
+    const surfaces = (store.result()?.parts ?? []).filter((p) => p.surface).map((p) => p.id);
+    const picked = pickedParts();
+    const parts = picked.length > 0 ? picked : surfaces;
+    if (parts.length === 0) return say("No hay superficies para coser");
+    void store.addFeature({ type: "sew", parts, solid: true, tolerance: 0.01 });
+  };
+
   /** Pestaña en la arista elegida (si no hay, se elige en el diálogo) */
   const startFlange = async () => {
     if (!store.result()?.body) return say("Primero hace falta una chapa");
@@ -406,6 +442,10 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addPrimitive,
     addSheetMetal,
     startFlange,
+    addSurfaceExtrude,
+    addSurfaceRevolve,
+    startFill,
+    addSew,
     addStandard,
     startEdges,
     startFaces,

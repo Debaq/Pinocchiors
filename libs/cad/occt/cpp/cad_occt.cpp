@@ -18,6 +18,8 @@
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <LocOpe_DPrism.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
+#include <BRepOffsetAPI_MakeFilling.hxx>
+#include <ShapeFix_Solid.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <gp_Lin.hxx>
 #include <STEPCAFControl_Writer.hxx>
@@ -1158,6 +1160,88 @@ CadShape* cad_thicken(const CadShape* faces, double thickness) {
         mk.MakeOffsetShape();
         if (!mk.IsDone()) throw Standard_Failure("no se pudo engrosar");
         return wrap_checked(mk.Shape(), "engrosar");
+    });
+}
+
+CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,
+                   int32_t n_points) {
+    return guard("relleno", (CadShape*)nullptr, [&] {
+        if (n < 1) throw Standard_Failure("hacen falta aristas del borde");
+        // Borde plano, sin tangencias ni puntos: la cara plana que encierra
+        bool tangent = false;
+        for (int32_t i = 0; faces && i < n; i++) tangent = tangent || faces[i];
+        if (!tangent && n_points == 0) {
+            TopTools_ListOfShape list;
+            for (int32_t i = 0; i < n; i++)
+                for (TopExp_Explorer ex(edges[i]->s, TopAbs_EDGE); ex.More(); ex.Next()) list.Append(ex.Current());
+            BRepBuilderAPI_MakeWire mw;
+            mw.Add(list);
+            if (mw.IsDone() && BRep_Tool::IsClosed(mw.Wire())) {
+                BRepBuilderAPI_MakeFace mf(mw.Wire(), Standard_True);
+                if (mf.IsDone()) return wrap(mf.Face());
+            }
+        }
+        BRepOffsetAPI_MakeFilling fill;
+        for (int32_t i = 0; i < n; i++) {
+            TopExp_Explorer ex(edges[i]->s, TopAbs_EDGE);
+            for (; ex.More(); ex.Next()) {
+                const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
+                // Con la cara vecina: tangente a ella; sin ella, solo pasa por el borde
+                if (faces && faces[i]) {
+                    TopExp_Explorer fx(faces[i]->s, TopAbs_FACE);
+                    if (fx.More()) {
+                        fill.Add(e, TopoDS::Face(fx.Current()), GeomAbs_G1, Standard_True);
+                        continue;
+                    }
+                }
+                fill.Add(e, GeomAbs_C0, Standard_True);
+            }
+        }
+        for (int32_t i = 0; i < n_points; i++) fill.Add(pnt(points + 3 * i));
+        fill.Build();
+        if (!fill.IsDone()) throw Standard_Failure("el borde no se pudo rellenar (¿está cerrado?)");
+        return wrap(fill.Shape());
+    });
+}
+
+CadShape* cad_sew(const CadShape* const* shapes, int32_t n, double tolerance, int32_t solid) {
+    return guard("coser", (CadShape*)nullptr, [&] {
+        if (n < 1) throw Standard_Failure("nada que coser");
+        BRepBuilderAPI_Sewing sew(tolerance);
+        for (int32_t i = 0; i < n; i++) sew.Add(shapes[i]->s);
+        sew.Perform();
+        TopoDS_Shape sewed = sew.SewedShape();
+        if (sewed.IsNull()) throw Standard_Failure("no quedó nada cosido");
+        if (!solid) return wrap(sewed);
+        // Cada concha cerrada, un sólido (orientado hacia afuera)
+        BRep_Builder b;
+        TopoDS_Compound out;
+        b.MakeCompound(out);
+        int count = 0;
+        std::vector<TopoDS_Shell> shells;
+        for (TopExp_Explorer ex(sewed, TopAbs_SHELL); ex.More(); ex.Next()) shells.push_back(TopoDS::Shell(ex.Current()));
+        // Caras sueltas (una esfera es una sola cara): cada una en su concha
+        for (TopExp_Explorer ex(sewed, TopAbs_FACE, TopAbs_SHELL); ex.More(); ex.Next()) {
+            TopoDS_Shell sh;
+            b.MakeShell(sh);
+            b.Add(sh, ex.Current());
+            sh.Closed(BRep_Tool::IsClosed(sh));
+            shells.push_back(sh);
+        }
+        for (const TopoDS_Shell& shell : shells) {
+            if (!BRep_Tool::IsClosed(shell)) throw Standard_Failure("las superficies no cierran un volumen");
+            ShapeFix_Solid fix;
+            TopoDS_Solid sol = fix.SolidFromShell(shell);
+            if (sol.IsNull()) throw Standard_Failure("no se pudo hacer el sólido");
+            b.Add(out, sol);
+            count++;
+        }
+        if (count == 0) throw Standard_Failure("las superficies no cierran un volumen");
+        if (count == 1) {
+            TopExp_Explorer ex(out, TopAbs_SOLID);
+            return wrap_checked(ex.Current(), "coser");
+        }
+        return wrap_checked(out, "coser");
     });
 }
 
