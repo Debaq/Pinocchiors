@@ -211,17 +211,27 @@ pub fn flat_pattern(shape: &Shape, k_factor: f64, thickness: Option<f64>, fixed:
             if inner < -1e-9 {
                 return Err("un doblez tiene radio menor que el espesor".into());
             }
-            // El otro borde recto del doblez y la pared que sigue
+            // El otro borde recto del doblez y la pared que sigue: el más lejano
+            // (un alivio o un agujero que corta el doblez deja otras rectas a
+            // lo largo del eje, a medio camino)
             let r1 = radial(s1);
-            let e2 = face_edges[c].iter().copied().find(|&j| {
-                j != k
-                    && edges[j].curve == CurveKind::Line
-                    && dot(normalize(sub(edges[j].end, edges[j].start)), u).abs() > 0.999
-                    && norm(sub(radial(edges[j].start), r1)) > 1e-6
-            });
+            let angle_of = |j: usize| {
+                let r2 = radial(edges[j].start);
+                dot(cross(r1, r2), u).atan2(dot(r1, r2))
+            };
+            let e2 = face_edges[c]
+                .iter()
+                .copied()
+                .filter(|&j| {
+                    j != k
+                        && edges[j].curve == CurveKind::Line
+                        && dot(normalize(sub(edges[j].end, edges[j].start)), u).abs() > 0.999
+                        && norm(sub(radial(edges[j].start), r1)) > 1e-6
+                })
+                .max_by(|&a, &b| angle_of(a).abs().total_cmp(&angle_of(b).abs()));
             let Some(e2) = e2 else { continue };
             let s2 = edges[e2].start;
-            let signed = dot(cross(r1, radial(s2)), u).atan2(dot(r1, radial(s2)));
+            let signed = angle_of(e2);
             let (sign, theta) = (signed.signum(), signed.abs());
             if theta < 1e-9 {
                 continue;

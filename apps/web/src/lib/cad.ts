@@ -90,6 +90,8 @@ export type RefView = { id: number } & (
 );
 
 /** Unir funde con lo que toca (o crea pieza si no toca nada); `new` siempre crea pieza aparte */
+export type BendRelief = "rectangle" | "obround" | "none";
+export type CornerRelief = "round" | "square" | "none";
 export type BodyOp = "join" | "cut" | "intersect" | "new";
 
 export type RegionSelection = { type: "all" } | { type: "points"; points: P2[] };
@@ -304,7 +306,20 @@ export type FeatureKind =
   /** Chapa metálica: regiones de un sketch al espesor; radio interior de doblez y factor K para pestañas y desarrollo */
   | { type: "sheet_metal"; sketch: number; regions: RegionSelection; thickness: number; radius: number; k_factor: number; flip: boolean; op: BodyOp }
   /** Pestaña: pared doblada desde una arista del borde de la chapa (`length` después del doblez) */
-  | { type: "flange"; edge?: EdgeRef | null; length: number; angle: number; flip: boolean; radius?: number | null }
+  | {
+      type: "flange";
+      edge?: EdgeRef | null;
+      length: number;
+      angle: number;
+      flip: boolean;
+      radius?: number | null;
+      /** Ranura donde la chapa sigue al lado del doblez (esquina hacia adentro) */
+      relief?: BendRelief;
+      relief_width?: number | null;
+      /** Donde se junta con el doblez de otra pestaña */
+      corner_relief?: CornerRelief;
+      corner_size?: number | null;
+    }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
   | { type: "point"; def: PointSpec };

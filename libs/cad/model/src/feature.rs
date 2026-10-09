@@ -497,7 +497,43 @@ pub enum FeatureKind {
         /// Radio interior (sin él, el de la chapa)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius: Option<f64>,
+        /// Ranura en un extremo donde la chapa sigue al lado del doblez (esquina
+        /// hacia adentro): sin ella el doblez queda pegado a ese material
+        #[serde(default)]
+        relief: BendRelief,
+        /// Ancho de la ranura (sin él, el espesor)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        relief_width: Option<f64>,
+        /// Alivio en el extremo que se junta con el doblez de otra pestaña
+        #[serde(default)]
+        corner_relief: CornerRelief,
+        /// Radio (o medio lado) del alivio de esquina (sin él, el espesor)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corner_size: Option<f64>,
     },
+}
+
+/// Forma de la ranura de alivio de un doblez.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BendRelief {
+    #[default]
+    Rectangle,
+    /// Con el fondo redondo
+    Obround,
+    None,
+}
+
+/// Forma del alivio donde se juntan los dobleces de dos pestañas. Sin
+/// alivio igual queda una muesca cuadrada del largo del doblez (los dobleces
+/// van por fuera del borde de la chapa y se tocan solo en el vértice).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CornerRelief {
+    Round,
+    Square,
+    #[default]
+    None,
 }
 
 fn default_k_factor() -> f64 {

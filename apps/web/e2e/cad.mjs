@@ -2173,6 +2173,55 @@ const scenarios = {
     if (!dxf.includes("CONTORNO") || (dxf.match(/\nDOBLEZ\n/g) ?? []).length < 2) throw new Error("DXF del desarrollo");
   },
 
+  async "chapa: alivios"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const filter = (label) => b.eval(`[...document.querySelectorAll('[role=radio]')].find((e) => e.textContent === ${JSON.stringify(label)}).click()`);
+    await begin(b);
+    // L: 100 × 50 y un brazo de 50 × 30 que baja desde x = 50 (espesor 2, radio 2)
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [50, 0], [50, -30], [100, -30], [100, 50], [0, 50]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const entities = P.map((_, i) => line(10 + i, i + 1, ((i + 1) % P.length) + 1));
+    const sketch = { points, entities, constraints: [], next_id: 20, origin: 0 };
+    const sk = doc.next_id++;
+    doc.features.push({ id: sk, name: "Contorno", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.features.push({ id: doc.next_id++, name: "Chapa", suppressed: false, kind: { type: "sheet_metal", sketch: sk, regions: { type: "all" }, thickness: 2, radius: 2, k_factor: 0.44, flip: false, op: "join" } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadViewer.frameAll()`);
+    await sleep(500);
+    const plate = (100 * 50 + 50 * 30) * 2;
+    near((await body()).volume, plate, 1e-6, "chapa en L");
+    // Pestaña en el borde de y = 0 entre x = 0 y 50: en x = 50 la chapa sigue (el brazo)
+    await filter("Aristas");
+    await b.click(...(await at([20, 0, 2])), { wait: 800 });
+    await b.clickText("Pestaña");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "flange"; t++) await sleep(250);
+    await sleep(1500);
+    // El diálogo ofrece el alivio y la esquina
+    for (const label of ["Alivio", "Esquina", "Ancho del alivio"]) {
+      if (!(await b.eval(`[...document.querySelectorAll("label, span, div")].some((e) => e.textContent.trim() === ${JSON.stringify(label)})`)))
+        throw new Error("falta en el diálogo: " + label);
+    }
+    await accept(b, 2000);
+    const bend = (Math.PI / 4) * (16 - 4) * 50;
+    // Ranura recta de 2 × 6 a través del espesor
+    near((await body()).volume, plate + bend + 2000 - 24, 1e-6, "con alivio recto");
+    const id = await b.eval(`window.__cadStore.doc().features.at(-1).id`);
+    await b.eval(`window.__cadStore.updateFeature(${id}, (f) => { f.kind.relief = "obround"; })`);
+    await sleep(2000);
+    near((await body()).volume, plate + bend + 2000 - (20 + Math.PI / 2) * 2, 1e-6, "con alivio redondo");
+    await b.shot("chapa_alivio");
+    // El desarrollo sale con el doblez
+    await filter("Todo");
+    await b.clickText("Desarrollo");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-flat] svg")`)); t++) await sleep(300);
+    const size = await b.eval(`document.querySelector("[data-flat-size]")?.textContent ?? ""`);
+    if (!size.includes("1 doblez")) throw new Error(`desarrollo: ${size}`);
+  },
+
   async "chaflán de dos distancias y redondeo variable"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);

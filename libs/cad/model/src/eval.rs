@@ -144,6 +144,34 @@ pub struct Evaluation {
     pub recomputed: usize,
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas), en orden.
     pub threads: Vec<ThreadAxis>,
+    /// Dobleces de las pestañas, en orden (para los alivios de esquina).
+    pub bends: Vec<BendInfo>,
+}
+
+/// Arista de la chapa de la que sale una pestaña.
+#[derive(Debug, Clone, Serialize)]
+pub struct BendInfo {
+    pub feature: FeatureId,
+    pub part: PartId,
+    pub start: P3,
+    pub end: P3,
+    /// Normal de la cara de la arista (la chapa queda del otro lado)
+    pub normal: P3,
+    pub thickness: f64,
+}
+
+/// Lo que una pestaña sabe de su arista, para los alivios.
+struct FlangeGeom {
+    start: P3,
+    end: P3,
+    /// De `start` a `end`
+    dir: P3,
+    /// Normal de la cara de la arista
+    n: P3,
+    /// Normal del canto (hacia afuera de la chapa)
+    m: P3,
+    t: f64,
+    r: f64,
 }
 
 /// Estado después de una operación, guardado por la huella de todo lo que
@@ -160,6 +188,7 @@ struct CacheEntry {
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
+    bends: Vec<BendInfo>,
     auto_scope: Vec<PartId>,
     handle: Option<Handle>,
     /// Para descartar las menos usadas.
@@ -457,6 +486,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 ctx.ev.tools.insert(f.id, t.clone());
             }
             ctx.ev.threads.extend(e.threads.iter().cloned());
+            ctx.ev.bends.extend(e.bends.iter().cloned());
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handle: e.handle.clone() });
             continue;
         }
@@ -494,6 +524,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
+                bends: ctx.ev.bends.iter().filter(|b| b.feature == f.id).cloned().collect(),
                 auto_scope: ctx.auto_scope.clone(),
                 handle: ctx.handle.borrow().clone(),
                 used: 0,
@@ -1953,14 +1984,34 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
-            FeatureKind::Flange { edge, length, angle, flip, radius } => {
+            FeatureKind::Flange { edge, length, angle, flip, radius, relief, relief_width, corner_relief, corner_size } => {
                 let edge = edge.as_ref().ok_or("elegir la arista del borde de la chapa")?;
-                let (tool, part) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
+                let (tool, part, g) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
+                // Con la chapa de antes: dónde sigue el material al lado del doblez
+                let cut = self.flange_reliefs(f.id, part, &g, *relief, *relief_width, *corner_relief, *corner_size)?;
+                // El alivio se resta antes de unir, de la chapa y de la pestaña: unidas
+                // primero, dos dobleces que se tocan en una línea dan un sólido roto
+                let tool = match &cut {
+                    Some(c) => {
+                        let (shape, h) = with_history(|| tool.shape.cut(&c.shape)).map_err(err)?;
+                        let tags = propagate(&[tool.tags.as_slice(), c.tags.as_slice()], &h, shape.face_count()).0;
+                        Tagged { shape, tags }
+                    }
+                    None => tool,
+                };
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
                 let saved = std::mem::replace(&mut self.scope, vec![part]);
-                let r = self.apply(f.id, tool, BodyOp::Join);
+                let mut r = Ok(());
+                if let Some(cut) = cut {
+                    r = self.apply(f.id, cut, BodyOp::Cut);
+                }
+                if r.is_ok() {
+                    r = self.apply(f.id, tool, BodyOp::Join);
+                }
                 self.scope = saved;
-                r
+                r?;
+                self.ev.bends.push(BendInfo { feature: f.id, part, start: g.start, end: g.end, normal: g.n, thickness: g.t });
+                Ok(())
             }
             FeatureKind::Hole(h) => {
                 // Asociado a otra rosca: su medida (la holgura es la propia)
@@ -2160,7 +2211,7 @@ impl Ctx<'_> {
 
     /// Doblez y pared de una pestaña desde la arista `edge` (recta, entre la
     /// cara grande de la chapa y su canto). Devuelve la herramienta y la pieza.
-    fn flange_tool(&self, id: FeatureId, edge: &EdgeRef, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId)> {
+    fn flange_tool(&self, id: FeatureId, edge: &EdgeRef, length: f64, angle: f64, flip: bool, radius: Option<f64>) -> R<(Tagged, PartId, FlangeGeom)> {
         if !(angle > 0.0 && angle < 180.0) {
             return Err("el ángulo va entre 0 y 180°".into());
         }
@@ -2200,7 +2251,11 @@ impl Ctx<'_> {
         // Girar el canto del lado del material (−b) hacia afuera (m)
         let sign = if dot(cross(dir, scale(b, -1.0)), m) >= 0.0 { 1.0 } else { -1.0 };
         let a = sign * angle.to_radians();
-        let face = body.face_shape(side.0).map_err(err)?;
+        // El canto a lo largo de la arista y a través del espesor. No la cara del
+        // cuerpo: junto a otra pestaña se funde con la tapa de su doblez (son
+        // coplanares) y se revolucionaría todo eso
+        let below = scale(n, -t);
+        let face = Shape::polygon(&[info.start, info.end, add(info.end, below), add(info.start, below)]).map_err(err)?;
         let bend = face.revolve(axis, a).map_err(err)?;
         let shape = if length > 0.0 {
             let rot = cad_occt::rotation_matrix(axis, a);
@@ -2212,7 +2267,107 @@ impl Ctx<'_> {
         };
         let part = self.ev.part_of_face(side.0).ok_or("la arista no es de ninguna pieza")?;
         let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("pestaña:{k}"))]).collect();
-        Ok((Tagged { shape, tags }, part))
+        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r };
+        Ok((Tagged { shape, tags }, part, g))
+    }
+
+    /// Alivios de una pestaña, para restar después de unirla: en cada extremo,
+    /// si se junta con el doblez de otra pestaña, el alivio de esquina
+    /// (centrado en el vértice, a través del espesor); si no, y la chapa sigue
+    /// al lado del doblez (esquina hacia adentro), una ranura desde el canto
+    /// hasta pasado el doblez. Sin alivios que hacer, `None`.
+    #[allow(clippy::too_many_arguments)]
+    fn flange_reliefs(
+        &self,
+        id: FeatureId,
+        part: PartId,
+        g: &FlangeGeom,
+        relief: BendRelief,
+        relief_width: Option<f64>,
+        corner: CornerRelief,
+        corner_size: Option<f64>,
+    ) -> R<Option<Tagged>> {
+        let plate = &self.ev.parts.iter().find(|p| p.id == part).ok_or("la pieza de la chapa no está")?.shape;
+        let scale_len = norm(sub(g.end, g.start)).max(g.t);
+        let tol = 1e-6 * (1.0 + scale_len);
+        let eps = (g.t * 0.05).max(1e-3);
+        // Prisma a través del espesor (de un poco arriba de la cara de la arista
+        // a un poco abajo de la otra) desde un contorno en el plano de la cara
+        let through = |pts: &[P3]| -> R<Shape> {
+            let lifted: Vec<P3> = pts.iter().map(|p| add(*p, scale(g.n, eps))).collect();
+            Shape::polygon(&lifted).map_err(err)?.prism(scale(g.n, -(g.t + 2.0 * eps))).map_err(err)
+        };
+        // `seam`: hacia dónde queda la costura del cilindro (en un plano de una
+        // cara, la booleana da un sólido al revés)
+        let disk = |c: P3, radius: f64, seam: P3| -> R<Shape> {
+            let frame = Frame { origin: add(c, scale(g.n, eps)), z: scale(g.n, -1.0), x: seam };
+            Shape::cylinder(frame, radius, g.t + 2.0 * eps).map_err(err)
+        };
+        let mut cuts: Vec<Shape> = Vec::new();
+        for (e, sigma) in [(g.start, -1.0), (g.end, 1.0)] {
+            let u = scale(g.dir, sigma);
+            // ¿Termina en el doblez de otra pestaña (no paralela) de la misma pieza?
+            let meets = self.ev.bends.iter().any(|b| {
+                b.part == part
+                    && b.feature != id
+                    && dot(normalize(sub(b.end, b.start)), g.dir).abs() < 0.99
+                    && [b.start, b.end].iter().any(|p| {
+                        let d = sub(*p, e);
+                        let along = dot(d, g.n);
+                        norm(sub(d, scale(g.n, along))) < tol && along.abs() <= g.t + tol
+                    })
+            });
+            if meets {
+                let rho = corner_size.unwrap_or(g.t);
+                if rho <= 0.0 && corner != CornerRelief::None {
+                    return Err("el alivio de esquina tiene que ser mayor que cero".into());
+                }
+                match corner {
+                    CornerRelief::None => {}
+                    // Costura hacia el hueco de la esquina (pasado el extremo, afuera del canto)
+                    CornerRelief::Round => cuts.push(disk(e, rho, normalize(add(u, g.m)))?),
+                    CornerRelief::Square => {
+                        let (a, b) = (scale(g.dir, rho), scale(g.m, rho));
+                        cuts.push(through(&[sub(sub(e, a), b), sub(add(e, a), b), add(add(e, a), b), add(sub(e, a), b)])?);
+                    }
+                }
+                continue;
+            }
+            if relief == BendRelief::None {
+                continue;
+            }
+            let w = relief_width.unwrap_or(g.t);
+            if w <= 0.0 {
+                return Err("el ancho del alivio tiene que ser mayor que cero".into());
+            }
+            // Material al lado del doblez: un cubito pasado el extremo, afuera del canto
+            let d = (g.t.min(w) * 0.25).max(1e-4);
+            let probe = add(add(add(e, scale(g.n, -g.t / 2.0)), scale(u, d)), scale(g.m, d));
+            let frame = Frame { origin: sub(probe, [d / 4.0; 3]), ..Frame::WORLD };
+            let cube = Shape::make_box(frame, d / 2.0, d / 2.0, d / 2.0).map_err(err)?;
+            let touches = plate.intersect(&cube).ok().and_then(|s| s.mass().ok()).is_some_and(|m| m.volume > 1e-12);
+            if !touches {
+                continue;
+            }
+            // Desde un poco adentro del canto hasta pasado el doblez (R + t)
+            let (inner, outer) = (-w / 2.0, g.r + g.t + w / 2.0);
+            let at = |a: f64, b: f64| add(add(e, scale(u, a)), scale(g.m, b));
+            match relief {
+                BendRelief::Rectangle => cuts.push(through(&[at(0.0, inner), at(w, inner), at(w, outer), at(0.0, outer)])?),
+                BendRelief::Obround => {
+                    let end = outer - w / 2.0;
+                    let slot = through(&[at(0.0, inner), at(w, inner), at(w, end), at(0.0, end)])?;
+                    cuts.push(slot.union(&disk(at(w / 2.0, end), w / 2.0, g.m)?).map_err(err)?);
+                }
+                BendRelief::None => {}
+            }
+        }
+        if cuts.is_empty() {
+            return Ok(None);
+        }
+        let shape = if cuts.len() == 1 { cuts.pop().unwrap() } else { Shape::fuse_all(&cuts).map_err(err)? };
+        let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("alivio:{k}"))]).collect();
+        Ok(Some(Tagged { shape, tags }))
     }
 
     fn extrude(&self, id: FeatureId, e: &Extrude) -> R<Tagged> {

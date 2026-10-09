@@ -31,7 +31,9 @@ import {
   offsetEntities,
   offsetPlane,
   type AxisSpec,
+  type BendRelief,
   type BodyOp,
+  type CornerRelief,
   type CadStore,
   type ChamferSecond,
   type Configuration,
@@ -186,6 +188,16 @@ const Section: Component<{ title: string; children: JSX.Element; right?: JSX.Ele
 );
 
 const OP_OPTIONS = (Object.keys(OP_LABELS) as BodyOp[]).map((v) => ({ value: v, label: OP_LABELS[v] }));
+const RELIEF_OPTIONS = [
+  { value: "rectangle", label: "Ranura recta" },
+  { value: "obround", label: "Ranura con fondo redondo" },
+  { value: "none", label: "Sin alivio" },
+];
+const CORNER_OPTIONS = [
+  { value: "none", label: "Muesca del doblez" },
+  { value: "round", label: "Redonda" },
+  { value: "square", label: "Cuadrada" },
+];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
 
 /** Número con `d` decimales; lo que redondea a cero se muestra sin signo (no "-0,00") */
@@ -2001,12 +2013,14 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "flange" && (f().kind as Extract<FeatureKind, { type: "flange" }>)}>
             {(k) => {
               // El radio de la chapa de la que sale (la última antes)
-              const sheetRadius = () => {
+              const sheet = () => {
                 const list = props.store.doc()?.features ?? [];
                 const before = list.slice(0, list.findIndex((x) => x.id === f().id));
                 const sm = [...before].reverse().find((x) => x.kind.type === "sheet_metal");
-                return sm?.kind.type === "sheet_metal" ? sm.kind.radius : undefined;
+                return sm?.kind.type === "sheet_metal" ? sm.kind : undefined;
               };
+              const sheetRadius = () => sheet()?.radius;
+              const sheetThickness = () => sheet()?.thickness;
               return (
                 <>
                   <SelectionBox
@@ -2026,6 +2040,37 @@ export const FeatureEditor: Component<{
                   <p class="text-[11px] text-text-dim">
                     Dobla hacia el lado de la cara de la arista elegida. El largo es la pared después del doblez; el radio, el interior (el de la chapa si
                     no se cambia).
+                  </p>
+                  <Row label="Alivio">
+                    <Select
+                      options={RELIEF_OPTIONS}
+                      value={k().relief ?? "rectangle"}
+                      onChange={(v) => update((x) => x.type === "flange" && (x.relief = v as BendRelief))}
+                    />
+                  </Row>
+                  <Show when={(k().relief ?? "rectangle") !== "none"}>
+                    {field("Ancho del alivio", "kind.relief_width", k().relief_width ?? sheetThickness() ?? 0, (x, v) => x.type === "flange" && (x.relief_width = v), "mm")}
+                  </Show>
+                  <Row label="Esquina">
+                    <Select
+                      options={CORNER_OPTIONS}
+                      value={k().corner_relief ?? "none"}
+                      onChange={(v) => update((x) => x.type === "flange" && (x.corner_relief = v as CornerRelief))}
+                    />
+                  </Row>
+                  <Show when={(k().corner_relief ?? "none") !== "none"}>
+                    {field(
+                      k().corner_relief === "square" ? "Medio lado" : "Radio del alivio",
+                      "kind.corner_size",
+                      k().corner_size ?? sheetThickness() ?? 0,
+                      (x, v) => x.type === "flange" && (x.corner_size = v),
+                      "mm",
+                    )}
+                  </Show>
+                  <p class="text-[11px] text-text-dim">
+                    El alivio es una ranura en el extremo donde la chapa sigue al lado del doblez (una esquina hacia adentro): sin ella el doblez quedaría
+                    pegado y la chapa se rasgaría. Donde se junta con otra pestaña queda una muesca cuadrada del largo del doblez; también puede ser
+                    redonda o cuadrada más grande. El ancho, si no se cambia, es el espesor.
                   </p>
                 </>
               );
