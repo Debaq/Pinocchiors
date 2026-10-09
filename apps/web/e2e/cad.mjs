@@ -2036,6 +2036,121 @@ const scenarios = {
     await b.shot("cotas_nuevas");
   },
 
+  async "rectángulo por 3 puntos, círculos por 2 y 3 puntos y tangente, polígono circunscrito, ranuras y colineal"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    const tool = async (label) => {
+      await b.clickText(label);
+      await sleep(200);
+    };
+    const esc = () => b.key("Escape", "Escape", 27);
+    const status = () => b.eval(`window.__cadUi.session().report?.status`);
+    const okStatus = async (what) => {
+      await sleep(800);
+      const st = await status();
+      if (st === "over_constrained" || st === "failed") throw new Error(`${what}: ${st}`);
+    };
+    const count = async (type) => (await sk()).entities.filter((e) => e.geometry.type === type).length;
+    // Rectángulo inclinado por 3 puntos
+    await tool("Rect. 3 p.");
+    await b.click(200, 520);
+    await b.click(340, 430);
+    await b.click(370, 480, { wait: 800 });
+    await esc();
+    let s = await sk();
+    const rect = s.entities.filter((e) => e.geometry.type === "line").map((e) => e.id);
+    if (rect.length !== 4) throw new Error(`rectángulo: ${rect.length} líneas`);
+    const kinds = s.constraints.map((c) => c.type);
+    if (kinds.filter((k) => k === "parallel").length !== 2 || !kinds.includes("perpendicular")) throw new Error(`restricciones del rectángulo: ${kinds}`);
+    await okStatus("rectángulo");
+    // Círculo tangente a tres lados del rectángulo: clic cerca del medio de cada uno
+    await tool("Círculo tangente");
+    const P = new Map(s.points.map((p) => [p.id, [p.x, p.y]]));
+    const lineOf = (id) => s.entities.find((e) => e.id === id).geometry;
+    for (const id of rect.slice(0, 3)) {
+      const g = lineOf(id);
+      const [a, c] = [P.get(g.start), P.get(g.end)];
+      await b.click(...(await at((a[0] + c[0]) / 2, (a[1] + c[1]) / 2)), { wait: 500 });
+    }
+    await okStatus("círculo tangente");
+    s = await sk();
+    const tan = s.entities.find((e) => e.geometry.type === "circle");
+    if (!tan) throw new Error("no se creó el círculo tangente");
+    // Tangente a dos lados paralelos: el diámetro es el ancho (largo del segundo lado)
+    const Q = new Map(s.points.map((p) => [p.id, [p.x, p.y]]));
+    const g1 = s.entities.find((e) => e.id === rect[1]).geometry;
+    const width = Math.hypot(Q.get(g1.end)[0] - Q.get(g1.start)[0], Q.get(g1.end)[1] - Q.get(g1.start)[1]);
+    near(2 * tan.geometry.radius, width, 1e-4, "diámetro del tangente");
+    // Círculos por 2 y por 3 puntos
+    await tool("Círculo 2 p.");
+    await b.click(500, 250);
+    await b.click(580, 250, { wait: 800 });
+    await esc();
+    await tool("Círculo 3 p.");
+    await b.click(650, 260);
+    await b.click(700, 210);
+    await b.click(750, 260, { wait: 800 });
+    await esc();
+    if ((await count("circle")) !== 3) throw new Error(`círculos: ${await count("circle")}`);
+    await okStatus("círculos por puntos");
+    // Polígono circunscrito de 6 lados
+    await tool("Polígono");
+    await b.clickText("Inscrito");
+    await b.click(520, 620);
+    await b.click(520, 680, { wait: 800 });
+    await esc();
+    s = await sk();
+    const tangents = s.constraints.filter((c) => c.type === "tangent").length;
+    if (tangents < 3 + 6) throw new Error(`tangencias del polígono: ${tangents - 3}`);
+    await okStatus("polígono circunscrito");
+    // Ranura por el centro y ranura en arco
+    const arcs0 = await count("arc");
+    await tool("Ranura centro");
+    await b.click(720, 450);
+    await b.click(790, 450);
+    await b.click(790, 480, { wait: 800 });
+    await esc();
+    if ((await count("arc")) !== arcs0 + 2) throw new Error("ranura por el centro sin sus dos arcos");
+    await okStatus("ranura por el centro");
+    await tool("Ranura arco");
+    await b.click(860, 700);
+    await b.click(980, 700);
+    await b.click(860, 580);
+    await b.click(995, 700, { wait: 800 });
+    await esc();
+    if ((await count("arc")) !== arcs0 + 2 + 5) throw new Error(`ranura en arco: ${(await count("arc")) - arcs0 - 2} arcos`);
+    await okStatus("ranura en arco");
+    // Colineales: dos líneas sueltas
+    await tool("Línea");
+    await b.click(200, 760);
+    await b.click(300, 790, { wait: 600 });
+    await esc();
+    await esc();
+    await tool("Línea");
+    await b.click(360, 820);
+    await b.click(460, 800, { wait: 600 });
+    await esc();
+    await esc();
+    s = await sk();
+    const two = s.entities.filter((e) => e.geometry.type === "line" && !e.construction).slice(-2).map((e) => e.id);
+    await b.eval(`window.__cadUi.setSelection(${JSON.stringify(two)})`);
+    await sleep(300);
+    await b.clickText("Colineales");
+    await okStatus("colineales");
+    s = await sk();
+    const R = new Map(s.points.map((p) => [p.id, [p.x, p.y]]));
+    const [la, lb] = two.map((id) => s.entities.find((e) => e.id === id).geometry);
+    const [a0, a1] = [R.get(la.start), R.get(la.end)];
+    const off = (p) => Math.abs((a1[0] - a0[0]) * (p[1] - a0[1]) - (a1[1] - a0[1]) * (p[0] - a0[0])) / Math.hypot(a1[0] - a0[0], a1[1] - a0[1]);
+    near(off(R.get(lb.start)), 0, 1e-6, "colineal (comienzo)");
+    near(off(R.get(lb.end)), 0, 1e-6, "colineal (fin)");
+    await b.shot("formas_nuevas_del_sketch");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {

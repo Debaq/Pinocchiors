@@ -9,6 +9,7 @@ import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
+import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -50,13 +51,19 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon:
   { id: "line_mid", short: "Línea centro", label: "Línea desde el centro (centro, extremo: crece igual a los dos lados)", key: "M", icon: SketchIcons.LineMid, group: 1 },
   { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1 },
   { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1 },
+  { id: "rect3", short: "Rect. 3 p.", label: "Rectángulo por 3 puntos (un lado y el ancho: queda inclinado)", icon: SketchIcons.Rect3, group: 1 },
   { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1 },
+  { id: "circle2", short: "Círculo 2 p.", label: "Círculo por 2 puntos (los extremos de un diámetro)", icon: SketchIcons.Circle2, group: 1 },
+  { id: "circle3", short: "Círculo 3 p.", label: "Círculo por 3 puntos", icon: SketchIcons.Circle3, group: 1 },
+  { id: "circle_tan", short: "Círculo tangente", label: "Círculo tangente a 3 líneas o curvas (clic en cada una, cerca de donde toca)", icon: SketchIcons.CircleTan, group: 1 },
   { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1 },
   { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1 },
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1 },
   { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1 },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P", icon: SketchIcons.Polygon, group: 1 },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U", icon: SketchIcons.Slot, group: 1 },
+  { id: "slot_center", short: "Ranura centro", label: "Ranura por el centro (centro, extremo, ancho)", icon: SketchIcons.SlotCenter, group: 1 },
+  { id: "slot_arc", short: "Ranura arco", label: "Ranura en arco (centro del arco, comienzo, fin antihorario, ancho)", icon: SketchIcons.SlotArc, group: 1 },
   { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N", icon: SketchIcons.Spline, group: 1 },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O", icon: SketchIcons.Point, group: 1 },
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
@@ -214,6 +221,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
   const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
+  // Polígono inscrito (el clic es un vértice) o circunscrito (el clic es el medio de un lado)
+  const [polygonCircumscribed, setPolygonCircumscribed] = createSignal(false);
+  // Círculo tangente: las entidades elegidas (y dónde se hizo clic en cada una)
+  const [tanPicks, setTanPicks] = createSignal<{ entity: number; p: P2 }[]>([]);
   /** Texto elegido con «Elegir» (una de sus curvas o su ancla): se puede rehacer */
   const selectedText = () => {
     const s = ui.session();
@@ -276,6 +287,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     setChain(undefined);
     setAnchor([]);
     setTangentFrom(undefined);
+    setTanPicks([]);
   };
   // Deshacer o rehacer en el sketch: lo que la herramienta tenía a medias (y las
   // cotas pedidas, por índice) puede ya no existir
@@ -575,7 +587,40 @@ export const CadView: Component<CadViewProps> = (props) => {
         preview.push(Array.from({ length: 49 }, (_, i) => [an[0][0] + r * Math.cos((i / 48) * 2 * Math.PI), an[0][1] + r * Math.sin((i / 48) * 2 * Math.PI)] as P2));
       }
       if (t === "arc" && an.length >= 1) preview.push([an[0], an.length === 2 ? an[1] : c]);
-      if (t === "polygon" && an.length === 1) preview.push(polygonPoints(an[0], c, polygonSides(), true));
+      if (t === "polygon" && an.length === 1) {
+        if (polygonCircumscribed()) {
+          const v = circumscribedVertices(an[0], c, Math.max(3, Math.round(polygonSides())));
+          preview.push([...v, v[0]]);
+        } else preview.push(polygonPoints(an[0], c, polygonSides(), true));
+      }
+      if ((t === "circle2" || t === "circle3") && an.length) {
+        const cc = t === "circle2" ? { c: [(an[0][0] + c[0]) / 2, (an[0][1] + c[1]) / 2] as P2, r: dist(an[0], c) / 2 } : an.length === 2 ? circumcircle(an[0], an[1], c) : undefined;
+        if (cc) preview.push(Array.from({ length: 49 }, (_, i) => [cc.c[0] + cc.r * Math.cos((i / 48) * 2 * Math.PI), cc.c[1] + cc.r * Math.sin((i / 48) * 2 * Math.PI)] as P2));
+        else preview.push([an[0], c]);
+      }
+      if (t === "rect3" && an.length === 1) preview.push([an[0], c]);
+      if (t === "rect3" && an.length === 2) {
+        const r = rectFrom3(an[0], an[1], c);
+        preview.push(r ? [...r, r[0]] : [an[0], an[1]]);
+      }
+      if (t === "slot_center" && an.length === 1) preview.push([[2 * an[0][0] - c[0], 2 * an[0][1] - c[1]], c]);
+      if (t === "slot_center" && an.length === 2) {
+        const a: P2 = [2 * an[0][0] - an[1][0], 2 * an[0][1] - an[1][1]];
+        preview.push(slotOutline(a, an[1], slotRadius(a, an[1], c)));
+      }
+      if (t === "slot_arc" && an.length >= 1) {
+        const [k] = an;
+        if (an.length === 1) preview.push([k, c]);
+        else {
+          const R = dist(k, an[1]);
+          const a0 = Math.atan2(an[1][1] - k[1], an[1][0] - k[0]);
+          const to = an.length === 3 ? an[2] : c;
+          let sweep = Math.atan2(to[1] - k[1], to[0] - k[0]) - a0;
+          while (sweep <= 0) sweep += 2 * Math.PI;
+          if (an.length === 2) preview.push(Array.from({ length: 33 }, (_, i) => [k[0] + R * Math.cos(a0 + (sweep * i) / 32), k[1] + R * Math.sin(a0 + (sweep * i) / 32)] as P2));
+          else preview.push(arcSlotOutline(k, an[1], sweep, Math.max(1e-6, Math.abs(dist(k, c) - R))));
+        }
+      }
       const tf = tangentFrom();
       const tp = tf && pt(tf.point);
       if (t === "tangent" && tf && tp) {
@@ -634,7 +679,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketch: s.sketch,
       regions: s.regions,
       selected: ui.selection(),
-      hover: [...ui.hoverIds(), ...(snapView()?.refs ?? [])],
+      hover: [...ui.hoverIds(), ...(snapView()?.refs ?? []), ...tanPicks().map((x) => x.entity)],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
@@ -934,6 +979,119 @@ export const CadView: Component<CadViewProps> = (props) => {
       });
       return;
     }
+    if (t === "circle2" || t === "circle3") {
+      const an = anchor();
+      const need = t === "circle2" ? 1 : 2;
+      if (an.length < need) return setAnchor([...an, hit]);
+      const hits = [...an, hit];
+      const cc =
+        t === "circle2" ? { c: [(hits[0].p[0] + hit.p[0]) / 2, (hits[0].p[1] + hit.p[1]) / 2] as P2, r: dist(hits[0].p, hit.p) / 2 } : circumcircle(hits[0].p, hits[1].p, hit.p);
+      if (!cc || cc.r < 1e-9) return ui.setMessage(t === "circle2" ? "Los dos puntos coinciden" : "Los tres puntos están en línea: mover el tercero hacia un costado");
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const center = ui.addPoint(sk, cc.c);
+        const c = ui.addEntity(sk, { type: "circle", center, radius: cc.r });
+        // Los clics sobre puntos que ya estaban: el círculo pasa por ellos
+        const on = [...new Set(hits.flatMap((h) => (h.id !== undefined && sk.points.some((q) => q.id === h.id) ? [h.id] : [])))];
+        for (const p of on) sk.constraints.push({ type: "point_on_circle", point: p, circle: c });
+        if (t === "circle2" && on.length === 2) {
+          // Por dos puntos: el centro en el medio (diámetro de construcción)
+          const d = ui.addEntity(sk, { type: "line", start: on[0], end: on[1] });
+          sk.entities.find((x) => x.id === d)!.construction = true;
+          sk.constraints.push({ type: "midpoint", point: center, line: d });
+        } else if (on.length < (t === "circle2" ? 2 : 3)) dims.push(dim(sk, { type: "diameter", entity: c, value: round(2 * cc.r) }));
+      });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "circle_tan") {
+      // Las líneas o curvas bajo el cursor (no los puntos)
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      const g = target !== undefined ? s.sketch.entities.find((x) => x.id === target)?.geometry : undefined;
+      if (target === undefined || !g || !["line", "circle", "arc"].includes(g.type)) return ui.setMessage("Clic sobre una línea, círculo o arco");
+      const picks = [...tanPicks().filter((x) => x.entity !== target), { entity: target, p: raw }];
+      if (picks.length < 3) {
+        setTanPicks(picks);
+        return ui.setMessage(`Elegidas ${picks.length} de 3`);
+      }
+      // Arranque: el círculo por los puntos de cada una más cercanos a los clics (cerca de donde toca)
+      const q = picks.map((x) => nearestOnEntity(s.sketch, x.entity, x.p)!);
+      const cc = circumcircle(q[0], q[1], q[2]);
+      setTanPicks([]);
+      if (!cc) return ui.setMessage("No se puede arrancar con esos clics: hacer clic cerca de donde el círculo toca cada una");
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const center = ui.addPoint(sk, cc.c);
+        const c = ui.addEntity(sk, { type: "circle", center, radius: cc.r });
+        for (const x of picks) sk.constraints.push({ type: "tangent", a: x.entity, b: c });
+      });
+      return;
+    }
+    if (t === "rect3") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [A, B] = an;
+      const r = rectFrom3(A.p, B.p, hit.p);
+      if (!r) return ui.setMessage("El tercer punto da el ancho: moverlo hacia un costado del primer lado");
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const pa = placeSnap(sk, A);
+        const pb = placeSnap(sk, B);
+        const l = addRect3(sk, pa, pb, r[2], r[3]);
+        if (A.id === undefined || B.id === undefined) dims.push(dim(sk, { type: "length", line: l[0], value: round(dist(A.p, B.p)) }));
+        dims.push(dim(sk, { type: "length", line: l[1], value: round(dist(r[1], r[2])) }));
+      });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "slot_center") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [M, B] = an;
+      const a: P2 = [2 * M.p[0] - B.p[0], 2 * M.p[1] - B.p[1]];
+      const r = slotRadius(a, B.p, hit.p);
+      const len = dist(a, B.p);
+      if (r > 1e-9 && len > 1e-9)
+        ui.change((sk) => {
+          const cm = placeSnap(sk, M);
+          const cb = placeSnap(sk, B);
+          const ca = ui.addPoint(sk, a);
+          // Eje de construcción con el centro en el medio
+          const axis = ui.addEntity(sk, { type: "line", start: ca, end: cb });
+          sk.entities.find((x) => x.id === axis)!.construction = true;
+          sk.constraints.push({ type: "midpoint", point: cm, line: axis });
+          const { arcA } = addSlot(sk, ca, cb, r);
+          if (M.id === undefined || B.id === undefined) dims.push(dim(sk, { type: "length", line: axis, value: round(len) }));
+          dims.push(dim(sk, { type: "radius", entity: arcA, value: round(r) }));
+        });
+      setAnchor([]);
+      return askDims(dims);
+    }
+    if (t === "slot_arc") {
+      const an = anchor();
+      if (an.length < 3) return setAnchor([...an, hit]);
+      const [C, S, E] = an;
+      const R = dist(C.p, S.p);
+      const w = Math.abs(dist(C.p, hit.p) - R);
+      const ang = Math.atan2(E.p[1] - C.p[1], E.p[0] - C.p[0]);
+      const b: P2 = [C.p[0] + R * Math.cos(ang), C.p[1] + R * Math.sin(ang)];
+      if (R < 1e-9 || w < 1e-9) return setAnchor([]);
+      let msg: string | undefined;
+      ui.change((sk) => {
+        const center = placeSnap(sk, C);
+        const start = placeSnap(sk, S);
+        // El fin solo se pega a un punto que ya estaba (el resto queda en el radio)
+        const end = E.id !== undefined && E.id !== start && E.id !== center && sk.points.some((q) => q.id === E.id) ? E.id : ui.addPoint(sk, b);
+        const r = addArcSlot(sk, center, start, end, w);
+        if (typeof r === "string") return void (msg = r);
+        if (C.id === undefined || S.id === undefined) dims.push(dim(sk, { type: "radius", entity: r.axis, value: round(R) }));
+        dims.push(dim(sk, { type: "radius", entity: r.capStart, value: round(w) }));
+      });
+      ui.setMessage(msg);
+      setAnchor([]);
+      return askDims(dims);
+    }
     if (t === "circle") {
       const an = anchor();
       if (an.length === 0) return setAnchor([hit]);
@@ -1036,7 +1194,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (an.length === 0) return setAnchor([hit]);
       const n = Math.max(3, Math.round(polygonSides()));
       const r = dist(an[0].p, hit.p);
-      if (r > 1e-9)
+      if (r > 1e-9 && polygonCircumscribed())
+        ui.change((sk) => {
+          const center = placeSnap(sk, an[0]);
+          const { circle, lines } = addCircumscribedPolygon(sk, center, hit.p, n);
+          // Sobre un punto que ya estaba: el medio del primer lado queda ahí
+          if (hit.id !== undefined && hit.id !== center) sk.constraints.push({ type: "midpoint", point: hit.id, line: lines[0] });
+          if (an[0].id === undefined || hit.id === undefined) dims.push(dim(sk, { type: "radius", entity: circle, value: round(r) }));
+        });
+      else if (r > 1e-9)
         ui.change((sk) => {
           const center = placeSnap(sk, an[0]);
           const circle = ui.addEntity(sk, { type: "circle", center, radius: r });
@@ -1059,25 +1225,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       const len = dist(a, b);
       if (r > 1e-9 && len > 1e-9)
         ui.change((sk) => {
-          const n: P2 = [-(b[1] - a[1]) / len, (b[0] - a[0]) / len];
-          const off = (p: P2, s: number): P2 => [p[0] + n[0] * r * s, p[1] + n[1] * r * s];
           const ca = placeSnap(sk, an[0]);
           const cb = placeSnap(sk, an[1]);
-          const a1 = ui.addPoint(sk, off(a, 1));
-          const a2 = ui.addPoint(sk, off(a, -1));
-          const b1 = ui.addPoint(sk, off(b, 1));
-          const b2 = ui.addPoint(sk, off(b, -1));
-          const bottom = ui.addEntity(sk, { type: "line", start: a2, end: b2 });
-          const arcB = ui.addEntity(sk, { type: "arc", center: cb, start: b2, end: b1 });
-          const top = ui.addEntity(sk, { type: "line", start: b1, end: a1 });
-          const arcA = ui.addEntity(sk, { type: "arc", center: ca, start: a1, end: a2 });
-          sk.constraints.push(
-            { type: "tangent", a: bottom, b: arcB },
-            { type: "tangent", a: top, b: arcB },
-            { type: "tangent", a: top, b: arcA },
-            { type: "tangent", a: bottom, b: arcA },
-            { type: "equal", a: arcA, b: arcB },
-          );
+          const { arcA } = addSlot(sk, ca, cb, r);
           if (an[0].id === undefined || an[1].id === undefined) dims.push(dim(sk, { type: "distance", a: ca, b: cb, value: round(len) }));
           dims.push(dim(sk, { type: "radius", entity: arcA, value: round(r) }));
         });
@@ -2041,6 +2191,13 @@ export const CadView: Component<CadViewProps> = (props) => {
                     onChange={(e) => setPolygonSides(Math.max(3, Math.min(64, parseInt(e.currentTarget.value) || 6)))}
                   />
                 </label>
+                <button
+                  class="px-2 py-0.5 rounded text-xs text-text-muted hover:text-text hover:bg-surface border border-border"
+                  title="Inscrito: el clic es un vértice. Circunscrito: el clic es el medio de un lado (el círculo toca los lados)"
+                  onClick={() => setPolygonCircumscribed(!polygonCircumscribed())}
+                >
+                  {polygonCircumscribed() ? "Circunscrito" : "Inscrito"}
+                </button>
               </Show>
               <div class="w-px h-5 bg-border mx-1" />
               <Tooltip content="Deshacer en el sketch (Ctrl+Z)">

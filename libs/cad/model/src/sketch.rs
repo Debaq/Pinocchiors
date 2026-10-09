@@ -84,6 +84,8 @@ pub enum SketchConstraint {
     /// Dos puntos en la misma vertical (`a.x = b.x`).
     VerticalPoints { a: u32, b: u32 },
     Parallel { a: u32, b: u32 },
+    /// Dos líneas sobre la misma recta.
+    Collinear { a: u32, b: u32 },
     Perpendicular { a: u32, b: u32 },
     /// Líneas del mismo largo, o círculos/arcos del mismo radio.
     Equal { a: u32, b: u32 },
@@ -188,7 +190,7 @@ impl SketchConstraint {
             Coincident { a, b } | HorizontalPoints { a, b } | VerticalPoints { a, b } => p(a) || p(b),
             Fixed { point: q, .. } => p(q),
             Horizontal { line } | Vertical { line } | Length { line, .. } => e(line),
-            Parallel { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Concentric { a, b } | Angle { a, b, .. } => {
+            Parallel { a, b } | Collinear { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Concentric { a, b } | Angle { a, b, .. } => {
                 e(a) || e(b)
             }
             PointOnLine { point: q, line } | Midpoint { point: q, line } | PointLineDistance { point: q, line, .. } | AxisDiameter { point: q, line, .. } => {
@@ -761,6 +763,13 @@ impl Sketch {
             S::Parallel { a, b } => {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Parallel { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 }]
+            }
+            S::Collinear { a, b } => {
+                let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
+                vec![
+                    Constraint::Parallel { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 },
+                    Constraint::PointOnLine { p_idx: b1, line_p1: a1, line_p2: a2 },
+                ]
             }
             S::Perpendicular { a, b } => {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);

@@ -198,6 +198,11 @@ export function constraintHolds(s: Sketch, c: SketchConstraint, tol: number): bo
       const n = len(d1) * len(d2);
       return !n || Math.abs(c.type === "parallel" ? cross(d1, d2) : dot(d1, d2)) / n <= angTol;
     }
+    case "collinear": {
+      const [l1, l2] = [lineOf(s, c.a), lineOf(s, c.b)];
+      if (!l1 || !l2) return true;
+      return constraintHolds(s, { type: "parallel", a: c.a, b: c.b }, tol) && toLine(l2[0], l1) <= tol;
+    }
     case "equal": {
       const [l1, l2] = [lineOf(s, c.a), lineOf(s, c.b)];
       if (l1 && l2) return Math.abs(len(sub(l1[1], l1[0])) - len(sub(l2[1], l2[0]))) <= tol;

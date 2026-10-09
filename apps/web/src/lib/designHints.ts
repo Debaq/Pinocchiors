@@ -26,6 +26,7 @@ const SKETCH_CLICK: Partial<Record<SketchTool, string>> = {
   paste: "dónde va lo pegado",
   trim: "el tramo que se quita",
   extend: "cerca del extremo",
+  circle_tan: "cada línea o curva, cerca de donde toca",
 };
 
 export function designHints(store: CadStore, ui: CadUi): KeyHint[] {

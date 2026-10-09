@@ -573,3 +573,8 @@ cargo test -p cad-model
   revolución) y largo de arco. Restricciones nuevas en el solver (`DistancePointLine`,
   `ArcLength`) y en el modelo (`PointLineDistance`, `AxisDiameter`, `ArcLength`); medidas también
   en `sketchTransform.measureConstraint` para que transformar las actualice.
+- **2026-10-09 Formas y colineal en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 4):
+  círculo por 2 y 3 puntos, círculo tangente a 3 líneas o curvas, polígono circunscrito,
+  ranura por el centro y en arco, rectángulo por 3 puntos (inclinado) y restricción Colineales.
+  Pruebas: node `e2e/sketchShapes.test.mjs` (6), Rust `collinear_lines` y e2e "rectángulo por
+  3 puntos, círculos…".

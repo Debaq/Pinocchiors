@@ -102,3 +102,18 @@ fn json_names() {
     let back: SketchConstraint = serde_json::from_str(r#"{"type":"arc_length","arc":4,"value":2.5}"#).unwrap();
     assert_eq!(back, SketchConstraint::ArcLength { arc: 4, value: 2.5, reference: false });
 }
+
+#[test]
+fn collinear_lines() {
+    let mut s = Sketch::new();
+    let l = base_line(&mut s);
+    let other = s.line([12.0, 1.0], [20.0, 2.5]);
+    let Geometry::Line { start, end } = s.entity(other).unwrap().geometry else { unreachable!() };
+    s.constrain(SketchConstraint::Collinear { a: l, b: other });
+    let r = s.solve().unwrap();
+    assert_ne!(r.status, SketchStatus::OverConstrained);
+    assert_relative_eq!(pt(&s, start)[1], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(pt(&s, end)[1], 0.0, epsilon = 1e-6);
+    let j = serde_json::to_string(&s.constraints.last().unwrap()).unwrap();
+    assert!(j.contains("\"type\":\"collinear\""), "{j}");
+}

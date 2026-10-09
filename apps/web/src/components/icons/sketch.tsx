@@ -221,3 +221,59 @@ export const Scale = (p: IconProps) => (
     <path d="M12 12 L18 6 M14 6 L18 6 L18 10" />
   </SketchIcon>
 );
+
+/** Círculo por 2 puntos: los extremos de un diámetro */
+export const Circle2 = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <path d="M4 12 L20 12" {...dashed} />
+    <Dot x={4} y={12} />
+    <Dot x={20} y={12} />
+  </SketchIcon>
+);
+
+/** Círculo por 3 puntos */
+export const Circle3 = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <circle cx="12" cy="12" r="8" />
+    <Dot x={4} y={12} />
+    <Dot x={17.7} y={6.3} />
+    <Dot x={14.8} y={19.5} />
+  </SketchIcon>
+);
+
+/** Círculo tangente a tres líneas */
+export const CircleTan = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M2.5 20 L21.5 20 M4 21.5 L13 3 M20 21.5 L11 3" stroke-width="1.2" />
+    <circle cx="12" cy="14.3" r="5.2" />
+  </SketchIcon>
+);
+
+/** Rectángulo por 3 puntos (inclinado) */
+export const Rect3 = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 15 L12 5 L21 12 L12 22 Z" stroke-width="1.5" />
+    <Dot x={3} y={15} />
+    <Dot x={12} y={5} />
+    <Dot x={21} y={12} />
+  </SketchIcon>
+);
+
+/** Ranura por el centro */
+export const SlotCenter = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M8 7.5 L16 7.5 A4.5 4.5 0 0 1 16 16.5 L8 16.5 A4.5 4.5 0 0 1 8 7.5 Z" />
+    <path d="M12 12 L16 12" {...dashed} />
+    <Dot x={12} y={12} />
+    <Dot x={16} y={12} />
+  </SketchIcon>
+);
+
+/** Ranura en arco */
+export const SlotArc = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 18 A10 10 0 0 1 18 4.5 A2.6 2.6 0 0 1 17.6 9.6 A5.4 5.4 0 0 0 9.4 18 A2.6 2.6 0 0 1 4 18 Z" />
+    <Dot x={6.7} y={18} />
+  </SketchIcon>
+);

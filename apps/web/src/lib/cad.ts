@@ -137,6 +137,7 @@ export type SketchConstraint =
   | { type: "horizontal_points"; a: number; b: number }
   | { type: "vertical_points"; a: number; b: number }
   | { type: "parallel"; a: number; b: number }
+  | { type: "collinear"; a: number; b: number }
   | { type: "perpendicular"; a: number; b: number }
   | { type: "equal"; a: number; b: number }
   | { type: "tangent"; a: number; b: number }
@@ -2487,6 +2488,7 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   horizontal_points: "Alineados horizontal",
   vertical_points: "Alineados vertical",
   parallel: "Paralelas",
+  collinear: "Colineales",
   perpendicular: "Perpendiculares",
   equal: "Iguales",
   tangent: "Tangente",

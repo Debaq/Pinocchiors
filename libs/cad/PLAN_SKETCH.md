@@ -147,12 +147,22 @@ referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del 
    faltaba. Se ofrecen en el panel según lo elegido (punto + línea, dos líneas, un arco).
    Pruebas: `model/tests/sketch_dims.rs` (6) y e2e "cotas: distancia a la línea…".*
 4. **Restricciones y herramientas**: colineal, círculo por 2/3 puntos y tangente a 3,
-   polígono circunscrito, ranuras en arco y por centro, rectángulo por 3 puntos.
+   polígono circunscrito, ranuras en arco y por centro, rectángulo por 3 puntos. *Hecha el
+   2026-10-09: `lib/sketchShapes.ts` (puro, `e2e/sketchShapes.test.mjs`) y `Collinear` en el
+   modelo (paralelas + un extremo sobre la recta, sin cambios en el solver). Círculo por 2 y 3
+   puntos (los clics sobre puntos existentes quedan sobre el círculo; por dos puntos, el centro
+   en el medio de un diámetro de construcción), tangente a 3 (arranca con el círculo por los
+   puntos más cercanos a los clics: hacer clic cerca de donde toca), polígono con botón
+   Inscrito/Circunscrito (lados tangentes al círculo de construcción), ranura por el centro (eje
+   de construcción con el centro en el medio), ranura en arco (eje de construcción, arcos
+   concéntricos, tapas tangentes e iguales), rectángulo por 3 puntos (perpendicular y
+   paralelas). Queda: la barra del sketch ya ocupa dos filas → agrupar las variantes (círculo,
+   rectángulo, arco, ranura) en menús desplegables como Onshape (fase 7).*
 5. **Referencias al modelo**: contorno de cara, intersección, otro sketch, romper vínculo.
 6. **Validación del contorno**: abiertos, extremos sueltos, cruces, superposiciones; aviso en
    las operaciones.
 7. **Visualización y lista**: mostrar/ocultar, lista de entidades editable, selección por
-   cadena y por tipo.
+   cadena y por tipo; variantes de herramientas agrupadas en menús desplegables.
 
 ### Más adelante (sin fecha)
 

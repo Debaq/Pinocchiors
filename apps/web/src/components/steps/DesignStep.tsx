@@ -4048,6 +4048,7 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
     if (L.length === 2) {
       out.push({ label: "Paralelas", make: () => ({ type: "parallel", a: L[0], b: L[1] }) });
       out.push({ label: "Perpendiculares", make: () => ({ type: "perpendicular", a: L[0], b: L[1] }) });
+      out.push({ label: "Colineales", make: () => ({ type: "collinear", a: L[0], b: L[1] }) });
       out.push({ label: "Mismo largo", make: () => ({ type: "equal", a: L[0], b: L[1] }) });
       out.push({ label: "Ángulo", make: () => ({ type: "angle", a: L[0], b: L[1], degrees: 90 }) });
       // Entre paralelas: un extremo de la segunda hasta la recta de la primera (y paralelas si no lo eran)
