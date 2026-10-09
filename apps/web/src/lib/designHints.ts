@@ -2,7 +2,7 @@
 // estado (teclas a la izquierda, qué hacen a la derecha)
 
 import type { CadStore } from "./cad";
-import type { CadUi } from "./cadUi";
+import type { CadUi, SketchTool } from "./cadUi";
 
 export interface KeyHint {
   keys: string;
@@ -15,13 +15,28 @@ const VIEW: KeyHint[] = [
   { keys: "Rueda", label: "acercar" },
 ];
 
+/** Qué hace el clic en las herramientas del sketch que no dibujan */
+const SKETCH_CLICK: Partial<Record<SketchTool, string>> = {
+  select: "elegir",
+  move: "punto base y destino",
+  copy: "punto base y destino",
+  rotate: "centro, desde y hasta",
+  scale: "punto base, desde y hasta",
+  split: "donde se parte",
+  paste: "dónde va lo pegado",
+  trim: "el tramo que se quita",
+  extend: "cerca del extremo",
+};
+
 export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
   if (ui.drawingOpen() || ui.flatOpen()) return [];
   if (ui.session())
     return [
-      { keys: "Clic", label: "dibujar" },
+      { keys: "Clic", label: SKETCH_CLICK[ui.tool()] ?? "dibujar" },
       { keys: "Mayús", label: "sin anclajes" },
       { keys: "Q", label: "construcción" },
+      { keys: "Ctrl+C / Ctrl+V", label: "copiar y pegar" },
+      { keys: "Ctrl+Z", label: "deshacer" },
       { keys: "Supr", label: "borrar lo elegido" },
       { keys: "Esc", label: "cortar la herramienta" },
       { keys: "Enter", label: "terminar" },

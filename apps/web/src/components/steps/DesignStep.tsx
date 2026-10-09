@@ -83,6 +83,7 @@ import {
 import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
+import { rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -3988,6 +3989,9 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
   const [offsetDist, setOffsetDist] = createSignal(2);
+  const [moveBy, setMoveBy] = createSignal<P2>([10, 0]);
+  const [turnBy, setTurnBy] = createSignal(90);
+  const [scaleBy, setScaleBy] = createSignal(2);
   const [patternCount, setPatternCount] = createSignal(3);
   const [patternKind, setPatternKind] = createSignal<SketchPatternKind>("linear");
   const [patternStep, setPatternStep] = createSignal<P2>([20, 0]);
@@ -4286,6 +4290,52 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
               </Button>
             </div>
           </Show>
+          {/* Con números (con el mouse: herramientas Mover, Copiar, Girar y Escalar de la barra) */}
+          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Transformar">
+            <span class="text-xs text-text-muted">Transformar lo elegido (girar y escalar desde su centro)</span>
+            <div class="flex items-end gap-1.5">
+              <Num label="X" suffix="mm" step={1} value={moveBy()[0]} onCommit={(v) => setMoveBy([v, moveBy()[1]])} />
+              <Num label="Y" suffix="mm" step={1} value={moveBy()[1]} onCommit={(v) => setMoveBy([moveBy()[0], v])} />
+            </div>
+            <div class="flex gap-1.5">
+              <Button size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy())))}>
+                Mover
+              </Button>
+              <Button size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy()), { copy: true }))}>
+                Copiar corrido
+              </Button>
+            </div>
+            <div class="flex items-end gap-1.5">
+              <div class="flex-1">
+                <Num label="Ángulo" suffix="°" step={15} value={turnBy()} onCommit={setTurnBy} />
+              </div>
+              <Button
+                size="sm"
+                title="Alrededor del centro de lo elegido; positivo: antihorario"
+                onClick={() => {
+                  const c = selectionCenter(sketch(), sel());
+                  ui.setMessage(c ? ui.transformSelected(rotation(c, turnBy())) : "Elegir primero lo que se gira");
+                }}
+              >
+                Girar
+              </Button>
+            </div>
+            <div class="flex items-end gap-1.5">
+              <div class="flex-1">
+                <Num label="Factor" step={0.1} min={0.001} value={scaleBy()} onCommit={(v) => v > 0 && setScaleBy(v)} />
+              </div>
+              <Button
+                size="sm"
+                title="Desde el centro de lo elegido; las cotas toman la medida nueva"
+                onClick={() => {
+                  const c = selectionCenter(sketch(), sel());
+                  ui.setMessage(c ? ui.transformSelected(scaling(c, scaleBy()), { scale: scaleBy() }) : "Elegir primero lo que se escala");
+                }}
+              >
+                Escalar
+              </Button>
+            </div>
+          </div>
           <div class="flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => ui.toggleConstruction()} disabled={selEntities().length === 0}>
               Construcción sí/no (Q)

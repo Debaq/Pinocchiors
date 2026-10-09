@@ -177,3 +177,47 @@ export const Use = (p: IconProps) => (
     <path d="M4 16 L12 20 L20 16" stroke-width="2.4" />
   </SketchIcon>
 );
+
+/** Partir: la curva cortada en un punto */
+export const Split = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 15 L10.5 12" />
+    <path d="M13.5 10.6 L20 7.5" />
+    <Dot x={12} y={11.3} />
+    <path d="M12 4 L12 7.5 M12 15 L12 20" stroke-width="1.2" {...dashed} />
+  </SketchIcon>
+);
+
+/** Mover: de un punto base a un destino */
+export const Move = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M12 3 L12 21 M3 12 L21 12" />
+    <path d="M9.5 5.5 L12 3 L14.5 5.5 M9.5 18.5 L12 21 L14.5 18.5 M5.5 9.5 L3 12 L5.5 14.5 M18.5 9.5 L21 12 L18.5 14.5" />
+  </SketchIcon>
+);
+
+/** Copiar: la forma y su copia corrida */
+export const Copy = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <rect x="4" y="4" width="10" height="10" rx="1" {...dashed} />
+    <rect x="10" y="10" width="10" height="10" rx="1" />
+  </SketchIcon>
+);
+
+/** Girar alrededor de un centro */
+export const Rotate = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M18.5 9 A7 7 0 1 0 19 14" />
+    <path d="M19 4.5 L18.5 9 L14 8.5" />
+    <Dot x={12} y={12} />
+  </SketchIcon>
+);
+
+/** Escalar desde un punto base */
+export const Scale = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <rect x="4" y="12" width="8" height="8" />
+    <path d="M4 20 L4 4 L20 4 L20 20 L12 20" {...dashed} />
+    <path d="M12 12 L18 6 M14 6 L18 6 L18 10" />
+  </SketchIcon>
+);

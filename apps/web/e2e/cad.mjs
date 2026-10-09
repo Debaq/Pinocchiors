@@ -1865,6 +1865,107 @@ const scenarios = {
     await b.shot("deshacer_en_el_sketch");
   },
 
+  async "mover, copiar y pegar, girar, escalar y partir en el sketch"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const lines = async () => (await sk()).entities.filter((e) => e.geometry.type === "line");
+    const ctrl = async (key) => {
+      for (const type of ["keyDown", "keyUp"])
+        await b.send("Input.dispatchKeyEvent", { type, key, code: "Key" + key.toUpperCase(), windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0), modifiers: 2 });
+      await sleep(600);
+    };
+    /** Caja de los puntos de unas líneas: [x0, y0, x1, y1] */
+    const bbox = (s, ls) => {
+      const ids = new Set(ls.flatMap((e) => [e.geometry.start, e.geometry.end]));
+      const ps = s.points.filter((p) => ids.has(p.id));
+      return [Math.min(...ps.map((p) => p.x)), Math.min(...ps.map((p) => p.y)), Math.max(...ps.map((p) => p.x)), Math.max(...ps.map((p) => p.y))];
+    };
+    /** Campo y botón del bloque Transformar del panel */
+    const field = (label, value) =>
+      b.eval(`(() => {
+        const box = document.querySelector('[aria-label="Transformar"]');
+        const i = [...box.querySelectorAll("label")].find((l) => l.textContent.startsWith(${JSON.stringify(label)}))?.querySelector("input");
+        i.value = ${JSON.stringify(String(value))}; i.dispatchEvent(new Event("change", { bubbles: true })); return true;
+      })()`);
+    const press = async (text) => {
+      await b.eval(`[...document.querySelector('[aria-label="Transformar"]').querySelectorAll("button")].find((x) => x.textContent.trim() === ${JSON.stringify(text)}).click()`);
+      await sleep(1000);
+    };
+    await b.clickText("Rectángulo");
+    await b.click(380, 320);
+    await b.click(520, 460);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Elegir");
+    await b.drag(350, 290, 560, 490);
+    const first = (await lines()).map((e) => e.id);
+    const box0 = bbox(await sk(), await lines());
+    const nConstraints = (await sk()).constraints.length;
+
+    // Mover con la herramienta (V): de la esquina a 60 px a la derecha
+    await b.key("v", "KeyV", 86);
+    const plane = await b.eval(`window.__cadUi.session().plane`);
+    const mm = (x, y) => b.eval(`window.__cadViewer.planePoint(${x}, ${y}, ${JSON.stringify(plane)})`);
+    await b.click(380, 320);
+    await b.click(440, 320, { wait: 1200 });
+    const box1 = bbox(await sk(), await lines());
+    const [p0, p1] = [await mm(380, 320), await mm(440, 320)];
+    const want = p1[0] - p0[0];
+    near(box1[0] - box0[0], want, Math.abs(want) * 0.1, "movido en x");
+    near(box1[1] - box0[1], 0, 1e-6, "movido en y");
+    near(box1[2] - box1[0], box0[2] - box0[0], 1e-6, "mismo ancho");
+    if ((await sk()).constraints.length !== nConstraints) throw new Error("mover cambió las restricciones");
+    if ((await b.eval(`window.__cadUi.session().report?.status`)) === "over_constrained") throw new Error("mover sobre-definió");
+    // Un solo paso para deshacer
+    await ctrl("z");
+    near(bbox(await sk(), await lines())[0], box0[0], 1e-6, "deshacer el movimiento");
+
+    // Copiar y pegar: Ctrl+C, Ctrl+V y clic
+    await ctrl("c");
+    await ctrl("v");
+    if ((await b.eval(`window.__cadUi.tool()`)) !== "paste") throw new Error("Ctrl+V no quedó pegando");
+    await b.click(700, 390, { wait: 1200 });
+    const all = await lines();
+    if (all.length !== 8) throw new Error(`tras pegar: ${all.length} líneas`);
+    const copy = all.filter((e) => !first.includes(e.id));
+    const s1 = await sk();
+    // Las 4 de ejes y las 2 cotas de la copia (la alineación con el origen no se copia: no es interna)
+    const mine = new Set(copy.map((e) => e.id));
+    const copied = s1.constraints.filter((c) => mine.has(c.line));
+    if (copied.length !== 6) throw new Error(`restricciones de la copia: ${JSON.stringify(copied)}`);
+    const sel = await b.eval(`window.__cadUi.selection()`);
+    if (!copy.every((e) => sel.includes(e.id))) throw new Error("lo pegado no quedó elegido");
+
+    // Girar 90° desde el panel: el ancho pasa a ser el alto
+    const [w, h] = [box0[2] - box0[0], box0[3] - box0[1]];
+    await field("Ángulo", 90);
+    await press("Girar");
+    let bc = bbox(await sk(), copy);
+    near(bc[2] - bc[0], h, 1e-6, "ancho girado");
+    near(bc[3] - bc[1], w, 1e-6, "alto girado");
+    // Escalar al doble: las cotas de largo de la copia también
+    await field("Factor", 2);
+    await press("Escalar");
+    bc = bbox(await sk(), copy);
+    near(bc[2] - bc[0], 2 * h, 1e-6, "ancho escalado");
+    const copyIds = new Set(copy.map((e) => e.id));
+    const lens = (await sk()).constraints.filter((c) => c.type === "length" && copyIds.has(c.line)).map((c) => c.value).sort((a, c) => a - c);
+    near(lens[0], 2 * Math.min(w, h), 1e-6, "cota chica escalada");
+    near(lens[1], 2 * Math.max(w, h), 1e-6, "cota grande escalada");
+    if ((await b.eval(`window.__cadUi.session().report?.status`)) === "over_constrained") throw new Error("girar o escalar sobre-definió");
+
+    // Partir (D) el lado de abajo del original por la mitad
+    await b.key("d", "KeyD", 68);
+    await b.click(450, 460, { wait: 1000 });
+    if ((await lines()).length !== 9) throw new Error(`tras partir: ${(await lines()).length} líneas`);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const r = await evaluate();
+    const solved = r.sketches.find((x) => x.sketch.entities.length)?.sketch;
+    if (solved.entities.filter((e) => e.geometry.type === "line").length !== 9) throw new Error("no se guardó");
+    await b.shot("transformar_en_el_sketch");
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {

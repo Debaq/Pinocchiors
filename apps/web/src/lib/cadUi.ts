@@ -3,6 +3,7 @@
 // sketch en edición.
 
 import { batch, createEffect, createSignal, on } from "solid-js";
+import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
 import {
   constraintPath,
@@ -75,7 +76,14 @@ export type SketchTool =
   | "trim"
   | "tangent"
   | "extend"
-  | "use";
+  | "use"
+  | "split"
+  | "move"
+  | "copy"
+  | "rotate"
+  | "scale"
+  /** Pegar lo copiado (Ctrl+V): no está en la barra */
+  | "paste";
 
 /** Qué hace un clic en el visor */
 export type PickMode =
@@ -142,6 +150,8 @@ export function createCadUi(store: CadStore) {
   // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
   createEffect(on(() => store.result()?.version, () => setPicks((p) => p.filter((x) => x.kind === "plane")), { defer: true }));
   const [message, setMessage] = createSignal<string>();
+  // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
+  const [clipboard, setClipboard] = createSignal<SketchClip>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
   let pendingDrag: [number, P2] | null = null;
@@ -342,6 +352,43 @@ export function createCadUi(store: CadStore) {
       if (!s || !next) return;
       past.push(s.sketch);
       restore(s, next);
+    },
+    clipboard,
+    /** Copia lo elegido al portapapeles; devuelve el aviso */
+    copySelection(): string {
+      const s = session();
+      const clip = s && extractClip(s.sketch, selection());
+      if (!clip) return "Elegir primero lo que se copia";
+      setClipboard(clip);
+      return `Copiado (${clip.entities.length} ${clip.entities.length === 1 ? "entidad" : "entidades"}): Ctrl+V para pegar`;
+    },
+    /** Pega lo copiado con su centro en `at`; lo pegado queda elegido */
+    paste(at: P2) {
+      const clip = clipboard();
+      if (!clip || !session()) return;
+      const c = clipCenter(clip);
+      let made: number[] = [];
+      ui.change((sk) => (made = insertClip(sk, clip, translation([at[0] - c[0], at[1] - c[1]]))));
+      setSelection(made);
+    },
+    /**
+     * Mueve, gira o escala lo elegido (`scale`: el factor, para radios y
+     * textos); con `copy` deja lo elegido y pone una copia llevada por `f`
+     * (solo traslaciones). Devuelve el aviso si no se pudo.
+     */
+    transformSelected(f: Xform, opts: { scale?: number; copy?: boolean } = {}): string | undefined {
+      const sel = selection();
+      let msg: string | undefined;
+      let made: number[] | undefined;
+      ui.change((sk) => {
+        if (opts.copy) {
+          const clip = extractClip(sk, sel);
+          if (!clip) msg = "Elegir primero lo que se copia";
+          else made = insertClip(sk, clip, f);
+        } else msg = transformSelection(sk, sel, f, opts.scale ?? 1);
+      });
+      if (made) setSelection(made);
+      return msg;
     },
     /** Termina un arrastre: el próximo empieza un paso nuevo */
     endDrag() {

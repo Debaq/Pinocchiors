@@ -8,6 +8,7 @@ import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
+import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
@@ -62,7 +63,32 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon:
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T", icon: SketchIcons.Trim, group: 2 },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E", icon: SketchIcons.Extend, group: 2 },
   { id: "use", short: "Usar arista", label: "Usar arista del sólido (queda ligada: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
+  { id: "split", short: "Partir", label: "Partir una línea, arco o círculo (clic donde se parte)", key: "D", icon: SketchIcons.Split, group: 2 },
+  { id: "move", short: "Mover", label: "Mover lo elegido (punto base, destino)", key: "V", icon: SketchIcons.Move, group: 3 },
+  { id: "copy", short: "Copiar", label: "Copiar lo elegido (punto base, destino; Ctrl+C y Ctrl+V también)", key: "K", icon: SketchIcons.Copy, group: 3 },
+  { id: "rotate", short: "Girar", label: "Girar lo elegido (centro, desde, hasta)", key: "H", icon: SketchIcons.Rotate, group: 3 },
+  { id: "scale", short: "Escalar", label: "Escalar lo elegido (punto base, desde, hasta)", key: "Y", icon: SketchIcons.Scale, group: 3 },
 ];
+
+/** Herramientas que transforman lo elegido */
+const TRANSFORMS: SketchTool[] = ["move", "copy", "rotate", "scale"];
+
+/** Ángulo con signo (grados, antihorario) de `a` a `b` alrededor de `c` */
+const angleAt = (c: P2, a: P2, b: P2) => {
+  const [u, v] = [[a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]];
+  return (Math.atan2(u[0] * v[1] - u[1] * v[0], u[0] * v[0] + u[1] * v[1]) * 180) / Math.PI;
+};
+
+/** Lo que hace una herramienta de transformar con sus clics (`pts`) y el último (`to`) */
+function transformOf(tool: SketchTool, pts: P2[], to: P2): { f: Xform; scale?: number } | undefined {
+  const [a, b] = pts;
+  if (tool === "move" || tool === "copy") return a && { f: translation([to[0] - a[0], to[1] - a[1]]) };
+  if (!a || !b) return undefined;
+  if (tool === "rotate") return { f: rotation(a, angleAt(a, b, to)) };
+  const r0 = dist(a, b);
+  const k = r0 > 1e-9 ? dist(a, to) / r0 : 0;
+  return k > 1e-9 ? { f: scaling(a, k), scale: k } : undefined;
+}
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
@@ -580,6 +606,26 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (arc) preview.push(Array.from({ length: 49 }, (_, i) => [arc.c[0] + arc.r * Math.cos(arc.a0 + (arc.sweep * i) / 48), arc.c[1] + arc.r * Math.sin(arc.a0 + (arc.sweep * i) / 48)] as P2));
         else preview.push([an[0], an[1]]);
       }
+      if (TRANSFORMS.includes(t) && an.length) {
+        // Lo elegido donde quedaría, y las guías desde el primer clic
+        const xf = transformOf(t, an, c);
+        const pts = new Map(s.sketch.points.map((q) => [q.id, [q.x, q.y] as P2]));
+        if (xf) for (const e of selectedEntities(s.sketch, ui.selection())) {
+          const poly = entityPolyline(e.geometry, pts);
+          if (poly) preview.push(poly.map(xf.f));
+        }
+        if (t === "rotate" || t === "scale") preview.push(an.length === 2 ? [an[1], an[0], c] : [an[0], c]);
+        else preview.push([an[0], c]);
+      }
+      const clip = ui.clipboard();
+      if (t === "paste" && clip) {
+        const o = clipCenter(clip);
+        const pts = new Map(clip.points.map((q) => [q.id, [q.x - o[0] + c[0], q.y - o[1] + c[1]] as P2]));
+        for (const e of clip.entities) {
+          const poly = entityPolyline(e.geometry, pts);
+          if (poly) preview.push(poly);
+        }
+      }
       if (t === "slot" && an.length === 1) preview.push([an[0], c]);
       if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
@@ -903,6 +949,37 @@ export const CadView: Component<CadViewProps> = (props) => {
         });
       setAnchor([]);
       return askDims(dims);
+    }
+    if (t === "split") {
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      if (target === undefined) return ui.setMessage("Clic sobre la línea, arco o círculo que se parte");
+      let msg: string | undefined;
+      // En un anclaje (un cruce, el punto medio) se parte justo ahí
+      ui.change((sk) => {
+        const r = splitEntityAt(sk, target, hit.kind !== "free" ? hit.p : raw);
+        if (typeof r === "string") msg = r;
+      });
+      ui.setMessage(msg);
+      return;
+    }
+    if (t === "paste") {
+      ui.paste(hit.p);
+      ui.setTool("select");
+      return;
+    }
+    if (TRANSFORMS.includes(t)) {
+      if (!ui.selection().length) return ui.setMessage("Elegir primero (con «Elegir») lo que se transforma");
+      const pts = anchor().map((a) => a.p);
+      const xf = transformOf(t, pts, hit.p);
+      if (!xf || pts.length < (t === "move" || t === "copy" ? 1 : 2)) {
+        // Rotar o escalar con el segundo clic en el primero: no hay "desde"
+        if (pts.length === 1 && t !== "move" && t !== "copy" && dist(pts[0], hit.p) < 1e-9) return;
+        return setAnchor([...anchor(), hit]);
+      }
+      ui.setMessage(ui.transformSelected(xf.f, { scale: xf.scale, copy: t === "copy" }));
+      setAnchor([]);
+      return;
     }
     if (t === "extend") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
@@ -1424,6 +1501,14 @@ export const CadView: Component<CadViewProps> = (props) => {
         else ui.setTool("select");
       } else if (e.key === "Enter") void ui.finishSketch();
       else if (e.key === "Delete" || e.key === "Backspace") ui.deleteSelection();
+      else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "c") ui.setMessage(ui.copySelection());
+      else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "v") {
+        // Pegar: lo copiado sigue al cursor hasta el clic
+        if (!ui.clipboard()) return ui.setMessage("No hay nada copiado (Ctrl+C con algo elegido)");
+        ui.setTool("paste");
+        resetTool();
+        ui.setMessage("Clic donde va lo pegado (Esc cancela)");
+      }
       else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         // Q: construcción sí/no en lo elegido (como Onshape)
         if (key === "q" && ui.selection().length) {

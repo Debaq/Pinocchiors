@@ -562,3 +562,9 @@ cargo test -p cad-model
   es un paso (un arrastre entero, uno solo; lo que no cambia nada no cuenta), con botones en la
   barra y Ctrl+Z/Ctrl+Mayús+Z. Las respuestas del solver pedidas antes de un cambio o un
   deshacer se descartan (número de generación). e2e "deshacer y rehacer dentro del sketch".
+- **2026-10-09 Transformar en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 2): partir
+  líneas, arcos y círculos; mover, copiar, girar y escalar lo elegido con clics (vista previa) o
+  con números desde el panel; copiar y pegar con Ctrl+C / Ctrl+V, también entre sketches.
+  Después de transformar el sketch queda donde se dejó: las cotas toman la medida nueva y lo que
+  deja de cumplirse se quita. Pruebas: node `e2e/sketchTransform.test.mjs` (10) y e2e "mover,
+  copiar y pegar, girar, escalar y partir en el sketch".

@@ -129,7 +129,16 @@ referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del 
    sketch abierto, botones en la barra del sketch. Ojo con Solid: `on(() => señal().campo)` corre
    con cada cambio de la señal aunque el campo no cambie; por eso «repuesto» es una señal aparte
    (si no, cada clic cortaba la línea encadenada).*
-2. **Transformar**: mover, copiar, rotar, escalar, dividir; copiar y pegar.
+2. **Transformar**: mover, copiar, rotar, escalar, dividir; copiar y pegar. *Hecha el 2026-10-09:
+   `lib/sketchTransform.ts` (puro, `e2e/sketchTransform.test.mjs`). Herramientas Partir (D),
+   Mover (V), Copiar (K), Girar (H) y Escalar (Y) con clics y vista previa; bloque «Transformar
+   lo elegido» en el panel con números (girar y escalar desde el centro de lo elegido);
+   Ctrl+C / Ctrl+V con portapapeles que sobrevive al sketch. Decisión al transformar: los puntos
+   compartidos con lo no elegido se mueven igual (lo de al lado se estira), los fijos pasan a su
+   lugar nuevo, las cotas toman lo que miden ahora (las que tienen fórmula no se tocan) y las
+   restricciones que dejan de cumplirse se quitan (horizontal girada 90° pasa a vertical). Lo
+   ligado al sólido no se mueve. Partir un círculo deja dos medias vueltas (en el clic y en el
+   opuesto). Copiar con Copiar no lleva restricciones con lo de afuera (tampoco los fijos).*
 3. **Cotas**: punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje.
 4. **Restricciones y herramientas**: colineal, círculo por 2/3 puntos y tangente a 3,
    polígono circunscrito, ranuras en arco y por centro, rectángulo por 3 puntos.
