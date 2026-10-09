@@ -34,6 +34,8 @@ export interface CadViewProps {
   actions: DesignActions;
   /** Luces del panel Luces (las mismas que en el visor principal) */
   lights?: LightSettings;
+  /** Modo notebook: la rueda gira la vista */
+  trackpad?: boolean;
   /** La cámara del visor principal al entrar (se lee una vez) */
   initialPose?: CameraPose;
   /** Al salir, la cámara de acá para el visor principal */
@@ -421,6 +423,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
   createEffect(() => viewer?.setGridVisible(props.showGrid !== false));
   createEffect(() => props.lights && viewer?.setLights(props.lights));
+  createEffect(() => viewer && (viewer.trackpad = props.trackpad === true));
   // Planos base: visibles fuera de la edición (y al elegir dónde va un sketch)
   const [planesReady, setPlanesReady] = createSignal(0);
   createEffect(() => {

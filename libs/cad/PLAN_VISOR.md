@@ -30,7 +30,8 @@ fondo según el tema. Lo mismo, copiado, con diferencias que se notan:
    `NavDrag` los apaga mientras dura el arrastre.*
 2. **Mismos botones**: el derecho desplaza arrastrando en los dos y sin arrastre abre el menú;
    Ctrl + medio hace zoom; modo notebook (rueda gira) también en Diseñar.
-   *Hecha el 2026-10-09 salvo el modo notebook en Diseñar: el derecho desplaza en el visor
+   *Hecha el 2026-10-09 (el modo notebook pasó a `CameraRig.trackpadWheel`, con la órbita
+   sin tope, y Diseñar lo respeta): el derecho desplaza en el visor
    principal y el menú sale al soltarlo sin arrastrar; Ctrl + medio acerca en Diseñar. e2e
    "visor principal: derecho desplaza o abre el menú, Ver todo encuadra".*
 3. **Mismo aspecto**: luces y entorno de `Viewer3D` (con el panel Luces) y la grilla por

@@ -34,6 +34,23 @@ export class CameraRig {
     this.nav = new NavDrag(camera, controls, element, onChange);
   }
 
+  /**
+   * Modo notebook: la rueda (o dos dedos en el touchpad) gira la vista y con
+   * Mayús la desplaza; Ctrl y el pellizco (Ctrl + rueda) siguen acercando.
+   * `true` si usó el evento.
+   */
+  trackpadWheel(e: WheelEvent): boolean {
+    if (e.ctrlKey || e.metaKey || !this.controls.enabled) return false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 400 : 1;
+    const [dx, dy] = [e.deltaX * unit, e.deltaY * unit];
+    // Girar como un arrastre; desplazar al revés (el contenido sigue a los dedos), como antes
+    if (e.shiftKey) this.nav.by("pan", -dx, -dy);
+    else this.nav.by("rotate", dx, dy);
+    return true;
+  }
+
   /** Hay un giro hacia una vista en curso */
   get moving(): boolean {
     return this.transition !== null;

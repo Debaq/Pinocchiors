@@ -118,7 +118,12 @@ export class NavDrag {
       d.y = e.clientY;
     }
     if (!dx && !dy) return;
-    if (d.mode === "rotate") this.rotate(dx, dy);
+    this.by(d.mode, dx, dy);
+  }
+
+  /** Gira o desplaza como si el puntero se hubiera movido (dx, dy) píxeles (también la rueda en modo notebook) */
+  by(mode: "rotate" | "pan", dx: number, dy: number) {
+    if (mode === "rotate") this.rotate(dx, dy);
     else this.pan(dx, dy);
     this.controls.update();
     this.onChange();

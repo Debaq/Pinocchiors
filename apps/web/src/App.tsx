@@ -7079,6 +7079,7 @@ export const App: Component = () => {
             <Show when={showCad()}>
               <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions}
                 lights={lights()}
+                trackpad={trackpadNavigation()}
                 initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}
                 onLeave={(pose) => viewer()?.setCameraPose(pose)}
               />

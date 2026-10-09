@@ -905,26 +905,7 @@ export class Viewer3D {
    * gesto de pellizco (que llega como Ctrl + rueda) siguen haciendo zoom.
    */
   private onTrackpadWheel(e: WheelEvent): void {
-    if (!this.settings.trackpadNavigation || e.ctrlKey || e.metaKey || !this.controls.enabled) return;
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    const unit = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? 400 : 1;
-    const dx = e.deltaX * unit;
-    const dy = e.deltaY * unit;
-    // Métodos internos de OrbitControls: el mismo camino que un arrastre
-    const orbit = this.controls as unknown as {
-      _rotateLeft(angle: number): void;
-      _rotateUp(angle: number): void;
-      _pan(dx: number, dy: number): void;
-    };
-    if (e.shiftKey) {
-      orbit._pan(-dx, -dy);
-    } else {
-      const height = this.canvas.clientHeight || 1;
-      orbit._rotateLeft((2 * Math.PI * dx) / height);
-      orbit._rotateUp((2 * Math.PI * dy) / height);
-    }
-    this.controls.update();
+    if (this.settings.trackpadNavigation) this.cameraRig.trackpadWheel(e);
   }
 
   /** Clic en el cubo: la cámara va a la vista de esa cara, arista o vértice */

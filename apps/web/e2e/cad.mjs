@@ -1137,6 +1137,13 @@ const scenarios = {
     await drag("right", 2, 80);
     const t1 = (await cam()).target;
     if (!(Math.hypot(...t1.map((v, i) => v - t0[i])) > 1e-3)) throw new Error("no desplazó");
+    // Modo notebook: la rueda gira (misma distancia, otra posición) en vez de acercar
+    const c0 = await cam();
+    await b.eval(`(() => { const v = window.__cadViewer; v.trackpad = true; v.canvas.dispatchEvent(new WheelEvent("wheel", { deltaX: 40, deltaY: 0, bubbles: true, cancelable: true })); })()`);
+    await sleep(300);
+    const c1 = await cam();
+    near(dist(c1), dist(c0), 1e-6 * dist(c0), "la rueda no acerca en modo notebook");
+    if (!(Math.hypot(...c1.pos.map((v, i) => v - c0.pos[i])) > 1e-3)) throw new Error("la rueda no giró");
   },
 
   async "hélice y engrosar"(b) {

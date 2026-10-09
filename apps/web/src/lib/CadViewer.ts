@@ -201,6 +201,8 @@ export class CadViewer {
     this.controls.mouseButtons = { LEFT: none, MIDDLE: none, RIGHT: none };
     this.controls.addEventListener("change", () => this.requestRender());
     this.rig = new CameraRig(this.camera, this.controls, this.renderer.domElement, () => this.requestRender());
+    // Antes que el zoom de OrbitControls
+    this.renderer.domElement.addEventListener("wheel", (e) => this.trackpad && this.rig.trackpadWheel(e), { capture: true, passive: false });
     // Como el visor principal: botón del medio orbita, Mayús+medio desplaza, el
     // derecho desplaza; Alt + izquierdo también orbita (el izquierdo solo queda
     // para elegir y dibujar)
@@ -282,6 +284,9 @@ export class CadViewer {
   setCameraPose(pose: CameraPose) {
     this.rig.setPose(pose, this.mmPerUnit / 1000);
   }
+
+  /** Modo notebook (Vista): la rueda gira, como en el visor principal */
+  trackpad = false;
 
   /** Las luces del panel Luces (las mismas que en el visor principal) */
   setLights(lights: LightSettings) {
