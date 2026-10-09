@@ -6,7 +6,7 @@ Onshape). Cada plan dice qué hay hoy, qué falta y por qué, diseño, fases, pr
 
 | # | Plan | Tamaño | Depende de |
 |---|---|---|---|
-| 1 | [Sketch: igualar la lista completa de un CAD](PLAN_SKETCH.md) (fases 1–7 hechas salvo la 5; quedan 8–20) | L | — |
+| 1 | [Sketch: igualar la lista completa de un CAD](PLAN_SKETCH.md) (fases 1–4 y 6–9 hechas; quedan 10–20) | L | — |
 | 2 | [Edición con vista previa](PLAN_EDICION.md) | M | — |
 | 3 | [Medir e inspeccionar](PLAN_INSPECCION.md) | S–M | — |
 | 4 | [Recálculo incremental](PLAN_RECALCULO.md) | M | — (mejora 2) |

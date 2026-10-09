@@ -6,6 +6,8 @@
 #include <HLRBRep_Algo.hxx>
 #include <HLRBRep_HLRToShape.hxx>
 #include <HLRAlgo_Projector.hxx>
+#include <BRepAlgoAPI_Section.hxx>
+#include <gp_Pln.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAdaptor_CompCurve.hxx>
@@ -1317,6 +1319,70 @@ double cad_ray_hit(const CadShape* s, const double* origin, const double* dir) {
             if (t > 1e-9 && (best < 0 || t < best)) best = t;
         }
         return best;
+    });
+}
+
+int32_t cad_lines_hit(const CadShape* s, const double* origins, int32_t n, const double* dir, uint8_t* out) {
+    return guard("rayos", 0, [&] {
+        IntCurvesFace_ShapeIntersector inter;
+        inter.Load(s->s, 1e-7);
+        gp_Dir d(dir[0], dir[1], dir[2]);
+        for (int32_t i = 0; i < n; i++) {
+            inter.Perform(gp_Lin(pnt(origins + 3 * i), d), RealFirst(), RealLast());
+            out[i] = inter.IsDone() && inter.NbPnt() > 0 ? 1 : 0;
+        }
+        return 1;
+    });
+}
+
+int32_t cad_edge_points(const CadShape* s, int32_t index, const double* fractions, int32_t n, double* out) {
+    return guard("puntos de arista", 0, [&] {
+        auto m = map_of(s->s, TopAbs_EDGE);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("arista inexistente");
+        BRepAdaptor_Curve c(TopoDS::Edge(m(index + 1)));
+        double t0 = c.FirstParameter(), t1 = c.LastParameter();
+        for (int32_t i = 0; i < n; i++) put(out + 3 * i, c.Value(t0 + fractions[i] * (t1 - t0)).XYZ());
+        return 1;
+    });
+}
+
+CadShape* cad_section(const CadShape* s, const double* origin, const double* normal) {
+    return guard("intersección con el plano", (CadShape*)nullptr, [&] {
+        BRepAlgoAPI_Section sec(s->s, gp_Pln(pnt(origin), dir(normal)), Standard_False);
+        sec.Approximation(Standard_True);
+        sec.Build();
+        if (!sec.IsDone()) throw Standard_Failure("no se pudo cortar");
+        TopoDS_Compound out;
+        BRep_Builder b;
+        b.MakeCompound(out);
+        for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) b.Add(out, ex.Current());
+        return new CadShape{out};
+    });
+}
+
+CadShape* cad_outline(const CadShape* s, const double* origin, const double* normal, const double* xdir) {
+    return guard("silueta", (CadShape*)nullptr, [&] {
+        gp_Ax2 cs(pnt(origin), dir(normal), dir(xdir));
+        Handle(HLRBRep_Algo) algo = new HLRBRep_Algo();
+        algo->Add(s->s);
+        algo->Projector(HLRAlgo_Projector(cs));
+        algo->Update();
+        algo->Hide();
+        HLRBRep_HLRToShape hts(algo);
+        // Las líneas salen en el plano XY del sistema de la vista: se llevan al plano
+        gp_Trsf back;
+        back.SetTransformation(gp_Ax3(cs));
+        back.Invert();
+        TopoDS_Compound out;
+        BRep_Builder b;
+        b.MakeCompound(out);
+        for (const TopoDS_Shape& comp : {hts.VCompound(), hts.OutLineVCompound(), hts.Rg1LineVCompound()}) {
+            if (comp.IsNull()) continue;
+            BRepLib::BuildCurves3d(comp);
+            TopoDS_Shape moved = BRepBuilderAPI_Transform(comp, back, Standard_True).Shape();
+            for (TopExp_Explorer ex(moved, TopAbs_EDGE); ex.More(); ex.Next()) b.Add(out, ex.Current());
+        }
+        return new CadShape{out};
     });
 }
 

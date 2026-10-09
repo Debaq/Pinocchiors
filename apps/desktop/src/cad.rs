@@ -630,14 +630,12 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
-/// Arista del sólido proyectada al plano de un sketch ("Usar"): línea, círculo
-/// o arco (antihorario), en coordenadas del plano.
+/// Arista del sólido proyectada al plano de un sketch ("Usar"), en
+/// coordenadas del plano, con la referencia que la sigue.
 #[derive(Debug, Clone, Serialize)]
 pub struct ProjectedEdge {
-    pub kind: &'static str,
-    /// Línea: inicio y fin; círculo: centro; arco: centro, inicio y fin.
-    pub points: Vec<[f64; 2]>,
-    pub radius: f64,
+    #[serde(flatten)]
+    pub curve: cad_model::project::Projected,
     #[serde(rename = "ref")]
     pub edge_ref: EdgeRef,
 }
@@ -652,25 +650,91 @@ fn project_edge_impl(state: &AppState, edge: usize, plane: &cad_model::Plane) ->
     let cache = state.cad_cache.lock().unwrap();
     let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
     let body = eval.body.as_ref().ok_or("No hay sólido")?;
-    let info = body.edge_info(edge).map_err(|e| e.to_string())?;
     let edge_ref = eval.edge_ref(edge).ok_or("Esa arista no existe")?;
-    let l = |p: [f64; 3]| plane.to_local(p);
-    let n = cad_model::geom::normalize(plane.normal);
-    Ok(match (info.curve, info.circle) {
-        (cad_model::occt::CurveKind::Line, _) => ProjectedEdge { kind: "line", points: vec![l(info.start), l(info.end)], radius: 0.0, edge_ref },
-        // Solo los círculos paralelos al plano siguen siendo círculos al proyectarlos
-        (cad_model::occt::CurveKind::Circle, Some((c, axis, r))) if cad_model::geom::dot(cad_model::geom::normalize(axis), n).abs() > 1.0 - 1e-6 => {
-            if info.closed {
-                ProjectedEdge { kind: "circle", points: vec![l(c)], radius: r, edge_ref }
-            } else {
-                let (c, a, m, b) = (l(c), l(info.start), l(info.mid), l(info.end));
-                let ccw = (a[0] - c[0]) * (m[1] - c[1]) - (a[1] - c[1]) * (m[0] - c[0]) > 0.0;
-                let (a, b) = if ccw { (a, b) } else { (b, a) };
-                ProjectedEdge { kind: "arc", points: vec![c, a, b], radius: r, edge_ref }
-            }
+    let curve = cad_model::project::edge(body, edge, plane)?;
+    if matches!(curve, cad_model::project::Projected::Point { .. }) {
+        return Err("Esa arista se ve de punta desde el plano: queda como un punto (usar su vértice)".into());
+    }
+    Ok(ProjectedEdge { curve, edge_ref })
+}
+
+/// Contorno de una cara (todas sus aristas, con las de los agujeros), cada
+/// arista ligada a la suya. Las que se ven de punta no se traen.
+#[tauri::command]
+pub async fn cad_project_face(app: AppHandle, face: usize, plane: cad_model::Plane) -> Result<Vec<ProjectedEdge>, String> {
+    in_background(app, move |state| project_face_impl(state, face, &plane)).await
+}
+
+fn project_face_impl(state: &AppState, face: usize, plane: &cad_model::Plane) -> Result<Vec<ProjectedEdge>, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let eval = &cache.as_ref().ok_or("No hay sólido")?.eval;
+    let body = eval.body.as_ref().ok_or("No hay sólido")?;
+    let pairs = body.edge_face_pairs().map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for (i, f) in pairs.iter().enumerate() {
+        if !f.contains(&Some(face)) {
+            continue;
         }
-        _ => return Err("Por ahora se usan aristas rectas y circulares paralelas al plano".into()),
-    })
+        let (Some(edge_ref), Ok(curve)) = (eval.edge_ref(i), cad_model::project::edge(body, i, plane)) else { continue };
+        if !matches!(curve, cad_model::project::Projected::Point { .. }) {
+            out.push(ProjectedEdge { curve, edge_ref });
+        }
+    }
+    if out.is_empty() {
+        return Err("Esa cara no tiene aristas que se vean desde el plano".into());
+    }
+    Ok(out)
+}
+
+/// Intersección del plano con el sólido (`section`) o su silueta vista desde
+/// la normal del plano (`silhouette`), con el sólido que hay justo antes de la
+/// operación `index` (el sketch que se edita).
+#[tauri::command]
+pub async fn cad_project_model(app: AppHandle, document: Document, index: usize, plane: cad_model::Plane, what: String) -> Result<Vec<cad_model::project::Projected>, String> {
+    require_occt()?;
+    in_background(app, move |state| project_model_impl(state, document, index, &plane, &what)).await
+}
+
+fn project_model_impl(state: &AppState, mut doc: Document, index: usize, plane: &cad_model::Plane, what: &str) -> Result<Vec<cad_model::project::Projected>, String> {
+    doc.rollback = Some(doc.rollback.map_or(index, |r| r.min(index)));
+    let eval = doc.evaluate_with(&mut state.cad_ops.lock().unwrap());
+    let body = eval.body.as_ref().ok_or("No hay sólido antes de este sketch")?;
+    let curves = match what {
+        "section" => cad_model::project::section(body, plane)?,
+        "silhouette" => cad_model::project::silhouette(body, plane)?,
+        _ => return Err(format!("Proyección desconocida: {what}")),
+    };
+    if curves.is_empty() {
+        return Err(if what == "section" { "El plano del sketch no corta el sólido".into() } else { "El sólido no se ve desde este plano".into() });
+    }
+    Ok(curves)
+}
+
+/// Entidad de otro sketch proyectada al plano.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProjectedEntity {
+    #[serde(flatten)]
+    pub curve: cad_model::project::Projected,
+    pub entity: u32,
+}
+
+/// Todas las entidades del sketch `feature` (ya calculado) en el plano.
+#[tauri::command]
+pub async fn cad_project_sketch(app: AppHandle, feature: cad_model::FeatureId, plane: cad_model::Plane) -> Result<Vec<ProjectedEntity>, String> {
+    in_background(app, move |state| project_sketch_impl(state, feature, &plane)).await
+}
+
+fn project_sketch_impl(state: &AppState, feature: cad_model::FeatureId, plane: &cad_model::Plane) -> Result<Vec<ProjectedEntity>, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let eval = &cache.as_ref().ok_or("No hay diseño")?.eval;
+    let r = eval.sketches.get(&feature).ok_or("Ese sketch no está calculado")?;
+    Ok(r.sketch
+        .entities
+        .iter()
+        .filter_map(|e| cad_model::project::sketch_entity(&r.sketch, &r.plane, e.id, plane).ok().map(|curve| ProjectedEntity { curve, entity: e.id }))
+        .collect())
 }
 
 /// Qué cara o arista del sólido mostrado es cada referencia (`None` = no se encontró).
@@ -1553,6 +1617,12 @@ pub mod bridge {
             }
             "cad_mm_per_unit" => ok(mm_per_unit(state)),
             "cad_project_edge" => ok(project_edge_impl(state, arg(args, "edge")?, &arg::<cad_model::Plane>(args, "plane")?)?),
+            "cad_project_face" => ok(project_face_impl(state, arg(args, "face")?, &arg::<cad_model::Plane>(args, "plane")?)?),
+            "cad_project_model" => {
+                let what: String = arg(args, "what")?;
+                ok(project_model_impl(state, arg(args, "document")?, arg(args, "index")?, &arg::<cad_model::Plane>(args, "plane")?, &what)?)
+            }
+            "cad_project_sketch" => ok(project_sketch_impl(state, arg(args, "feature")?, &arg::<cad_model::Plane>(args, "plane")?)?),
             "cad_export" => {
                 let (path, format): (String, String) = (arg(args, "path")?, arg(args, "format")?);
                 ok(export_impl(state, &path, &format, arg::<Option<cad_model::PartId>>(args, "part")?, arg::<Option<bool>>(args, "assembly")?.unwrap_or(false))?)

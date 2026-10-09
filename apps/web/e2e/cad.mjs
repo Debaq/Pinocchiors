@@ -2380,7 +2380,7 @@ const scenarios = {
     await b.click(...(await at([3, 3, 10])), { wait: 800 });
     await b.clickText("Sketch");
     for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()`)); t++) await sleep(250);
-    await b.clickText("Usar arista");
+    await b.clickText("Usar");
     await b.click(...(await at([0, -10, 10])), { wait: 1500 });
     const sk = await b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
     if (sk.uses?.length !== 1) throw new Error(`usadas: ${JSON.stringify(sk.uses)}`);
@@ -2403,6 +2403,80 @@ const scenarios = {
     near(xs[0], -15, 1e-6, "extremo izquierdo");
     near(xs[1], 15, 1e-6, "extremo derecho");
     await b.shot("usar_arista");
+  },
+
+  async "usar del modelo: cara, silueta, intersección, otro sketch y romper vínculo"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const byTitle = (t) => b.eval(`(() => { const e = [...document.querySelectorAll("button")].find((x) => x.title === ${JSON.stringify(t)} && x.offsetParent !== null); e?.click(); return !!e; })()`);
+    const session = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const waitUses = async (n) => {
+      for (let t = 0; t < 40 && ((await session()).uses?.length ?? 0) !== n; t++) await sleep(250);
+      const sk = await session();
+      if ((sk.uses?.length ?? 0) !== n) throw new Error(`ligadas: ${sk.uses?.length} (esperaba ${n}); aviso: ${await b.eval(`window.__cadUi.message?.()`)}`);
+      return sk;
+    };
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Sketch sobre la cara de arriba (z = 10): Usar con clic en la cara trae sus 4 aristas
+    await b.click(...(await at([3, 3, 10])), { wait: 800 });
+    await b.clickText("Sketch");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()`)); t++) await sleep(250);
+    await b.clickText("Usar");
+    await b.click(...(await at([3, 3, 10])), { wait: 1500 });
+    let sk = await waitUses(4);
+    if (!sk.uses.every((u) => u.edge)) throw new Error(`sin arista: ${JSON.stringify(sk.uses)}`);
+    // Las esquinas se comparten: 4 puntos (más el origen)
+    if (sk.points.length > 5) throw new Error(`puntos: ${sk.points.length}`);
+    // Romper el vínculo de una
+    const broken = sk.uses[0].entity;
+    await b.eval(`window.__cadUi.setSelection([${broken}])`);
+    await sleep(300);
+    if (!(await byTitle("Lo elegido deja de seguir al modelo y queda editable"))) throw new Error("no está Romper vínculo");
+    sk = await waitUses(3);
+    await b.shot("usar_cara");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // Sketch en la planta (z = 0, a media altura de la caja)
+    await sketchOn(b);
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()`)); t++) await sleep(250);
+    if (!(await byTitle("Las curvas donde el plano del sketch corta el sólido"))) throw new Error("no está Intersección");
+    await waitUses(4);
+    if (!(await byTitle("El contorno del sólido visto desde la normal del plano, con los agujeros pasantes"))) throw new Error("no está Silueta");
+    await waitUses(8);
+    if (!(await byTitle("Todas sus curvas y puntos, proyectados a este plano"))) throw new Error("no está el otro sketch");
+    sk = await waitUses(12);
+    const kinds = sk.uses.map((u) => u.source?.type ?? "edge").join(",");
+    if (kinds !== "section,section,section,section,silhouette,silhouette,silhouette,silhouette,sketch,sketch,sketch,sketch") throw new Error(`fuentes: ${kinds}`);
+    await b.shot("usar_silueta");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // La caja más ancha: la intersección y la silueta se estiran; lo del otro
+    // sketch sigue a sus aristas (la del vínculo roto no)
+    const doc = await call("cad_get_document");
+    doc.features[0].kind.shape.dx = 30;
+    const id = doc.features.filter((f) => f.kind.type === "sketch")[1].id;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2500);
+    const xs = await b.eval(`(() => {
+      const v = window.__cadStore.sketchView(${id});
+      const pt = (p) => v.sketch.points.find((q) => q.id === p);
+      const out = {};
+      for (const u of v.sketch.uses) {
+        const g = v.sketch.entities.find((e) => e.id === u.entity).geometry;
+        const k = u.source.type;
+        out[k] = [...(out[k] ?? []), pt(g.start).x, pt(g.end).x];
+      }
+      return Object.fromEntries(Object.entries(out).map(([k, v]) => [k, [Math.min(...v), Math.max(...v)]]));
+    })()`);
+    for (const k of ["section", "silhouette", "sketch"]) {
+      near(xs[k][0], -15, 1e-6, `${k}: izquierda`);
+      near(xs[k][1], 15, 1e-6, `${k}: derecha`);
+    }
+    const st = (await evaluate()).status?.find((s) => s.id === id);
+    if (st && st.state !== "ok") throw new Error(`estado del sketch: ${JSON.stringify(st)}`);
   },
 
   async "configuraciones: variante, valores y exportar todas"(b) {

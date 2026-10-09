@@ -170,16 +170,82 @@ export interface Sketch {
   origin?: number;
   /** Textos insertados como curvas: se mueven en bloque con su ancla y se pueden rehacer */
   texts?: SketchText[];
-  /** Aristas del sólido usadas: la entidad sigue a la arista proyectada (para el solver, fija) */
-  uses?: { edge: EdgeRef; entity: number }[];
+  /** Entidades ligadas al modelo: siguen a su fuente proyectada (para el solver, fijas) */
+  uses?: SketchUse[];
 }
 
-/** Arista del sólido proyectada al plano de un sketch */
-export interface ProjectedEdge {
-  kind: "line" | "circle" | "arc";
-  points: P2[];
-  radius: number;
-  ref: EdgeRef;
+/** Entidad ligada: a una arista del sólido (`edge`) o a otra fuente */
+export interface SketchUse {
+  edge?: EdgeRef;
+  source?: UseSource;
+  entity: number;
+}
+
+export type UseSource =
+  /** Una de las curvas donde el plano del sketch corta el sólido */
+  | { type: "section" }
+  /** Una de las curvas del contorno del sólido visto desde la normal del plano */
+  | { type: "silhouette" }
+  /** Una entidad de un sketch anterior */
+  | { type: "sketch"; feature: number; entity: number };
+
+/** Curva del modelo llevada al plano del sketch (arcos antihorario) */
+export type Projected =
+  | { kind: "point"; at: P2 }
+  | { kind: "line"; start: P2; end: P2 }
+  | { kind: "circle"; center: P2; radius: number }
+  | { kind: "arc"; center: P2; start: P2; end: P2 }
+  | { kind: "ellipse"; center: P2; major: P2; minor: P2 }
+  | { kind: "spline"; points: P2[]; closed: boolean; handles?: [P2, P2] };
+
+/** Arista del sólido proyectada al plano de un sketch, con su referencia */
+export type ProjectedEdge = Projected & { ref: EdgeRef };
+
+/**
+ * Agrega curvas proyectadas al sketch, cada una ligada con `link(i)`. Los
+ * extremos que caen en el mismo lugar comparten punto. Devuelve las entidades.
+ */
+export function addProjected(s: Sketch, curves: Projected[], link: (i: number) => Omit<SketchUse, "entity">): number[] {
+  const made: { id: number; p: P2 }[] = [];
+  const pt = (p: P2, share = true): number => {
+    const tol = 1e-6 * Math.max(1, Math.hypot(p[0], p[1]));
+    const old = share ? made.find((m) => Math.hypot(m.p[0] - p[0], m.p[1] - p[1]) <= tol) : undefined;
+    if (old) return old.id;
+    const id = addPoint(s, p);
+    if (share) made.push({ id, p });
+    return id;
+  };
+  const ids = curves.map((c, i) => {
+    const g: Geometry =
+      c.kind === "point"
+        ? { type: "point", point: pt(c.at) }
+        : c.kind === "line"
+          ? { type: "line", start: pt(c.start), end: pt(c.end) }
+          : c.kind === "circle"
+            ? { type: "circle", center: pt(c.center, false), radius: c.radius }
+            : c.kind === "arc"
+              ? { type: "arc", center: pt(c.center, false), start: pt(c.start), end: pt(c.end) }
+              : c.kind === "ellipse"
+                ? { type: "ellipse", center: pt(c.center, false), major: pt(c.major, false), minor: pt(c.minor, false) }
+                : {
+                    type: "spline",
+                    points: c.points.map((q, k) => pt(q, !c.closed && (k === 0 || k === c.points.length - 1))),
+                    closed: c.closed,
+                    ...(c.handles ? { start_handle: pt(c.handles[0], false), end_handle: pt(c.handles[1], false) } : {}),
+                  };
+    const entity = addEntity(s, g);
+    s.uses = [...(s.uses ?? []), { ...link(i), entity }];
+    return entity;
+  });
+  return ids;
+}
+
+/** Quita el vínculo de esas entidades: quedan donde están, propias y editables */
+export function breakLinks(s: Sketch, entities: number[]): number {
+  const before = s.uses?.length ?? 0;
+  s.uses = (s.uses ?? []).filter((u) => !entities.includes(u.entity));
+  if (s.uses.length === 0) delete s.uses;
+  return before - (s.uses?.length ?? 0);
 }
 
 /** Texto del sketch: el ancla es el comienzo de la línea base */
@@ -3117,6 +3183,13 @@ export function createCadStore() {
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
     projectEdge: (edge: number, plane: Plane) => invoke<ProjectedEdge>("cad_project_edge", { edge, plane }),
+    /** Contorno de una cara: cada arista proyectada y ligada a la suya */
+    projectFace: (face: number, plane: Plane) => invoke<ProjectedEdge[]>("cad_project_face", { face, plane }),
+    /** Intersección del plano con el sólido o su silueta, con el sólido de antes de la operación `index` */
+    projectModel: (document: CadDocument, index: number, plane: Plane, what: "section" | "silhouette") =>
+      invoke<Projected[]>("cad_project_model", { document, index, plane, what }),
+    /** Entidades de otro sketch (ya calculado) en este plano */
+    projectSketch: (feature: number, plane: Plane) => invoke<(Projected & { entity: number })[]>("cad_project_sketch", { feature, plane }),
     solveSketch: (sketch: Sketch, drag?: [number, P2]) => invoke<SolvedSketch>("cad_solve_sketch", { sketch, drag: drag ?? null }),
 
     /** Exporta el diseño (todas las piezas, o solo `part`) */

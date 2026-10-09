@@ -74,3 +74,7 @@ CadShape* cad_make_vertex(const double* p) { (void)p; FAIL_PTR; }
 double cad_min_distance(const CadShape* a, const CadShape* b, double* pa, double* pb) { (void)a; (void)b; (void)pa; (void)pb; return -1.0; }
 double cad_face_distance(const CadShape* s, int32_t i, const double* p) { (void)s; (void)i; (void)p; return -1.0; }
 double cad_edge_distance(const CadShape* s, int32_t i, const double* p) { (void)s; (void)i; (void)p; return -1.0; }
+int32_t cad_lines_hit(const CadShape* s, const double* o, int32_t n, const double* d, uint8_t* out) { (void)s; (void)o; (void)n; (void)d; (void)out; FAIL_INT; }
+int32_t cad_edge_points(const CadShape* s, int32_t i, const double* f, int32_t n, double* out) { (void)s; (void)i; (void)f; (void)n; (void)out; FAIL_INT; }
+CadShape* cad_section(const CadShape* s, const double* o, const double* n) { (void)s; (void)o; (void)n; FAIL_PTR; }
+CadShape* cad_outline(const CadShape* s, const double* o, const double* n, const double* x) { (void)s; (void)o; (void)n; (void)x; FAIL_PTR; }

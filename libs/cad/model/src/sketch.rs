@@ -268,10 +268,27 @@ pub struct Sketch {
     pub uses: Vec<SketchUse>,
 }
 
+/// Entidad ligada al modelo: sigue a una arista del sólido (`edge`) o a otra
+/// fuente (`source`) cada vez que se recalcula.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchUse {
-    pub edge: crate::feature::EdgeRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge: Option<crate::feature::EdgeRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<UseSource>,
     pub entity: u32,
+}
+
+/// De dónde sale una entidad ligada que no es una arista.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum UseSource {
+    /// Una de las curvas donde el plano del sketch corta el sólido.
+    Section,
+    /// Una de las curvas del contorno del sólido visto desde la normal del plano.
+    Silhouette,
+    /// Una entidad de un sketch anterior.
+    Sketch { feature: crate::feature::FeatureId, entity: u32 },
 }
 
 /// Texto del sketch: sus curvas se mueven en bloque con `anchor` (el comienzo

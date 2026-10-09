@@ -12,6 +12,8 @@ import {
   plainNumber,
   addEntity,
   addPoint,
+  addProjected,
+  breakLinks,
   addRectangle,
   ensureOrigin,
   removeEntity,
@@ -24,6 +26,8 @@ import {
   type P3,
   type Plane,
   type PlaneSpec,
+  type Projected,
+  type SketchUse,
   type Region,
   type ScanDeviation,
   type ScanPick,
@@ -562,6 +566,55 @@ export function createCadUi(store: CadStore) {
       ui.change((s) => {
         for (const e of s.entities) if (ids.has(e.id)) e.construction = !e.construction;
       });
+    },
+
+    /**
+     * Trae curvas del modelo al sketch, ligadas: la intersección del plano con
+     * el sólido o su silueta (con el sólido de antes del sketch). Devuelve el aviso.
+     */
+    async useModel(what: "section" | "silhouette"): Promise<string> {
+      const s = session();
+      const d = store.doc();
+      const index = d?.features.findIndex((f) => f.id === s?.feature) ?? -1;
+      if (!s || !d || index < 0) return "No hay sketch abierto";
+      try {
+        const curves = await store.projectModel(d, index, s.plane, what);
+        return ui.addLinked(curves, () => ({ source: { type: what } }), what === "section" ? "de la intersección" : "de la silueta");
+      } catch (e) {
+        return String(e);
+      }
+    },
+
+    /** Trae todas las entidades de un sketch anterior, ligadas a las suyas */
+    async useSketch(feature: number): Promise<string> {
+      const s = session();
+      if (!s) return "No hay sketch abierto";
+      try {
+        const curves = await store.projectSketch(feature, s.plane);
+        if (curves.length === 0) return "Ese sketch está vacío";
+        return ui.addLinked(curves, (i) => ({ source: { type: "sketch", feature, entity: curves[i].entity } }), "del otro sketch");
+      } catch (e) {
+        return String(e);
+      }
+    },
+
+    /** Agrega curvas ligadas al sketch (si la sesión sigue abierta) y las deja elegidas */
+    addLinked(curves: Projected[], link: (i: number) => Omit<SketchUse, "entity">, what: string): string {
+      if (!session()) return "El sketch se cerró";
+      let ids: number[] = [];
+      ui.change((sk) => (ids = addProjected(sk, curves, link)));
+      setSelection(ids);
+      const n = ids.length;
+      return `${n === 1 ? "1 curva" : `${n} curvas`} ${what}, ligada${n === 1 ? "" : "s"} al modelo (si cambia, se mueve${n === 1 ? "" : "n"} con él)`;
+    },
+
+    /** Lo elegido deja de seguir al modelo: queda donde está, editable */
+    breakLinks(): string {
+      const s = session();
+      const ids = selection().filter((id) => s?.sketch.uses?.some((u) => u.entity === id));
+      if (ids.length === 0) return "Nada de lo elegido está ligado al modelo";
+      ui.change((sk) => breakLinks(sk, ids));
+      return ids.length === 1 ? "Ya no sigue al modelo" : `${ids.length} curvas ya no siguen al modelo`;
     },
 
     /** Guarda el sketch en el documento y sale */

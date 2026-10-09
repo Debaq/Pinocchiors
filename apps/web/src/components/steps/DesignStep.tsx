@@ -297,7 +297,7 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                   <VersionsSection store={store} />
                 </Show>
               }>
-                <SketchPanel ui={ui} />
+                <SketchPanel ui={ui} store={store} />
               </Show>
             </Match>
             <Match when={props.section === "design_part"}>
@@ -3989,7 +3989,7 @@ const SKETCH_PATTERNS: { value: SketchPatternKind; label: string }[] = [
   { value: "fill", label: "De relleno" },
 ];
 
-const SketchPanel: Component<{ ui: CadUi }> = (props) => {
+const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
   const [offsetDist, setOffsetDist] = createSignal(2);
@@ -4374,6 +4374,8 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
         </Show>
       </Section>
 
+      <SketchModelRefs ui={ui} store={props.store} />
+
       <SketchEntities ui={ui} />
 
       <Section title="Restricciones">
@@ -4488,6 +4490,62 @@ const ENTITY_NAMES: Record<Geometry["type"], string> = {
   spline: "Spline",
   point: "Punto",
   ellipse: "Elipse",
+};
+
+/** Usar del modelo: silueta, intersección, otro sketch y romper el vínculo */
+const SketchModelRefs: Component<{ ui: CadUi; store: CadStore }> = (props) => {
+  const ui = props.ui;
+  const [busy, setBusy] = createSignal(false);
+  const s = () => ui.session()!;
+  const linked = () => s().sketch.uses ?? [];
+  const selectedLinked = () => ui.selection().filter((id) => linked().some((u) => u.entity === id)).length;
+  // Sketches de antes en el historial (los de después no están calculados todavía)
+  const earlier = () => {
+    const fs = props.store.doc()?.features ?? [];
+    const at = fs.findIndex((f) => f.id === s().feature);
+    return fs.slice(0, Math.max(0, at)).filter((f) => f.kind.type === "sketch" && !f.suppressed);
+  };
+  const run = async (job: () => Promise<string>) => {
+    setBusy(true);
+    try {
+      ui.setMessage(await job());
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Section title="Usar del modelo">
+      <p class="text-[11px] text-text-dim leading-relaxed">
+        Con Usar (J), clic en una arista o en una cara del sólido (la cara trae todo su contorno). Lo usado queda ligado: si el modelo cambia, se mueve con él.
+      </p>
+      <div class="flex flex-wrap gap-1.5">
+        <Button size="sm" disabled={busy()} title="El contorno del sólido visto desde la normal del plano, con los agujeros pasantes" onClick={() => void run(() => ui.useModel("silhouette"))}>
+          Silueta
+        </Button>
+        <Button size="sm" disabled={busy()} title="Las curvas donde el plano del sketch corta el sólido" onClick={() => void run(() => ui.useModel("section"))}>
+          Intersección
+        </Button>
+      </div>
+      <Show when={earlier().length > 0}>
+        <span class="text-xs text-text-muted">De otro sketch</span>
+        <div class="flex flex-wrap gap-1.5">
+          <For each={earlier()}>
+            {(f) => (
+              <Button size="sm" variant="ghost" disabled={busy()} title="Todas sus curvas y puntos, proyectados a este plano" onClick={() => void run(() => ui.useSketch(f.id))}>
+                {f.name}
+              </Button>
+            )}
+          </For>
+        </div>
+      </Show>
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs text-text-muted">{linked().length === 1 ? "1 curva ligada" : `${linked().length} curvas ligadas`}</span>
+        <Button size="sm" variant="ghost" disabled={selectedLinked() === 0} title="Lo elegido deja de seguir al modelo y queda editable" onClick={() => ui.setMessage(ui.breakLinks())}>
+          Romper vínculo
+        </Button>
+      </div>
+    </Section>
+  );
 };
 
 /** Entidades del sketch: elegir por tipo, lista y propiedades de lo elegido */

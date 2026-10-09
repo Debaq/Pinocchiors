@@ -1309,52 +1309,86 @@ impl Ctx<'_> {
         })
     }
 
-    /// Lleva cada entidad usada a su arista proyectada en el plano del sketch
-    /// (si la arista ya no está, queda donde estaba y la operación avisa).
+    /// Lleva cada entidad ligada a su fuente proyectada en el plano del sketch:
+    /// arista del sólido, intersección, silueta u otro sketch (si la fuente ya
+    /// no está, queda donde estaba y la operación avisa).
     fn project_uses(&self, plane: &Plane, sketch: &mut Sketch) {
-        let Ok(body) = self.body().cloned() else {
-            self.warn("las aristas usadas necesitan un sólido antes del sketch".into());
-            return;
-        };
-        let mut lost = 0;
+        use crate::project;
+        use crate::sketch::UseSource;
+        let body = self.body().ok().cloned();
+        let no_body = || self.warn("lo usado del sólido necesita un sólido antes del sketch".into());
+        let (mut lost, mut changed) = (0, 0);
+        let (mut section, mut silhouette) = (Vec::new(), Vec::new());
         for (k, u) in sketch.uses.clone().iter().enumerate() {
-            let Ok(i) = self.ev.resolve_edge(&u.edge) else {
-                self.miss("uses", k);
-                lost += 1;
-                continue;
+            let target = match (&u.edge, &u.source) {
+                (Some(edge), _) => {
+                    let Some(body) = &body else {
+                        no_body();
+                        continue;
+                    };
+                    let Ok(i) = self.ev.resolve_edge(edge) else {
+                        self.miss("uses", k);
+                        lost += 1;
+                        continue;
+                    };
+                    project::edge(body, i, plane)
+                }
+                (None, Some(UseSource::Sketch { feature, entity })) => match self.ev.sketches.get(feature) {
+                    Some(r) => project::sketch_entity(&r.sketch, &r.plane, *entity, plane),
+                    None => Err(String::new()),
+                },
+                (None, Some(UseSource::Section)) => {
+                    section.push(u.entity);
+                    continue;
+                }
+                (None, Some(UseSource::Silhouette)) => {
+                    silhouette.push(u.entity);
+                    continue;
+                }
+                (None, None) => continue,
             };
-            let (Ok(info), Ok(e)) = (body.edge_info(i), sketch.entity(u.entity)) else { continue };
-            let local = |p: P3| plane.to_local(p);
-            match e.geometry.clone() {
-                Geometry::Line { start, end } => {
-                    let _ = sketch.set_point(start, local(info.start));
-                    let _ = sketch.set_point(end, local(info.end));
+            match target {
+                Ok(p) if project::fit(sketch, u.entity, &p) => {}
+                Ok(_) => changed += 1,
+                Err(_) => {
+                    self.miss("uses", k);
+                    lost += 1;
                 }
-                Geometry::Circle { center, .. } => {
-                    if let Some((c, _, r)) = info.circle {
-                        let _ = sketch.set_point(center, local(c));
-                        if let Some(Geometry::Circle { radius, .. }) = sketch.entities.iter_mut().find(|x| x.id == u.entity).map(|x| &mut x.geometry) {
-                            *radius = r;
-                        }
-                    }
-                }
-                Geometry::Arc { center, start, end } => {
-                    if let Some((c, _, _)) = info.circle {
-                        // Los arcos del sketch van antihorario: si la arista gira al revés
-                        // en este plano, se dan vuelta sus extremos
-                        let (c, a, m, b) = (local(c), local(info.start), local(info.mid), local(info.end));
-                        let ccw = (a[0] - c[0]) * (m[1] - c[1]) - (a[1] - c[1]) * (m[0] - c[0]) > 0.0;
-                        let (a, b) = if ccw { (a, b) } else { (b, a) };
-                        let _ = sketch.set_point(center, c);
-                        let _ = sketch.set_point(start, a);
-                        let _ = sketch.set_point(end, b);
-                    }
-                }
-                _ => {}
             }
         }
         if lost > 0 {
-            self.warn(format!("faltan {lost} de {} aristas usadas", sketch.uses.len()));
+            self.warn(format!("faltan {lost} de {} curvas usadas", sketch.uses.len()));
+        }
+        if changed > 0 {
+            self.warn(format!("{changed} curvas usadas cambiaron de forma (romper el vínculo y volver a usarlas)"));
+        }
+        for (entities, name, curves) in [
+            (&section, "la intersección con el sólido", body.as_ref().map(|b| project::section(b, plane))),
+            (&silhouette, "la silueta", body.as_ref().map(|b| project::silhouette(b, plane))),
+        ] {
+            if entities.is_empty() {
+                continue;
+            }
+            let curves = match curves {
+                None => {
+                    no_body();
+                    continue;
+                }
+                Some(Err(e)) => {
+                    self.warn(format!("no se pudo calcular {name}: {e}"));
+                    continue;
+                }
+                Some(Ok(c)) => c,
+            };
+            let pairs = project::assign(sketch, entities, &curves);
+            for (e, c) in &pairs {
+                project::fit(sketch, *e, &curves[*c]);
+            }
+            if pairs.len() < entities.len() {
+                self.warn(format!("{name} cambió: {} de sus curvas ya no están", entities.len() - pairs.len()));
+            } else if curves.len() > entities.len() {
+                self.warn(format!("{name} cambió: tiene {} curvas nuevas (volver a usarla para traerlas)", curves.len() - entities.len()));
+            }
         }
     }
 

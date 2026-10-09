@@ -2,8 +2,8 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4, 6 y 7 están hechas; la 5 pasó a
-ser la 8. Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
+planes anteriores (sketch completo y anclajes). Las fases 1–4 y 6–9 están hechas (la 5 pasó a
+ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
 Tamaños: S = un día, M = unos días, L = una semana o más. «Backend» = toca el modelo o el solver
@@ -64,44 +64,36 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
    (▾). De paso, **modo construcción** como Onshape: botón Construcción y Q alternan lo
    elegido, o sin nada elegido prenden el modo (lo dibujado sale de construcción).*
 
+8. **Referencias al modelo**: contorno de cara, silueta, intersección, otro sketch, romper
+   vínculo. *Hecha el 2026-10-09: `cad_model::project` (aristas de cualquier tipo al plano:
+   círculos inclinados como elipses, de canto como segmentos, el resto como splines de 16
+   puntos, reconociendo las que resultan rectas o circulares) y puente C++ `cad_section`,
+   `cad_outline`, `cad_lines_hit`, `cad_edge_points`. `SketchUse` = `edge` opcional + `source`
+   (`section`, `silhouette`, `sketch {feature, entity}`). Usar (J) con clic en una cara trae su
+   contorno, una arista por entidad. Silueta: líneas visibles de la vista (HLR) y se quedan los
+   tramos con sólido de un solo lado (rayos normales al plano a ±ε, bordes por bisección); da
+   el borde de la sombra con los agujeros pasantes, no los ciegos. Silueta e intersección se
+   calculan con el sólido de antes del sketch (`cad_project_model` con rollback) y al recalcular
+   se reparten entre sus entidades por tipo y cercanía (avisa si cambió la cantidad). Otro
+   sketch: solo los anteriores, todas sus entidades. Lo ligado se dibuja violeta; Romper
+   vínculo lo deja propio. Pruebas: `model/tests/project.rs` (7) y e2e "usar del modelo…".*
+
+9. **Restricciones a la vista**: íconos junto a la geometría, mostrar u ocultar, elegir todas
+   las restricciones o cotas, preselección, lazo. *Hecha el 2026-10-09: `lib/sketchGlyphs.ts`
+   (puro, `e2e/sketchGlyphs.test.mjs`) decide símbolo y lugar (en las dos entidades si ata dos;
+   la tangencia con extremo común, en el punto; patrones sin ícono); `CadView` los pone en fila
+   por lo que atan (tope 500). `cadUi.selectedConstraints` (Supr las quita antes que las
+   entidades; se vacía si cambia la cantidad de restricciones o al deshacer). Panel: «Todas las
+   restricciones», «Todas las cotas», «Quitar elegidas» y un ícono por fila para elegirla.
+   Preselección en Elegir, Recortar, Extender, Partir y Círculo tangente. El lazo va con
+   **Ctrl**+arrastrar (Alt+arrastrar ya gira la vista). De paso, elegir tardaba hasta ~200 ms:
+   `setSketch` liberaba los materiales antes del cuadro y three.js recompilaba los programas de
+   WebGL; ahora lo reemplazado se libera después del cuadro (`CadViewer.retired`), 13–27 ms por
+   clic. El doble clic mide con `e.timeStamp` (la hora del evento).*
+
 ## Fases que faltan
 
 Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
-
-### 8. Referencias al modelo (M, C++) — antes fase 5
-
-- **Contorno de cara**: elegir una cara plana del sólido y proyectar todas sus aristas (exterior
-  e islas) como `uses` ligados.
-- **Silueta del cuerpo**: el contorno del sólido visto en la normal del plano (las líneas
-  ocultas de los planos 2D ya calculan siluetas con HLR: reusar).
-- **Intersección** del plano del sketch con el sólido (`BRepAlgoAPI_Section`), ligada.
-- **Otro sketch**: proyectar curvas y puntos de un sketch anterior; `SketchUse` pasa a tener
-  origen arista del sólido o entidad de un sketch, y se mueve si el otro cambia.
-- **Romper vínculo**: el `use` se quita y la geometría queda propia y editable.
-- Riesgo: curvas B-spline de OCCT a geometría del sketch (aproximar con splines, como las elipses).
-
-### 9. Restricciones a la vista (M)
-
-- **Íconos de restricciones** junto a la geometría (horizontal, vertical, paralelas,
-  perpendiculares, tangente, concéntrico, igual, coincidente, simétrico, fijo…), como
-  etiquetas HTML igual que las cotas; clic elige la restricción y resalta lo que ata; Supr la
-  borra.
-- **Mostrar u ocultar restricciones** (botón junto a Cotas / Constr. / Puntos).
-- **Elegir todas las restricciones** y **todas las cotas**.
-- **Preselección**: resaltar la entidad o el punto bajo el mouse en el visor.
-- **Selección por lazo**: arrastrar con Alt dibuja un lazo libre.
-
-*Hecha el 2026-10-09: `lib/sketchGlyphs.ts` (puro, `e2e/sketchGlyphs.test.mjs`) decide símbolo y
-lugar (en las dos entidades si ata dos; la tangencia con extremo común, en el punto; patrones
-sin ícono); `CadView` los pone en fila por lo que atan (tope 500). `cadUi.selectedConstraints`
-(Supr las quita antes que las entidades; se vacía si cambia la cantidad de restricciones o al
-deshacer). Panel: «Todas las restricciones», «Todas las cotas», «Quitar elegidas» y un ícono
-por fila para elegirla. Preselección en Elegir, Recortar, Extender, Partir y Círculo
-tangente. El lazo va con **Ctrl**+arrastrar (Alt+arrastrar ya gira la vista). De paso, elegir
-tardaba hasta ~200 ms: `setSketch` liberaba los materiales antes del cuadro y three.js
-recompilaba los programas de WebGL; ahora lo reemplazado se libera después del cuadro
-(`CadViewer.retired`), 13–27 ms por clic. El doble clic mide con `e.timeStamp` (la hora del
-evento).*
 
 ### 10. Cotas II (M, backend)
 
@@ -241,7 +233,7 @@ estirar, eliminar duplicados, reparar, cerrar contorno. — 13: simetría dinám
 eliminar puntos de spline, tangencia en puntos intermedios, simplificar, convertir a spline.
 
 **Referencias al modelo** — ✅ proyectar aristas, convertir entidades del modelo, mantener
-asociatividad. — 8: contorno de cara, silueta, intersección, geometría y puntos de otro sketch,
+asociatividad, contorno de cara, silueta, intersección, geometría y puntos de otro sketch,
 romper vínculo.
 
 **Restricciones** — ✅ coincidente, horizontal, vertical (de línea y entre puntos), colineal,
@@ -272,11 +264,11 @@ absolutas, relativas y polares.
 (cadena), abiertos, cruces, superpuestas, extremos sueltos, sombreado. — 19: validación según la
 operación.
 
-**Selección** — ✅ clic, ventana, cruce, cadena, por tipo, construcción, subdefinidas. — 9:
+**Selección** — ✅ clic, ventana, cruce, cadena, por tipo, construcción, subdefinidas,
 preselección resaltada, lazo, todas las restricciones, todas las cotas.
 
 **Visualización** — ✅ mostrar/ocultar cotas, construcción y puntos, rejilla del visor, colores
-por estado, trazo por tipo, zoom al sketch. — 9: mostrar/ocultar restricciones. — 17: peine de
+por estado, trazo por tipo, zoom al sketch, mostrar/ocultar restricciones. — 17: peine de
 curvatura, inflexión y radio mínimo.
 
 **Gestión** — ✅ crear, editar, terminar, descartar, renombrar, copiar y pegar entidades entre

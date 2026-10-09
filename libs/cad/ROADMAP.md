@@ -591,3 +591,17 @@ cargo test -p cad-model
   Ctrl+arrastrar. Rendimiento: el visor liberaba materiales antes de dibujar y three.js
   recompilaba los shaders en cada redibujo (~200 ms al elegir); ahora se liberan después del
   cuadro. Pruebas: node `e2e/sketchGlyphs.test.mjs` (3) y e2e "íconos de restricciones…".
+- **2026-10-09 Referencias al modelo en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 8):
+  Usar (J) con clic en una cara trae todo su contorno (cada arista ligada a la suya); Silueta
+  (borde de la sombra del sólido visto desde la normal del plano, con los agujeros pasantes),
+  Intersección del plano con el sólido y las curvas de un sketch anterior, todas ligadas;
+  Romper vínculo. Lo ligado se ve violeta. Cualquier arista se proyecta: círculos inclinados
+  como elipses, de canto como segmentos, el resto como splines de 16 puntos (las que resultan
+  rectas o circulares se reconocen). `SketchUse` pasa a `edge` opcional + `source`
+  (`Section`/`Silhouette`/`Sketch`); los documentos viejos cargan igual. Módulo
+  `cad_model::project`; puente C++ `cad_section`, `cad_outline` (HLR llevado al plano),
+  `cad_lines_hit` (rayos en lote) y `cad_edge_points`. La silueta toma las líneas visibles y
+  se queda con los tramos que tienen sólido de un solo lado (rayos normales al plano a cada
+  lado, bordes afinados por bisección). Al recalcular, las curvas de la silueta y la
+  intersección se reparten entre sus entidades por tipo y cercanía; si cambia la cantidad,
+  avisa. Pruebas: Rust `model/tests/project.rs` (7) y e2e "usar del modelo…".

@@ -6,7 +6,7 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
@@ -72,7 +72,7 @@ const TOOLS: ToolDef[] = [
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T", icon: SketchIcons.Trim, group: 2 },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E", icon: SketchIcons.Extend, group: 2 },
-  { id: "use", short: "Usar arista", label: "Usar arista del sólido (queda ligada: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
+  { id: "use", short: "Usar", label: "Usar arista o cara del sólido (una cara trae todo su contorno; queda ligado: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
   { id: "split", short: "Partir", label: "Partir una línea, arco o círculo (clic donde se parte)", key: "D", icon: SketchIcons.Split, group: 2 },
   { id: "move", short: "Mover", label: "Mover lo elegido (punto base, destino)", key: "V", icon: SketchIcons.Move, group: 3 },
   { id: "copy", short: "Copiar", label: "Copiar lo elegido (punto base, destino; Ctrl+C y Ctrl+V también)", key: "K", icon: SketchIcons.Copy, group: 3 },
@@ -736,6 +736,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       ],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
+      linkedEntities: s.sketch.uses?.map((u) => u.entity),
       hideConstruction: !ui.sketchShow().construction,
       hidePoints: !ui.sketchShow().points,
       problems: [...(problems()?.looseEnds.map((x) => x.p) ?? []), ...(problems()?.crossings.map((x) => x.p) ?? [])],
@@ -858,25 +859,18 @@ export const CadView: Component<CadViewProps> = (props) => {
       return;
     }
     if (t === "use") {
-      // La arista del sólido bajo el cursor, proyectada al plano y ligada a él
-      const pick = viewer.pick(e.clientX, e.clientY, { edges: true });
-      if (pick?.kind !== "edge") return ui.setMessage("Clic sobre una arista del sólido");
-      store
-        .projectEdge(pick.edge, s.plane)
-        .then((pe) => {
-          ui.change((sk) => {
-            const p = pe.points.map((q) => addPoint(sk, q));
-            const geometry: Geometry =
-              pe.kind === "line"
-                ? { type: "line", start: p[0], end: p[1] }
-                : pe.kind === "circle"
-                  ? { type: "circle", center: p[0], radius: pe.radius }
-                  : { type: "arc", center: p[0], start: p[1], end: p[2] };
-            const entity = ui.addEntity(sk, geometry);
-            sk.uses = [...(sk.uses ?? []), { edge: pe.ref, entity }];
-          });
-          ui.setMessage(undefined);
-        })
+      // La arista o la cara del sólido bajo el cursor, proyectada al plano y ligada a él
+      const pick = viewer.pick(e.clientX, e.clientY, { edges: true, faces: true });
+      const plane = s.plane;
+      const linked =
+        pick?.kind === "edge"
+          ? store.projectEdge(pick.edge, plane).then((pe) => [pe])
+          : pick?.kind === "face"
+            ? store.projectFace(pick.face, plane)
+            : undefined;
+      if (!linked) return ui.setMessage("Clic sobre una arista o una cara del sólido");
+      linked
+        .then((pes) => ui.setMessage(ui.addLinked(pes, (i) => ({ edge: pes[i].ref }), pes.length === 1 ? "de la arista" : "del contorno de la cara")))
         .catch((err) => ui.setMessage(String(err)));
       return;
     }

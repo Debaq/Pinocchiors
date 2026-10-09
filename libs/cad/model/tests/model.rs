@@ -1021,7 +1021,7 @@ fn used_edge_follows_the_solid() {
     let a = s.add_point(-10.0, -10.0);
     let b = s.add_point(10.0, -10.0);
     let l = s.add_line(a, b);
-    s.uses.push(SketchUse { edge: ev.edge_ref(edge).unwrap(), entity: l });
+    s.uses.push(SketchUse { edge: Some(ev.edge_ref(edge).unwrap()), source: None, entity: l });
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 10.0, sketch: s });
     // Más ancha: la línea usada se estira con la arista
     if let FeatureKind::Primitive(p) = &mut doc.get_mut(bx).unwrap().kind

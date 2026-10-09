@@ -204,6 +204,20 @@ int32_t cad_wire_sample(const CadShape* wire, int32_t n, double* out_p, double* 
 // 4 arista suave visible), cantidad de puntos y sus (x, y).
 int32_t cad_hlr(const CadShape* s, const double* eye, const double* xdir, double deflection, uint8_t** out, size_t* len);
 
+// Para cada recta (punto en `origins`, 3n valores; dirección `dir`, entera, sin
+// sentido) out[i] = 1 si cruza alguna cara de la forma.
+int32_t cad_lines_hit(const CadShape* s, const double* origins, int32_t n, const double* dir, uint8_t* out);
+
+// Puntos de la arista `index` en fracciones de su parámetro (0 = inicio, 1 = fin).
+int32_t cad_edge_points(const CadShape* s, int32_t index, const double* fractions, int32_t n, double* out);
+
+// Curvas donde el plano corta la forma (compuesto de aristas).
+CadShape* cad_section(const CadShape* s, const double* origin, const double* normal);
+
+// Líneas visibles de la forma vista desde la normal del plano (aristas, contornos y
+// aristas suaves), proyectadas sobre el plano (compuesto de aristas en 3D).
+CadShape* cad_outline(const CadShape* s, const double* origin, const double* normal, const double* xdir);
+
 // Las dos caras de cada arista (−1 si falta): out tiene 2 × cad_count_edges.
 int32_t cad_edge_face_pairs(const CadShape* s, int32_t* out);
 

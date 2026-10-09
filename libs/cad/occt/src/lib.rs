@@ -718,6 +718,36 @@ impl Shape {
         (t > 0.0).then_some(t)
     }
 
+    /// Para cada recta (por `origins`, con dirección `dir`, entera) si cruza alguna cara.
+    pub fn lines_hit(&self, origins: &[P3], dir: P3) -> Result<Vec<bool>> {
+        let flat: Vec<f64> = origins.iter().flatten().copied().collect();
+        let mut out = vec![0u8; origins.len()];
+        if unsafe { ffi::cad_lines_hit(self.ptr(), flat.as_ptr(), origins.len() as i32, dir.as_ptr(), out.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        Ok(out.into_iter().map(|b| b != 0).collect())
+    }
+
+    /// Puntos de la arista `index` en fracciones de su parámetro (0 inicio, 1 fin).
+    pub fn edge_points(&self, index: usize, fractions: &[f64]) -> Result<Vec<P3>> {
+        let mut out = vec![0.0; 3 * fractions.len()];
+        if unsafe { ffi::cad_edge_points(self.ptr(), index as i32, fractions.as_ptr(), fractions.len() as i32, out.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        Ok(out.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    }
+
+    /// Curvas donde el plano corta la forma (compuesto de aristas).
+    pub fn section(&self, origin: P3, normal: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_section(self.ptr(), origin.as_ptr(), normal.as_ptr()) })
+    }
+
+    /// Líneas visibles vistas desde la normal del plano, proyectadas sobre él
+    /// (compuesto de aristas en 3D, sobre el plano).
+    pub fn outline(&self, origin: P3, normal: P3, xdir: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_outline(self.ptr(), origin.as_ptr(), normal.as_ptr(), xdir.as_ptr()) })
+    }
+
     /// Prisma de esta cara (plana) hacia su normal con las paredes inclinadas
     /// `angle` radianes (positivo: se angosta al subir).
     pub fn draft_prism(&self, height: f64, angle: f64) -> Result<Shape> {
