@@ -2151,6 +2151,109 @@ const scenarios = {
     await sleep(1500);
   },
 
+  async "revisión del sketch: extremos sueltos, cruces y aviso al extruir"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const problems = () => b.eval(`document.querySelector("[data-sketch-problems]")?.textContent ?? ""`);
+    // Una línea suelta: dos extremos sueltos
+    await b.clickText("Línea");
+    await b.click(400, 300);
+    await b.click(560, 330, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    if ((await problems()) !== "2 extremos sueltos") throw new Error(`una línea: "${await problems()}"`);
+    // Otra que la cruza sin punto común (Mayús: sin anclajes, así no la parte)
+    await b.clickText("Línea");
+    await b.click(470, 250, { modifiers: 8 });
+    await b.click(490, 400, { modifiers: 8, wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    if (!(await problems()).includes("1 cruce sin unir")) throw new Error(`cruce: "${await problems()}"`);
+    if (!(await problems()).includes("4 extremos sueltos")) throw new Error(`extremos: "${await problems()}"`);
+    await b.shot("revision_del_sketch");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // Extruir ese sketch: no se crea la operación y el aviso dice por qué
+    const n = await b.eval(`window.__cadStore.doc().features.length`);
+    await b.clickText("Extrusión");
+    await sleep(1000);
+    const text = await b.eval(`document.body.innerText`);
+    if (!text.includes("El sketch no tiene regiones cerradas: 4 extremos sueltos · 1 cruce sin unir")) throw new Error("falta el aviso de por qué no hay regiones");
+    if ((await b.eval(`window.__cadStore.doc().features.length`)) !== n) throw new Error("se creó la extrusión igual");
+  },
+
+  async "modo construcción, mostrar y ocultar, lista de entidades, cadena y variantes en menús"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    // Modo construcción sin nada elegido: la línea sale de construcción
+    await b.clickText("Construcción");
+    if (!(await b.eval(`window.__cadUi.constructionMode()`))) throw new Error("no se prendió el modo construcción");
+    await b.clickText("Línea");
+    await b.click(300, 650);
+    await b.click(800, 650, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    let s = await sk();
+    if (!s.entities.some((e) => e.geometry.type === "line" && e.construction)) throw new Error("la línea no salió de construcción");
+    // Apagado: el rectángulo sale normal y forma región (la construcción no cuenta)
+    await b.clickText("Construcción");
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(560, 440, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    s = await sk();
+    const rect = s.entities.filter((e) => e.geometry.type === "line" && !e.construction).map((e) => e.id);
+    if (rect.length !== 4) throw new Error(`rectángulo: ${rect.length}`);
+    await sleep(600);
+    if ((await b.eval(`window.__cadUi.session().regions.length`)) !== 1) throw new Error("la región no se formó");
+    // Doble clic sobre un lado: la cadena entera (sin la construcción)
+    await b.clickText("Elegir");
+    await b.click(480, 300, { wait: 80 });
+    await b.click(480, 300, { wait: 400 });
+    const sel = (await b.eval(`window.__cadUi.selection()`)).sort();
+    if (JSON.stringify(sel) !== JSON.stringify([...rect].sort())) throw new Error(`cadena: ${sel} (esperado ${rect})`);
+    // Elegir por tipo: construcción
+    await b.eval(`[...document.querySelector('[aria-label="Elegir por tipo"]').querySelectorAll("button")].find((x) => x.textContent.trim() === "Construcción").click()`);
+    await sleep(300);
+    const cons = await b.eval(`window.__cadUi.selection()`);
+    if (cons.length !== 1 || rect.includes(cons[0])) throw new Error(`por tipo: ${cons}`);
+    // Ctrl+A: todo
+    for (const type of ["keyDown", "keyUp"]) await b.send("Input.dispatchKeyEvent", { type, key: "a", code: "KeyA", windowsVirtualKeyCode: 65, modifiers: 2 });
+    await sleep(300);
+    if ((await b.eval(`window.__cadUi.selection().length`)) !== 5) throw new Error(`Ctrl+A: ${await b.eval(`window.__cadUi.selection().length`)}`);
+    // Ocultar las cotas
+    // Ocultar las cotas (las etiquetas son botones font-mono)
+    if (!(await b.eval(`[...document.querySelectorAll("button.font-mono")].length`))) throw new Error("no hay cotas a la vista");
+    await b.eval(`document.querySelector('[aria-label="Mostrar cotas"]').click()`);
+    await sleep(400);
+    if (await b.eval(`[...document.querySelectorAll("button.font-mono")].length`)) throw new Error("las cotas siguen a la vista");
+    await b.eval(`document.querySelector('[aria-label="Mostrar cotas"]').click()`);
+    await sleep(400);
+    if (!(await b.eval(`[...document.querySelectorAll("button.font-mono")].length`))) throw new Error("las cotas no volvieron");
+    // Un punto suelto movido desde sus propiedades
+    await b.clickText("Punto");
+    await b.click(700, 300, { wait: 800 });
+    s = await sk();
+    const pt = s.entities.filter((e) => e.geometry.type === "point").at(-1).geometry.point;
+    await b.eval(`window.__cadUi.setSelection([${pt}])`);
+    await sleep(300);
+    await b.eval(`(() => {
+      const box = document.querySelector('[aria-label="Propiedades"]');
+      const i = [...box.querySelectorAll("label")].find((l) => l.textContent.startsWith("X"))?.querySelector("input");
+      i.value = "42"; i.dispatchEvent(new Event("change", { bubbles: true }));
+    })()`);
+    await sleep(1000);
+    near((await sk()).points.find((p) => p.id === pt).x, 42, 1e-6, "x del punto");
+    // Variantes en menús: Círculo 3 p. desde la lista de círculos
+    await b.clickText("Más círculos");
+    await b.clickText("Círculo 3 p.");
+    if ((await b.eval(`window.__cadUi.tool()`)) !== "circle3") throw new Error(`variante: ${await b.eval(`window.__cadUi.tool()`)}`);
+    // El botón de la familia muestra la última variante usada
+    if (!(await b.eval(`!!document.querySelector('button[aria-label="Círculo 3 p."]')`))) throw new Error("el botón no muestra la variante elegida");
+    await b.shot("modo_construccion_y_lista");
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {

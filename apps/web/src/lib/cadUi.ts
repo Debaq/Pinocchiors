@@ -120,6 +120,15 @@ export interface SketchSession {
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
+/** Herramientas que no dibujan: el modo construcción no marca lo que crean */
+const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "move", "copy", "rotate", "scale", "paste"]);
+
+/** Qué se ve dentro del sketch */
+export interface SketchShow {
+  dims: boolean;
+  construction: boolean;
+  points: boolean;
+}
 /** Pasos que se pueden deshacer dentro de un sketch */
 const SKETCH_HISTORY_LIMIT = 200;
 
@@ -156,6 +165,9 @@ export function createCadUi(store: CadStore) {
   // Recalcular cambia los índices de caras, aristas y regiones: la selección vieja ya no vale
   createEffect(on(() => store.result()?.version, () => setPicks((p) => p.filter((x) => x.kind === "plane")), { defer: true }));
   const [message, setMessage] = createSignal<string>();
+  // Modo construcción (como Onshape): lo que se dibuja sale de construcción
+  const [constructionMode, setConstructionMode] = createSignal(false);
+  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, construction: true, points: true });
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
   const [clipboard, setClipboard] = createSignal<SketchClip>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
@@ -332,7 +344,9 @@ export function createCadUi(store: CadStore) {
       // Junto con lo que la herramienta actualice dentro de `mutate`: la vista
       // previa nunca ve el sketch viejo con el estado nuevo de la herramienta
       batch(() => {
+        const before = new Set(s.sketch.entities.map((e) => e.id));
         mutate(next);
+        if (constructionMode() && !NOT_DRAWING.has(tool())) for (const e of next.entities) if (!before.has(e.id)) e.construction = true;
         // Lo que no cambia nada (una herramienta que avisa un error) no es un paso
         if (JSON.stringify(next) !== JSON.stringify(s.sketch)) remember(s.sketch);
         setSession({ ...s, sketch: next });
@@ -395,6 +409,19 @@ export function createCadUi(store: CadStore) {
       });
       if (made) setSelection(made);
       return msg;
+    },
+    /** Lleva un punto a `to` respetando las restricciones (un paso de deshacer) */
+    movePoint(point: number, to: P2) {
+      void ui.drag(point, to);
+      ui.endDrag();
+    },
+    /** Cambia el radio de un círculo (si una cota lo fija, gana la cota) */
+    setCircleRadius(entity: number, r: number) {
+      if (!(r > 0)) return;
+      ui.change((sk) => {
+        const g = sk.entities.find((e) => e.id === entity)?.geometry;
+        if (g?.type === "circle") g.radius = r;
+      });
     },
     /** Termina un arrastre: el próximo empieza un paso nuevo */
     endDrag() {
@@ -492,6 +519,24 @@ export function createCadUi(store: CadStore) {
         for (const e of [...s.entities]) if (ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point))) removeEntity(s, e.id);
       });
       setSelection([]);
+    },
+
+    constructionMode,
+    setConstructionMode,
+    sketchShow,
+    /** Muestra u oculta cotas, construcción o puntos */
+    toggleShow(k: keyof SketchShow) {
+      setSketchShow((v) => ({ ...v, [k]: !v[k] }));
+    },
+    /**
+     * Botón Construcción (Q): con algo elegido lo pasa a construcción o de
+     * vuelta; sin nada elegido prende o apaga el modo construcción
+     */
+    construction() {
+      const s = session();
+      const ids = new Set(selection());
+      if (s?.sketch.entities.some((e) => ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point)))) ui.toggleConstruction();
+      else setConstructionMode(!constructionMode());
     },
 
     toggleConstruction() {

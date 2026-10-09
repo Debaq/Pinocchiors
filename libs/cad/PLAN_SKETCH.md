@@ -160,9 +160,23 @@ referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del 
    rectángulo, arco, ranura) en menús desplegables como Onshape (fase 7).*
 5. **Referencias al modelo**: contorno de cara, intersección, otro sketch, romper vínculo.
 6. **Validación del contorno**: abiertos, extremos sueltos, cruces, superposiciones; aviso en
-   las operaciones.
+   las operaciones. *Hecha el 2026-10-09: `lib/sketchCheck.ts` (puro, `e2e/sketchCheck.test.mjs`)
+   con la misma idea que `regions.rs`: extremos unidos por posición, ramas de grado 1 = extremos
+   sueltos, cruces de polilíneas que no son un extremo común de las dos (también la T sin
+   partir), encimadas (misma recta o mismo círculo con tramos que se pisan). Marcas rojas en el
+   visor (`SketchOverlay.problems`, encimadas en rojo), resumen en la barra del sketch y, al
+   extruir o girar un sketch sin regiones, el aviso dice por qué y no crea la operación.*
 7. **Visualización y lista**: mostrar/ocultar, lista de entidades editable, selección por
-   cadena y por tipo; variantes de herramientas agrupadas en menús desplegables.
+   cadena y por tipo; variantes de herramientas agrupadas en menús desplegables. *Hecha el
+   2026-10-09: botones Cotas / Constr. / Puntos en la barra (no hay íconos de restricciones en
+   el visor: solo las etiquetas de las cotas); sección «Entidades» en el panel con elegir por
+   tipo (líneas, círculos y arcos, construcción, puntos, sin definir, todo), lista (un texto es
+   una fila) y propiedades de lo elegido (punto X/Y; línea largo y extremos; círculo centro y
+   diámetro; arco centro y radio) que mueven con `solve_drag` (las restricciones mandan);
+   doble clic = cadena (`connectedChain`), Ctrl+A = todo; familias de herramientas (línea,
+   rectángulo, círculo, arco, ranura) con un botón que muestra la última variante y una lista
+   (▾). De paso, **modo construcción** como Onshape: botón Construcción y Q alternan lo
+   elegido, o sin nada elegido prenden el modo (lo dibujado sale de construcción).*
 
 ### Más adelante (sin fecha)
 

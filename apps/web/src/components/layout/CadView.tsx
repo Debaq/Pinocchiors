@@ -9,6 +9,7 @@ import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
+import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
 import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -45,25 +46,26 @@ export interface CadViewProps {
 }
 
 // Grupos de la barra: elegir · dibujar · modificar
-const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon: (p: { size?: number }) => JSX.Element; group: number }[] = [
+type ToolDef = { id: SketchTool; short: string; label: string; key?: string; icon: (p: { size?: number }) => JSX.Element; group: number; family?: string };
+const TOOLS: ToolDef[] = [
   { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S", icon: SketchIcons.Select, group: 0 },
-  { id: "line", short: "Línea", label: "Línea", key: "L", icon: SketchIcons.Line, group: 1 },
-  { id: "line_mid", short: "Línea centro", label: "Línea desde el centro (centro, extremo: crece igual a los dos lados)", key: "M", icon: SketchIcons.LineMid, group: 1 },
-  { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1 },
-  { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1 },
-  { id: "rect3", short: "Rect. 3 p.", label: "Rectángulo por 3 puntos (un lado y el ancho: queda inclinado)", icon: SketchIcons.Rect3, group: 1 },
-  { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1 },
-  { id: "circle2", short: "Círculo 2 p.", label: "Círculo por 2 puntos (los extremos de un diámetro)", icon: SketchIcons.Circle2, group: 1 },
-  { id: "circle3", short: "Círculo 3 p.", label: "Círculo por 3 puntos", icon: SketchIcons.Circle3, group: 1 },
-  { id: "circle_tan", short: "Círculo tangente", label: "Círculo tangente a 3 líneas o curvas (clic en cada una, cerca de donde toca)", icon: SketchIcons.CircleTan, group: 1 },
-  { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1 },
-  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1 },
-  { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1 },
+  { id: "line", short: "Línea", label: "Línea", key: "L", icon: SketchIcons.Line, group: 1, family: "line" },
+  { id: "line_mid", short: "Línea centro", label: "Línea desde el centro (centro, extremo: crece igual a los dos lados)", key: "M", icon: SketchIcons.LineMid, group: 1, family: "line" },
+  { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1, family: "rect" },
+  { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1, family: "rect" },
+  { id: "rect3", short: "Rect. 3 p.", label: "Rectángulo por 3 puntos (un lado y el ancho: queda inclinado)", icon: SketchIcons.Rect3, group: 1, family: "rect" },
+  { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1, family: "circle" },
+  { id: "circle2", short: "Círculo 2 p.", label: "Círculo por 2 puntos (los extremos de un diámetro)", icon: SketchIcons.Circle2, group: 1, family: "circle" },
+  { id: "circle3", short: "Círculo 3 p.", label: "Círculo por 3 puntos", icon: SketchIcons.Circle3, group: 1, family: "circle" },
+  { id: "circle_tan", short: "Círculo tangente", label: "Círculo tangente a 3 líneas o curvas (clic en cada una, cerca de donde toca)", icon: SketchIcons.CircleTan, group: 1, family: "circle" },
+  { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1, family: "arc" },
+  { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1, family: "arc" },
+  { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1, family: "arc" },
   { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1 },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P", icon: SketchIcons.Polygon, group: 1 },
-  { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U", icon: SketchIcons.Slot, group: 1 },
-  { id: "slot_center", short: "Ranura centro", label: "Ranura por el centro (centro, extremo, ancho)", icon: SketchIcons.SlotCenter, group: 1 },
-  { id: "slot_arc", short: "Ranura arco", label: "Ranura en arco (centro del arco, comienzo, fin antihorario, ancho)", icon: SketchIcons.SlotArc, group: 1 },
+  { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U", icon: SketchIcons.Slot, group: 1, family: "slot" },
+  { id: "slot_center", short: "Ranura centro", label: "Ranura por el centro (centro, extremo, ancho)", icon: SketchIcons.SlotCenter, group: 1, family: "slot" },
+  { id: "slot_arc", short: "Ranura arco", label: "Ranura en arco (centro del arco, comienzo, fin antihorario, ancho)", icon: SketchIcons.SlotArc, group: 1, family: "slot" },
   { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N", icon: SketchIcons.Spline, group: 1 },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O", icon: SketchIcons.Point, group: 1 },
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
@@ -76,6 +78,9 @@ const TOOLS: { id: SketchTool; short: string; label: string; key?: string; icon:
   { id: "rotate", short: "Girar", label: "Girar lo elegido (centro, desde, hasta)", key: "H", icon: SketchIcons.Rotate, group: 3 },
   { id: "scale", short: "Escalar", label: "Escalar lo elegido (punto base, desde, hasta)", key: "Y", icon: SketchIcons.Scale, group: 3 },
 ];
+
+/** Nombre de cada familia de variantes (para el botón que abre la lista) */
+const FAMILY_MENU: Record<string, string> = { line: "Más líneas", rect: "Más rectángulos", circle: "Más círculos", arc: "Más arcos", slot: "Más ranuras" };
 
 /** Herramientas que transforman lo elegido */
 const TRANSFORMS: SketchTool[] = ["move", "copy", "rotate", "scale"];
@@ -221,6 +226,29 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
   const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
+  // Variante a la vista de cada familia de herramientas, y la lista abierta
+  const [familyPick, setFamilyPick] = createSignal<Record<string, SketchTool>>({});
+  const [openFamily, setOpenFamily] = createSignal<string>();
+  createEffect(() => {
+    const t = TOOLS.find((x) => x.id === ui.tool());
+    if (t?.family) setFamilyPick((m) => (m[t.family!] === t.id ? m : { ...m, [t.family!]: t.id }));
+  });
+  // Un clic fuera cierra la lista de variantes
+  const closeFamily = (e: PointerEvent) => {
+    if (openFamily() && !(e.target as HTMLElement).closest("[data-family-list], [data-toolbar-menu]")) setOpenFamily(undefined);
+  };
+  onMount(() => window.addEventListener("pointerdown", closeFamily, true));
+  onCleanup(() => window.removeEventListener("pointerdown", closeFamily, true));
+  /** Botones de la barra: una entrada por familia (con su lista) o por herramienta suelta */
+  const toolSlots = () => {
+    const out: { family?: string; group: number; tools: ToolDef[] }[] = [];
+    for (const t of TOOLS) {
+      const prev = t.family && out.find((x) => x.family === t.family);
+      if (prev) prev.tools.push(t);
+      else out.push({ family: t.family, group: t.group, tools: [t] });
+    }
+    return out;
+  };
   // Polígono inscrito (el clic es un vértice) o circunscrito (el clic es el medio de un lado)
   const [polygonCircumscribed, setPolygonCircumscribed] = createSignal(false);
   // Círculo tangente: las entidades elegidas (y dónde se hizo clic en cada una)
@@ -263,6 +291,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
+  // Para el doble clic sobre una entidad (elige la cadena)
+  let lastEntityClick: { id: number; t: number } | undefined;
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
   const [viewTick, setViewTick] = createSignal(0);
   const [editingDim, setEditingDim] = createSignal<number>();
@@ -282,6 +312,12 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const ui = props.ui;
   const store = props.store;
+
+  /** Lo que impide cerrar regiones en el sketch en edición */
+  const problems = createMemo(() => {
+    const s = ui.session();
+    return s ? checkSketch(s.sketch) : undefined;
+  });
 
   const resetTool = () => {
     setChain(undefined);
@@ -682,6 +718,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       hover: [...ui.hoverIds(), ...(snapView()?.refs ?? []), ...tanPicks().map((x) => x.entity)],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
+      hideConstruction: !ui.sketchShow().construction,
+      hidePoints: !ui.sketchShow().points,
+      problems: [...(problems()?.looseEnds.map((x) => x.p) ?? []), ...(problems()?.crossings.map((x) => x.p) ?? [])],
+      warnEntities: problems()?.overlaps.flat(),
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
         const c = s.sketch.constraints[i];
         return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
@@ -773,6 +813,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       if (h.entity !== undefined) {
         const id = h.entity;
+        // Doble clic: toda la cadena unida por los extremos
+        const now = performance.now();
+        if (lastEntityClick && lastEntityClick.id === id && now - lastEntityClick.t < 450) {
+          lastEntityClick = undefined;
+          const chain = connectedChain(s.sketch, id);
+          ui.setSelection((sel) => (e.shiftKey ? [...new Set([...sel, ...chain])] : chain));
+          return;
+        }
+        lastEntityClick = { id, t: now };
         ui.setSelection((sel) => (e.shiftKey ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
         return;
       }
@@ -1652,6 +1701,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       } else if (e.key === "Enter") void ui.finishSketch();
       else if (e.key === "Delete" || e.key === "Backspace") ui.deleteSelection();
       else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "c") ui.setMessage(ui.copySelection());
+      else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "a") {
+        ui.setTool("select");
+        resetTool();
+        ui.setSelection(selectByKind(ui.session()!.sketch, "all"));
+      }
       else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "v") {
         // Pegar: lo copiado sigue al cursor hasta el clic
         if (!ui.clipboard()) return ui.setMessage("No hay nada copiado (Ctrl+C con algo elegido)");
@@ -1660,9 +1714,9 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setMessage("Clic donde va lo pegado (Esc cancela)");
       }
       else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        // Q: construcción sí/no en lo elegido (como Onshape)
-        if (key === "q" && ui.selection().length) {
-          ui.toggleConstruction();
+        // Q: construcción sí/no en lo elegido, o el modo construcción sin nada elegido (como Onshape)
+        if (key === "q") {
+          ui.construction();
           e.preventDefault();
           e.stopPropagation();
           return;
@@ -1775,10 +1829,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       return undefined;
     };
+    const showDims = ui.sketchShow().dims;
     s.sketch.constraints.forEach((c, index) => {
       const v = constraintValue(c);
       const a = anchor(c);
-      if (v === undefined || !a) return;
+      // Ocultas: menos la que se está escribiendo
+      if (v === undefined || !a || (!showDims && editingDim() !== index)) return;
       let [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
       // Correr 16 px perpendicular a lo acotado, hacia afuera del sketch, para
       // no tapar la línea (y poder elegirla con un clic)
@@ -2078,32 +2134,86 @@ export const CadView: Component<CadViewProps> = (props) => {
         >
           {(s) => (
             <div class="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
-              <For each={TOOLS}>
-                {(t, i) => (
-                  <>
-                    <Show when={i() > 0 && TOOLS[i() - 1].group !== t.group}>
-                      <div class="w-px h-5 bg-border mx-0.5" />
-                    </Show>
-                    <Tooltip content={t.key ? `${t.label} (${t.key})` : t.label}>
-                      <button
-                        aria-label={t.short}
-                        class={clsx(
-                          "p-1 rounded",
-                          ui.tool() === t.id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
-                        )}
-                        onClick={() => {
-                          ui.setTool(t.id);
-                          resetTool();
-                        }}
-                      >
-                        <t.icon size={18} />
-                        {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
-                        <span class="sr-only">{t.short}</span>
-                      </button>
-                    </Tooltip>
-                  </>
-                )}
+              <For each={toolSlots()}>
+                {(slot, i) => {
+                  const shown = () => TOOLS.find((t) => t.id === (slot.family ? (familyPick()[slot.family] ?? slot.tools[0].id) : slot.tools[0].id))!;
+                  const variants = slot.tools;
+                  return (
+                    <>
+                      <Show when={i() > 0 && toolSlots()[i() - 1].group !== slot.group}>
+                        <div class="w-px h-5 bg-border mx-0.5" />
+                      </Show>
+                      <div class="relative flex items-center">
+                        <Tooltip content={shown().key ? `${shown().label} (${shown().key})` : shown().label}>
+                          <button
+                            aria-label={shown().short}
+                            class={clsx(
+                              "p-1 rounded",
+                              variants.some((t) => t.id === ui.tool()) ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
+                            )}
+                            onClick={() => {
+                              ui.setTool(shown().id);
+                              resetTool();
+                            }}
+                          >
+                            {(() => {
+                              const Icon = shown().icon;
+                              return <Icon size={18} />;
+                            })()}
+                            {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
+                            <span class="sr-only">{shown().short}</span>
+                          </button>
+                        </Tooltip>
+                        <Show when={variants.length > 1}>
+                          <div data-toolbar-menu={FAMILY_MENU[slot.family!]} data-items={JSON.stringify(variants.map((t) => t.short))}>
+                            <button
+                              class="px-0.5 py-1 rounded text-text-dim hover:text-text hover:bg-surface"
+                              onClick={() => setOpenFamily(openFamily() === slot.family ? undefined : slot.family)}
+                            >
+                              <Icons.CaretDown size={10} />
+                              <span class="sr-only">{FAMILY_MENU[slot.family!]}</span>
+                            </button>
+                          </div>
+                          <Show when={openFamily() === slot.family}>
+                            <div class="absolute top-full left-0 mt-1 z-20 min-w-44 rounded-md border border-border bg-bg-lighter shadow-lg py-1" data-family-list>
+                              <For each={variants}>
+                                {(t) => (
+                                  <button
+                                    class={clsx(
+                                      "w-full flex items-center gap-2 px-2 py-1 text-xs text-left",
+                                      ui.tool() === t.id ? "text-accent" : "text-text-muted hover:text-text hover:bg-surface",
+                                    )}
+                                    title={t.label}
+                                    onClick={() => {
+                                      ui.setTool(t.id);
+                                      resetTool();
+                                      setOpenFamily(undefined);
+                                    }}
+                                  >
+                                    <t.icon size={16} />
+                                    {t.short}
+                                  </button>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
+                        </Show>
+                      </div>
+                    </>
+                  );
+                }}
               </For>
+              <div class="w-px h-5 bg-border mx-0.5" />
+              <Tooltip content="Construcción (Q): con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción (no cuenta para las regiones)">
+                <button
+                  aria-label="Construcción"
+                  class={clsx("p-1 rounded", ui.constructionMode() ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
+                  onClick={() => ui.construction()}
+                >
+                  <SketchIcons.Construction size={18} />
+                  <span class="sr-only">Construcción</span>
+                </button>
+              </Tooltip>
               <Show when={ui.tool() === "text"}>
                 <input
                   type="text"
@@ -2219,6 +2329,27 @@ export const CadView: Component<CadViewProps> = (props) => {
               >
                 {statusText()}
               </span>
+              <Show when={problems() && problemsText(problems()!)}>
+                {(t) => (
+                  <span class="text-xs px-1 text-error" data-sketch-problems title="Marcados en rojo en el visor: así no se cierran las regiones (no se puede extruir esa parte)">
+                    {t()}
+                  </span>
+                )}
+              </Show>
+              <div class="w-px h-5 bg-border mx-1" />
+              <For each={[["dims", "Cotas"], ["construction", "Constr."], ["points", "Puntos"]] as const}>
+                {([k, label]) => (
+                  <button
+                    aria-label={`Mostrar ${label.toLowerCase()}`}
+                    aria-pressed={ui.sketchShow()[k]}
+                    class={clsx("px-1.5 py-0.5 rounded text-[11px]", ui.sketchShow()[k] ? "text-text hover:bg-surface" : "text-text-dim line-through hover:bg-surface")}
+                    title={ui.sketchShow()[k] ? `Ocultar ${label.toLowerCase()}` : `Mostrar ${label.toLowerCase()}`}
+                    onClick={() => ui.toggleShow(k)}
+                  >
+                    {label}
+                  </button>
+                )}
+              </For>
               <div class="w-px h-5 bg-border mx-1" />
               <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
                 Terminar sketch

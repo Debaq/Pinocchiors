@@ -67,6 +67,8 @@ import {
   type PlaneSpec,
   type ScanPick,
   type Sketch,
+  type SketchEntity,
+  type Geometry,
   type SketchConstraint,
   type ThreadAxis,
   type ThreadLink,
@@ -84,6 +86,7 @@ import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { selectByKind, type SelectKind } from "../../lib/sketchCheck";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -4370,6 +4373,8 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
         </Show>
       </Section>
 
+      <SketchEntities ui={ui} />
+
       <Section title="Restricciones">
         <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">Sin restricciones</p>}>
           <div class="space-y-0.5 max-h-72 overflow-y-auto">
@@ -4432,5 +4437,178 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
         </Button>
       </div>
     </div>
+  );
+};
+
+const SELECT_KINDS: { kind: SelectKind; label: string }[] = [
+  { kind: "lines", label: "Líneas" },
+  { kind: "round", label: "Círculos y arcos" },
+  { kind: "construction", label: "Construcción" },
+  { kind: "points", label: "Puntos" },
+  { kind: "free", label: "Sin definir" },
+  { kind: "all", label: "Todo" },
+];
+
+const ENTITY_NAMES: Record<Geometry["type"], string> = {
+  line: "Línea",
+  circle: "Círculo",
+  arc: "Arco",
+  spline: "Spline",
+  point: "Punto",
+  ellipse: "Elipse",
+};
+
+/** Entidades del sketch: elegir por tipo, lista y propiedades de lo elegido */
+const SketchEntities: Component<{ ui: CadUi }> = (props) => {
+  const ui = props.ui;
+  const sketch = (): Sketch => ui.session()!.sketch;
+  const pos = (id: number): P2 => {
+    const p = sketch().points.find((q) => q.id === id);
+    return p ? [p.x, p.y] : [0, 0];
+  };
+  const fmtN = (v: number) => String(+v.toFixed(3));
+  /** Una fila por entidad (un texto es una sola fila) */
+  const rows = createMemo(() => {
+    const s = sketch();
+    const inText = new Map<number, number>();
+    for (const t of s.texts ?? []) for (const e of t.entities) inText.set(e, t.id);
+    const out: { key: string; label: string; measure: string; ids: number[]; construction: boolean }[] = [];
+    for (const t of s.texts ?? []) out.push({ key: `t${t.id}`, label: `Texto «${t.text}»`, measure: `${fmtN(t.size)} mm`, ids: [...t.entities], construction: false });
+    for (const e of s.entities) {
+      if (inText.has(e.id)) continue;
+      const g = e.geometry;
+      let measure = "";
+      if (g.type === "line") measure = fmtN(Math.hypot(pos(g.end)[0] - pos(g.start)[0], pos(g.end)[1] - pos(g.start)[1]));
+      else if (g.type === "circle") measure = `Ø ${fmtN(2 * g.radius)}`;
+      else if (g.type === "arc") measure = `R ${fmtN(Math.hypot(pos(g.start)[0] - pos(g.center)[0], pos(g.start)[1] - pos(g.center)[1]))}`;
+      else if (g.type === "point") measure = pos(g.point).map(fmtN).join(", ");
+      out.push({ key: `e${e.id}`, label: ENTITY_NAMES[g.type], measure, ids: [g.type === "point" ? g.point : e.id], construction: !!e.construction });
+    }
+    return out;
+  });
+  const MAX_ROWS = 300;
+  const sel = () => ui.selection();
+  const selected = (ids: number[]) => ids.every((id) => sel().includes(id));
+  /** Lo elegido, si es una sola entidad (o un solo punto) */
+  const single = () => {
+    const ids = sel();
+    if (ids.length !== 1) return undefined;
+    const e = sketch().entities.find((x) => x.id === ids[0]);
+    if (e) return e.geometry.type === "point" ? ({ kind: "point", point: e.geometry.point } as const) : ({ kind: "entity", e } as const);
+    return sketch().points.some((p) => p.id === ids[0]) ? ({ kind: "point", point: ids[0] } as const) : undefined;
+  };
+  const PointFields = (p: { point: number; label?: string }) => (
+    <div class="flex gap-1.5">
+      <Num label={`${p.label ?? ""}X`} suffix="mm" step={1} value={pos(p.point)[0]} onCommit={(v) => ui.movePoint(p.point, [v, pos(p.point)[1]])} />
+      <Num label={`${p.label ?? ""}Y`} suffix="mm" step={1} value={pos(p.point)[1]} onCommit={(v) => ui.movePoint(p.point, [pos(p.point)[0], v])} />
+    </div>
+  );
+  return (
+    <Section title={`Entidades (${rows().length})`}>
+      <div class="flex flex-wrap gap-1" aria-label="Elegir por tipo">
+        <For each={SELECT_KINDS}>
+          {(k) => (
+            <Button size="sm" variant="ghost" onClick={() => ui.setSelection(selectByKind(sketch(), k.kind, ui.session()?.report?.free_entities ?? []))}>
+              {k.label}
+            </Button>
+          )}
+        </For>
+      </div>
+      <p class="text-[11px] text-text-dim">Doble clic en el visor elige la cadena unida; Ctrl+A, todo.</p>
+      <div class="max-h-48 overflow-y-auto rounded border border-border" aria-label="Lista de entidades">
+        <For each={rows().slice(0, MAX_ROWS)}>
+          {(r) => (
+            <button
+              class={clsx(
+                "w-full flex items-center justify-between gap-2 px-2 py-0.5 text-[11px] text-left",
+                selected(r.ids) ? "bg-accent/20 text-text" : "text-text-muted hover:bg-surface hover:text-text",
+              )}
+              onClick={(e) => ui.setSelection((cur) => (e.shiftKey ? (selected(r.ids) ? cur.filter((x) => !r.ids.includes(x)) : [...cur, ...r.ids]) : r.ids))}
+              onMouseEnter={() => ui.setHoverIds(r.ids)}
+              onMouseLeave={() => ui.setHoverIds([])}
+            >
+              <span class={r.construction ? "italic text-text-dim" : undefined}>
+                {r.label}
+                {r.construction ? " (constr.)" : ""}
+              </span>
+              <span class="font-mono text-text-dim">{r.measure}</span>
+            </button>
+          )}
+        </For>
+        <Show when={rows().length > MAX_ROWS}>
+          <p class="px-2 py-0.5 text-[11px] text-text-dim">… y {rows().length - MAX_ROWS} más</p>
+        </Show>
+      </div>
+      {/* Propiedades: escribir un valor mueve la geometría (las restricciones mandan) */}
+      <Show when={single()}>
+        {(it) => (
+          <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Propiedades">
+            <Switch>
+              <Match when={it().kind === "point" && it()}>{(p) => <PointFields point={(p() as { point: number }).point} />}</Match>
+              <Match when={it().kind === "entity" && (it() as { e: SketchEntity }).e}>
+                {(e) => {
+                  const g = () => e().geometry;
+                  return (
+                    <Switch>
+                      <Match when={g().type === "line" && (g() as Extract<Geometry, { type: "line" }>)}>
+                        {(l) => {
+                          const len = () => Math.hypot(pos(l().end)[0] - pos(l().start)[0], pos(l().end)[1] - pos(l().start)[1]);
+                          return (
+                            <>
+                              <Num
+                                label="Largo"
+                                suffix="mm"
+                                step={1}
+                                value={len()}
+                                onCommit={(v) => {
+                                  const [a, b] = [pos(l().start), pos(l().end)];
+                                  const k = len() > 0 ? v / len() : 0;
+                                  if (v > 0) ui.movePoint(l().end, [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k]);
+                                }}
+                              />
+                              <PointFields point={l().start} label="Inicio " />
+                              <PointFields point={l().end} label="Fin " />
+                            </>
+                          );
+                        }}
+                      </Match>
+                      <Match when={g().type === "circle" && (g() as Extract<Geometry, { type: "circle" }>)}>
+                        {(c) => (
+                          <>
+                            <PointFields point={c().center} label="Centro " />
+                            <Num label="Diámetro" suffix="mm" step={1} value={2 * c().radius} onCommit={(v) => ui.setCircleRadius(e().id, v / 2)} />
+                          </>
+                        )}
+                      </Match>
+                      <Match when={g().type === "arc" && (g() as Extract<Geometry, { type: "arc" }>)}>
+                        {(a) => {
+                          const r = () => Math.hypot(pos(a().start)[0] - pos(a().center)[0], pos(a().start)[1] - pos(a().center)[1]);
+                          return (
+                            <>
+                              <PointFields point={a().center} label="Centro " />
+                              <Num
+                                label="Radio"
+                                suffix="mm"
+                                step={1}
+                                value={r()}
+                                onCommit={(v) => {
+                                  const [c, st] = [pos(a().center), pos(a().start)];
+                                  const k = r() > 0 ? v / r() : 0;
+                                  if (v > 0) ui.movePoint(a().start, [c[0] + (st[0] - c[0]) * k, c[1] + (st[1] - c[1]) * k]);
+                                }}
+                              />
+                            </>
+                          );
+                        }}
+                      </Match>
+                    </Switch>
+                  );
+                }}
+              </Match>
+            </Switch>
+          </div>
+        )}
+      </Show>
+    </Section>
   );
 };

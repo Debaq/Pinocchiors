@@ -69,6 +69,13 @@ export interface SketchOverlay {
   guides?: [P2, P2][];
   /** Eligiendo regiones: se muestran todas y se resaltan las que contienen estos puntos */
   chosen?: P2[];
+  /** Ocultar la construcción y los puntos (salvo lo elegido) */
+  hideConstruction?: boolean;
+  hidePoints?: boolean;
+  /** Lo que impide cerrar regiones: extremos sueltos y cruces (marcas rojas) */
+  problems?: P2[];
+  /** Entidades con problemas (encimadas): en rojo */
+  warnEntities?: number[];
 }
 
 function inPolygon(p: P2, poly: P2[]): boolean {
@@ -851,7 +858,7 @@ export class CadViewer {
     const construction = themeHex("comment");
     const sel = themeHex("orange");
     const freeE = new Set(overlay.freeEntities ?? []);
-    const conflictE = new Set(overlay.conflictEntities ?? []);
+    const conflictE = new Set([...(overlay.conflictEntities ?? []), ...(overlay.warnEntities ?? [])]);
     // Como Onshape: azul = le falta definir, color del texto = definida, rojo = en conflicto
     const entityColor = (id: number, construct: boolean) =>
       hover.has(id)
@@ -867,6 +874,7 @@ export class CadViewer {
                 : normal;
     for (const e of sketch.entities) {
       const g = e.geometry;
+      if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
       const color = entityColor(e.id, !!e.construction);
       let pts: P2[] = [];
       if (g.type === "line") pts = [point.get(g.start)!, point.get(g.end)!];
@@ -919,6 +927,7 @@ export class CadViewer {
         marker([p.x, p.y], hover.has(p.id) ? themeHex("cyan") : selected.has(p.id) ? themeHex("orange") : themeHex("purple"), 10);
         continue;
       }
+      if (overlay.hidePoints && !selected.has(p.id) && !hover.has(p.id)) continue;
       const v = w([p.x, p.y]);
       pos.push(v.x, v.y, v.z);
       const c = new THREE.Color(
@@ -933,6 +942,7 @@ export class CadViewer {
     pts.renderOrder = 8;
     this.sketchGroup.add(pts);
     if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
+    for (const p of overlay.problems ?? []) marker(p, themeHex("error"), 11);
 
     // Ejes del plano
     const axisLen = 20;

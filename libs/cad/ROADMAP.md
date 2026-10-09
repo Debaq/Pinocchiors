@@ -578,3 +578,10 @@ cargo test -p cad-model
   ranura por el centro y en arco, rectángulo por 3 puntos (inclinado) y restricción Colineales.
   Pruebas: node `e2e/sketchShapes.test.mjs` (6), Rust `collinear_lines` y e2e "rectángulo por
   3 puntos, círculos…".
+- **2026-10-09 Revisión, lista y modo construcción en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+  fases 6 y 7): extremos sueltos, cruces sin unir y entidades encimadas marcados en rojo y
+  resumidos en la barra; extruir o girar un sketch sin regiones avisa por qué. Mostrar u ocultar
+  cotas, construcción y puntos; lista de entidades con propiedades editables; elegir por tipo,
+  por cadena (doble clic) y todo (Ctrl+A); variantes de herramientas en listas; botón
+  Construcción con modo (lo dibujado sale de construcción). Pruebas: node
+  `e2e/sketchCheck.test.mjs` (9) y dos escenarios e2e.

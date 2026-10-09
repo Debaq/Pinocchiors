@@ -277,3 +277,12 @@ export const SlotArc = (p: IconProps) => (
     <Dot x={6.7} y={18} />
   </SketchIcon>
 );
+
+/** Construcción: línea punteada (no cuenta para las regiones) */
+export const Construction = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 20 L20 4" {...dashed} />
+    <Dot x={4} y={20} />
+    <Dot x={20} y={4} />
+  </SketchIcon>
+);

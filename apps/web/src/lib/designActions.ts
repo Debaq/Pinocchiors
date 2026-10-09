@@ -22,6 +22,7 @@ import {
   type RegionSelection,
 } from "./cad";
 import type { CadUi } from "./cadUi";
+import { whyNoRegions } from "./sketchCheck";
 
 export function createDesignActions(store: CadStore, ui: CadUi) {
   // Aviso corto (falta un sketch…); lo muestra el visor
@@ -82,6 +83,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const sel = selectedFeature();
     if (sel?.kind.type === "sketch") return sel;
     return [...sketches()].pop();
+  };
+
+  /** El sketch no tiene regiones: avisa por qué (extremos sueltos, cruces...) */
+  const noRegions = (s: Feature): boolean => {
+    const view = store.sketchView(s.id);
+    if (!view || view.regions.length > 0 || s.kind.type !== "sketch") return false;
+    say(whyNoRegions(view.sketch));
+    return true;
   };
 
   /** Sketches con alguna región cerrada (perfiles posibles) */
@@ -186,6 +195,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s) return say("Primero hace falta un sketch con una región cerrada");
+    if (!picked && noRegions(s)) return;
     ui.clearPicks();
     void store.addFeature({
       type: "extrude",
@@ -264,6 +274,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     const picked = pickedRegions();
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con una región cerrada");
+    if (!picked && noRegions(s)) return;
     ui.clearPicks();
     // Eje: la primera línea de construcción del sketch, o Z
     const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
