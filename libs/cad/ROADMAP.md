@@ -568,3 +568,8 @@ cargo test -p cad-model
   Después de transformar el sketch queda donde se dejó: las cotas toman la medida nueva y lo que
   deja de cumplirse se quita. Pruebas: node `e2e/sketchTransform.test.mjs` (10) y e2e "mover,
   copiar y pegar, girar, escalar y partir en el sketch".
+- **2026-10-09 Cotas nuevas del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 3): distancia
+  de un punto a una línea, entre paralelas, diámetro respecto de un eje (perfiles de
+  revolución) y largo de arco. Restricciones nuevas en el solver (`DistancePointLine`,
+  `ArcLength`) y en el modelo (`PointLineDistance`, `AxisDiameter`, `ArcLength`); medidas también
+  en `sketchTransform.measureConstraint` para que transformar las actualice.

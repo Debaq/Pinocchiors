@@ -1966,6 +1966,76 @@ const scenarios = {
     await b.shot("transformar_en_el_sketch");
   },
 
+  async "cotas: distancia a la línea, entre paralelas, diámetro respecto del eje y largo de arco"(b) {
+    await begin(b);
+    // Eje vertical fijo en x = 0, un punto suelto, una línea casi paralela al eje y un arco de radio 10
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    const sketch = {
+      points: [P(0, 0, 0), P(1, 0, 0), P(2, 0, 40), P(3, 12, 20), P(4, 20, 0), P(5, 21, 30), P(6, 50, 0), P(7, 60, 0), P(8, 57, 7), P(9, 36, 15)],
+      entities: [
+        { id: 10, geometry: { type: "line", start: 1, end: 2 }, construction: true },
+        { id: 11, geometry: { type: "point", point: 3 } },
+        { id: 12, geometry: { type: "line", start: 4, end: 5 } },
+        { id: 13, geometry: { type: "arc", center: 6, start: 7, end: 8 } },
+        { id: 14, geometry: { type: "point", point: 9 } },
+      ],
+      constraints: [
+        { type: "fixed", point: 1, x: 0, y: 0 },
+        { type: "fixed", point: 2, x: 0, y: 40 },
+        { type: "fixed", point: 6, x: 50, y: 0 },
+        { type: "fixed", point: 7, x: 60, y: 0 },
+        { type: "horizontal_points", a: 3, b: 1 },
+        { type: "horizontal_points", a: 9, b: 2 },
+      ],
+      next_id: 20,
+      origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    const id = doc.next_id;
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1200);
+    const suggest = async (ids, label, value) => {
+      await b.eval(`window.__cadUi.setSelection(${JSON.stringify(ids)})`);
+      await sleep(300);
+      await b.clickText(label);
+      await sleep(800);
+      const i = await b.eval(`window.__cadUi.session().sketch.constraints.length - 1`);
+      const msg = await b.eval(`window.__cadUi.setConstraintText(${i}, ${JSON.stringify(String(value))})`);
+      if (msg) throw new Error(`${label}: ${msg}`);
+      await sleep(1000);
+    };
+    const pt = (id) => b.eval(`(() => { const p = window.__cadUi.session().sketch.points.find((q) => q.id === ${id}); return [p.x, p.y]; })()`);
+    // Ø 30 respecto del eje: el punto queda a 15
+    await suggest([3, 10], "Diámetro respecto del eje", 30);
+    near((await pt(3))[0], 15, 1e-6, "punto a 15 del eje");
+    // La línea paralela al eje, a 25
+    await suggest([10, 12], "Distancia entre paralelas", 25);
+    near((await pt(4))[0], 25, 1e-6, "extremo de abajo a 25");
+    near((await pt(5))[0], 25, 1e-6, "extremo de arriba a 25 (paralelas)");
+    // Otro punto a 5 de la línea, del lado de afuera: x = 30
+    await suggest([9, 12], "Distancia a la línea", 5);
+    near((await pt(9))[0], 30, 1e-6, "punto a 5 de la línea");
+    // Arco de radio 10 con largo 5π: un cuarto de vuelta, termina en (50, 10)
+    await suggest([13], "Largo del arco", (5 * Math.PI).toFixed(9));
+    const e = await pt(8);
+    near(e[0], 50, 1e-5, "fin del arco x");
+    near(e[1], 10, 1e-5, "fin del arco y");
+    const r = await b.eval(`window.__cadUi.session().report`);
+    if (r.status === "over_constrained" || r.status === "failed") throw new Error(`estado: ${r.status}`);
+    // Las etiquetas: Ø y ⌒
+    const texts = await b.eval(`document.body.innerText`);
+    if (!texts.includes("Ø 30")) throw new Error("no se ve la cota Ø 30");
+    if (!texts.includes("⌒ 15.708")) throw new Error("no se ve el largo de arco");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.shot("cotas_nuevas");
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {

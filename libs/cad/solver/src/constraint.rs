@@ -161,6 +161,23 @@ pub enum Constraint {
         p_on_circle: usize,
         radius: f64,
     },
+
+    /// Distancia (sin signo) de un punto a la recta que pasa por una línea
+    DistancePointLine {
+        p_idx: usize,
+        line_p1: usize,
+        line_p2: usize,
+        distance: f64,
+    },
+
+    /// Largo de un arco: de `start_idx` a `end_idx` antihorario alrededor de
+    /// `center_idx`, con radio |start − centro|
+    ArcLength {
+        center_idx: usize,
+        start_idx: usize,
+        end_idx: usize,
+        length: f64,
+    },
 }
 
 impl Constraint {
@@ -189,6 +206,8 @@ impl Constraint {
             Constraint::PointOnCircle { .. } => 1,
             Constraint::PointOnSpline { .. } => 2,
             Constraint::Radius { .. } => 1,
+            Constraint::DistancePointLine { .. } => 1,
+            Constraint::ArcLength { .. } => 1,
         }
     }
 
@@ -279,6 +298,8 @@ impl Constraint {
                 p_on_circle,
                 ..
             } => vec![*center_idx, *p_on_circle],
+            Constraint::DistancePointLine { p_idx, line_p1, line_p2, .. } => vec![*p_idx, *line_p1, *line_p2],
+            Constraint::ArcLength { center_idx, start_idx, end_idx, .. } => vec![*center_idx, *start_idx, *end_idx],
         }
     }
 
@@ -344,6 +365,10 @@ impl Constraint {
                 Constraint::PointOnSpline { p_idx: r(p_idx), spline_point_indices: spline_point_indices.iter().map(&r).collect() },
             Constraint::Radius { center_idx, p_on_circle, radius } =>
                 Constraint::Radius { center_idx: r(center_idx), p_on_circle: r(p_on_circle), radius: *radius },
+            Constraint::DistancePointLine { p_idx, line_p1, line_p2, distance } =>
+                Constraint::DistancePointLine { p_idx: r(p_idx), line_p1: r(line_p1), line_p2: r(line_p2), distance: *distance },
+            Constraint::ArcLength { center_idx, start_idx, end_idx, length } =>
+                Constraint::ArcLength { center_idx: r(center_idx), start_idx: r(start_idx), end_idx: r(end_idx), length: *length },
         }
     }
 
@@ -483,6 +508,28 @@ impl Constraint {
                 // Lineal como TangentLineCircle (ver ahí por qué no cuadrática)
                 let cross = d.x * f.y - d.y * f.x;
                 vec![cross.abs() / len - (points[*rim_idx].co - c.co).norm()]
+            }
+
+            Constraint::DistancePointLine { p_idx, line_p1, line_p2, distance } => {
+                let d = points[*line_p2].co - points[*line_p1].co;
+                let f = points[*p_idx].co - points[*line_p1].co;
+                let len = d.norm();
+                if len < 1e-15 {
+                    return vec![f.norm() - distance];
+                }
+                // Lineal en la distancia, como TangentLineCircle
+                vec![(d.x * f.y - d.y * f.x).abs() / len - distance]
+            }
+
+            Constraint::ArcLength { center_idx, start_idx, end_idx, length } => {
+                let c = points[*center_idx].co;
+                let (u, v) = (points[*start_idx].co - c, points[*end_idx].co - c);
+                // Barrido antihorario en (0, 2π]
+                let mut sweep = (u.x * v.y - u.y * v.x).atan2(u.dot(&v));
+                if sweep <= 0.0 {
+                    sweep += std::f64::consts::TAU;
+                }
+                vec![u.norm() * sweep - length]
             }
 
             Constraint::EqualVector { a1, a2, b1, b2 } => {
@@ -760,9 +807,11 @@ impl Constraint {
                 self.jacobian_numerical(points)
             }
 
-            Constraint::TangentLineCircleVar { .. } | Constraint::TangentCircles { .. } | Constraint::EqualRotation { .. } => {
-                self.jacobian_numerical(points)
-            }
+            Constraint::TangentLineCircleVar { .. }
+            | Constraint::TangentCircles { .. }
+            | Constraint::EqualRotation { .. }
+            | Constraint::DistancePointLine { .. }
+            | Constraint::ArcLength { .. } => self.jacobian_numerical(points),
 
             Constraint::EqualVector { a1, a2, b1, b2 } => vec![
                 (0, *a1, 1.0, 0.0),

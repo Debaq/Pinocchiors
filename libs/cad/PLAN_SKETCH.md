@@ -139,7 +139,13 @@ referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del 
    restricciones que dejan de cumplirse se quitan (horizontal girada 90° pasa a vertical). Lo
    ligado al sólido no se mueve. Partir un círculo deja dos medias vueltas (en el clic y en el
    opuesto). Copiar con Copiar no lleva restricciones con lo de afuera (tampoco los fijos).*
-3. **Cotas**: punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje.
+3. **Cotas**: punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje. *Hecha el 2026-10-09:
+   solver `DistancePointLine` (sin signo, como la tangencia) y `ArcLength` (barrido antihorario en
+   (0, 2π]), los dos con jacobiano numérico; modelo `PointLineDistance`, `AxisDiameter` (el doble
+   de la distancia, etiqueta Ø) y `ArcLength` (etiqueta ⌒). «Entre paralelas» no es una
+   restricción aparte: distancia de un extremo de la segunda a la primera, más paralelas si
+   faltaba. Se ofrecen en el panel según lo elegido (punto + línea, dos líneas, un arco).
+   Pruebas: `model/tests/sketch_dims.rs` (6) y e2e "cotas: distancia a la línea…".*
 4. **Restricciones y herramientas**: colineal, círculo por 2/3 puntos y tangente a 3,
    polígono circunscrito, ranuras en arco y por centro, rectángulo por 3 puntos.
 5. **Referencias al modelo**: contorno de cara, intersección, otro sketch, romper vínculo.

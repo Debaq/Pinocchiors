@@ -83,7 +83,7 @@ import {
 import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -4031,10 +4031,12 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
     }
     return 0;
   };
-  const add = (c: SketchConstraint) => ui.addConstraint(c);
+  const add = (c: SketchConstraint | SketchConstraint[]) => ui.change((s) => s.constraints.push(...[c].flat()));
+  const measure = (c: SketchConstraint) => +(measureConstraint(sketch(), c) ?? 0).toFixed(3);
+  const isArc = (id: number) => entity(id)?.geometry.type === "arc";
 
-  const suggestions = (): { label: string; make: () => SketchConstraint }[] => {
-    const out: { label: string; make: () => SketchConstraint }[] = [];
+  const suggestions = (): { label: string; make: () => SketchConstraint | SketchConstraint[] }[] => {
+    const out: { label: string; make: () => SketchConstraint | SketchConstraint[] }[] = [];
     const L = lines().map((e) => e!.id);
     const C = curves().map((e) => e!.id);
     const P = selPoints();
@@ -4048,10 +4050,25 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
       out.push({ label: "Perpendiculares", make: () => ({ type: "perpendicular", a: L[0], b: L[1] }) });
       out.push({ label: "Mismo largo", make: () => ({ type: "equal", a: L[0], b: L[1] }) });
       out.push({ label: "Ángulo", make: () => ({ type: "angle", a: L[0], b: L[1], degrees: 90 }) });
+      // Entre paralelas: un extremo de la segunda hasta la recta de la primera (y paralelas si no lo eran)
+      out.push({
+        label: "Distancia entre paralelas",
+        make: () => {
+          const g = entity(L[1])!.geometry as { start: number };
+          const c: SketchConstraint = { type: "point_line_distance", point: g.start, line: L[0], value: 0 };
+          c.value = measure(c);
+          const already = sketch().constraints.some((k) => k.type === "parallel" && [k.a, k.b].includes(L[0]) && [k.a, k.b].includes(L[1]));
+          return already ? c : [{ type: "parallel", a: L[0], b: L[1] }, c];
+        },
+      });
     }
     if (C.length === 1 && L.length === 0) {
       out.push({ label: "Radio", make: () => ({ type: "radius", entity: C[0], value: +radius(C[0]).toFixed(3) }) });
       out.push({ label: "Diámetro", make: () => ({ type: "diameter", entity: C[0], value: +(2 * radius(C[0])).toFixed(3) }) });
+      if (isArc(C[0])) {
+        const c: SketchConstraint = { type: "arc_length", arc: C[0], value: 0 };
+        out.push({ label: "Largo del arco", make: () => ({ ...c, value: measure(c) }) });
+      }
     }
     if (C.length === 2) {
       out.push({ label: "Mismo radio", make: () => ({ type: "equal", a: C[0], b: C[1] }) });
@@ -4062,6 +4079,11 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
     if (P.length === 1 && L.length === 1) {
       out.push({ label: "Punto en la línea", make: () => ({ type: "point_on_line", point: P[0], line: L[0] }) });
       out.push({ label: "Punto medio", make: () => ({ type: "midpoint", point: P[0], line: L[0] }) });
+      const d: SketchConstraint = { type: "point_line_distance", point: P[0], line: L[0], value: 0 };
+      out.push({ label: "Distancia a la línea", make: () => ({ ...d, value: measure(d) }) });
+      // Perfiles de revolución: el diámetro que da el punto al girar alrededor de la línea
+      const ax: SketchConstraint = { type: "axis_diameter", point: P[0], line: L[0], value: 0 };
+      out.push({ label: "Diámetro respecto del eje", make: () => ({ ...ax, value: measure(ax) }) });
     }
     if (P.length === 1 && C.length === 1) out.push({ label: "Punto en el círculo", make: () => ({ type: "point_on_circle", point: P[0], circle: C[0] }) });
     if (P.length === 2 && L.length === 0) {

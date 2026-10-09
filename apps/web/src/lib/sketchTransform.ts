@@ -138,6 +138,22 @@ export function measureConstraint(s: Sketch, c: SketchConstraint): number | unde
       const r = radiusOf(s, c.entity);
       return r === undefined ? undefined : 2 * r;
     }
+    case "point_line_distance":
+    case "axis_diameter": {
+      const [p, l] = [pos(s, c.point), lineOf(s, c.line)];
+      if (!p || !l) return undefined;
+      return (c.type === "axis_diameter" ? 2 : 1) * toLine(p, l);
+    }
+    case "arc_length": {
+      const g = s.entities.find((e) => e.id === c.arc)?.geometry;
+      if (g?.type !== "arc") return undefined;
+      const [k, a, b] = [pos(s, g.center), pos(s, g.start), pos(s, g.end)];
+      if (!k || !a || !b) return undefined;
+      const [u, v] = [sub(a, k), sub(b, k)];
+      let sweep = Math.atan2(cross(u, v), dot(u, v));
+      if (sweep <= 0) sweep += 2 * Math.PI;
+      return len(u) * sweep;
+    }
     case "angle": {
       const [l1, l2] = [lineOf(s, c.a), lineOf(s, c.b)];
       if (!l1 || !l2) return undefined;

@@ -1554,6 +1554,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       const g = ent.get(id);
       return g?.type === "line" ? mid(pt.get(g.start), pt.get(g.end)) : undefined;
     };
+    /** Pie de la perpendicular desde un punto a la recta de una línea */
+    const foot = (point: number, line: number): P2 | undefined => {
+      const g = ent.get(line);
+      const [p, a, b] = [pt.get(point), g?.type === "line" ? pt.get(g.start) : undefined, g?.type === "line" ? pt.get(g.end) : undefined];
+      if (!p || !a || !b) return undefined;
+      const d: P2 = [b[0] - a[0], b[1] - a[1]];
+      const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1);
+      return [a[0] + t * d[0], a[1] + t * d[1]];
+    };
     const anchor = (c: SketchConstraint): P2 | undefined => {
       switch (c.type) {
         case "length":
@@ -1564,6 +1573,21 @@ export const CadView: Component<CadViewProps> = (props) => {
         case "horizontal_distance":
         case "vertical_distance":
           return mid(pt.get(c.a), pt.get(c.b));
+        case "point_line_distance":
+        case "axis_diameter":
+          return mid(pt.get(c.point), foot(c.point, c.line));
+        case "arc_length": {
+          const g = ent.get(c.arc);
+          if (g?.type !== "arc") return undefined;
+          const [k, a, b] = [pt.get(g.center), pt.get(g.start), pt.get(g.end)];
+          if (!k || !a || !b) return undefined;
+          // En el medio del arco
+          const a0 = Math.atan2(a[1] - k[1], a[0] - k[0]);
+          let sweep = Math.atan2(b[1] - k[1], b[0] - k[0]) - a0;
+          if (sweep <= 0) sweep += 2 * Math.PI;
+          const r = dist(k, a);
+          return [k[0] + r * Math.cos(a0 + sweep / 2), k[1] + r * Math.sin(a0 + sweep / 2)];
+        }
         case "radius":
         case "diameter": {
           const g = ent.get(c.entity);
@@ -1595,6 +1619,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         const [a, b] = [pt.get(c.a), pt.get(c.b)];
         return a && b ? [a, b] : undefined;
       }
+      if (c.type === "point_line_distance" || c.type === "axis_diameter") {
+        const [a, b] = [pt.get(c.point), foot(c.point, c.line)];
+        return a && b && dist(a, b) > 1e-9 ? [a, b] : undefined;
+      }
       return undefined;
     };
     s.sketch.constraints.forEach((c, index) => {
@@ -1625,7 +1653,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         x += (dx / l) * 14;
         y += (dy / l) * 14;
       }
-      const prefix = c.type === "radius" ? "R " : c.type === "diameter" ? "Ø " : "";
+      const prefix = c.type === "radius" ? "R " : c.type === "diameter" || c.type === "axis_diameter" ? "Ø " : c.type === "arc_length" ? "⌒ " : "";
       const suffix = c.type === "angle" ? "°" : "";
       const expr = (c as { expr?: string }).expr;
       const reference = isReference(c);

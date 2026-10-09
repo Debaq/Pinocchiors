@@ -153,7 +153,12 @@ export type SketchConstraint =
   | { type: "length"; line: number; value: number; reference?: boolean }
   | { type: "radius"; entity: number; value: number; reference?: boolean }
   | { type: "diameter"; entity: number; value: number; reference?: boolean }
-  | { type: "angle"; a: number; b: number; degrees: number; reference?: boolean };
+  | { type: "angle"; a: number; b: number; degrees: number; reference?: boolean }
+  /** Distancia de un punto a la recta de una línea (entre paralelas: un extremo de una y la otra) */
+  | { type: "point_line_distance"; point: number; line: number; value: number; reference?: boolean }
+  /** Cota simétrica respecto de un eje: el doble de la distancia (diámetro en perfiles de revolución) */
+  | { type: "axis_diameter"; point: number; line: number; value: number; reference?: boolean }
+  | { type: "arc_length"; arc: number; value: number; reference?: boolean };
 
 export interface Sketch {
   points: SketchPoint[];
@@ -2499,6 +2504,9 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   radius: "Radio",
   diameter: "Diámetro",
   angle: "Ángulo",
+  point_line_distance: "Distancia a la línea",
+  axis_diameter: "Diámetro respecto del eje",
+  arc_length: "Largo de arco",
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────

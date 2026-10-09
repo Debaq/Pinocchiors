@@ -169,3 +169,19 @@ test("partir una línea, un arco y un círculo", () => {
   assert.equal(halves.length, 2);
   assert.ok(!s.entities.some((e) => e.geometry.type === "circle"));
 });
+
+test("medir las cotas nuevas: punto-línea, diámetro respecto del eje y largo de arco", () => {
+  const s = sketch();
+  const line = addEntity(s, { type: "line", start: addPoint(s, [0, 0]), end: addPoint(s, [0, 10]) });
+  const p = addPoint(s, [6, 3]);
+  near(measureConstraint(s, { type: "point_line_distance", point: p, line, value: 0 }), 6, "distancia");
+  near(measureConstraint(s, { type: "axis_diameter", point: p, line, value: 0 }), 12, "diámetro");
+  // Tres cuartos de vuelta de radio 2
+  const arc = addEntity(s, { type: "arc", center: addPoint(s, [0, 0]), start: addPoint(s, [2, 0]), end: addPoint(s, [0, -2]) });
+  near(measureConstraint(s, { type: "arc_length", arc, value: 0 }), 3 * Math.PI, "largo de arco");
+  // Al escalar al doble, el largo de arco también
+  const c = { type: "arc_length", arc, value: 3 * Math.PI };
+  s.constraints.push(c);
+  transformSelection(s, [arc], scaling([0, 0], 2), 2);
+  near(c.value, 6 * Math.PI, "largo escalado");
+});

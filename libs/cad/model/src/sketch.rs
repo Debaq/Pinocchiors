@@ -110,6 +110,14 @@ pub enum SketchConstraint {
     Radius { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
     Diameter { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
     Angle { a: u32, b: u32, degrees: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    /// Distancia de un punto a la recta de una línea (entre paralelas: un
+    /// extremo de una y la otra).
+    PointLineDistance { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    /// Cota simétrica respecto de un eje: el doble de la distancia del punto
+    /// a la línea (el diámetro en un perfil de revolución).
+    AxisDiameter { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    /// Largo de un arco.
+    ArcLength { arc: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
 }
 
 fn is_false(b: &bool) -> bool {
@@ -126,7 +134,10 @@ impl SketchConstraint {
             | VerticalDistance { value, .. }
             | Length { value, .. }
             | Radius { value, .. }
-            | Diameter { value, .. } => Some(*value),
+            | Diameter { value, .. }
+            | PointLineDistance { value, .. }
+            | AxisDiameter { value, .. }
+            | ArcLength { value, .. } => Some(*value),
             Angle { degrees, .. } => Some(*degrees),
             _ => None,
         }
@@ -144,6 +155,9 @@ impl SketchConstraint {
                 | Radius { reference: true, .. }
                 | Diameter { reference: true, .. }
                 | Angle { reference: true, .. }
+                | PointLineDistance { reference: true, .. }
+                | AxisDiameter { reference: true, .. }
+                | ArcLength { reference: true, .. }
         )
     }
 
@@ -155,7 +169,10 @@ impl SketchConstraint {
             | VerticalDistance { value, .. }
             | Length { value, .. }
             | Radius { value, .. }
-            | Diameter { value, .. } => *value = v,
+            | Diameter { value, .. }
+            | PointLineDistance { value, .. }
+            | AxisDiameter { value, .. }
+            | ArcLength { value, .. } => *value = v,
             Angle { degrees, .. } => *degrees = v,
             _ => return false,
         }
@@ -174,7 +191,10 @@ impl SketchConstraint {
             Parallel { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Concentric { a, b } | Angle { a, b, .. } => {
                 e(a) || e(b)
             }
-            PointOnLine { point: q, line } | Midpoint { point: q, line } => p(q) || e(line),
+            PointOnLine { point: q, line } | Midpoint { point: q, line } | PointLineDistance { point: q, line, .. } | AxisDiameter { point: q, line, .. } => {
+                p(q) || e(line)
+            }
+            ArcLength { arc, .. } => e(arc),
             PointOnCircle { point: q, circle } => p(q) || e(circle),
             Symmetric { a, b, line } => p(a) || p(b) || e(line),
             EqualOffset { a1, a2, b1, b2 } => p(a1) || p(a2) || p(b1) || p(b2),
@@ -681,6 +701,23 @@ impl Sketch {
                 let (d1, d2) = (dir(a)?, dir(b)?);
                 (d1[0] * d2[1] - d1[1] * d2[0]).atan2(d1[0] * d2[0] + d1[1] * d2[1]).to_degrees()
             }
+            S::PointLineDistance { point, line, .. } | S::AxisDiameter { point, line, .. } => {
+                let (a, _) = self.line_points(line).ok()?;
+                let (d, a, q) = (dir(line)?, p(a)?, p(point)?);
+                let l = d[0].hypot(d[1]);
+                let dist = if l < 1e-15 { dist2(a, q) } else { (d[0] * (q[1] - a[1]) - d[1] * (q[0] - a[0])).abs() / l };
+                if matches!(c, S::AxisDiameter { .. }) { 2.0 * dist } else { dist }
+            }
+            S::ArcLength { arc, .. } => {
+                let Geometry::Arc { center, start, end } = self.entity(arc).ok()?.geometry else { return None };
+                let (c, a, b) = (p(center)?, p(start)?, p(end)?);
+                let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+                let mut sweep = (u[0] * v[1] - u[1] * v[0]).atan2(u[0] * v[0] + u[1] * v[1]);
+                if sweep <= 0.0 {
+                    sweep += std::f64::consts::TAU;
+                }
+                u[0].hypot(u[1]) * sweep
+            }
             _ => return None,
         })
     }
@@ -840,6 +877,17 @@ impl Sketch {
                 let (center, rim) = round(entity)?;
                 vec![Constraint::Distance { p1_idx: center, p2_idx: rim, distance: r }]
             }
+            S::PointLineDistance { point, line: l, value, .. } | S::AxisDiameter { point, line: l, value, .. } => {
+                let d = if matches!(c, S::AxisDiameter { .. }) { value / 2.0 } else { value };
+                let (a, b) = line(l)?;
+                vec![Constraint::DistancePointLine { p_idx: ix(point)?, line_p1: a, line_p2: b, distance: d }]
+            }
+            S::ArcLength { arc, value, .. } => match self.entity(arc)?.geometry {
+                Geometry::Arc { center, start, end } => {
+                    vec![Constraint::ArcLength { center_idx: ix(center)?, start_idx: ix(start)?, end_idx: ix(end)?, length: value }]
+                }
+                _ => return Err(SketchError::WrongKind(arc, "un arco")),
+            },
         })
     }
 }
