@@ -21,11 +21,13 @@ const EVEN_EDGE = 1.5;
 /** Lado del vóxel en mm */
 export const voxelSize = (c: VoxelConfig, info?: RemeshInfo) => (info?.extent_mm ?? 100) / c.resolution;
 
-export const voxelParams = (c: VoxelConfig, info?: RemeshInfo) => ({
+/** Los parámetros de `remesh_preview` / `remesh_apply`, relativos al tamaño
+ * (siguen al modelo si se rehace sobre un diseño que cambió) */
+export const voxelParams = (c: VoxelConfig) => ({
   mode: "voxel" as const,
-  voxel_mm: voxelSize(c, info),
+  resolution: c.resolution,
   smooth_iterations: Math.round(c.smoothIterations),
-  isotropic_edge_mm: c.even ? voxelSize(c, info) * EVEN_EDGE : null,
+  even: c.even ? EVEN_EDGE : null,
 });
 
 /** La grilla que usaría la reconstrucción (del backend) */

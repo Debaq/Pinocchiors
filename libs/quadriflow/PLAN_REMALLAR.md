@@ -2,7 +2,7 @@
 
 Plan acordado el 2026-10-08: en el espacio **Preparar**, la pestaña "Retopología" pasa a ser
 **"Remallar"**, una pestaña lateral como UV o Animar, con todas las formas de ordenar una
-malla. La retopología a quads es una de ellas. Este documento es solo el plan; nada está hecho.
+malla. La retopología a quads es una de ellas. Hecho entero el mismo día (fases 1–7, abajo).
 
 ## Por qué
 
@@ -219,6 +219,19 @@ con `chilesaurus_animado.glb` (37 k triángulos, textura y rig): Isótropo de 12
 triángulos, 8 s en el puente de depuración; Vóxeles → 7,3 k, 6,8 s; renders con f3d iguales al
 original. Prueba e2e "remallar: isótropo traslada textura y pesos, o los descarta" (se salta
 si falta el modelo; `E2E_RIGGED` para otro).
+
+*Fase 7 hecha el 2026-10-08*: el remallado ya era una operación del objeto (`remesh_apply`
+está en `REPLAYABLE` y el Outliner lo lista bajo la pieza); faltaba que se rehiciera con el
+tamaño nuevo. Los parámetros pasaron a ser relativos: Isótropo con lado automático manda
+`edge_mm: null` y el backend lo calcula sobre la malla de ese momento (`auto_edge`: arista
+media, sin pasar de 1/50 del tamaño); Vóxeles manda `resolution` (vóxeles en el lado largo) y
+`even` (lado del isótropo en vóxeles). Los parámetros viejos en mm siguen valiendo. Además, al
+rehacer las modificaciones la barra del visor quedaba con las cantidades de la malla vieja;
+ahora cuenta la nueva. Prueba e2e "objetos: el remallado se rehace si cambia el diseño" (bola
+de radio 20 → 40 con Isótropo automático: tamaño 80, aristas parejas otra vez, "1
+modificación rehecha", Outliner y barra al día).
+
+**Plan terminado el 2026-10-08.**
 
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.

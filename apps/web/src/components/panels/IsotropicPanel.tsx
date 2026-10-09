@@ -49,9 +49,12 @@ export const isotropicEdge = (c: IsotropicConfig, info?: RemeshInfo) => c.edgeMm
 /** Triángulos equiláteros de lado `edge` que caben en el área */
 export const estimateTriangles = (areaMm2: number, edgeMm: number) => Math.round(areaMm2 / ((Math.sqrt(3) / 4) * edgeMm * edgeMm));
 
-export const isotropicParams = (c: IsotropicConfig, info?: RemeshInfo) => ({
+/** Los parámetros de `remesh_preview` / `remesh_apply`. El lado automático
+ * va como `null`: el backend lo calcula sobre la malla de ese momento (así
+ * sigue al tamaño si se rehace sobre un diseño que cambió) */
+export const isotropicParams = (c: IsotropicConfig) => ({
   mode: "isotropic" as const,
-  edge_mm: isotropicEdge(c, info),
+  edge_mm: c.edgeMm,
   sharp_angle: c.keepSharp ? c.sharpAngle : null,
   iterations: Math.round(c.iterations),
   thin_features: c.thinFeatures,

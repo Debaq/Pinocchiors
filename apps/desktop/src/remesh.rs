@@ -67,8 +67,10 @@ pub struct SmoothParams {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct IsotropicParams {
-    /// Lado de los triángulos, en mm
-    pub edge_mm: f64,
+    /// Lado de los triángulos, en mm (`None`: automático, ver [`auto_edge`];
+    /// se recalcula si la malla cambia, como al rehacer sobre un diseño nuevo)
+    #[serde(default)]
+    pub edge_mm: Option<f64>,
     /// Conservar las aristas vivas desde este ángulo entre caras, en grados
     #[serde(default)]
     pub sharp_angle: Option<f64>,
@@ -81,14 +83,28 @@ pub struct IsotropicParams {
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct VoxelParams {
+    /// Vóxeles en el lado más largo del modelo (relativo: sigue al tamaño
+    /// si la malla cambia); si no, `voxel_mm`
+    #[serde(default)]
+    pub resolution: Option<f64>,
     /// Lado del vóxel, en mm
-    pub voxel_mm: f64,
+    #[serde(default)]
+    pub voxel_mm: Option<f64>,
     /// Pasadas de suavizado después
     #[serde(default)]
     pub smooth_iterations: usize,
+    /// Isótropo después con este lado, en vóxeles
+    #[serde(default)]
+    pub even: Option<f64>,
     /// Isótropo después con este lado, en mm
     #[serde(default)]
     pub isotropic_edge_mm: Option<f64>,
+}
+
+/// Lado automático de Isótropo: la arista media, sin pasar de 1/50 del
+/// tamaño (una pieza CAD tiene pocos triángulos enormes)
+fn auto_edge(stats: &remesh::SurfaceStats) -> f64 {
+    stats.mean_edge.min(stats.extent / 50.0)
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -384,8 +400,12 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
             report(progress, "isotropic", 5, "Remallando con triángulos parejos...");
             let (positions, indices) = before.buffers();
             let mm = scene.meters_per_unit * 1000.0;
+            let edge = match p.edge_mm {
+                Some(e) => e / mm,
+                None => auto_edge(&remesh::surface_stats(&positions, &indices)),
+            };
             let options = IsotropicOptions {
-                edge_length: p.edge_mm / mm,
+                edge_length: edge,
                 sharp_angle: p.sharp_angle,
                 iterations: p.iterations,
                 thin_features: p.thin_features,
@@ -401,10 +421,15 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
             report(progress, "voxel", 5, "Rehaciendo la superficie desde el volumen...");
             let (positions, indices) = before.buffers();
             let mm = scene.meters_per_unit * 1000.0;
+            let voxel = match (p.resolution, p.voxel_mm) {
+                (Some(cells), _) if cells > 0.0 => remesh::surface_stats(&positions, &indices).extent / cells,
+                (_, Some(v)) => v / mm,
+                _ => return Err("Falta el tamaño del vóxel".into()),
+            };
             let options = VoxelOptions {
-                voxel_size: p.voxel_mm / mm,
+                voxel_size: voxel,
                 smooth_iterations: p.smooth_iterations,
-                isotropic_edge: p.isotropic_edge_mm.map(|e| e / mm),
+                isotropic_edge: p.even.map(|k| k * voxel).or(p.isotropic_edge_mm.map(|e| e / mm)),
             };
             let mesh = remesh::voxel(&positions, &indices, &options).map_err(|e| e.to_string())?;
             replace_geometry(scene, &mesh, None)
@@ -1266,7 +1291,7 @@ mod tests {
     fn isotropic_and_voxel_make_a_new_mesh_in_mm() {
         let scene = sphere_scene();
         let channel = Channel::new(|_| Ok(()));
-        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: 1.0, sharp_angle: None, iterations: 5, thin_features: false });
+        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: Some(1.0), sharp_angle: None, iterations: 5, thin_features: false });
         let (out, stats) = compute(&scene, &iso, &channel).unwrap();
         // Esfera de área 4π·100 ≈ 1257 mm² con triángulos de 1 mm: ≈ 2900
         assert!((2000..4000).contains(&stats.after.triangles), "{}", stats.after.triangles);
@@ -1277,7 +1302,7 @@ mod tests {
         assert_eq!(normals(prim).unwrap().len(), positions(prim).unwrap().len());
         assert!(out.materials[0].base_color_texture.is_none(), "sin UV, el material queda sin textura");
 
-        let vox = RemeshParams::Voxel(VoxelParams { voxel_mm: 0.5, smooth_iterations: 2, isotropic_edge_mm: None });
+        let vox = RemeshParams::Voxel(VoxelParams { resolution: None, voxel_mm: Some(0.5), smooth_iterations: 2, even: None, isotropic_edge_mm: None });
         let (_, stats) = compute(&scene, &vox, &channel).unwrap();
         assert!(stats.after.triangles > 1000);
         assert!(stats.deviation.max_mm < 0.5, "{:?}", stats.deviation);
@@ -1344,7 +1369,7 @@ mod tests {
         scene.textures.push(converter_scene::Texture { name: "dos".into(), data: png, format: converter_scene::TextureFormat::Png, width: 16, height: 16 });
         assert!(has_skin(&scene));
         let channel = Channel::new(|_| Ok(()));
-        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: 2.0, sharp_angle: None, iterations: 3, thin_features: false });
+        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: Some(2.0), sharp_angle: None, iterations: 3, thin_features: false });
         let (remeshed, _) = compute(&scene, &iso, &channel).unwrap();
         assert!(!has_skin(&remeshed), "sin hornear, la malla nueva no tiene UV");
         let baked = baked_skin(&scene, &remeshed);
@@ -1358,6 +1383,29 @@ mod tests {
         let (a, b) = (WorldSurface::of(&remeshed), WorldSurface::of(&baked));
         let d = remesh::deviation((&a.positions, &a.triangles), (&b.positions, &b.triangles));
         assert!(d.max < 1e-4, "{d:?}");
+    }
+
+    #[test]
+    fn relative_sizes_follow_the_model() {
+        // La misma esfera al doble de tamaño: con lado automático y resolución,
+        // sale la misma cantidad de triángulos
+        let small = sphere_scene();
+        let mut big = sphere_scene();
+        for prim in &mut big.meshes[0].primitives {
+            for a in &mut prim.attributes {
+                if let VertexAttribute::Positions(p) = a {
+                    p.iter_mut().for_each(|v| *v = v.map(|c| c * 2.0));
+                }
+            }
+        }
+        let channel = Channel::new(|_| Ok(()));
+        let iso = RemeshParams::Isotropic(IsotropicParams { edge_mm: None, sharp_angle: None, iterations: 3, thin_features: false });
+        let vox = RemeshParams::Voxel(VoxelParams { resolution: Some(60.0), voxel_mm: None, smooth_iterations: 0, even: Some(1.5), isotropic_edge_mm: None });
+        for params in [iso, vox] {
+            let a = compute(&small, &params, &channel).unwrap().1.after.triangles as f64;
+            let b = compute(&big, &params, &channel).unwrap().1.after.triangles as f64;
+            assert!((a - b).abs() / a < 0.1, "{params:?}: {a} → {b}");
+        }
     }
 
     #[test]
@@ -1378,8 +1426,10 @@ mod tests {
             RemeshParams::Smooth(SmoothParams { iterations: 5, strength: 0.4, sharp_angle: None, fix_borders: false, normal_only: true })
         );
         let p: RemeshParams = serde_json::from_str(r#"{"mode":"isotropic","edge_mm":2}"#).unwrap();
-        assert_eq!(p, RemeshParams::Isotropic(IsotropicParams { edge_mm: 2.0, sharp_angle: None, iterations: 5, thin_features: false }));
+        assert_eq!(p, RemeshParams::Isotropic(IsotropicParams { edge_mm: Some(2.0), sharp_angle: None, iterations: 5, thin_features: false }));
+        let p: RemeshParams = serde_json::from_str(r#"{"mode":"isotropic","edge_mm":null}"#).unwrap();
+        assert!(matches!(p, RemeshParams::Isotropic(IsotropicParams { edge_mm: None, .. })));
         let p: RemeshParams = serde_json::from_str(r#"{"mode":"voxel","voxel_mm":0.5}"#).unwrap();
-        assert_eq!(p, RemeshParams::Voxel(VoxelParams { voxel_mm: 0.5, smooth_iterations: 0, isotropic_edge_mm: None }));
+        assert_eq!(p, RemeshParams::Voxel(VoxelParams { resolution: None, voxel_mm: Some(0.5), smooth_iterations: 0, even: None, isotropic_edge_mm: None }));
     }
 }

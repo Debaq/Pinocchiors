@@ -1605,7 +1605,13 @@ export const App: Component = () => {
     history.milestone("Malla regenerada del diseño");
     // La interfaz relee del backend lo que quedó (malla, quads, esqueleto, pesos)
     await restoreProjectUi(projectUi(false), true);
-    setMeshInfo((prev) => ({ ...prev, format: info.format }));
+    // Las cantidades guardadas en la interfaz son de la malla vieja: se cuentan en la nueva
+    const data = meshData();
+    setMeshInfo((prev) => ({
+      ...prev,
+      format: info.format,
+      ...(data ? { vertices: data.positions.length / 3, faces: data.indices.length / 3 } : {}),
+    }));
     if (meshAnalysis()) setMeshAnalysis(await invoke<TauriPrint3dAnalysis>("analyze_print3d").catch(() => undefined));
     if (subdivideResult()) setSubdivideResult(subdivided);
     if (count > 0 || hadWeights) setStatusMessage(`El diseño cambió: malla nueva con ${count} modificación${count === 1 ? "" : "es"} rehecha${count === 1 ? "" : "s"}`);
@@ -5395,9 +5401,9 @@ export const App: Component = () => {
       const edge = formatMm(isotropicEdge(config, remeshInfo()));
       return {
         mode,
-        params: isotropicParams(config, remeshInfo()),
+        params: isotropicParams(config),
         busy: "Remallando con triángulos parejos...",
-        step: `Remallado isótropo (${edge})`,
+        step: `Remallado isótropo (${config.edgeMm == null ? "automático" : edge})`,
         done: (stats: RemeshStats) => `Malla isótropa: ${stats.after.triangles.toLocaleString("es")} triángulos de ${edge}`,
       };
     }
@@ -5417,12 +5423,11 @@ export const App: Component = () => {
     }
     if (mode === "voxel") {
       const config = voxelConfig();
-      const size = formatMm(voxelSize(config, remeshInfo()));
       return {
         mode,
-        params: voxelParams(config, remeshInfo()),
+        params: voxelParams(config),
         busy: "Rehaciendo la superficie desde el volumen...",
-        step: `Rehacer con vóxeles (${size})`,
+        step: `Rehacer con vóxeles (${config.resolution} en el lado largo)`,
         done: (stats: RemeshStats) => `Superficie rehecha: ${stats.after.triangles.toLocaleString("es")} triángulos, cerrada`,
       };
     }

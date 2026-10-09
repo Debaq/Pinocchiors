@@ -3352,6 +3352,66 @@ const scenarios = {
     await b.shot("objetos");
   },
 
+  async "objetos: el remallado se rehace si cambia el diseño"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Bola", kind: { type: "primitive", shape: { type: "sphere", radius: 20 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 51;
+    })`);
+    await sleep(2500);
+    // Desvío relativo del largo de las aristas: una malla isótropa lo tiene chico
+    const spread = async () => {
+      const buf = await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer();
+      const [nv, ni] = new Uint32Array(buf, 0, 4);
+      const p = new Float32Array(buf, 16, nv * 3);
+      const uvs = new Uint32Array(buf, 0, 4)[2] ? nv * 2 : 0;
+      const idx = new Uint32Array(buf, 16 + 4 * (nv * 6 + uvs), ni);
+      const lengths = [];
+      for (let t = 0; t < ni; t += 3)
+        for (let k = 0; k < 3; k++) {
+          const [a, c] = [idx[t + k], idx[t + ((k + 1) % 3)]];
+          lengths.push(Math.hypot(p[3 * a] - p[3 * c], p[3 * a + 1] - p[3 * c + 1], p[3 * a + 2] - p[3 * c + 2]));
+        }
+      const mean = lengths.reduce((x, y) => x + y, 0) / lengths.length;
+      return Math.sqrt(lengths.reduce((x, y) => x + (y - mean) ** 2, 0) / lengths.length) / mean;
+    };
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!window.__objects?.()[0]?.source.hash`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="isotropic"]').click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-isotropic-estimate]")`)); t++) await sleep(250);
+    const raw = await spread();
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 120 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
+    const even = await spread();
+    if (!(even < 0.25 && even < raw)) throw new Error(`no quedó isótropa: desvío ${even} (antes ${raw})`);
+    const extent0 = (await call("remesh_info")).extent_mm;
+    near(extent0, 40, 1, "tamaño");
+
+    // El diseño cambia: la bola el doble de grande
+    const hash = await b.eval(`window.__objects()[0].source.hash`);
+    await b.clickText("Diseñar");
+    await sleep(800);
+    await b.eval(`window.__cadStore.commit((d) => { d.features.find((f) => f.id === 50).kind.shape.radius = 40; })`);
+    await sleep(2000);
+    await b.clickText("Preparar");
+    for (let t = 0; t < 60 && (await b.eval(`window.__objects()[0].source.hash`)) === hash; t++) await sleep(250);
+    for (let t = 0; t < 120 && !(await b.eval(`/El diseño cambió/.test(document.body.innerText)`)); t++) await sleep(250);
+    const status = await b.eval(`document.body.innerText.match(/El diseño cambió[^\\n]*/)?.[0] ?? ""`);
+    if (!status.includes("1 modificación")) throw new Error(`aviso: ${status}`);
+    // La malla nueva es la bola grande, otra vez isótropa (el lado automático siguió al tamaño)
+    near((await call("remesh_info")).extent_mm, 80, 2, "tamaño rehecho");
+    const again = await spread();
+    if (!(again < 0.25)) throw new Error(`el remallado no se rehízo: desvío ${again}`);
+    // La barra del visor cuenta la malla rehecha (no la de antes del cambio)
+    const faces = new Uint32Array(await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer(), 0, 4)[1] / 3;
+    const shown = await b.eval(`parseInt(document.body.innerText.match(/Caras:\\s*([\\d.]+)/)?.[1].replace(/\\./g, "") ?? "0")`);
+    if (shown !== faces) throw new Error(`la barra dice ${shown} caras, la malla tiene ${faces}`);
+    const got = await b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
+    if (!got.some((r) => r.startsWith("Remallado isótropo (automático)"))) throw new Error(`árbol del objeto: ${JSON.stringify(got)}`);
+    await b.shot("objetos-remallado-rehecho");
+  },
+
   async "objetos: lo hecho sobre la malla se rehace si cambia el diseño"(b) {
     await begin(b);
     await b.clickText("Caja");
