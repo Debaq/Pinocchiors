@@ -1131,7 +1131,7 @@ fn export_impl(state: &AppState, path: &str, format: &str, part: Option<cad_mode
 }
 
 /// Malla del diseño a un archivo según el formato.
-fn export_scene(scene: &Scene, p: &std::path::Path, format: &str) -> Result<(), String> {
+pub(crate) fn export_scene(scene: &Scene, p: &std::path::Path, format: &str) -> Result<(), String> {
     match format {
         "stl" => converter_stl::export_stl(scene, p).map_err(|e| format!("Error exportando STL: {e:?}")),
         "3mf" => converter_3mf::export_3mf(scene, p).map_err(|e| format!("Error exportando 3MF: {e}")),
@@ -1581,6 +1581,15 @@ pub mod bridge {
             "object_remove" => ok(crate::project::remove_impl(state, arg(args, "id")?)),
             "object_adopt" => ok(crate::project::adopt_impl(state, arg(args, "id")?)),
             "object_mesh_data" => crate::project::object_mesh_bytes(state, arg(args, "id")?).map(Reply::Bytes),
+            "objects_info" => ok(crate::project::objects_info_impl(state, &arg::<Vec<u64>>(args, "ids")?)?),
+            "export_objects" => ok(crate::project::export_objects_impl(
+                state,
+                &arg::<Vec<u64>>(args, "ids")?,
+                &arg::<Vec<String>>(args, "names")?,
+                &arg::<String>(args, "path")?,
+                &arg::<String>(args, "format")?,
+                arg::<Option<f64>>(args, "spacing").unwrap_or(None),
+            )?),
             "take_snapshot" => ok(crate::project::take_snapshot_impl(state)),
             "swap_snapshot" => ok(crate::project::swap_snapshot_impl(state, arg(args, "id")?)?),
             "drop_snapshot" => {

@@ -1959,22 +1959,23 @@ export class Viewer3D {
   }
 
   /** Los demás objetos de la escena, en gris (reemplaza a los anteriores) */
-  setGhosts(list: MeshData[]): void {
+  setGhosts(list: MeshData[], selected: boolean[] = []): void {
     for (const child of [...this.ghostGroup.children]) {
       const mesh = child as THREE.Mesh;
       mesh.geometry.dispose();
       (mesh.material as THREE.Material).dispose();
       this.ghostGroup.remove(mesh);
     }
-    for (const data of list) {
+    for (const [k, data] of list.entries()) {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
       geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
+      // Los elegidos junto con el activo (Ctrl + clic en el Outliner), con el acento
       const material = new THREE.MeshStandardMaterial({
-        color: themeHex("comment"),
+        color: themeHex(selected[k] ? "accent" : "comment"),
         transparent: true,
-        opacity: 0.4,
+        opacity: selected[k] ? 0.6 : 0.4,
         depthWrite: false,
         roughness: 0.9,
       });

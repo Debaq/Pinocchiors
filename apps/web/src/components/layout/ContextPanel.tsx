@@ -71,7 +71,7 @@ export interface ContextPanelProps {
   // Outliner
   sceneTree?: SceneNode;
   onToggleVisibility?: (nodeId: string) => void;
-  onSelectNode?: (nodeId: string) => void;
+  onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
 
   // Pestaña de información

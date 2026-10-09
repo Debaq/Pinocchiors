@@ -692,11 +692,13 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         group_nodes.push(prim.node.map_or(u32::MAX, |n| n as u32));
         positions.extend(prim.positions.iter().flatten());
 
+        // Normales calculadas, o aristas vivas con los vértices compartidos (un
+        // STL arma así sus normales): el visor les marca las aristas vivas
+        computed.push((prim.normals.is_none() || welded_creases(&prim.positions, &prim.triangles)) as u32);
         match &prim.normals {
             Some(n) => normals.extend(n.iter().flatten()),
             None => normals.extend(compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten()),
         }
-        computed.push(prim.normals.is_none() as u32);
 
         // Si alguna primitiva tiene UVs, las demás se rellenan para mantener la alineación
         if has_uvs {
@@ -725,6 +727,39 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         quad_indices,
         group_computed_normals: computed,
     }
+}
+
+/// ¿Al menos el 1 % de las aristas compartidas une caras a más de 60°? En
+/// esos vértices compartidos la normal es por fuerza un promedio
+fn welded_creases(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> bool {
+    let normal = |t: &[u32; 3]| {
+        let [a, b, c] = t.map(|i| positions[i as usize]);
+        let (e1, e2) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-20);
+        [n[0] / l, n[1] / l, n[2] / l]
+    };
+    let mut first: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::with_capacity(triangles.len() * 2);
+    let (mut shared, mut sharp) = (0usize, 0usize);
+    for (k, t) in triangles.iter().enumerate() {
+        for e in 0..3 {
+            let (a, b) = (t[e], t[(e + 1) % 3]);
+            let key = (a.min(b), a.max(b));
+            match first.remove(&key) {
+                Some(j) => {
+                    shared += 1;
+                    let (n, m) = (normal(t), normal(&triangles[j]));
+                    if n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0.5 {
+                        sharp += 1;
+                    }
+                }
+                None => {
+                    first.insert(key, k);
+                }
+            }
+        }
+    }
+    shared > 0 && sharp * 100 >= shared
 }
 
 /// Normales por vértice ponderadas por área
@@ -4893,6 +4928,12 @@ mod tests {
         let with_nodes = MeshData { group_nodes: vec![5, u32::MAX], ..grouped.clone() };
         let w = words(&with_nodes.to_bytes());
         assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX]);
+
+        // Un cubo soldado tiene aristas vivas; una tira plana no
+        let cube_p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]];
+        let cube_t = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5]];
+        assert!(welded_creases(&cube_p, &cube_t));
+        assert!(!welded_creases(&cube_p[..4], &cube_t[..2]));
 
         // Y las normales calculadas de cada grupo
         let flagged = MeshData { group_computed_normals: vec![1, 0], ..with_nodes.clone() };

@@ -833,6 +833,136 @@ pub(crate) fn object_mesh_bytes(state: &AppState, id: u64) -> Result<Vec<u8>, St
     Ok(data.to_bytes())
 }
 
+/// Escena de un objeto: la del activo o la de su casillero
+fn object_scene(state: &AppState, id: u64) -> Result<Scene, String> {
+    if state.objects.lock().unwrap().active == Some(id) {
+        return state.scene.lock().unwrap().clone().ok_or_else(|| "El objeto activo no tiene malla".to_string());
+    }
+    let project: ProjectState = {
+        let objects = state.objects.lock().unwrap();
+        // Una pieza del diseño que nunca se abrió fuera de Diseñar no tiene malla todavía
+        let stored = objects.stored.iter().find(|o| o.id == id).ok_or("Un objeto elegido todavía no tiene malla: elegirlo una vez solo")?;
+        rmp_serde::from_slice(&stored.state).map_err(|e| format!("Objeto ilegible: {e}"))?
+    };
+    project.scene.ok_or_else(|| "Un objeto elegido no tiene malla".to_string())
+}
+
+/// Cómo llevar una escena a milímetros con Y arriba: giro y escala, y su caja
+/// envolvente así (sin trasladar)
+fn to_mm(scene: &Scene) -> (converter_scene::glam::Quat, f32, [f32; 3], [f32; 3], usize, f64) {
+    use converter_scene::glam::{Quat, Vec3};
+    let k = (scene.meters_per_unit * 1000.0) as f32;
+    // Z arriba → Y arriba: (x, y, z) → (x, z, −y)
+    let rot = if scene.y_up { Quat::IDENTITY } else { Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2) };
+    let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    let mut triangles = 0;
+    let mut volume = 0.0f64;
+    for prim in scene.world_primitives() {
+        let pts: Vec<Vec3> = prim.positions.iter().map(|p| rot * (Vec3::from(*p) * k)).collect();
+        for q in &pts {
+            for i in 0..3 {
+                min[i] = min[i].min(q[i]);
+                max[i] = max[i].max(q[i]);
+            }
+        }
+        triangles += prim.triangles.len();
+        // Volumen con signo (vale si la malla es cerrada)
+        for t in &prim.triangles {
+            let [a, b, c] = t.map(|i| pts[i as usize].as_dvec3());
+            volume += a.dot(b.cross(c)) / 6.0;
+        }
+    }
+    (rot, k, min, max, triangles, volume.abs())
+}
+
+/// Medidas de un objeto para Fabricar (en mm, como se ve: Z arriba)
+#[derive(Debug, Clone, Serialize)]
+pub struct ObjectInfo {
+    pub id: u64,
+    pub size: [f32; 3],
+    pub triangles: usize,
+    /// En mm³ (si la malla no es cerrada no significa nada)
+    pub volume: f64,
+}
+
+#[tauri::command]
+pub async fn objects_info(app: AppHandle, ids: Vec<u64>) -> Result<Vec<ObjectInfo>, String> {
+    in_background(app, move |state| objects_info_impl(state, &ids)).await
+}
+
+pub(crate) fn objects_info_impl(state: &AppState, ids: &[u64]) -> Result<Vec<ObjectInfo>, String> {
+    ids.iter()
+        .map(|&id| {
+            let (_, _, min, max, triangles, volume) = to_mm(&object_scene(state, id)?);
+            let d = [max[0] - min[0], max[1] - min[1], max[2] - min[2]];
+            Ok(ObjectInfo { id, size: [d[0], d[2], d[1]], triangles, volume })
+        })
+        .collect()
+}
+
+/// Varios objetos en una escena en mm, cada uno en su nodo con su nombre.
+/// Con `spacing`, apoyados en la cama (abajo en 0) y en fila a lo largo de X
+/// con esa separación; sin él, donde están.
+pub(crate) fn objects_scene(state: &AppState, ids: &[u64], names: &[String], spacing: Option<f64>) -> Result<Scene, String> {
+    use converter_scene::glam::Vec3;
+    if ids.is_empty() {
+        return Err("No hay objetos elegidos".into());
+    }
+    let mut out = Scene::new();
+    out.meters_per_unit = 0.001;
+    out.y_up = true;
+    let mut cursor = 0.0f32;
+    for (i, &id) in ids.iter().enumerate() {
+        let scene = object_scene(state, id)?;
+        let (rot, k, min, max, _, _) = to_mm(&scene);
+        if !min[0].is_finite() {
+            continue;
+        }
+        let translation = match spacing {
+            Some(gap) => {
+                let t = Vec3::new(cursor - min[0], -min[1], -(min[2] + max[2]) / 2.0);
+                cursor += max[0] - min[0] + gap as f32;
+                t
+            }
+            None => Vec3::ZERO,
+        };
+        let name = names.get(i).cloned().unwrap_or_else(|| format!("Objeto {id}"));
+        let (roots_before, meshes_before) = (out.root_nodes.len(), out.meshes.len());
+        out.merge(scene);
+        // Las mallas con el nombre del objeto (el 3MF nombra así cada objeto)
+        let added = out.meshes.len() - meshes_before;
+        for (k, m) in out.meshes[meshes_before..].iter_mut().enumerate() {
+            m.name = if added == 1 { name.clone() } else { format!("{name} {}", k + 1) };
+        }
+        let children: Vec<usize> = out.root_nodes.drain(roots_before..).collect();
+        out.nodes.push(converter_scene::Node {
+            name,
+            transform: converter_scene::Transform::Trs { translation, rotation: rot, scale: Vec3::splat(k) },
+            mesh: None,
+            skin: None,
+            children,
+        });
+        out.root_nodes.push(out.nodes.len() - 1);
+    }
+    if out.root_nodes.is_empty() {
+        return Err("Los objetos elegidos no tienen malla".into());
+    }
+    Ok(out)
+}
+
+/// Exporta varios objetos juntos (para imprimirlos de una vez)
+#[tauri::command]
+pub async fn export_objects(app: AppHandle, ids: Vec<u64>, names: Vec<String>, path: String, format: String, spacing: Option<f64>) -> Result<u64, String> {
+    in_background(app, move |state| export_objects_impl(state, &ids, &names, &path, &format, spacing)).await
+}
+
+pub(crate) fn export_objects_impl(state: &AppState, ids: &[u64], names: &[String], path: &str, format: &str, spacing: Option<f64>) -> Result<u64, String> {
+    let scene = objects_scene(state, ids, names, spacing)?;
+    let p = Path::new(path);
+    crate::cad::export_scene(&scene, p, format)?;
+    Ok(std::fs::metadata(p).map(|m| m.len()).unwrap_or(0))
+}
+
 /// Le da número al objeto activo sin cambiar nada (el modelo que ya estaba
 /// cuando todavía no había objetos)
 #[tauri::command]
@@ -1007,6 +1137,69 @@ mod tests {
         assert_eq!(other.objects.lock().unwrap().active, None);
         activate_impl(&other, 1).unwrap();
         assert_eq!(other.mesh.lock().unwrap().as_ref().unwrap().num_vertices(), 8);
+    }
+
+    /// Escena de un cubo de `side` (en las unidades de la escena) con una esquina en `at`
+    fn cube_scene(side: f32, at: [f32; 3], meters_per_unit: f64) -> Scene {
+        use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, VertexAttribute};
+        let unit = [
+            [0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0],
+        ];
+        let positions = unit.iter().map(|p: &[f32; 3]| [at[0] + side * p[0], at[1] + side * p[1], at[2] + side * p[2]]).collect();
+        let tris: [[u32; 3]; 12] = [
+            [0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4],
+            [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5],
+        ];
+        let indices = tris.iter().flatten().copied().collect();
+        let mut scene = Scene::new();
+        scene.meshes.push(SceneMesh {
+            name: "cubo".into(),
+            primitives: vec![Primitive { attributes: vec![VertexAttribute::Positions(positions)], indices: Some(IndexData::U32(indices)), material: None }],
+        });
+        scene.nodes.push(Node { name: "cubo".into(), transform: converter_scene::Transform::identity(), mesh: Some(0), skin: None, children: vec![] });
+        scene.root_nodes.push(0);
+        scene.meters_per_unit = meters_per_unit;
+        scene
+    }
+
+    /// Varios objetos juntos en mm: medidas, nombres y en fila sobre la cama
+    #[test]
+    fn several_objects_in_one_scene() {
+        let state = AppState::new();
+        // Objeto 1: cubo de 10 mm; objeto 2: cubo de 2 cm (en metros), lejos y en el aire
+        *state.scene.lock().unwrap() = Some(cube_scene(10.0, [0.0, 0.0, 0.0], 0.001));
+        adopt_impl(&state, 1);
+        activate_impl(&state, 2).unwrap();
+        *state.scene.lock().unwrap() = Some(cube_scene(0.02, [1.0, 0.5, 0.0], 1.0));
+        let info = objects_info_impl(&state, &[1, 2]).unwrap();
+        assert!((info[0].size[0] - 10.0).abs() < 1e-3 && (info[1].size[2] - 20.0).abs() < 1e-3, "{info:?}");
+        assert!((info[0].volume - 1000.0).abs() < 1e-3 && (info[1].volume - 8000.0).abs() < 1e-2, "{info:?}");
+        assert_eq!(info[0].triangles, 12);
+        let names = vec!["Tapa".to_string(), "Caja".to_string()];
+        let scene = objects_scene(&state, &[1, 2], &names, Some(5.0)).unwrap();
+        assert_eq!(scene.meters_per_unit, 0.001);
+        assert_eq!(scene.root_nodes.len(), 2);
+        assert_eq!(scene.meshes.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Tapa", "Caja"]);
+        // En fila: el primero de 0 a 10, el segundo de 15 a 35; los dos apoyados en y = 0
+        let prims = scene.world_primitives();
+        let range = |k: usize, axis: usize| {
+            let v = prims[k].positions.iter().map(|p| p[axis]);
+            (v.clone().fold(f32::INFINITY, f32::min), v.fold(f32::NEG_INFINITY, f32::max))
+        };
+        let close = |a: (f32, f32), b: (f32, f32)| (a.0 - b.0).abs() < 1e-3 && (a.1 - b.1).abs() < 1e-3;
+        assert!(close(range(0, 0), (0.0, 10.0)), "{:?}", range(0, 0));
+        assert!(close(range(1, 0), (15.0, 35.0)), "{:?}", range(1, 0));
+        assert!(close(range(1, 1), (0.0, 20.0)), "{:?}", range(1, 1));
+        // Sin acomodar: donde están (el segundo a 1 m = 1000 mm)
+        let scene = objects_scene(&state, &[1, 2], &names, None).unwrap();
+        let prims = scene.world_primitives();
+        assert!((prims[1].positions.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min) - 1000.0).abs() < 1e-2);
+        // A un 3MF con los dos objetos
+        let path = std::env::temp_dir().join(format!("objetos-{}.3mf", std::process::id()));
+        let size = export_objects_impl(&state, &[1, 2], &names, path.to_str().unwrap(), "3mf", Some(5.0)).unwrap();
+        assert!(size > 0);
+        let _ = std::fs::remove_file(path);
     }
 
     /// Deshacer y rehacer intercambian el estado con la copia

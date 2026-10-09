@@ -474,7 +474,16 @@ export const App: Component = () => {
   const [objects, setObjects] = createSignal<SceneObject[]>([]);
   const [activeObjectId, setActiveObjectId] = createSignal<number>();
   const activeObject = () => objects().find((o) => o.id === activeObjectId());
-  if (import.meta.env.DEV) Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __viewer: () => viewer() });
+  // Más objetos elegidos además del activo (Ctrl o Mayús + clic en el Outliner)
+  const [extraObjects, setExtraObjects] = createSignal<number[]>([]);
+  /** El activo y los demás elegidos, en orden (solo los que siguen existiendo) */
+  const selectedObjects = () => {
+    const list = objects();
+    const ids = [activeObjectId(), ...extraObjects()].filter((id): id is number => id !== undefined);
+    return ids.flatMap((id) => list.filter((o) => o.id === id));
+  };
+  if (import.meta.env.DEV)
+    Object.assign(window, { __objects: objects, __activeObject: activeObjectId, __selectedObjects: () => selectedObjects().map((o) => o.id), __viewer: () => viewer() });
   const inDesign = () => pipeline.workspace()?.id === "design";
   onMount(() => void cad.init().catch(() => {}));
   // Dibujando un sketch, el panel muestra lo elegido y sus restricciones
@@ -725,6 +734,8 @@ export const App: Component = () => {
   const [meshLoaded, setMeshLoaded] = createSignal(false);
   const [meshInfo, setMeshInfo] = createSignal({ vertices: 0, faces: 0, format: "" });
   const [meshData, setMeshData] = createSignal<MeshData | undefined>();
+  /** Sube cada vez que llega otra malla del activo */
+  const meshRevision = createMemo((n: number) => (meshData(), n + 1), 0);
 
   // Skeleton state
   const [selectedSkeleton, setSelectedSkeleton] = createSignal<string | undefined>();
@@ -1376,7 +1387,7 @@ export const App: Component = () => {
           active: isActive,
           modifications,
           meshLabel: "Malla generada",
-          selected: isActive,
+          selected: isActive || extraObjects().includes(o.id),
           visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
           readonly: inDesign() ? !view : !isActive && !o.ui,
           deletable: true,
@@ -1393,7 +1404,7 @@ export const App: Component = () => {
         label: o.name,
         active: isActive,
         modifications,
-        selected: isActive,
+        selected: isActive || extraObjects().includes(o.id),
         visible: isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
         readonly: !isActive && !o.ui,
         deletable: true,
@@ -1626,12 +1637,14 @@ export const App: Component = () => {
     if (!v) return;
     const active = activeObjectId();
     const hidden = hiddenGhosts();
+    const extra = extraObjects();
     // `"model":false` en su interfaz: todavía no tiene malla
     const list = objects().filter((o) => o.id !== active && o.ui && !o.ui.includes('"model":false') && !hidden.includes(o.id));
     const request = ++ghostRequest;
     void (async () => {
       await switchingObject;
       const out: MeshData[] = [];
+      const selected: boolean[] = [];
       for (const o of list) {
         // En las unidades del activo: cambia con el activo y con lo hecho sobre el objeto
         const key = `${o.id}:${o.rev ?? 0}:${active}`;
@@ -1646,8 +1659,9 @@ export const App: Component = () => {
           ghostCache.set(key, data);
         }
         out.push(data);
+        selected.push(extra.includes(o.id));
       }
-      if (request === ghostRequest) v.setGhosts(out);
+      if (request === ghostRequest) v.setGhosts(out, selected);
     })();
   });
 
@@ -5656,6 +5670,21 @@ export const App: Component = () => {
       }
     });
 
+  /** Los objetos elegidos juntos en un archivo (acomodados en la cama con `spacing`) */
+  const handleExportObjects = async (format: string, spacing: number | null) => {
+    const list = selectedObjects();
+    try {
+      const path = await save({ title: "Exportar los objetos juntos", filters: [{ name: format.toUpperCase(), extensions: [format] }] });
+      if (!path) return;
+      const bytes = await busy(`Exportando ${list.length} objetos...`, () =>
+        invoke<number>("export_objects", { ids: list.map((o) => o.id), names: list.map((o) => o.name), path, format, spacing }),
+      );
+      setStatusMessage(`${list.length} objetos exportados (${(bytes / 1024).toLocaleString("es", { maximumFractionDigits: 0 })} KB)`);
+    } catch (e) {
+      setStatusMessage(`Error: ${e}`);
+    }
+  };
+
   const handleExportPiece = async (index: number) => {
     try {
       const selected = await save({
@@ -6828,7 +6857,7 @@ export const App: Component = () => {
     return items;
   };
 
-  const handleSelectNode = (nodeId: string) => {
+  const handleSelectNode = (nodeId: string, add = false) => {
     // Lo del diseño se elige en Diseñar
     const plane = nodeId.startsWith("plane-") ? (nodeId.slice(6) as "xy" | "xz" | "yz") : undefined;
     const feature = cadFeatureOfNode(nodeId);
@@ -6840,7 +6869,13 @@ export const App: Component = () => {
     }
     // Un objeto pasa a ser el activo: las herramientas del espacio actúan sobre él
     const object = objectOfNode(nodeId);
+    // Con Ctrl o Mayús se suma (o se quita) de los elegidos sin cambiar el activo
+    if (object && add && activeObjectId() !== undefined && object.id !== activeObjectId()) {
+      setExtraObjects((list) => (list.includes(object.id) ? list.filter((i) => i !== object.id) : [...list, object.id]));
+      return;
+    }
     if (object) {
+      setExtraObjects([]);
       if (isCadObject(object) && inDesign()) {
         cadUi.setOpenPart(partKey(object.source.part));
         pipeline.setActiveStep("design_part");
@@ -7344,6 +7379,11 @@ export const App: Component = () => {
               canUndoScale: canUndoPrintScale(),
               onSubdivide: handleSubdivide,
               onExportPiece: handleExportPiece,
+              selection: {
+                objects: selectedObjects().map((o) => ({ id: o.id, name: o.name })),
+                revision: selectedObjects().map((o) => `${o.id}:${o.rev ?? 0}`).join(",") + `|${meshRevision()}`,
+                onExport: (format, spacing) => void handleExportObjects(format, spacing),
+              },
               analysis: meshAnalysis(),
               subdivideResult: subdivideResult(),
               canAnalyze: meshLoaded(),

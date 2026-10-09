@@ -3450,6 +3450,50 @@ const scenarios = {
     await b.shot("objetos");
   },
 
+  async "objetos: varios elegidos se exportan juntos"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Caja", kind: { type: "primitive", shape: { type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.features.push({ id: 51, name: "Cilindro", kind: { type: "primitive", shape: { type: "cylinder", radius: 5, height: 10 }, origin: [40, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 52;
+    })`);
+    await sleep(2500);
+    const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("[data-outliner-row]")].find((x) => x.innerText.split("\\n")[0] === ${JSON.stringify(label)})`;
+    const selected = () => b.eval(`JSON.stringify(window.__selectedObjects())`);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Malla generada")`)); t++) await sleep(250);
+    await sleep(1000);
+    // La pieza 2 activa (así las dos tienen malla) y la 1 sumada con Ctrl + clic
+    await b.eval(`${row("Pieza 2")}.click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`window.__objects().find((o) => o.name === "Pieza 1")?.ui != null`)); t++) await sleep(250);
+    await sleep(1000);
+    await b.eval(`${row("Pieza 1")}.dispatchEvent(new MouseEvent("click", { bubbles: true, ctrlKey: true }))`);
+    await sleep(800);
+    const ids = JSON.parse(await selected());
+    if (ids.length !== 2) throw new Error(`elegidos: ${JSON.stringify(ids)}`);
+    // El panel lista los dos con sus medidas
+    for (let t = 0; t < 20 && (await b.eval(`document.querySelectorAll("[data-selected-object]").length`)) !== 2; t++) await sleep(250);
+    for (let t = 0; t < 20 && (await b.eval(`[...document.querySelectorAll("[data-selected-object]")].some((e) => e.innerText.includes("…"))`)); t++) await sleep(250);
+    const sizes = await b.eval(`[...document.querySelectorAll("[data-selected-object]")].map((e) => e.innerText).join(" | ")`);
+    if (!sizes.includes("20 × 20 × 20 mm") || !sizes.includes("10 × 10 × 10 mm")) throw new Error(`medidas: ${sizes}`);
+    // El de la Pieza 1 en el visor, con el acento
+    if (!(await b.eval(`[...document.querySelectorAll("[data-outliner-row]")].filter((e) => e.className.includes("bg-accent")).length === 2`)))
+      throw new Error("el Outliner no marca los dos");
+    await b.shot("objetos-elegidos");
+    // Exportar juntos a 3MF, acomodados en la cama
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const path = `${out}/juntos.3mf`;
+    rmSync(path, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.clickText("Exportar juntos");
+    for (let t = 0; t < 40 && !existsSync(path); t++) await sleep(250);
+    if (!existsSync(path) || statSync(path).size < 500) throw new Error("no se exportó el 3MF");
+    // Un clic sin Ctrl vuelve a uno solo
+    await b.eval(`${row("Pieza 1")}.click()`);
+    await sleep(1500);
+    if (JSON.parse(await selected()).length !== 1) throw new Error(`sin Ctrl: ${await selected()}`);
+  },
+
   async "objetos: el remallado se rehace si cambia el diseño"(b) {
     await begin(b);
     await b.eval(`window.__cadStore.commit((d) => {

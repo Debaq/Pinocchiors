@@ -79,6 +79,8 @@ pub fn run() {
             project::object_remove,
             project::object_adopt,
             project::object_mesh_data,
+            project::objects_info,
+            project::export_objects,
             commands::get_body_plan,
             commands::list_template_shapes,
             commands::new_body_plan,

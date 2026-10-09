@@ -7,7 +7,8 @@ import * as SketchIcons from "../icons/sketch";
 export interface SceneOutlinerProps {
   tree: SceneNode;
   onToggleVisibility?: (nodeId: string) => void;
-  onSelectNode?: (nodeId: string) => void;
+  /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
+  onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
 }
 
@@ -38,7 +39,8 @@ const OutlinerNode: Component<{
   node: SceneNode;
   depth: number;
   onToggleVisibility?: (nodeId: string) => void;
-  onSelectNode?: (nodeId: string) => void;
+  /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
+  onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
@@ -74,7 +76,7 @@ const OutlinerNode: Component<{
         style={{ "padding-left": `${props.depth * 12 + 4}px` }}
         data-outliner-row={props.node.id}
         title={props.node.hint}
-        onClick={() => (isGroup ? props.onToggleExpanded(props.node) : props.onSelectNode?.(props.node.id))}
+        onClick={(e) => (isGroup ? props.onToggleExpanded(props.node) : props.onSelectNode?.(props.node.id, e.ctrlKey || e.metaKey || e.shiftKey))}
       >
         {/* Expand arrow */}
         <Show
