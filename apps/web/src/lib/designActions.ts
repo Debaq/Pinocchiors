@@ -15,6 +15,7 @@ import {
   type CadStore,
   type Feature,
   type FeatureKind,
+  type FaceRef,
   type P2,
   type PartId,
   type PlaneSpec,
@@ -65,6 +66,22 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       return newSketch({ type: "face", face: ref });
     }
     ui.setPick({ kind: "place", prompt: "Elegir dónde va el sketch: un plano base o una cara plana", done: (spec) => void newSketch(spec) });
+  };
+
+  /** Sketch envuelto en la cara elegida (o se pide una) */
+  const startSurfaceSketch = async () => {
+    const make = async (face: FaceRef) => {
+      const id = await store.addFeature({ type: "surface_sketch", face, sketch: emptySketch() });
+      await store.settled();
+      ui.editSketch(id);
+    };
+    const face = ui.picks().find((p) => p.kind === "face");
+    if (face?.kind === "face") {
+      const ref = await store.faceRef(face.face);
+      ui.clearPicks();
+      return make(ref);
+    }
+    ui.setPick({ kind: "face", prompt: "Elegir la cara sobre la que va el sketch (un cilindro, un cono, una superficie…)", done: (ref) => void make(ref) });
   };
 
   /** Regiones elegidas en el visor, del primer sketch que tenga alguna */
@@ -524,6 +541,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),
     addDeleteParts: () => void store.addFeature({ type: "delete_parts", parts: pickedParts() }),
     addHelix: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false }),
+    addSketch3d: () => void store.addFeature({ type: "sketch3d", sketch: { points: [], entities: [], constraints: [], next_id: 1 } }),
+    startSurfaceSketch,
     addScale: () => void store.addFeature({ type: "scale", factor: [2, 2, 2], center: { type: "at", point: [0, 0, 0] } }),
     sketches,
     toolFeatures,

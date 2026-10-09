@@ -10,7 +10,7 @@ import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
-import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
+import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -82,6 +82,47 @@ export interface SketchOverlay {
   curvature?: { comb: [P2, P2][]; inflections: P2[] };
   /** Grados libres: puntos con una sola dirección (y cuál), puntos libres del todo y círculos con el radio libre */
   freedom?: { dirs: [number, P2][]; free: number[]; radius: number[] };
+}
+
+/** Sketch 3D en edición: lo elegido, lo libre, lo que choca, el plano activo y lo que se está dibujando */
+export interface Sketch3dOverlay {
+  sketch: Sketch3d;
+  selected: number[];
+  free: number[];
+  conflict: number[];
+  plane?: Plane;
+  preview?: P3[];
+  cursor?: P3;
+}
+
+/** Arco por tres puntos como polilínea (o la recta si están alineados) */
+export function arc3Polyline(a: P3, m: P3, b: P3, n = 32): P3[] {
+  const sub = (p: P3, q: P3): P3 => [p[0] - q[0], p[1] - q[1], p[2] - q[2]];
+  const cross = (p: P3, q: P3): P3 => [p[1] * q[2] - p[2] * q[1], p[2] * q[0] - p[0] * q[2], p[0] * q[1] - p[1] * q[0]];
+  const dot = (p: P3, q: P3) => p[0] * q[0] + p[1] * q[1] + p[2] * q[2];
+  const ab = sub(m, a);
+  const ac = sub(b, a);
+  const nn = cross(ab, ac);
+  const n2 = dot(nn, nn);
+  if (n2 < 1e-18) return [a, b];
+  const t = cross(nn, ab).map((v, i) => v * dot(ac, ac) + cross(ac, nn)[i] * dot(ab, ab)) as P3;
+  const c: P3 = [a[0] + t[0] / (2 * n2), a[1] + t[1] / (2 * n2), a[2] + t[2] / (2 * n2)];
+  const u = sub(a, c);
+  const r = Math.sqrt(dot(u, u));
+  const ux: P3 = [u[0] / r, u[1] / r, u[2] / r];
+  const nl = Math.sqrt(n2);
+  const uz: P3 = [nn[0] / nl, nn[1] / nl, nn[2] / nl];
+  const uy = cross(uz, ux);
+  const ang = (p: P3) => {
+    const v = sub(p, c);
+    const a2 = Math.atan2(dot(v, uy), dot(v, ux));
+    return a2 < 0 ? a2 + 2 * Math.PI : a2;
+  };
+  const end = ang(b);
+  return Array.from({ length: n + 1 }, (_, i) => {
+    const t2 = (end * i) / n;
+    return [0, 1, 2].map((k) => c[k] + r * (Math.cos(t2) * ux[k] + Math.sin(t2) * uy[k])) as P3;
+  });
 }
 
 function inPolygon(p: P2, poly: P2[]): boolean {
@@ -159,6 +200,8 @@ export class CadViewer {
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
   private sketchGroup = new THREE.Group();
+  /** Sketch 3D en edición */
+  private sketch3dGroup = new THREE.Group();
   private sketchesGroup = new THREE.Group();
   private planesGroup = new THREE.Group();
   /** Planos, ejes y puntos de referencia */
@@ -239,6 +282,7 @@ export class CadViewer {
     this.lightRig.place(new THREE.Vector3(), this.gridExtent);
     this.scene.add(this.grid);
     this.scene.add(this.sketchGroup);
+    this.scene.add(this.sketch3dGroup);
     this.scene.add(this.sketchesGroup);
     this.scene.add(this.planesGroup);
     this.scene.add(this.refsGroup);
@@ -1086,11 +1130,13 @@ export class CadViewer {
         line.computeLineDistances();
         line.renderOrder = 5;
         this.refsGroup.add(line);
-      } else if (r.kind === "curve") {
-        const g = new THREE.BufferGeometry().setFromPoints(r.points.map((p) => this.toView(p)));
-        const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
-        line.renderOrder = 5;
-        this.refsGroup.add(line);
+      } else if (r.kind === "curve" || r.kind === "curves") {
+        for (const pts of r.kind === "curve" ? [r.points] : r.lines) {
+          const g = new THREE.BufferGeometry().setFromPoints(pts.map((p) => this.toView(p)));
+          const line = new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
+          line.renderOrder = 5;
+          this.refsGroup.add(line);
+        }
       } else {
         const g = new THREE.BufferGeometry().setFromPoints([this.toView(r.point)]);
         const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: 8, sizeAttenuation: false, depthTest: false }));
@@ -1620,6 +1666,78 @@ export class CadViewer {
   }
 
   /** Tamaño en mm de un píxel cerca del objetivo (para tolerancias de clic) */
+  /** Dibuja el sketch 3D en edición (o lo quita con `null`) */
+  setSketch3d(o: Sketch3dOverlay | null) {
+    this.clearGroup(this.sketch3dGroup);
+    if (!o) return this.requestRender();
+    const sk = o.sketch;
+    const at = new Map(sk.points.map((p) => [p.id, [p.x, p.y, p.z] as P3]));
+    const selected = new Set(o.selected);
+    const conflict = new Set(o.conflict);
+    const free = new Set(o.free);
+    const line = (pts: P3[], color: number, dashed = false) => {
+      const g = new THREE.BufferGeometry().setFromPoints(pts.map((p) => this.toView(p)));
+      const m = dashed
+        ? new THREE.LineDashedMaterial({ color, dashSize: 1.5 / this.mmPerUnit, gapSize: 1 / this.mmPerUnit, depthTest: false })
+        : new THREE.LineBasicMaterial({ color, depthTest: false });
+      const l = new THREE.Line(g, m);
+      if (dashed) l.computeLineDistances();
+      l.renderOrder = 8;
+      this.sketch3dGroup.add(l);
+    };
+    for (const e of sk.entities) {
+      const g = e.geometry;
+      const color = selected.has(e.id) ? themeHex("orange") : conflict.has(e.id) ? themeHex("error") : e.construction ? themeHex("comment") : themeHex("fg");
+      const p = (id: number) => at.get(id);
+      if (g.type === "line" && p(g.start) && p(g.end)) line([p(g.start)!, p(g.end)!], color, !!e.construction);
+      else if (g.type === "arc" && p(g.start) && p(g.mid) && p(g.end)) line(arc3Polyline(p(g.start)!, p(g.mid)!, p(g.end)!), color, !!e.construction);
+      // La spline la dibuja su curva (referencia); acá van los puntos de paso
+      else if (g.type === "spline") line(g.points.map((q) => p(q)).filter((q): q is P3 => !!q), color, true);
+    }
+    const pos: number[] = [];
+    const col: number[] = [];
+    for (const p of sk.points) {
+      const v = this.toView([p.x, p.y, p.z]);
+      pos.push(v.x, v.y, v.z);
+      const c = new THREE.Color(selected.has(p.id) ? themeHex("orange") : free.has(p.id) ? themeHex("yellow") : themeHex("green"));
+      col.push(c.r, c.g, c.b);
+    }
+    if (pos.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      g.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+      const pts = new THREE.Points(g, new THREE.PointsMaterial({ size: 7, sizeAttenuation: false, vertexColors: true, depthTest: false }));
+      pts.renderOrder = 9;
+      this.sketch3dGroup.add(pts);
+    }
+    if (o.preview && o.preview.length > 1) line(o.preview, themeHex("cyan"), true);
+    if (o.cursor) {
+      const g = new THREE.BufferGeometry().setFromPoints([this.toView(o.cursor)]);
+      const m = new THREE.Points(g, new THREE.PointsMaterial({ color: themeHex("cyan"), size: 10, sizeAttenuation: false, depthTest: false }));
+      m.renderOrder = 9;
+      this.sketch3dGroup.add(m);
+    }
+    // Plano activo: un cuadro translúcido donde caen los clics
+    if (o.plane) {
+      const size = Math.max(this.planeSize, 40) / this.mmPerUnit;
+      const n = this.dirToView(o.plane.normal);
+      const x = this.dirToView(o.plane.x_dir);
+      const y = new THREE.Vector3().crossVectors(n, x).normalize();
+      const g = new THREE.PlaneGeometry(size, size);
+      const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: themeHex("cyan"), transparent: true, opacity: 0.06, side: THREE.DoubleSide, depthWrite: false }));
+      mesh.applyMatrix4(new THREE.Matrix4().makeBasis(x, y, n).setPosition(this.toView(o.plane.origin)));
+      mesh.renderOrder = 1;
+      this.sketch3dGroup.add(mesh);
+    }
+    this.requestRender();
+  }
+
+  /** Punto del puntero sobre un plano del CAD, en coordenadas del mundo (mm) */
+  planePoint3(clientX: number, clientY: number, plane: Plane): P3 | null {
+    const p = this.planePoint(clientX, clientY, plane);
+    return p ? planeToWorld(plane, p) : null;
+  }
+
   /** Flechas dobles de lo que todavía se mueve: en la dirección de los puntos
    * que solo deslizan, en cruz en los que van a cualquier lado y hacia afuera
    * en los círculos con el radio libre (tamaño fijo en pantalla al dibujar) */

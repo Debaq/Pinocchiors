@@ -211,6 +211,15 @@ int32_t cad_lines_hit(const CadShape* s, const double* origins, int32_t n, const
 // Puntos de la arista `index` en fracciones de su parámetro (0 = inicio, 1 = fin).
 int32_t cad_edge_points(const CadShape* s, int32_t index, const double* fractions, int32_t n, double* out);
 
+// Superficie de la cara `index`: sus límites de parámetros en `bounds` (umin,
+// umax, vmin, vmax) y, por cada par (u, v) de `uv`, 12 valores en `out`: punto,
+// derivadas en u y en v, normal hacia afuera de la cara.
+int32_t cad_face_eval(const CadShape* s, int32_t index, const double* uv, int32_t n, double* bounds, double* out);
+
+// Puntos donde las aristas de la forma cruzan el plano (hasta `max`, 3 por
+// punto); devuelve cuántos (−1 si falla).
+int32_t cad_plane_hits(const CadShape* s, const double* origin, const double* normal, double* out, int32_t max);
+
 // Curvas donde el plano corta la forma (compuesto de aristas).
 CadShape* cad_section(const CadShape* s, const double* origin, const double* normal);
 

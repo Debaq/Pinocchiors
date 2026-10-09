@@ -175,6 +175,8 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
     { label: "Punto", icon: D.Point, run: () => void a.addReference("point") },
     { label: "Hélice", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas" },
+    { label: "Sketch 3D", icon: D.Sketch3d, run: a.addSketch3d, tip: "Líneas, arcos y splines en el espacio (caminos de barrido): clic en un plano o en un vértice del sólido" },
+    { label: "Sketch envuelto", icon: D.SurfaceSketch, run: () => void a.startSurfaceSketch(), needsBody: true, tip: "Un sketch dibujado en el desarrollo de una cara y llevado sobre ella (cilindros, conos…)" },
   ];
 
   return (

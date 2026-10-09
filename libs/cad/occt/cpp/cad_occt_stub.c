@@ -78,3 +78,5 @@ int32_t cad_lines_hit(const CadShape* s, const double* o, int32_t n, const doubl
 int32_t cad_edge_points(const CadShape* s, int32_t i, const double* f, int32_t n, double* out) { (void)s; (void)i; (void)f; (void)n; (void)out; FAIL_INT; }
 CadShape* cad_section(const CadShape* s, const double* o, const double* n) { (void)s; (void)o; (void)n; FAIL_PTR; }
 CadShape* cad_outline(const CadShape* s, const double* o, const double* n, const double* x) { (void)s; (void)o; (void)n; (void)x; FAIL_PTR; }
+int32_t cad_face_eval(const CadShape* s, int32_t i, const double* uv, int32_t n, double* b, double* out) { (void)s; (void)i; (void)uv; (void)n; (void)b; (void)out; FAIL_INT; }
+int32_t cad_plane_hits(const CadShape* s, const double* o, const double* n, double* out, int32_t max) { (void)s; (void)o; (void)n; (void)out; (void)max; return -1; }

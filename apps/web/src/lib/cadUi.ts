@@ -35,6 +35,7 @@ import {
   type Sketch,
   type SketchConstraint,
   type SolveReport,
+  editsAsSketch,
 } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
@@ -122,7 +123,17 @@ export type PickMode =
   /** Dónde va un sketch nuevo: un plano base o una cara plana */
   | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void }
   /** Una cara de la malla del ensamble (su índice) */
-  | { kind: "asm_face"; prompt: string; done: (face: number) => void };
+  | { kind: "asm_face"; prompt: string; done: (face: number) => void }
+  /** Sketch 3D: clic en un punto o una curva del sketch, un vértice del sólido o el plano activo; `from` es donde arranca lo que se dibuja */
+  | { kind: "sketch3d"; prompt: string; owner?: string; feature: number; plane: Plane; from?: P3; click: (hit: Hit3d, e: PointerEvent) => void };
+
+/** Qué hay bajo un clic del sketch 3D: un punto suyo, una curva suya, un vértice del sólido o el plano activo */
+export interface Hit3d {
+  at: P3;
+  point?: number;
+  entity?: number;
+  vertex?: boolean;
+}
 
 export interface SketchSession {
   feature: number;
@@ -190,6 +201,9 @@ export function createCadUi(store: CadStore) {
   const [constructionMode, setConstructionMode] = createSignal(false);
   const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
+  // Sketch 3D: lo elegido (puntos y entidades) y dónde está el cursor
+  const [sel3d, setSel3d] = createSignal<number[]>([]);
+  const [cursor3d, setCursor3d] = createSignal<P3>();
   /** Spline con el peine de curvatura a la vista */
   const [combEntity, setCombEntity] = createSignal<number>();
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
@@ -294,6 +308,10 @@ export function createCadUi(store: CadStore) {
     },
     clearPicks: () => setPicks([]),
     hiddenSketches,
+    sel3d,
+    setSel3d,
+    cursor3d,
+    setCursor3d,
     showCenterOfMass,
     setShowCenterOfMass,
     pickFilter,
@@ -341,7 +359,7 @@ export function createCadUi(store: CadStore) {
     editSketch(feature: number): boolean {
       const f = store.doc()?.features.find((x) => x.id === feature);
       const view = store.sketchView(feature);
-      if (!f || f.kind.type !== "sketch" || !view) {
+      if (!f || !editsAsSketch(f.kind) || !view) {
         setMessage("El sketch todavía no tiene plano (recalcular primero)");
         return false;
       }
@@ -667,7 +685,7 @@ export function createCadUi(store: CadStore) {
       const prefix = `${s.feature}.kind.sketch.constraints.`;
       await store.commit((d) => {
         const f = d.features.find((x) => x.id === s.feature);
-        if (f?.kind.type === "sketch") f.kind.sketch = sketch;
+        if (f && editsAsSketch(f.kind)) f.kind.sketch = sketch;
         const bindings = { ...(d.bindings ?? {}) };
         for (const k of Object.keys(bindings)) if (k.startsWith(prefix)) delete bindings[k];
         sketch.constraints.forEach((c, i) => {

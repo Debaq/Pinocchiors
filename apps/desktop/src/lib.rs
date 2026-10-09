@@ -166,6 +166,7 @@ pub fn run() {
             cad::cad_solve_sketch,
             cad::cad_sketch_suggest,
             cad::cad_sketch_define,
+            cad::cad_vertex_spec,
             cad::cad_eval_expr,
             cad::cad_mesh,
             cad::cad_tool_mesh,

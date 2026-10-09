@@ -140,6 +140,8 @@ unsafe extern "C" {
     pub fn cad_ray_hit(s: *const CadShape, origin: *const f64, dir: *const f64) -> f64;
     pub fn cad_lines_hit(s: *const CadShape, origins: *const f64, n: i32, dir: *const f64, out: *mut u8) -> i32;
     pub fn cad_edge_points(s: *const CadShape, index: i32, fractions: *const f64, n: i32, out: *mut f64) -> i32;
+    pub fn cad_face_eval(s: *const CadShape, index: i32, uv: *const f64, n: i32, bounds: *mut f64, out: *mut f64) -> i32;
+    pub fn cad_plane_hits(s: *const CadShape, origin: *const f64, normal: *const f64, out: *mut f64, max: i32) -> i32;
     pub fn cad_section(s: *const CadShape, origin: *const f64, normal: *const f64) -> *mut CadShape;
     pub fn cad_outline(s: *const CadShape, origin: *const f64, normal: *const f64, xdir: *const f64) -> *mut CadShape;
     pub fn cad_wire_sample(wire: *const CadShape, n: i32, out_p: *mut f64, out_t: *mut f64) -> i32;

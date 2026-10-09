@@ -1416,6 +1416,48 @@ int32_t cad_edge_points(const CadShape* s, int32_t index, const double* fraction
     });
 }
 
+int32_t cad_face_eval(const CadShape* s, int32_t index, const double* uv, int32_t n, double* bounds, double* out) {
+    return guard("superficie de la cara", 0, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        if (index < 0 || index >= m.Extent()) throw Standard_Failure("cara inexistente");
+        TopoDS_Face face = TopoDS::Face(m(index + 1));
+        BRepAdaptor_Surface sf(face);
+        bounds[0] = sf.FirstUParameter();
+        bounds[1] = sf.LastUParameter();
+        bounds[2] = sf.FirstVParameter();
+        bounds[3] = sf.LastVParameter();
+        bool reversed = face.Orientation() == TopAbs_REVERSED;
+        for (int32_t i = 0; i < n; i++) {
+            gp_Pnt p;
+            gp_Vec du, dv;
+            sf.D1(uv[2 * i], uv[2 * i + 1], p, du, dv);
+            gp_Vec nrm = du.Crossed(dv);
+            if (nrm.Magnitude() > 1e-15) nrm.Normalize();
+            if (reversed) nrm.Reverse();
+            double* o = out + 12 * i;
+            put(o, p.XYZ());
+            put(o + 3, du.XYZ());
+            put(o + 6, dv.XYZ());
+            put(o + 9, nrm.XYZ());
+        }
+        return 1;
+    });
+}
+
+int32_t cad_plane_hits(const CadShape* s, const double* origin, const double* normal, double* out, int32_t max) {
+    return guard("cruces con el plano", -1, [&] {
+        BRepAlgoAPI_Section sec(s->s, gp_Pln(pnt(origin), dir(normal)), Standard_False);
+        sec.Build();
+        if (!sec.IsDone()) throw Standard_Failure("no se pudo cortar");
+        int32_t k = 0;
+        for (TopExp_Explorer ex(sec.Shape(), TopAbs_VERTEX); ex.More() && k < max; ex.Next()) {
+            put(out + 3 * k, BRep_Tool::Pnt(TopoDS::Vertex(ex.Current())).XYZ());
+            k++;
+        }
+        return k;
+    });
+}
+
 CadShape* cad_section(const CadShape* s, const double* origin, const double* normal) {
     return guard("intersección con el plano", (CadShape*)nullptr, [&] {
         BRepAlgoAPI_Section sec(s->s, gp_Pln(pnt(origin), dir(normal)), Standard_False);

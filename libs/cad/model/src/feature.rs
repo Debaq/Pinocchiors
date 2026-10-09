@@ -85,6 +85,12 @@ pub enum PointSpec {
     OnEdge { edge: EdgeRef, at: f64 },
     /// Un punto de referencia del historial.
     Reference { feature: FeatureId },
+    /// Un extremo de una arista (un vértice del sólido): el final con `end`.
+    EdgeEnd {
+        edge: EdgeRef,
+        #[serde(default)]
+        end: bool,
+    },
 }
 
 /// Cómo se define un plano de referencia.
@@ -360,6 +366,11 @@ pub enum FeatureKind {
         offset: f64,
         sketch: Sketch,
     },
+    /// Sketch 3D: curvas en el espacio (caminos de barrido).
+    Sketch3d { sketch: crate::sketch3d::Sketch3d },
+    /// Sketch envuelto sobre una cara: se dibuja en el plano tangente en el
+    /// centro de la cara y sus curvas se llevan a la superficie.
+    SurfaceSketch { face: FaceRef, sketch: Sketch },
     Extrude(Extrude),
     Revolve(Revolve),
     Primitive(Primitive),
@@ -768,7 +779,24 @@ impl FeatureKind {
     pub fn dependencies(&self) -> Vec<FeatureId> {
         let axis_dep = axis_deps;
         match self {
-            FeatureKind::Sketch { plane, .. } => plane_deps(plane),
+            FeatureKind::Sketch { plane, sketch, .. } => {
+                let mut d = plane_deps(plane);
+                // Las curvas que lo perforan
+                d.extend(sketch.constraints.iter().filter_map(|c| match c {
+                    crate::sketch::SketchConstraint::Pierce { curve, .. } => Some(FeatureId(*curve)),
+                    _ => None,
+                }));
+                d
+            }
+            FeatureKind::Sketch3d { sketch } => sketch
+                .constraints
+                .iter()
+                .flat_map(|c| match c {
+                    crate::sketch3d::Constraint3d::Attach { target, .. } => point_deps(target),
+                    crate::sketch3d::Constraint3d::OnPlane { plane, .. } => plane_deps(plane),
+                    _ => vec![],
+                })
+                .collect(),
             FeatureKind::Draft { neutral, .. } => plane_deps(neutral),
             FeatureKind::Split { plane, .. } => plane_deps(plane),
             FeatureKind::Plane { def } => match def {
@@ -840,6 +868,8 @@ impl FeatureKind {
     pub fn label(&self) -> &'static str {
         match self {
             FeatureKind::Sketch { .. } => "Sketch",
+            FeatureKind::Sketch3d { .. } => "Sketch 3D",
+            FeatureKind::SurfaceSketch { .. } => "Sketch envuelto",
             FeatureKind::Extrude(_) => "Extrusión",
             FeatureKind::Revolve(_) => "Revolución",
             FeatureKind::Primitive(p) => match p.shape {

@@ -68,7 +68,9 @@ export type PointSpec =
   | { type: "at"; point: P3 }
   | { type: "center"; edge: EdgeRef }
   | { type: "on_edge"; edge: EdgeRef; at: number }
-  | { type: "reference"; feature: number };
+  | { type: "reference"; feature: number }
+  /** Un extremo de una arista (vértice del sólido): el final con `end` */
+  | { type: "edge_end"; edge: EdgeRef; end?: boolean };
 
 export type PlaneDef =
   | { type: "offset"; base: PlaneSpec; distance: number }
@@ -88,7 +90,71 @@ export type RefView = { id: number } & (
   | { kind: "axis"; origin: P3; dir: P3 }
   | { kind: "point"; point: P3 }
   | { kind: "curve"; points: P3[] }
+  /** Varias curvas (sketch 3D o envuelto): una polilínea por arista */
+  | { kind: "curves"; lines: P3[][] }
 );
+
+// ─── Sketch 3D ─────────────────────────────────────────────────────────────
+
+export interface Point3d {
+  id: number;
+  x: number;
+  y: number;
+  z: number;
+}
+
+export type Geometry3d =
+  | { type: "line"; start: number; end: number }
+  /** Arco por tres puntos */
+  | { type: "arc"; start: number; mid: number; end: number }
+  | { type: "spline"; points: number[] }
+  | { type: "point"; point: number };
+
+export interface Entity3d {
+  id: number;
+  construction?: boolean;
+  geometry: Geometry3d;
+}
+
+export type WorldAxis = "x" | "y" | "z";
+
+export type Constraint3d =
+  | { type: "coincident"; a: number; b: number }
+  | { type: "fixed"; point: number; at: P3 }
+  | { type: "attach"; point: number; target: PointSpec }
+  | { type: "on_plane"; point: number; plane: PlaneSpec; offset?: number }
+  | { type: "along_axis"; line: number; axis: WorldAxis }
+  | { type: "parallel"; a: number; b: number }
+  | { type: "perpendicular"; a: number; b: number }
+  | { type: "equal"; a: number; b: number }
+  | { type: "tangent"; a: number; b: number }
+  | { type: "midpoint"; point: number; line: number }
+  | { type: "length"; line: number; value: number }
+  | { type: "distance"; a: number; b: number; value: number }
+  | { type: "angle"; a: number; b: number; degrees: number };
+
+export interface Sketch3d {
+  points: Point3d[];
+  entities: Entity3d[];
+  constraints: Constraint3d[];
+  next_id: number;
+}
+
+export interface Report3d {
+  status: "well_constrained" | "under_constrained" | "over_constrained" | "failed";
+  dof: number;
+  residual: number;
+  conflicting: number[];
+  missing?: number[];
+  free_points: number[];
+  free_entities: number[];
+}
+
+export interface Sketch3dView {
+  id: number;
+  sketch: Sketch3d;
+  report: Report3d;
+}
 
 /** Unir funde con lo que toca (o crea pieza si no toca nada); `new` siempre crea pieza aparte */
 export type BendRelief = "rectangle" | "obround" | "none";
@@ -192,7 +258,9 @@ export type SketchConstraint =
   /** Entidad bloqueada entera (puntos y radio) */
   | { type: "lock"; entity: number }
   /** Continuidad de curvatura (G2) en el extremo común; una de las dos es una spline por polos */
-  | { type: "curvature"; a: number; b: number };
+  | { type: "curvature"; a: number; b: number }
+  /** Perforación: el punto va donde la curva de la operación `curve` cruza el plano (`at` lo pone el historial) */
+  | { type: "pierce"; point: number; curve: number; at: P2 };
 
 /** Lo común a las cotas: de referencia (no restringe) y opciones de cómo se ven */
 export interface Dim {
@@ -369,6 +437,10 @@ export type SplitTool = { type: "plane"; plane: PlaneSpec } | { type: "part"; pa
 
 export type FeatureKind =
   | { type: "sketch"; plane: PlaneSpec; offset: number; sketch: Sketch }
+  /** Sketch 3D: curvas en el espacio (caminos de barrido) */
+  | { type: "sketch3d"; sketch: Sketch3d }
+  /** Sketch envuelto sobre una cara (se dibuja en el plano tangente en su centro) */
+  | { type: "surface_sketch"; face: FaceRef; sketch: Sketch }
   | {
       type: "extrude";
       sketch: number;
@@ -942,6 +1014,8 @@ export interface BodyInfo {
 export interface CadResult {
   status: FeatureStatus[];
   sketches: SketchView[];
+  /** Sketches 3D resueltos */
+  sketches3d?: Sketch3dView[];
   body: BodyInfo | null;
   parameters: ResolvedValue[];
   bindings: ResolvedValue[];
@@ -1112,6 +1186,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   loft: "Transición",
   hole: "Agujero",
   helix: "Hélice",
+  sketch3d: "Sketch 3D",
+  surface_sketch: "Sketch envuelto",
   thicken: "Engrosar",
   move_face: "Mover cara",
   rib: "Nervio",
@@ -1252,6 +1328,11 @@ const PRIMITIVE_LABELS: Record<PrimitiveShape["type"], string> = {
   washer: "Arandela",
 };
 
+/** Operación que se edita con el editor de sketch (en un plano, o envuelto sobre una cara) */
+export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, { type: "sketch" | "surface_sketch" }> {
+  return kind.type === "sketch" || kind.type === "surface_sketch";
+}
+
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
@@ -1270,7 +1351,9 @@ export function dependencies(kind: FeatureKind): number[] {
   const point = (p: PointSpec) => (p.type === "reference" ? [p.feature] : []);
   switch (kind.type) {
     case "sketch":
-      return plane(kind.plane);
+      return [...plane(kind.plane), ...kind.sketch.constraints.flatMap((c) => (c.type === "pierce" ? [c.curve] : []))];
+    case "sketch3d":
+      return kind.sketch.constraints.flatMap((c) => (c.type === "attach" ? point(c.target) : c.type === "on_plane" ? plane(c.plane) : []));
     case "draft":
       return plane(kind.neutral);
     case "plane": {
@@ -2632,18 +2715,23 @@ export function trimAt(s: Sketch, id: number, p: P2): string | undefined {
 /** Campos numéricos de una restricción que no son ids */
 const NOT_IDS = ["value", "degrees", "x", "y"];
 
+/** En la perforación `curve` es una operación, no una entidad */
+const notIds = (c: SketchConstraint) => (c.type === "pierce" ? [...NOT_IDS, "curve"] : NOT_IDS);
+
 /** Puntos y entidades que nombra una restricción (para resaltarla) */
 export function constraintIds(c: SketchConstraint): number[] {
+  const skip = notIds(c);
   return Object.entries(c).flatMap(([k, v]) =>
-    NOT_IDS.includes(k) ? [] : typeof v === "number" ? [v] : k === "entities" && Array.isArray(v) ? (v as number[]) : [],
+    skip.includes(k) ? [] : typeof v === "number" ? [v] : k === "entities" && Array.isArray(v) ? (v as number[]) : [],
   );
 }
 
 /** Copia de una restricción con sus ids cambiados por `f` */
 export function mapConstraintIds<C extends SketchConstraint>(c: C, f: (id: number) => number): C {
   const k = structuredClone(c) as C & Record<string, unknown>;
+  const skip = notIds(c);
   for (const [key, v] of Object.entries(k)) {
-    if (NOT_IDS.includes(key)) continue;
+    if (skip.includes(key)) continue;
     if (typeof v === "number") (k as Record<string, unknown>)[key] = f(v);
     else if (key === "entities" && Array.isArray(v)) (k as Record<string, unknown>)[key] = (v as number[]).map(f);
   }
@@ -2761,6 +2849,7 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   intersection: "Punto en la intersección",
   lock: "Bloqueada",
   curvature: "Curvatura igual (G2)",
+  pierce: "Perforación",
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────
@@ -3072,7 +3161,7 @@ export function createCadStore() {
         d.next_id = id + 1;
         if (d.rollback != null) d.rollback += 1;
       };
-      if (kind.type === "sketch") {
+      if (editsAsSketch(kind)) {
         setSelected(id);
         await commit(insert);
         return id;
@@ -3368,6 +3457,8 @@ export function createCadStore() {
     /** Medidas de una o dos cosas elegidas en el sólido mostrado */
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
+    /** Vértice del sólido en `point` como punto que lo sigue (extremo de una arista) */
+    vertexSpec: (point: P3) => invoke<PointSpec>("cad_vertex_spec", { point }),
     projectEdge: (edge: number, plane: Plane) => invoke<ProjectedEdge>("cad_project_edge", { edge, plane }),
     /** Contorno de una cara: cada arista proyectada y ligada a la suya */
     projectFace: (face: number, plane: Plane) => invoke<ProjectedEdge[]>("cad_project_face", { face, plane }),

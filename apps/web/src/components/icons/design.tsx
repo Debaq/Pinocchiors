@@ -215,6 +215,23 @@ export const Helix = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Sketch3d = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 19 V9 M4 19 H14 M4 19 L9 14" {...dashed} />
+    <path d="M7 16 L13 6 L20 9 L17 17" />
+    <circle cx="13" cy="6" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="20" cy="9" r="1.2" fill="currentColor" stroke="none" />
+  </DesignIcon>
+);
+
+export const SurfaceSketch = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <ellipse cx="12" cy="5" rx="7" ry="2.5" />
+    <path d="M5 5 V19 C5 21 19 21 19 19 V5" />
+    <path d="M7 12 C10 14 14 10 17 12" {...soft} stroke-width="2" />
+  </DesignIcon>
+);
+
 export const Thicken = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M3 14 C8 8 16 8 21 14" />

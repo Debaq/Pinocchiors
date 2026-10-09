@@ -11,7 +11,8 @@ use crate::document::{Document, ResolvedValue};
 use crate::feature::*;
 use crate::geom::*;
 use crate::regions::{Loop, LoopPiece, Region, arc_sweep, find_regions};
-use crate::sketch::{Geometry, Sketch, SolveReport};
+use crate::sketch::{Geometry, Sketch, SketchConstraint, SketchStatus, SolveReport};
+use crate::sketch3d::{ModelRef, Report3d, Sketch3d, Targets};
 use crate::standard::Threading;
 use crate::threads::{ThreadAxis, default_x, spec_name};
 
@@ -109,6 +110,15 @@ pub enum RefGeom {
     Point { point: P3 },
     /// Curva (hélice), como polilínea para dibujarla.
     Curve { points: Vec<P3> },
+    /// Varias curvas (un sketch 3D o envuelto), una polilínea por arista.
+    Curves { lines: Vec<Vec<P3>> },
+}
+
+/// Sketch 3D resuelto.
+#[derive(Debug, Clone, Serialize)]
+pub struct Sketch3dResult {
+    pub sketch: Sketch3d,
+    pub report: Report3d,
 }
 
 /// Pieza calculada.
@@ -143,6 +153,7 @@ pub struct Evaluation {
     pub parts: Vec<Part>,
     pub status: Vec<FeatureStatus>,
     pub sketches: HashMap<FeatureId, SketchResult>,
+    pub sketches3d: HashMap<FeatureId, Sketch3dResult>,
     /// Planos, ejes y puntos de referencia.
     pub references: HashMap<FeatureId, RefGeom>,
     /// Curvas de referencia (alambres), para barridos.
@@ -207,6 +218,7 @@ struct CacheEntry {
     state: FeatureState,
     ms: f64,
     sketch: Option<SketchResult>,
+    sketch3d: Option<Sketch3dResult>,
     reference: Option<RefGeom>,
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
@@ -499,6 +511,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(s) = &e.sketch {
                 ctx.ev.sketches.insert(f.id, s.clone());
             }
+            if let Some(s) = &e.sketch3d {
+                ctx.ev.sketches3d.insert(f.id, s.clone());
+            }
             if let Some(r) = &e.reference {
                 ctx.ev.references.insert(f.id, r.clone());
             }
@@ -543,6 +558,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 state: state.clone(),
                 ms,
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
+                sketch3d: ctx.ev.sketches3d.get(&f.id).cloned(),
                 reference: ctx.ev.references.get(&f.id).cloned(),
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
@@ -1026,6 +1042,125 @@ impl Ctx<'_> {
         })
     }
 
+    /// Perforación: cada punto atado a una curva va donde la curva cruza el
+    /// plano del sketch (el cruce más cercano a donde estaba).
+    fn pierce(&self, plane: &Plane, sketch: &mut Sketch) {
+        for i in 0..sketch.constraints.len() {
+            let SketchConstraint::Pierce { curve, at, .. } = sketch.constraints[i] else { continue };
+            let Some(shape) = self.ev.curves.get(&FeatureId(curve)) else {
+                self.miss("sketch", i);
+                self.warn("la curva que perfora el sketch no está calculada".into());
+                continue;
+            };
+            let hits = shape.plane_hits(plane.origin, plane.normal).unwrap_or_default();
+            let near = plane.to_world(at);
+            match hits.iter().min_by(|a, b| norm(sub(**a, near)).total_cmp(&norm(sub(**b, near)))) {
+                Some(&h) => {
+                    let local = plane.to_local(h);
+                    if let SketchConstraint::Pierce { at, .. } = &mut sketch.constraints[i] {
+                        *at = [(local[0] * 1e9).round() / 1e9, (local[1] * 1e9).round() / 1e9];
+                    }
+                }
+                None => self.warn("la curva no cruza el plano del sketch".into()),
+            }
+        }
+    }
+
+    /// Sketch 3D: resuelve lo que nombra del modelo, el sketch y sus caminos.
+    fn sketch3d(&mut self, id: FeatureId, sketch: &Sketch3d) -> R<()> {
+        let mut targets = Targets::default();
+        for (i, r) in sketch.model_refs() {
+            let field = format!("sketch.constraints.{i}");
+            match r {
+                ModelRef::Point(spec) => match self.point(&field, spec) {
+                    Ok(p) => drop(targets.points.insert(i, p)),
+                    Err(e) => self.warn(format!("restricción {}: {e}", i + 1)),
+                },
+                ModelRef::Plane(spec) => match self.plane(&field, spec) {
+                    Ok(p) => drop(targets.planes.insert(i, p)),
+                    Err(e) => self.warn(format!("restricción {}: {e}", i + 1)),
+                },
+            }
+        }
+        let mut solved = sketch.clone();
+        let report = solved.solve(&targets).map_err(err)?;
+        if report.status == SketchStatus::OverConstrained {
+            self.warn("hay restricciones en conflicto en el sketch 3D".into());
+        }
+        let chains = solved.chains().map_err(err);
+        self.ev.sketches3d.insert(id, crate::eval::Sketch3dResult { sketch: solved, report });
+        self.curves_from(id, chains?)
+    }
+
+    /// Alambres de una lista de caminos: la curva de la operación (uno solo,
+    /// el alambre; varios, un compuesto) y sus polilíneas para el visor.
+    fn curves_from(&mut self, id: FeatureId, chains: Vec<Vec<Curve>>) -> R<()> {
+        if chains.is_empty() {
+            self.ev.references.insert(id, RefGeom::Curves { lines: vec![] });
+            return Ok(());
+        }
+        let wires: Vec<Shape> = chains.iter().map(|c| Shape::wire(c)).collect::<Result<_, _>>().map_err(err)?;
+        let shape = if wires.len() == 1 { wires[0].clone() } else { Shape::compound(&wires).map_err(err)? };
+        let lines = shape.tessellate(0.02, 0.1).map_err(err)?.edges;
+        self.ev.references.insert(id, RefGeom::Curves { lines });
+        self.ev.curves.insert(id, shape);
+        Ok(())
+    }
+
+    /// Sketch envuelto sobre una cara: el sketch se dibuja en el plano tangente
+    /// en el centro de la cara (X a lo largo de u, Y de v) y cada curva se lleva
+    /// a la superficie midiendo sobre ella (en un cilindro, el desarrollo).
+    fn surface_sketch(&mut self, id: FeatureId, face: &FaceRef, sketch: &Sketch) -> R<()> {
+        let i = self.face("face", face)?;
+        let body = self.body()?.clone();
+        let (b, _) = body.face_eval(i, &[]).map_err(err)?;
+        let (u0, v0) = ((b[0] + b[1]) / 2.0, (b[2] + b[3]) / 2.0);
+        let (_, c) = body.face_eval(i, &[[u0, v0]]).map_err(err)?;
+        let c = c[0];
+        let (su, sv) = (norm(c.du), norm(c.dv));
+        if su < 1e-12 || sv < 1e-12 {
+            return Err("la cara no tiene una parametrización usable en el centro".into());
+        }
+        let x = normalize(c.du);
+        let plane = Plane { origin: c.point, normal: normalize(c.normal), x_dir: x };
+        let flip = if dot(c.dv, plane.y_dir()) < 0.0 { -1.0 } else { 1.0 };
+        let mut solved = sketch.clone();
+        let report = solved.solve().map_err(err)?;
+        let regions = find_regions(&solved).map_err(err)?;
+        // Curvas: muestras de cada entidad (densas: una recta no queda recta)
+        let step = (solved.extent().max(1.0) / 64.0).max(0.2);
+        let mut open = Vec::new();
+        let mut closed = Vec::new();
+        for e in solved.entities.iter().filter(|e| !e.construction) {
+            if matches!(e.geometry, Geometry::Point { .. }) {
+                continue;
+            }
+            let pts = crate::regions::sample_entity(&solved, e.id).map_err(err)?;
+            let mut dense: Vec<P2> = Vec::new();
+            for w in pts.windows(2) {
+                let n = (dist2(w[0], w[1]) / step).ceil().clamp(1.0, 200.0) as usize;
+                for k in 0..n {
+                    let t = k as f64 / n as f64;
+                    dense.push([w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])]);
+                }
+            }
+            dense.push(*pts.last().ok_or("entidad vacía")?);
+            let uv: Vec<[f64; 2]> = dense.iter().map(|p| [u0 + p[0] / su, v0 + flip * p[1] / sv]).collect();
+            let (_, on) = body.face_eval(i, &uv).map_err(err)?;
+            let mut world: Vec<P3> = on.iter().map(|q| q.point).collect();
+            if e.geometry.is_closed() {
+                world.pop();
+                closed.push(Curve::SplineTangents { points: world, tangents: vec![], periodic: true });
+            } else if let Some((a, b)) = e.geometry.ends() {
+                open.push((a, b, Curve::Spline(world)));
+            }
+        }
+        let mut chains = crate::sketch3d::chain_curves(open)?;
+        chains.extend(closed.into_iter().map(|c| vec![c]));
+        self.ev.sketches.insert(id, SketchResult { plane, sketch: solved, report, regions });
+        self.curves_from(id, chains)
+    }
+
     fn point(&self, field: &str, spec: &PointSpec) -> R<P3> {
         Ok(match spec {
             PointSpec::At { point } => *point,
@@ -1041,6 +1176,11 @@ impl Ctx<'_> {
                     return Err("un punto sobre la arista necesita una arista recta".into());
                 }
                 add(info.start, scale(sub(info.end, info.start), *at))
+            }
+            PointSpec::EdgeEnd { edge, end } => {
+                let i = self.edge(field, edge)?;
+                let info = self.body()?.edge_info(i).map_err(err)?;
+                if *end { info.end } else { info.start }
             }
             PointSpec::Reference { feature } => match self.ev.references.get(feature) {
                 Some(RefGeom::Point { point }) => *point,
@@ -1641,11 +1781,14 @@ impl Ctx<'_> {
                 if !solved.uses.is_empty() {
                     self.project_uses(&plane, &mut solved);
                 }
+                self.pierce(&plane, &mut solved);
                 let report = solved.solve().map_err(err)?;
                 let regions = find_regions(&solved).map_err(err)?;
                 self.ev.sketches.insert(f.id, SketchResult { plane, sketch: solved, report, regions });
                 Ok(())
             }
+            FeatureKind::Sketch3d { sketch } => self.sketch3d(f.id, sketch),
+            FeatureKind::SurfaceSketch { face, sketch } => self.surface_sketch(f.id, face, sketch),
             FeatureKind::Extrude(e) => {
                 let tool = self.extrude(f.id, e)?;
                 self.ev.tools.insert(f.id, (tool.clone(), e.op));

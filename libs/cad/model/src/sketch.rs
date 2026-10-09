@@ -196,6 +196,10 @@ pub enum SketchConstraint {
     Intersection { point: u32, a: u32, b: u32 },
     /// Entidad bloqueada entera: sus puntos y su radio quedan donde están.
     Lock { entity: u32 },
+    /// Perforación: el punto va donde la curva `curve` (una operación con
+    /// curva: hélice, sketch 3D o envuelto) cruza el plano del sketch. `at` lo
+    /// pone el historial al recalcular (para el solver es un punto fijo).
+    Pierce { point: u32, curve: u32, at: [f64; 2] },
     /// Continuidad de curvatura (G2) donde dos curvas se juntan: tangentes y
     /// con la misma curvatura. Una de las dos es una B-spline; la otra, una
     /// línea, un arco u otra B-spline.
@@ -294,7 +298,7 @@ impl SketchConstraint {
         let e = |id: &u32| Some(*id) == entity;
         match self {
             Coincident { a, b } | HorizontalPoints { a, b } | VerticalPoints { a, b } => p(a) || p(b),
-            Fixed { point: q, .. } => p(q),
+            Fixed { point: q, .. } | Pierce { point: q, .. } => p(q),
             Horizontal { line } | Vertical { line } | Length { line, .. } => e(line),
             Parallel { a, b } | Collinear { a, b } | Perpendicular { a, b } | Equal { a, b } | Tangent { a, b } | Concentric { a, b } | Angle { a, b, .. } => {
                 e(a) || e(b)
@@ -1244,7 +1248,7 @@ impl Sketch {
         };
         Ok(match *c {
             S::Coincident { a, b } => vec![Constraint::Coincident { p1_idx: ix(a)?, p2_idx: ix(b)? }],
-            S::Fixed { point, x, y } => vec![Constraint::Fixed { p_idx: ix(point)?, position: Point2::new(x, y) }],
+            S::Fixed { point, x, y } | S::Pierce { point, at: [x, y], .. } => vec![Constraint::Fixed { p_idx: ix(point)?, position: Point2::new(x, y) }],
             S::Horizontal { line: l } => {
                 let (a, b) = line(l)?;
                 vec![Constraint::Horizontal { p1_idx: a, p2_idx: b }]

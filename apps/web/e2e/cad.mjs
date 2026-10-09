@@ -2166,6 +2166,165 @@ const scenarios = {
     await b.shot("cotas_restricciones_2");
   },
 
+  async "sketch 3D: clics en el plano y en un vértice, ejes, largo, conflicto, perforar, barrido y sketch envuelto"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    // Después de que llegue la vista previa de lo último que se cambió
+    const view3d = () => b.eval(`window.__cadStore.settled().then(() => { const d = window.__cadStore.draft(); return (window.__cadStore.result()?.sketches3d ?? []).find((v) => v.id === d?.feature); })`);
+    const clickAt = async (p, wait = 1200) => b.click(...(await at(p)), { wait });
+    const clickButton = async (text) => {
+      const r = await b.eval(`(() => { const e = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === ${JSON.stringify(text)} && x.offsetParent !== null); if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+      if (!r) throw new Error("no encontré: " + text);
+      await b.click(...r, { wait: 1200 });
+    };
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un vértice de arriba de la caja que se vea (y se pueda elegir)
+    let v;
+    for (const c of [[10, -10, 10], [-10, -10, 10], [10, 10, 10], [-10, 10, 10]]) {
+      const [x, y] = await at(c);
+      if ((await b.eval(`window.__cadViewer.pick(${x}, ${y}, { vertices: true })?.kind`)) === "vertex") {
+        v = c;
+        break;
+      }
+    }
+    if (!v) throw new Error("no se ve ningún vértice de arriba");
+    const sx = Math.sign(v[0]);
+    const sy = -Math.sign(v[1]);
+    const B = [v[0] + 12 * sx, v[1], 10];
+    const C = [B[0], v[1] + 16 * sy, 10];
+    // Todo dentro del lienzo (a la derecha está el panel)
+    const canvas = await b.eval(`(() => { const r = window.__cadViewer.canvas.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; })()`);
+    for (const p of [v, B, C]) {
+      const [x, y] = await at(p);
+      if (x < canvas[0] + 10 || x > canvas[2] - 10 || y < canvas[1] + 10 || y > canvas[3] - 10) throw new Error(`fuera del visor: ${p} → ${x}, ${y}`);
+    }
+    await b.clickText("Sketch 3D");
+    await sleep(1500);
+    // Plano activo: la planta corrida 10 (la tapa de la caja)
+    if (!(await setInput(b, "Desplazado", 10))) throw new Error("falta el desplazamiento del plano activo");
+    await sleep(400);
+    await clickAt(v);
+    await clickAt(B);
+    await clickAt(C);
+    await clickButton("Terminar trazo");
+    let w = await view3d();
+    if (!w || w.sketch.points.length !== 3 || w.sketch.entities.length !== 2) throw new Error(`trazo: ${JSON.stringify(w?.sketch)}`);
+    const types = w.sketch.constraints.map((c) => c.type).sort();
+    if (JSON.stringify(types) !== JSON.stringify(["along_axis", "along_axis", "attach"])) throw new Error(`restricciones solas: ${types}`);
+    if (w.report.dof !== 2) throw new Error(`grados: ${w.report.dof}`);
+    // Largos: elegir cada línea en el visor y acotarla
+    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta del sketch 3D"] [role=radio]')].find((e) => e.textContent === "Elegir").click()`);
+    await sleep(300);
+    const mid = (p, q) => p.map((x, i) => (x + q[i]) / 2);
+    const solved = async (i) => {
+      const s = (await view3d()).sketch.points[i];
+      return [s.x, s.y, s.z];
+    };
+    const setLength = async (i, j, value) => {
+      const m = mid(await solved(i), await solved(j));
+      await clickAt(m, 600);
+      const sel = await b.eval(`window.__cadUi.sel3d()`);
+      if (sel.length !== 1) throw new Error(`elegir la línea ${i}-${j}: ${JSON.stringify(sel)}`);
+      await clickButton("Largo");
+      const ok = await b.eval(`(() => {
+        const rows = [...document.querySelectorAll('[data-constraint3d="length"]')];
+        const i = rows[rows.length - 1]?.querySelector("input");
+        if (!i) return false;
+        i.value = "${value}";
+        i.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      })()`);
+      if (!ok) throw new Error("no está el largo en la lista");
+      await sleep(1500);
+    };
+    await setLength(0, 1, 14);
+    await setLength(1, 2, 18);
+    w = await view3d();
+    if (w.report.status !== "well_constrained") throw new Error(`definido: ${JSON.stringify(w.report)}`);
+    const pt = (i) => [w.sketch.points[i].x, w.sketch.points[i].y, w.sketch.points[i].z];
+    const end = pt(2);
+    near(end[0], v[0] + 14 * sx, 1e-6, "fin x");
+    near(end[1], v[1] + 18 * sy, 1e-6, "fin y");
+    near(end[2], 10, 1e-6, "fin z");
+    // Paralela a Y en la primera: choca; lo demás sigue y se marca
+    await clickAt(mid(v, pt(1)), 600);
+    await clickButton("Paralela a Y");
+    await sleep(800);
+    w = await view3d();
+    if (w.report.status !== "over_constrained" || w.report.conflicting.length !== 1) throw new Error(`conflicto: ${JSON.stringify(w.report)}`);
+    if (!(await b.eval(`document.querySelector("[data-sketch3d-status]").textContent.includes("conflicto")`))) throw new Error("no avisa el conflicto");
+    await b.eval(`[...document.querySelectorAll('[data-constraint3d]')].at(-1).querySelector('[aria-label="Quitar"]').click()`);
+    await sleep(1500);
+    w = await view3d();
+    if (w.report.status !== "well_constrained") throw new Error(`sin el conflicto: ${w.report.status}`);
+    await b.shot("sketch3d");
+    await accept(b);
+    let r = await evaluate();
+    const path = r.references.find((x) => x.kind === "curves");
+    if (!path || path.lines.length !== 2) throw new Error(`curvas del sketch 3D: ${JSON.stringify(path?.kind)}`);
+    const pathId = path.id;
+    // Perfil en el plano lateral corrido hasta el vértice (x = v.x): círculo cuyo centro perfora el camino
+    const doc = await call("cad_get_document");
+    const prof = {
+      points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 3, y: 3 }],
+      entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 1.5 } }],
+      constraints: [{ type: "radius", entity: 2, value: 1.5 }],
+      next_id: 3,
+      origin: 0,
+    };
+    const profId = doc.next_id;
+    doc.features.push({ id: profId, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "yz" }, offset: v[0], sketch: prof } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${profId})`);
+    await sleep(1000);
+    await b.eval(`window.__cadUi.setSelection([1])`);
+    await sleep(400);
+    const name = doc.features.find((f) => f.id === pathId).name;
+    const done = await b.eval(`(() => { const e = [...document.querySelectorAll('[aria-label="Perforar"] button')].find((x) => x.textContent.trim() === ${JSON.stringify(name)}); e?.click(); return !!e; })()`);
+    if (!done) {
+      await b.shot("sketch3d-perforar");
+      throw new Error("falta «Perforar» con un punto elegido");
+    }
+    await sleep(1200);
+    const c = await b.eval(`window.__cadUi.session().sketch.points.find((p) => p.id === 1)`);
+    // En el plano lateral: x del sketch = Y del mundo, y = Z
+    near(c.x, v[1], 1e-4, "perforación en Y");
+    near(c.y, 10, 1e-4, "perforación en Z");
+    await b.eval(`window.__cadUi.finishSketch()`);
+    await sleep(1500);
+    const doc2 = await call("cad_get_document");
+    doc2.features.push({ id: doc2.next_id, name: "Tubo", suppressed: false, kind: { type: "sweep", sketch: profId, regions: { type: "all" }, path: { type: "curve", feature: pathId }, op: "new" } });
+    doc2.next_id += 1;
+    await call("cad_set_document", { document: doc2 });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    r = await evaluate();
+    const bad = r.status.filter((x) => x.state.type === "error");
+    if (bad.length) throw new Error(`barrido: ${JSON.stringify(bad)}`);
+    const tube = Math.PI * 1.5 * 1.5;
+    if (!(r.body.volume > 8000 + tube * 28 && r.body.volume < 8000 + tube * 32.5)) throw new Error(`volumen con el tubo: ${r.body.volume}`);
+    // Sketch envuelto sobre la tapa de la caja: una recta de 10 queda a z = 10
+    await b.clickText("Sketch envuelto");
+    await sleep(600);
+    await clickAt([2, 2, 10], 2500);
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error("no abrió el sketch envuelto");
+    await b.eval(`window.__cadUi.change((s) => { const a = window.__cadUi.addPoint(s, [-5, 0]); const c = window.__cadUi.addPoint(s, [5, 0]); window.__cadUi.addEntity(s, { type: "line", start: a, end: c }); })`);
+    await sleep(800);
+    await b.eval(`window.__cadUi.finishSketch()`);
+    await sleep(2000);
+    r = await evaluate();
+    const wrapped = r.references.filter((x) => x.kind === "curves").at(-1);
+    if (!wrapped || wrapped.id === pathId || wrapped.lines.length !== 1) throw new Error(`envuelto: ${JSON.stringify(wrapped && { id: wrapped.id, n: wrapped.lines.length })}`);
+    for (const p of wrapped.lines[0]) near(p[2], 10, 1e-6, "sobre la tapa");
+    const L = wrapped.lines[0].slice(1).reduce((acc, p, i) => acc + Math.hypot(...p.map((x, k) => x - wrapped.lines[0][i][k])), 0);
+    near(L, 10, 1e-3, "largo sobre la tapa");
+  },
+
   async "solver II: grados libres, sugerir, definir todo, cambio grande sin dar vuelta y conflicto parcial"(b) {
     await begin(b);
     const doc = await call("cad_get_document");

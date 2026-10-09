@@ -29,6 +29,7 @@ export const GLYPHS: Partial<Record<SketchConstraint["type"], string>> = {
   intersection: "✕",
   lock: "⊞",
   curvature: "G2",
+  pierce: "⊙",
 };
 
 export interface Glyph {

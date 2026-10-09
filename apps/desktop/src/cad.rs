@@ -114,6 +114,8 @@ pub struct BodyInfo {
 pub struct CadResult {
     pub status: Vec<FeatureStatus>,
     pub sketches: Vec<SketchView>,
+    /// Sketches 3D resueltos, en el orden del árbol
+    pub sketches3d: Vec<Sketch3dView>,
     pub body: Option<BodyInfo>,
     /// Parámetros calculados (valor o error)
     pub parameters: Vec<cad_model::ResolvedValue>,
@@ -132,6 +134,13 @@ pub struct CadResult {
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas): para
     /// coordinarlas entre sí
     pub threads: Vec<cad_model::ThreadAxis>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Sketch3dView {
+    pub id: cad_model::FeatureId,
+    pub sketch: cad_model::Sketch3d,
+    pub report: cad_model::Report3d,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,6 +264,8 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         })
         .collect();
     sketches.sort_by_key(|s| doc.index_of(s.id));
+    let mut sketches3d: Vec<Sketch3dView> = eval.sketches3d.iter().map(|(id, r)| Sketch3dView { id: *id, sketch: r.sketch.clone(), report: r.report.clone() }).collect();
+    sketches3d.sort_by_key(|s| doc.index_of(s.id));
     let body = m.body;
     let parts = part_views(doc, eval, &m.parts);
     let assembly = doc.assembly.as_ref().map(|a| {
@@ -271,6 +282,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         assembly,
         status: eval.status.clone(),
         sketches,
+        sketches3d,
         body,
         parameters: eval.parameters.clone(),
         bindings: eval.bindings.clone(),
@@ -641,6 +653,35 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     evaluate(state)?;
     let cache = state.cad_cache.lock().unwrap();
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
+}
+
+/// Vértice del sólido en `point` como punto que lo sigue: el extremo de una
+/// arista que termina ahí.
+#[tauri::command]
+pub async fn cad_vertex_spec(app: AppHandle, point: [f64; 3]) -> Result<cad_model::PointSpec, String> {
+    in_background(app, move |state| vertex_spec_impl(state, point)).await
+}
+
+fn vertex_spec_impl(state: &AppState, point: [f64; 3]) -> Result<cad_model::PointSpec, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let eval = &cache.as_ref().ok_or("No hay diseño")?.eval;
+    let body = eval.body.as_ref().ok_or("Todavía no hay un sólido")?;
+    let d = |a: [f64; 3]| (0..3).map(|k| (a[k] - point[k]).powi(2)).sum::<f64>().sqrt();
+    let mut best: Option<(f64, usize, bool)> = None;
+    for (i, e) in body.edges().map_err(|e| e.to_string())?.iter().enumerate() {
+        for (end, at) in [(false, e.start), (true, e.end)] {
+            if best.is_none_or(|b| d(at) < b.0) {
+                best = Some((d(at), i, end));
+            }
+        }
+    }
+    let (dist, i, end) = best.ok_or("El sólido no tiene aristas")?;
+    if dist > 1e-3 {
+        return Err("Ahí no hay un vértice del sólido".into());
+    }
+    let edge = eval.edge_ref(i).ok_or("Esa arista no existe")?;
+    Ok(cad_model::PointSpec::EdgeEnd { edge, end })
 }
 
 /// Arista del sólido proyectada al plano de un sketch ("Usar"), en
@@ -1606,6 +1647,7 @@ pub mod bridge {
             "cad_compare" => compare_impl(state, &arg::<Document>(args, "document")?).map(Reply::Bytes),
             "cad_face_ref" => ok(face_ref_impl(state, arg(args, "face")?)?),
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
+            "cad_vertex_spec" => ok(vertex_spec_impl(state, arg(args, "point")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
             "cad_assembly_mesh" => assembly_mesh_impl(state).map(Reply::Bytes),

@@ -1,12 +1,12 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
+import { CadViewer, arc3Polyline, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
@@ -14,7 +14,7 @@ import { constraintGlyphs } from "../../lib/sketchGlyphs";
 import { ellipseArcPolyline, ellipseParam, makeBSpline, rhoWeight, sample as sampleCurve } from "../../lib/sketchCurves";
 import { addParallelogram, insertSplinePoint, splineCurvature } from "../../lib/sketchSplines";
 import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
-import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
+import type { CadUi, Hit3d, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
@@ -1590,11 +1590,94 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
 
+  /** Sketch 3D en edición: el resuelto de la vista previa (o el del borrador) */
+  const sketch3dOf = (feature: number): { sketch: Sketch3d; report?: Report3d } | undefined => {
+    const view = store.result()?.sketches3d?.find((v) => v.id === feature);
+    if (view) return view;
+    const f = store.doc()?.features.find((x) => x.id === feature);
+    return f?.kind.type === "sketch3d" ? { sketch: f.kind.sketch } : undefined;
+  };
+  /** Qué hay bajo el puntero en el sketch 3D: punto, curva, vértice del sólido o el plano activo */
+  const hit3d = (e: PointerEvent, feature: number, plane: Plane): Hit3d | undefined => {
+    if (!viewer) return undefined;
+    const sk = sketch3dOf(feature)?.sketch;
+    const near = (p: P3) => {
+      const [x, y] = viewer!.screenOf(p);
+      return Math.hypot(x - e.clientX, y - e.clientY);
+    };
+    if (sk) {
+      let best: { d: number; id: number; at: P3 } | undefined;
+      for (const p of sk.points) {
+        const at: P3 = [p.x, p.y, p.z];
+        const d = near(at);
+        if (d <= 8 && (!best || d < best.d)) best = { d, id: p.id, at };
+      }
+      if (best) return { at: best.at, point: best.id };
+      const at = new Map(sk.points.map((p) => [p.id, [p.x, p.y, p.z] as P3]));
+      for (const ent of sk.entities) {
+        const g = ent.geometry;
+        const pts: P3[] =
+          g.type === "line"
+            ? [at.get(g.start)!, at.get(g.end)!]
+            : g.type === "arc"
+              ? arc3Polyline(at.get(g.start)!, at.get(g.mid)!, at.get(g.end)!)
+              : g.type === "spline"
+                ? g.points.map((q) => at.get(q)!)
+                : [];
+        if (pts.some((q) => !q)) continue;
+        for (let i = 1; i < pts.length; i++) {
+          const [ax, ay] = viewer.screenOf(pts[i - 1]);
+          const [bx, by] = viewer.screenOf(pts[i]);
+          const [dx, dy] = [bx - ax, by - ay];
+          const t = Math.max(0, Math.min(1, ((e.clientX - ax) * dx + (e.clientY - ay) * dy) / (dx * dx + dy * dy || 1)));
+          if (Math.hypot(ax + t * dx - e.clientX, ay + t * dy - e.clientY) <= 6) {
+            const q = pts[i - 1].map((v, k) => v + t * (pts[i][k] - v)) as P3;
+            return { at: q, entity: ent.id };
+          }
+        }
+      }
+    }
+    const v = viewer.pick(e.clientX, e.clientY, { vertices: true });
+    if (v?.kind === "vertex") return { at: v.at, vertex: true };
+    const p = viewer.planePoint3(e.clientX, e.clientY, plane);
+    return p ? { at: p.map((x) => Math.round(x * 1e4) / 1e4) as P3 } : undefined;
+  };
+  // Sketch 3D en el visor mientras su diálogo está abierto
+  createEffect(() => {
+    const d = store.draft();
+    const f = d ? store.doc()?.features.find((x) => x.id === d.feature) : undefined;
+    if (!viewer) return;
+    if (!d || f?.kind.type !== "sketch3d") {
+      viewer.setSketch3d(null);
+      return;
+    }
+    const view = sketch3dOf(f.id);
+    if (!view) return viewer.setSketch3d(null);
+    const mode = ui.pick();
+    const cursor = mode.kind === "sketch3d" ? ui.cursor3d() : undefined;
+    const conflict = (view.report?.conflicting ?? []).flatMap((i) => {
+      const c = view.sketch.constraints[i];
+      return c && "line" in c ? [c.line] : c && "a" in c && c.type !== "coincident" && c.type !== "distance" ? [c.a, c.b] : [];
+    });
+    viewer.setSketch3d({
+      sketch: view.sketch,
+      selected: ui.sel3d(),
+      free: view.report?.free_points ?? [],
+      conflict,
+      plane: mode.kind === "sketch3d" ? mode.plane : undefined,
+      preview: mode.kind === "sketch3d" && mode.from && cursor ? [mode.from, cursor] : undefined,
+      cursor,
+    });
+  });
+
   const pickClick = async (e: PointerEvent) => {
     if (!viewer) return;
     const mode = ui.pick();
     try {
-      if (mode.kind === "face") {
+      if (mode.kind === "sketch3d") {
+        const hit = hit3d(e, mode.feature, mode.plane);
+        if (hit) mode.click(hit, e);
+      } else if (mode.kind === "face") {
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
         if (hit?.kind !== "face") return;
         const ref = await store.faceRef(hit.face);
@@ -1704,6 +1787,8 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    const mode3 = ui.pick();
+    if (mode3.kind === "sketch3d" && e.buttons === 0) ui.setCursor3d(hit3d(e, mode3.feature, mode3.plane)?.at);
     const ls = lasso();
     if (ls && (e.buttons & 1) === 1) {
       const last = ls[ls.length - 1];
@@ -1894,7 +1979,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     ids.sort((a, b) => features.findIndex((f) => f.id === b) - features.findIndex((f) => f.id === a));
     return ids.map((id): MenuEntry => {
       const f = byId(id)!;
-      const sketch = f.kind.type === "sketch";
+      const sketch = editsAsSketch(f.kind);
       return {
         label: `${sketch ? "Editar sketch" : "Editar"} «${f.name}»`,
         onSelect: () => (sketch ? void store.settled().then(() => ui.editSketch(id)) : store.select(id)),

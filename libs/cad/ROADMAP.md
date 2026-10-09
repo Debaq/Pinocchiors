@@ -629,3 +629,9 @@ cargo test -p cad-model
   la geometría y resolución parcial con conflicto (lo demás se cumple). `cad_model::sketch_assist`,
   `Sketch::build` separado del resolver. Pruebas: Rust `model/tests/sketch_solver2.rs` (6) y e2e
   "solver II…".
+- **2026-10-09 Sketch 3D** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 20): operación Sketch 3D
+  (líneas, arcos por 3 puntos y splines en el espacio, atadas a vértices, planos y ejes, con su
+  propio solver) que sirve de camino de barrido; sketch envuelto sobre una cara (el editor de
+  siempre en el desarrollo de la cara); perforación (un punto del perfil donde la curva cruza
+  su plano). Puente C++: `cad_face_eval`, `cad_plane_hits`. Pruebas: Rust
+  `model/tests/sketch3d.rs` (7) y e2e "sketch 3D…".

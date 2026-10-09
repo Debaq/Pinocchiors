@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 14, 16 y 17 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 14, 16, 17 y 20 están hechas (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -171,6 +171,29 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     `sketchCurves.test.mjs` (7), `sketchSplines.test.mjs` (6), `sketchText.test.mjs` (+2); e2e
     "curvas: spline por polos…".*
 
+20. **Sketch 3D**: líneas, arcos y splines en el espacio con restricciones 3D, sketch sobre
+    superficie curva, perforación. *Hecha el 2026-10-09: operación `Sketch3d`
+    (`cad_model::sketch3d`): puntos xyz, línea, arco por 3 puntos, spline por puntos y punto;
+    restricciones coincidente, fijo, sobre un punto del modelo (`Attach` con un `PointSpec`:
+    vértice = `PointSpec::EdgeEnd` nuevo, centro, punto de referencia), sobre un plano (base,
+    cara o de referencia, con desplazamiento), paralela a un eje, paralelas, perpendiculares,
+    mismo largo, tangentes (línea y arco o dos arcos en el punto común), punto medio, largo,
+    distancia y ángulo. Solver propio Levenberg-Marquardt denso con jacobiano numérico; el
+    conflicto saca la que más falla y resuelve lo demás entero. Lo del modelo lo resuelve el
+    historial (no se guarda en el documento). Los caminos (sin ramas) son alambres
+    (`Evaluation.curves`, barrido por «curva») y `RefGeom::Curves` para el visor. Editor en el
+    diálogo: Línea (encadenada; casi paralela a un eje queda paralela), Arco, Spline, Punto y
+    Elegir con clics en el plano activo (planta, frente o lateral corrido), en un punto o en un
+    vértice del sólido (queda atado: `cad_vertex_spec`); restricciones según lo elegido, lista
+    con valores y conflictos en rojo. Sketch envuelto (`SurfaceSketch`): un sketch 2D común
+    (mismo editor) dibujado en el plano tangente en el centro de la cara; cada curva se
+    muestrea y se lleva a la superficie midiendo sobre ella (u = x / |∂S/∂u|; en un cilindro,
+    el desarrollo exacto). Perforación: `SketchConstraint::Pierce { point, curve, at }`, el
+    historial pone `at` donde la curva cruza el plano (`cad_plane_hits`, el cruce más cercano);
+    en el panel, botones «Perforar» con un punto elegido. Puente C++: `cad_face_eval`
+    (superficie, derivadas y normal en (u, v)) y `cad_plane_hits`. Pruebas: Rust
+    `model/tests/sketch3d.rs` (7); e2e "sketch 3D…".*
+
 ## Fases que faltan
 
 Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
@@ -227,20 +250,13 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 - **Validación según la operación**: revolución (el perfil no cruza el eje), barrido (camino
   sin ramas), transición (una región por sección).
 
-### 20. Sketch 3D (L, backend + C++)
-
-- **Sketch 3D**: líneas, arcos y splines en el espacio con restricciones 3D (paralelo a un eje,
-  sobre un plano, coincidente con vértices del sólido).
-- **Sketch sobre superficie curva**: curvas en las coordenadas UV de una cara.
-- **Perforación**: un punto del sketch que atraviesa una curva fuera de su plano (para barridos).
-
 ## Cobertura de la lista
 
 ✅ hecho · número = fase que lo trae.
 
 **Soporte y planos** — ✅ planos de origen, de referencia y caras planas; cambiar el plano;
-origen y ejes propios; vista normal al entrar. — 15: dirección horizontal, invertir normal, vista
-de corte al entrar, ocultar el modelo. — 20: sketch 3D, sobre superficie curva.
+origen y ejes propios; vista normal al entrar; sketch 3D, sobre superficie curva. — 15:
+dirección horizontal, invertir normal, vista de corte al entrar, ocultar el modelo.
 
 **Entidades** — ✅ punto, línea, línea de construcción, rectángulo por 2 esquinas, por centro y
 por 3 puntos, polígono inscrito y circunscrito, círculo por centro, por 2 y 3 puntos y tangente
@@ -268,7 +284,7 @@ romper vínculo.
 paralelo, perpendicular, tangente, concéntrico, igual largo, igual radio, simétrico (puntos),
 punto medio, punto sobre línea y círculo, fijo, tangencia en extremos de spline, alineación con
 el origen, restricciones con geometría proyectada, coradial, simétrico de entidades, punto en
-intersección, bloqueo de entidad, punto sobre spline y elipse, curvatura igual / G2. — 20:
+intersección, bloqueo de entidad, punto sobre spline y elipse, curvatura igual / G2,
 perforación.
 
 **Cotas** — ✅ horizontal, vertical, alineada, angular, radial, diametral, largo de arco,
@@ -322,4 +338,5 @@ bloques, subsketches, capas.
   incógnitas tardan segundos.
 - **Glifos de restricciones** (fase 9): con sketches grandes tapan el dibujo; agrupar por
   entidad y ocultar al alejar.
-- **Sketch 3D** (fase 20): es casi un modo nuevo (solver con puntos 3D); dejarlo al final.
+- **Sketch 3D** (fase 20, hecha): el solver 3D es denso con jacobiano numérico (sketches de
+  decenas de puntos); no se arrastra en el visor (se dibuja con clics y se ajusta con números).

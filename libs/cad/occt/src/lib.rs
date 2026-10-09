@@ -203,6 +203,15 @@ impl Curve {
     }
 }
 
+/// Un punto de una superficie con sus derivadas y su normal.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SurfacePoint {
+    pub point: P3,
+    pub du: P3,
+    pub dv: P3,
+    pub normal: P3,
+}
+
 /// Sistema de coordenadas para primitivas: origen, eje Z y eje X.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Frame {
@@ -797,6 +806,31 @@ impl Shape {
             return Err(last_error());
         }
         Ok(out.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect())
+    }
+
+    /// Superficie de la cara `index` en cada (u, v): límites de parámetros
+    /// (umin, umax, vmin, vmax) y por punto la posición, las derivadas en u y
+    /// en v y la normal hacia afuera.
+    pub fn face_eval(&self, index: usize, uv: &[[f64; 2]]) -> Result<([f64; 4], Vec<SurfacePoint>)> {
+        let flat: Vec<f64> = uv.iter().flatten().copied().collect();
+        let mut bounds = [0.0; 4];
+        let mut out = vec![0.0; 12 * uv.len()];
+        if unsafe { ffi::cad_face_eval(self.ptr(), index as i32, flat.as_ptr(), uv.len() as i32, bounds.as_mut_ptr(), out.as_mut_ptr()) } == 0 {
+            return Err(last_error());
+        }
+        let v = |c: &[f64], i: usize| [c[i], c[i + 1], c[i + 2]];
+        Ok((bounds, out.chunks_exact(12).map(|c| SurfacePoint { point: v(c, 0), du: v(c, 3), dv: v(c, 6), normal: v(c, 9) }).collect()))
+    }
+
+    /// Puntos donde las aristas de la forma cruzan el plano.
+    pub fn plane_hits(&self, origin: P3, normal: P3) -> Result<Vec<P3>> {
+        let max = 256;
+        let mut out = vec![0.0; 3 * max];
+        let n = unsafe { ffi::cad_plane_hits(self.ptr(), origin.as_ptr(), normal.as_ptr(), out.as_mut_ptr(), max as i32) };
+        if n < 0 {
+            return Err(last_error());
+        }
+        Ok(out.chunks_exact(3).take(n as usize).map(|c| [c[0], c[1], c[2]]).collect())
     }
 
     /// Curvas donde el plano corta la forma (compuesto de aristas).
