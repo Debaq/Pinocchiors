@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4 y 6–9 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10 y 12 están hechas (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -91,23 +91,36 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
    WebGL; ahora lo reemplazado se libera después del cuadro (`CadViewer.retired`), 13–27 ms por
    clic. El doble clic mide con `e.timeStamp` (la hora del evento).*
 
+10. **Cotas II**: ángulo suplementario, largo total, mínima y máxima con círculos, ordenadas y
+    cadena, unidades en la cota, bloquear, nombre/valor/fórmula, mover el texto. *Hecha el
+    2026-10-09: `Angle.supplementary` (el ángulo hasta la segunda línea invertida; en el panel
+    y en el clic derecho de la cota), `CurveLength` (líneas, arcos y círculos; solver
+    `CurveLength`), `CircleDistance` entre un círculo o arco y otro, un punto o una línea
+    (solver `RimDistance` con signos; la mínima entre círculos es por fuera o por dentro según
+    cómo están al resolver). `DimOpts` en todas las cotas: `locked` (no se edita y transformar
+    no la cambia), `offset` (texto arrastrado, en mm del plano: sigue a lo acotado, con guía
+    punteada) y `ordinate`. Ordenadas y cadena son acciones del panel con 3 o más puntos
+    (distancias horizontales o verticales desde el primero, o cada una desde la anterior, con
+    los textos en fila). Unidades en las fórmulas (`mm cm m in " ft deg ° rad`), así que una
+    cota acepta `1 in`. Barra del sketch: Valor / Nombre (`d1`, `d2`… o el parámetro) /
+    Fórmula. Clic derecho en una cota: bloquear, devolver el texto, suplementario, quitar.*
+
+12. **Restricciones II**: coradial, simetría de entidades, punto en intersección, bloquear
+    entidad, punto sobre spline y elipse. *Hecha el 2026-10-09: `Coradial`, `SymmetricEntities`
+    (puntos, líneas, círculos, arcos, elipses y splines con la misma cantidad de puntos; los
+    extremos se emparejan como están y en los arcos el reflejo da vuelta el sentido),
+    `PointOnCurve` (solver `PointOnEllipse` y `PointOnCurveSpline`: la spline de Hermite con
+    tangentes de Catmull-Rom que dibuja el sketch; la interpolación de OCCT del sólido puede
+    diferir un poco), `Intersection` (dos «sobre» en una) y `Lock` (fijos en el lugar actual;
+    transformar no mueve lo bloqueado). **Curvatura igual / G2 pasa a la fase 17**: necesita
+    que la spline del sketch y la del sólido sean la misma curva (polos explícitos), si no la
+    curvatura que se iguala no es la del modelo. Pruebas: Rust `model/tests/sketch_constraints2.rs`
+    (10), unidades en `expr.rs`, node `sketchTransform.test.mjs` y `sketchGlyphs.test.mjs`, e2e
+    "cotas II y restricciones II…".*
+
 ## Fases que faltan
 
 Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
-
-### 10. Cotas II (M, backend)
-
-- **Ángulo suplementario** (180° − el ángulo; el lado del ángulo elegido con el clic).
-- **Largo total de una curva** (cadena de líneas, arcos y splines): restricción nueva en el
-  solver (suma de largos, jacobiano numérico).
-- **Entre círculos**: mínima y máxima además de entre centros (|c₁c₂| ∓ r₁ ∓ r₂).
-- **Cotas de ordenadas** (un origen y distancias horizontales o verticales a varios puntos,
-  dibujadas en fila) y **cotas en cadena** (cada una desde la anterior).
-- **Unidades dentro de la cota**: escribir `1 in`, `2 cm`, `30 mm`, `45 deg`.
-- **Bloquear una cota** (no se edita por error; transformar no la cambia).
-- **Mostrar nombre, valor o fórmula** (cada cota con nombre `d1`, `d2`… o el del parámetro).
-- **Mover el texto de la cota** arrastrándolo; el desplazamiento se guarda en la cota (campo
-  nuevo en el modelo, el solver lo ignora).
 
 ### 11. Edición II (M)
 
@@ -122,15 +135,6 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 - **Reparar**: unir extremos a menos de una tolerancia, quitar entidades cortísimas, partir en
   los cruces y las T sin partir (lo que marca la revisión).
 - **Cerrar contorno**: unir los extremos sueltos más cercanos con una línea.
-
-### 12. Restricciones II (M, backend)
-
-- **Coradial** (mismo centro y mismo radio).
-- **Simétrico de entidades** (líneas, arcos y círculos respecto de una línea; hoy solo puntos).
-- **Punto en intersección** como restricción propia (hoy sale del anclaje, como dos «sobre»).
-- **Bloquear entidad completa** (todos sus puntos y su radio).
-- **Igual curvatura / continuidad G2** entre una spline y un arco u otra spline.
-- **Punto sobre spline y sobre elipse** (el solver ya tiene `PointOnSpline`).
 
 ### 13. Asistencia al dibujo (M)
 
@@ -180,6 +184,8 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 - **Agregar y quitar puntos** de una spline; **simplificar** (menos puntos dentro de una
   tolerancia); **convertir entidades a spline**.
 - **Peine de curvatura**, **puntos de inflexión** y **radio mínimo**.
+- **Curvatura igual / continuidad G2** entre una spline y un arco u otra spline (viene de la
+  fase 12: con polos explícitos la curvatura del sketch es la del sólido).
 
 ### 18. Archivos y fórmulas (M)
 
@@ -239,13 +245,13 @@ romper vínculo.
 **Restricciones** — ✅ coincidente, horizontal, vertical (de línea y entre puntos), colineal,
 paralelo, perpendicular, tangente, concéntrico, igual largo, igual radio, simétrico (puntos),
 punto medio, punto sobre línea y círculo, fijo, tangencia en extremos de spline, alineación con
-el origen, restricciones con geometría proyectada. — 12: curvatura igual / G2, igual curvatura,
-coradial, simétrico de entidades, punto en intersección, bloqueo de entidad, punto sobre
-spline y elipse. — 20: perforación.
+el origen, restricciones con geometría proyectada, coradial, simétrico de entidades, punto en
+intersección, bloqueo de entidad, punto sobre spline y elipse. — 17: curvatura igual / G2. —
+20: perforación.
 
 **Cotas** — ✅ horizontal, vertical, alineada, angular, radial, diametral, largo de arco,
 punto-línea, entre paralelas, entre centros, simétrica respecto de un eje, impulsora, conducida,
-conmutar, edición en sitio, expresiones, variables con nombre. — 10: ángulo suplementario, largo
+conmutar, edición en sitio, expresiones, variables con nombre, ángulo suplementario, largo
 total, entre círculos mín./máx., ordenadas, cadena, unidades en la cota, bloqueo, mostrar
 nombre/valor/fórmula, reubicar el texto.
 

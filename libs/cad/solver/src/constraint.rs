@@ -178,6 +178,153 @@ pub enum Constraint {
         end_idx: usize,
         length: f64,
     },
+
+    /// Largo total de una cadena de tramos (líneas, arcos y círculos)
+    CurveLength { parts: Vec<CurvePart>, length: f64 },
+
+    /// Distancia mínima o máxima con círculos de por medio:
+    /// `signs[0]·base + signs[1]·ra + signs[2]·rb = distance`, donde `base` es
+    /// |a − b| (o la distancia de `a` a la recta `b`–`b_end`) y `ra`, `rb` los
+    /// radios |a_rim − a| y |b_rim − b| (0 si no hay círculo)
+    RimDistance {
+        a: usize,
+        a_rim: Option<usize>,
+        b: usize,
+        b_end: Option<usize>,
+        b_rim: Option<usize>,
+        signs: [f64; 3],
+        distance: f64,
+    },
+
+    /// Punto sobre una elipse (`major` y `minor`: extremos de los semiejes)
+    PointOnEllipse {
+        p_idx: usize,
+        center: usize,
+        major: usize,
+        minor: usize,
+    },
+
+    /// Punto sobre una spline suave por sus puntos (tramos de Hermite con
+    /// tangentes de Catmull-Rom: la misma curva que dibuja el sketch). Las
+    /// manijas dan la dirección de salida y de llegada de una abierta.
+    PointOnCurveSpline {
+        p_idx: usize,
+        points: Vec<usize>,
+        closed: bool,
+        start_handle: Option<usize>,
+        end_handle: Option<usize>,
+    },
+}
+
+/// Tramo de una cadena para `Constraint::CurveLength`
+#[derive(Debug, Clone)]
+pub enum CurvePart {
+    Segment { a: usize, b: usize },
+    /// Antihorario de `start` a `end`, radio |start − center|
+    Arc { center: usize, start: usize, end: usize },
+    Circle { center: usize, rim: usize },
+}
+
+impl CurvePart {
+    fn indices(&self) -> Vec<usize> {
+        match *self {
+            CurvePart::Segment { a, b } => vec![a, b],
+            CurvePart::Arc { center, start, end } => vec![center, start, end],
+            CurvePart::Circle { center, rim } => vec![center, rim],
+        }
+    }
+
+    fn remap(&self, r: &impl Fn(&usize) -> usize) -> Self {
+        match self {
+            CurvePart::Segment { a, b } => CurvePart::Segment { a: r(a), b: r(b) },
+            CurvePart::Arc { center, start, end } => CurvePart::Arc { center: r(center), start: r(start), end: r(end) },
+            CurvePart::Circle { center, rim } => CurvePart::Circle { center: r(center), rim: r(rim) },
+        }
+    }
+
+    fn length(&self, points: &[Point2]) -> f64 {
+        match *self {
+            CurvePart::Segment { a, b } => (points[b].co - points[a].co).norm(),
+            CurvePart::Arc { center, start, end } => {
+                let c = points[center].co;
+                arc_length(points[start].co - c, points[end].co - c)
+            }
+            CurvePart::Circle { center, rim } => std::f64::consts::TAU * (points[rim].co - points[center].co).norm(),
+        }
+    }
+}
+
+/// Largo del arco antihorario de `u` a `v` (vectores desde el centro), barrido en (0, 2π]
+fn arc_length(u: nalgebra::Vector2<f64>, v: nalgebra::Vector2<f64>) -> f64 {
+    let mut sweep = (u.x * v.y - u.y * v.x).atan2(u.dot(&v));
+    if sweep <= 0.0 {
+        sweep += std::f64::consts::TAU;
+    }
+    u.norm() * sweep
+}
+
+/// Punto más cercano a `p` sobre la spline suave por `pts` (ver
+/// `Constraint::PointOnCurveSpline`); `t0`/`t1`: direcciones de las manijas.
+pub fn closest_on_spline(
+    pts: &[nalgebra::Vector2<f64>],
+    closed: bool,
+    t0: Option<nalgebra::Vector2<f64>>,
+    t1: Option<nalgebra::Vector2<f64>>,
+    p: nalgebra::Vector2<f64>,
+) -> nalgebra::Vector2<f64> {
+    type V = nalgebra::Vector2<f64>;
+    let n = pts.len();
+    if n == 0 {
+        return p;
+    }
+    if n == 1 {
+        return pts[0];
+    }
+    let at = |i: isize| pts[i.rem_euclid(n as isize) as usize];
+    let along = |dir: V, r: V| if dir.norm() < 1e-15 { r } else { dir * (r.norm() / dir.norm()) };
+    let tangent = |i: usize| -> V {
+        if closed {
+            return (at(i as isize + 1) - at(i as isize - 1)) / 2.0;
+        }
+        if i == 0 {
+            return t0.map_or(pts[1] - pts[0], |t| along(t, pts[1] - pts[0]));
+        }
+        if i == n - 1 {
+            return t1.map_or(pts[n - 1] - pts[n - 2], |t| along(t, pts[n - 1] - pts[n - 2]));
+        }
+        (pts[i + 1] - pts[i - 1]) / 2.0
+    };
+    let segs = if closed { n } else { n - 1 };
+    let eval = |seg: usize, t: f64| -> V {
+        let (a, b) = (at(seg as isize), at(seg as isize + 1));
+        let (ma, mb) = (tangent(seg), tangent((seg + 1) % n));
+        let (t2, t3) = (t * t, t * t * t);
+        a * (2.0 * t3 - 3.0 * t2 + 1.0) + ma * (t3 - 2.0 * t2 + t) + b * (-2.0 * t3 + 3.0 * t2) + mb * (t3 - t2)
+    };
+    const STEPS: usize = 24;
+    let (mut best, mut best_d) = ((0, 0.0), f64::INFINITY);
+    for seg in 0..segs {
+        for k in 0..=STEPS {
+            let t = k as f64 / STEPS as f64;
+            let d = (eval(seg, t) - p).norm_squared();
+            if d < best_d {
+                (best, best_d) = ((seg, t), d);
+            }
+        }
+    }
+    // Afinar por sección dorada alrededor de la mejor muestra
+    let (seg, t) = best;
+    let (mut lo, mut hi) = ((t - 1.0 / STEPS as f64).max(0.0), (t + 1.0 / STEPS as f64).min(1.0));
+    let g = 0.5 * (5f64.sqrt() - 1.0);
+    for _ in 0..40 {
+        let (m1, m2) = (hi - g * (hi - lo), lo + g * (hi - lo));
+        if (eval(seg, m1) - p).norm_squared() < (eval(seg, m2) - p).norm_squared() {
+            hi = m2;
+        } else {
+            lo = m1;
+        }
+    }
+    eval(seg, 0.5 * (lo + hi))
 }
 
 impl Constraint {
@@ -208,6 +355,10 @@ impl Constraint {
             Constraint::Radius { .. } => 1,
             Constraint::DistancePointLine { .. } => 1,
             Constraint::ArcLength { .. } => 1,
+            Constraint::CurveLength { .. } => 1,
+            Constraint::RimDistance { .. } => 1,
+            Constraint::PointOnEllipse { .. } => 1,
+            Constraint::PointOnCurveSpline { .. } => 2,
         }
     }
 
@@ -300,6 +451,14 @@ impl Constraint {
             } => vec![*center_idx, *p_on_circle],
             Constraint::DistancePointLine { p_idx, line_p1, line_p2, .. } => vec![*p_idx, *line_p1, *line_p2],
             Constraint::ArcLength { center_idx, start_idx, end_idx, .. } => vec![*center_idx, *start_idx, *end_idx],
+            Constraint::CurveLength { parts, .. } => parts.iter().flat_map(CurvePart::indices).collect(),
+            Constraint::RimDistance { a, a_rim, b, b_end, b_rim, .. } => {
+                [Some(*a), *a_rim, Some(*b), *b_end, *b_rim].into_iter().flatten().collect()
+            }
+            Constraint::PointOnEllipse { p_idx, center, major, minor } => vec![*p_idx, *center, *major, *minor],
+            Constraint::PointOnCurveSpline { p_idx, points, start_handle, end_handle, .. } => {
+                std::iter::once(*p_idx).chain(points.iter().copied()).chain(*start_handle).chain(*end_handle).collect()
+            }
         }
     }
 
@@ -369,6 +528,25 @@ impl Constraint {
                 Constraint::DistancePointLine { p_idx: r(p_idx), line_p1: r(line_p1), line_p2: r(line_p2), distance: *distance },
             Constraint::ArcLength { center_idx, start_idx, end_idx, length } =>
                 Constraint::ArcLength { center_idx: r(center_idx), start_idx: r(start_idx), end_idx: r(end_idx), length: *length },
+            Constraint::CurveLength { parts, length } => Constraint::CurveLength { parts: parts.iter().map(|p| p.remap(&r)).collect(), length: *length },
+            Constraint::RimDistance { a, a_rim, b, b_end, b_rim, signs, distance } => Constraint::RimDistance {
+                a: r(a),
+                a_rim: a_rim.as_ref().map(&r),
+                b: r(b),
+                b_end: b_end.as_ref().map(&r),
+                b_rim: b_rim.as_ref().map(&r),
+                signs: *signs,
+                distance: *distance,
+            },
+            Constraint::PointOnEllipse { p_idx, center, major, minor } =>
+                Constraint::PointOnEllipse { p_idx: r(p_idx), center: r(center), major: r(major), minor: r(minor) },
+            Constraint::PointOnCurveSpline { p_idx, points, closed, start_handle, end_handle } => Constraint::PointOnCurveSpline {
+                p_idx: r(p_idx),
+                points: points.iter().map(&r).collect(),
+                closed: *closed,
+                start_handle: start_handle.as_ref().map(&r),
+                end_handle: end_handle.as_ref().map(&r),
+            },
         }
     }
 
@@ -530,6 +708,48 @@ impl Constraint {
                     sweep += std::f64::consts::TAU;
                 }
                 vec![u.norm() * sweep - length]
+            }
+
+            Constraint::CurveLength { parts, length } => vec![parts.iter().map(|p| p.length(points)).sum::<f64>() - length],
+
+            Constraint::RimDistance { a, a_rim, b, b_end, b_rim, signs, distance } => {
+                let (pa, pb) = (points[*a].co, points[*b].co);
+                let base = match b_end {
+                    Some(e) => {
+                        let d = points[*e].co - pb;
+                        let f = pa - pb;
+                        let l = d.norm();
+                        if l < 1e-15 { f.norm() } else { (d.x * f.y - d.y * f.x).abs() / l }
+                    }
+                    None => (pa - pb).norm(),
+                };
+                let ra = a_rim.map_or(0.0, |r| (points[r].co - pa).norm());
+                let rb = b_rim.map_or(0.0, |r| (points[r].co - pb).norm());
+                vec![signs[0] * base + signs[1] * ra + signs[2] * rb - distance]
+            }
+
+            Constraint::PointOnEllipse { p_idx, center, major, minor } => {
+                let c = points[*center].co;
+                let u = points[*major].co - c;
+                let (ra, rb) = (u.norm(), (points[*minor].co - c).norm());
+                if ra < 1e-12 || rb < 1e-12 {
+                    return vec![(points[*p_idx].co - c).norm()];
+                }
+                let q = points[*p_idx].co - c;
+                // Coordenadas en el marco de la elipse
+                let (x, y) = (q.dot(&u) / ra, (u.x * q.y - u.y * q.x) / ra);
+                // En mm cerca de la curva: (ρ − 1)·√(a·b)
+                let rho = ((x / ra).powi(2) + (y / rb).powi(2)).sqrt();
+                vec![(rho - 1.0) * (ra * rb).sqrt()]
+            }
+
+            Constraint::PointOnCurveSpline { p_idx, points: ids, closed, start_handle, end_handle } => {
+                let pts: Vec<_> = ids.iter().map(|&i| points[i].co).collect();
+                let handle = |h: &Option<usize>, end: usize| h.map(|i| points[i].co - pts[end]);
+                let (t0, t1) = if *closed || pts.is_empty() { (None, None) } else { (handle(start_handle, 0), handle(end_handle, pts.len() - 1)) };
+                let p = points[*p_idx].co;
+                let q = closest_on_spline(&pts, *closed, t0, t1, p);
+                vec![q.x - p.x, q.y - p.y]
             }
 
             Constraint::EqualVector { a1, a2, b1, b2 } => {
@@ -811,7 +1031,11 @@ impl Constraint {
             | Constraint::TangentCircles { .. }
             | Constraint::EqualRotation { .. }
             | Constraint::DistancePointLine { .. }
-            | Constraint::ArcLength { .. } => self.jacobian_numerical(points),
+            | Constraint::ArcLength { .. }
+            | Constraint::CurveLength { .. }
+            | Constraint::RimDistance { .. }
+            | Constraint::PointOnEllipse { .. }
+            | Constraint::PointOnCurveSpline { .. } => self.jacobian_numerical(points),
 
             Constraint::EqualVector { a1, a2, b1, b2 } => vec![
                 (0, *a1, 1.0, 0.0),

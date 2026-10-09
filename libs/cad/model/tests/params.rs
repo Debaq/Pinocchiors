@@ -55,8 +55,8 @@ fn sketch_dimensions_and_extrusion_follow_parameters() {
     let l = s.rectangle([0.0, 0.0], [30.0, 10.0]);
     let Geometry::Line { start, .. } = s.entity(l[0]).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::Fixed { point: start, x: 0.0, y: 0.0 });
-    let largo = s.constrain(SketchConstraint::Length { line: l[0], value: 30.0, reference: false });
-    s.constrain(SketchConstraint::Length { line: l[1], value: 10.0, reference: false });
+    let largo = s.constrain(SketchConstraint::Length { line: l[0], value: 30.0, reference: false, opts: Default::default() });
+    s.constrain(SketchConstraint::Length { line: l[1], value: 10.0, reference: false, opts: Default::default() });
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
     let ext = doc.add(FeatureKind::Extrude(Extrude {
         sketch: sk,

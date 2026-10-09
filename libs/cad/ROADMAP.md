@@ -605,3 +605,12 @@ cargo test -p cad-model
   lado, bordes afinados por bisección). Al recalcular, las curvas de la silueta y la
   intersección se reparten entre sus entidades por tipo y cercanía; si cambia la cantidad,
   avisa. Pruebas: Rust `model/tests/project.rs` (7) y e2e "usar del modelo…".
+- **2026-10-09 Cotas II y restricciones II** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fases 10 y 12):
+  ángulo suplementario, largo total de una cadena, distancia mínima y máxima entre un círculo y
+  otro, un punto o una línea, cotas de ordenadas y en cadena, unidades en las fórmulas
+  (`1 in`, `2 cm`, `45 deg`), cotas bloqueadas, texto de la cota arrastrable con guía, etiquetas
+  con valor, nombre o fórmula; coradiales, simetría entre entidades, punto sobre elipse y
+  spline, punto en la intersección y entidad bloqueada. Solver: `CurveLength`, `RimDistance`,
+  `PointOnEllipse`, `PointOnCurveSpline`. G2 pasa a la fase 17. Pruebas: Rust
+  `model/tests/sketch_constraints2.rs` (10) y unidades en `expr.rs`, node (3 nuevas) y e2e
+  "cotas II y restricciones II…".

@@ -2,7 +2,7 @@
 // portapapeles para copiar y pegar (dentro de un sketch o entre sketches).
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
-import { addEntity, addPoint, constraintIds, geometryPoints, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { addEntity, addPoint, constraintIds, geometryPoints, mapConstraintIds, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
 export type Xform = (p: P2) => P2;
@@ -49,16 +49,23 @@ export function selectedEntities(s: Sketch, ids: number[]): SketchEntity[] {
   return s.entities.filter((e) => set.has(e.id) || (e.geometry.type === "point" && set.has(e.geometry.point)));
 }
 
-/** Puntos que mueve la selección (sin el origen ni lo ligado al sólido) */
+/** Entidades que no se mueven: ligadas al sólido o bloqueadas */
+export function heldEntities(s: Sketch): Set<number> {
+  const out = new Set((s.uses ?? []).map((u) => u.entity));
+  for (const c of s.constraints) if (c.type === "lock") out.add(c.entity);
+  return out;
+}
+
+/** Puntos que mueve la selección (sin el origen, lo ligado al sólido ni lo bloqueado) */
 export function selectionPoints(s: Sketch, ids: number[]): number[] {
-  const used = new Set((s.uses ?? []).map((u) => u.entity));
+  const used = heldEntities(s);
   const out = new Set<number>();
   for (const e of selectedEntities(s, ids)) if (!used.has(e.id)) for (const p of geometryPoints(e.geometry)) out.add(p);
   for (const t of textsOf(s, new Set(ids))) for (const p of [t.anchor, ...t.points]) out.add(p);
   // Puntos elegidos sueltos (el extremo de una línea, por ejemplo)
   for (const id of ids) if (s.points.some((p) => p.id === id)) out.add(id);
   if (s.origin !== undefined) out.delete(s.origin);
-  // Lo ligado al sólido se queda donde está (también un extremo compartido)
+  // Lo ligado al sólido y lo bloqueado se quedan donde están (también un extremo compartido)
   for (const e of s.entities) if (used.has(e.id)) for (const p of geometryPoints(e.geometry)) out.delete(p);
   return [...out].filter((id) => s.points.some((p) => p.id === id));
 }
@@ -110,6 +117,68 @@ function toLine(p: P2, [a, b]: [P2, P2]): number {
   return l ? Math.abs(cross(d, sub(p, a))) / l : len(sub(p, a));
 }
 
+type Target = { kind: "point"; p: P2 } | { kind: "line"; a: P2; b: P2 } | { kind: "round"; c: P2; r: number };
+
+/** Qué es un id en una cota con círculos: punto, línea o círculo/arco */
+function dimTarget(s: Sketch, id: number): Target | undefined {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e) {
+    const p = pos(s, id);
+    return p && { kind: "point", p };
+  }
+  const g = e.geometry;
+  if (g.type === "line") {
+    const l = lineOf(s, id);
+    return l && { kind: "line", a: l[0], b: l[1] };
+  }
+  if (g.type === "circle" || g.type === "arc") {
+    const [c, r] = [pos(s, g.center), radiusOf(s, id)];
+    return c && r !== undefined ? { kind: "round", c, r } : undefined;
+  }
+  if (g.type === "point") {
+    const p = pos(s, g.point);
+    return p && { kind: "point", p };
+  }
+  return undefined;
+}
+
+/**
+ * Distancia mínima o máxima entre un círculo o arco y otro, un punto o una
+ * línea (la misma cuenta que `Sketch::circle_gap` en Rust): la mínima entre
+ * círculos es por fuera, o por dentro si uno contiene al otro.
+ */
+export function circleGap(s: Sketch, a: number, b: number, max: boolean): number | undefined {
+  let [ta, tb] = [dimTarget(s, a), dimTarget(s, b)];
+  if (!ta || !tb) return undefined;
+  if (ta.kind === "line") [ta, tb] = [tb, ta];
+  if (ta.kind === "line" || (ta.kind !== "round" && tb.kind !== "round")) return undefined;
+  const pa = ta.kind === "round" ? ta.c : ta.p;
+  const base = tb.kind === "line" ? toLine(pa, [tb.a, tb.b]) : len(sub(pa, tb.kind === "round" ? tb.c : tb.p));
+  const [ra, rb] = [ta.kind === "round" ? ta.r : 0, tb.kind === "round" ? tb.r : 0];
+  if (max) return base + ra + rb;
+  if (ta.kind === "round" && tb.kind === "round") return base < Math.abs(ra - rb) ? Math.abs(ra - rb) - base : base - ra - rb;
+  return Math.abs(base - ra - rb);
+}
+
+/** Largo de una línea, un arco o un círculo */
+export function curveLength(s: Sketch, id: number): number | undefined {
+  const g = s.entities.find((e) => e.id === id)?.geometry;
+  if (g?.type === "line") {
+    const l = lineOf(s, id);
+    return l && len(sub(l[1], l[0]));
+  }
+  if (g?.type === "circle") return 2 * Math.PI * g.radius;
+  if (g?.type === "arc") {
+    const [k, a, b] = [pos(s, g.center), pos(s, g.start), pos(s, g.end)];
+    if (!k || !a || !b) return undefined;
+    const [u, v] = [sub(a, k), sub(b, k)];
+    let sweep = Math.atan2(cross(u, v), dot(u, v));
+    if (sweep <= 0) sweep += 2 * Math.PI;
+    return len(u) * sweep;
+  }
+  return undefined;
+}
+
 /**
  * Lo que mide una cota en la geometría actual (la misma cuenta que
  * `Sketch::measure` en Rust). `undefined` si no es una cota.
@@ -144,20 +213,25 @@ export function measureConstraint(s: Sketch, c: SketchConstraint): number | unde
       if (!p || !l) return undefined;
       return (c.type === "axis_diameter" ? 2 : 1) * toLine(p, l);
     }
-    case "arc_length": {
-      const g = s.entities.find((e) => e.id === c.arc)?.geometry;
-      if (g?.type !== "arc") return undefined;
-      const [k, a, b] = [pos(s, g.center), pos(s, g.start), pos(s, g.end)];
-      if (!k || !a || !b) return undefined;
-      const [u, v] = [sub(a, k), sub(b, k)];
-      let sweep = Math.atan2(cross(u, v), dot(u, v));
-      if (sweep <= 0) sweep += 2 * Math.PI;
-      return len(u) * sweep;
+    case "arc_length":
+      return s.entities.find((e) => e.id === c.arc)?.geometry.type === "arc" ? curveLength(s, c.arc) : undefined;
+    case "curve_length": {
+      let total = 0;
+      for (const id of c.entities) {
+        const l = curveLength(s, id);
+        if (l === undefined) return undefined;
+        total += l;
+      }
+      return total;
     }
+    case "circle_distance":
+      return circleGap(s, c.a, c.b, !!c.max);
     case "angle": {
       const [l1, l2] = [lineOf(s, c.a), lineOf(s, c.b)];
       if (!l1 || !l2) return undefined;
-      const [d1, d2] = [sub(l1[1], l1[0]), sub(l2[1], l2[0])];
+      const d1 = sub(l1[1], l1[0]);
+      // Suplementario: hasta la segunda invertida
+      const d2 = c.supplementary ? sub(l2[0], l2[1]) : sub(l2[1], l2[0]);
       return (Math.atan2(cross(d1, d2), dot(d1, d2)) * 180) / Math.PI;
     }
     default:
@@ -233,6 +307,14 @@ export function constraintHolds(s: Sketch, c: SketchConstraint, tol: number): bo
       const [p, k, r] = [P(c.point), centerOf(s, c.circle), radiusOf(s, c.circle)];
       return !p || !k || r === undefined || Math.abs(len(sub(p, k)) - r) <= tol;
     }
+    case "point_on_curve":
+      return onCurve(s, c.point, c.curve, tol);
+    case "intersection":
+      return onCurve(s, c.point, c.a, tol) && onCurve(s, c.point, c.b, tol);
+    case "coradial": {
+      const [a, b, ra, rb] = [centerOf(s, c.a), centerOf(s, c.b), radiusOf(s, c.a), radiusOf(s, c.b)];
+      return !a || !b || ra === undefined || rb === undefined || (len(sub(a, b)) <= tol && Math.abs(ra - rb) <= tol);
+    }
     case "midpoint": {
       const [p, l] = [P(c.point), lineOf(s, c.line)];
       return !p || !l || len(sub(p, [(l[0][0] + l[1][0]) / 2, (l[0][1] + l[1][1]) / 2])) <= tol;
@@ -266,6 +348,32 @@ export function constraintHolds(s: Sketch, c: SketchConstraint, tol: number): bo
   }
 }
 
+/** Si un punto está sobre una curva (las splines se dan por cumplidas) */
+function onCurve(s: Sketch, point: number, curve: number, tol: number): boolean {
+  const p = pos(s, point);
+  const g = s.entities.find((e) => e.id === curve)?.geometry;
+  if (!p || !g) return true;
+  if (g.type === "line") {
+    const l = lineOf(s, curve);
+    return !l || toLine(p, l) <= tol;
+  }
+  if (g.type === "circle" || g.type === "arc") {
+    const [k, r] = [centerOf(s, curve), radiusOf(s, curve)];
+    return !k || r === undefined || Math.abs(len(sub(p, k)) - r) <= tol;
+  }
+  if (g.type === "ellipse") {
+    const [k, a, b] = [pos(s, g.center), pos(s, g.major), pos(s, g.minor)];
+    if (!k || !a || !b) return true;
+    const u = sub(a, k);
+    const [ra, rb] = [len(u), len(sub(b, k))];
+    if (!ra || !rb) return true;
+    const q = sub(p, k);
+    const [x, y] = [dot(q, u) / ra, cross(u, q) / ra];
+    return Math.abs(Math.hypot(x / ra, y / rb) - 1) * Math.sqrt(ra * rb) <= tol;
+  }
+  return true;
+}
+
 /** Puntos que mira una restricción (las entidades, por sus puntos) */
 function constraintPoints(s: Sketch, c: SketchConstraint): number[] {
   const out: number[] = [];
@@ -294,7 +402,7 @@ function sketchTol(s: Sketch): number {
  */
 export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1): string | undefined {
   const pts = selectionPoints(s, ids);
-  if (!pts.length) return "Elegir primero lo que se transforma (lo ligado al sólido no se mueve)";
+  if (!pts.length) return "Elegir primero lo que se transforma (lo ligado al sólido y lo bloqueado no se mueven)";
   const moved = new Set(pts);
   for (const p of s.points)
     if (moved.has(p.id)) {
@@ -323,7 +431,8 @@ export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1
     }
     const v = measureConstraint(s, c);
     if (v !== undefined) {
-      if (!(c as { expr?: string }).expr) {
+      // Las que tienen fórmula o están bloqueadas no cambian
+      if (!(c as { expr?: string }).expr && !("opts" in c && c.opts?.locked)) {
         if (c.type === "angle") c.degrees = +v.toFixed(9);
         else (c as { value: number }).value = +v.toFixed(9);
       }
@@ -368,7 +477,7 @@ export function extractClip(s: Sketch, ids: number[]): SketchClip | undefined {
   return {
     points: s.points.filter((p) => pts.has(p.id)).map((p) => ({ id: p.id, x: p.x, y: p.y })),
     entities: ents.map((e) => structuredClone(e)),
-    constraints: s.constraints.filter((c) => c.type !== "fixed" && constraintIds(c).every((id) => inside.has(id))).map((c) => structuredClone(c)),
+    constraints: s.constraints.filter((c) => c.type !== "fixed" && c.type !== "lock" && constraintIds(c).every((id) => inside.has(id))).map((c) => structuredClone(c)),
     texts,
   };
 }
@@ -399,11 +508,7 @@ export function insertClip(s: Sketch, clip: SketchClip, f: Xform): number[] {
     map.set(e.id, n);
     out.push(n);
   }
-  for (const c of clip.constraints) {
-    const k = structuredClone(c) as SketchConstraint & Record<string, unknown>;
-    for (const [key, v] of Object.entries(k)) if (typeof v === "number" && !["value", "degrees", "x", "y"].includes(key)) (k as Record<string, unknown>)[key] = id(v);
-    s.constraints.push(k);
-  }
+  for (const c of clip.constraints) s.constraints.push(mapConstraintIds(c, id));
   for (const t of clip.texts) {
     const tid = (Math.max(0, ...(s.texts ?? []).map((x) => x.id)) || 0) + 1;
     s.texts = [...(s.texts ?? []), { ...t, id: tid, anchor: id(t.anchor), entities: t.entities.map(id), points: t.points.map(id) }];

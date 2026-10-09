@@ -185,3 +185,41 @@ test("medir las cotas nuevas: punto-línea, diámetro respecto del eje y largo d
   transformSelection(s, [arc], scaling([0, 0], 2), 2);
   near(c.value, 6 * Math.PI, "largo escalado");
 });
+
+test("cotas II: suplementario, largo total y distancia mínima o máxima con círculos", () => {
+  const s = sketch();
+  const a = addEntity(s, { type: "line", start: addPoint(s, [0, 0]), end: addPoint(s, [10, 0]) });
+  const b = addEntity(s, { type: "line", start: addPoint(s, [0, 0]), end: addPoint(s, [0, 5]) });
+  near(measureConstraint(s, { type: "angle", a, b, degrees: 0, supplementary: true }), -90, "suplementario");
+  const c1 = addEntity(s, { type: "circle", center: addPoint(s, [0, 20]), radius: 3 });
+  const c2 = addEntity(s, { type: "circle", center: addPoint(s, [20, 20]), radius: 7 });
+  near(measureConstraint(s, { type: "curve_length", entities: [a, b, c1], value: 0 }), 15 + 6 * Math.PI, "largo total");
+  near(measureConstraint(s, { type: "circle_distance", a: c1, b: c2, value: 0 }), 10, "mínima");
+  near(measureConstraint(s, { type: "circle_distance", a: c1, b: c2, max: true, value: 0 }), 30, "máxima");
+  // Línea (y = 0) contra el círculo de radio 3 en y = 20: mínima 17, máxima 23
+  near(measureConstraint(s, { type: "circle_distance", a, b: c1, value: 0 }), 17, "línea mínima");
+  near(measureConstraint(s, { type: "circle_distance", a, b: c1, max: true, value: 0 }), 23, "línea máxima");
+  // Adentro: centro a 2 del grande (radio 10), radio 3 → 5
+  const big = addEntity(s, { type: "circle", center: addPoint(s, [50, 0]), radius: 10 });
+  const small = addEntity(s, { type: "circle", center: addPoint(s, [52, 0]), radius: 3 });
+  near(measureConstraint(s, { type: "circle_distance", a: big, b: small, value: 0 }), 5, "por dentro");
+});
+
+test("ids de las restricciones con lista de entidades; lo bloqueado no se mueve y la cota bloqueada no cambia", async () => {
+  const { constraintIds, mapConstraintIds } = await import("../src/lib/cad.ts");
+  const c = { type: "curve_length", entities: [4, 5], value: 3, opts: { offset: [1, 2] } };
+  assert.deepEqual(constraintIds(c), [4, 5]);
+  assert.deepEqual(mapConstraintIds(c, (id) => id + 10).entities, [14, 15]);
+  assert.deepEqual(c.entities, [4, 5]);
+  const { s, l } = box();
+  s.constraints.push({ type: "lock", entity: l[0] });
+  s.constraints[4].opts = { locked: true };
+  transformSelection(s, l, scaling([0, 0], 2), 2);
+  // La línea de abajo (bloqueada) quedó donde estaba; su cota bloqueada sigue en 10
+  const g = s.entities.find((e) => e.id === l[0]).geometry;
+  assert.deepEqual(at(s, g.start), [0, 0]);
+  assert.deepEqual(at(s, g.end), [10, 0]);
+  assert.equal(s.constraints.find((k) => k.type === "length" && k.line === l[0]).value, 10);
+  // El copiar no lleva el bloqueo
+  assert.ok(!extractClip(s, l).constraints.some((k) => k.type === "lock"));
+});

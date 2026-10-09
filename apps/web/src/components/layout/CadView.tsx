@@ -8,7 +8,7 @@ import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
 import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
-import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
+import { clipCenter, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
 import { constraintGlyphs } from "../../lib/sketchGlyphs";
 import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
@@ -109,6 +109,32 @@ function transformOf(tool: SketchTool, pts: P2[], to: P2): { f: Xform; scale?: n
 }
 
 const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+/** Etiqueta de una cota en pantalla */
+interface DimView {
+  index: number;
+  x: number;
+  y: number;
+  text: string;
+  conflict: boolean;
+  reference: boolean;
+  locked: boolean;
+  /** Desde dónde sale la guía (texto movido a mano), en px del visor */
+  leader?: [number, number];
+  /** Punto acotado (coordenadas del sketch) y corrimiento del texto, si se movió */
+  anchor: P2;
+  offset?: [number, number];
+}
+
+/** Lo que va antes del valor de cada tipo de cota */
+const DIM_PREFIX: Partial<Record<SketchConstraint["type"], (c: SketchConstraint) => string>> = {
+  radius: () => "R ",
+  diameter: () => "Ø ",
+  axis_diameter: () => "Ø ",
+  arc_length: () => "⌒ ",
+  curve_length: () => "Σ ",
+  circle_distance: (c) => (c.type === "circle_distance" && c.max ? "máx " : "mín "),
+};
 
 // Fuente del texto: la incluida (Liberation Sans, OFL) o la que se elija
 let textFont: { name: string; font: Font } | undefined;
@@ -307,6 +333,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
   const [viewTick, setViewTick] = createSignal(0);
   const [editingDim, setEditingDim] = createSignal<number>();
+  /** Texto de cota que se está arrastrando: dónde va (corrimiento en mm del plano) */
+  const [dimDrag, setDimDrag] = createSignal<{ index: number; offset: [number, number] }>();
+  /** Para no abrir la edición al soltar un arrastre de texto */
+  let dimDragged = false;
   // Cotas que se piden al terminar una forma, en orden (índices de restricciones)
   const [dimQueue, setDimQueue] = createSignal<number[]>([]);
   /** Pide las cotas recién creadas: la primera queda en edición */
@@ -1844,31 +1874,59 @@ export const CadView: Component<CadViewProps> = (props) => {
       const t = ((p[0] - a[0]) * d[0] + (p[1] - a[1]) * d[1]) / (d[0] * d[0] + d[1] * d[1] || 1);
       return [a[0] + t * d[0], a[1] + t * d[1]];
     };
+    /** Medio de un arco */
+    const arcMid = (id: number): P2 | undefined => {
+      const g = ent.get(id);
+      if (g?.type !== "arc") return undefined;
+      const [k, a, b] = [pt.get(g.center), pt.get(g.start), pt.get(g.end)];
+      if (!k || !a || !b) return undefined;
+      const a0 = Math.atan2(a[1] - k[1], a[0] - k[0]);
+      let sweep = Math.atan2(b[1] - k[1], b[0] - k[0]) - a0;
+      if (sweep <= 0) sweep += 2 * Math.PI;
+      const r = dist(k, a);
+      return [k[0] + r * Math.cos(a0 + sweep / 2), k[1] + r * Math.sin(a0 + sweep / 2)];
+    };
+    /** Un lugar sobre la curva (línea, arco o círculo) */
+    const curveMid = (id: number): P2 | undefined => {
+      const g = ent.get(id);
+      if (g?.type === "line") return lineMid(id);
+      if (g?.type === "arc") return arcMid(id);
+      if (g?.type === "circle") {
+        const k = pt.get(g.center);
+        return k && [k[0] + g.radius * Math.SQRT1_2, k[1] + g.radius * Math.SQRT1_2];
+      }
+      return undefined;
+    };
+    /** Punto, medio de una línea o centro de un círculo (para las cotas con círculos) */
+    const targetAt = (id: number): P2 | undefined => {
+      const g = ent.get(id);
+      if (!g) return pt.get(id);
+      if (g.type === "line") return lineMid(id);
+      if (g.type === "point") return pt.get(g.point);
+      return "center" in g ? pt.get(g.center) : undefined;
+    };
     const anchor = (c: SketchConstraint): P2 | undefined => {
       switch (c.type) {
         case "length":
           return lineMid(c.line);
         case "angle":
           return lineMid(c.a);
-        case "distance":
         case "horizontal_distance":
         case "vertical_distance":
+          // Ordenadas: junto al punto medido
+          if (c.opts?.ordinate) return pt.get(c.b);
           return mid(pt.get(c.a), pt.get(c.b));
+        case "distance":
+          return mid(pt.get(c.a), pt.get(c.b));
+        case "curve_length":
+          return curveMid(c.entities[0]);
+        case "circle_distance":
+          return mid(targetAt(c.a), targetAt(c.b));
         case "point_line_distance":
         case "axis_diameter":
           return mid(pt.get(c.point), foot(c.point, c.line));
-        case "arc_length": {
-          const g = ent.get(c.arc);
-          if (g?.type !== "arc") return undefined;
-          const [k, a, b] = [pt.get(g.center), pt.get(g.start), pt.get(g.end)];
-          if (!k || !a || !b) return undefined;
-          // En el medio del arco
-          const a0 = Math.atan2(a[1] - k[1], a[0] - k[0]);
-          let sweep = Math.atan2(b[1] - k[1], b[0] - k[0]) - a0;
-          if (sweep <= 0) sweep += 2 * Math.PI;
-          const r = dist(k, a);
-          return [k[0] + r * Math.cos(a0 + sweep / 2), k[1] + r * Math.sin(a0 + sweep / 2)];
-        }
+        case "arc_length":
+          return arcMid(c.arc);
         case "radius":
         case "diameter": {
           const g = ent.get(c.entity);
@@ -1883,7 +1941,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
     };
     const rect = container.getBoundingClientRect();
-    const out: { index: number; x: number; y: number; text: string; conflict: boolean; reference: boolean }[] = [];
+    const out: DimView[] = [];
     // Centro del sketch en pantalla: las etiquetas se corren hacia afuera de él
     const pts = s.sketch.points;
     const centroid: P2 = pts.length ? [pts.reduce((a, p) => a + p.x, 0) / pts.length, pts.reduce((a, p) => a + p.y, 0) / pts.length] : [0, 0];
@@ -1913,10 +1971,18 @@ export const CadView: Component<CadViewProps> = (props) => {
       // Ocultas: menos la que se está escribiendo
       if (v === undefined || !a || (!showDims && editingDim() !== index)) return;
       let [x, y] = viewer!.screenOf(planeToWorld(s.plane, a));
-      // Correr 16 px perpendicular a lo acotado, hacia afuera del sketch, para
-      // no tapar la línea (y poder elegirla con un clic)
+      const opts = "opts" in c ? c.opts : undefined;
+      // Texto movido a mano (o mientras se arrastra): donde se dejó, con una guía hasta lo acotado
+      const drag = dimDrag();
+      const offset = drag?.index === index ? drag.offset : opts?.offset;
+      let leader: [number, number] | undefined;
       const e2 = ends(c);
-      if (e2) {
+      if (offset) {
+        leader = [x - rect.left, y - rect.top];
+        [x, y] = viewer!.screenOf(planeToWorld(s.plane, [a[0] + offset[0], a[1] + offset[1]]));
+      } else if (e2) {
+        // Correr 22 px perpendicular a lo acotado, hacia afuera del sketch, para
+        // no tapar la línea (y poder elegirla con un clic)
         const [p0, p1] = e2.map((p) => viewer!.screenOf(planeToWorld(s.plane, p)));
         let nx = -(p1[1] - p0[1]);
         let ny = p1[0] - p0[0];
@@ -1936,11 +2002,15 @@ export const CadView: Component<CadViewProps> = (props) => {
         x += (dx / l) * 14;
         y += (dy / l) * 14;
       }
-      const prefix = c.type === "radius" ? "R " : c.type === "diameter" || c.type === "axis_diameter" ? "Ø " : c.type === "arc_length" ? "⌒ " : "";
+      const prefix = DIM_PREFIX[c.type]?.(c) ?? "";
       const suffix = c.type === "angle" ? "°" : "";
-      const expr = (c as { expr?: string }).expr;
+      const expr = (c as { expr?: string }).expr?.trim();
       const reference = isReference(c);
-      const shown = expr && !reference ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : `${prefix}${+v.toFixed(3)}${suffix}`;
+      const value = `${prefix}${+v.toFixed(3)}${suffix}`;
+      // Nombre: el parámetro si la fórmula es solo eso; si no, d1, d2… por orden
+      const name = expr && /^[\p{L}_][\p{L}\p{N}_]*$/u.test(expr) ? expr : `d${index + 1}`;
+      const mode = ui.dimLabel();
+      const shown = mode === "name" ? `${prefix}${name}` : mode === "expr" && expr && !reference ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : value;
       out.push({
         index,
         x: x - rect.left,
@@ -1949,6 +2019,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         text: reference ? `(${shown})` : shown,
         conflict: s.report?.conflicting.includes(index) ?? false,
         reference,
+        locked: !!opts?.locked,
+        leader,
+        anchor: a,
+        offset,
       });
     });
     return out;
@@ -1973,6 +2047,82 @@ export const CadView: Component<CadViewProps> = (props) => {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+  };
+
+  /**
+   * Arrastrar el texto de una cota: el corrimiento se guarda en mm del plano
+   * (sigue a lo acotado si la geometría se mueve). Un clic sin moverse edita.
+   */
+  const startDimDrag = (e: PointerEvent, d: DimView) => {
+    e.stopPropagation();
+    dimDragged = false;
+    const s = ui.session();
+    if (e.button !== 0 || !s || !viewer || ui.tool() !== "select") return;
+    const rect = container.getBoundingClientRect();
+    // Paso de px a mm del plano cerca del punto acotado (inversa de la jacobiana)
+    const at = (p: P2) => viewer!.screenOf(planeToWorld(s.plane, p));
+    const o = at(d.anchor);
+    const ux = at([d.anchor[0] + 1, d.anchor[1]]);
+    const uy = at([d.anchor[0], d.anchor[1] + 1]);
+    const [a, b, c, k] = [ux[0] - o[0], uy[0] - o[0], ux[1] - o[1], uy[1] - o[1]];
+    const det = a * k - b * c;
+    if (Math.abs(det) < 1e-12) return;
+    const toPlane = (dx: number, dy: number): [number, number] => [(k * dx - b * dy) / det, (-c * dx + a * dy) / det];
+    // Donde está ahora el texto (sin mover, va corrido de lo acotado)
+    const start = d.offset ?? toPlane(d.x + rect.left - o[0], d.y + rect.top - o[1]);
+    const [sx, sy] = [e.clientX, e.clientY];
+    const move = (ev: PointerEvent) => {
+      const [dx, dy] = [ev.clientX - sx, ev.clientY - sy];
+      if (!dimDragged && Math.hypot(dx, dy) < 4) return;
+      dimDragged = true;
+      const m = toPlane(dx, dy);
+      setDimDrag({ index: d.index, offset: [+(start[0] + m[0]).toFixed(4), +(start[1] + m[1]).toFixed(4)] });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const moved = dimDrag();
+      setDimDrag(undefined);
+      if (dimDragged && moved) ui.setDimOpts(moved.index, { offset: moved.offset });
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+
+  /** Clic derecho en una cota: bloquear, devolver el texto, impulsora o de referencia, quitar */
+  const dimMenu = (x: number, y: number, d: DimView) => {
+    const c = ui.session()?.sketch.constraints[d.index];
+    if (!c) return;
+    const sep: MenuEntry = { separator: true };
+    const flippable = c.type === "angle";
+    setMenu({
+      x,
+      y,
+      items: [
+        { header: CONSTRAINT_LABELS[c.type] },
+        { label: d.locked ? "Desbloquear" : "Bloquear", onSelect: () => ui.setDimOpts(d.index, { locked: !d.locked }) },
+        ...(d.offset ? [{ label: "Devolver el texto a su lugar", onSelect: () => ui.setDimOpts(d.index, { offset: undefined }) }] : []),
+        ...(flippable
+          ? [
+              {
+                label: c.supplementary ? "Ángulo (no suplementario)" : "Ángulo suplementario",
+                onSelect: () =>
+                  ui.change((sk) => {
+                    const k = sk.constraints[d.index];
+                    if (k?.type !== "angle") return;
+                    // El mismo dibujo: el ángulo hasta la otra punta de la segunda línea
+                    if (k.supplementary) delete k.supplementary;
+                    else k.supplementary = true;
+                    const v = measureConstraint(sk, k);
+                    if (v !== undefined && !(k as { expr?: string }).expr) k.degrees = +v.toFixed(6);
+                  }),
+              },
+            ]
+          : []),
+        sep,
+        { label: "Quitar", onSelect: () => ui.removeConstraint(d.index) },
+      ],
+    });
   };
 
   const promptText = () => {
@@ -2070,7 +2220,14 @@ export const CadView: Component<CadViewProps> = (props) => {
         }}
       </Show>
 
-      {/* Cotas del sketch: clic para cambiar el valor */}
+      {/* Guías de las cotas con el texto movido a mano */}
+      <svg class="absolute inset-0 w-full h-full pointer-events-none" data-dim-leaders>
+        <For each={dimensions().filter((d) => d.leader)}>
+          {(d) => <line x1={d.leader![0]} y1={d.leader![1]} x2={d.x} y2={d.y} class="stroke-text-muted" stroke-width="1" stroke-dasharray="3 2" />}
+        </For>
+      </svg>
+
+      {/* Cotas del sketch: clic para cambiar el valor, arrastrar para mover el texto */}
       <Index each={dimensions()}>
         {(d) => (
           <Show
@@ -2088,10 +2245,23 @@ export const CadView: Component<CadViewProps> = (props) => {
                   ui.tool() !== "select" && "pointer-events-none",
                 )}
                 style={{ left: `${d().x}px`, top: `${d().y}px` }}
-                onPointerDown={(e) => e.stopPropagation()}
-                // Una cota de referencia no se escribe: mide
-                onClick={() => !d().reference && setEditingDim(d().index)}
+                data-dim={d().index}
+                onPointerDown={(e) => startDimDrag(e, d())}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  dimMenu(e.clientX, e.clientY, d());
+                }}
+                onClick={() => {
+                  if (dimDragged) return void (dimDragged = false);
+                  // Una cota de referencia no se escribe: mide; una bloqueada, tampoco
+                  if (d().locked) ui.setMessage("Cota bloqueada: clic derecho para desbloquearla");
+                  else if (!d().reference) setEditingDim(d().index);
+                }}
               >
+                <Show when={d().locked}>
+                  <Icons.Lock size={10} class="inline -mt-0.5 mr-0.5" />
+                </Show>
                 {d().text}
               </button>
             }
@@ -2475,6 +2645,21 @@ export const CadView: Component<CadViewProps> = (props) => {
                   </button>
                 )}
               </For>
+              <div role="radiogroup" aria-label="Qué dicen las cotas" class="flex items-center gap-0.5 ml-0.5">
+                <For each={[["value", "Valor", "Las cotas muestran su valor"], ["name", "Nombre", "Las cotas muestran su nombre (d1, d2… o el parámetro)"], ["expr", "Fórmula", "Las cotas con fórmula la muestran junto al valor"]] as const}>
+                  {([k, label, tip]) => (
+                    <button
+                      role="radio"
+                      aria-checked={ui.dimLabel() === k}
+                      title={tip}
+                      class={clsx("px-1.5 py-0.5 rounded text-[11px]", ui.dimLabel() === k ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
+                      onClick={() => ui.setDimLabel(k)}
+                    >
+                      {label}
+                    </button>
+                  )}
+                </For>
+              </div>
               <div class="w-px h-5 bg-border mx-1" />
               <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
                 Terminar sketch

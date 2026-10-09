@@ -20,6 +20,7 @@ import {
   removeText,
   type AxisSpec,
   type CadStore,
+  type DimOpts,
   type EdgeRef,
   type FaceRef,
   type P2,
@@ -134,6 +135,9 @@ export interface SketchShow {
   construction: boolean;
   points: boolean;
 }
+/** Qué dice la etiqueta de una cota: el valor, su nombre (d1, d2… o el parámetro) o la fórmula con el valor */
+export type DimLabel = "value" | "name" | "expr";
+
 /** Pasos que se pueden deshacer dentro de un sketch */
 const SKETCH_HISTORY_LIMIT = 200;
 
@@ -175,6 +179,7 @@ export function createCadUi(store: CadStore) {
   // Modo construcción (como Onshape): lo que se dibuja sale de construcción
   const [constructionMode, setConstructionMode] = createSignal(false);
   const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true });
+  const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
   const [clipboard, setClipboard] = createSignal<SketchClip>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
@@ -546,6 +551,19 @@ export function createCadUi(store: CadStore) {
     constructionMode,
     setConstructionMode,
     sketchShow,
+    dimLabel,
+    setDimLabel,
+    /** Cambia las opciones de una cota (bloqueo, lugar del texto, ordenadas) */
+    setDimOpts(index: number, patch: Partial<DimOpts>) {
+      ui.change((s) => {
+        const c = s.constraints[index];
+        if (!c || !("value" in c || c.type === "angle")) return;
+        const opts: DimOpts = { ...(c.opts ?? {}), ...patch };
+        for (const k of Object.keys(opts) as (keyof DimOpts)[]) if (opts[k] === undefined || opts[k] === false) delete opts[k];
+        if (Object.keys(opts).length) c.opts = opts;
+        else delete c.opts;
+      });
+    },
     /** Muestra u oculta cotas, construcción o puntos */
     toggleShow(k: keyof SketchShow) {
       setSketchShow((v) => ({ ...v, [k]: !v[k] }));

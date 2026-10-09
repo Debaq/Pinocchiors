@@ -17,7 +17,7 @@ pub mod solver;
 pub mod system;
 pub mod types;
 
-pub use constraint::Constraint;
+pub use constraint::{Constraint, CurvePart, closest_on_spline};
 pub use diagnostics::{DiagnosticResult, DiagnosticStatus, diagnose};
 pub use error::{Result, SolverError};
 pub use fitting::{FitResult, PrimitiveParams, PrimitiveType};

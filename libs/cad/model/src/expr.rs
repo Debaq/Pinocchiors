@@ -2,8 +2,8 @@
 //!
 //! Números (con punto o coma decimal), `+ - * / ^`, paréntesis, menos unario,
 //! constantes `pi` y `e`, funciones `sin cos tan asin acos atan` (en grados),
-//! `sqrt abs min max round floor ceil` y nombres de parámetros. Se ignora un
-//! "mm" o "°" al final de un número.
+//! `sqrt abs min max round floor ceil` y nombres de parámetros. Un número puede
+//! llevar unidad: `mm cm m in " ft` (pasa a mm) o `deg ° rad` (pasa a grados).
 
 use std::collections::HashMap;
 
@@ -39,15 +39,19 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
                 }
             }
             let text: String = chars[start..i].iter().collect::<String>().replace(',', ".");
-            out.push(Tok::Num(text.parse().map_err(|_| format!("número inválido: {text}"))?));
-            // Unidades decorativas
-            if src[char_offset(src, i)..].trim_start().starts_with("mm") {
-                let rest = &src[char_offset(src, i)..];
-                let skip = rest.len() - rest.trim_start().len() + 2;
-                i += rest[..skip].chars().count();
-            } else if i < chars.len() && chars[i] == '°' {
-                i += 1;
+            let mut value: f64 = text.parse().map_err(|_| format!("número inválido: {text}"))?;
+            // Unidad pegada al número: se pasa a mm o a grados
+            let rest = &src[char_offset(src, i)..];
+            let trimmed = rest.trim_start();
+            for (unit, k) in UNITS {
+                let after = trimmed.strip_prefix(unit);
+                if after.is_some_and(|a| !a.starts_with(|c: char| c.is_alphanumeric() || c == '_')) {
+                    value *= k;
+                    i += rest[..rest.len() - trimmed.len() + unit.len()].chars().count();
+                    break;
+                }
             }
+            out.push(Tok::Num(value));
         } else if c.is_alphabetic() || c == '_' {
             let start = i;
             while i < chars.len() && (chars[i].is_alphanumeric() || chars[i] == '_') {
@@ -67,6 +71,20 @@ fn tokenize(src: &str) -> Result<Vec<Tok>, String> {
     }
     Ok(out)
 }
+
+/// Unidades que se pueden escribir después de un número (largos en mm,
+/// ángulos en grados). "mm" antes que "m".
+const UNITS: [(&str, f64); 9] = [
+    ("mm", 1.0),
+    ("cm", 10.0),
+    ("m", 1000.0),
+    ("in", 25.4),
+    ("\"", 25.4),
+    ("ft", 304.8),
+    ("deg", 1.0),
+    ("°", 1.0),
+    ("rad", 180.0 / std::f64::consts::PI),
+];
 
 /// Dentro de los argumentos de una función la coma separa, no es decimal.
 fn in_call(toks: &[Tok]) -> bool {
@@ -351,6 +369,22 @@ mod tests {
         assert_eq!(ev("max(1,5, 2)"), 5.0);
         assert_eq!(ev("max(1.5, 1)"), 1.5);
         assert_eq!(ev("sqrt(16) + abs(-1)"), 5.0);
+    }
+
+    #[test]
+    fn units() {
+        assert_eq!(ev("1 in"), 25.4);
+        assert_eq!(ev("2cm + 3 mm"), 23.0);
+        assert_eq!(ev("0.5 m"), 500.0);
+        assert_eq!(ev("1 ft"), 304.8);
+        assert_eq!(ev("2\""), 50.8);
+        assert_eq!(ev("45 deg + 15°"), 60.0);
+        assert!((ev("pi/2") - std::f64::consts::FRAC_PI_2).abs() < 1e-12);
+        assert!((ev("1 rad") - 57.29577951308232).abs() < 1e-9);
+        // La unidad va con el número: ancho / (2 in)
+        assert!((ev("ancho / 2 in") - 40.0 / 50.8).abs() < 1e-12);
+        // Una palabra que empieza como unidad no es unidad
+        assert!(Expr::parse("2 mmx").is_err());
     }
 
     #[test]

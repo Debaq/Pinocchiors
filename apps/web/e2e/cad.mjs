@@ -2036,6 +2036,136 @@ const scenarios = {
     await b.shot("cotas_nuevas");
   },
 
+  async "cotas II y restricciones II: suplementario, largo total en pulgadas, mínima entre círculos, coradiales, intersección, bloqueo, ordenadas y texto movido"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    const sketch = {
+      points: [
+        P(0, 0, 0), P(1, 0, 0), P(2, 20, 0), P(3, 14, 14), P(4, 60, 0), P(5, 80, 0), P(6, 100, 10), P(7, 104, 12), P(8, 54, 1),
+        P(9, 0, 30), P(10, 10, 35), P(11, 0, -20), P(12, 10, -20), P(13, 10, -10), P(14, 0, -40), P(15, 7, -40), P(16, 15, -45),
+      ],
+      entities: [
+        { id: 20, geometry: { type: "line", start: 1, end: 2 } },
+        { id: 21, geometry: { type: "line", start: 1, end: 3 } },
+        { id: 22, geometry: { type: "circle", center: 4, radius: 5 } },
+        { id: 23, geometry: { type: "circle", center: 5, radius: 2 } },
+        { id: 24, geometry: { type: "circle", center: 6, radius: 3 } },
+        { id: 25, geometry: { type: "circle", center: 7, radius: 1 } },
+        { id: 26, geometry: { type: "point", point: 8 } },
+        { id: 27, geometry: { type: "line", start: 9, end: 10 } },
+        { id: 28, geometry: { type: "line", start: 11, end: 12 } },
+        { id: 29, geometry: { type: "line", start: 12, end: 13 } },
+        { id: 30, geometry: { type: "point", point: 14 } },
+        { id: 31, geometry: { type: "point", point: 15 } },
+        { id: 32, geometry: { type: "point", point: 16 } },
+      ],
+      constraints: [
+        { type: "fixed", point: 1, x: 0, y: 0 },
+        { type: "fixed", point: 2, x: 20, y: 0 },
+        { type: "fixed", point: 4, x: 60, y: 0 },
+        { type: "radius", entity: 22, value: 5 },
+        { type: "fixed", point: 5, x: 80, y: 0 },
+        { type: "fixed", point: 6, x: 100, y: 10 },
+        { type: "radius", entity: 24, value: 3 },
+        { type: "fixed", point: 11, x: 0, y: -20 },
+        { type: "horizontal", line: 28 },
+        { type: "vertical", line: 29 },
+      ],
+      next_id: 40,
+      origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    const id = doc.next_id;
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1200);
+    const count = () => b.eval(`window.__cadUi.session().sketch.constraints.length`);
+    /** Elige, aprieta la sugerencia y (si se pasa) escribe el valor de la última cota */
+    const suggest = async (ids, label, value) => {
+      await b.eval(`window.__cadUi.setSelection(${JSON.stringify(ids)})`);
+      await sleep(300);
+      const before = await count();
+      await b.clickText(label);
+      await sleep(800);
+      if ((await count()) <= before) throw new Error(`${label}: no agregó nada`);
+      if (value === undefined) return;
+      const i = (await count()) - 1;
+      const msg = await b.eval(`window.__cadUi.setConstraintText(${i}, ${JSON.stringify(String(value))})`);
+      if (msg) throw new Error(`${label}: ${msg}`);
+      await sleep(1000);
+    };
+    const pt = (id) => b.eval(`(() => { const p = window.__cadUi.session().sketch.points.find((q) => q.id === ${id}); return [p.x, p.y]; })()`);
+    const radius = (id) => b.eval(`window.__cadUi.session().sketch.entities.find((e) => e.id === ${id}).geometry.radius`);
+    // Suplementario de −150°: la segunda línea queda a 30°
+    await suggest([20, 21], "Ángulo suplementario", -150);
+    const p3 = await pt(3);
+    near((Math.atan2(p3[1], p3[0]) * 180) / Math.PI, 30, 1e-5, "línea a 30°");
+    // Mínima entre círculos 10: el segundo pasa a radio 5
+    await suggest([22, 23], "Distancia mínima", 10);
+    near(await radius(23), 5, 1e-6, "radio por la distancia mínima");
+    // Coradiales: el chico se va al centro del grande con su radio
+    await suggest([24, 25], "Coradiales");
+    near(await radius(25), 3, 1e-6, "radio coradial");
+    const c7 = await pt(7);
+    near(c7[0], 100, 1e-6, "centro coradial x");
+    near(c7[1], 10, 1e-6, "centro coradial y");
+    // Punto en la intersección de la recta y = 0 y el círculo de (60, 0) radio 5: (55, 0)
+    await suggest([8, 20, 22], "Punto en la intersección");
+    const p8 = await pt(8);
+    near(p8[0], 55, 1e-6, "intersección x");
+    near(p8[1], 0, 1e-6, "intersección y");
+    // Largo total en pulgadas: 1 in = 25,4 mm entre las dos líneas
+    await suggest([28, 29], "Largo total", "1 in");
+    const [a, m, z] = [await pt(11), await pt(12), await pt(13)];
+    near(Math.hypot(m[0] - a[0], m[1] - a[1]) + Math.hypot(z[0] - m[0], z[1] - m[1]), 25.4, 1e-5, "largo total");
+    // Bloquear una línea: no se mueve al transformarla
+    await suggest([27], "Bloquear la entidad");
+    const glyphs = await b.eval(`[...document.querySelectorAll("button")].filter((x) => x.textContent === "⊞").length`);
+    if (glyphs < 1) throw new Error("no se ve el ícono del bloqueo");
+    // Ordenadas horizontales desde el primer punto: dos cotas con el texto en fila
+    await suggest([14, 15, 16], "Ordenadas horizontales");
+    const ords = await b.eval(`window.__cadUi.session().sketch.constraints.filter((c) => c.opts?.ordinate).map((c) => [c.b, c.value])`);
+    if (JSON.stringify(ords) !== JSON.stringify([[15, 7], [16, 15]])) throw new Error("ordenadas: " + JSON.stringify(ords));
+    const r = await b.eval(`window.__cadUi.session().report`);
+    if (r.status === "over_constrained" || r.status === "failed") throw new Error(`estado: ${r.status}`);
+    // Nombres en las etiquetas
+    const labelMode = (t) => b.eval(`[...document.querySelectorAll('[aria-label="Qué dicen las cotas"] button')].find((x) => x.textContent === ${JSON.stringify(t)})?.click()`);
+    await labelMode("Nombre");
+    await sleep(400);
+    if (!(await b.eval(`document.body.innerText`)).includes("mín d")) throw new Error("no se ven los nombres de las cotas");
+    await labelMode("Fórmula");
+    await sleep(400);
+    const texts = await b.eval(`document.body.innerText`);
+    if (!texts.includes("1 in = 25.4")) throw new Error("no se ve la fórmula con unidades");
+    // Arrastrar el texto de la cota mínima: queda corrido, con guía
+    const di = await b.eval(`window.__cadUi.session().sketch.constraints.findIndex((c) => c.type === "circle_distance")`);
+    const box = await b.eval(`(() => { const r = document.querySelector('[data-dim="${di}"]').getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.drag(box[0], box[1], box[0] + 60, box[1] - 40);
+    await sleep(1200);
+    const off = await b.eval(`window.__cadUi.session().sketch.constraints[${di}].opts?.offset`);
+    if (!off) throw new Error("el texto no se movió");
+    if ((await b.eval(`document.querySelectorAll("[data-dim-leaders] line").length`)) < 1) throw new Error("falta la guía de la cota movida");
+    // Bloquear la cota: el clic ya no la edita
+    await b.eval(`window.__cadUi.setDimOpts(${di}, { locked: true })`);
+    await sleep(800);
+    await b.eval(`document.querySelector('[data-dim="${di}"]').click()`);
+    await sleep(300);
+    if (await b.eval(`!!document.querySelector("input.w-20")`)) throw new Error("la cota bloqueada se pudo editar");
+    await b.shot("cotas_restricciones_2_sketch");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // El documento guarda las opciones y vuelve a abrir igual
+    const saved = (await call("cad_get_document")).features.find((f) => f.id === id).kind.sketch.constraints;
+    const dim = saved.find((c) => c.type === "circle_distance");
+    if (!dim?.opts?.locked || !dim.opts.offset) throw new Error("no se guardaron las opciones de la cota: " + JSON.stringify(dim));
+    if (!saved.some((c) => c.type === "angle" && c.supplementary)) throw new Error("no se guardó el suplementario");
+    await b.shot("cotas_restricciones_2");
+  },
+
   async "rectángulo por 3 puntos, círculos por 2 y 3 puntos y tangente, polígono circunscrito, ranuras y colineal"(b) {
     await begin(b);
     await sketchOn(b);

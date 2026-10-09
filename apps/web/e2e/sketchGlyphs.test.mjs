@@ -44,3 +44,16 @@ test("cotas y patrones sin ícono", () => {
   assert.ok(isDimension(s.constraints[0]));
   assert.ok(!isDimension(s.constraints[1]));
 });
+
+test("restricciones II: coradiales en el centro, intersección en el punto, bloqueo en la entidad", () => {
+  const s = sketch();
+  const c1 = addEntity(s, { type: "circle", center: addPoint(s, [0, 0]), radius: 2 });
+  const c2 = addEntity(s, { type: "circle", center: addPoint(s, [0, 0]), radius: 2 });
+  const l = addEntity(s, { type: "line", start: addPoint(s, [-5, 0]), end: addPoint(s, [5, 0]) });
+  const p = addPoint(s, [2, 0]);
+  s.constraints.push({ type: "coradial", a: c1, b: c2 }, { type: "intersection", point: p, a: l, b: c1 }, { type: "lock", entity: l });
+  const g = constraintGlyphs(s);
+  assert.deepEqual(g.find((x) => x.index === 0).at, [0, 0]);
+  assert.deepEqual(g.find((x) => x.index === 1).at, [2, 0]);
+  assert.equal(g.find((x) => x.index === 2).host, `e${l}`);
+});

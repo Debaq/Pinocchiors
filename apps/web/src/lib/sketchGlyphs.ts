@@ -23,6 +23,11 @@ export const GLYPHS: Partial<Record<SketchConstraint["type"], string>> = {
   point_on_circle: "∈",
   midpoint: "½",
   symmetric: "⋈",
+  symmetric_entities: "⋈",
+  coradial: "⊚",
+  point_on_curve: "∈",
+  intersection: "✕",
+  lock: "⊞",
 };
 
 export interface Glyph {
@@ -90,10 +95,19 @@ export function constraintGlyphs(s: Sketch): Glyph[] {
       case "collinear":
         onEnt(c.a);
         return void onEnt(c.b);
-      case "concentric": {
+      case "concentric":
+      case "coradial": {
         const g = ent.get(c.a)?.geometry;
         return void (g && "center" in g ? onPoint(g.center) : onEnt(c.a));
       }
+      case "symmetric_entities":
+        onEnt(c.a);
+        return void onEnt(c.b);
+      case "point_on_curve":
+      case "intersection":
+        return void onPoint(c.point);
+      case "lock":
+        return void onEnt(c.entity);
       case "coincident":
         return void onPoint(c.a);
       case "fixed":

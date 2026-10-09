@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use cad_solver::{Constraint, ConstraintSystem, Point2, SolveStatus};
+use cad_solver::{Constraint, ConstraintSystem, CurvePart, Point2, SolveStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{P2, dist2};
@@ -103,23 +103,77 @@ pub enum SketchConstraint {
     /// Patrón circular: `b2` es `b1` girado alrededor de `center` lo mismo que
     /// `a2` respecto de `a1` (puntos).
     EqualRotation { center: u32, a1: u32, a2: u32, b1: u32, b2: u32 },
-    Distance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    Distance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     /// `b.x − a.x = value`
-    HorizontalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    HorizontalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     /// `b.y − a.y = value`
-    VerticalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
-    Length { line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
-    Radius { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
-    Diameter { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
-    Angle { a: u32, b: u32, degrees: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    VerticalDistance { a: u32, b: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    Length { line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    Radius { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    Diameter { entity: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    /// Ángulo de `a` a `b`; con `supplementary`, de `a` a `b` invertida (180° − el ángulo).
+    Angle {
+        a: u32,
+        b: u32,
+        degrees: f64,
+        #[serde(default, skip_serializing_if = "is_false")]
+        supplementary: bool,
+        #[serde(default, skip_serializing_if = "is_false")] reference: bool,
+        #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts,
+    },
     /// Distancia de un punto a la recta de una línea (entre paralelas: un
     /// extremo de una y la otra).
-    PointLineDistance { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    PointLineDistance { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     /// Cota simétrica respecto de un eje: el doble de la distancia del punto
     /// a la línea (el diámetro en un perfil de revolución).
-    AxisDiameter { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    AxisDiameter { point: u32, line: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
     /// Largo de un arco.
-    ArcLength { arc: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool },
+    ArcLength { arc: u32, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    /// Largo total de una cadena de líneas, arcos y círculos.
+    CurveLength { entities: Vec<u32>, value: f64, #[serde(default, skip_serializing_if = "is_false")] reference: bool, #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts },
+    /// Distancia mínima (o máxima con `max`) entre un círculo o arco y otro,
+    /// un punto o una línea. `a` y `b` son ids de entidad o de punto (comparten
+    /// numeración). La mínima entre círculos es por fuera, o por dentro si uno
+    /// contiene al otro (según cómo están al resolver).
+    CircleDistance {
+        a: u32,
+        b: u32,
+        #[serde(default, skip_serializing_if = "is_false")]
+        max: bool,
+        value: f64,
+        #[serde(default, skip_serializing_if = "is_false")] reference: bool,
+        #[serde(default, skip_serializing_if = "DimOpts::is_default")] opts: DimOpts,
+    },
+    /// Mismo centro y mismo radio.
+    Coradial { a: u32, b: u32 },
+    /// Dos entidades del mismo tipo simétricas respecto de una línea.
+    SymmetricEntities { a: u32, b: u32, line: u32 },
+    /// Punto sobre cualquier curva (línea, círculo, arco, elipse o spline).
+    PointOnCurve { point: u32, curve: u32 },
+    /// Punto en la intersección de dos curvas.
+    Intersection { point: u32, a: u32, b: u32 },
+    /// Entidad bloqueada entera: sus puntos y su radio quedan donde están.
+    Lock { entity: u32 },
+}
+
+/// Cómo se muestra y se trata una cota (no cambia lo que restringe).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct DimOpts {
+    /// No se edita por error ni la cambia transformar.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+    /// Lugar del texto respecto de donde lo pondría el sketch (mm del plano).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<[f64; 2]>,
+    /// Se dibuja como cota de ordenadas: el valor junto al punto medido.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ordinate: bool,
+}
+
+impl DimOpts {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 fn is_false(b: &bool) -> bool {
@@ -139,7 +193,9 @@ impl SketchConstraint {
             | Diameter { value, .. }
             | PointLineDistance { value, .. }
             | AxisDiameter { value, .. }
-            | ArcLength { value, .. } => Some(*value),
+            | ArcLength { value, .. }
+            | CurveLength { value, .. }
+            | CircleDistance { value, .. } => Some(*value),
             Angle { degrees, .. } => Some(*degrees),
             _ => None,
         }
@@ -160,6 +216,8 @@ impl SketchConstraint {
                 | PointLineDistance { reference: true, .. }
                 | AxisDiameter { reference: true, .. }
                 | ArcLength { reference: true, .. }
+                | CurveLength { reference: true, .. }
+                | CircleDistance { reference: true, .. }
         )
     }
 
@@ -174,7 +232,9 @@ impl SketchConstraint {
             | Diameter { value, .. }
             | PointLineDistance { value, .. }
             | AxisDiameter { value, .. }
-            | ArcLength { value, .. } => *value = v,
+            | ArcLength { value, .. }
+            | CurveLength { value, .. }
+            | CircleDistance { value, .. } => *value = v,
             Angle { degrees, .. } => *degrees = v,
             _ => return false,
         }
@@ -202,7 +262,14 @@ impl SketchConstraint {
             EqualOffset { a1, a2, b1, b2 } => p(a1) || p(a2) || p(b1) || p(b2),
             EqualRotation { center, a1, a2, b1, b2 } => p(center) || p(a1) || p(a2) || p(b1) || p(b2),
             Distance { a, b, .. } | HorizontalDistance { a, b, .. } | VerticalDistance { a, b, .. } => p(a) || p(b),
-            Radius { entity: x, .. } | Diameter { entity: x, .. } => e(x),
+            Radius { entity: x, .. } | Diameter { entity: x, .. } | Lock { entity: x } => e(x),
+            CurveLength { entities, .. } => entities.iter().any(e),
+            // Ids de punto o de entidad
+            CircleDistance { a, b, .. } => p(a) || e(a) || p(b) || e(b),
+            Coradial { a, b } => e(a) || e(b),
+            SymmetricEntities { a, b, line } => e(a) || e(b) || e(line),
+            PointOnCurve { point: q, curve } => p(q) || e(curve),
+            Intersection { point: q, a, b } => p(q) || e(a) || e(b),
         }
     }
 }
@@ -716,8 +783,11 @@ impl Sketch {
             }
             S::Radius { entity, .. } => self.radius(entity).ok()?,
             S::Diameter { entity, .. } => 2.0 * self.radius(entity).ok()?,
-            S::Angle { a, b, .. } => {
-                let (d1, d2) = (dir(a)?, dir(b)?);
+            S::Angle { a, b, supplementary, .. } => {
+                let (d1, mut d2) = (dir(a)?, dir(b)?);
+                if supplementary {
+                    d2 = [-d2[0], -d2[1]];
+                }
                 (d1[0] * d2[1] - d1[1] * d2[0]).atan2(d1[0] * d2[0] + d1[1] * d2[1]).to_degrees()
             }
             S::PointLineDistance { point, line, .. } | S::AxisDiameter { point, line, .. } => {
@@ -737,8 +807,86 @@ impl Sketch {
                 }
                 u[0].hypot(u[1]) * sweep
             }
+            S::CurveLength { ref entities, .. } => entities.iter().map(|&e| self.curve_length(e)).sum::<Result<f64, _>>().ok()?,
+            S::CircleDistance { a, b, max, .. } => self.circle_gap(a, b, max).ok()?.0,
             _ => return None,
         })
+    }
+
+    /// Largo de una línea, un arco o un círculo.
+    fn curve_length(&self, id: u32) -> Result<f64, SketchError> {
+        match self.entity(id)?.geometry {
+            Geometry::Line { start, end } => Ok(dist2(self.point(start)?, self.point(end)?)),
+            Geometry::Arc { center, start, end } => {
+                let (c, a, b) = (self.point(center)?, self.point(start)?, self.point(end)?);
+                let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+                let mut sweep = (u[0] * v[1] - u[1] * v[0]).atan2(u[0] * v[0] + u[1] * v[1]);
+                if sweep <= 0.0 {
+                    sweep += std::f64::consts::TAU;
+                }
+                Ok(u[0].hypot(u[1]) * sweep)
+            }
+            Geometry::Circle { radius, .. } => Ok(std::f64::consts::TAU * radius),
+            _ => Err(SketchError::WrongKind(id, "una línea, un arco o un círculo")),
+        }
+    }
+
+    /// Qué es un id en una cota con círculos: punto, línea o círculo/arco.
+    fn dim_target(&self, id: u32) -> Result<Target, SketchError> {
+        let Ok(e) = self.entity(id) else {
+            self.point(id)?;
+            return Ok(Target::Point(id));
+        };
+        match e.geometry {
+            Geometry::Line { start, end } => Ok(Target::Line(start, end)),
+            Geometry::Circle { center, .. } | Geometry::Arc { center, .. } => Ok(Target::Round(id, center)),
+            Geometry::Point { point } => Ok(Target::Point(point)),
+            _ => Err(SketchError::WrongKind(id, "un punto, una línea, un círculo o un arco")),
+        }
+    }
+
+    /// Distancia mínima o máxima con círculos en la geometría actual: valor,
+    /// signos de (distancia base, radio de a, radio de b) y los dos extremos
+    /// en el orden del solver (`a` nunca es la línea).
+    fn circle_gap(&self, a: u32, b: u32, max: bool) -> Result<(f64, [f64; 3], Target, Target), SketchError> {
+        let (mut ta, mut tb) = (self.dim_target(a)?, self.dim_target(b)?);
+        if matches!(ta, Target::Line(..)) {
+            std::mem::swap(&mut ta, &mut tb);
+        }
+        if matches!(ta, Target::Line(..)) || !(matches!(ta, Target::Round(..)) || matches!(tb, Target::Round(..))) {
+            return Err(SketchError::Unsupported("la distancia mínima o máxima necesita un círculo o arco".into()));
+        }
+        let at = |t: Target| match t {
+            Target::Point(p) | Target::Round(_, p) | Target::Line(p, _) => self.point(p),
+        };
+        let pa = at(ta)?;
+        let base = match tb {
+            Target::Line(s, e) => {
+                let (s, e) = (self.point(s)?, self.point(e)?);
+                let d = [e[0] - s[0], e[1] - s[1]];
+                let l = d[0].hypot(d[1]);
+                if l < 1e-15 { dist2(pa, s) } else { (d[0] * (pa[1] - s[1]) - d[1] * (pa[0] - s[0])).abs() / l }
+            }
+            _ => dist2(pa, at(tb)?),
+        };
+        let r = |t: Target| match t {
+            Target::Round(e, _) => self.radius(e),
+            _ => Ok(0.0),
+        };
+        let (ra, rb) = (r(ta)?, r(tb)?);
+        let both = matches!((ta, tb), (Target::Round(..), Target::Round(..)));
+        let signs = if max {
+            [1.0, 1.0, 1.0]
+        } else if both && base < (ra - rb).abs() {
+            // Uno adentro del otro
+            if ra >= rb { [-1.0, 1.0, -1.0] } else { [-1.0, -1.0, 1.0] }
+        } else if both || base >= ra + rb {
+            [1.0, -1.0, -1.0]
+        } else {
+            // Punto o línea adentro del círculo
+            [-1.0, 1.0, 1.0]
+        };
+        Ok((signs[0] * base + signs[1] * ra + signs[2] * rb, signs, ta, tb))
     }
 
     /// Traduce una restricción a ecuaciones del solver.
@@ -763,6 +911,27 @@ impl Sketch {
         let line = |id| -> Result<(usize, usize), SketchError> {
             let (a, b) = self.line_points(id)?;
             Ok((ix(a)?, ix(b)?))
+        };
+        // Punto (índice del solver) sobre cualquier curva
+        let on_curve = |q: usize, id: u32| -> Result<Vec<Constraint>, SketchError> {
+            Ok(match &self.entity(id)?.geometry {
+                Geometry::Line { start, end } => vec![Constraint::PointOnLine { p_idx: q, line_p1: ix(*start)?, line_p2: ix(*end)? }],
+                Geometry::Circle { .. } | Geometry::Arc { .. } => {
+                    let (c, rim) = round(id)?;
+                    vec![Constraint::EqualLength { l1_p1: c, l1_p2: q, l2_p1: c, l2_p2: rim }]
+                }
+                Geometry::Ellipse { center, major, minor } => {
+                    vec![Constraint::PointOnEllipse { p_idx: q, center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)? }]
+                }
+                Geometry::Spline { points, closed, start_handle, end_handle } => vec![Constraint::PointOnCurveSpline {
+                    p_idx: q,
+                    points: points.iter().map(|&p| ix(p)).collect::<Result<_, _>>()?,
+                    closed: *closed,
+                    start_handle: start_handle.map(ix).transpose()?,
+                    end_handle: end_handle.map(ix).transpose()?,
+                }],
+                Geometry::Point { .. } => return Err(SketchError::WrongKind(id, "una curva")),
+            })
         };
         Ok(match *c {
             S::Coincident { a, b } => vec![Constraint::Coincident { p1_idx: ix(a)?, p2_idx: ix(b)? }],
@@ -792,8 +961,11 @@ impl Sketch {
                 let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
                 vec![Constraint::Perpendicular { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2 }]
             }
-            S::Angle { a, b, degrees, .. } => {
-                let ((a1, a2), (b1, b2)) = (line(a)?, line(b)?);
+            S::Angle { a, b, degrees, supplementary, .. } => {
+                let ((a1, a2), (mut b1, mut b2)) = (line(a)?, line(b)?);
+                if supplementary {
+                    std::mem::swap(&mut b1, &mut b2);
+                }
                 vec![Constraint::Angle { l1_p1: a1, l1_p2: a2, l2_p1: b1, l2_p2: b2, angle_rad: degrees.to_radians() }]
             }
             S::Equal { a, b } => match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
@@ -914,6 +1086,120 @@ impl Sketch {
                 }
                 _ => return Err(SketchError::WrongKind(arc, "un arco")),
             },
+            S::CurveLength { ref entities, value, .. } => {
+                let mut parts = Vec::new();
+                for &e in entities {
+                    parts.push(match self.entity(e)?.geometry {
+                        Geometry::Line { start, end } => CurvePart::Segment { a: ix(start)?, b: ix(end)? },
+                        Geometry::Arc { center, start, end } => CurvePart::Arc { center: ix(center)?, start: ix(start)?, end: ix(end)? },
+                        Geometry::Circle { .. } => {
+                            let (center, rim) = round(e)?;
+                            CurvePart::Circle { center, rim }
+                        }
+                        _ => return Err(SketchError::WrongKind(e, "una línea, un arco o un círculo")),
+                    });
+                }
+                vec![Constraint::CurveLength { parts, length: value }]
+            }
+            S::CircleDistance { a, b, max, value, .. } => {
+                let (_, signs, ta, tb) = self.circle_gap(a, b, max)?;
+                let (pa, a_rim) = match ta {
+                    Target::Round(e, c) => (ix(c)?, Some(round(e)?.1)),
+                    Target::Point(p) | Target::Line(p, _) => (ix(p)?, None),
+                };
+                let (pb, b_end, b_rim) = match tb {
+                    Target::Point(p) => (ix(p)?, None, None),
+                    Target::Line(s, e) => (ix(s)?, Some(ix(e)?), None),
+                    Target::Round(e, c) => (ix(c)?, None, Some(round(e)?.1)),
+                };
+                vec![Constraint::RimDistance { a: pa, a_rim, b: pb, b_end, b_rim, signs, distance: value }]
+            }
+            S::Coradial { a, b } => {
+                let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
+                vec![
+                    Constraint::Coincident { p1_idx: c1, p2_idx: c2 },
+                    Constraint::EqualLength { l1_p1: c1, l1_p2: r1, l2_p1: c2, l2_p2: r2 },
+                ]
+            }
+            S::PointOnCurve { point, curve } => on_curve(ix(point)?, curve)?,
+            S::Intersection { point, a, b } => {
+                let q = ix(point)?;
+                let mut out = on_curve(q, a)?;
+                out.extend(on_curve(q, b)?);
+                out
+            }
+            S::Lock { entity } => {
+                let e = self.entity(entity)?;
+                let mut idx = e.geometry.point_ids().into_iter().map(ix).collect::<Result<Vec<_>, _>>()?;
+                idx.extend(rims.get(&entity));
+                idx.sort_unstable();
+                idx.dedup();
+                idx.into_iter().map(|i| Constraint::Fixed { p_idx: i, position: at[i] }).collect()
+            }
+            S::SymmetricEntities { a, b, line: l } => {
+                let (l1, l2) = line(l)?;
+                let (o, d) = (at[l1].co, at[l2].co - at[l1].co);
+                // Distancia entre el reflejo de i y j: para emparejar extremos como están
+                let near = |i: usize, j: usize| {
+                    let v = at[i].co - o;
+                    let foot = o + d * (v.dot(&d) / d.norm_squared().max(1e-30));
+                    (foot * 2.0 - at[i].co - at[j].co).norm()
+                };
+                let sym = |i: usize, j: usize| Constraint::Symmetric { p1_idx: i, p2_idx: j, line_p1: l1, line_p2: l2 };
+                let ids = |v: &[u32]| v.iter().map(|&p| ix(p)).collect::<Result<Vec<_>, _>>();
+                match (&self.entity(a)?.geometry, &self.entity(b)?.geometry) {
+                    (Geometry::Point { point: p }, Geometry::Point { point: q }) => vec![sym(ix(*p)?, ix(*q)?)],
+                    (Geometry::Line { start: a1, end: a2 }, Geometry::Line { start: b1, end: b2 }) => {
+                        let (a1, a2, b1, b2) = (ix(*a1)?, ix(*a2)?, ix(*b1)?, ix(*b2)?);
+                        if near(a1, b1) + near(a2, b2) <= near(a1, b2) + near(a2, b1) {
+                            vec![sym(a1, b1), sym(a2, b2)]
+                        } else {
+                            vec![sym(a1, b2), sym(a2, b1)]
+                        }
+                    }
+                    (Geometry::Circle { .. }, Geometry::Circle { .. }) => {
+                        let ((c1, r1), (c2, r2)) = (round(a)?, round(b)?);
+                        vec![sym(c1, c2), Constraint::EqualLength { l1_p1: c1, l1_p2: r1, l2_p1: c2, l2_p2: r2 }]
+                    }
+                    // El reflejo da vuelta el sentido: el inicio de uno es el final del otro
+                    (Geometry::Arc { center: c1, start: s1, end: e1 }, Geometry::Arc { center: c2, start: s2, end: e2 }) => {
+                        vec![sym(ix(*c1)?, ix(*c2)?), sym(ix(*s1)?, ix(*e2)?), sym(ix(*e1)?, ix(*s2)?)]
+                    }
+                    (Geometry::Ellipse { center: c1, major: m1, minor: n1 }, Geometry::Ellipse { center: c2, major: m2, minor: n2 }) => {
+                        vec![sym(ix(*c1)?, ix(*c2)?), sym(ix(*m1)?, ix(*m2)?), sym(ix(*n1)?, ix(*n2)?)]
+                    }
+                    (
+                        Geometry::Spline { points: p1, start_handle: h1, end_handle: k1, .. },
+                        Geometry::Spline { points: p2, start_handle: h2, end_handle: k2, .. },
+                    ) if p1.len() == p2.len() => {
+                        let (p1, mut p2) = (ids(p1)?, ids(p2)?);
+                        let (mut h2, mut k2) = (*h2, *k2);
+                        let fwd: f64 = p1.iter().zip(&p2).map(|(&i, &j)| near(i, j)).sum();
+                        let rev: f64 = p1.iter().zip(p2.iter().rev()).map(|(&i, &j)| near(i, j)).sum();
+                        if rev < fwd {
+                            p2.reverse();
+                            std::mem::swap(&mut h2, &mut k2);
+                        }
+                        let mut out: Vec<Constraint> = p1.iter().zip(&p2).map(|(&i, &j)| sym(i, j)).collect();
+                        for (h, k) in [(*h1, h2), (*k1, k2)] {
+                            if let (Some(h), Some(k)) = (h, k) {
+                                out.push(sym(ix(h)?, ix(k)?));
+                            }
+                        }
+                        out
+                    }
+                    _ => return Err(SketchError::Unsupported("simetría entre entidades de distinto tipo (o splines con distinta cantidad de puntos)".into())),
+                }
+            }
         })
     }
+}
+
+/// Un extremo de una cota con círculos.
+#[derive(Debug, Clone, Copy)]
+enum Target {
+    Point(u32),
+    Line(u32, u32),
+    /// Entidad (círculo o arco) y su centro
+    Round(u32, u32),
 }

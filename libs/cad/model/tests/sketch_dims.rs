@@ -22,7 +22,7 @@ fn point_to_line_distance() {
     let mut s = Sketch::new();
     let l = base_line(&mut s);
     let p = s.add_point(3.0, 2.0);
-    let c = s.constrain(SketchConstraint::PointLineDistance { point: p, line: l, value: 7.5, reference: false });
+    let c = s.constrain(SketchConstraint::PointLineDistance { point: p, line: l, value: 7.5, reference: false, opts: Default::default() });
     s.solve().unwrap();
     assert_relative_eq!(pt(&s, p)[1], 7.5, epsilon = 1e-6);
     assert_relative_eq!(s.measure(&s.constraints[c].clone()).unwrap(), 7.5, epsilon = 1e-6);
@@ -35,7 +35,7 @@ fn distance_between_parallel_lines() {
     let other = s.line([0.0, 3.0], [8.0, 3.5]);
     let Geometry::Line { start, end } = s.entity(other).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::Parallel { a: l, b: other });
-    s.constrain(SketchConstraint::PointLineDistance { point: start, line: l, value: 4.0, reference: false });
+    s.constrain(SketchConstraint::PointLineDistance { point: start, line: l, value: 4.0, reference: false, opts: Default::default() });
     s.solve().unwrap();
     // Paralela a la base: los dos extremos a 4
     assert_relative_eq!(pt(&s, start)[1].abs(), 4.0, epsilon = 1e-6);
@@ -52,7 +52,7 @@ fn axis_diameter_is_twice_the_distance() {
     s.constrain(SketchConstraint::Fixed { point: b, x: 0.0, y: 10.0 });
     let axis = s.add_line(a, b);
     let p = s.add_point(9.0, 5.0);
-    let c = s.constrain(SketchConstraint::AxisDiameter { point: p, line: axis, value: 30.0, reference: false });
+    let c = s.constrain(SketchConstraint::AxisDiameter { point: p, line: axis, value: 30.0, reference: false, opts: Default::default() });
     s.solve().unwrap();
     assert_relative_eq!(pt(&s, p)[0], 15.0, epsilon = 1e-6);
     assert_relative_eq!(s.measure(&s.constraints[c].clone()).unwrap(), 30.0, epsilon = 1e-6);
@@ -66,7 +66,7 @@ fn arc_length_sets_the_sweep() {
     let Geometry::Arc { center, start, end } = s.entity(arc).unwrap().geometry else { unreachable!() };
     s.constrain(SketchConstraint::Fixed { point: center, x: 0.0, y: 0.0 });
     s.constrain(SketchConstraint::Fixed { point: start, x: 10.0, y: 0.0 });
-    let c = s.constrain(SketchConstraint::ArcLength { arc, value: 5.0 * PI, reference: false });
+    let c = s.constrain(SketchConstraint::ArcLength { arc, value: 5.0 * PI, reference: false, opts: Default::default() });
     let r = s.solve().unwrap();
     assert_eq!(r.status, SketchStatus::WellConstrained, "{r:?}");
     let e = pt(&s, end);
@@ -87,7 +87,7 @@ fn new_dimensions_as_reference_only_measure() {
     let l = base_line(&mut s);
     let p = s.add_point(3.0, 2.0);
     s.constrain(SketchConstraint::Fixed { point: p, x: 3.0, y: 2.0 });
-    let c = s.constrain(SketchConstraint::PointLineDistance { point: p, line: l, value: 99.0, reference: true });
+    let c = s.constrain(SketchConstraint::PointLineDistance { point: p, line: l, value: 99.0, reference: true, opts: Default::default() });
     let r = s.solve().unwrap();
     assert_ne!(r.status, SketchStatus::OverConstrained);
     assert_relative_eq!(pt(&s, p)[1], 2.0, epsilon = 1e-9);
@@ -96,11 +96,11 @@ fn new_dimensions_as_reference_only_measure() {
 
 #[test]
 fn json_names() {
-    let c = SketchConstraint::AxisDiameter { point: 1, line: 2, value: 3.0, reference: false };
+    let c = SketchConstraint::AxisDiameter { point: 1, line: 2, value: 3.0, reference: false, opts: Default::default() };
     let j = serde_json::to_string(&c).unwrap();
     assert!(j.contains("\"type\":\"axis_diameter\""), "{j}");
     let back: SketchConstraint = serde_json::from_str(r#"{"type":"arc_length","arc":4,"value":2.5}"#).unwrap();
-    assert_eq!(back, SketchConstraint::ArcLength { arc: 4, value: 2.5, reference: false });
+    assert_eq!(back, SketchConstraint::ArcLength { arc: 4, value: 2.5, reference: false, opts: Default::default() });
 }
 
 #[test]

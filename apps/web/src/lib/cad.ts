@@ -148,18 +148,51 @@ export type SketchConstraint =
   | { type: "symmetric"; a: number; b: number; line: number }
   | { type: "equal_offset"; a1: number; a2: number; b1: number; b2: number }
   | { type: "equal_rotation"; center: number; a1: number; a2: number; b1: number; b2: number }
-  | { type: "distance"; a: number; b: number; value: number; reference?: boolean }
-  | { type: "horizontal_distance"; a: number; b: number; value: number; reference?: boolean }
-  | { type: "vertical_distance"; a: number; b: number; value: number; reference?: boolean }
-  | { type: "length"; line: number; value: number; reference?: boolean }
-  | { type: "radius"; entity: number; value: number; reference?: boolean }
-  | { type: "diameter"; entity: number; value: number; reference?: boolean }
-  | { type: "angle"; a: number; b: number; degrees: number; reference?: boolean }
+  | ({ type: "distance"; a: number; b: number; value: number } & Dim)
+  | ({ type: "horizontal_distance"; a: number; b: number; value: number } & Dim)
+  | ({ type: "vertical_distance"; a: number; b: number; value: number } & Dim)
+  | ({ type: "length"; line: number; value: number } & Dim)
+  | ({ type: "radius"; entity: number; value: number } & Dim)
+  | ({ type: "diameter"; entity: number; value: number } & Dim)
+  /** De `a` a `b`; con `supplementary`, de `a` a `b` invertida (180° − el ángulo) */
+  | ({ type: "angle"; a: number; b: number; degrees: number; supplementary?: boolean } & Dim)
   /** Distancia de un punto a la recta de una línea (entre paralelas: un extremo de una y la otra) */
-  | { type: "point_line_distance"; point: number; line: number; value: number; reference?: boolean }
+  | ({ type: "point_line_distance"; point: number; line: number; value: number } & Dim)
   /** Cota simétrica respecto de un eje: el doble de la distancia (diámetro en perfiles de revolución) */
-  | { type: "axis_diameter"; point: number; line: number; value: number; reference?: boolean }
-  | { type: "arc_length"; arc: number; value: number; reference?: boolean };
+  | ({ type: "axis_diameter"; point: number; line: number; value: number } & Dim)
+  | ({ type: "arc_length"; arc: number; value: number } & Dim)
+  /** Largo total de una cadena de líneas, arcos y círculos */
+  | ({ type: "curve_length"; entities: number[]; value: number } & Dim)
+  /**
+   * Distancia mínima (o máxima con `max`) entre un círculo o arco y otro, un
+   * punto o una línea (`a` y `b`: ids de punto o de entidad)
+   */
+  | ({ type: "circle_distance"; a: number; b: number; max?: boolean; value: number } & Dim)
+  /** Mismo centro y mismo radio */
+  | { type: "coradial"; a: number; b: number }
+  /** Dos entidades del mismo tipo simétricas respecto de una línea */
+  | { type: "symmetric_entities"; a: number; b: number; line: number }
+  /** Punto sobre cualquier curva (también elipse y spline) */
+  | { type: "point_on_curve"; point: number; curve: number }
+  /** Punto en la intersección de dos curvas */
+  | { type: "intersection"; point: number; a: number; b: number }
+  /** Entidad bloqueada entera (puntos y radio) */
+  | { type: "lock"; entity: number };
+
+/** Lo común a las cotas: de referencia (no restringe) y opciones de cómo se ven */
+export interface Dim {
+  reference?: boolean;
+  opts?: DimOpts;
+}
+
+export interface DimOpts {
+  /** No se edita por error ni la cambia transformar */
+  locked?: boolean;
+  /** Lugar del texto respecto del que le toca (mm del plano) */
+  offset?: [number, number];
+  /** Cota de ordenadas: el valor junto al punto medido */
+  ordinate?: boolean;
+}
 
 export interface Sketch {
   points: SketchPoint[];
@@ -1422,7 +1455,7 @@ export function removeText(s: Sketch, t: SketchText, keepAnchor = false): void {
   for (const e of t.entities) removeEntity(s, e);
   if (!keepAnchor) {
     s.points = s.points.filter((p) => p.id !== t.anchor);
-    s.constraints = s.constraints.filter((c) => !Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && !["value", "degrees", "x", "y"].includes(k) && v === t.anchor));
+    s.constraints = s.constraints.filter((c) => !constraintMentions(c, [t.anchor]));
   }
 }
 
@@ -1902,7 +1935,7 @@ export function removeEntity(s: Sketch, id: number): void {
   if (!e) return;
   s.entities = s.entities.filter((x) => x.id !== id);
   const pointsOf = geometryPoints;
-  const mentions = (c: SketchConstraint, ids: Set<number>) => Object.entries(c).some(([k, v]) => k !== "type" && typeof v === "number" && k !== "value" && k !== "degrees" && k !== "x" && k !== "y" && ids.has(v));
+  const mentions = constraintMentions;
   s.constraints = s.constraints.filter((c) => !mentions(c, new Set([id])));
   const anchors = new Set((s.texts ?? []).map((t) => t.anchor));
   const loose = pointsOf(e.geometry).filter((p) => p !== s.origin && !anchors.has(p) && !s.entities.some((x) => pointsOf(x.geometry).includes(p)));
@@ -1968,7 +2001,7 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
   const cross = (T1[0] - C[0]) * (T2[1] - C[1]) - (T1[1] - C[1]) * (T2[0] - C[0]);
   const arc = addEntity(s, cross > 0 ? { type: "arc", center: c, start: t1, end: t2 } : { type: "arc", center: c, start: t2, end: t1 });
   // La esquina vieja desaparece con sus restricciones
-  s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, val]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && val === point));
+  s.constraints = s.constraints.filter((k) => !constraintMentions(k, [point]));
   if (!s.entities.some((e) => geometryPoints(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
   // Las líneas quedaron más cortas: sus cotas de largo ya no valen
   s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
@@ -2109,7 +2142,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2): string | undefined {
   const used = new Set(s.entities.flatMap((e) => geometryPoints(e.geometry)));
   const loose = new Set(s.points.filter((q) => !used.has(q.id) && q.id !== s.origin).map((q) => q.id));
   s.points = s.points.filter((q) => !loose.has(q.id));
-  s.constraints = s.constraints.filter((k) => !Object.entries(k).some(([key, v]) => key !== "type" && key !== "value" && key !== "degrees" && key !== "x" && key !== "y" && typeof v === "number" && loose.has(v)));
+  s.constraints = s.constraints.filter((k) => !constraintMentions(k, loose));
   return undefined;
 }
 
@@ -2471,11 +2504,31 @@ export function trimAt(s: Sketch, id: number, p: P2): string | undefined {
   return "Las splines no se recortan";
 }
 
+/** Campos numéricos de una restricción que no son ids */
+const NOT_IDS = ["value", "degrees", "x", "y"];
+
 /** Puntos y entidades que nombra una restricción (para resaltarla) */
 export function constraintIds(c: SketchConstraint): number[] {
-  return Object.entries(c)
-    .filter(([k, v]) => typeof v === "number" && !["value", "degrees", "x", "y"].includes(k))
-    .map(([, v]) => v as number);
+  return Object.entries(c).flatMap(([k, v]) =>
+    NOT_IDS.includes(k) ? [] : typeof v === "number" ? [v] : k === "entities" && Array.isArray(v) ? (v as number[]) : [],
+  );
+}
+
+/** Copia de una restricción con sus ids cambiados por `f` */
+export function mapConstraintIds<C extends SketchConstraint>(c: C, f: (id: number) => number): C {
+  const k = structuredClone(c) as C & Record<string, unknown>;
+  for (const [key, v] of Object.entries(k)) {
+    if (NOT_IDS.includes(key)) continue;
+    if (typeof v === "number") (k as Record<string, unknown>)[key] = f(v);
+    else if (key === "entities" && Array.isArray(v)) (k as Record<string, unknown>)[key] = (v as number[]).map(f);
+  }
+  return k;
+}
+
+/** Si una restricción nombra alguno de los ids */
+export function constraintMentions(c: SketchConstraint, ids: Set<number> | number[]): boolean {
+  const set = ids instanceof Set ? ids : new Set(ids);
+  return constraintIds(c).some((v) => set.has(v));
 }
 
 /**
@@ -2575,6 +2628,13 @@ export const CONSTRAINT_LABELS: Record<SketchConstraint["type"], string> = {
   point_line_distance: "Distancia a la línea",
   axis_diameter: "Diámetro respecto del eje",
   arc_length: "Largo de arco",
+  curve_length: "Largo total",
+  circle_distance: "Distancia mín./máx.",
+  coradial: "Coradiales",
+  symmetric_entities: "Simétricas",
+  point_on_curve: "Punto en la curva",
+  intersection: "Punto en la intersección",
+  lock: "Bloqueada",
 };
 
 // ─── Store ────────────────────────────────────────────────────────────────

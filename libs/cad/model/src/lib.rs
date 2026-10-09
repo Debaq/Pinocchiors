@@ -31,4 +31,4 @@ pub use geom::{P2, P3, Plane};
 pub use measure::{Distance, ItemMeasure, MeasureItem, Measurement, measure};
 pub use regions::{Loop, LoopPiece, Region, find_regions};
 pub use threads::ThreadAxis;
-pub use sketch::{Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, SolveReport, UseSource};
+pub use sketch::{DimOpts, Geometry, Sketch, SketchConstraint, SketchEntity, SketchError, SketchPoint, SketchStatus, SketchText, SketchUse, SolveReport, UseSource};

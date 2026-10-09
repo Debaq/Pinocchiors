@@ -4105,7 +4105,87 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       const p = point(P[0])!;
       out.push({ label: "Fijar", make: () => ({ type: "fixed", point: P[0], x: p.x, y: p.y }) });
     }
+    if (L.length === 2) {
+      const c: SketchConstraint = { type: "angle", a: L[0], b: L[1], degrees: 0, supplementary: true };
+      out.push({ label: "Ángulo suplementario", make: () => ({ ...c, degrees: measure(c) }) });
+    }
+    // Cadena de líneas, arcos y círculos: su largo total
+    const E = selEntities().map((e) => e!);
+    const chain = E.filter((e) => ["line", "arc", "circle"].includes(e.geometry.type));
+    if (chain.length >= 2 && chain.length === E.length && P.length === 0) {
+      const c: SketchConstraint = { type: "curve_length", entities: chain.map((e) => e.id), value: 0 };
+      out.push({ label: "Largo total", make: () => ({ ...c, value: measure(c) }) });
+    }
+    // Distancia mínima y máxima: un círculo o arco con otro, un punto o una línea
+    const pair: [number, number] | undefined =
+      C.length === 2 && L.length === 0 && P.length === 0 ? [C[0], C[1]] : C.length === 1 && L.length + P.length === 1 && E.length === L.length + 1 ? [C[0], L[0] ?? P[0]] : undefined;
+    if (pair) {
+      for (const max of [false, true]) {
+        const c: SketchConstraint = { type: "circle_distance", a: pair[0], b: pair[1], ...(max ? { max } : {}), value: 0 };
+        out.push({ label: max ? "Distancia máxima" : "Distancia mínima", make: () => ({ ...c, value: measure(c) }) });
+      }
+    }
+    if (C.length === 2 && L.length === 0) out.push({ label: "Coradiales", make: () => ({ type: "coradial", a: C[0], b: C[1] }) });
+    // Dos entidades del mismo tipo y una línea (la última elegida) como eje
+    if (E.length === 3 && P.length === 0) {
+      const axis = [...sel()].reverse().find((id) => entity(id)?.geometry.type === "line");
+      const pairE = E.filter((e) => e.id !== axis);
+      if (axis !== undefined && pairE.length === 2 && pairE[0].geometry.type === pairE[1].geometry.type)
+        out.push({ label: "Simétricas (eje: la última línea)", make: () => ({ type: "symmetric_entities", a: pairE[0].id, b: pairE[1].id, line: axis }) });
+    }
+    const curvesAny = E.filter((e) => e.geometry.type !== "point");
+    if (P.length === 1 && curvesAny.length === 1 && E.length === 1 && ["ellipse", "spline"].includes(curvesAny[0].geometry.type))
+      out.push({ label: "Punto en la curva", make: () => ({ type: "point_on_curve", point: P[0], curve: curvesAny[0].id }) });
+    if (P.length === 1 && curvesAny.length === 2 && E.length === 2)
+      out.push({ label: "Punto en la intersección", make: () => ({ type: "intersection", point: P[0], a: curvesAny[0].id, b: curvesAny[1].id }) });
+    if (E.length > 0) {
+      const locked = new Set(sketch().constraints.flatMap((c) => (c.type === "lock" ? [c.entity] : [])));
+      const fresh = E.filter((e) => !locked.has(e.id));
+      if (fresh.length) out.push({ label: fresh.length > 1 ? "Bloquear las entidades" : "Bloquear la entidad", make: () => fresh.map((e) => ({ type: "lock", entity: e.id })) });
+    }
+    // Varios puntos: cotas de ordenadas desde el primero o en cadena
+    if (P.length >= 3 && E.length === 0) {
+      for (const [axis, name] of [
+        [0, "horizontales"],
+        [1, "verticales"],
+      ] as const) {
+        out.push({ label: `Ordenadas ${name}`, make: () => ordinateDims(P, axis) });
+        out.push({ label: `Cadena ${name}`, make: () => chainDims(P, axis) });
+      }
+    }
     return out;
+  };
+
+  /** Fila donde van los textos: un poco más allá de los puntos, del lado de afuera */
+  const dimRow = (ids: number[], axis: 0 | 1) => {
+    const other = ids.map((id) => (axis === 0 ? point(id)!.y : point(id)!.x));
+    const span = Math.max(...ids.map((id) => (axis === 0 ? point(id)!.x : point(id)!.y))) - Math.min(...ids.map((id) => (axis === 0 ? point(id)!.x : point(id)!.y)));
+    return Math.max(...other) + Math.max(2, span * 0.08);
+  };
+  /** Distancias desde el primer punto elegido a cada uno de los otros, con los textos en fila junto a cada punto */
+  const ordinateDims = (ids: number[], axis: 0 | 1): SketchConstraint[] => {
+    const row = dimRow(ids, axis);
+    const type = axis === 0 ? "horizontal_distance" : "vertical_distance";
+    return ids.slice(1).map((b) => {
+      const p = point(b)!;
+      const offset: [number, number] = axis === 0 ? [0, +(row - p.y).toFixed(4)] : [+(row - p.x).toFixed(4), 0];
+      const c: SketchConstraint = { type, a: ids[0], b, value: 0, opts: { ordinate: true, offset } };
+      return { ...c, value: measure(c) } as SketchConstraint;
+    });
+  };
+  /** Cada punto desde el anterior (ordenados a lo largo del eje), con los textos en fila */
+  const chainDims = (ids: number[], axis: 0 | 1): SketchConstraint[] => {
+    const coord = (id: number) => (axis === 0 ? point(id)!.x : point(id)!.y);
+    const sorted = [...ids].sort((a, b) => coord(a) - coord(b));
+    const row = dimRow(ids, axis);
+    const type = axis === 0 ? "horizontal_distance" : "vertical_distance";
+    return sorted.slice(1).map((b, i) => {
+      const a = sorted[i];
+      const [pa, pb] = [point(a)!, point(b)!];
+      const offset: [number, number] = axis === 0 ? [0, +(row - (pa.y + pb.y) / 2).toFixed(4)] : [+(row - (pa.x + pb.x) / 2).toFixed(4), 0];
+      const c: SketchConstraint = { type, a, b, value: 0, opts: { offset } };
+      return { ...c, value: measure(c) } as SketchConstraint;
+    });
   };
 
   return (
