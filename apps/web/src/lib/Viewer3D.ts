@@ -17,8 +17,10 @@ import { chainAround, type BoneShape, type JointFrame, type RigControl } from ".
 import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
 import { ViewCube } from "./ViewCube";
 import { installDqSkinning, setDqSkinning } from "./dqSkinning";
+import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 
 installDqSkinning();
+installAutoSmooth();
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -35,6 +37,8 @@ export interface MeshData {
   groups?: Uint32Array;
   /** Nodo del archivo de cada grupo (0xffffffff = sin nodo) */
   groupNodes?: Uint32Array;
+  /** Por grupo, 1 si las normales las calculó el programa (malla soldada) */
+  computedNormals?: Uint32Array;
 }
 
 /** Material del archivo de origen, con sus texturas ya decodificadas */
@@ -2049,7 +2053,27 @@ export class Viewer3D {
   }
 
   private defaultMaterial(): THREE.MeshStandardMaterial {
-    return new THREE.MeshStandardMaterial({ color: 0x6272a4, metalness: 0.1, roughness: 0.7, side: THREE.DoubleSide });
+    const m = new THREE.MeshStandardMaterial({ color: 0x6272a4, metalness: 0.1, roughness: 0.7, side: THREE.DoubleSide });
+    setAutoSmooth(m, this.autoSmooth());
+    return m;
+  }
+
+  /**
+   * Normales calculadas (malla soldada: pieza del CAD, STL...) en la mayor
+   * parte de la malla: se suaviza solo hasta un ángulo y las aristas vivas
+   * se ven vivas. Las normales que trae el archivo se respetan.
+   */
+  private autoSmooth(): boolean {
+    const d = this.meshData;
+    if (!d?.computedNormals || !d.groups) return false;
+    let computed = 0;
+    let total = 0;
+    for (let g = 0; g < d.computedNormals.length; g++) {
+      const count = d.groups[g * 3 + 1];
+      total += count;
+      if (d.computedNormals[g]) computed += count;
+    }
+    return total > 0 && computed * 2 >= total;
   }
 
   /**
@@ -2135,6 +2159,7 @@ export class Viewer3D {
     }
     material.name = m.name;
     material.userData.sceneMaterial = true;
+    setAutoSmooth(material, this.autoSmooth());
     return material;
   }
 

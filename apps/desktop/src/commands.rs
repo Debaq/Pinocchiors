@@ -80,6 +80,10 @@ pub struct MeshData {
     /// Caras de la malla de 4 índices (un triángulo repite el último), para
     /// el alambre sin diagonales; vacío si la escena no tiene quads
     pub quad_indices: Vec<u32>,
+    /// Por grupo, 1 si las normales las calculó el programa (malla soldada:
+    /// pieza del CAD, STL...) y no vienen del archivo: el visor suaviza
+    /// solo hasta un ángulo, así las aristas vivas se ven vivas
+    pub group_computed_normals: Vec<u32>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -116,6 +120,12 @@ impl MeshData {
         if !self.groups.is_empty() && self.group_nodes.len() == self.groups.len() {
             for node in &self.group_nodes {
                 out.extend_from_slice(&node.to_le_bytes());
+            }
+            // Y después, si están, las normales calculadas de cada grupo
+            if self.group_computed_normals.len() == self.groups.len() {
+                for flag in &self.group_computed_normals {
+                    out.extend_from_slice(&flag.to_le_bytes());
+                }
             }
         }
         out
@@ -673,6 +683,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut groups: Vec<[u32; 3]> = Vec::new();
     let mut group_nodes: Vec<u32> = Vec::new();
     let mut quad_indices: Vec<u32> = Vec::new();
+    let mut computed: Vec<u32> = Vec::new();
     let has_quads = scene.has_quads();
 
     for prim in &prims {
@@ -685,6 +696,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
             Some(n) => normals.extend(n.iter().flatten()),
             None => normals.extend(compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten()),
         }
+        computed.push(prim.normals.is_none() as u32);
 
         // Si alguna primitiva tiene UVs, las demás se rellenan para mantener la alineación
         if has_uvs {
@@ -711,6 +723,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         groups,
         group_nodes,
         quad_indices,
+        group_computed_normals: computed,
     }
 }
 
@@ -4860,6 +4873,7 @@ mod tests {
             groups: vec![],
             group_nodes: vec![],
             quad_indices: vec![],
+            group_computed_normals: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);
@@ -4879,6 +4893,11 @@ mod tests {
         let with_nodes = MeshData { group_nodes: vec![5, u32::MAX], ..grouped.clone() };
         let w = words(&with_nodes.to_bytes());
         assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX]);
+
+        // Y las normales calculadas de cada grupo
+        let flagged = MeshData { group_computed_normals: vec![1, 0], ..with_nodes.clone() };
+        let w = words(&flagged.to_bytes());
+        assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX, 1, 0]);
 
         let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
         let w = words(&quads);

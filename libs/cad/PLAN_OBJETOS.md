@@ -69,8 +69,11 @@ herramientas actúan sobre **el objeto elegido en el Outliner**.
 - Las ediciones de esqueleto no se rehacen: el esqueleto se conserva tal cual
   sobre la malla nueva (los pesos sí se recalculan).
 - El orden de los objetos es el de creación; no se pueden reordenar ni agrupar.
-- Las normales de la malla soldada se promedian (franjas en cilindros, igual
-  que un STL importado); lo ideal sería partirlas por ángulo solo para dibujar.
+- ~~Las normales de la malla soldada se promedian (franjas en cilindros)~~:
+  hecho 2026-10-08 con suavizado automático en el shader (`lib/autoSmooth.ts`,
+  define `AUTO_SMOOTH`): donde la normal del vértice se aparta más de 10–18° de
+  la de la cara se usa la de la cara. Solo en mallas con normales calculadas por
+  el programa (`MeshData.group_computed_normals`); las del archivo se respetan.
 - Elegir varios objetos a la vez (Fabricar con varias piezas juntas).
 - Diseñar sigue con su propio visor; el plan del rediseño de la interfaz de
   Diseñar (ver ROADMAP) puede unificarlo.

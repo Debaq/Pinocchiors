@@ -27,14 +27,17 @@ export function decodeMesh(buffer: ArrayBuffer): MeshData {
   // Opcional al final: grupos por material, cantidad y [inicio, cantidad, material]
   let groups: Uint32Array | undefined;
   let groupNodes: Uint32Array | undefined;
+  let computedNormals: Uint32Array | undefined;
   if (offset + 4 <= buffer.byteLength) {
     const [count] = new Uint32Array(buffer, offset, 1);
     offset += 4;
     groups = uints(count * 3);
     // Opcional después: el nodo del archivo de cada grupo
     if (offset + count * 4 <= buffer.byteLength) groupNodes = uints(count);
+    // Y después: 1 si las normales del grupo las calculó el programa
+    if (groupNodes && offset + count * 4 <= buffer.byteLength) computedNormals = uints(count);
   }
-  return { positions, normals, indices, uvs, quadIndices, groups, groupNodes };
+  return { positions, normals, indices, uvs, quadIndices, groups, groupNodes, computedNormals };
 }
 
 /** Pesos: cabecera u32 × 4 (vértices, huesos, influencias, bytes de nombres) */
