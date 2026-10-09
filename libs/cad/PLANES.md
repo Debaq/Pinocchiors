@@ -6,7 +6,7 @@ Onshape). Cada plan dice qué hay hoy, qué falta y por qué, diseño, fases, pr
 
 | # | Plan | Tamaño | Depende de |
 |---|---|---|---|
-| 1 | [Sketch completo](PLAN_SKETCH.md) — incluye [anclajes](PLAN_ANCLAJES.md) | M | — |
+| 1 | [Sketch: lo que falta para el uso diario](PLAN_SKETCH.md) (el plan del sketch completo y el de anclajes ya se cumplieron) | M | — |
 | 2 | [Edición con vista previa](PLAN_EDICION.md) | M | — |
 | 3 | [Medir e inspeccionar](PLAN_INSPECCION.md) | S–M | — |
 | 4 | [Recálculo incremental](PLAN_RECALCULO.md) | M | — (mejora 2) |

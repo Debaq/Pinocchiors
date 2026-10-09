@@ -1,144 +1,172 @@
-# Sketch completo
+# Sketch: lo que falta para el uso diario
 
-Objetivo: que dibujar en un sketch se sienta como en Onshape: todo lo que se dibuja queda atado,
-el color dice qué falta definir y están las herramientas y restricciones que se usan a diario.
-
-Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su propio plan:
-[PLAN_ANCLAJES.md](PLAN_ANCLAJES.md). Este plan cubre el resto.
+Plan anotado el 2026-10-09 tras repasar el sketch contra la lista completa de un CAD de
+referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del sketch
+(sketch completo y anclajes), ya cumplidos; lo que hicieron está en la bitácora de
+[ROADMAP.md](ROADMAP.md).
 
 ## Qué tenemos hoy
 
-- Entidades (`model/src/sketch.rs`, `Geometry`): línea, círculo, arco, spline interpolada.
-- Restricciones (`SketchConstraint`): coincidente, fijo, horizontal y vertical de una línea,
-  paralela, perpendicular, igual, tangente, punto en línea, punto en círculo, punto medio,
-  simétrico, distancia, distancia horizontal y vertical, largo, radio, diámetro, ángulo.
-- Herramientas de la interfaz: línea, rectángulo por esquinas, círculo por centro, arco por
-  centro, arco tangente, polígono, ranura, recortar, extender, redondeo de esquina, equidistante.
-- Cotas al dibujar con Enter para pasar a la siguiente; gestor de restricciones con resaltado.
-- Diagnóstico de grados de libertad por espacio nulo (`solver`, `nullspace()`), que hoy solo se
-  usa para el estado general del sketch.
+- **Planos**: de origen, de referencia, caras planas; cambiar el plano de un sketch; origen
+  propio (`Sketch.origin`); vista de frente y encuadre al entrar.
+- **Entidades** (`model/src/sketch.rs`, `Geometry`): punto, línea, círculo, arco, spline
+  interpolada (manijas en los extremos), elipse; texto como bloque (`Sketch.texts`).
+  Herramientas: línea, línea desde el centro, rectángulo por esquinas y por centro, círculo por
+  centro, arco por centro y por 3 puntos, arco tangente, elipse, polígono inscrito, ranura
+  recta, spline, punto, texto, construcción (Q).
+- **Edición**: recortar, extender, redondeo de esquina, equidistante, simetría, patrones
+  (lineal en filas, circular con ángulo, en curva, por tabla, de relleno), borrar, arrastrar
+  respetando las restricciones.
+- **Referencias al sólido**: anclajes a vértices, medios, centros y aristas; «Usar arista» (J)
+  ligada al sólido (`Sketch.uses`).
+- **Restricciones** (`SketchConstraint`): coincidente, fijo, horizontal y vertical (de línea y
+  entre puntos), paralela, perpendicular, igual, tangente, concéntrico, punto en línea, punto
+  en círculo, punto medio, simétrico de dos puntos.
+- **Cotas**: distancia, horizontal, vertical, largo, radio, diámetro, ángulo; de referencia;
+  edición en sitio con Enter/Tab; fórmulas con los parámetros del documento.
+- **Solver**: grados de libertad, sub/sobredefinido, color por entidad, conflictos en rojo,
+  redundantes, aviso de cota que sobra con «dejarla de referencia».
+- **Asistencia**: inferencias (extremos, medios, centros, cuadrantes, cruces, alineaciones,
+  paralela, perpendicular, tangente), cotas al dibujar, vista previa, dibujo encadenado.
+- **Selección**: clic, caja de ventana y de cruce, Mayús suma.
+- **Regiones**: lazos cerrados, islas, elegir regiones para las operaciones.
 
 ## Qué falta y por qué
 
-| Falta | Por qué |
+| Falta | Por qué importa |
 |---|---|
-| Radio como incógnita del solver | `Circle2 { center_idx, radius }` y `Arc2` guardan el radio como constante. Las restricciones que lo involucran (igual entre círculos, tangencias entre círculos, concéntrico con radio libre) se resuelven por trucos (p. ej. tangente arco-arco como punto en línea de los centros) o no se pueden expresar |
-| Concéntrico | No existe la restricción; hoy se logra compartiendo el centro al dibujar |
-| Coincidente curva-curva general, simétrico de entidades | Solo hay simétrico de dos puntos respecto de una línea |
-| Horizontal / vertical entre dos puntos | El solver las tiene (`Horizontal { p1, p2 }`), el modelo no |
-| Cotas de referencia (*driven*) | Toda cota maneja la geometría; no hay forma de "solo mostrar" una medida |
-| Color por entidad según qué tan definida está | El espacio nulo se calcula pero no se reparte por entidad |
-| Rectángulo por centro, arco por 3 puntos, elipse, punto suelto, texto | No se priorizaron |
-| Simetría y patrón dentro del sketch | Solo existen como operaciones 3D |
-| Spline con manijas editables | La spline solo interpola puntos; no hay tangentes en los extremos ni curvatura |
-| Convertir a construcción y de vuelta | Existe la marca de construcción pero no una acción rápida (tecla Q en Onshape) |
+| Deshacer dentro del sketch | Ctrl+Z hoy deshace el **documento** con el sketch abierto: no se puede volver atrás un trazo y, peor, el documento cambia por debajo del sketch en edición |
+| Mover, copiar, rotar, escalar, dividir | Hoy solo se arrastra punto por punto; reacomodar un dibujo obliga a borrarlo y redibujarlo |
+| Copiar y pegar entidades | Mismo motivo, y para llevar dibujo de un sketch a otro |
+| Cotas punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje | Las más usadas que no se pueden expresar; la simétrica es la forma natural de acotar perfiles de revolución (diámetros) |
+| Colineal | Se arma hoy con paralela + punto en línea |
+| Círculo por 2 y 3 puntos, tangente a 3; polígono circunscrito; ranuras en arco; rectángulo por 3 puntos | Herramientas de dibujo comunes que obligan a construir a mano |
+| Proyectar contorno de cara, intersección con el modelo, geometría de otro sketch | «Usar arista» va de a una arista; dibujar sobre una cara existente es lo más habitual |
+| Contornos abiertos, extremos sueltos, cruces y superposiciones | Una extrusión que no encuentra regiones no dice por qué |
+| Mostrar u ocultar cotas, restricciones, construcción | Con sketches grandes la vista se llena de glifos |
+| Lista de entidades con propiedades editables | No hay forma de escribir la coordenada o el largo de algo ya dibujado sin crear una cota |
+| Selección por cadena y por tipo | Elegir un contorno entero es clic a clic |
 
 ## Diseño
 
-### Radio como variable
+### Deshacer en el sketch
 
-- El solver pasa a guardar el radio de círculos y arcos como un parámetro más del vector de
-  incógnitas (igual que las coordenadas de los puntos). `Radius`/`Diameter` pasan a ser
-  restricciones sobre esa variable en vez de valores fijos.
-- En arcos, el radio queda definido por centro e inicio; se agrega la ecuación
-  `|fin − centro| = |inicio − centro|` (hoy implícita) y la variable radio se iguala a la primera.
-- Con esto se pueden escribir directo: **igual entre círculos** (`r_a = r_b`),
-  **tangente círculo-círculo** externa e interna (`|c_a − c_b| = r_a ± r_b`), **tangente
-  línea-círculo** (distancia del centro a la línea = r), **concéntrico** (centros iguales).
-- Migración: un documento viejo con `Circle { radius }` se lee igual; el valor guardado pasa a
-  ser el valor inicial de la variable. Si no tiene cota de radio queda libre (como en Onshape).
+- Pilas propias de la sesión en `cadUi`: `undo: Sketch[]`, `redo: Sketch[]` con el sketch
+  **antes** de cada cambio. Cada `change` es un paso (cada clic de una línea encadenada es un
+  paso, como en Onshape); un arrastre entero es un solo paso (se guarda al primer movimiento y
+  se cierra al soltar). Los cambios que no cambian nada (una herramienta que avisa un error)
+  no suman pasos.
+- Deshacer repone el sketch guardado, limpia de la selección lo que ya no existe, corta la
+  herramienta en curso y lo vuelve a resolver.
+- Ctrl+Z / Ctrl+Mayús+Z con un sketch abierto van a estas pilas, no al documento. Terminar o
+  descartar el sketch las vacía; deshacer en el documento después de terminar deshace el
+  sketch entero (como hoy).
+- Carrera: un resultado del solver que llega después de un deshacer no debe pisar el sketch
+  repuesto → número de generación en la sesión; `solve` descarta respuestas viejas.
 
-### Restricciones nuevas en el modelo
+### Transformar entidades
 
-| Restricción | Ecuación |
+- Herramientas en la barra del sketch: **Mover**, **Copiar**, **Rotar**, **Escalar**, sobre lo
+  elegido. Mover/copiar: punto base y destino (con anclajes y cotas al dibujar: distancia y
+  ángulo). Rotar: centro y ángulo. Escalar: punto base y factor.
+- Mover, rotar y escalar cambian los puntos y quitan las restricciones que dejarían de
+  cumplirse (fijos, cotas horizontales/verticales con puntos de afuera, coincidencias con
+  puntos no elegidos: se desprenden). Copiar duplica entidades y las restricciones internas
+  entre ellas (como `linearPattern` con una sola copia, sin igualdades con el original).
+- **Dividir**: herramienta que parte una línea, arco o círculo en el punto del clic
+  (`splitLineAt` ya existe para líneas; falta arco y círculo).
+- **Copiar y pegar** (Ctrl+C / Ctrl+V): portapapeles de la sesión con las entidades, sus puntos y
+  las restricciones internas; pegar pide el punto de inserción. Sirve entre sketches (el
+  portapapeles sobrevive a cerrar el sketch).
+
+### Cotas nuevas
+
+| Cota | Ecuación / cómo |
 |---|---|
-| `Concentric { a, b }` | centros coinciden (o se fusionan al crear) |
-| `HorizontalPoints { a, b }` / `VerticalPoints { a, b }` | `a.y = b.y` / `a.x = b.x` |
-| `SymmetricEntities { a, b, line }` | simetría punto a punto de dos entidades iguales |
-| `Coincident` curva-curva | línea sobre línea (colineal), círculo sobre círculo |
-| `Collinear { a, b }` | paralelas + un punto de b sobre a |
+| Punto-línea | `DistancePointLine { point, line, value }`: distancia con signo al soporte de la línea (solver: ya hay `PointOnLine`; se agrega la versión con valor) |
+| Entre paralelas | Misma restricción con un extremo de la otra línea, y paralela si no lo eran |
+| Largo de arco | `ArcLength { arc, value }`: r·θ con θ del barrido |
+| Simétrica respecto de un eje | `Distance` × 2 sobre la perpendicular a la línea de construcción: se muestra como diámetro (`⌀`) y se usa para perfiles de revolución |
 
-### Cotas de referencia
+### Restricciones y herramientas nuevas
 
-- Campo `driving: bool` en las cotas (por defecto `true`). Una cota de referencia no entra al
-  solver; después de resolver se calcula su valor y se muestra entre paréntesis, como Onshape.
-- Si una cota nueva sobre-define el sketch, se ofrece crearla como referencia en vez de fallar.
+- `Collinear { a, b }`: paralelas + extremo de b en el soporte de a.
+- Círculo por 2 puntos (diámetro), por 3 puntos (centro calculado), tangente a 3 entidades
+  (cálculo inicial por Apolonio simplificado y tangencias en el solver).
+- Polígono circunscrito: opción en la barra del polígono (inscrito/circunscrito); el
+  circunscrito acota el círculo de construcción tangente a los lados.
+- Ranura en arco (centro del arco, extremos, ancho) y ranura por el centro.
+- Rectángulo por 3 puntos (inclinado): dos esquinas y el ancho, con paralelas y perpendiculares.
 
-### Colores por entidad
+### Referencias al modelo
 
-- Después de resolver: para cada entidad, sus grados de libertad que quedan en el espacio nulo
-  (ya existe `point_dof_in_nullspace` para puntos; se extiende al radio).
-- Colores como Onshape: **azul** = le falta definir, **negro** (o el color de texto del tema) =
-  totalmente definida, **rojo** = en conflicto. El arrastre de una entidad azul mueve solo lo
-  que está libre (ya funciona con `solve_drag`).
-- El estado del sketch ("faltan 3 grados") ya existe; se agrega el número en la barra del sketch.
+- **Contorno de cara**: elegir una cara plana del sólido y proyectar todas sus aristas
+  (exterior e islas) como `uses`.
+- **Intersección**: el plano del sketch corta el sólido (`BRepAlgoAPI_Section`) y las curvas
+  quedan como `uses` ligados.
+- **Otro sketch**: proyectar curvas de un sketch anterior (mismo mecanismo de `uses` con el
+  origen en el sketch en vez del sólido).
+- **Romper vínculo**: convierte un `use` en geometría propia.
 
-### Herramientas nuevas
+### Validación del contorno
 
-- **Rectángulo por centro**: cuatro líneas + punto central de construcción con punto medio en
-  las diagonales.
-- **Arco por 3 puntos**: inicio, fin y un punto por donde pasa; se calcula el centro.
-- **Elipse** (entidad nueva `Ellipse { center, major, ratio }`) — necesita soporte en
-  `regions.rs` y en el puente (`GC_MakeEllipse` en OCCT). Opcional: arco de elipse.
-- **Punto suelto**: entidad punto, útil para agujeros y referencias.
-- **Texto**: entidad que genera contornos con una fuente; requiere decidir de dónde salen las
-  fuentes (OCCT `Font_BRepTextBuilder` necesita freetype, que hoy no se compila). Alternativa:
-  convertir el texto a contornos en el frontend con `opentype.js` y guardarlo como splines.
-  Se deja al final.
-- **Simetría en el sketch**: elige entidades y una línea; crea copias con `SymmetricEntities`.
-- **Patrón en el sketch**: lineal (también en filas), circular, en curva, por tabla y de
-  relleno; copias con restricciones de igualdad y distancia o ángulo, de modo que cambiar una
-  cota mueve todas.
-- **Spline con manijas**: tangente opcional en extremos y en puntos intermedios; manijas
-  arrastrables. Usa `GeomAPI_Interpolate` con tangentes (ya disponible en TKGeomAlgo).
-- **Construcción rápida**: tecla Q alterna construcción en lo seleccionado.
+- Después de resolver: extremos que no se tocan con nada (resaltado), cruces de curvas sin
+  punto común, entidades superpuestas. Se muestran en el visor y en la barra del sketch
+  («3 extremos sueltos»).
+- Al elegir el sketch en una extrusión o revolución sin regiones, el aviso dice por qué.
+
+### Visualización y lista
+
+- Botones en la barra del sketch: cotas, restricciones, construcción, puntos (mostrar/ocultar).
+- Lista de entidades en el panel (tipo, largo/radio) con coordenadas y medidas editables: escribir
+  un valor mueve los puntos sin agregar cota.
+- Selección por cadena (doble clic elige todo lo conectado) y por tipo.
 
 ## Fases
 
-1. **Inferencias** — según [PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fases 1 a 3. *Hecha el 2026-10-05.*
-2. **Radio variable** en el solver + concéntrico, igual y tangencias generales. Es el cambio
-   de fondo; todo lo demás se apoya en esto. *Hecha el 2026-10-05: en vez de un parámetro
-   aparte, cada círculo lleva un punto oculto en su borde (a la derecha del centro, con
-   horizontal implícita); en los arcos el borde es el inicio.*
-3. **Colores por entidad** y número de grados libres; cotas de referencia. *Hecha el 2026-10-05.*
-4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
-   rápida. *Hecha el 2026-10-05.*
-5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05. El 2026-10-09 se sumaron los
-   mismos patrones que hay como operación: lineal en dos direcciones (filas), circular con
-   ángulo total (de punta a punta, horario con negativo) y sin girar las copias, en curva (la
-   primera entidad elegida es el camino; en líneas, arcos y círculos las copias quedan atadas
-   con guías de construcción y siguen al camino; en splines y elipses quedan donde caen), por
-   tabla (cotas horizontal y vertical por copia) y de relleno (la región es el lazo de la
-   primera entidad elegida; grilla cuadrada o hexagonal con el paso como una sola cota sobre
-   líneas de construcción; tope de 120 copias porque el solver es denso). De paso: el
-   jacobiano numérico contaba dos veces un punto con dos papeles (la copia 1 de un patrón
-   circular es destino de un giro y origen del siguiente) y cambiar el ángulo de un patrón
-   circular no convergía; y el diagnóstico buscaba redundantes con un SVD por restricción
-   (100 copias: 8 s → 0,4 s con uno solo).*
-6. **Elipse y spline con manijas.** *Hecha el 2026-10-05 (manijas solo en los extremos; las intermedias y la curvatura quedan para más adelante).*
-7. **Texto** (después de decidir fuentes). *Hecha el 2026-10-05 con opentype.js (decisión del
-   usuario): el texto se inserta como curvas. Desde el 2026-10-08 queda como bloque
-   (`Sketch.texts`: texto, tamaño, fuente, ancla, curvas y puntos): sus puntos se mueven con el
-   ancla (el comienzo de la línea base), que se arrastra, acota o ancla como cualquier punto; los
-   que no toca nada más no entran al solver (se reponen con su distancia al ancla: 3 s → 15 ms
-   con "Hola"); elegido con «Elegir», la barra deja cambiar lo que dice y el tamaño y lo rehace
-   en el mismo lugar; borrar una de sus curvas borra el texto entero.*
+1. **Deshacer y rehacer dentro del sketch.**
+2. **Transformar**: mover, copiar, rotar, escalar, dividir; copiar y pegar.
+3. **Cotas**: punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje.
+4. **Restricciones y herramientas**: colineal, círculo por 2/3 puntos y tangente a 3,
+   polígono circunscrito, ranuras en arco y por centro, rectángulo por 3 puntos.
+5. **Referencias al modelo**: contorno de cara, intersección, otro sketch, romper vínculo.
+6. **Validación del contorno**: abiertos, extremos sueltos, cruces, superposiciones; aviso en
+   las operaciones.
+7. **Visualización y lista**: mostrar/ocultar, lista de entidades editable, selección por
+   cadena y por tipo.
+
+### Más adelante (sin fecha)
+
+- Planos: dirección horizontal por arista, invertir normal, vista de corte y ocultar el modelo
+  al entrar, sketch 3D, sketch sobre superficie curva.
+- Entidades: línea infinita, paralelogramo, arco elíptico, parábola, cónica, spline por puntos de
+  control y de ajuste, curvas por ecuación o desde archivo, texto sobre curva, imagen de
+  calco, importar DXF.
+- Edición: recortar con barrido, unir, equidistante a dos lados o con extremos cerrados,
+  chaflán 2D, simetría dinámica, estirar, manijas intermedias de spline, simplificar y
+  convertir a spline, eliminar duplicados, reparar, cerrar contorno.
+- Restricciones: curvatura G2, coradial, simétrico de entidades, punto en intersección,
+  bloquear entidad, perforación.
+- Cotas: ángulo suplementario, largo total, entre círculos (mín./máx.), ordenadas, cadena,
+  unidades en la cota, bloquear, mostrar nombre o fórmula, mover el texto de la cota.
+- Solver: sugerir restricciones, definir automáticamente, grados libres por entidad a la
+  vista, no invertir la geometría con cambios grandes, resolución parcial con conflicto.
+- Asistencia: activar/desactivar inferencias, anclaje y espaciado de rejilla, coordenadas
+  absolutas, relativas y polares.
+- Gestión: bloques, subsketches, capas, exportar el sketch a DXF/SVG, peine de curvatura.
 
 ## Pruebas
 
-- Solver (`cad-solver`): casos con radio libre — círculo tangente a dos líneas queda definido
-  al dar el radio; dos círculos iguales y tangentes; arco tangente a línea y círculo.
-- Modelo: documento viejo con radio fijo se carga y resuelve igual (prueba de migración con un
-  JSON guardado en `tests/`).
-- Diagnóstico: rectángulo sin cotas → 4 entidades azules; con dos cotas y un punto fijo → todas
-  negras; cota que sobra → se ofrece como referencia.
-- E2E: dibujar rectángulo por centro, acotar, verificar que quede centrado al cambiar la cota.
+- Funciones puras de `cad.ts` (transformar, copiar, dividir, validar) con `node --test` como
+  `e2e/sketchPattern.test.mjs`.
+- Solver: cada restricción nueva con un caso definido y uno sobredefinido en
+  `solver/tests` o `model/tests`.
+- e2e (`e2e/cad.mjs`): un escenario por fase, solo el afectado mientras se trabaja.
 
 ## Riesgos
 
-- **Radio variable cambia la convergencia**: más incógnitas y ecuaciones no lineales; arcos que
-  se "dan vuelta" (radio negativo o paso por cero). Mitigación: radio con valor inicial del
-  dibujo, límites en el paso de Newton y prueba con los sketches del banco e2e.
-- **Compatibilidad** de documentos y del cálculo de regiones: el radio deja de ser dato y pasa
-  a ser resultado; todo lo que lee `Geometry::Circle { radius }` debe leer el radio resuelto.
-- **Texto**: dependencia de fuentes y tamaño del binario.
+- **Deshacer y el solver asíncrono**: respuestas viejas que pisan lo repuesto (generación).
+- **Transformar con restricciones**: mover lo elegido y dejar atado lo de afuera puede no
+  tener solución; se desprende antes que fallar.
+- **Proyección de intersecciones**: curvas B-spline de OCCT a geometría del sketch (se
+  aproximan con splines como las elipses).

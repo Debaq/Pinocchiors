@@ -225,7 +225,7 @@ cargo test -p cad-model
   puntero. Bugs encontrados por las pruebas: el campo de cota se recreaba en cada cuadro y
   perdía el foco (For → Index), Esc en la cota no cortaba la polilínea, las etiquetas tapaban
   clics de dibujo (ahora sin clic mientras se dibuja y corridas fuera de la figura).
-- **2026-10-05 Anclajes, fase 1** ([PLAN_ANCLAJES.md](PLAN_ANCLAJES.md)): `Sketch.origin`, punto
+- **2026-10-05 Anclajes, fase 1** (plan de anclajes, ya borrado): `Sketch.origin`, punto
   fijo en (0, 0) con ecuación implícita en el solver, que no se borra al quitar entidades (los
   sketches viejos lo reciben al editarse). Restricciones nuevas `horizontal_points` /
   `vertical_points` (también en el panel con dos puntos elegidos). `lib/sketchSnap.ts` calcula
@@ -248,7 +248,7 @@ cargo test -p cad-model
   la forma en curso). Líneas guía punteadas y la entidad de referencia resaltada. Las pruebas
   e2e con clics en coordenadas fijas ahora tienen que quedar lejos (> 8 px) de alineaciones
   sin querer.
-- **2026-10-05 Radio variable** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 2): el radio de los
+- **2026-10-05 Radio variable** (plan del sketch anterior, fase 2): el radio de los
   círculos deja de ser dato. Cada círculo suma al solver un punto oculto en su borde (misma
   altura que el centro); radio, diámetro, igual, punto en círculo y tangencias se escriben
   sobre esa distancia, y después de resolver el radio vuelve a `Geometry::Circle`. Un círculo
@@ -258,20 +258,20 @@ cargo test -p cad-model
   "Concéntricos" con dos curvas elegidas. Pruebas: círculo por tres puntos, tangente a una
   esquina en L, iguales y tangentes, concéntrico y tangencia interna, documento viejo con
   radio sin cota.
-- **2026-10-05 Colores por entidad y cotas de referencia** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+- **2026-10-05 Colores por entidad y cotas de referencia** (plan del sketch anterior,
   fase 3): `SolveReport.free_entities` (alguno de sus puntos o su radio libre, según el espacio
   nulo) → azul en el visor (`--color-sketch-free`), en conflicto → rojo, definida → color del
   texto. Las cotas llevan `reference` (no entran al solver; al resolver se escribe lo que miden)
   y se muestran entre paréntesis; botón "Ref" en el panel. Una cota que repite lo que ya está
   definido también sobre-define (antes pasaba sin aviso porque no deja residuo): se marca la
   más nueva de las redundantes y el visor ofrece "Dejarla de referencia" o "Quitarla".
-- **2026-10-05 Herramientas simples** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 4): rectángulo
+- **2026-10-05 Herramientas simples** (plan del sketch anterior, fase 4): rectángulo
   por el centro (diagonal de construcción partida en el centro: mitades paralelas e iguales,
   así el centro puede ser el origen), arco por 3 puntos (inicio, fin y uno por donde pasa;
   se guarda antihorario, al revés si pasa por el otro lado; tecla 3), punto suelto
   (`Geometry::Point`, no forma regiones; tecla O) y Q para construcción sí/no en lo elegido.
   `geometryPoints` reemplaza las cadenas de ternarios que daban por hecho "si no, es arco".
-- **2026-10-05 Simetría y patrones en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 5):
+- **2026-10-05 Simetría y patrones en el sketch** (plan del sketch anterior, fase 5):
   simetría respecto de la primera línea elegida (cada punto copiado `symmetric` con su
   original, los que están sobre el eje se comparten, los arcos se invierten). Patrón lineal y
   circular con dos restricciones nuevas del solver, `EqualVector` (mismo desplazamiento) y
@@ -279,7 +279,7 @@ cargo test -p cad-model
   horizontal y vertical, o radios iguales y ángulo entre dos líneas de construcción) y cambiar
   esa cota mueve todas las copias. Con 2 en total el centro es punto medio (180° es inestable
   con `atan2`). Los círculos copiados llevan `equal` (el radio es incógnita).
-- **2026-10-05 Elipse** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 6, primera parte):
+- **2026-10-05 Elipse** (plan del sketch anterior, fase 6, primera parte):
   `Geometry::Ellipse { center, major, minor }` con los extremos de los semiejes como puntos
   (perpendicular implícita en el solver), así los radios se acotan con distancias y se
   arrastran. En OCCT es exacta: `Curve::Ellipse` (tipo 4 del puente, `gp_Elips`; si el semieje
@@ -287,14 +287,14 @@ cargo test -p cad-model
   mayor y ancho. Al dibujar, ahora solo los rectángulos evitan alinearse con su primer punto
   (la elipse, el arco, la ranura y el polígono sí se alinean con su centro). La barra del
   sketch pasa a dos filas si no entra.
-- **2026-10-05 Spline con manijas** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 6, segunda parte):
+- **2026-10-05 Spline con manijas** (plan del sketch anterior, fase 6, segunda parte):
   herramienta Spline (N): clics por donde pasa, clic en el primero la cierra, Esc la termina
   abierta. `Geometry::Spline` suma `start_handle`/`end_handle` opcionales (puntos: la tangente de
   salida y la de llegada, en el sentido de avance); en OCCT, `Curve::SplineEnds` (tipo 5 del
   puente, `GeomAPI_Interpolate::Load` con escala: cuenta la dirección, no el largo). En el
   visor la spline se ve suave (Catmull-Rom con esas tangentes; antes era una polilínea) y las
   manijas con línea punteada; botón "Manijas en los extremos sí/no".
-- **2026-10-05 Texto** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 7; el usuario eligió opentype.js
+- **2026-10-05 Texto** (plan del sketch anterior, fase 7; el usuario eligió opentype.js
   en vez de OCCT + freetype): herramienta Texto (X) con el texto, el tamaño (em, en mm) y la
   fuente (incluida Liberation Sans, SIL OFL, en `apps/web/public/fonts` con su licencia; o un
   .ttf/.otf elegido). `lib/sketchText.ts` pasa los contornos a líneas y splines: las Bézier
@@ -488,7 +488,7 @@ cargo test -p cad-model
   exportar" ofrece el ensamble cuando tiene instancias; STEP con cada instancia en su lugar, su
   nombre y el color de su pieza, y en malla (3MF, STL, OBJ, PLY, GLB) un objeto por instancia
   (`cad_export` con `assembly`).
-- **2026-10-08 Texto del sketch como bloque editable** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 7):
+- **2026-10-08 Texto del sketch como bloque editable** (plan del sketch anterior, fase 7):
   se mueve entero con su ancla y se puede cambiar lo que dice y el tamaño.
 - **2026-10-08 Roscas modeladas** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md)): el Agujero tiene
   "Roscar (rosca modelada)" (`Hole.modeled: ThreadSpec { nominal, pitch, clearance, left }`; el
@@ -500,7 +500,7 @@ cargo test -p cad-model
   recortado al largo. Gotchas: la herramienta pasa 1 µm de las tapas y, sin holgura, la cresta
   sobresale 1 µm de la cara (superficies coincidentes hacían fallar la booleana sin avisar).
   Pruebas: volumen del macho por Pappus (exacto), agujero pasante, eje y agujero roscados.
-- **2026-10-08 Usar arista en el sketch** ([PLAN_ANCLAJES.md](PLAN_ANCLAJES.md), fase 4 v2): aristas
+- **2026-10-08 Usar arista en el sketch** (plan de anclajes, ya borrado, fase 4 v2): aristas
   del sólido traídas al sketch y ligadas a él (si cambia la pieza, se mueven con ella).
 - **2026-10-08 Configuraciones** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): variantes de la pieza que
   cambian parámetros y apagan operaciones; se exportan todas juntas.
@@ -552,7 +552,7 @@ cargo test -p cad-model
   ~17 corridos medio paso; errores y dependencias) y e2e "roscas coordinadas". El arnés e2e acepta
   `?bridge=` / `E2E_BRIDGE_PORT` para no pisar el puente de otra sesión.
 
-- **2026-10-09 Patrones del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 5): los mismos que
+- **2026-10-09 Patrones del sketch** (plan del sketch anterior, fase 5): los mismos que
   hay como operación (lineal en filas, circular con ángulo y sin girar, en curva, por tabla, de
   relleno). Solver: jacobiano numérico con puntos repetidos y diagnóstico con un solo SVD.
   Pruebas: node `e2e/sketchPattern.test.mjs` y e2e "patrones del sketch". Los patrones que
