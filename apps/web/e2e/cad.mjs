@@ -2986,6 +2986,107 @@ const scenarios = {
     near(row[2] - row[0], 50, 1e-6, "paso 2");
   },
 
+  async "patrones del sketch: grilla, ángulo, en curva, tabla y relleno"(b) {
+    await begin(b);
+    await sketchOn(b);
+    // Dibujo armado directo en el sketch (mm): un rectángulo de 60 × 40, un
+    // camino recto y círculos sueltos para cada patrón
+    const made = await b.eval(`(() => {
+      const ids = {};
+      window.__cadUi.change((s) => {
+        let next = Math.max(...s.points.map((p) => p.id), ...s.entities.map((e) => e.id), s.next_id ?? 0) + 1;
+        const pt = (x, y) => (s.points.push({ id: next, x, y }), next++);
+        const ent = (geometry) => (s.entities.push({ id: next, geometry }), next++);
+        const corners = [pt(0, 0), pt(60, 0), pt(60, 40), pt(0, 40)];
+        ids.rect = corners.map((p, i) => ent({ type: "line", start: p, end: corners[(i + 1) % 4] }));
+        const circle = (x, y, r) => ent({ type: "circle", center: pt(x, y), radius: r });
+        ids.fill = circle(5, 5, 1.5);
+        ids.path = ent({ type: "line", start: pt(0, -20), end: pt(60, -20) });
+        ids.curve = circle(0, -15, 1);
+        ids.table = circle(-30, 50, 1);
+        ids.arc = circle(80, 0, 1);
+        ids.grid = circle(-30, -30, 1);
+        s.next_id = next;
+      });
+      return ids;
+    })()`);
+    await sleep(1200);
+    const kind = async (from, to) => {
+      await b.clickText(from);
+      await sleep(300);
+      await b.clickText(to);
+      await sleep(300);
+    };
+    // Elegir primero (sin elección no se ve la sección de patrones), después el tipo
+    const select = async (ids) => {
+      await b.eval(`window.__cadUi.setSelection(${JSON.stringify(ids)})`);
+      await sleep(400);
+    };
+    const run = async () => {
+      await b.clickText("Repetir en patrón");
+      await sleep(1200);
+      const msg = await b.eval(`window.__cadUi.message?.() ?? null`);
+      if (msg) throw new Error(`patrón: ${msg}`);
+    };
+    // Relleno: la región es la del primer lado elegido
+    await select([made.rect[0], made.fill]);
+    await kind("Lineal", "De relleno");
+    await setInput(b, "Separación", 10);
+    await setInput(b, "Margen al borde", 1);
+    await run();
+    // Tabla con las dos filas de siempre: (10, 0) y (20, 5)
+    await select([made.table]);
+    await kind("De relleno", "Por tabla");
+    await run();
+    // En curva sobre la línea: 4 de punta a punta
+    await select([made.path, made.curve]);
+    await kind("Por tabla", "En curva");
+    await setInput(b, "Cantidad", 4);
+    await run();
+    // Circular en 90°: 3 de punta a punta alrededor del origen
+    await select([made.arc]);
+    await kind("En curva", "Circular");
+    await setInput(b, "Cantidad", 3);
+    await setInput(b, "Ángulo", 90);
+    await run();
+    // Grilla: 2 × 2 de a 20 mm (X) y 20 mm (filas, Y)
+    await select([made.grid]);
+    await kind("Circular", "Lineal");
+    await setInput(b, "Cantidad", 2);
+    await setInput(b, "Filas", 2);
+    await run();
+    await b.shot("sketch-patrones");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const doc = await call("cad_get_document");
+    const sk = doc.features[0].kind.sketch;
+    const centersOf = (s) => s.entities.filter((e) => e.geometry.type === "circle").map((e) => s.points.find((p) => p.id === e.geometry.center));
+    const has = (list, x, y, what) => {
+      if (!list.some((c) => Math.abs(c.x - x) < 1e-3 && Math.abs(c.y - y) < 1e-3)) throw new Error(`${what} (${x}, ${y}): ${JSON.stringify(list.map((c) => [c.x, c.y]))}`);
+    };
+    const all = centersOf(sk);
+    const inRect = all.filter((c) => c.x > 0 && c.x < 60 && c.y > 0 && c.y < 40);
+    if (inRect.length !== 24) throw new Error(`relleno: ${inRect.length} círculos (esperados 6 × 4)`);
+    has(all, 55, 35, "relleno");
+    has(all, -20, 50, "tabla 1");
+    has(all, -10, 55, "tabla 2");
+    for (const x of [20, 40, 60]) has(all, x, -15, "en curva");
+    has(all, 80 * Math.SQRT1_2, 80 * Math.SQRT1_2, "circular a 45°");
+    has(all, 0, 80, "circular a 90°");
+    for (const [x, y] of [[-10, -30], [-30, -10], [-10, -10]]) has(all, x, y, "grilla");
+    // El paso del relleno es una cota: a 12 mm la grilla la sigue
+    const step = sk.constraints.find((k) => k.type === "length" && k.value === 10);
+    step.value = 12;
+    await call("cad_set_document", { document: doc });
+    const ev = await evaluate();
+    const solved = ev.sketches[0];
+    if (solved.report?.status === "failed" || solved.report?.status === "over_constrained") throw new Error(`solver: ${JSON.stringify(solved.report)}`);
+    const after = centersOf(solved.sketch);
+    const lead = after.find((c) => Math.abs(c.x - 5) < 1e-3 && Math.abs(c.y - 5) < 1e-3) ?? after[0];
+    has(after, lead.x + 12, lead.y, "relleno a 12 mm");
+    has(after, lead.x, lead.y + 12, "relleno a 12 mm (arriba)");
+  },
+
   async "elipse extruida"(b) {
     await begin(b);
     await sketchOn(b);

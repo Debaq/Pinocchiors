@@ -1449,80 +1449,377 @@ export function mirrorEntities(s: Sketch, ids: number[], axis: number): string |
   return undefined;
 }
 
+/** Marca una entidad como de construcción */
+function construction(s: Sketch, id: number): number {
+  s.entities.find((x) => x.id === id)!.construction = true;
+  return id;
+}
+
+/** Punto de construcción (entidad punto) que guía un patrón */
+function guidePoint(s: Sketch, p: P2): number {
+  const q = addPoint(s, p);
+  construction(s, addEntity(s, { type: "point", point: q }));
+  return q;
+}
+
+/** Una copia de las entidades con sus puntos llevados por `place`; devuelve original → copia */
+function placeCopy(s: Sketch, ids: number[], pts: number[], place: (p: number) => P2, keep: number[] = []): Map<number, number> {
+  const map = new Map<number, number>();
+  for (const p of pts) map.set(p, keep.includes(p) ? p : addPoint(s, place(p)));
+  copyEntities(s, ids, (p) => map.get(p) ?? p);
+  return map;
+}
+
+/** Los demás puntos de la copia guardan la forma del original: mismo desplazamiento que `lead` */
+function keepShape(s: Sketch, pts: number[], lead: number, map: Map<number, number>): void {
+  for (const p of pts) if (p !== lead) s.constraints.push({ type: "equal_offset", a1: lead, a2: p, b1: map.get(lead)!, b2: map.get(p)! });
+}
+
 /**
- * Patrón lineal: `count` en total (el original y count − 1 copias) corridas de
- * a `offset`. Solo el primer par lleva cotas (distancia horizontal y
+ * Patrón lineal: `count` en total por fila (el original y count − 1 copias)
+ * corridas de a `offset`; con `rows` > 1, filas corridas de a `offset2`. Solo
+ * el primer par de cada dirección lleva cotas (distancia horizontal y
  * vertical); el resto sigue con "mismo desplazamiento".
  */
-export function linearPattern(s: Sketch, ids: number[], count: number, offset: P2): string | undefined {
+export function linearPattern(s: Sketch, ids: number[], count: number, offset: P2, rows = 1, offset2: P2 = [0, 0]): string | undefined {
   const pts = pointsOfEntities(s, ids);
-  if (!pts.length || count < 2) return "Elegir qué repetir y al menos 2 en total";
-  let prev = new Map(pts.map((p) => [p, p]));
-  let master: [number, number] | undefined;
-  for (let k = 1; k < count; k++) {
-    const next = new Map<number, number>();
-    for (const p of pts) {
-      const P = pointOf(s, p);
-      const q = addPoint(s, [P[0] + k * offset[0], P[1] + k * offset[1]]);
-      next.set(p, q);
-      if (!master) {
-        master = [p, q];
-        s.constraints.push({ type: "horizontal_distance", a: p, b: q, value: offset[0] }, { type: "vertical_distance", a: p, b: q, value: offset[1] });
-      } else s.constraints.push({ type: "equal_offset", a1: master[0], a2: master[1], b1: prev.get(p)!, b2: q });
+  if (!pts.length || count < 1 || rows < 1 || count * rows < 2) return "Elegir qué repetir y al menos 2 en total";
+  const grid = new Map<string, Map<number, number>>([["0,0", new Map(pts.map((p) => [p, p]))]]);
+  const masters: [[number, number] | undefined, [number, number] | undefined] = [undefined, undefined];
+  for (let j = 0; j < rows; j++)
+    for (let k = 0; k < count; k++) {
+      if (!j && !k) continue;
+      const d: P2 = [k * offset[0] + j * offset2[0], k * offset[1] + j * offset2[1]];
+      const map = placeCopy(s, ids, pts, (p) => {
+        const P = pointOf(s, p);
+        return [P[0] + d[0], P[1] + d[1]];
+      });
+      // Cada copia sigue a la anterior de su fila (o a la de la fila anterior si es la primera)
+      const dir = k > 0 ? 0 : 1;
+      const parent = grid.get(k > 0 ? `${k - 1},${j}` : `${k},${j - 1}`)!;
+      for (const p of pts) {
+        const [from, q] = [parent.get(p)!, map.get(p)!];
+        const m = masters[dir];
+        if (m) s.constraints.push({ type: "equal_offset", a1: m[0], a2: m[1], b1: from, b2: q });
+        else {
+          const off = dir ? offset2 : offset;
+          masters[dir] = [from, q];
+          s.constraints.push({ type: "horizontal_distance", a: from, b: q, value: off[0] }, { type: "vertical_distance", a: from, b: q, value: off[1] });
+        }
+      }
+      grid.set(`${k},${j}`, map);
     }
-    copyEntities(s, ids, (p) => next.get(p) ?? p);
-    prev = next;
-  }
   return undefined;
 }
 
 /**
  * Patrón circular alrededor del punto `center`: `count` en total repartidos
- * en la vuelta. El primer par lleva radios iguales y una cota de ángulo
- * (entre dos líneas de construcción); el resto sigue con "mismo giro".
+ * en `span` grados (360: la vuelta entera; menos: de punta a punta; negativo:
+ * horario). El primer par lleva radios iguales y una cota de ángulo (entre
+ * dos líneas de construcción); el resto sigue con "mismo giro". Sin `rotate`
+ * las copias se trasladan sin girar.
  */
-export function circularPattern(s: Sketch, ids: number[], count: number, center: number): string | undefined {
+export function circularPattern(s: Sketch, ids: number[], count: number, center: number, span = 360, rotate = true): string | undefined {
   const pts = pointsOfEntities(s, ids);
   const lead = pts.find((p) => p !== center);
   if (lead === undefined || count < 2) return "Elegir qué repetir y al menos 2 en total";
+  if (span === 0) return "El ángulo no puede ser 0";
+  const full = Math.abs(span) >= 360 - 1e-9;
+  const step = ((full ? Math.sign(span) * 360 : span) / (full ? count : count - 1)) * (Math.PI / 180);
+  const half = Math.abs(Math.abs(step) - Math.PI) < 1e-9;
+  if (!half && Math.abs(step) > Math.PI) return "Entre una copia y la siguiente tiene que haber menos de 180°";
   const C = pointOf(s, center);
-  const step = (2 * Math.PI) / count;
   const rot = (P: P2, a: number): P2 => {
     const [x, y] = [P[0] - C[0], P[1] - C[1]];
     return [C[0] + x * Math.cos(a) - y * Math.sin(a), C[1] + x * Math.sin(a) + y * Math.cos(a)];
   };
+  const L = pointOf(s, lead);
   let prev = new Map(pts.map((p) => [p, p]));
   let master: [number, number] | undefined;
   for (let k = 1; k < count; k++) {
-    const next = new Map<number, number>();
-    for (const p of pts) {
-      if (p === center) {
-        next.set(p, p);
-        continue;
-      }
-      const q = addPoint(s, rot(pointOf(s, p), k * step));
-      next.set(p, q);
-      if (!master && p === lead) {
-        master = [p, q];
-        if (count === 2) {
-          // Media vuelta: el centro es el punto medio (un ángulo de 180° es inestable en el solver)
-          const d = addEntity(s, { type: "line", start: p, end: q });
-          s.entities.find((x) => x.id === d)!.construction = true;
-          s.constraints.push({ type: "midpoint", point: center, line: d });
-        } else {
-          const r0 = addEntity(s, { type: "line", start: center, end: p });
-          const r1 = addEntity(s, { type: "line", start: center, end: q });
-          for (const r of [r0, r1]) s.entities.find((x) => x.id === r)!.construction = true;
-          s.constraints.push({ type: "equal", a: r0, b: r1 }, { type: "angle", a: r0, b: r1, degrees: +((step * 180) / Math.PI).toFixed(6) });
-        }
+    // Girando, cada punto da la vuelta; sin girar, todos siguen al principal
+    const shift: P2 = [rot(L, k * step)[0] - L[0], rot(L, k * step)[1] - L[1]];
+    const next = placeCopy(
+      s,
+      ids,
+      pts,
+      (p) => (rotate ? rot(pointOf(s, p), k * step) : [pointOf(s, p)[0] + shift[0], pointOf(s, p)[1] + shift[1]]),
+      rotate ? [center] : [],
+    );
+    if (!master) {
+      master = [lead, next.get(lead)!];
+      if (half) {
+        // Media vuelta: el centro es el punto medio (un ángulo de 180° es inestable en el solver)
+        const d = construction(s, addEntity(s, { type: "line", start: master[0], end: master[1] }));
+        s.constraints.push({ type: "midpoint", point: center, line: d });
+      } else {
+        const r0 = construction(s, addEntity(s, { type: "line", start: center, end: master[0] }));
+        const r1 = construction(s, addEntity(s, { type: "line", start: center, end: master[1] }));
+        s.constraints.push({ type: "equal", a: r0, b: r1 }, { type: "angle", a: r0, b: r1, degrees: +((step * 180) / Math.PI).toFixed(6) });
       }
     }
-    for (const p of pts) {
+    for (const p of rotate ? pts : [lead]) {
       if (p === center || (k === 1 && p === lead)) continue;
-      s.constraints.push({ type: "equal_rotation", center, a1: master![0], a2: master![1], b1: prev.get(p)!, b2: next.get(p)! });
+      s.constraints.push({ type: "equal_rotation", center, a1: master[0], a2: master[1], b1: prev.get(p)!, b2: next.get(p)! });
     }
-    copyEntities(s, ids, (p) => next.get(p) ?? p);
+    if (!rotate) keepShape(s, pts, lead, next);
     prev = next;
+  }
+  return undefined;
+}
+
+/** Polilínea de una entidad del sketch (para recorrerla o medirla) */
+function polylineOf(s: Sketch, g: Geometry): P2[] {
+  const at = (id: number) => pointOf(s, id);
+  if (g.type === "line") return [at(g.start), at(g.end)];
+  if (g.type === "point") return [at(g.point)];
+  if (g.type === "ellipse") return ellipsePolyline(at(g.center), at(g.major), at(g.minor));
+  if (g.type === "spline") return splineOf(g, (id) => s.points.find((p) => p.id === id) && at(id)) ?? [];
+  const c = circleOf(s, g)!;
+  const [a0, sweep] = [c.a0 ?? 0, c.sweep ?? 2 * Math.PI];
+  const n = Math.max(8, Math.ceil((sweep / (2 * Math.PI)) * 64));
+  return Array.from({ length: n + 1 }, (_, i) => [c.c[0] + c.r * Math.cos(a0 + (sweep * i) / n), c.c[1] + c.r * Math.sin(a0 + (sweep * i) / n)] as P2);
+}
+
+/** Puntos a distancias iguales (por largo) sobre una polilínea; cerrada: sin repetir la punta */
+function alongPolyline(poly: P2[], count: number, closed: boolean): { at: P2; dir: number }[] {
+  const lens = [0];
+  for (let i = 1; i < poly.length; i++) lens.push(lens[i - 1] + Math.hypot(poly[i][0] - poly[i - 1][0], poly[i][1] - poly[i - 1][1]));
+  const total = lens[lens.length - 1];
+  const out: { at: P2; dir: number }[] = [];
+  for (let k = 0; k < count; k++) {
+    const want = (total * k) / (closed ? count : count - 1);
+    let i = 1;
+    while (i < poly.length - 1 && lens[i] < want) i++;
+    const [a, b] = [poly[i - 1], poly[i]];
+    const t = lens[i] > lens[i - 1] ? (want - lens[i - 1]) / (lens[i] - lens[i - 1]) : 0;
+    out.push({ at: [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])], dir: Math.atan2(b[1] - a[1], b[0] - a[0]) });
+  }
+  return out;
+}
+
+/**
+ * Patrón en curva: `count` en total repartidos de punta a punta de la
+ * entidad `path` (en un círculo o curva cerrada, en la vuelta). Cada copia se
+ * traslada lo que avanza el camino desde su comienzo; con `rotate` además
+ * gira con él. En líneas, arcos y círculos las copias quedan atadas al
+ * camino; en splines y elipses quedan donde caen.
+ */
+export function curvePattern(s: Sketch, ids: number[], count: number, path: number, rotate = false): string | undefined {
+  const g = s.entities.find((e) => e.id === path)?.geometry;
+  if (!g || g.type === "point") return "El camino tiene que ser una línea, arco, círculo, spline o elipse";
+  const items = ids.filter((id) => id !== path);
+  const pts = pointsOfEntities(s, items);
+  if (!pts.length || count < 2) return "Elegir el camino primero, después qué repetir, y al menos 2 en total";
+  const lead = pts[0];
+  if (g.type === "circle" && rotate) return circularPattern(s, items, count, g.center);
+  const move = (map: (P: P2) => P2) => (p: number) => map(pointOf(s, p));
+  if (g.type === "line") {
+    // Pasos iguales y el último en la punta: "mismo desplazamiento" que la línea entera
+    const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
+    let [prev, first] = [new Map(pts.map((p) => [p, p])), undefined as number | undefined];
+    for (let k = 1; k < count; k++) {
+      const t = k / (count - 1);
+      const next = placeCopy(s, items, pts, move((P) => [P[0] + t * (B[0] - A[0]), P[1] + t * (B[1] - A[1])]));
+      if (first === undefined) first = next.get(lead)!;
+      else s.constraints.push({ type: "equal_offset", a1: lead, a2: first, b1: prev.get(lead)!, b2: next.get(lead)! });
+      if (k === count - 1) s.constraints.push({ type: "equal_offset", a1: g.start, a2: g.end, b1: lead, b2: next.get(lead)! });
+      keepShape(s, pts, lead, next);
+      prev = next;
+    }
+    return undefined;
+  }
+  if (g.type === "arc" || g.type === "circle") {
+    // Guías sobre el camino a giros iguales; las copias siguen a su guía
+    const { c: C, r, a0: arcStart, sweep: arcSweep } = circleOf(s, g)!;
+    const L = pointOf(s, lead);
+    const a0 = arcStart ?? (Math.hypot(L[0] - C[0], L[1] - C[1]) > 1e-9 ? Math.atan2(L[1] - C[1], L[0] - C[0]) : 0);
+    const step = arcSweep !== undefined ? arcSweep / (count - 1) : (2 * Math.PI) / count;
+    const on = (a: number): P2 => [C[0] + r * Math.cos(a), C[1] + r * Math.sin(a)];
+    let start: number;
+    if (g.type === "arc") start = g.start;
+    else {
+      // Comienzo en el círculo, en el rayo que va del centro al punto principal
+      start = guidePoint(s, on(a0));
+      s.constraints.push({ type: "point_on_circle", point: start, circle: path });
+      if (Math.hypot(L[0] - C[0], L[1] - C[1]) > 1e-9) {
+        const ray = construction(s, addEntity(s, { type: "line", start: g.center, end: start }));
+        s.constraints.push({ type: "point_on_line", point: lead, line: ray });
+      } else s.constraints.push({ type: "horizontal_points", a: g.center, b: start });
+    }
+    const guides = [start];
+    for (let k = 1; k < count; k++) guides.push(g.type === "arc" && k === count - 1 ? g.end : guidePoint(s, on(a0 + k * step)));
+    for (let k = 2; k < count; k++) s.constraints.push({ type: "equal_rotation", center: g.center, a1: start, a2: guides[1], b1: guides[k - 1], b2: guides[k] });
+    // Cerrar la vuelta: la última guía vuelve al comienzo con el mismo giro
+    if (g.type === "circle") s.constraints.push({ type: "equal_rotation", center: g.center, a1: start, a2: guides[1], b1: guides[count - 1], b2: start });
+    for (let k = 1; k < count; k++) {
+      const a = k * step;
+      const S = on(a0);
+      const next = placeCopy(
+        s,
+        items,
+        pts,
+        move((P) => {
+          if (!rotate) return [P[0] + on(a0 + a)[0] - S[0], P[1] + on(a0 + a)[1] - S[1]];
+          const [x, y] = [P[0] - C[0], P[1] - C[1]];
+          return [C[0] + x * Math.cos(a) - y * Math.sin(a), C[1] + x * Math.sin(a) + y * Math.cos(a)];
+        }),
+      );
+      for (const p of pts)
+        s.constraints.push(
+          rotate
+            ? { type: "equal_rotation", center: g.center, a1: start, a2: guides[k], b1: p, b2: next.get(p)! }
+            : { type: "equal_offset", a1: start, a2: guides[k], b1: p, b2: next.get(p)! },
+        );
+    }
+    return undefined;
+  }
+  // Spline o elipse: sin restricción "sobre la curva", las copias guardan la forma y nada más
+  const closed = g.type === "ellipse" || (g.type === "spline" && g.closed);
+  const stops = alongPolyline(polylineOf(s, g), count, closed);
+  if (stops.length < 2) return "El camino no tiene largo";
+  const [S, d0] = [stops[0].at, stops[0].dir];
+  for (const { at, dir } of stops.slice(1)) {
+    const a = rotate ? dir - d0 : 0;
+    const next = placeCopy(
+      s,
+      items,
+      pts,
+      move((P) => {
+        const [x, y] = [P[0] - S[0], P[1] - S[1]];
+        return [at[0] + x * Math.cos(a) - y * Math.sin(a), at[1] + x * Math.sin(a) + y * Math.cos(a)];
+      }),
+    );
+    if (!rotate) keepShape(s, pts, lead, next);
+  }
+  return undefined;
+}
+
+/**
+ * Patrón por tabla: una copia por desplazamiento (mm, relativo al original).
+ * Cada copia lleva sus cotas horizontal y vertical desde el original.
+ */
+export function tablePattern(s: Sketch, ids: number[], offsets: P2[]): string | undefined {
+  const pts = pointsOfEntities(s, ids);
+  if (!pts.length || !offsets.length) return "Elegir qué repetir y al menos una fila en la tabla";
+  const lead = pts[0];
+  for (const d of offsets) {
+    const next = placeCopy(s, ids, pts, (p) => [pointOf(s, p)[0] + d[0], pointOf(s, p)[1] + d[1]]);
+    const q = next.get(lead)!;
+    s.constraints.push({ type: "horizontal_distance", a: lead, b: q, value: d[0] }, { type: "vertical_distance", a: lead, b: q, value: d[1] });
+    keepShape(s, pts, lead, next);
+  }
+  return undefined;
+}
+
+function inPolygon(p: P2, poly: P2[]): boolean {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [a, b] = [poly[i], poly[j]];
+    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+
+/** Distancia de `p` al segmento ab */
+function segmentDistance(p: P2, a: P2, b: P2): number {
+  const [dx, dy] = [b[0] - a[0], b[1] - a[1]];
+  const l2 = dx * dx + dy * dy;
+  const t = l2 > 0 ? Math.min(1, Math.max(0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2)) : 0;
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+
+/** Máximo de copias de un patrón de relleno (con más, cada recálculo del sketch pasa del medio segundo) */
+const FILL_MAX = 120;
+
+/**
+ * Patrón de relleno: copias en grilla (cuadrada o hexagonal) a `spacing` que
+ * entran enteras en `region`, con todo a no menos de `margin` del borde. La
+ * grilla pasa por el original; su paso es una cota sobre líneas de
+ * construcción y cada copia sigue a su vecina con "mismo desplazamiento".
+ */
+export function fillPattern(s: Sketch, ids: number[], region: Region, spacing: number, hex: boolean, margin: number): string | undefined {
+  const pts = pointsOfEntities(s, ids);
+  if (!pts.length) return "Elegir la región primero y después qué repetir";
+  if (!(spacing > 0)) return "La separación tiene que ser mayor que cero";
+  const lead = pts[0];
+  const L = pointOf(s, lead);
+  // Contorno de lo que se repite, para ver si cada copia entra
+  const samples: { p: P2; r: number }[] = [];
+  for (const id of ids) {
+    const g = s.entities.find((e) => e.id === id)?.geometry;
+    if (!g) continue;
+    if (g.type === "circle") samples.push({ p: pointOf(s, g.center), r: g.radius });
+    else for (const p of polylineOf(s, g)) samples.push({ p, r: 0 });
+  }
+  const loops = [region.outer, ...region.holes].map((l) => l.polygon);
+  const fits = (d: P2) =>
+    samples.every(({ p, r }) => {
+      const q: P2 = [p[0] + d[0], p[1] + d[1]];
+      if (!inPolygon(q, region.outer.polygon) || region.holes.some((h) => inPolygon(q, h.polygon))) return false;
+      return loops.every((poly) => poly.every((a, i) => segmentDistance(q, a, poly[(i + 1) % poly.length]) >= r + margin - 1e-9));
+    });
+  // Base de la grilla: A en x, B arriba (corrida medio paso si es hexagonal)
+  const A: P2 = [spacing, 0];
+  const B: P2 = hex ? [spacing / 2, (spacing * Math.sqrt(3)) / 2] : [0, spacing];
+  const xs = region.outer.polygon.map((p) => p[0] - L[0]);
+  const ys = region.outer.polygon.map((p) => p[1] - L[1]);
+  const [b0, b1] = [Math.floor(Math.min(...ys) / B[1]) - 1, Math.ceil(Math.max(...ys) / B[1]) + 1];
+  const cells = new Map<string, [number, number]>();
+  for (let b = b0; b <= b1; b++) {
+    const [a0, a1] = [Math.floor((Math.min(...xs) - b * B[0]) / spacing) - 1, Math.ceil((Math.max(...xs) - b * B[0]) / spacing) + 1];
+    for (let a = a0; a <= a1; a++) {
+      if ((a || b) && fits([a * A[0] + b * B[0], a * A[1] + b * B[1]])) cells.set(`${a},${b}`, [a, b]);
+      if (cells.size > FILL_MAX) return `Saldrían más de ${FILL_MAX} copias: subir la separación, o usar el patrón de relleno de operaciones (Patrones → De relleno)`;
+    }
+  }
+  if (!cells.size) return "No entra ninguna copia en la región: bajar la separación o el margen";
+  // Paso de la grilla: líneas de construcción desde el original
+  const pA = guidePoint(s, [L[0] + A[0], L[1] + A[1]]);
+  const pB = guidePoint(s, [L[0] + B[0], L[1] + B[1]]);
+  const lA = construction(s, addEntity(s, { type: "line", start: lead, end: pA }));
+  const lB = construction(s, addEntity(s, { type: "line", start: lead, end: pB }));
+  s.constraints.push({ type: "horizontal", line: lA }, { type: "length", line: lA, value: spacing }, { type: "equal", a: lA, b: lB });
+  if (hex) {
+    const lAB = construction(s, addEntity(s, { type: "line", start: pA, end: pB }));
+    s.constraints.push({ type: "equal", a: lA, b: lAB });
+  } else s.constraints.push({ type: "perpendicular", a: lA, b: lB });
+  // Recorrido desde el original: cada copia sigue a una vecina ya puesta
+  const placed = new Map<string, number>([["0,0", lead]]);
+  const queue: [number, number][] = [[0, 0]];
+  const link = (a: number, b: number) => {
+    const d: P2 = [a * A[0] + b * B[0], a * A[1] + b * B[1]];
+    const next = placeCopy(s, ids, pts, (p) => [pointOf(s, p)[0] + d[0], pointOf(s, p)[1] + d[1]]);
+    placed.set(`${a},${b}`, next.get(lead)!);
+    keepShape(s, pts, lead, next);
+    queue.push([a, b]);
+    return next.get(lead)!;
+  };
+  const steps: [number, number, number][] = [
+    [1, 0, pA],
+    [-1, 0, pA],
+    [0, 1, pB],
+    [0, -1, pB],
+  ];
+  while (placed.size <= cells.size) {
+    const cur = queue.shift();
+    if (!cur) {
+      // Parte de la región que no se toca con lo ya puesto: se acota desde el original
+      const [a, b] = [...cells.values()].find(([a, b]) => !placed.has(`${a},${b}`))!;
+      const q = link(a, b);
+      const d = [a * A[0] + b * B[0], a * A[1] + b * B[1]].map((v) => +v.toFixed(6));
+      s.constraints.push({ type: "horizontal_distance", a: lead, b: q, value: d[0] }, { type: "vertical_distance", a: lead, b: q, value: d[1] });
+      continue;
+    }
+    const [a, b] = cur;
+    const from = placed.get(`${a},${b}`)!;
+    for (const [da, db, guide] of steps) {
+      const key = `${a + da},${b + db}`;
+      if (!cells.has(key) || placed.has(key)) continue;
+      const q = link(a + da, b + db);
+      // Vecina hacia adelante: q − from = guía − original; hacia atrás, al revés
+      s.constraints.push(da + db > 0 ? { type: "equal_offset", a1: lead, a2: guide, b1: from, b2: q } : { type: "equal_offset", a1: lead, a2: guide, b1: q, b2: from });
+    }
   }
   return undefined;
 }

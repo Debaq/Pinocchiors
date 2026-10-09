@@ -911,18 +911,25 @@ impl Constraint {
     /// Jacobiano numérico (fallback para constraints complejos)
     fn jacobian_numerical(&self, points: &[Point2]) -> Vec<(usize, usize, f64, f64)> {
         let eps = 1e-8;
-        let indices = self.point_indices();
+        // Un punto que cumple dos papeles (la copia 1 de un patrón es a la vez
+        // destino del giro y origen del siguiente) va una sola vez: las
+        // entradas repetidas se suman al armar la matriz y la derivada daría el doble
+        let mut indices = self.point_indices();
+        indices.sort_unstable();
+        indices.dedup();
         let base = self.residuals(points);
         let mut entries = Vec::new();
 
+        let mut pts = points.to_vec();
         for &pi in &indices {
-            let mut pts_dx = points.to_vec();
-            pts_dx[pi].co.x += eps;
-            let res_dx = self.residuals(&pts_dx);
+            let orig = pts[pi].co;
+            pts[pi].co.x += eps;
+            let res_dx = self.residuals(&pts);
+            pts[pi].co = orig;
 
-            let mut pts_dy = points.to_vec();
-            pts_dy[pi].co.y += eps;
-            let res_dy = self.residuals(&pts_dy);
+            pts[pi].co.y += eps;
+            let res_dy = self.residuals(&pts);
+            pts[pi].co = orig;
 
             for (row, _) in base.iter().enumerate() {
                 let dfdx = (res_dx[row] - base[row]) / eps;

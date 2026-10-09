@@ -86,8 +86,9 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
   convertir el texto a contornos en el frontend con `opentype.js` y guardarlo como splines.
   Se deja al final.
 - **Simetría en el sketch**: elige entidades y una línea; crea copias con `SymmetricEntities`.
-- **Patrón en el sketch**: lineal y circular; copias con restricciones de igualdad y distancia
-  o ángulo, de modo que cambiar una cota mueve todas.
+- **Patrón en el sketch**: lineal (también en filas), circular, en curva, por tabla y de
+  relleno; copias con restricciones de igualdad y distancia o ángulo, de modo que cambiar una
+  cota mueve todas.
 - **Spline con manijas**: tangente opcional en extremos y en puntos intermedios; manijas
   arrastrables. Usa `GeomAPI_Interpolate` con tangentes (ya disponible en TKGeomAlgo).
 - **Construcción rápida**: tecla Q alterna construcción en lo seleccionado.
@@ -102,7 +103,18 @@ Las inferencias (anclarse a medios, centros, origen, alineaciones) tienen su pro
 3. **Colores por entidad** y número de grados libres; cotas de referencia. *Hecha el 2026-10-05.*
 4. **Herramientas simples**: rectángulo por centro, arco por 3 puntos, punto, construcción
    rápida. *Hecha el 2026-10-05.*
-5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05.*
+5. **Simetría y patrón en el sketch.** *Hecha el 2026-10-05. El 2026-10-09 se sumaron los
+   mismos patrones que hay como operación: lineal en dos direcciones (filas), circular con
+   ángulo total (de punta a punta, horario con negativo) y sin girar las copias, en curva (la
+   primera entidad elegida es el camino; en líneas, arcos y círculos las copias quedan atadas
+   con guías de construcción y siguen al camino; en splines y elipses quedan donde caen), por
+   tabla (cotas horizontal y vertical por copia) y de relleno (la región es el lazo de la
+   primera entidad elegida; grilla cuadrada o hexagonal con el paso como una sola cota sobre
+   líneas de construcción; tope de 120 copias porque el solver es denso). De paso: el
+   jacobiano numérico contaba dos veces un punto con dos papeles (la copia 1 de un patrón
+   circular es destino de un giro y origen del siguiente) y cambiar el ángulo de un patrón
+   circular no convergía; y el diagnóstico buscaba redundantes con un SVD por restricción
+   (100 copias: 8 s → 0,4 s con uno solo).*
 6. **Elipse y spline con manijas.** *Hecha el 2026-10-05 (manijas solo en los extremos; las intermedias y la curvatura quedan para más adelante).*
 7. **Texto** (después de decidir fuentes). *Hecha el 2026-10-05 con opentype.js (decisión del
    usuario): el texto se inserta como curvas. Desde el 2026-10-08 queda como bloque

@@ -24,8 +24,11 @@ import {
   isReference,
   filletCorner,
   circularPattern,
+  curvePattern,
+  fillPattern,
   linearPattern,
   mirrorEntities,
+  tablePattern,
   toggleSplineHandles,
   linesAt,
   offsetEntities,
@@ -3971,13 +3974,35 @@ const BodySection: Component<{ store: CadStore; ui: CadUi }> = (props) => (
 
 // ─── Sketch en edición ────────────────────────────────────────────────────
 
+type SketchPatternKind = "linear" | "circular" | "curve" | "table" | "fill";
+
+const SKETCH_PATTERNS: { value: SketchPatternKind; label: string }[] = [
+  { value: "linear", label: "Lineal" },
+  { value: "circular", label: "Circular" },
+  { value: "curve", label: "En curva" },
+  { value: "table", label: "Por tabla" },
+  { value: "fill", label: "De relleno" },
+];
+
 const SketchPanel: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
   const [offsetDist, setOffsetDist] = createSignal(2);
   const [patternCount, setPatternCount] = createSignal(3);
-  const [patternKind, setPatternKind] = createSignal<"linear" | "circular">("linear");
+  const [patternKind, setPatternKind] = createSignal<SketchPatternKind>("linear");
   const [patternStep, setPatternStep] = createSignal<P2>([20, 0]);
+  const [patternRows, setPatternRows] = createSignal(1);
+  const [patternStep2, setPatternStep2] = createSignal<P2>([0, 20]);
+  const [patternAngle, setPatternAngle] = createSignal(360);
+  const [patternRotate, setPatternRotate] = createSignal(true);
+  const [curveRotate, setCurveRotate] = createSignal(false);
+  const [tableRows, setTableRows] = createSignal<P2[]>([
+    [10, 0],
+    [20, 5],
+  ]);
+  const [fillSpacing, setFillSpacing] = createSignal(10);
+  const [fillMargin, setFillMargin] = createSignal(1);
+  const [fillHex, setFillHex] = createSignal(false);
   const s = () => ui.session()!;
   const sketch = (): Sketch => s().sketch;
   const entity = (id: number) => sketch().entities.find((e) => e.id === id);
@@ -4157,42 +4182,101 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 </Button>
               </Show>
               <div class="flex items-end gap-1.5">
-                <div class="flex-1">
-                  <Num label="Cantidad" min={2} value={patternCount()} onCommit={(v) => setPatternCount(Math.max(2, Math.round(v)))} />
+                <Show when={patternKind() !== "table" && patternKind() !== "fill"}>
+                  <div class="flex-1">
+                    <Num label="Cantidad" min={2} value={patternCount()} onCommit={(v) => setPatternCount(Math.max(2, Math.round(v)))} />
+                  </div>
+                </Show>
+                <div class={patternKind() === "table" || patternKind() === "fill" ? "flex-1" : undefined}>
+                  <Select options={SKETCH_PATTERNS} value={patternKind()} onChange={(v) => setPatternKind(v as SketchPatternKind)} />
                 </div>
-                <Select
-                  options={[
-                    { value: "linear", label: "Lineal" },
-                    { value: "circular", label: "Circular" },
-                  ]}
-                  value={patternKind()}
-                  onChange={(v) => setPatternKind(v as "linear" | "circular")}
-                />
               </div>
-              <Show
-                when={patternKind() === "linear"}
-                fallback={
+              <Switch>
+                <Match when={patternKind() === "linear"}>
+                  <div class="flex gap-1.5">
+                    <Num label="X" suffix="mm" step={1} value={patternStep()[0]} onCommit={(v) => setPatternStep([v, patternStep()[1]])} />
+                    <Num label="Y" suffix="mm" step={1} value={patternStep()[1]} onCommit={(v) => setPatternStep([patternStep()[0], v])} />
+                  </div>
+                  <Num label="Filas" min={1} value={patternRows()} onCommit={(v) => setPatternRows(Math.max(1, Math.round(v)))} />
+                  <Show when={patternRows() > 1}>
+                    <div class="flex gap-1.5" aria-label="Paso entre filas">
+                      <Num label="X" suffix="mm" step={1} value={patternStep2()[0]} onCommit={(v) => setPatternStep2([v, patternStep2()[1]])} />
+                      <Num label="Y" suffix="mm" step={1} value={patternStep2()[1]} onCommit={(v) => setPatternStep2([patternStep2()[0], v])} />
+                    </div>
+                  </Show>
+                </Match>
+                <Match when={patternKind() === "circular"}>
+                  <Num label="Ángulo" suffix="°" step={15} value={patternAngle()} onCommit={setPatternAngle} />
+                  <Checkbox small label="Girar las copias" checked={patternRotate()} onChange={setPatternRotate} />
                   <p class="text-[11px] text-text-dim">
-                    {selPoints().length === 1 ? "Alrededor del punto elegido" : "Alrededor del origen (o elegir también un punto)"}, repartidos en la vuelta
+                    {selPoints().length === 1 ? "Alrededor del punto elegido" : "Alrededor del origen (o elegir también un punto)"};{" "}
+                    {Math.abs(patternAngle()) >= 360 ? "repartidos en la vuelta" : "de punta a punta del ángulo (negativo: horario)"}
                   </p>
-                }
-              >
-                <div class="flex gap-1.5">
-                  <Num label="X" suffix="mm" step={1} value={patternStep()[0]} onCommit={(v) => setPatternStep([v, patternStep()[1]])} />
-                  <Num label="Y" suffix="mm" step={1} value={patternStep()[1]} onCommit={(v) => setPatternStep([patternStep()[0], v])} />
-                </div>
-              </Show>
+                </Match>
+                <Match when={patternKind() === "curve"}>
+                  <Checkbox small label="Girar con la curva" checked={curveRotate()} onChange={setCurveRotate} />
+                  <p class="text-[11px] text-text-dim">
+                    El camino es la primera entidad elegida (línea, arco, círculo, spline o elipse); las copias se reparten de punta a punta. En líneas,
+                    arcos y círculos siguen al camino si cambia.
+                  </p>
+                </Match>
+                <Match when={patternKind() === "table"}>
+                  <div class="space-y-1" aria-label="Tabla de copias">
+                    <span class="text-xs text-text-muted">Desplazamiento de cada copia (mm)</span>
+                    <For each={tableRows()}>
+                      {(row, i) => (
+                        <div class="flex items-center gap-1" data-table-row={i()}>
+                          <Num label="X" step={1} value={row[0]} onCommit={(v) => setTableRows(tableRows().map((r, j) => (j === i() ? [v, r[1]] : r)))} />
+                          <Num label="Y" step={1} value={row[1]} onCommit={(v) => setTableRows(tableRows().map((r, j) => (j === i() ? [r[0], v] : r)))} />
+                          <IconButton aria-label={`Quitar la fila ${i() + 1}`} size="sm" variant="ghost" onClick={() => setTableRows(tableRows().filter((_, j) => j !== i()))}>
+                            <Icons.Trash size={11} />
+                          </IconButton>
+                        </div>
+                      )}
+                    </For>
+                    <Button
+                      size="sm"
+                      fullWidth
+                      onClick={() => {
+                        const last = tableRows()[tableRows().length - 1] ?? [0, 0];
+                        setTableRows([...tableRows(), [last[0] + 10, last[1]]]);
+                      }}
+                    >
+                      Agregar fila
+                    </Button>
+                  </div>
+                </Match>
+                <Match when={patternKind() === "fill"}>
+                  <Num label="Separación" suffix="mm" step={1} min={0} value={fillSpacing()} onCommit={(v) => setFillSpacing(Math.max(0.01, v))} />
+                  <Num label="Margen al borde" suffix="mm" step={0.5} min={0} value={fillMargin()} onCommit={(v) => setFillMargin(Math.max(0, v))} />
+                  <Checkbox small label="Grilla hexagonal" checked={fillHex()} onChange={setFillHex} />
+                  <p class="text-[11px] text-text-dim">
+                    La región es el lazo cerrado de la primera entidad elegida; entran las copias enteras a no menos del margen del borde. La grilla pasa
+                    por el original.
+                  </p>
+                </Match>
+              </Switch>
               <Button
                 size="sm"
                 onClick={() => {
                   const ids = selEntities().map((e) => e!.id);
                   const n = patternCount();
                   let msg: string | undefined;
-                  if (patternKind() === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, patternStep())));
-                  else {
+                  const kind = patternKind();
+                  if (kind === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, patternStep(), patternRows(), patternStep2())));
+                  else if (kind === "circular") {
                     const center = selPoints().length === 1 ? selPoints()[0] : sketch().origin;
                     if (center === undefined) msg = "Elegir el punto alrededor del cual repetir";
-                    else ui.change((sk) => (msg = circularPattern(sk, ids, n, center)));
+                    else ui.change((sk) => (msg = circularPattern(sk, ids, n, center, patternAngle(), patternRotate())));
+                  } else if (kind === "curve") ui.change((sk) => (msg = curvePattern(sk, ids, n, ids[0], curveRotate())));
+                  else if (kind === "table") ui.change((sk) => (msg = tablePattern(sk, ids, tableRows())));
+                  else {
+                    const first = ids[0];
+                    const region = s().regions.find((r) => r.outer.pieces.some((p) => p.entity === first));
+                    const border = new Set(region?.outer.pieces.map((p) => p.entity));
+                    if (!region) msg = "La primera entidad elegida tiene que ser el borde de una región cerrada";
+                    else
+                      ui.change((sk) => (msg = fillPattern(sk, ids.filter((id) => !border.has(id)), region, fillSpacing(), fillHex(), fillMargin())));
                   }
                   ui.setMessage(msg);
                   if (!msg) ui.setSelection([]);

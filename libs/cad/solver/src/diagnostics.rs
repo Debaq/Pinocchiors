@@ -58,30 +58,31 @@ pub fn diagnose(system: &ConstraintSystem) -> DiagnosticResult {
     }
 
     let full_jac = system.jacobian_dense();
-    let full_rank = compute_rank(&full_jac);
-    let dof = n_var as i32 - full_rank as i32;
 
-    // Resolver clon para obtener residuales por constraint en el óptimo
-    let mut sys_solved = system.clone();
-    let _ = solve(&mut sys_solved, &SolverParams::default());
-    let per_constraint_residuals = compute_per_constraint_residuals(&sys_solved);
-    let total_residual: f64 = per_constraint_residuals.iter().map(|r| r * r).sum::<f64>().sqrt();
+    // Un solo SVD da el rango y las constraints que no aportan rank
+    let mut blocks = Vec::with_capacity(system.constraints.len());
+    let mut eq_offset = 0;
+    for constraint in &system.constraints {
+        blocks.push((eq_offset, constraint.num_equations()));
+        eq_offset += constraint.num_equations();
+    }
+    let (full_rank, redundant_flags) = rank_and_redundant(&full_jac, &blocks);
+    let dof = n_var as i32 - full_rank as i32;
+    let redundant: Vec<usize> = redundant_flags.into_iter().enumerate().filter(|&(_, r)| r).map(|(ci, _)| ci).collect();
 
     // Tolerancia: residual relativo al tamaño del sistema
     let conflict_threshold = 1e-4;
-    let is_inconsistent = total_residual > conflict_threshold;
 
-    // Redundantes: constraints que no aportan rank
-    let mut redundant = Vec::new();
-    let mut eq_offset = 0;
-    for (ci, constraint) in system.constraints.iter().enumerate() {
-        let n_eqs_this = constraint.num_equations();
-        let reduced_rank = rank_without_rows(&full_jac, eq_offset, n_eqs_this);
-        if reduced_rank == full_rank {
-            redundant.push(ci);
-        }
-        eq_offset += n_eqs_this;
+    // Residuales por constraint en el óptimo. Lo normal es diagnosticar lo
+    // recién resuelto: si ya cumple, resolver de nuevo no cambia nada
+    let mut per_constraint_residuals = compute_per_constraint_residuals(system);
+    if per_constraint_residuals.iter().map(|r| r * r).sum::<f64>().sqrt() > conflict_threshold {
+        let mut sys_solved = system.clone();
+        let _ = solve(&mut sys_solved, &SolverParams::default());
+        per_constraint_residuals = compute_per_constraint_residuals(&sys_solved);
     }
+    let total_residual: f64 = per_constraint_residuals.iter().map(|r| r * r).sum::<f64>().sqrt();
+    let is_inconsistent = total_residual > conflict_threshold;
 
     // Conflictivos: residual por constraint alto (solo si sistema inconsistente)
     let conflicting: Vec<usize> = if is_inconsistent {
@@ -199,6 +200,39 @@ fn find_minimal_conflict_set(system: &ConstraintSystem, candidates: &[usize]) ->
 }
 
 /// Rank del Jacobiano sin las filas [start_row, start_row + n_rows)
+/// Rango del jacobiano y, para cada bloque de filas (inicio, cantidad), si
+/// quitarlo deja el rango igual. Con un solo SVD: las filas R sobran si las columnas de U con valor
+/// singular no nulo no las cubren enteras, es decir si I − U_R·U_Rᵀ tiene
+/// rango completo (sus filas están en el espacio de las demás). Antes era un
+/// SVD por restricción: con cientos (un patrón de relleno) tardaba segundos.
+fn rank_and_redundant(jac: &nalgebra::DMatrix<f64>, blocks: &[(usize, usize)]) -> (usize, Vec<bool>) {
+    use nalgebra::DMatrix;
+    if jac.nrows() == 0 || jac.ncols() == 0 {
+        return (0, vec![true; blocks.len()]);
+    }
+    let svd = jac.clone().svd(true, false);
+    let u = svd.u.as_ref().expect("SVD con U");
+    let max = svd.singular_values.iter().fold(0.0f64, |m, &v| m.max(v));
+    // Mismo umbral que `compute_rank`
+    let cols: Vec<usize> = (0..svd.singular_values.len()).filter(|&i| svd.singular_values[i] > 1e-8 * max).collect();
+    let redundant = blocks
+        .iter()
+        .map(|&(start, n)| {
+            if n == 0 {
+                return true;
+            }
+            let m = DMatrix::from_fn(n, n, |i, j| {
+                let dot: f64 = cols.iter().map(|&c| u[(start + i, c)] * u[(start + j, c)]).sum();
+                if i == j { 1.0 - dot } else { -dot }
+            });
+            let eig = nalgebra::SymmetricEigen::new(m);
+            eig.eigenvalues.iter().all(|&v| v > 1e-9)
+        })
+        .collect();
+    (cols.len(), redundant)
+}
+
+#[cfg(test)]
 fn rank_without_rows(jac: &nalgebra::DMatrix<f64>, start_row: usize, n_rows: usize) -> usize {
     use nalgebra::DMatrix;
     let total_rows = jac.nrows();
@@ -399,5 +433,47 @@ mod tests {
         let dof_p1 = diag.dof_per_point.iter().find(|(i, _)| *i == 1).unwrap().1;
         assert_eq!(dof_p0, 0);
         assert_eq!(dof_p1, 2);
+    }
+
+    /// Los redundantes con un solo SVD coinciden con quitar fila por fila
+    #[test]
+    fn test_redundant_blocks_matches_rank_without_rows() {
+        let mut systems = Vec::new();
+        // Rectángulo con una vertical de más, una cota repetida y un punto fijo dos veces
+        let mut sys = ConstraintSystem::new();
+        let p: Vec<usize> = [(0.0, 0.0), (4.0, 0.1), (4.2, 3.0), (0.1, 3.1)].iter().map(|&(x, y)| sys.add_point(x, y)).collect();
+        sys.add_constraint(Constraint::Fixed { p_idx: p[0], position: Point2::new(0.0, 0.0) });
+        sys.add_constraint(Constraint::Horizontal { p1_idx: p[0], p2_idx: p[1] });
+        sys.add_constraint(Constraint::Horizontal { p1_idx: p[3], p2_idx: p[2] });
+        sys.add_constraint(Constraint::Vertical { p1_idx: p[1], p2_idx: p[2] });
+        sys.add_constraint(Constraint::Vertical { p1_idx: p[0], p2_idx: p[3] });
+        sys.add_constraint(Constraint::Parallel { l1_p1: p[0], l1_p2: p[3], l2_p1: p[1], l2_p2: p[2] });
+        sys.add_constraint(Constraint::Distance { p1_idx: p[0], p2_idx: p[1], distance: 4.0 });
+        sys.add_constraint(Constraint::Distance { p1_idx: p[0], p2_idx: p[1], distance: 4.0 });
+        sys.add_constraint(Constraint::Fixed { p_idx: p[0], position: Point2::new(0.0, 0.0) });
+        systems.push(sys);
+        // Patrón: mismo desplazamiento encadenado y una cota que lo repite
+        let mut sys = ConstraintSystem::new();
+        let p: Vec<usize> = (0..4).map(|i| sys.add_point(3.0 * i as f64, 0.5 * i as f64)).collect();
+        sys.add_constraint(Constraint::EqualVector { a1: p[0], a2: p[1], b1: p[1], b2: p[2] });
+        sys.add_constraint(Constraint::EqualVector { a1: p[0], a2: p[1], b1: p[2], b2: p[3] });
+        sys.add_constraint(Constraint::EqualVector { a1: p[1], a2: p[2], b1: p[2], b2: p[3] });
+        sys.add_constraint(Constraint::HorizontalDist { p1_idx: p[0], p2_idx: p[1], distance: 3.0 });
+        systems.push(sys);
+        for sys in systems {
+            let jac = sys.jacobian_dense();
+            let full = compute_rank(&jac);
+            let mut blocks = Vec::new();
+            let mut off = 0;
+            for c in &sys.constraints {
+                blocks.push((off, c.num_equations()));
+                off += c.num_equations();
+            }
+            let (rank, fast) = rank_and_redundant(&jac, &blocks);
+            assert_eq!(rank, full);
+            let slow: Vec<bool> = blocks.iter().map(|&(s, n)| rank_without_rows(&jac, s, n) == full).collect();
+            assert_eq!(fast, slow);
+            assert!(fast.iter().any(|&r| r), "el caso tiene redundantes");
+        }
     }
 }

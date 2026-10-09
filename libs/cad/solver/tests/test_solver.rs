@@ -791,3 +791,27 @@ fn test_free_points_follow_nullspace() {
     let d = diagnose(&sys);
     assert_eq!(d.dof_per_point[b].1, 0);
 }
+
+/// Patrón circular: la copia 1 es destino del primer giro y origen del
+/// segundo (el mismo punto en dos papeles de EqualRotation). Al cambiar el
+/// ángulo las copias tienen que seguirlo.
+#[test]
+fn test_equal_rotation_shared_point_follows_angle() {
+    let mut sys = ConstraintSystem::new();
+    let c = sys.add_point(0.0, 0.0);
+    let p0 = sys.add_point(10.0, 0.0);
+    let p1 = sys.add_point(0.0, 10.0);
+    let p2 = sys.add_point(-10.0, 0.0);
+    sys.add_constraint(Constraint::Fixed { p_idx: c, position: Point2::new(0.0, 0.0) });
+    sys.add_constraint(Constraint::Fixed { p_idx: p0, position: Point2::new(10.0, 0.0) });
+    // 90° → 92°: p1 gira 92° y p2 lo mismo desde p1
+    sys.add_constraint(Constraint::EqualLength { l1_p1: c, l1_p2: p0, l2_p1: c, l2_p2: p1 });
+    sys.add_constraint(Constraint::Angle { l1_p1: c, l1_p2: p0, l2_p1: c, l2_p2: p1, angle_rad: 92f64.to_radians() });
+    sys.add_constraint(Constraint::EqualRotation { center: c, a1: p0, a2: p1, b1: p1, b2: p2 });
+
+    let result = solve(&mut sys, &default_params()).unwrap();
+    assert_eq!(result.status, SolveStatus::Converged);
+    let a = 184f64.to_radians();
+    assert_relative_eq!(result.points[p2].x(), 10.0 * a.cos(), epsilon = 1e-6);
+    assert_relative_eq!(result.points[p2].y(), 10.0 * a.sin(), epsilon = 1e-6);
+}
