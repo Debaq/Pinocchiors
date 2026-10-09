@@ -251,6 +251,19 @@ export const CadView: Component<CadViewProps> = (props) => {
     setAnchor([]);
     setTangentFrom(undefined);
   };
+  // Deshacer o rehacer en el sketch: lo que la herramienta tenía a medias (y las
+  // cotas pedidas, por índice) puede ya no existir
+  createEffect(
+    on(
+      ui.sketchRestored,
+      () => {
+        resetTool();
+        setDimQueue([]);
+        setEditingDim(undefined);
+      },
+      { defer: true },
+    ),
+  );
 
   const startPose = untrack(() => props.initialPose);
   onMount(async () => {
@@ -1235,6 +1248,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
+    ui.endDrag();
     if (handleDrag) {
       const d = handleDrag;
       handleDrag = undefined;
@@ -1915,6 +1929,17 @@ export const CadView: Component<CadViewProps> = (props) => {
                   />
                 </label>
               </Show>
+              <div class="w-px h-5 bg-border mx-1" />
+              <Tooltip content="Deshacer en el sketch (Ctrl+Z)">
+                <IconButton aria-label="Deshacer en el sketch" size="sm" disabled={!ui.sketchHistory().undo} onClick={() => ui.undoSketch()}>
+                  <Icons.ArrowCounterClockwise size={15} />
+                </IconButton>
+              </Tooltip>
+              <Tooltip content="Rehacer en el sketch (Ctrl+Shift+Z)">
+                <IconButton aria-label="Rehacer en el sketch" size="sm" disabled={!ui.sketchHistory().redo} onClick={() => ui.redoSketch()}>
+                  <Icons.ArrowClockwise size={15} />
+                </IconButton>
+              </Tooltip>
               <div class="w-px h-5 bg-border mx-1" />
               <span
                 class={clsx(

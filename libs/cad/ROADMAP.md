@@ -557,3 +557,8 @@ cargo test -p cad-model
   relleno). Solver: jacobiano numérico con puntos repetidos y diagnóstico con un solo SVD.
   Pruebas: node `e2e/sketchPattern.test.mjs` y e2e "patrones del sketch". Los patrones que
   todavía faltan quedan en F10.
+- **2026-10-09 Deshacer dentro del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 1): antes
+  Ctrl+Z con un sketch abierto deshacía el documento por debajo. Ahora cada cambio del sketch
+  es un paso (un arrastre entero, uno solo; lo que no cambia nada no cuenta), con botones en la
+  barra y Ctrl+Z/Ctrl+Mayús+Z. Las respuestas del solver pedidas antes de un cambio o un
+  deshacer se descartan (número de generación). e2e "deshacer y rehacer dentro del sketch".

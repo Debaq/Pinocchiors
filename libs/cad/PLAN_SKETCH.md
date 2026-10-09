@@ -124,7 +124,11 @@ referencia (Onshape, SolidWorks, Fusion). Reemplaza a los planes anteriores del 
 
 ## Fases
 
-1. **Deshacer y rehacer dentro del sketch.**
+1. **Deshacer y rehacer dentro del sketch.** *Hecha el 2026-10-09: pilas en `cadUi` (`undoSketch`/`redoSketch`,
+   `sketchHistory`, `sketchRestored`), Ctrl+Z/Ctrl+Mayús+Z enrutados desde `App.tsx` mientras hay
+   sketch abierto, botones en la barra del sketch. Ojo con Solid: `on(() => señal().campo)` corre
+   con cada cambio de la señal aunque el campo no cambie; por eso «repuesto» es una señal aparte
+   (si no, cada clic cortaba la línea encadenada).*
 2. **Transformar**: mover, copiar, rotar, escalar, dividir; copiar y pegar.
 3. **Cotas**: punto-línea, entre paralelas, largo de arco, simétrica respecto de un eje.
 4. **Restricciones y herramientas**: colineal, círculo por 2/3 puntos y tangente a 3,

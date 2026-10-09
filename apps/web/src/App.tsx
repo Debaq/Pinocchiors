@@ -1784,13 +1784,14 @@ export const App: Component = () => {
 
   /** Deshacer y rehacer con el error a la vista si el backend falla */
   const undo = () => {
-    if (inDesign()) return cad.undo();
+    // Con un sketch abierto se deshace dentro del sketch
+    if (inDesign()) return cadUi.session() ? cadUi.undoSketch() : cad.undo();
     if (cloudEditing()) return void scanCloud.history(false);
     if (operations > 0) return setStatusMessage("Espera a que termine la operación para deshacer");
     void history.undo().catch((e) => setStatusMessage(`No se pudo deshacer: ${e}`));
   };
   const redo = () => {
-    if (inDesign()) return cad.redo();
+    if (inDesign()) return cadUi.session() ? cadUi.redoSketch() : cad.redo();
     if (cloudEditing()) return void scanCloud.history(true);
     if (operations > 0) return setStatusMessage("Espera a que termine la operación para rehacer");
     void history.redo().catch((e) => setStatusMessage(`No se pudo rehacer: ${e}`));

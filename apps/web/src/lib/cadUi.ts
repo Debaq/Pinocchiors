@@ -106,6 +106,8 @@ export interface SketchSession {
 }
 
 const clone = <T>(v: T): T => structuredClone(v);
+/** Pasos que se pueden deshacer dentro de un sketch */
+const SKETCH_HISTORY_LIMIT = 200;
 
 export function createCadUi(store: CadStore) {
   const [pick, setPick] = createSignal<PickMode>({ kind: "none" });
@@ -143,12 +145,52 @@ export function createCadUi(store: CadStore) {
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
   let pendingDrag: [number, P2] | null = null;
+  // Deshacer dentro del sketch: el sketch antes de cada cambio (un arrastre
+  // entero es un solo paso)
+  let past: Sketch[] = [];
+  let future: Sketch[] = [];
+  let dragSaved = false;
+  // Sube con cada cambio y cada deshacer: una respuesta del solver pedida
+  // antes ya no vale (pisaría lo repuesto)
+  let generation = 0;
+  const [sketchHistory, setSketchHistory] = createSignal({ undo: 0, redo: 0 });
+  // Sube al reponer un paso (aparte: la herramienta en curso se corta solo entonces)
+  const [sketchRestored, setSketchRestored] = createSignal(0);
+  const historyChanged = () => setSketchHistory({ undo: past.length, redo: future.length });
+  const resetHistory = () => {
+    past = [];
+    future = [];
+    dragSaved = false;
+    historyChanged();
+  };
+  const remember = (before: Sketch) => {
+    past.push(before);
+    if (past.length > SKETCH_HISTORY_LIMIT) past.shift();
+    future = [];
+    historyChanged();
+  };
+  /** Repone un sketch guardado y lo vuelve a resolver */
+  const restore = (s: SketchSession, sketch: Sketch) => {
+    generation++;
+    dragSaved = false;
+    pendingDrag = null;
+    const ids = new Set([...sketch.points.map((p) => p.id), ...sketch.entities.map((e) => e.id)]);
+    batch(() => {
+      setSession({ ...s, sketch });
+      setSelection((sel) => sel.filter((id) => ids.has(id)));
+      historyChanged();
+      setSketchRestored((n) => n + 1);
+    });
+    void solve(clone(sketch));
+  };
 
   const solve = async (sketch: Sketch, drag?: [number, P2]) => {
     const s = session();
     if (!s) return;
+    const asked = generation;
     try {
       const r = await store.solveSketch(sketch, drag);
+      if (asked !== generation) return;
       // El solver no conoce las fórmulas: vuelven a su cota (mismo orden)
       sketch.constraints.forEach((c, i) => {
         const expr = (c as { expr?: string }).expr;
@@ -262,6 +304,7 @@ export function createCadUi(store: CadStore) {
         if (expr) (c as { expr?: string }).expr = expr;
       });
       setSession({ feature, plane: view.plane, sketch, report: view.report, regions: view.regions });
+      resetHistory();
       return true;
     },
 
@@ -274,13 +317,44 @@ export function createCadUi(store: CadStore) {
       // previa nunca ve el sketch viejo con el estado nuevo de la herramienta
       batch(() => {
         mutate(next);
+        // Lo que no cambia nada (una herramienta que avisa un error) no es un paso
+        if (JSON.stringify(next) !== JSON.stringify(s.sketch)) remember(s.sketch);
         setSession({ ...s, sketch: next });
       });
+      generation++;
       void solve(next);
+    },
+
+    /** Pasos para deshacer y rehacer dentro del sketch */
+    sketchHistory,
+    /** Sube cada vez que deshacer o rehacer repone un sketch */
+    sketchRestored,
+    undoSketch() {
+      const s = session();
+      const prev = past.pop();
+      if (!s || !prev) return;
+      future.push(s.sketch);
+      restore(s, prev);
+    },
+    redoSketch() {
+      const s = session();
+      const next = future.pop();
+      if (!s || !next) return;
+      past.push(s.sketch);
+      restore(s, next);
+    },
+    /** Termina un arrastre: el próximo empieza un paso nuevo */
+    endDrag() {
+      dragSaved = false;
     },
 
     /** Arrastre de un punto (se resuelve el último pedido cuando termina el anterior) */
     async drag(point: number, target: P2) {
+      const s = session();
+      if (s && !dragSaved) {
+        dragSaved = true;
+        remember(s.sketch);
+      }
       pendingDrag = [point, target];
       if (solving) return;
       solving = true;
@@ -380,6 +454,7 @@ export function createCadUi(store: CadStore) {
       if (!s) return;
       setSession(undefined);
       setSelection([]);
+      resetHistory();
       // Las fórmulas de las cotas pasan a ser vínculos del documento (por
       // índice: se rehacen todos los de este sketch)
       const sketch = clone(s.sketch);
@@ -404,6 +479,7 @@ export function createCadUi(store: CadStore) {
     cancelSketch() {
       setSession(undefined);
       setSelection([]);
+      resetHistory();
     },
 
     // Ayudas de dibujo usadas por el visor

@@ -1804,6 +1804,67 @@ const scenarios = {
     await b.shot("caja_en_el_sketch");
   },
 
+  async "deshacer y rehacer dentro del sketch"(b) {
+    await begin(b);
+    const features = () => b.eval(`window.__cadStore.doc().features.length`);
+    const before = await features();
+    await sketchOn(b);
+    const lines = () => b.eval(`window.__cadUi.session().sketch.entities.filter((e) => e.geometry.type === "line").length`);
+    const points = () => b.eval(`JSON.stringify(window.__cadUi.session().sketch.points.map((p) => [p.id, +p.x.toFixed(6), +p.y.toFixed(6)]))`);
+    const ctrlZ = async (shift = false) => {
+      for (const type of ["keyDown", "keyUp"])
+        await b.send("Input.dispatchKeyEvent", { type, key: shift ? "Z" : "z", code: "KeyZ", windowsVirtualKeyCode: 90, modifiers: 2 | (shift ? 8 : 0) });
+      await sleep(800);
+    };
+    // Dos rectángulos; Esc cierra las cotas pedidas (con el foco en la cota, Ctrl+Z es del texto)
+    await b.clickText("Rectángulo");
+    await b.click(380, 320);
+    await b.click(520, 460);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Rectángulo");
+    await b.click(600, 320);
+    await b.click(720, 440);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    if ((await lines()) !== 8) throw new Error(`dibujadas: ${await lines()}`);
+    // Ctrl+Z quita el segundo rectángulo, sin tocar el documento
+    await ctrlZ();
+    if ((await lines()) !== 4) throw new Error(`tras deshacer: ${await lines()}`);
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error("deshacer cerró el sketch");
+    if ((await features()) !== before + 1) throw new Error(`el documento cambió: ${await features()} operaciones`);
+    await ctrlZ(true);
+    if ((await lines()) !== 8) throw new Error(`tras rehacer: ${await lines()}`);
+    // Con el botón de la barra
+    await b.eval(`document.querySelector('[aria-label="Deshacer en el sketch"]').click()`);
+    await sleep(800);
+    if ((await lines()) !== 4) throw new Error(`con el botón: ${await lines()}`);
+    // Un arrastre entero es un solo paso
+    await b.clickText("Elegir");
+    const still = await points();
+    await b.drag(380, 320, 330, 280, 12);
+    await sleep(800);
+    if ((await points()) === still) throw new Error("el arrastre no movió nada");
+    await ctrlZ();
+    if ((await points()) !== still) throw new Error(`el arrastre no se deshizo: ${await points()} (antes ${still})`);
+    if ((await lines()) !== 4) throw new Error(`deshacer el arrastre quitó más: ${await lines()}`);
+    // Línea encadenada: cada clic es un paso (y cambiar el sketch no corta la cadena)
+    await b.clickText("Línea");
+    await b.click(600, 320);
+    await b.click(700, 330);
+    await b.click(720, 450);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    if ((await lines()) !== 6) throw new Error(`línea encadenada: ${(await lines()) - 4} tramos`);
+    await ctrlZ();
+    if ((await lines()) !== 5) throw new Error(`deshacer un tramo: ${(await lines()) - 4} tramos`);
+    // Lo deshecho no queda en el documento
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const saved = await b.eval(`window.__cadStore.doc().features.find((f) => f.kind.type === "sketch").kind.sketch.entities.length`);
+    if (saved !== 5) throw new Error(`guardadas: ${saved}`);
+    await b.shot("deshacer_en_el_sketch");
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {
