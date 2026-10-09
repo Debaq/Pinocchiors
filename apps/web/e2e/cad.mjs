@@ -3215,7 +3215,8 @@ const scenarios = {
     await sleep(500);
     // (≈ 12 millones de triángulos estimados para esta pieza)
     await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
-    await sleep(500);
+    // (antes de preguntar calcula la grilla del detalle elegido)
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Vóxeles muy finos")`)); t++) await sleep(250);
     if (!(await b.eval(`document.body.innerText.includes("Vóxeles muy finos")`))) throw new Error("no preguntó antes de una grilla pesada");
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
   },

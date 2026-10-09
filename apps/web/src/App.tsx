@@ -5357,8 +5357,12 @@ export const App: Component = () => {
   );
   /** Vóxeles con una grilla grande: preguntar antes */
   const confirmHeavyRemesh = async () => {
-    const grid = voxelGrid();
-    if (remeshMode() !== "voxel" || !grid || !isHeavyGrid(grid)) return true;
+    const info = remeshInfo();
+    if (remeshMode() !== "voxel" || !info) return true;
+    // La de ahora: la guardada se recalcula un momento después de mover el control
+    const grid = await rawInvoke<VoxelGridInfo>("remesh_voxel_grid", { voxelMm: voxelSize(voxelConfig(), info) }).catch(() => voxelGrid());
+    if (grid) setVoxelGrid(grid);
+    if (!grid || !isHeavyGrid(grid)) return true;
     const memory = grid.memory_mb >= 1000 ? `${(grid.memory_mb / 1000).toLocaleString("es", { maximumFractionDigits: 1 })} GB` : `${Math.ceil(grid.memory_mb)} MB`;
     return confirmAction({
       title: "Vóxeles muy finos",
