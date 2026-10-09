@@ -77,6 +77,9 @@ pub struct MeshData {
     /// Nodo del archivo de cada grupo (`u32::MAX` = sin nodo), para el
     /// Outliner: ocultar, resaltar y elegir por nodo
     pub group_nodes: Vec<u32>,
+    /// Caras de la malla de 4 índices (un triángulo repite el último), para
+    /// el alambre sin diagonales; vacío si la escena no tiene quads
+    pub quad_indices: Vec<u32>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -108,7 +111,7 @@ impl MeshData {
     /// cantidad y luego `[inicio, cantidad, material]` por grupo; después, si
     /// hay, el nodo de cada grupo (`u32` por grupo)
     pub(crate) fn to_bytes(&self) -> Vec<u8> {
-        let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &[]);
+        let mut out = pack_mesh(&self.positions, &self.normals, self.uvs.as_deref(), &self.indices, &self.quad_indices);
         append_groups(&mut out, &self.groups);
         if !self.groups.is_empty() && self.group_nodes.len() == self.groups.len() {
             for node in &self.group_nodes {
@@ -669,6 +672,8 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut uvs: Vec<f32> = Vec::new();
     let mut groups: Vec<[u32; 3]> = Vec::new();
     let mut group_nodes: Vec<u32> = Vec::new();
+    let mut quad_indices: Vec<u32> = Vec::new();
+    let has_quads = scene.has_quads();
 
     for prim in &prims {
         let offset = (positions.len() / 3) as u32;
@@ -690,6 +695,12 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         }
 
         indices.extend(prim.triangles.iter().flatten().map(|&i| i + offset));
+        if has_quads {
+            for face in converter_scene::polygons(&prim.triangles, scene.quad_pairs(prim.mesh, prim.primitive)) {
+                let v = face.vertices();
+                quad_indices.extend([v[0], v[1], v[2], v[v.len() - 1]].map(|i| i + offset));
+            }
+        }
     }
 
     MeshData {
@@ -699,6 +710,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         uvs: if has_uvs { Some(uvs) } else { None },
         groups,
         group_nodes,
+        quad_indices,
     }
 }
 
@@ -738,7 +750,7 @@ pub async fn export_model(app: AppHandle, config: ExportConfig) -> Result<Export
     in_background(app, move |state| export_model_impl(config, state)).await
 }
 
-fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportResult, String> {
+pub(crate) fn export_model_impl(config: ExportConfig, state: &AppState) -> Result<ExportResult, String> {
     if config.format == "json" {
         return export_weights_json(&config, state);
     }
@@ -1094,7 +1106,24 @@ fn quad_mesh_to_scene(
     base: &Scene,
 ) -> (Scene, Vec<usize>) {
     let (positions, faces) = quad_arrays(quad);
-    uv_core::skin_scene(&positions, &faces, skin, base)
+    let (mut scene, source) = uv_core::skin_scene(&positions, &faces, skin, base);
+    // Cada quad sale como el par (a, b, c), (a, c, d): OBJ y USD lo escriben como quad
+    mark_all_quads(&mut scene);
+    (scene, source)
+}
+
+/// Todas las primitivas son pares de triángulos de quads
+fn mark_all_quads(scene: &mut Scene) {
+    for m in 0..scene.meshes.len() {
+        for p in 0..scene.meshes[m].primitives.len() {
+            let indices = match &scene.meshes[m].primitives[p].indices {
+                Some(IndexData::U16(i)) => i.len(),
+                Some(IndexData::U32(i)) => i.len(),
+                None => 0,
+            };
+            scene.set_quad_pairs(m, p, indices / 6);
+        }
+    }
 }
 
 /// Construye una escena con skin a partir de la geometría (en espacio mundo),
@@ -1209,6 +1238,13 @@ fn rigged_scene(
         skeletons: vec![SceneSkeleton { name: "pinocchio".into(), joints, roots }],
         meters_per_unit: base.meters_per_unit,
         y_up: base.y_up,
+        // La malla con rig tiene una primitiva por cada una de `prims`, con sus triángulos
+        quads: prims
+            .iter()
+            .enumerate()
+            .map(|(k, p)| converter_scene::QuadPairs { mesh: 0, primitive: k, pairs: base.quad_pairs(p.mesh, p.primitive) })
+            .filter(|q| q.pairs > 0)
+            .collect(),
     }
 }
 
@@ -4823,6 +4859,7 @@ mod tests {
             uvs: Some(vec![0.25; 6]),
             groups: vec![],
             group_nodes: vec![],
+            quad_indices: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);

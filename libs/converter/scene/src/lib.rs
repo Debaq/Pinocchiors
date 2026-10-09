@@ -16,6 +16,7 @@ mod skeleton;
 mod animation;
 mod transform;
 mod world;
+mod polygon;
 
 pub use scene::{Scene, Node, SceneError};
 pub use mesh::{Mesh, Primitive, VertexAttribute, IndexData};
@@ -25,6 +26,7 @@ pub use skeleton::{Skeleton, Joint};
 pub use animation::{Animation, Channel, Interpolation, KeyframeTimes, KeyframeValues};
 pub use transform::Transform;
 pub use world::{MeshInstance, WorldPrimitive};
+pub use polygon::{polygons, triangulate, Polygon, QuadPairs};
 
 // La escena usa Y arriba con el frente hacia +Z (glTF). STL, PLY y 3MF, como
 // los escriben Blender, los CAD y los slicers, usan Z arriba con el frente

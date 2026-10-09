@@ -7,11 +7,13 @@
 //!   encoger (Taubin).
 //! - [`isotropic`]: triángulos parejos del lado pedido.
 //! - [`voxel`]: rehace la superficie desde el volumen (cerrada y manifold).
+//! - [`quads`]: junta pares de triángulos en quads sin mover vértices.
 //! - [`deviation`]: cuánto se aleja una malla de otra, para el "antes →
 //!   después" de cualquier modo.
 
 pub mod deviation;
 pub mod isotropic;
+pub mod quads;
 pub mod voxel;
 #[cfg(feature = "simplify")]
 pub mod simplify;
@@ -22,6 +24,7 @@ pub use deviation::{deviation, Deviation};
 pub use simplify::{simplify, SimplifyInput, SimplifyOptions, Simplified};
 pub use smooth::{smooth, SmoothOptions};
 pub use isotropic::{isotropic, IsotropicOptions};
+pub use quads::{all_quads, tris_to_quads, Face, QuadsInput, QuadsOptions, Subdivided};
 pub use voxel::{voxel, voxel_grid, VoxelGrid, VoxelOptions};
 
 use crate::surface::Surface;

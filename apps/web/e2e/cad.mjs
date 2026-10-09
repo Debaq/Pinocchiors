@@ -3038,10 +3038,11 @@ const scenarios = {
     // La retopología está adentro, con su botón
     if (!(await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`))) throw new Error("sin el panel de retopología");
     await b.shot("remallar");
-    // Un modo que todavía no está: lo dice, y sin el panel de la retopología
+    // Todos los modos están; otro modo cambia el panel
+    if (await b.eval(`document.querySelector('[aria-label="Modo de remallado"]').innerText.includes("pronto")`)) throw new Error("queda un modo marcado como pronto");
     await b.eval(`document.querySelector('[data-mode="quads"]').click()`);
     await sleep(300);
-    if (!(await b.eval(`!!document.querySelector("[data-remesh-pending]")`))) throw new Error("a quads sin aviso");
+    if (!(await b.eval(`!!document.querySelector("[data-quads]")`))) throw new Error("sin el panel de A quads");
     if (await b.eval(`[...document.querySelectorAll("button")].some((x) => x.textContent.trim() === "Retopologizar")`)) throw new Error("el panel de retopología sigue a la vista");
   },
 
@@ -3200,8 +3201,9 @@ const scenarios = {
     const grid = await b.eval(`document.querySelector("[data-voxel-grid]").textContent`);
     if (!/Vóxel de/.test(grid) || !/MB de memoria/.test(grid)) throw new Error(`sin la estimación de la grilla: ${grid}`);
     // Volumen de las dos cajas por separado: 16000; la unión, 15000
+    // (en el puente de depuración tarda ~30 s: grilla, emparejado y normales)
     await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
-    for (let t = 0; t < 120 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
+    for (let t = 0; t < 360 && !(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`)); t++) await sleep(250);
     if (!(await b.eval(`document.querySelector("[data-remesh-summary]")?.innerText.includes("Aplicado")`))) throw new Error("no se aplicó");
     const analysis = await call("analyze_print3d");
     if (!analysis.is_closed) throw new Error("la superficie rehecha no es cerrada");
@@ -3216,6 +3218,46 @@ const scenarios = {
     await sleep(500);
     if (!(await b.eval(`document.body.innerText.includes("Vóxeles muy finos")`))) throw new Error("no preguntó antes de una grilla pesada");
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+  },
+
+  async "remallar: triángulos a quads y OBJ con quads"(b) {
+    await begin(b);
+    // Una caja: cada cara es un rectángulo en dos triángulos
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 50, name: "Caja", kind: { type: "primitive", shape: { type: "box", dx: 30, dy: 20, dz: 10, centered: true, centered_z: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 51;
+    })`);
+    await sleep(2500);
+    const header = async () => new Uint32Array(await (await fetch(BRIDGE + "get_mesh_data", { method: "POST", body: "{}" })).arrayBuffer(), 0, 4);
+    await b.clickText("Preparar");
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
+    await tab(b, "Remallar");
+    await b.eval(`document.querySelector('[data-mode="quads"]').click()`);
+    await sleep(300);
+    const before = await header();
+    if (before[3] !== 0) throw new Error("la caja ya traía quads");
+    await b.eval(`document.querySelector("[data-remesh-preview]").click()`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector("[data-remesh-after]")`)); t++) await sleep(250);
+    const after = await b.eval(`document.querySelector("[data-remesh-after]").textContent`);
+    if (!/^6 quads/.test(after.trim())) throw new Error(`vista previa: ${after}`);
+    await b.shot("quads-vista-previa");
+    await b.eval(`document.querySelector("[data-remesh-apply]").click()`);
+    for (let t = 0; t < 40 && (await header())[3] === 0; t++) await sleep(250);
+    const applied = await header();
+    // Mismos vértices y triángulos; 6 caras de 4 índices para el alambre
+    if (applied[0] !== before[0] || applied[1] !== before[1]) throw new Error(`cambió la malla: ${before} → ${applied}`);
+    if (applied[3] !== 24) throw new Error(`índices de quads: ${applied[3]}`);
+    // OBJ: seis caras de cuatro vértices
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    mkdirSync(out, { recursive: true });
+    const path = `${out}/caja-quads.obj`;
+    await call("export_model", { config: { format: "obj", path } });
+    const faces = readFileSync(path, "utf8").split("\n").filter((l) => l.startsWith("f "));
+    if (faces.length !== 6 || !faces.every((l) => l.trim().split(/\s+/).length === 5)) throw new Error(`caras del OBJ: ${faces.join(" | ")}`);
+    // Deshacer: sin quads
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
+    for (let t = 0; t < 40 && (await header())[3] !== 0; t++) await sleep(250);
+    if ((await header())[3] !== 0) throw new Error("deshacer no quitó los quads");
   },
 
   async "objetos: las piezas pasan solas a Fabricar"(b) {

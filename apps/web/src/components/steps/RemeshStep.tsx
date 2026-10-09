@@ -5,6 +5,7 @@ import { SimplifyPanel, type SimplifyPanelProps } from "../panels/SimplifyPanel"
 import { SmoothPanel, type SmoothPanelProps } from "../panels/SmoothPanel";
 import { IsotropicPanel, type IsotropicPanelProps } from "../panels/IsotropicPanel";
 import { VoxelPanel, type VoxelPanelProps } from "../panels/VoxelPanel";
+import { QuadsPanel, type QuadsPanelProps } from "../panels/QuadsPanel";
 
 /** Formas de ordenar la malla (ver libs/quadriflow/PLAN_REMALLAR.md) */
 export type RemeshMode = "retopology" | "simplify" | "isotropic" | "voxel" | "quads" | "smooth";
@@ -43,7 +44,7 @@ export const REMESH_MODES: { id: RemeshMode; label: string; what: string; use: s
     label: "A quads",
     what: "Triángulos a quads: junta pares de triángulos vecinos sin mover vértices.",
     use: "Mallas bien hechas que vienen trianguladas de otro programa.",
-    ready: false,
+    ready: true,
   },
   {
     id: "smooth",
@@ -60,7 +61,23 @@ export interface MeshCount {
   faces: number;
   /** "triángulos", "quads"… */
   faceLabel: string;
+  /** Desglose debajo ("120 quads y 4 triángulos") */
+  detail?: string;
 }
+
+/** Caras de un antes/después del backend: quads y triángulos sueltos */
+export const facesOf = (c: { vertices: number; triangles: number; quads?: number }): MeshCount => {
+  const quads = c.quads ?? 0;
+  const loose = c.triangles - 2 * quads;
+  if (quads === 0) return { vertices: c.vertices, faces: c.triangles, faceLabel: "triángulos" };
+  if (loose === 0) return { vertices: c.vertices, faces: quads, faceLabel: "quads" };
+  return {
+    vertices: c.vertices,
+    faces: quads + loose,
+    faceLabel: "caras",
+    detail: `${quads.toLocaleString("es")} quads y ${loose.toLocaleString("es")} triángulos`,
+  };
+};
 
 /** Cuánto se aleja el resultado del original (del backend) */
 export interface RemeshDeviation {
@@ -72,8 +89,8 @@ export interface RemeshDeviation {
 
 /** Antes → después de un remallado (del backend) */
 export interface RemeshStats {
-  before: { vertices: number; triangles: number };
-  after: { vertices: number; triangles: number };
+  before: { vertices: number; triangles: number; quads?: number };
+  after: { vertices: number; triangles: number; quads?: number };
   deviation: RemeshDeviation;
 }
 
@@ -109,6 +126,12 @@ export const RemeshSummary: Component<{
           {num(props.after.faces)} {props.after.faceLabel}
           <span class="text-text-dim">{pct(props.before.faces, props.after.faces)}</span>
         </span>
+        <Show when={props.before.detail || props.after.detail}>
+          <span />
+          <span class="text-text-muted">{props.before.detail}</span>
+          <span />
+          <span data-remesh-detail class="text-text-muted">{props.after.detail}</span>
+        </Show>
         <span />
         <span class="text-text-muted">{num(props.before.vertices)} vértices</span>
         <span />
@@ -144,6 +167,7 @@ export interface RemeshStepProps {
   smooth: Omit<SmoothPanelProps, "hasPreview">;
   isotropic: Omit<IsotropicPanelProps, "hasPreview">;
   voxel: Omit<VoxelPanelProps, "hasPreview">;
+  quads: Omit<QuadsPanelProps, "hasPreview">;
 }
 
 /**
@@ -204,12 +228,15 @@ export const RemeshStep: Component<RemeshStepProps> = (props) => {
         <Show when={current().id === "voxel"}>
           <VoxelPanel {...props.voxel} hasPreview={hasPreview()} />
         </Show>
+        <Show when={current().id === "quads"}>
+          <QuadsPanel {...props.quads} hasPreview={hasPreview()} />
+        </Show>
         <Show when={stats()}>
           {(s) => (
             <RemeshSummary
               title={s().kind === "preview" ? "Vista previa (el modelo no cambió)" : "Aplicado"}
-              before={{ vertices: s().stats.before.vertices, faces: s().stats.before.triangles, faceLabel: "triángulos" }}
-              after={{ vertices: s().stats.after.vertices, faces: s().stats.after.triangles, faceLabel: "triángulos" }}
+              before={facesOf(s().stats.before)}
+              after={facesOf(s().stats.after)}
               deviation={s().stats.deviation}
             />
           )}

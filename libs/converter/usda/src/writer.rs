@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use converter_scene::{IndexData, Scene, Transform, VertexAttribute};
+use converter_scene::{Scene, Transform, VertexAttribute};
 use glam::{Quat, Vec3};
 use std::fmt::Write;
 use thiserror::Error;
@@ -352,15 +352,18 @@ fn write_mesh(w: &mut UsdWriter, scene: &Scene, mesh_idx: usize, flipped: bool, 
         } else {
             format!("{}_{}", sanitize_name(&mesh.name, "mesh", mesh_idx), pi)
         };
-        write_primitive(w, &name, prim, scene, flipped, options);
+        write_primitive(w, &name, prim, scene, mesh_idx, pi, flipped, options);
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_primitive(
     w: &mut UsdWriter,
     name: &str,
     prim: &converter_scene::Primitive,
     scene: &Scene,
+    mesh_idx: usize,
+    prim_idx: usize,
     flipped: bool,
     options: &UsdaExportOptions,
 ) {
@@ -379,31 +382,9 @@ fn write_primitive(
 
     w.open_block(&format!("def Mesh \"{}\"", name));
 
-    // faceVertexCounts y faceVertexIndices
-    let (face_counts, mut face_indices) = match &prim.indices {
-        Some(IndexData::U16(idx)) => {
-            let indices: Vec<u32> = idx.iter().map(|&i| i as u32).collect();
-            let counts = vec![3u32; indices.len() / 3];
-            (counts, indices)
-        }
-        Some(IndexData::U32(idx)) => {
-            let counts = vec![3u32; idx.len() / 3];
-            (counts, idx.clone())
-        }
-        None => {
-            let n = positions.len() as u32;
-            let counts = vec![3u32; positions.len() / 3];
-            let indices: Vec<u32> = (0..n).collect();
-            (counts, indices)
-        }
-    };
-
-    // Flip winding order si la escala acumulada es negativa
-    if flipped {
-        for tri in face_indices.as_chunks_mut::<3>().0 {
-            tri.swap(1, 2);
-        }
-    }
+    // faceVertexCounts y faceVertexIndices (triángulos y quads); al revés si
+    // la escala acumulada es negativa
+    let (face_counts, face_indices) = face_arrays(scene, mesh_idx, prim_idx, flipped);
 
     write_int_array(w, "int[] faceVertexCounts", &face_counts);
     write_int_array(w, "int[] faceVertexIndices", &face_indices);
@@ -596,6 +577,19 @@ fn compute_extent(positions: &[[f32; 3]]) -> ([f32; 3], [f32; 3]) {
 // pub(crate) wrappers para skeleton.rs
 // ---------------------------------------------------------------------------
 
+/// `faceVertexCounts` y `faceVertexIndices` de una primitiva: triángulos y
+/// quads (los pares que la escena marca), recorridos al revés si `flipped`
+pub(crate) fn face_arrays(scene: &Scene, mesh_idx: usize, prim_idx: usize, flipped: bool) -> (Vec<u32>, Vec<u32>) {
+    let mut counts = Vec::new();
+    let mut indices = Vec::new();
+    for face in scene.polygons(mesh_idx, prim_idx) {
+        let face = if flipped { face.reversed() } else { face };
+        counts.push(face.vertices().len() as u32);
+        indices.extend_from_slice(face.vertices());
+    }
+    (counts, indices)
+}
+
 pub(crate) fn write_int_array_pub(w: &mut UsdWriter, prefix: &str, values: &[u32]) {
     write_int_array(w, prefix, values);
 }
@@ -701,6 +695,19 @@ mod tests {
         assert!(output.usda.contains("defaultPrim = \"Root\""));
         assert!(output.usda.contains("metersPerUnit = 1"));
         assert!(output.usda.contains("upAxis = \"Y\""));
+    }
+
+    #[test]
+    fn usda_writes_quads_as_four_sided_faces() {
+        let mut scene = triangle_scene();
+        // Un cuadrado (0,1,2,3) como par de triángulos más un triángulo suelto
+        let prim = &mut scene.meshes[0].primitives[0];
+        prim.attributes = vec![VertexAttribute::Positions(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [2.0, 0.0, 0.0]])];
+        prim.indices = Some(IndexData::U32(vec![0, 1, 2, 0, 2, 3, 1, 4, 2]));
+        scene.set_quad_pairs(0, 0, 1);
+        let usda = write_usda(&scene, &default_opts()).unwrap().usda;
+        assert!(usda.contains("int[] faceVertexCounts = [4, 3]"), "{usda}");
+        assert!(usda.contains("int[] faceVertexIndices = [0, 1, 2, 3, 1, 4, 2]"), "{usda}");
     }
 
     #[test]

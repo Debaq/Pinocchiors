@@ -287,7 +287,7 @@ fn write_skinned_mesh(
         }
 
         // Geometría (misma lógica que write_primitive pero con skinning)
-        write_primitive_geometry(w, prim, scene, false, options);
+        write_primitive_geometry(w, prim, scene, mesh_idx, pi, false, options);
 
         // Joint indices y weights
         write_skel_binding_attrs(w, prim, skeleton_idx);
@@ -336,11 +336,11 @@ fn write_primitive_geometry(
     w: &mut UsdWriter,
     prim: &converter_scene::Primitive,
     scene: &Scene,
+    mesh_idx: usize,
+    prim_idx: usize,
     flipped: bool,
     options: &UsdaExportOptions,
 ) {
-    use converter_scene::IndexData;
-
     let positions = prim.attributes.iter().find_map(|a| {
         if let VertexAttribute::Positions(p) = a {
             Some(p)
@@ -353,29 +353,7 @@ fn write_primitive_geometry(
         None => return,
     };
 
-    let (face_counts, mut face_indices) = match &prim.indices {
-        Some(IndexData::U16(idx)) => {
-            let indices: Vec<u32> = idx.iter().map(|&i| i as u32).collect();
-            let counts = vec![3u32; indices.len() / 3];
-            (counts, indices)
-        }
-        Some(IndexData::U32(idx)) => {
-            let counts = vec![3u32; idx.len() / 3];
-            (counts, idx.clone())
-        }
-        None => {
-            let n = positions.len() as u32;
-            let counts = vec![3u32; positions.len() / 3];
-            let indices: Vec<u32> = (0..n).collect();
-            (counts, indices)
-        }
-    };
-
-    if flipped {
-        for tri in face_indices.as_chunks_mut::<3>().0 {
-            tri.swap(1, 2);
-        }
-    }
+    let (face_counts, face_indices) = crate::writer::face_arrays(scene, mesh_idx, prim_idx, flipped);
 
     crate::writer::write_int_array_pub(w, "int[] faceVertexCounts", &face_counts);
     crate::writer::write_int_array_pub(w, "int[] faceVertexIndices", &face_indices);

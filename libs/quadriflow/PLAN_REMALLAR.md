@@ -183,6 +183,25 @@ Pruebas e2e "remallar: isótropo con lado en mm y aristas vivas" y "remallar: v�
 piezas que se cruzan y avisa si es pesado" (STL de dos cubos que se cruzan: volumen 15000 de
 la unión, cerrada).
 
+*Fase 5 hecha el 2026-10-08*: `quadriflow_core::remesh::quads` (`tris_to_quads`, `all_quads`).
+Empareja los pares más cuadrados y planos primero (umbrales de ángulo entre caras y de forma,
+40° y 40° como Blender; solo quads convexos); vecinos solo si comparten los vértices de la
+arista con posición, UV y normal (no cruza costuras ni normales partidas). El quad conserva
+la diagonal original como 0–2: triangularlo da los mismos triángulos (desviación cero).
+"Todo quads" subdivide lineal (cada quad da 4, cada triángulo 3) y describe los vértices
+nuevos como mezcla de los de entrada; la app interpola posición, normal, UV, colores,
+tangentes y pesos de huesos (suma por hueso, los cuatro mayores). **Malla mixta** (decidido
+con el usuario: sobre la malla del modelo, no en el lugar de la retopología): los quads viven
+en `converter_scene` como pares de triángulos `(a,b,c),(a,c,d)` al comienzo de la primitiva
+y `Scene::quads` (`QuadPairs`) dice cuántos; `Scene::polygons` los lee validando par por par
+(si otra operación reordena los triángulos, vuelven a ser triángulos; Simplificar los borra).
+Así viajan solos por proyecto, deshacer, `merge` y exportación: OBJ escribe `f a b c d` y USD
+`faceVertexCounts` 4 (también la retopología, que antes salía triangulada); GLB/STL/PLY/3MF
+siguen en triángulos. El visor recibe `quad_indices` en `MeshData` (alambre sin diagonales,
+también en la vista previa). Banco (puente de depuración): gonfoterio 500 k → 53 % en quads en
+5,6 s; conejo 78 %; audiómetro 58 %. Prueba e2e "remallar: triángulos a quads y OBJ con quads"
+(caja → 6 quads, OBJ con 6 caras de 4, deshacer); el puente `cad_http` ganó `export_model`.
+
 1. **Sección y estructura**.
    - Pestaña Remallar con el selector de modos y la Retopología adentro.
    - Id de sección nuevo (`remesh`); los proyectos viejos con `retopology` abren ahí.

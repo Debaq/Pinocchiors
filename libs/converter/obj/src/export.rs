@@ -97,9 +97,10 @@ fn write_obj(scene: &Scene, mtl_filename: Option<&str>) -> Result<String, ObjExp
         let has_normals = !normals.is_empty();
         let has_uvs = !uvs.is_empty();
 
-        for face in &prim.triangles {
+        // Triángulos y quads (los pares que la escena marca como quads)
+        for face in converter_scene::polygons(&prim.triangles, scene.quad_pairs(prim.mesh, prim.primitive)) {
             write!(out, "f")?;
-            for &idx in face {
+            for &idx in face.vertices() {
                 let vi = idx as usize + vertex_offset + 1; // 1-based
                 let ti = idx as usize + uv_offset + 1;
                 let ni = idx as usize + normal_offset + 1;
@@ -330,6 +331,21 @@ mod tests {
         assert!(content.contains("v 1 0 0"));
         assert!(content.contains("v 0 1 0"));
         assert!(content.contains("f 1 2 3"));
+    }
+
+    #[test]
+    fn export_quads() {
+        let mut scene = triangle_scene();
+        let prim = &mut scene.meshes[0].primitives[0];
+        prim.attributes = vec![VertexAttribute::Positions(vec![[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [2.0, 0.0, 0.0]])];
+        prim.indices = Some(IndexData::U32(vec![0, 1, 2, 0, 2, 3, 1, 4, 2]));
+        scene.set_quad_pairs(0, 0, 1);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("quads.obj");
+        export_obj(&scene, &path).unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        let faces: Vec<&str> = content.lines().filter(|l| l.starts_with("f ")).collect();
+        assert_eq!(faces, ["f 1 2 3 4", "f 2 5 3"]);
     }
 
     #[test]

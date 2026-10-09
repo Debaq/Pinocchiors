@@ -596,7 +596,7 @@ export class Viewer3D {
   /** Objetos de la escena que no están activos: en gris translúcido, no se eligen */
   private ghostGroup = new THREE.Group();
   /** Vista previa de un remallado en alambre (ver `setPreviewOverlay`) */
-  private previewOverlay: THREE.Mesh | null = null;
+  private previewOverlay: THREE.Mesh | THREE.LineSegments | null = null;
   /** Con la nube a la vista se ocultan el modelo y el esqueleto */
   private cloudFocus = false;
   private cloudPointSize = 2;
@@ -1925,6 +1925,15 @@ export class Viewer3D {
     const box = new THREE.Box3().setFromArray(positions);
     const lift = 0.002 * box.getSize(new THREE.Vector3()).length();
     for (let i = 0; i < positions.length; i++) positions[i] += data.normals[i] * lift;
+    // Con quads, sus cuatro aristas (sin las diagonales)
+    if (data.quadIndices && data.quadIndices.length > 0) {
+      const lines = this.createQuadWireframeGeometry(positions, data.quadIndices);
+      const material = new THREE.LineBasicMaterial({ color: themeHex("accent"), transparent: true, opacity: 0.9, depthWrite: false });
+      this.previewOverlay = new THREE.LineSegments(lines, material);
+      this.previewOverlay.renderOrder = 2;
+      this.meshGroup.add(this.previewOverlay);
+      return;
+    }
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));

@@ -1,6 +1,6 @@
 //! Remallar: los modos que no son la retopología (ver
-//! `libs/quadriflow/PLAN_REMALLAR.md`): Simplificar, Suavizar, Isótropo y
-//! Vóxeles.
+//! `libs/quadriflow/PLAN_REMALLAR.md`): Simplificar, Suavizar, Isótropo,
+//! Vóxeles y Triángulos a quads.
 //!
 //! La vista previa calcula sin tocar el modelo y queda guardada hasta
 //! aplicarla o descartarla; aplicar con los mismos parámetros sobre la misma
@@ -14,7 +14,7 @@ use crate::commands::{
 use crate::state::AppState;
 use converter_scene::{IndexData, Primitive, Scene, VertexAttribute};
 use pinocchio_mesh::Mesh;
-use quadriflow_core::remesh::{self, IsotropicOptions, SimplifyInput, SimplifyOptions, SmoothOptions, TriMesh, VoxelOptions};
+use quadriflow_core::remesh::{self, Face, IsotropicOptions, QuadsInput, QuadsOptions, SimplifyInput, SimplifyOptions, SmoothOptions, TriMesh, VoxelOptions};
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};
 use tauri::ipc::{Channel, Response};
@@ -28,6 +28,7 @@ pub enum RemeshParams {
     Smooth(SmoothParams),
     Isotropic(IsotropicParams),
     Voxel(VoxelParams),
+    Quads(QuadsParams),
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -90,6 +91,17 @@ pub struct VoxelParams {
     pub isotropic_edge_mm: Option<f64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct QuadsParams {
+    /// Ángulo máximo entre los dos triángulos, en grados
+    pub face_angle: f64,
+    /// Desvío máximo de las esquinas del quad respecto de 90°, en grados
+    pub shape_angle: f64,
+    /// Subdividir un paso para que todo sean quads
+    #[serde(default)]
+    pub all_quads: bool,
+}
+
 fn five() -> usize {
     5
 }
@@ -111,6 +123,8 @@ pub struct Preview {
 pub struct MeshCounts {
     pub vertices: usize,
     pub triangles: usize,
+    /// Quads (cada uno son dos de los triángulos)
+    pub quads: usize,
 }
 
 /// Cuánto se aleja el resultado del original
@@ -326,6 +340,10 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
             let mesh = remesh::isotropic(&positions, &indices, &options).map_err(|e| e.to_string())?;
             replace_geometry(scene, &mesh, p.sharp_angle)
         }
+        RemeshParams::Quads(p) => {
+            report(progress, "quads", 5, "Juntando triángulos en quads...");
+            quads_scene(scene, p)
+        }
         RemeshParams::Voxel(p) => {
             report(progress, "voxel", 5, "Rehaciendo la superficie desde el volumen...");
             let (positions, indices) = before.buffers();
@@ -343,7 +361,7 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
     let after = WorldSurface::of(&result);
     let d = remesh::deviation((&before.positions, &before.triangles), (&after.positions, &after.triangles));
     let mm = scene.meters_per_unit * 1000.0;
-    let counts = |s: &Scene, w: &WorldSurface| MeshCounts { vertices: calculate_scene_stats(s).0, triangles: w.triangles.len() };
+    let counts = |s: &Scene, w: &WorldSurface| MeshCounts { vertices: calculate_scene_stats(s).0, triangles: w.triangles.len(), quads: quad_count(s) };
     let stats = RemeshStats {
         before: counts(scene, &before),
         after: counts(&result, &after),
@@ -355,6 +373,23 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
         },
     };
     Ok((result, stats))
+}
+
+/// Quads de la escena (todas sus instancias)
+fn quad_count(scene: &Scene) -> usize {
+    if !scene.has_quads() {
+        return 0;
+    }
+    scene
+        .world_primitives()
+        .iter()
+        .map(|p| {
+            converter_scene::polygons(&p.triangles, scene.quad_pairs(p.mesh, p.primitive))
+                .iter()
+                .filter(|f| matches!(f, converter_scene::Polygon::Quad(_)))
+                .count()
+        })
+        .sum()
 }
 
 /// Toda la superficie en espacio mundo
@@ -433,6 +468,8 @@ fn simplify_scene(scene: &Scene, params: &SimplifyParams, world: &WorldSurface) 
     // El error se pide en % del modelo entero, en mundo
     let max_error = params.max_error_percent.map(|p| p / 100.0 * world.diagonal());
     let mut out = scene.clone();
+    // Los triángulos cambian: los pares que eran quads ya no lo son
+    out.quads.clear();
     for (m, mesh) in out.meshes.iter_mut().enumerate() {
         let joined = Joined::of(&mesh.primitives);
         let count = joined.indices.len() / 3;
@@ -558,6 +595,173 @@ fn split_normals(mesh: &TriMesh, sharp_angle: Option<f64>) -> (Vec<[f32; 3]>, Ve
         }
     }
     (out_p, out_n, out_i)
+}
+
+/// Junta pares de triángulos en quads en cada primitiva, sin mover vértices
+/// (UV, pesos y colores quedan igual). Los quads se guardan como pares de
+/// triángulos al comienzo de la primitiva (`Scene::quads`). Con
+/// `all_quads`, además subdivide un paso: cada triángulo da tres quads y
+/// cada quad cuatro, con los atributos interpolados.
+fn quads_scene(scene: &Scene, params: &QuadsParams) -> Scene {
+    let options = QuadsOptions { max_face_angle: params.face_angle, max_shape_angle: params.shape_angle };
+    let mut out = scene.clone();
+    out.quads.clear();
+    for m in 0..out.meshes.len() {
+        for p in 0..out.meshes[m].primitives.len() {
+            let prim = &out.meshes[m].primitives[p];
+            let Some(positions) = positions(prim) else { continue };
+            let n = positions.len();
+            let indices: Vec<u32> = indices_u32(prim, n).chunks_exact(3).filter(|t| t.iter().all(|&i| (i as usize) < n)).flatten().copied().collect();
+            // Vértices iguales en posición, UV y normal cuentan como uno; si
+            // difieren (costura, arista con normales partidas) no se juntan
+            let mut attributes = Vec::new();
+            let mut stride = 0;
+            if let Some(uv) = uv0(prim).filter(|uv| uv.len() == n) {
+                stride += 2;
+                attributes.push(uv.iter().flatten().copied().collect::<Vec<f32>>());
+            }
+            if let Some(nr) = normals(prim).filter(|nr| nr.len() == n) {
+                stride += 3;
+                attributes.push(nr.iter().flatten().copied().collect());
+            }
+            let interleaved: Vec<f32> = (0..n)
+                .flat_map(|v| {
+                    attributes.iter().flat_map(move |a| {
+                        let k = a.len() / n;
+                        a[v * k..(v + 1) * k].iter().copied()
+                    })
+                })
+                .collect();
+            let input = QuadsInput { positions, indices: &indices, attributes: &interleaved, stride, groups: &[] };
+            let faces = remesh::tris_to_quads(&input, &options);
+            let prim = &mut out.meshes[m].primitives[p];
+            let pairs = if params.all_quads {
+                subdivide_primitive(prim, &faces, n)
+            } else {
+                let polygons: Vec<converter_scene::Polygon> = faces.iter().map(to_polygon).collect();
+                let (indices, pairs) = converter_scene::triangulate(&polygons);
+                prim.indices = Some(compact_indices(indices, n));
+                pairs
+            };
+            out.set_quad_pairs(m, p, pairs);
+        }
+    }
+    out
+}
+
+fn to_polygon(face: &Face) -> converter_scene::Polygon {
+    match *face {
+        Face::Tri(t) => converter_scene::Polygon::Tri(t),
+        Face::Quad(q) => converter_scene::Polygon::Quad(q),
+    }
+}
+
+fn compact_indices(indices: Vec<u32>, vertices: usize) -> IndexData {
+    if vertices <= u16::MAX as usize + 1 {
+        IndexData::U16(indices.iter().map(|&i| i as u16).collect())
+    } else {
+        IndexData::U32(indices)
+    }
+}
+
+/// Subdivide la primitiva para que todo sean quads; devuelve cuántos hay
+fn subdivide_primitive(prim: &mut Primitive, faces: &[Face], vertices: usize) -> usize {
+    let s = remesh::all_quads(faces, vertices);
+    let total = vertices + s.new_vertices.len();
+    fn mix<const K: usize>(values: &mut Vec<[f32; K]>, recipes: &[Vec<(u32, f32)>]) {
+        let extra: Vec<[f32; K]> = recipes
+            .iter()
+            .map(|r| {
+                let mut v = [0.0; K];
+                for &(i, w) in r {
+                    let src = values.get(i as usize).copied().unwrap_or([0.0; K]);
+                    for k in 0..K {
+                        v[k] += w * src[k];
+                    }
+                }
+                v
+            })
+            .collect();
+        values.extend(extra);
+    }
+    // Pesos de huesos: se suman por hueso y quedan los cuatro mayores
+    let joints: Option<Vec<[u16; 4]>> = prim.attributes.iter().find_map(|a| match a {
+        VertexAttribute::JointIndices(j) => Some(j.clone()),
+        _ => None,
+    });
+    for a in &mut prim.attributes {
+        match a {
+            VertexAttribute::Positions(v) => mix(v, &s.new_vertices),
+            VertexAttribute::Normals(v) => {
+                mix(v, &s.new_vertices);
+                for n in &mut v[vertices..] {
+                    let len = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+                    if len > 0.0 {
+                        *n = n.map(|c| c / len);
+                    }
+                }
+            }
+            VertexAttribute::Tangents(v) | VertexAttribute::Colors(v) => mix(v, &s.new_vertices),
+            VertexAttribute::TexCoords(_, v) => mix(v, &s.new_vertices),
+            VertexAttribute::JointWeights(w) => {
+                let Some(j) = &joints else { continue };
+                let mixed: Vec<([u16; 4], [f32; 4])> = s.new_vertices.iter().map(|r| mix_skin(r, j, w)).collect();
+                w.extend(mixed.iter().map(|m| m.1));
+            }
+            VertexAttribute::JointIndices(_) => {}
+        }
+    }
+    if let (Some(j), Some(w)) = (
+        joints,
+        prim.attributes.iter().find_map(|a| match a {
+            VertexAttribute::JointWeights(w) => Some(w[..vertices.min(w.len())].to_vec()),
+            _ => None,
+        }),
+    ) {
+        let extra: Vec<[u16; 4]> = s.new_vertices.iter().map(|r| mix_skin(r, &j, &w).0).collect();
+        for a in &mut prim.attributes {
+            if let VertexAttribute::JointIndices(v) = a {
+                v.extend(extra.iter().copied());
+            }
+        }
+    }
+    debug_assert!(prim.attributes.iter().all(|a| match a {
+        VertexAttribute::Positions(v) | VertexAttribute::Normals(v) => v.len() == total,
+        _ => true,
+    }));
+    let polygons: Vec<converter_scene::Polygon> = s.quads.iter().map(|&q| converter_scene::Polygon::Quad(q)).collect();
+    let (indices, pairs) = converter_scene::triangulate(&polygons);
+    prim.indices = Some(compact_indices(indices, total));
+    pairs
+}
+
+/// Influencias de un vértice nuevo: los pesos de sus vértices de origen
+/// sumados por hueso, los cuatro mayores, normalizados
+fn mix_skin(recipe: &[(u32, f32)], joints: &[[u16; 4]], weights: &[[f32; 4]]) -> ([u16; 4], [f32; 4]) {
+    let mut by_joint: Vec<(u16, f32)> = Vec::new();
+    for &(i, w) in recipe {
+        let (Some(j), Some(ws)) = (joints.get(i as usize), weights.get(i as usize)) else { continue };
+        for k in 0..4 {
+            if ws[k] <= 0.0 {
+                continue;
+            }
+            match by_joint.iter_mut().find(|e| e.0 == j[k]) {
+                Some(e) => e.1 += w * ws[k],
+                None => by_joint.push((j[k], w * ws[k])),
+            }
+        }
+    }
+    by_joint.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let sum: f32 = by_joint.iter().take(4).map(|e| e.1).sum();
+    let mut out = ([0u16; 4], [0f32; 4]);
+    for (k, e) in by_joint.iter().take(4).enumerate() {
+        out.0[k] = e.0;
+        out.1[k] = if sum > 0.0 { e.1 / sum } else { 0.0 };
+    }
+    if sum <= 0.0 {
+        out.1[0] = 1.0;
+    }
+    out
 }
 
 /// Suaviza cada malla de la escena (en su espacio local). Las primitivas de
@@ -985,6 +1189,57 @@ mod tests {
         let (_, stats) = compute(&scene, &vox, &channel).unwrap();
         assert!(stats.after.triangles > 1000);
         assert!(stats.deviation.max_mm < 0.5, "{:?}", stats.deviation);
+    }
+
+    #[test]
+    fn tris_to_quads_keeps_vertices_and_marks_quads() {
+        let scene = two_part_scene(10);
+        let channel = Channel::new(|_| Ok(()));
+        let params = QuadsParams { face_angle: 40.0, shape_angle: 40.0, all_quads: false };
+        let (out, stats) = compute(&scene, &RemeshParams::Quads(params), &channel).unwrap();
+        // La grilla ondulada de 10×10 cuadrados: todos quads, los mismos vértices
+        assert_eq!(stats.after.quads, 100);
+        assert_eq!(stats.after.triangles, stats.before.triangles);
+        assert_eq!(stats.after.vertices, stats.before.vertices);
+        assert!(stats.deviation.max_mm < 1e-9);
+        for (k, (a, b)) in scene.meshes[0].primitives.iter().zip(&out.meshes[0].primitives).enumerate() {
+            assert_eq!(positions(a), positions(b));
+            assert_eq!(uv0(a), uv0(b));
+            assert_eq!(out.quad_pairs(0, k), 50);
+        }
+        // El visor recibe el alambre de quads, 4 índices por cara
+        let data = crate::commands::scene_mesh_data(&out);
+        assert_eq!(data.quad_indices.len(), 100 * 4);
+    }
+
+    #[test]
+    fn all_quads_interpolates_attributes() {
+        let scene = two_part_scene(4);
+        let channel = Channel::new(|_| Ok(()));
+        let params = QuadsParams { face_angle: 40.0, shape_angle: 40.0, all_quads: true };
+        let (out, stats) = compute(&scene, &RemeshParams::Quads(params), &channel).unwrap();
+        // 16 quads de entrada → 64
+        assert_eq!(stats.after.quads, 64);
+        assert_eq!(stats.after.triangles, 128);
+        for prim in &out.meshes[0].primitives {
+            let (p, uv) = (positions(prim).unwrap(), uv0(prim).unwrap());
+            assert_eq!(p.len(), uv.len());
+            // La UV de cada vértice nuevo sigue a su posición (u = x, v = y en esta grilla)
+            for (pos, t) in p.iter().zip(uv) {
+                assert!((pos[0] - t[0]).abs() < 1e-5 && (pos[1] - t[1]).abs() < 1e-5);
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_skin_keeps_four_strongest_joints() {
+        let joints = [[0, 1, 0, 0], [2, 1, 0, 0]];
+        let weights = [[0.5, 0.5, 0.0, 0.0], [0.8, 0.2, 0.0, 0.0]];
+        let (j, w) = mix_skin(&[(0, 0.5), (1, 0.5)], &joints, &weights);
+        // Hueso 2: 0,4; hueso 1: 0,35; hueso 0: 0,25
+        assert_eq!(j[..3], [2, 1, 0]);
+        assert!((w.iter().sum::<f32>() - 1.0).abs() < 1e-6);
+        assert!((w[0] - 0.4).abs() < 1e-6);
     }
 
     #[test]

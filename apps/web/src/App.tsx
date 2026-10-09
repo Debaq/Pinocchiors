@@ -263,6 +263,7 @@ import { REMESH_MODES, type RemeshMode, type RemeshStats } from "./components/st
 import { DEFAULT_SIMPLIFY, simplifyParams, type SimplifyConfig } from "./components/panels/SimplifyPanel";
 import { DEFAULT_SMOOTH, smoothParams, type SmoothConfig } from "./components/panels/SmoothPanel";
 import { DEFAULT_ISOTROPIC, formatMm, isotropicEdge, isotropicParams, type IsotropicConfig, type RemeshInfo } from "./components/panels/IsotropicPanel";
+import { DEFAULT_QUADS, quadsParams, type QuadsConfig } from "./components/panels/QuadsPanel";
 import { DEFAULT_VOXEL, isHeavyGrid, voxelParams, voxelSize, type VoxelConfig, type VoxelGridInfo } from "./components/panels/VoxelPanel";
 import type { PreviewView } from "./components/layout/ViewportHeader";
 import { ScanEditor, type ScanEditorTab, type ScanMeshSettings } from "./components/layout/ScanEditor";
@@ -776,6 +777,7 @@ export const App: Component = () => {
   const [smoothConfig, setSmoothConfig] = createSignal<SmoothConfig>(DEFAULT_SMOOTH);
   const [isotropicConfig, setIsotropicConfig] = createSignal<IsotropicConfig>(DEFAULT_ISOTROPIC);
   const [voxelConfig, setVoxelConfig] = createSignal<VoxelConfig>(DEFAULT_VOXEL);
+  const [quadsConfig, setQuadsConfig] = createSignal<QuadsConfig>(DEFAULT_QUADS);
   /** Tamaño y arista media del modelo (para Isótropo y Vóxeles) */
   const [remeshInfo, setRemeshInfo] = createSignal<RemeshInfo>();
   const [voxelGrid, setVoxelGrid] = createSignal<VoxelGridInfo>();
@@ -5327,7 +5329,7 @@ export const App: Component = () => {
       { defer: true }
     )
   );
-  createEffect(on([simplifyConfig, smoothConfig, isotropicConfig, voxelConfig, remeshMode], discardRemeshPreview, { defer: true }));
+  createEffect(on([simplifyConfig, smoothConfig, isotropicConfig, voxelConfig, quadsConfig, remeshMode], discardRemeshPreview, { defer: true }));
   // Isótropo y Vóxeles proponen tamaños según el modelo
   const needsRemeshInfo = () =>
     pipeline.activeStep() === "remesh" && (remeshMode() === "isotropic" || remeshMode() === "voxel") && meshLoaded();
@@ -5395,6 +5397,20 @@ export const App: Component = () => {
         done: (stats: RemeshStats) => `Malla isótropa: ${stats.after.triangles.toLocaleString("es")} triángulos de ${edge}`,
       };
     }
+    if (mode === "quads") {
+      const config = quadsConfig();
+      return {
+        mode,
+        params: quadsParams(config),
+        busy: "Juntando triángulos en quads...",
+        step: config.allQuads ? "Triángulos a quads (todo quads)" : "Triángulos a quads",
+        done: (stats: RemeshStats) => {
+          const quads = stats.after.quads ?? 0;
+          const loose = stats.after.triangles - 2 * quads;
+          return `${quads.toLocaleString("es")} quads${loose > 0 ? ` y ${loose.toLocaleString("es")} triángulos sueltos` : ""}`;
+        },
+      };
+    }
     if (mode === "voxel") {
       const config = voxelConfig();
       const size = formatMm(voxelSize(config, remeshInfo()));
@@ -5438,8 +5454,13 @@ export const App: Component = () => {
         return stats;
       });
       setRemeshStats({ mode, kind: "preview", stats });
+      const quads = stats.after.quads ?? 0;
+      const faces =
+        quads > 0
+          ? `${quads.toLocaleString("es")} quads y ${(stats.after.triangles - 2 * quads).toLocaleString("es")} triángulos sueltos`
+          : `${stats.after.triangles.toLocaleString("es")} triángulos`;
       setStatusMessage(
-        `Vista previa: ${stats.after.triangles.toLocaleString("es")} triángulos (antes ${stats.before.triangles.toLocaleString("es")}), se aleja hasta ${deviationText(stats.deviation.max_percent)}`
+        `Vista previa: ${faces} (antes ${stats.before.triangles.toLocaleString("es")} triángulos), se aleja hasta ${deviationText(stats.deviation.max_percent)}`
       );
     } catch (e) {
       console.error("Remesh preview error:", e);
@@ -6208,7 +6229,7 @@ export const App: Component = () => {
       autorig: { config: autorigConfig(), complete: autorigComplete() },
       paintConfig: paintConfig(),
       retopology: { config: retopologyConfig(), loaded: quadMeshLoaded(), info: quadMeshInfo(), quality: quadQuality() },
-      remesh: { mode: remeshMode(), simplify: simplifyConfig(), smooth: smoothConfig(), isotropic: isotropicConfig(), voxel: voxelConfig() },
+      remesh: { mode: remeshMode(), simplify: simplifyConfig(), smooth: smoothConfig(), isotropic: isotropicConfig(), voxel: voxelConfig(), quads: quadsConfig() },
       uv: { config: uvConfig(), preview: uvPreview(), canUndoOriginal: canUndoUnwrap() },
       repair: {
         analysisConfig: repairAnalysisConfig(),
@@ -6241,6 +6262,7 @@ export const App: Component = () => {
     smooth: smoothConfig(),
     isotropic: isotropicConfig(),
     voxel: voxelConfig(),
+    quads: quadsConfig(),
     uv: uvConfig(),
     repairAnalysis: repairAnalysisConfig(),
     repair: repairOptions(),
@@ -6307,6 +6329,7 @@ export const App: Component = () => {
     if (ui.remesh?.smooth) setSmoothConfig(withDefaults(configDefaults.smooth, ui.remesh.smooth));
     if (ui.remesh?.isotropic) setIsotropicConfig(withDefaults(configDefaults.isotropic, ui.remesh.isotropic));
     if (ui.remesh?.voxel) setVoxelConfig(withDefaults(configDefaults.voxel, ui.remesh.voxel));
+    if (ui.remesh?.quads) setQuadsConfig(withDefaults(configDefaults.quads, ui.remesh.quads));
     if (ui.uv?.config) setUvConfig(withDefaults(configDefaults.uv, ui.uv.config));
     if (ui.uv?.preview) setUvPreview(ui.uv.preview);
     if (ui.repair?.analysisConfig) setRepairAnalysisConfig(withDefaults(configDefaults.repairAnalysis, ui.repair.analysisConfig));
@@ -7212,6 +7235,15 @@ export const App: Component = () => {
                 onApply: handleRemeshApply,
                 onDiscard: discardRemeshPreview,
                 canExecute: meshLoaded() && !!remeshInfo(),
+                isProcessing: isProcessing(),
+              },
+              quads: {
+                config: quadsConfig(),
+                onChange: setQuadsConfig,
+                onPreview: handleRemeshPreview,
+                onApply: handleRemeshApply,
+                onDiscard: discardRemeshPreview,
+                canExecute: meshLoaded(),
                 isProcessing: isProcessing(),
               },
               smooth: {

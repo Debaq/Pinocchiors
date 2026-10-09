@@ -49,6 +49,10 @@ pub struct Scene {
     pub meters_per_unit: f64,
     /// Eje "arriba" — true = Y-up, false = Z-up
     pub y_up: bool,
+    /// Quads guardados como pares de triángulos al comienzo de cada
+    /// primitiva (ver [`crate::Polygon`]).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub quads: Vec<crate::QuadPairs>,
 }
 
 impl Scene {
@@ -63,6 +67,7 @@ impl Scene {
             animations: Vec::new(),
             meters_per_unit: 1.0,
             y_up: true,
+            quads: Vec::new(),
         }
     }
 
@@ -178,6 +183,9 @@ impl Scene {
         for root in other.root_nodes {
             self.root_nodes.push(root + node_offset);
         }
+
+        // Quads de las primitivas de `other`, con sus mallas desplazadas
+        self.quads.extend(other.quads.iter().map(|q| crate::QuadPairs { mesh: q.mesh + mesh_offset, ..*q }));
 
         // Reasignar material indices en primitivas
         for mut mesh in other.meshes {
