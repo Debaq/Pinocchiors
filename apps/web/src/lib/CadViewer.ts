@@ -202,7 +202,8 @@ export class CadViewer {
       "pointerdown",
       (e) => {
         if (e.button === 1 || (e.button === 0 && e.altKey)) this.nav.start(e, e.shiftKey ? "pan" : "rotate");
-        else if (e.button === 2) this.nav.start(e, "pan");
+        // Sin bloquear: el clic derecho sin arrastre abre el menú
+        else if (e.button === 2) this.nav.start(e, "pan", false);
       },
       { capture: true },
     );
