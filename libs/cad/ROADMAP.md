@@ -71,6 +71,23 @@ Decisiones (2026-10-05):
       equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones
       que resalta y elige lo que restringe.
 - [~] **F9 — Más adelante**: planos 2D, ensambles y chapa hechos en una primera versión (ver abajo).
+- [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hay lineal, circular, en curva, por
+      tabla y de relleno, en el sketch y como operación, más la simetría. Orden propuesto (los más
+      usados y baratos primero):
+  1. **Por puntos del sketch**: una copia en cada punto dibujado (agujeros en posiciones libres
+     sin escribir tabla). En operaciones y en el sketch.
+  2. **Saltar copias**: marcar en el visor las que no van (el hueco de un conector en una
+     rejilla). Opción común a todos los patrones.
+  3. **Segunda dirección en operaciones**: lineal en dos direcciones (hoy una sola, la grilla se
+     arma con dos patrones; el sketch ya tiene filas) y circular en anillos (coronas de agujeros
+     de una brida).
+  4. **Variable**: cada copia cambia una cota según una regla (nervios cada vez más largos,
+     agujeros que crecen).
+  5. **Cadena**: eslabones que siguen un camino guardando la distancia entre ellos (cadena,
+     oruga).
+  6. Menos usados: **en espiral** (copias sobre una espiral plana), **sobre superficie** (siguen
+     una cara curva y su normal: textura en una carcasa) y **patrón de patrón** (repetir un patrón
+     hecho como un bloque).
 
 ## Compilar
 
@@ -534,3 +551,9 @@ cargo test -p cad-model
   tornillo en agujero roscado y rosca alrededor de un tornillo: 0 mm³ en común alineados contra
   ~17 corridos medio paso; errores y dependencias) y e2e "roscas coordinadas". El arnés e2e acepta
   `?bridge=` / `E2E_BRIDGE_PORT` para no pisar el puente de otra sesión.
+
+- **2026-10-09 Patrones del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 5): los mismos que
+  hay como operación (lineal en filas, circular con ángulo y sin girar, en curva, por tabla, de
+  relleno). Solver: jacobiano numérico con puntos repetidos y diagnóstico con un solo SVD.
+  Pruebas: node `e2e/sketchPattern.test.mjs` y e2e "patrones del sketch". Los patrones que
+  todavía faltan quedan en F10.
