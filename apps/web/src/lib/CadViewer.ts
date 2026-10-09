@@ -6,7 +6,9 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CameraRig } from "./cameraRig";
+import { CameraRig, type CameraPose } from "./cameraRig";
+import { buildGridLines } from "./gridLines";
+import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
 import { deviationColor, ellipsePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
@@ -151,7 +153,11 @@ export class CadViewer {
   private hiddenPlanes = new Set<BasePlane>();
   /** Lado de los planos base (mm): acompaña el tamaño del modelo */
   planeSize = 60;
-  private grid: THREE.GridHelper;
+  /** Grilla del piso (la misma que en el visor principal) y su tamaño, en unidades del visor */
+  private grid = new THREE.Group();
+  private gridExtent = 100;
+  /** Luces del panel Luces, como en el visor principal */
+  private lightRig: LightRig;
   private highlightedFaces = new Set<number>();
   private highlightedEdges = new Set<number>();
   /** Color y visibilidad de cada pieza (rangos de caras y aristas del cuerpo) */
@@ -182,7 +188,7 @@ export class CadViewer {
   constructor(private container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     this.renderer.localClippingEnabled = true;
-    this.renderer.setPixelRatio(window.devicePixelRatio);
+    configureRenderer(this.renderer);
     container.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = "block";
 
@@ -213,13 +219,8 @@ export class CadViewer {
       { capture: true },
     );
 
-    this.scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.6));
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(1, 2, 1.5);
-    this.camera.add(key);
-    this.scene.add(this.camera);
-
-    this.grid = new THREE.GridHelper(400, 40);
+    this.lightRig = new LightRig(this.scene, this.camera, this.renderer);
+    this.lightRig.place(new THREE.Vector3(), this.gridExtent);
     this.scene.add(this.grid);
     this.scene.add(this.sketchGroup);
     this.scene.add(this.sketchesGroup);
@@ -245,11 +246,7 @@ export class CadViewer {
 
   private applyTheme() {
     this.scene.background = new THREE.Color(themeHex("viewport"));
-    const mats = (Array.isArray(this.grid.material) ? this.grid.material : [this.grid.material]) as THREE.LineBasicMaterial[];
-    mats.forEach((m) => {
-      m.color = new THREE.Color(themeHex("grid-minor"));
-      m.vertexColors = false;
-    });
+    buildGridLines(this.grid, this.gridExtent, this.mmPerUnit);
     if (this.bodyEdges) (this.bodyEdges.material as THREE.LineBasicMaterial).color.set(themeHex("bg-darker"));
   }
 
@@ -274,6 +271,22 @@ export class CadViewer {
       this.rig.renderCube(this.renderer);
       this.onRender?.();
     });
+  }
+
+  /** Dónde está la cámara (en metros), para pasarla al visor principal */
+  cameraPose(): CameraPose {
+    return this.rig.pose(this.mmPerUnit / 1000);
+  }
+
+  /** Pone la cámara en `pose` (en metros), la del visor principal al entrar */
+  setCameraPose(pose: CameraPose) {
+    this.rig.setPose(pose, this.mmPerUnit / 1000);
+  }
+
+  /** Las luces del panel Luces (las mismas que en el visor principal) */
+  setLights(lights: LightSettings) {
+    this.lightRig.set(lights);
+    this.requestRender();
   }
 
   /** Punto del CAD (mm, Z arriba) → visor (Y arriba, unidades de la escena) */
@@ -1438,14 +1451,9 @@ export class CadViewer {
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(100, 100, 100).divideScalar(this.mmPerUnit));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
     this.rig.frame(sphere);
-    const size = Math.max(sphere.radius * 4, 1);
-    this.scene.remove(this.grid);
-    this.grid.geometry.dispose();
-    const step = Math.pow(10, Math.floor(Math.log10(size / 4)));
-    const visible = this.grid.visible;
-    this.grid = new THREE.GridHelper(Math.ceil(size / step) * step, Math.ceil(size / step));
-    this.grid.visible = visible;
-    this.scene.add(this.grid);
+    // Grilla y luces alrededor de lo que se ve, como en el visor principal
+    this.gridExtent = Math.max(sphere.radius * 2, 1e-3);
+    this.lightRig.place(sphere.center, sphere.radius * 2);
     this.applyTheme();
     this.controls.update();
     this.requestRender();

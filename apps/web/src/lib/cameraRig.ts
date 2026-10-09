@@ -4,6 +4,16 @@ import { NavDrag } from "./navDrag";
 import { ViewCube } from "./ViewCube";
 
 /**
+ * Dónde está la cámara, en metros y con los ejes internos (Y arriba): igual en
+ * los dos visores, así pasar de uno al otro no cambia la vista.
+ */
+export interface CameraPose {
+  position: [number, number, number];
+  target: [number, number, number];
+  up: [number, number, number];
+}
+
+/**
  * Lo que comparten los dos visores (el principal y el de Diseñar) para mover
  * la cámara: girar y desplazar arrastrando (`NavDrag`), el cubo de vistas
  * (clic y resaltado con cursor de mano), el giro animado hacia una vista y
@@ -115,6 +125,28 @@ export class CameraRig {
     this.camera.near = dist / 1000;
     this.camera.far = dist * 100;
     this.camera.updateProjectionMatrix();
+    this.controls.update();
+    this.onChange();
+  }
+
+  /** La pose de la cámara en metros (`metersPerUnit`: metros por unidad de la escena) */
+  pose(metersPerUnit: number): CameraPose {
+    const m = (v: THREE.Vector3) => v.clone().multiplyScalar(metersPerUnit).toArray() as [number, number, number];
+    return { position: m(this.camera.position), target: m(this.controls.target), up: this.camera.up.toArray() as [number, number, number] };
+  }
+
+  /** Pone la cámara en `pose` (en metros) */
+  setPose(pose: CameraPose, metersPerUnit: number) {
+    this.stop();
+    const k = 1 / metersPerUnit;
+    this.camera.position.fromArray(pose.position).multiplyScalar(k);
+    this.controls.target.fromArray(pose.target).multiplyScalar(k);
+    this.camera.up.fromArray(pose.up);
+    const dist = Math.max(this.camera.position.distanceTo(this.controls.target), 1e-9);
+    this.camera.near = dist / 1000;
+    this.camera.far = dist * 100;
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(this.controls.target);
     this.controls.update();
     this.onChange();
   }

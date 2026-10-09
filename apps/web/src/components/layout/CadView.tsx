@@ -2,6 +2,8 @@ import { Component, For, type JSX, Index, Show, createEffect, createMemo, create
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
 import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
+import type { LightSettings } from "../../lib/lightRig";
+import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
 import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
@@ -30,6 +32,12 @@ export interface CadViewProps {
   showGrid?: boolean;
   /** Acciones para la barra de herramientas */
   actions: DesignActions;
+  /** Luces del panel Luces (las mismas que en el visor principal) */
+  lights?: LightSettings;
+  /** La cámara del visor principal al entrar (se lee una vez) */
+  initialPose?: CameraPose;
+  /** Al salir, la cámara de acá para el visor principal */
+  onLeave?: (pose: CameraPose) => void;
 }
 
 // Grupos de la barra: elegir · dibujar · modificar
@@ -242,6 +250,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     setTangentFrom(undefined);
   };
 
+  const startPose = untrack(() => props.initialPose);
   onMount(async () => {
     viewer = new CadViewer(container);
     viewer.onRender = () => setViewTick((t) => t + 1);
@@ -255,9 +264,14 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer.setScan(props.scanMesh);
     viewer.setBody(store.mesh());
     viewer.frameAll();
+    // La misma vista que en el visor principal (grilla y luces quedan del encuadre)
+    if (startPose) viewer.setCameraPose(startPose);
     setPlanesReady((n) => n + 1);
   });
-  onCleanup(() => viewer?.dispose());
+  onCleanup(() => {
+    if (viewer && store.mesh()) props.onLeave?.(viewer.cameraPose());
+    viewer?.dispose();
+  });
 
   createEffect(
     on(
@@ -277,8 +291,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       { defer: true },
     ),
   );
-  // Encuadrar cuando aparece el primer sólido (no en cada recálculo)
-  let hadBody = false;
+  // Encuadrar cuando aparece el primer sólido (no en cada recálculo); al entrar
+  // con la vista del visor principal, ya hay uno
+  let hadBody = !!startPose;
   createEffect(() => {
     const m = store.mesh();
     // En el ensamble el visor muestra las instancias (efecto de abajo)
@@ -405,6 +420,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer?.setVisibleSketches(list);
   });
   createEffect(() => viewer?.setGridVisible(props.showGrid !== false));
+  createEffect(() => props.lights && viewer?.setLights(props.lights));
   // Planos base: visibles fuera de la edición (y al elegir dónde va un sketch)
   const [planesReady, setPlanesReady] = createSignal(0);
   createEffect(() => {

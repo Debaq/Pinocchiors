@@ -7077,7 +7077,11 @@ export const App: Component = () => {
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions} />
+              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions}
+                lights={lights()}
+                initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}
+                onLeave={(pose) => viewer()?.setCameraPose(pose)}
+              />
             </Show>
 
             {/* Welcome Screen overlay */}

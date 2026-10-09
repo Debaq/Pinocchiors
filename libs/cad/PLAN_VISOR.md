@@ -35,6 +35,14 @@ fondo según el tema. Lo mismo, copiado, con diferencias que se notan:
    "visor principal: derecho desplaza o abre el menú, Ver todo encuadra".*
 3. **Mismo aspecto**: luces y entorno de `Viewer3D` (con el panel Luces) y la grilla por
    unidades en Diseñar.
+   *Hecha el 2026-10-09: `lib/lightRig.ts` (luces, entorno PBR, tono ACES y densidad de
+   píxeles) y `lib/gridLines.ts` (grilla con mayores cada 10 y ejes), usados por los dos.*
 4. **Un solo canvas** (más adelante): el diseño como una capa más del visor principal, así
    pasar a Diseñar no cambia de visor. Exige mover elegir caras/aristas, sketches, vista de
    corte, manijas y planos a capas; es el paso grande.
+   *Primer paso hecho el 2026-10-09: la misma cámara. `CameraPose` en metros con los ejes
+   internos; Diseñar arranca con la del visor principal y al salir se la devuelve (si llega
+   enseguida la malla de la pieza, el principal la conserva en vez de reencuadrar). e2e
+   "visor: la misma cámara en Diseñar y en Fabricar". Lo que falta para un canvas único:
+   que el visor principal dibuje las capas del CAD (cuerpo con caras y aristas elegibles,
+   sketches, planos, manijas, corte) y CadView use ese canvas.*

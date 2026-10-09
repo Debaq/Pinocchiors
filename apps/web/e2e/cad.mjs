@@ -2271,6 +2271,79 @@ const scenarios = {
     await b.shot("superficies_cosido");
   },
 
+  async "patrones por tabla y de relleno, partir y recortar superficies"(b) {
+    await begin(b);
+    // Placa de 100 × 60 × 2, agujero de Ø4 en (10, 10) y una región de 5 a 95 por 5 a 55
+    const doc = await call("cad_get_document");
+    const rect = (x0, y0, x1, y1, base) => {
+      const P = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+      const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: base + i, x, y }))];
+      const entities = P.map((_, i) => ({ id: base + 10 + i, geometry: { type: "line", start: base + i, end: base + ((i + 1) % 4) } }));
+      return { points, entities, constraints: [], next_id: base + 20, origin: 0 };
+    };
+    const id = () => doc.next_id++;
+    const plate = id();
+    doc.features.push({ id: plate, name: "Placa", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: rect(0, 0, 100, 60, 1) } });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    doc.features.push({ id: id(), name: "Región", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: rect(5, 5, 95, 55, 1) } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    // Relleno: con el agujero elegido, 45 en grilla cuadrada (centros a 3 del borde)
+    await b.eval(`window.__cadStore.select(${hole})`);
+    await b.clickText("Patrón de relleno");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.pattern?.type`)) !== "fill"; t++) await sleep(250);
+
+    await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.kind.pattern.margin = 3; })`);
+    await sleep(2500);
+    await accept(b, 2500);
+    near((await body()).volume, 12000 - 45 * holeV, 1e-3, "relleno");
+    // Hexagonal: 43
+    await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.kind.pattern.hex = true; })`);
+    await sleep(2500);
+    near((await body()).volume, 12000 - 43 * holeV, 1e-3, "relleno hexagonal");
+    await b.shot("patron_relleno");
+    // Por tabla: suprimido el relleno, dos copias más (filas por defecto)
+    await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.suppressed = true; })`);
+    await sleep(1500);
+    await b.eval(`window.__cadStore.select(${hole})`);
+    await b.clickText("Patrón por tabla");
+    for (let t = 0; t < 20 && (await b.eval(`document.querySelectorAll("[data-table-row]").length`)) !== 2; t++) await sleep(250);
+    await b.clickText("Agregar fila");
+    await sleep(2500);
+    await accept(b, 2500);
+    near((await body()).volume, 12000 - 4 * holeV, 1e-3, "tabla de 3 filas");
+    // Partir con el plano a z = 1: dos placas
+    await b.clickText("Partir");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "split_by"; t++) await sleep(250);
+    await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.kind.tool.plane.plane.origin = [0, 0, 1]; })`);
+    await sleep(2500);
+    await accept(b, 2500);
+    const parts = await b.eval(`window.__cadStore.result().parts.length`);
+    if (parts !== 2) throw new Error(`partir: ${parts} piezas`);
+    // Recortar con plano un tubo de superficie (r 5, alto 10, aparte) a z = 4
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 90, name: "Círculo tubo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 150, y: 0 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 5 } }], constraints: [], next_id: 3, origin: 0 } } });
+      d.features.push({ id: 91, name: "Tubo", suppressed: false, kind: { type: "surface_extrude", sketch: 90, entities: [], extent: { type: "blind", distance: 10 }, reverse: false } });
+      d.next_id = 92;
+    })`);
+    await sleep(2500);
+    await b.clickText("Recortar con plano");
+    for (let t = 0; t < 20 && (await b.eval(`window.__cadStore.doc().features.at(-1).kind.type`)) !== "split"; t++) await sleep(250);
+    await b.eval(`window.__cadStore.updateFeature(window.__cadStore.doc().features.at(-1).id, (f) => { f.kind.plane.plane.origin = [0, 0, 4]; })`);
+    await sleep(2500);
+    await accept(b, 2500);
+    const tube = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts.find((p) => p.surface)))`);
+    near(tube.area, 2 * Math.PI * 5 * 6, 1e-3, "tubo recortado");
+    // Las placas no se tocaron (el recorte solo actúa sobre la superficie)
+    if ((await b.eval(`window.__cadStore.result().parts.filter((p) => !p.surface).length`)) !== 2) throw new Error("el recorte tocó las placas");
+  },
+
   async "chaflán de dos distancias y redondeo variable"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const last = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);
@@ -3530,6 +3603,39 @@ const scenarios = {
     await sleep(500);
     const t2 = await target();
     if (Math.hypot(...t2.map((v, i) => v - t0[i])) > Math.hypot(...t1.map((v, i) => v - t0[i]))) throw new Error(`Ver todo no volvió: ${t0} ${t2}`);
+  },
+
+  async "visor: la misma cámara en Diseñar y en Fabricar"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Malla generada")`)); t++) await sleep(250);
+    await sleep(1000);
+    const main = () => b.eval(`JSON.parse(JSON.stringify(window.__viewer().getCameraPose()))`);
+    const cadPose = () => b.eval(`JSON.parse(JSON.stringify(window.__cadViewer.cameraPose()))`);
+    const close = (a, c, what) => {
+      for (const k of ["position", "target"]) {
+        const d = Math.hypot(...a[k].map((v, i) => v - c[k][i]));
+        const size = Math.hypot(...a.position.map((v, i) => v - a.target[i]));
+        if (d > 1e-3 * size) throw new Error(`${what}: ${k} ${JSON.stringify(a[k])} contra ${JSON.stringify(c[k])}`);
+      }
+    };
+    // Mirar desde arriba en Fabricar y pasar a Diseñar: la misma vista
+    await b.eval(`window.__viewer().setView("top")`);
+    await sleep(800);
+    const fromMain = await main();
+    await b.clickText("Diseñar");
+    await sleep(2000);
+    close(await cadPose(), fromMain, "al entrar a Diseñar");
+    // De frente en Diseñar y vuelta a Fabricar: la misma vista allá
+    await b.eval(`window.__cadViewer.lookFrom([0, -1, 0])`);
+    await sleep(800);
+    const fromCad = await cadPose();
+    await b.clickText("Fabricar");
+    await sleep(2500);
+    close(await main(), fromCad, "al volver a Fabricar");
   },
 
   async "objetos: el remallado se rehace si cambia el diseño"(b) {

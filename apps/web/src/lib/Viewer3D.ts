@@ -6,9 +6,8 @@
 import * as THREE from "three";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CameraRig } from "./cameraRig";
+import { CameraRig, type CameraPose } from "./cameraRig";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
-import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
 import { boneHue, estimateInfluence, type Influence } from "./boneInfluence";
 import { boundsAfter, type FloorCandidate } from "./placement";
@@ -17,6 +16,8 @@ import { chainAround, type BoneShape, type JointFrame, type RigControl } from ".
 import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
 import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
+import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
+import { buildGridLines } from "./gridLines";
 
 installDqSkinning();
 installAutoSmooth();
@@ -62,31 +63,8 @@ export interface SceneMaterial {
 }
 
 /** Luces del visor */
-export interface LightSettings {
-  /** Dirección de la luz principal (grados): acimut alrededor del modelo y elevación */
-  azimuth: number;
-  elevation: number;
-  intensity: number;
-  color: string;
-  /** Luz de relleno (del lado opuesto) y ambiente */
-  fill: number;
-  ambient: number;
-  /** Luz que sale desde la cámara */
-  headlight: boolean;
-  /** Reflejos de entorno (iluminación por imagen) */
-  environment: number;
-}
-
-export const defaultLights: LightSettings = {
-  azimuth: 45,
-  elevation: 45,
-  intensity: 2,
-  color: "#ffffff",
-  fill: 0.6,
-  ambient: 0.3,
-  headlight: false,
-  environment: 0.6,
-};
+// Las luces son las mismas en todos los visores (ver lightRig.ts)
+export { defaultLights, type LightSettings } from "./lightRig";
 
 export interface SkeletonData {
   bones: BoneData[];
@@ -522,12 +500,7 @@ export class Viewer3D {
   private sceneTextureCache = new Map<ImageBitmap, THREE.Texture>();
 
   // Luces
-  private lights: LightSettings = { ...defaultLights };
-  private keyLight = new THREE.DirectionalLight(0xffffff, 1);
-  private fillLight = new THREE.DirectionalLight(0x8be9fd, 1);
-  private ambientLight = new THREE.HemisphereLight(0xffffff, 0x44475a, 1);
-  private headLight = new THREE.DirectionalLight(0xffffff, 0);
-  private environmentMap: THREE.Texture | null = null;
+  private lightRig!: LightRig;
   /** Arrastre de la luz principal (L + clic izquierdo) */
   private lightDrag: { x: number; y: number; azimuth: number; elevation: number } | null = null;
   private sunMarker: THREE.Mesh | null = null;
@@ -572,6 +545,8 @@ export class Viewer3D {
   private objectDragStart: THREE.Matrix4 | null = null;
   /** Tras soltar el gizmo del modelo, la malla nueva llega sin mover la cámara */
   private keepCamera = false;
+  /** Pose recién traída de Diseñar: la próxima malla que llegue la conserva (no reencuadra) */
+  private pendingPose: { pose: CameraPose; until: number } | null = null;
   /** Pivote del gizmo de pose en la animación (el rig gira huesos, no esferas) */
   private posePivot = new THREE.Object3D();
   private poseDragStart: {
@@ -712,10 +687,8 @@ export class Viewer3D {
       canvas: this.canvas,
       antialias: true,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    configureRenderer(this.renderer);
     this.renderer.setSize(canvas.clientWidth, canvas.clientHeight);
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
 
     // Controls
     this.controls = new OrbitControls(this.camera, this.canvas);
@@ -760,63 +733,37 @@ export class Viewer3D {
   }
 
   private setupLights(): void {
-    this.scene.add(this.ambientLight);
-    this.scene.add(this.keyLight, this.keyLight.target);
-    this.scene.add(this.fillLight, this.fillLight.target);
-    // Luz de cámara: cuelga de la cámara y apunta hacia adelante
-    this.camera.add(this.headLight, this.headLight.target);
-    this.headLight.target.position.set(0, 0, -1);
-    this.scene.add(this.camera);
-    // Entorno para los reflejos de los materiales PBR (metales sobre todo)
-    const pmrem = new THREE.PMREMGenerator(this.renderer);
-    this.environmentMap = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    pmrem.dispose();
+    this.lightRig = new LightRig(this.scene, this.camera, this.renderer);
     this.placeLights();
   }
 
   /** Cambia las luces */
   setLights(lights: LightSettings): void {
-    this.lights = { ...lights };
+    this.lightRig.set(lights);
     this.placeLights();
   }
 
   /** Luces actuales */
   getLights(): LightSettings {
-    return { ...this.lights };
+    return this.lightRig.get();
   }
 
-  /** Ubica las luces alrededor del modelo según `this.lights` */
+  /** Ubica las luces alrededor del modelo */
   private placeLights(): void {
-    const s = this.lights;
-    const center = this.controls.target.clone();
     const radius = this.currentMesh
       ? Math.max(new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3()).length(), 1e-3)
       : 5;
-    const direction = (azimuth: number, elevation: number) => {
-      const a = THREE.MathUtils.degToRad(azimuth);
-      const e = THREE.MathUtils.degToRad(elevation);
-      return new THREE.Vector3(Math.cos(e) * Math.sin(a), Math.sin(e), Math.cos(e) * Math.cos(a));
-    };
-    this.keyLight.position.copy(center).addScaledVector(direction(s.azimuth, s.elevation), 2 * radius);
-    this.keyLight.target.position.copy(center);
-    this.keyLight.color.set(s.color);
-    this.keyLight.intensity = s.intensity;
-    this.fillLight.position.copy(center).addScaledVector(direction(s.azimuth + 180, 20), 2 * radius);
-    this.fillLight.target.position.copy(center);
-    this.fillLight.intensity = s.fill;
-    this.ambientLight.intensity = s.ambient;
-    this.headLight.intensity = s.headlight ? 0.6 * s.intensity : 0;
-    this.scene.environment = s.environment > 0 ? this.environmentMap : null;
-    this.scene.environmentIntensity = s.environment;
+    this.lightRig.place(this.controls.target, radius);
     if (this.sunMarker) {
-      this.sunMarker.position.copy(this.keyLight.position);
+      this.sunMarker.position.copy(this.lightRig.key.position);
       this.sunMarker.scale.setScalar(radius * 0.03);
     }
   }
 
   /** L + arrastrar: gira la luz principal alrededor del modelo */
   private onLightDown(event: PointerEvent): void {
-    this.lightDrag = { x: event.clientX, y: event.clientY, azimuth: this.lights.azimuth, elevation: this.lights.elevation };
+    const l = this.lightRig.get();
+    this.lightDrag = { x: event.clientX, y: event.clientY, azimuth: l.azimuth, elevation: l.elevation };
     this.controls.enabled = false;
     if (!this.sunMarker) {
       this.sunMarker = new THREE.Mesh(
@@ -835,7 +782,7 @@ export class Viewer3D {
     if (!drag) return;
     const azimuth = drag.azimuth - (event.clientX - drag.x) * 0.4;
     const elevation = THREE.MathUtils.clamp(drag.elevation + (event.clientY - drag.y) * 0.4, -10, 89);
-    this.lights = { ...this.lights, azimuth: ((azimuth % 360) + 540) % 360 - 180, elevation };
+    this.lightRig.set({ ...this.lightRig.get(), azimuth: ((azimuth % 360) + 540) % 360 - 180, elevation });
     this.placeLights();
     this.callbacks.onLightsChanged?.(this.getLights());
   }
@@ -1866,7 +1813,12 @@ export class Viewer3D {
     }
 
     // Tras mover el modelo con el gizmo, la cámara queda donde estaba
-    if (this.keepCamera) this.placeLights();
+    const pending = this.pendingPose && performance.now() < this.pendingPose.until ? this.pendingPose.pose : null;
+    this.pendingPose = null;
+    if (pending) {
+      this.cameraRig.setPose(pending, this.gridUnits.metersPerUnit);
+      this.placeLights();
+    } else if (this.keepCamera) this.placeLights();
     else this.fitCamera();
     this.keepCamera = false;
     this.rebuildGrid();
@@ -3079,12 +3031,6 @@ export class Viewer3D {
    * cada 10 celdas y ejes X (rojo) y Z (celeste) por el origen.
    */
   private rebuildGrid(): void {
-    for (const child of [...this.grid.children]) {
-      this.grid.remove(child);
-      const line = child as THREE.LineSegments;
-      line.geometry.dispose();
-      (line.material as THREE.Material).dispose();
-    }
     const { metersPerUnit, unitMeters, unitLabel } = this.gridUnits;
     // Escena → unidad elegida
     const toUnit = metersPerUnit / unitMeters;
@@ -3097,41 +3043,7 @@ export class Viewer3D {
       const size = new THREE.Box3().setFromObject(this.currentMesh).getSize(new THREE.Vector3());
       extent = Math.max(size.x, size.y, size.z) || extent;
     }
-    const extentUnits = extent * toUnit;
-    const step = Math.pow(10, Math.floor(Math.log10(extentUnits)) - 1);
-    const major = step * 10;
-    const half = Math.max(Math.ceil((extentUnits * 1.5) / major), 1) * major;
-    const toScene = 1 / toUnit;
-
-    const lines = (every: number, color: number, opacity: number, skipEvery?: number) => {
-      const points: number[] = [];
-      const n = Math.round(half / every);
-      for (let i = -n; i <= n; i++) {
-        if (i === 0 || (skipEvery && i % skipEvery === 0)) continue;
-        const c = i * every * toScene;
-        const h = half * toScene;
-        points.push(-h, 0, c, h, 0, c, c, 0, -h, c, 0, h);
-      }
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
-      return new THREE.LineSegments(
-        geometry,
-        new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false })
-      );
-    };
-    const axis = (from: THREE.Vector3, to: THREE.Vector3, color: number) =>
-      new THREE.LineSegments(
-        new THREE.BufferGeometry().setFromPoints([from, to]),
-        new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.6, depthWrite: false })
-      );
-    const h = half * toScene;
-    this.grid.add(
-      lines(step, themeHex("grid-minor"), 0.35, 10),
-      lines(major, themeHex("grid-major"), 0.45),
-      axis(new THREE.Vector3(-h, 0, 0), new THREE.Vector3(h, 0, 0), themeHex("axis-x")),
-      // Z del visor = Y de la vista (Z arriba, como Blender): verde
-      axis(new THREE.Vector3(0, 0, -h), new THREE.Vector3(0, 0, h), themeHex("axis-y"))
-    );
+    const { step, major } = buildGridLines(this.grid, extent, toUnit);
 
     const format = (v: number) => `${Number(v.toPrecision(6)).toLocaleString()} ${unitLabel}`;
     this.callbacks.onGridChanged?.(`Grilla: ${format(step)} · líneas mayores ${format(major)}`);
@@ -3148,6 +3060,21 @@ export class Viewer3D {
   }
 
   /** Vistas con nombre (atajos 1, 3, 7 y Ctrl): el mismo giro que el cubo */
+  /** Dónde está la cámara (en metros), para pasarla a Diseñar */
+  getCameraPose(): CameraPose {
+    return this.cameraRig.pose(this.gridUnits.metersPerUnit);
+  }
+
+  /**
+   * La cámara de Diseñar al volver: se aplica ya y también a la malla que
+   * llegue enseguida (la pieza recién convertida), en vez de reencuadrar.
+   */
+  setCameraPose(pose: CameraPose): void {
+    this.cameraRig.setPose(pose, this.gridUnits.metersPerUnit);
+    this.pendingPose = { pose, until: performance.now() + 4000 };
+    this.placeLights();
+  }
+
   setView(name: string): void {
     const directions: Record<string, Vec3> = {
       front: [0, 0, 1],
