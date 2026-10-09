@@ -21,6 +21,8 @@ export class NavDrag {
     y: number;
     /** Cursor dibujado mientras el puntero está bloqueado */
     cursor?: { el: HTMLDivElement; x: number; y: number };
+    /** `controls` estaban encendidos al empezar (se apagan durante el arrastre) */
+    controls: boolean;
   };
 
   constructor(
@@ -51,7 +53,11 @@ export class NavDrag {
 
   start(e: PointerEvent, mode: "rotate" | "pan", lock = true) {
     this.stop();
-    this.drag = { mode, id: e.pointerId, x: e.clientX, y: e.clientY };
+    // `OrbitControls` (que ve el mismo pointerdown después) quiere capturar el
+    // puntero, y con el bloqueo pedido el navegador lo rechaza con un error:
+    // apagados mientras dura el arrastre, no lo intentan
+    this.drag = { mode, id: e.pointerId, x: e.clientX, y: e.clientY, controls: this.controls.enabled };
+    this.controls.enabled = false;
     try {
       this.element.setPointerCapture(e.pointerId);
     } catch {
@@ -72,6 +78,7 @@ export class NavDrag {
     const d = this.drag;
     this.drag = undefined;
     d?.cursor?.el.remove();
+    if (d?.controls) this.controls.enabled = true;
     if (document.pointerLockElement === this.element) document.exitPointerLock();
   }
 

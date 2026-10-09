@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import { THEME_EVENT, themeHex } from "./theme";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { NavDrag } from "./navDrag";
+import { CameraRig } from "./cameraRig";
 import { TransformControls } from "three/addons/controls/TransformControls.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
 import { boneWeight, paintRow } from "./weightPaint";
@@ -15,7 +15,6 @@ import { boundsAfter, type FloorCandidate } from "./placement";
 import type { Pose, Quat, Vec3 } from "./animation";
 import { chainAround, type BoneShape, type JointFrame, type RigControl } from "./rig";
 import { boundaryPoints, diskDirection, type JointLimits } from "./jointLimits";
-import { ViewCube } from "./ViewCube";
 import { installDqSkinning, setDqSkinning } from "./dqSkinning";
 import { installAutoSmooth, setAutoSmooth } from "./autoSmooth";
 
@@ -435,8 +434,8 @@ export class Viewer3D {
   private camera: THREE.PerspectiveCamera;
   private renderer: THREE.WebGLRenderer;
   private controls: OrbitControls;
-  /** Girar y desplazar sin tope en los polos (el zoom queda en `controls`) */
-  private nav!: NavDrag;
+  /** Navegación sin tope, cubo de vistas y encuadre (los mismos que en Diseñar) */
+  private cameraRig!: CameraRig;
 
   // Groups
   private meshGroup: THREE.Group;
@@ -540,14 +539,10 @@ export class Viewer3D {
   /** Suelta de una vez los listeners globales en `dispose` */
   private readonly listeners = new AbortController();
   private resizeObserver: ResizeObserver | null = null;
-  /** Cubo de orientación de la esquina */
-  private viewCube = new ViewCube();
   /** El último clic derecho canceló una operación modal */
   private suppressContextMenu = false;
-  /** Cursor del lienzo antes de pasar sobre el cubo */
-  private cursorBeforeCube: string | null = null;
-  /** Giro animado de la cámara hacia una vista del cubo */
-  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; up: THREE.Vector3; start: number } | null = null;
+  /** Dónde se apretó el derecho (sin moverse al soltar: menú) */
+  private rightDown: { x: number; y: number } | null = null;
 
   // Callbacks
   private callbacks: ViewerCallbacks = {};
@@ -730,7 +725,7 @@ export class Viewer3D {
     this.controls.update();
     // También durante la amortiguación, tras soltar el botón
     this.controls.addEventListener("change", () => this.requestRender());
-    this.nav = new NavDrag(this.camera, this.controls, this.canvas, () => this.requestRender());
+    this.cameraRig = new CameraRig(this.camera, this.controls, this.canvas, () => this.requestRender());
 
     // Groups
     this.meshGroup = new THREE.Group();
@@ -875,14 +870,19 @@ export class Viewer3D {
       }
       this.configureNavigation(e);
     }, { capture: true, signal });
-    this.canvas.addEventListener("contextmenu", (e) => {
-      e.preventDefault();
+    // El menú va al soltar el derecho sin arrastrar (arrastrando desplaza la
+    // vista, como en Diseñar); el evento del navegador llega al apretar
+    this.canvas.addEventListener("contextmenu", (e) => e.preventDefault(), { signal });
+    this.canvas.addEventListener("pointerup", (e) => {
+      if (e.button !== 2) return;
+      const down = this.rightDown;
+      this.rightDown = null;
       // El clic derecho que canceló G/R/F no abre el menú
       if (this.suppressContextMenu) {
         this.suppressContextMenu = false;
         return;
       }
-      this.callbacks.onContextMenu?.(e.clientX, e.clientY);
+      if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) <= 4) this.callbacks.onContextMenu?.(e.clientX, e.clientY);
     }, { signal });
     window.addEventListener("wheel", (e) => {
       if (e.target === this.canvas) this.onTrackpadWheel(e);
@@ -939,7 +939,12 @@ export class Viewer3D {
     // con OrbitControls
     const dolly = (e.ctrlKey || e.metaKey) && !e.shiftKey;
     const button = e.button === 1 || (e.button === 0 && e.altKey && !this.modal);
-    if (button && !dolly && this.controls.enabled) this.nav.start(e, e.shiftKey ? "pan" : "rotate");
+    if (button && !dolly && this.controls.enabled) this.cameraRig.nav.start(e, e.shiftKey ? "pan" : "rotate");
+    // El derecho arrastrando desplaza (sin bloquear el puntero: soltado quieto abre el menú)
+    if (e.button === 2 && !this.modal) {
+      this.rightDown = { x: e.clientX, y: e.clientY };
+      if (this.controls.enabled) this.cameraRig.nav.start(e, "pan", false);
+    }
     const none = null as unknown as THREE.MOUSE;
     this.controls.mouseButtons = {
       LEFT: e.altKey && !this.modal && dolly ? THREE.MOUSE.DOLLY : none,
@@ -977,51 +982,16 @@ export class Viewer3D {
 
   /** Clic en el cubo: la cámara va a la vista de esa cara, arista o vértice */
   private onViewCubeDown(e: PointerEvent): boolean {
-    if (!this.viewCube.contains(this.canvas, e.clientX, e.clientY)) return false;
-    const dir = this.viewCube.pick(this.canvas, e.clientX, e.clientY);
-    if (!dir) return false;
-    this.lookFrom([dir.x, dir.y, dir.z]);
-    return true;
+    return this.cameraRig.cubeDown(e.clientX, e.clientY);
   }
 
   /** Lleva la cámara (con un giro corto) a mirar desde `dir` hacia el centro de la vista */
   lookFrom(direction: Vec3): void {
-    const dir = new THREE.Vector3(...direction);
-    // Vista cenital pura: un pelo hacia el frente para que "arriba" en pantalla sea −Z
-    if (dir.x === 0 && dir.z === 0) dir.z = 1e-3;
-    const from = this.camera.position.clone().sub(this.controls.target);
-    const turn = new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), dir.normalize());
-    this.viewTransition = { from, turn, up: this.camera.up.clone(), start: performance.now() };
+    this.cameraRig.lookFrom(new THREE.Vector3(...direction));
   }
 
   private updateViewCubeHover(e: PointerEvent): void {
-    const over = e.target === this.canvas && !this.modal && e.buttons === 0
-      ? this.viewCube.pick(this.canvas, e.clientX, e.clientY)
-      : null;
-    this.viewCube.setHover(over);
-    if (over && this.cursorBeforeCube === null) {
-      this.cursorBeforeCube = this.canvas.style.cursor;
-      this.canvas.style.cursor = "pointer";
-    } else if (!over && this.cursorBeforeCube !== null) {
-      this.canvas.style.cursor = this.cursorBeforeCube;
-      this.cursorBeforeCube = null;
-    }
-  }
-
-  /** Avanza el giro hacia la vista elegida en el cubo (~0,3 s, con frenado) */
-  private stepViewTransition(): void {
-    const transition = this.viewTransition;
-    if (!transition) return;
-    const t = Math.min(1, (performance.now() - transition.start) / 300);
-    const eased = 1 - Math.pow(1 - t, 3);
-    const turn = new THREE.Quaternion().slerp(transition.turn, eased);
-    this.camera.position.copy(this.controls.target).add(transition.from.clone().applyQuaternion(turn));
-    // Si se había dado la vuelta por encima, vuelve con Y arriba
-    this.camera.up.copy(transition.up).lerp(new THREE.Vector3(0, 1, 0), eased).normalize();
-    if (this.camera.up.lengthSq() < 0.5) this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(this.controls.target);
-    if (t < 1) this.requestRender();
-    else this.viewTransition = null;
+    this.cameraRig.cubeHover(e.clientX, e.clientY, e.target === this.canvas && !this.modal && e.buttons === 0);
   }
 
   private onPointerDown(e: PointerEvent): void {
@@ -1830,15 +1800,15 @@ export class Viewer3D {
 
   private animate = (): void => {
     this.animationId = null;
-    if (this.viewTransition) {
-      this.stepViewTransition();
+    if (this.cameraRig.moving) {
+      this.cameraRig.step();
       // Sin arrastre residual de la amortiguación durante el giro
-      this.controls.enableDamping = this.viewTransition === null;
+      this.controls.enableDamping = !this.cameraRig.moving;
     }
     // Si la cámara sigue amortiguando, su evento "change" pide el siguiente
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
-    this.viewCube.render(this.renderer, this.camera, this.controls.target);
+    this.cameraRig.renderCube(this.renderer);
     this.frameCount++;
   };
 
@@ -3092,7 +3062,7 @@ export class Viewer3D {
   applyTheme(): void {
     (this.scene.background as THREE.Color).setHex(themeHex("viewport"));
     this.rebuildGrid();
-    this.viewCube.applyTheme();
+    this.cameraRig.viewCube.applyTheme();
     this.drawMeasure();
   }
 
@@ -3224,7 +3194,7 @@ export class Viewer3D {
     this.clearSkeleton();
     this.clearCloud();
     this.cloudOverlay?.remove();
-    this.viewCube.dispose();
+    this.cameraRig.viewCube.dispose();
     this.renderer.dispose();
   }
 
@@ -4834,22 +4804,8 @@ export class Viewer3D {
   private fitCamera(): void {
     const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
     if (!box) return;
-    this.viewTransition = null;
-
-    const center = box.getCenter(new THREE.Vector3());
-    const size = box.getSize(new THREE.Vector3());
-
-    const maxDim = Math.max(size.x, size.y, size.z);
-    const distance = maxDim * 2;
-
-    this.camera.position.set(
-      center.x + distance,
-      center.y + distance * 0.5,
-      center.z + distance
-    );
-    this.camera.up.set(0, 1, 0);
-    this.controls.target.copy(center);
-    this.controls.update();
+    // Como en Diseñar: entera en pantalla, mirando desde donde se miraba
+    this.cameraRig.frame(box.getBoundingSphere(new THREE.Sphere()));
     // Las luces se ubican alrededor del modelo
     this.placeLights();
   }

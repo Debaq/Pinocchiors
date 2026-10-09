@@ -3494,6 +3494,44 @@ const scenarios = {
     if (JSON.parse(await selected()).length !== 1) throw new Error(`sin Ctrl: ${await selected()}`);
   },
 
+  async "visor principal: derecho desplaza o abre el menú, Ver todo encuadra"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Malla generada")`)); t++) await sleep(250);
+    await sleep(1000);
+    const rect = await b.eval(`(() => { const r = window.__viewer().canvas.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; })()`);
+    const [cx, cy] = [rect[0] + rect[2] * 0.3, rect[1] + rect[3] * 0.6];
+    const target = () => b.eval(`window.__viewer().controls.target.toArray()`);
+    const menuOpen = () => b.eval(`!!document.querySelector('[role=menu]')`);
+    // Clic derecho quieto: menú
+    await b.click(cx, cy, { button: "right", buttons: 2, wait: 800 });
+    if (!(await menuOpen())) throw new Error("el clic derecho no abrió el menú");
+    await b.eval(`document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+    await sleep(400);
+    if (await menuOpen()) await b.click(rect[0] + 5, rect[1] + 5, { wait: 400 });
+    // Arrastrar con el derecho: desplaza y no abre el menú
+    const t0 = await target();
+    await b.mouse("mouseMoved", cx, cy, { buttons: 0 });
+    await b.mouse("mousePressed", cx, cy, { button: "right", buttons: 2 });
+    for (let i = 1; i <= 15; i++) {
+      await b.mouse("mouseMoved", cx + i * 6, cy, { button: "right", buttons: 2 });
+      await sleep(20);
+    }
+    await b.mouse("mouseReleased", cx + 90, cy, { button: "right", buttons: 0 });
+    await sleep(500);
+    const t1 = await target();
+    if (!(Math.hypot(...t1.map((v, i) => v - t0[i])) > 1e-4)) throw new Error("el derecho no desplazó");
+    if (await menuOpen()) throw new Error("arrastrar con el derecho abrió el menú");
+    // Ver todo: el centro de giro vuelve al centro de la caja y entra entera
+    await b.eval(`window.__viewer().resetView()`);
+    await sleep(500);
+    const t2 = await target();
+    if (Math.hypot(...t2.map((v, i) => v - t0[i])) > Math.hypot(...t1.map((v, i) => v - t0[i]))) throw new Error(`Ver todo no volvió: ${t0} ${t2}`);
+  },
+
   async "objetos: el remallado se rehace si cambia el diseño"(b) {
     await begin(b);
     await b.eval(`window.__cadStore.commit((d) => {

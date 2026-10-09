@@ -6,11 +6,10 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { NavDrag } from "./navDrag";
+import { CameraRig } from "./cameraRig";
 import { THEME_EVENT, themeHex } from "./theme";
 import { deviationColor, ellipsePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
-import { ViewCube } from "./ViewCube";
 
 export type BasePlane = "xy" | "xz" | "yz";
 
@@ -128,7 +127,8 @@ export class CadViewer {
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
   /** Girar y desplazar sin tope en los polos (el zoom queda en `controls`) */
-  private nav: NavDrag;
+  /** Navegación, cubo de vistas y encuadre, como en el visor principal */
+  private rig: CameraRig;
   private raycaster = new THREE.Raycaster();
   private resizeObserver: ResizeObserver;
   private frame = 0;
@@ -168,9 +168,7 @@ export class CadViewer {
   private section: THREE.Plane | null = null;
   private sectionGroup = new THREE.Group();
   /** Cubo de vistas en la esquina superior derecha */
-  private viewCube = new ViewCube();
   /** Giro de cámara en curso hacia una vista (ver `lookFrom`) */
-  private viewTransition: { from: THREE.Vector3; turn: THREE.Quaternion; up: THREE.Vector3; start: number } | null = null;
   /** Centro de masa: tres trazos con los colores de los ejes */
   private centerMark?: THREE.LineSegments;
 
@@ -196,16 +194,21 @@ export class CadViewer {
     const none = null as unknown as THREE.MOUSE;
     this.controls.mouseButtons = { LEFT: none, MIDDLE: none, RIGHT: none };
     this.controls.addEventListener("change", () => this.requestRender());
-    this.nav = new NavDrag(this.camera, this.controls, this.renderer.domElement, () => this.requestRender());
+    this.rig = new CameraRig(this.camera, this.controls, this.renderer.domElement, () => this.requestRender());
     // Como el visor principal: botón del medio orbita, Mayús+medio desplaza, el
     // derecho desplaza; Alt + izquierdo también orbita (el izquierdo solo queda
     // para elegir y dibujar)
     this.renderer.domElement.addEventListener(
       "pointerdown",
       (e) => {
-        if (e.button === 1 || (e.button === 0 && e.altKey)) this.nav.start(e, e.shiftKey ? "pan" : "rotate");
+        // Ctrl + medio (o + Alt e izquierdo): acercar arrastrando, como en el visor principal
+        const dolly = (e.ctrlKey || e.metaKey) && !e.shiftKey;
+        const none = null as unknown as THREE.MOUSE;
+        this.controls.mouseButtons = { LEFT: dolly && e.altKey ? THREE.MOUSE.DOLLY : none, MIDDLE: dolly ? THREE.MOUSE.DOLLY : none, RIGHT: none };
+        if (dolly && (e.button === 1 || (e.button === 0 && e.altKey))) return;
+        if (e.button === 1 || (e.button === 0 && e.altKey)) this.rig.nav.start(e, e.shiftKey ? "pan" : "rotate");
         // Sin bloquear: el clic derecho sin arrastre abre el menú
-        else if (e.button === 2) this.nav.start(e, "pan", false);
+        else if (e.button === 2) this.rig.nav.start(e, "pan", false);
       },
       { capture: true },
     );
@@ -236,7 +239,7 @@ export class CadViewer {
 
   private onTheme = () => {
     this.applyTheme();
-    this.viewCube.applyTheme();
+    this.rig.viewCube.applyTheme();
     this.requestRender();
   };
 
@@ -264,10 +267,11 @@ export class CadViewer {
     if (this.frame) return;
     this.frame = requestAnimationFrame(() => {
       this.frame = 0;
-      this.stepViewTransition();
+      // Se llama dentro del cuadro (con `frame` ya en 0): si sigue girando pide el siguiente
+      this.rig.step();
       this.scaleHandle();
       this.renderer.render(this.scene, this.camera);
-      this.viewCube.render(this.renderer, this.camera, this.controls.target);
+      this.rig.renderCube(this.renderer);
       this.onRender?.();
     });
   }
@@ -1148,59 +1152,19 @@ export class CadViewer {
 
   // ─── Vistas ─────────────────────────────────────────────────────────────
 
-  /**
-   * Lleva la cámara (con un giro corto) a mirar hacia el centro de la vista
-   * desde `direction` (en el visor, Y arriba); Z del CAD queda arriba en pantalla.
-   */
-  private lookFromView(direction: THREE.Vector3) {
-    const dir = direction.clone().normalize();
-    // Vista cenital o desde abajo: un pelo hacia el frente para que +Y del CAD quede arriba
-    if (Math.abs(dir.x) < 1e-9 && Math.abs(dir.z) < 1e-9) dir.z = 1e-3 * Math.sign(dir.y || 1);
-    dir.normalize();
-    const from = this.camera.position.clone().sub(this.controls.target);
-    const turn = new THREE.Quaternion().setFromUnitVectors(from.clone().normalize(), dir);
-    this.viewTransition = { from, turn, up: this.camera.up.clone(), start: performance.now() };
-    this.requestRender();
-  }
-
   /** Mira desde una dirección del CAD (mm, Z arriba): [0, −1, 0] = de frente */
   lookFrom(direction: P3) {
-    this.lookFromView(this.dirToView(direction));
-  }
-
-  /** Avanza el giro hacia la vista elegida (~0,3 s, con frenado) */
-  private stepViewTransition() {
-    const t0 = this.viewTransition;
-    if (!t0) return;
-    const t = Math.min(1, (performance.now() - t0.start) / 300);
-    const eased = 1 - Math.pow(1 - t, 3);
-    const turn = new THREE.Quaternion().slerp(t0.turn, eased);
-    this.camera.position.copy(this.controls.target).add(t0.from.clone().applyQuaternion(turn));
-    // De un sketch se puede venir con la cámara inclinada: vuelve a Y arriba
-    this.camera.up.copy(t0.up).lerp(new THREE.Vector3(0, 1, 0), eased).normalize();
-    // Desde una vista de cabeza el promedio pasa por cero
-    if (this.camera.up.lengthSq() < 0.5) this.camera.up.set(0, 1, 0);
-    this.camera.lookAt(this.controls.target);
-    this.controls.update();
-    // Se llama dentro del cuadro (con `frame` ya en 0): pide el siguiente
-    if (t < 1) this.requestRender();
-    else this.viewTransition = null;
+    this.rig.lookFrom(this.dirToView(direction));
   }
 
   /** Clic en el cubo de vistas: gira hacia esa cara, arista o vértice. `true` si lo usó */
   cubeDown(clientX: number, clientY: number): boolean {
-    if (!this.viewCube.contains(this.renderer.domElement, clientX, clientY)) return false;
-    const dir = this.viewCube.pick(this.renderer.domElement, clientX, clientY);
-    if (!dir) return false;
-    this.lookFromView(dir);
-    return true;
+    return this.rig.cubeDown(clientX, clientY);
   }
 
-  /** Resalta la zona del cubo bajo el puntero; `true` si está sobre él */
+  /** Resalta la zona del cubo bajo el puntero; `true` si está sobre él (el cursor lo pone CadView) */
   cubeHover(clientX: number, clientY: number): boolean {
-    const dir = this.viewCube.pick(this.renderer.domElement, clientX, clientY);
-    if (this.viewCube.setHover(dir)) this.requestRender();
-    return dir !== null;
+    return this.rig.cubeHover(clientX, clientY, true, false);
   }
 
   /**
@@ -1348,7 +1312,7 @@ export class CadViewer {
   /** Dibuja ya, sin esperar al cuadro (para leer píxeles en las pruebas) */
   renderNow() {
     this.renderer.render(this.scene, this.camera);
-    this.viewCube.render(this.renderer, this.camera, this.controls.target);
+    this.rig.renderCube(this.renderer);
   }
 
   /** Primer impacto que no quedó cortado por la vista de corte */
@@ -1473,14 +1437,7 @@ export class CadViewer {
     if (this.planesGroup.visible) box.expandByObject(this.planesGroup);
     if (box.isEmpty()) box.setFromCenterAndSize(new THREE.Vector3(), new THREE.Vector3(100, 100, 100).divideScalar(this.mmPerUnit));
     const sphere = box.getBoundingSphere(new THREE.Sphere());
-    const dir = this.camera.position.clone().sub(this.controls.target).normalize();
-    if (dir.lengthSq() < 1e-9) dir.set(0.6, 0.5, 0.8).normalize();
-    const dist = sphere.radius / Math.sin((this.camera.fov * Math.PI) / 360) * 1.1;
-    this.controls.target.copy(sphere.center);
-    this.camera.position.copy(sphere.center).addScaledVector(dir, dist);
-    this.camera.near = dist / 1000;
-    this.camera.far = dist * 100;
-    this.camera.updateProjectionMatrix();
+    this.rig.frame(sphere);
     const size = Math.max(sphere.radius * 4, 1);
     this.scene.remove(this.grid);
     this.grid.geometry.dispose();
@@ -1620,7 +1577,7 @@ export class CadViewer {
     this.setComparison(null, null);
     this.setScan(null);
     this.setSketch(null);
-    this.viewCube.dispose();
+    this.rig.viewCube.dispose();
     this.renderer.dispose();
     this.renderer.domElement.remove();
   }
