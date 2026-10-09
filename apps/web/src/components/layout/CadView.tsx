@@ -6,10 +6,11 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { outlineContours } from "../../lib/sketchText";
-import { addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, type Geometry, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
+import { constraintGlyphs } from "../../lib/sketchGlyphs";
 import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -81,6 +82,11 @@ const TOOLS: ToolDef[] = [
 
 /** Nombre de cada familia de variantes (para el botón que abre la lista) */
 const FAMILY_MENU: Record<string, string> = { line: "Más líneas", rect: "Más rectángulos", circle: "Más círculos", arc: "Más arcos", slot: "Más ranuras" };
+
+/** Herramientas en las que un clic elige algo del sketch: se resalta lo que está bajo el mouse */
+const PRESELECT = new Set<SketchTool>(["select", "trim", "extend", "split", "circle_tan"]);
+/** Tope de íconos de restricciones a la vista */
+const MAX_GLYPHS = 500;
 
 /** Herramientas que transforman lo elegido */
 const TRANSFORMS: SketchTool[] = ["move", "copy", "rotate", "scale"];
@@ -291,6 +297,11 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
+  // Lazo libre (Ctrl+arrastrar en vacío con Elegir): sus puntos en pantalla
+  const [lasso, setLasso] = createSignal<[number, number][]>();
+  let lassoAdditive = false;
+  // Entidad o punto bajo el mouse (preselección)
+  const [preHover, setPreHover] = createSignal<number>();
   // Para el doble clic sobre una entidad (elige la cadena)
   let lastEntityClick: { id: number; t: number } | undefined;
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
@@ -715,7 +726,14 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketch: s.sketch,
       regions: s.regions,
       selected: ui.selection(),
-      hover: [...ui.hoverIds(), ...(snapView()?.refs ?? []), ...tanPicks().map((x) => x.entity)],
+      hover: [
+        ...ui.hoverIds(),
+        ...(snapView()?.refs ?? []),
+        ...tanPicks().map((x) => x.entity),
+        ...(preHover() !== undefined ? [preHover()!] : []),
+        // Lo que atan las restricciones elegidas
+        ...ui.selectedConstraints().flatMap((i) => (s.sketch.constraints[i] ? constraintIds(s.sketch.constraints[i]) : [])),
+      ],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
       hideConstruction: !ui.sketchShow().construction,
@@ -805,6 +823,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (t === "select") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const h = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8);
+      if (!e.shiftKey) ui.setSelectedConstraints([]);
       if (h.point !== undefined) {
         dragging = h.point;
         if (e.shiftKey) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
@@ -813,9 +832,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       if (h.entity !== undefined) {
         const id = h.entity;
-        // Doble clic: toda la cadena unida por los extremos
-        const now = performance.now();
-        if (lastEntityClick && lastEntityClick.id === id && now - lastEntityClick.t < 450) {
+        // Doble clic: toda la cadena unida por los extremos (con la hora del evento: si la
+        // página está ocupada, el segundo clic se procesa tarde pero llegó a tiempo)
+        const now = e.timeStamp;
+        if (lastEntityClick && lastEntityClick.id === id && now - lastEntityClick.t < 500) {
           lastEntityClick = undefined;
           const chain = connectedChain(s.sketch, id);
           ui.setSelection((sel) => (e.shiftKey ? [...new Set([...sel, ...chain])] : chain));
@@ -823,6 +843,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         }
         lastEntityClick = { id, t: now };
         ui.setSelection((sel) => (e.shiftKey ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
+        return;
+      }
+      // En vacío con Ctrl: lazo libre
+      if (e.ctrlKey || e.metaKey) {
+        lassoAdditive = e.shiftKey;
+        setLasso([[e.clientX, e.clientY]]);
         return;
       }
       // En vacío: arrastrar elige por caja (Mayús suma)
@@ -1419,6 +1445,19 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    const ls = lasso();
+    if (ls && (e.buttons & 1) === 1) {
+      const last = ls[ls.length - 1];
+      if (Math.hypot(e.clientX - last[0], e.clientY - last[1]) >= 3) setLasso([...ls, [e.clientX, e.clientY]]);
+      return;
+    }
+    // Preselección: lo que elegiría un clic, resaltado
+    const ss = ui.session();
+    if (ss && viewer && e.buttons === 0 && PRESELECT.has(ui.tool())) {
+      const raw = viewer.planePoint(e.clientX, e.clientY, ss.plane);
+      const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
+      setPreHover(h.point ?? h.entity);
+    } else if (preHover() !== undefined) setPreHover(undefined);
     if (handleDrag) {
       const d = handleDrag;
       if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
@@ -1488,6 +1527,30 @@ export const CadView: Component<CadViewProps> = (props) => {
       return [...base, ...found.filter((p) => !seen.has(key(p)))];
     });
   };
+  /** Lazo: lo que queda entero adentro (entidades y puntos) */
+  const finishLasso = () => {
+    const poly = lasso()!;
+    setLasso(undefined);
+    const s = ui.session();
+    if (!s || !viewer || poly.length < 3) return;
+    const inside = ([x, y]: [number, number]) => {
+      let ins = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const [a, b] = [poly[i], poly[j]];
+        if (a[1] > y !== b[1] > y && x < ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0]) ins = !ins;
+      }
+      return ins;
+    };
+    const scr = (p: P2) => viewer!.screenOf(planeToWorld(s.plane, p));
+    const point = new Map(s.sketch.points.map((q) => [q.id, [q.x, q.y] as P2]));
+    const found: number[] = [];
+    for (const e of s.sketch.entities) {
+      const pl = e.geometry.type === "point" ? [point.get(e.geometry.point)].filter((p): p is P2 => !!p) : entityPolyline(e.geometry, point);
+      if (pl?.length && pl.map(scr).every(inside)) found.push(e.id);
+    }
+    for (const q of s.sketch.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
+    ui.setSelection((cur) => (lassoAdditive ? [...new Set([...cur, ...found])] : found));
+  };
   // Selección del sketch antes de empezar la caja (con Mayús se suma a ella)
   let sketchBoxBefore: number[] = [];
   /**
@@ -1525,6 +1588,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
     ui.endDrag();
+    if (lasso()) return finishLasso();
     if (handleDrag) {
       const d = handleDrag;
       handleDrag = undefined;
@@ -1746,6 +1810,25 @@ export const CadView: Component<CadViewProps> = (props) => {
   onMount(() => window.addEventListener("keydown", onKey, true));
   onCleanup(() => window.removeEventListener("keydown", onKey, true));
 
+  /** Íconos de las restricciones: en fila junto a lo que atan */
+  const glyphs = createMemo(() => {
+    viewTick();
+    const s = ui.session();
+    if (!s || !viewer || !ui.sketchShow().constraints) return [];
+    const rect = container.getBoundingClientRect();
+    const count = new Map<string, number>();
+    const sel = new Set(ui.selectedConstraints());
+    const conflict = new Set(s.report?.conflicting ?? []);
+    return constraintGlyphs(s.sketch)
+      .slice(0, MAX_GLYPHS)
+      .map((g) => {
+        const k = count.get(g.host) ?? 0;
+        count.set(g.host, k + 1);
+        const [x, y] = viewer!.screenOf(planeToWorld(s.plane, g.at));
+        return { ...g, x: x - rect.left + 10 + k * 15, y: y - rect.top + 12, selected: sel.has(g.index), conflict: conflict.has(g.index) };
+      });
+  });
+
   /** Cotas del sketch en edición: dónde dibujar cada valor */
   const dimensions = createMemo(() => {
     viewTick();
@@ -1943,6 +2026,54 @@ export const CadView: Component<CadViewProps> = (props) => {
             {SNAP_GLYPHS[v().kind].glyph} {SNAP_GLYPHS[v().kind].label}
           </span>
         )}
+      </Show>
+
+      {/* Íconos de restricciones: clic elige (Mayús suma), Supr borra */}
+      <Index each={glyphs()}>
+        {(g) => (
+          <button
+            data-constraint-glyph={g().index}
+            class={clsx(
+              "absolute -translate-x-1/2 -translate-y-1/2 min-w-4 h-4 px-0.5 rounded text-[10px] leading-none border flex items-center justify-center",
+              g().selected
+                ? "bg-cyan text-bg border-cyan"
+                : g().conflict
+                  ? "bg-bg/90 text-error border-error"
+                  : "bg-bg/80 text-text-muted border-border hover:text-text hover:border-cyan",
+              ui.tool() !== "select" && "pointer-events-none",
+            )}
+            style={{ left: `${g().x}px`, top: `${g().y}px` }}
+            title={CONSTRAINT_LABELS[ui.session()?.sketch.constraints[g().index]?.type ?? "coincident"]}
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseEnter={() => {
+              const c = ui.session()?.sketch.constraints[g().index];
+              ui.setHoverIds(c ? constraintIds(c) : []);
+            }}
+            onMouseLeave={() => ui.setHoverIds([])}
+            onClick={(e) => {
+              const i = g().index;
+              if (e.shiftKey) ui.setSelectedConstraints((cur) => (cur.includes(i) ? cur.filter((x) => x !== i) : [...cur, i]));
+              else {
+                ui.setSelectedConstraints([i]);
+                ui.setSelection([]);
+              }
+            }}
+          >
+            {g().glyph}
+          </button>
+        )}
+      </Index>
+
+      {/* Lazo libre mientras se arrastra */}
+      <Show when={lasso()}>
+        {(ls) => {
+          const r = () => container.getBoundingClientRect();
+          return (
+            <svg class="absolute inset-0 w-full h-full pointer-events-none" data-lasso>
+              <polygon points={ls().map(([x, y]) => `${x - r().left},${y - r().top}`).join(" ")} class="fill-cyan/10 stroke-cyan" stroke-dasharray="4 3" />
+            </svg>
+          );
+        }}
       </Show>
 
       {/* Cotas del sketch: clic para cambiar el valor */}
@@ -2337,7 +2468,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 )}
               </Show>
               <div class="w-px h-5 bg-border mx-1" />
-              <For each={[["dims", "Cotas"], ["construction", "Constr."], ["points", "Puntos"]] as const}>
+              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"]] as const}>
                 {([k, label]) => (
                   <button
                     aria-label={`Mostrar ${label.toLowerCase()}`}

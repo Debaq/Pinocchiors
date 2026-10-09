@@ -126,6 +126,7 @@ const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "spl
 /** Qué se ve dentro del sketch */
 export interface SketchShow {
   dims: boolean;
+  constraints: boolean;
   construction: boolean;
   points: boolean;
 }
@@ -139,6 +140,8 @@ export function createCadUi(store: CadStore) {
   const [session, setSession] = createSignal<SketchSession>();
   const [tool, setTool] = createSignal<SketchTool>("line");
   const [selection, setSelection] = createSignal<number[]>([]);
+  // Restricciones elegidas (por índice): con un ícono o desde el panel; Supr las borra
+  const [selectedConstraints, setSelectedConstraints] = createSignal<number[]>([]);
   // Lo que nombra la restricción bajo el mouse en el panel (resaltado en el visor)
   const [hoverIds, setHoverIds] = createSignal<number[]>([]);
   // Selección en el visor (caras, aristas, regiones, planos), como en Onshape
@@ -167,7 +170,7 @@ export function createCadUi(store: CadStore) {
   const [message, setMessage] = createSignal<string>();
   // Modo construcción (como Onshape): lo que se dibuja sale de construcción
   const [constructionMode, setConstructionMode] = createSignal(false);
-  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, construction: true, points: true });
+  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true });
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
   const [clipboard, setClipboard] = createSignal<SketchClip>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
@@ -186,6 +189,7 @@ export function createCadUi(store: CadStore) {
   const [sketchRestored, setSketchRestored] = createSignal(0);
   const historyChanged = () => setSketchHistory({ undo: past.length, redo: future.length });
   const resetHistory = () => {
+    setSelectedConstraints([]);
     past = [];
     future = [];
     dragSaved = false;
@@ -206,6 +210,7 @@ export function createCadUi(store: CadStore) {
     batch(() => {
       setSession({ ...s, sketch });
       setSelection((sel) => sel.filter((id) => ids.has(id)));
+      setSelectedConstraints([]);
       historyChanged();
       setSketchRestored((n) => n + 1);
     });
@@ -349,6 +354,8 @@ export function createCadUi(store: CadStore) {
         if (constructionMode() && !NOT_DRAWING.has(tool())) for (const e of next.entities) if (!before.has(e.id)) e.construction = true;
         // Lo que no cambia nada (una herramienta que avisa un error) no es un paso
         if (JSON.stringify(next) !== JSON.stringify(s.sketch)) remember(s.sketch);
+        // Los índices cambian si se agregan o quitan restricciones
+        if (next.constraints.length !== s.sketch.constraints.length) setSelectedConstraints([]);
         setSession({ ...s, sketch: next });
       });
       generation++;
@@ -510,7 +517,18 @@ export function createCadUi(store: CadStore) {
       }
     },
 
+    selectedConstraints,
+    setSelectedConstraints,
+    /** Quita varias restricciones (por índice) en un paso */
+    removeConstraints(indices: number[]) {
+      const drop = new Set(indices);
+      ui.change((s) => (s.constraints = s.constraints.filter((_, i) => !drop.has(i))));
+      setSelectedConstraints([]);
+    },
+
+    /** Supr: las restricciones elegidas si hay; si no, las entidades */
     deleteSelection() {
+      if (selectedConstraints().length) return ui.removeConstraints(selectedConstraints());
       const ids = new Set(selection());
       ui.change((s) => {
         // Un texto se borra entero (alcanza con elegir una de sus curvas o su ancla)

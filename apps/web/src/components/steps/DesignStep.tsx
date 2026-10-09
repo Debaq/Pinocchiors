@@ -87,6 +87,7 @@ import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { selectByKind, type SelectKind } from "../../lib/sketchCheck";
+import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -4377,6 +4378,19 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
 
       <Section title="Restricciones">
         <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">Sin restricciones</p>}>
+          <div class="flex flex-wrap gap-1" aria-label="Elegir restricciones">
+            <Button size="sm" variant="ghost" onClick={() => ui.setSelectedConstraints(sketch().constraints.flatMap((c, i) => (isDimension(c) ? [] : [i])))}>
+              Todas las restricciones
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => ui.setSelectedConstraints(sketch().constraints.flatMap((c, i) => (isDimension(c) ? [i] : [])))}>
+              Todas las cotas
+            </Button>
+            <Show when={ui.selectedConstraints().length > 0}>
+              <Button size="sm" variant="danger" icon={<Icons.Trash size={12} />} onClick={() => ui.removeConstraints(ui.selectedConstraints())}>
+                Quitar elegidas ({ui.selectedConstraints().length})
+              </Button>
+            </Show>
+          </div>
           <div class="space-y-0.5 max-h-72 overflow-y-auto">
             <For each={sketch().constraints}>
               {(c, i) => {
@@ -4384,10 +4398,28 @@ const SketchPanel: Component<{ ui: CadUi }> = (props) => {
                 const value = () => constraintValue(c);
                 return (
                   <div
-                    class={clsx("flex items-center gap-2 px-1.5 py-0.5 rounded text-xs hover:bg-surface", conflict() ? "bg-error/15 text-error" : "text-text-muted")}
+                    class={clsx(
+                      "flex items-center gap-2 px-1.5 py-0.5 rounded text-xs hover:bg-surface",
+                      conflict() ? "bg-error/15 text-error" : ui.selectedConstraints().includes(i()) ? "bg-cyan/15 text-text" : "text-text-muted",
+                    )}
+                    data-constraint-row={i()}
                     onMouseEnter={() => ui.setHoverIds(constraintIds(c))}
                     onMouseLeave={() => ui.setHoverIds([])}
                   >
+                    <button
+                      class={clsx(
+                        "w-4 h-4 shrink-0 rounded border text-[10px] leading-none",
+                        ui.selectedConstraints().includes(i()) ? "bg-cyan text-bg border-cyan" : "border-border text-text-dim hover:text-text",
+                      )}
+                      title="Elegir la restricción (Mayús suma; Supr la quita)"
+                      onClick={(e) =>
+                        ui.setSelectedConstraints((cur) =>
+                          e.shiftKey ? (cur.includes(i()) ? cur.filter((x) => x !== i()) : [...cur, i()]) : cur.length === 1 && cur[0] === i() ? [] : [i()],
+                        )
+                      }
+                    >
+                      {GLYPHS[c.type] ?? (isDimension(c) ? "↔" : "·")}
+                    </button>
                     <button
                       class="flex-1 truncate text-left hover:text-text"
                       title="Elegir lo que restringe"

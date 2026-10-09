@@ -278,9 +278,17 @@ export class CadViewer {
       this.scaleHandle();
       this.renderer.render(this.scene, this.camera);
       this.rig.renderCube(this.renderer);
+      // Lo reemplazado se libera recién ahora: los materiales nuevos ya tomaron los
+      // programas de WebGL (liberarlo antes los dejaba sin uso y se recompilaban: ~200 ms)
+      for (const o of this.retired.splice(0)) {
+        o.geometry?.dispose();
+        (o.material as THREE.Material | undefined)?.dispose();
+      }
       this.onRender?.();
     });
   }
+  /** Objetos sacados de la escena que se liberan después del próximo cuadro */
+  private retired: THREE.Mesh[] = [];
 
   /** Dónde está la cámara (en metros), para pasarla al visor principal */
   cameraPose(): CameraPose {
@@ -806,9 +814,7 @@ export class CadViewer {
   setSketch(overlay: SketchOverlay | null) {
     for (const child of [...this.sketchGroup.children]) {
       this.sketchGroup.remove(child);
-      const o = child as THREE.Mesh;
-      o.geometry?.dispose();
-      (o.material as THREE.Material | undefined)?.dispose();
+      this.retired.push(child as THREE.Mesh);
     }
     if (!overlay) return this.requestRender();
     const { plane, sketch } = overlay;
@@ -956,10 +962,10 @@ export class CadViewer {
   private clearGroup(g: THREE.Group) {
     for (const child of [...g.children]) {
       g.remove(child);
-      const o = child as THREE.Mesh;
-      o.geometry?.dispose();
-      (o.material as THREE.Material | undefined)?.dispose();
+      this.retired.push(child as THREE.Mesh);
     }
+    // Se liberan después del próximo cuadro (ver `retired`)
+    this.requestRender();
   }
 
   /** Sketches que se ven fuera de la edición, con sus regiones elegibles */

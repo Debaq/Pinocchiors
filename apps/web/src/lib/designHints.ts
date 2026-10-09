@@ -34,6 +34,12 @@ export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
   if (ui.session())
     return [
       { keys: "Clic", label: SKETCH_CLICK[ui.tool()] ?? "dibujar" },
+      ...(ui.tool() === "select"
+        ? [
+            { keys: "Doble clic", label: "cadena" },
+            { keys: "Ctrl+arrastrar", label: "lazo" },
+          ]
+        : []),
       { keys: "Mayús", label: "sin anclajes" },
       { keys: "Q", label: "construcción" },
       { keys: "Ctrl+C / Ctrl+V", label: "copiar y pegar" },

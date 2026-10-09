@@ -2254,6 +2254,64 @@ const scenarios = {
     await b.shot("modo_construccion_y_lista");
   },
 
+  async "íconos de restricciones: elegir, quitar, ocultar, todas las cotas y lazo"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const glyphs = () => b.eval(`[...document.querySelectorAll("[data-constraint-glyph]")].map((g) => g.textContent).sort().join("")`);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(540, 440, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Círculo");
+    await b.click(760, 370);
+    await b.click(800, 370, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Elegir");
+    await sleep(500);
+    // Rectángulo: dos H y dos V
+    if ((await glyphs()) !== "HHVV") throw new Error(`íconos: "${await glyphs()}"`);
+    // Clic en un ícono: elige la restricción; Supr la quita
+    const n = (await sk()).constraints.length;
+    const g = await b.eval(`(() => { const e = document.querySelector("[data-constraint-glyph]"); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2, +e.dataset.constraintGlyph]; })()`);
+    await b.click(g[0], g[1], { wait: 300 });
+    if (JSON.stringify(await b.eval(`window.__cadUi.selectedConstraints()`)) !== JSON.stringify([g[2]])) throw new Error("el clic no eligió la restricción");
+    await b.key("Delete", "Delete", 46);
+    await sleep(800);
+    if ((await sk()).constraints.length !== n - 1) throw new Error("Supr no quitó la restricción");
+    if ((await glyphs()).length !== 3) throw new Error(`íconos tras quitar: "${await glyphs()}"`);
+    // Ocultar y mostrar
+    await b.eval(`document.querySelector('[aria-label="Mostrar restric."]').click()`);
+    await sleep(300);
+    if ((await glyphs()) !== "") throw new Error("los íconos siguen a la vista");
+    await b.eval(`document.querySelector('[aria-label="Mostrar restric."]').click()`);
+    await sleep(300);
+    // Todas las cotas desde el panel y quitarlas
+    const dims = (await sk()).constraints.filter((c) => "value" in c).length;
+    if (dims < 2) throw new Error(`cotas: ${dims}`);
+    await b.eval(`[...document.querySelector('[aria-label="Elegir restricciones"]').querySelectorAll("button")].find((x) => x.textContent.trim() === "Todas las cotas").click()`);
+    await sleep(300);
+    if ((await b.eval(`window.__cadUi.selectedConstraints().length`)) !== dims) throw new Error("no eligió todas las cotas");
+    await b.clickContains("Quitar elegidas");
+    await sleep(800);
+    if ((await sk()).constraints.some((c) => "value" in c)) throw new Error("quedaron cotas");
+    // Lazo con Ctrl+arrastrar alrededor del círculo: solo el círculo (y su centro)
+    await b.mouse("mouseMoved", 700, 310, { buttons: 0 });
+    await b.mouse("mousePressed", 700, 310, { modifiers: 2 });
+    for (const [x, y] of [[860, 310], [860, 430], [700, 430], [700, 320]]) {
+      for (let k = 1; k <= 6; k++) await b.mouse("mouseMoved", x, y, { buttons: 1, modifiers: 2 });
+      await sleep(40);
+    }
+    await b.mouse("mouseReleased", 700, 320, { modifiers: 2 });
+    await sleep(400);
+    const s = await sk();
+    const sel = await b.eval(`window.__cadUi.selection()`);
+    const circle = s.entities.find((e) => e.geometry.type === "circle");
+    if (!sel.includes(circle.id)) throw new Error(`el lazo no eligió el círculo: ${sel}`);
+    if (s.entities.some((e) => e.geometry.type === "line" && sel.includes(e.id))) throw new Error("el lazo eligió líneas de afuera");
+    await b.shot("iconos_de_restricciones");
+  },
+
   async "agujero con rosca modelada"(b) {
     // Volumen por mm de un macho M6 × 1 (perfil ISO básico)
     const rodPerMm = (d, p) => {

@@ -91,6 +91,18 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 - **Preselección**: resaltar la entidad o el punto bajo el mouse en el visor.
 - **Selección por lazo**: arrastrar con Alt dibuja un lazo libre.
 
+*Hecha el 2026-10-09: `lib/sketchGlyphs.ts` (puro, `e2e/sketchGlyphs.test.mjs`) decide símbolo y
+lugar (en las dos entidades si ata dos; la tangencia con extremo común, en el punto; patrones
+sin ícono); `CadView` los pone en fila por lo que atan (tope 500). `cadUi.selectedConstraints`
+(Supr las quita antes que las entidades; se vacía si cambia la cantidad de restricciones o al
+deshacer). Panel: «Todas las restricciones», «Todas las cotas», «Quitar elegidas» y un ícono
+por fila para elegirla. Preselección en Elegir, Recortar, Extender, Partir y Círculo
+tangente. El lazo va con **Ctrl**+arrastrar (Alt+arrastrar ya gira la vista). De paso, elegir
+tardaba hasta ~200 ms: `setSketch` liberaba los materiales antes del cuadro y three.js
+recompilaba los programas de WebGL; ahora lo reemplazado se libera después del cuadro
+(`CadViewer.retired`), 13–27 ms por clic. El doble clic mide con `e.timeStamp` (la hora del
+evento).*
+
 ### 10. Cotas II (M, backend)
 
 - **Ángulo suplementario** (180° − el ángulo; el lado del ángulo elegido con el clic).

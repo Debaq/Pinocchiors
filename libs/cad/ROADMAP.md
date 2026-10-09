@@ -585,3 +585,9 @@ cargo test -p cad-model
   por cadena (doble clic) y todo (Ctrl+A); variantes de herramientas en listas; botón
   Construcción con modo (lo dibujado sale de construcción). Pruebas: node
   `e2e/sketchCheck.test.mjs` (9) y dos escenarios e2e.
+- **2026-10-09 Restricciones a la vista** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 9): íconos de
+  restricciones junto a la geometría (clic elige, Mayús suma, Supr quita), mostrar u ocultar,
+  elegir todas las restricciones o todas las cotas, preselección bajo el mouse, lazo con
+  Ctrl+arrastrar. Rendimiento: el visor liberaba materiales antes de dibujar y three.js
+  recompilaba los shaders en cada redibujo (~200 ms al elegir); ahora se liberan después del
+  cuadro. Pruebas: node `e2e/sketchGlyphs.test.mjs` (3) y e2e "íconos de restricciones…".
