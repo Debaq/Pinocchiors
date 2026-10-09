@@ -14,6 +14,7 @@ declare module "opentype.js" {
   }
   export interface Font {
     getPath(text: string, x: number, y: number, fontSize: number): Path;
+    getAdvanceWidth(text: string, fontSize: number): number;
   }
   export function parse(buffer: ArrayBuffer): Font;
 }

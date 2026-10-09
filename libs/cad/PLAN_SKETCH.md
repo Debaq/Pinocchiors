@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10 y 12 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 16 y 17 están hechas (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -118,6 +118,39 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     (10), unidades en `expr.rs`, node `sketchTransform.test.mjs` y `sketchGlyphs.test.mjs`, e2e
     "cotas II y restricciones II…".*
 
+16. **Entidades II**: línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en
+    arco por 3 puntos, estilo y alineación del texto, texto sobre una curva. *Hecha el
+    2026-10-09: `Geometry::EllipseArc` (el solver deja los extremos sobre la elipse; OCCT
+    `GC_MakeArcOfEllipse`, al revés con la arista invertida) y `Geometry::BSpline` (polos,
+    grado, cerrada periódica, pesos y nudos opcionales; OCCT `Geom_BSplineCurve`). La cónica
+    es una B-spline de grado 2 con el peso del medio rho / (1 − rho); la parábola, rho 0,5.
+    `SketchEntity.infinite` (de construcción, se dibuja de punta a punta y el anclaje la toma
+    entera). Herramientas nuevas en las listas de la barra (Línea infinita, Paralelogramo,
+    Arco elíptico, Spline por polos, Cónica con su rho, Parábola, Ranura arco 3 p.). Texto:
+    `SketchText.style` (negrita y cursiva con Liberation Sans Bold/Italic incluidas, +1,2 MB;
+    una fuente elegida se usa tal cual), alineación izquierda/centro/derecha respecto del
+    clic, y con una curva elegida las letras la siguen (`layoutText`; Rehacer texto vuelve a
+    seguirla, no se mueve sola si la curva cambia).*
+
+17. **Splines**: por polos y de ajuste, manijas intermedias, agregar y quitar puntos,
+    simplificar, convertir, peine de curvatura, inflexiones y radio mínimo, curvatura igual
+    (G2). *Hecha el 2026-10-09: `lib/sketchCurves.ts` (evaluación NURBS con derivadas, igual
+    que `cad_solver::bspline`), `lib/sketchSplines.ts`. Spline por polos con grado; Spline de
+    ajuste (mínimos cuadrados con los menos polos dentro de la tolerancia); manijas en puntos
+    intermedios de la spline por puntos (`Spline.handles`, OCCT `GeomAPI_Interpolate::Load`
+    con tangentes por punto); Punto en spline (en una por polos inserta un nudo: la forma no
+    cambia); quitar punto o polo; Simplificar; Convertir a spline por polos una cadena de
+    líneas, arcos y splines por puntos (las splines exactas: cada tramo de Hermite es una
+    Bézier; los arcos con ~0,03 % del radio); peine de curvatura con inflexiones y radio
+    mínimo. G2: `SketchConstraint::Curvature` (tangencia en la unión + solver
+    `EqualCurvature` con la curvatura con signo en el sentido de avance) entre una spline por
+    polos y una línea, un arco u otra por polos; tangencia con splines por polos. Una curva
+    abierta que vuelve a su comienzo cuenta como región. Las manijas de curvatura en puntos
+    intermedios no: la curvatura se maneja con los polos. Pruebas: Rust
+    `model/tests/sketch_curves.rs` (10), `solver/src/bspline.rs` (4), `occt.rs` (1); node
+    `sketchCurves.test.mjs` (7), `sketchSplines.test.mjs` (6), `sketchText.test.mjs` (+2); e2e
+    "curvas: spline por polos…".*
+
 ## Fases que faltan
 
 Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
@@ -166,27 +199,6 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 - **Vista de corte automática** al entrar (opción recordada) y **ocultar el modelo** mientras se
   dibuja.
 
-### 16. Entidades II (M, backend + C++)
-
-- **Línea infinita** (de construcción, para referencias).
-- **Paralelogramo** (como el rectángulo por 3 puntos, sin el ángulo recto).
-- **Arco elíptico** (`GC_MakeArcOfEllipse`).
-- **Parábola** y **cónica por factor rho** (B-spline racional; la parábola es rho 0,5).
-- **Ranura en arco por 3 puntos** (hoy está la de centro).
-- **Texto**: estilo (negrita, cursiva) y alineación (izquierda, centro, derecha); **texto sobre
-  una curva** (los glifos siguen una línea o un arco).
-
-### 17. Splines (M–L)
-
-- **Por puntos de control** (B-spline con polos y grado) y **de ajuste** (a partir de puntos
-  existentes, con tolerancia).
-- **Manijas de tangencia y curvatura en puntos intermedios** (hoy solo en los extremos).
-- **Agregar y quitar puntos** de una spline; **simplificar** (menos puntos dentro de una
-  tolerancia); **convertir entidades a spline**.
-- **Peine de curvatura**, **puntos de inflexión** y **radio mínimo**.
-- **Curvatura igual / continuidad G2** entre una spline y un arco u otra spline (viene de la
-  fase 12: con polos explícitos la curvatura del sketch es la del sólido).
-
 ### 18. Archivos y fórmulas (M)
 
 - **Curva por ecuación** explícita `y = f(x)` y paramétrica `x(t), y(t)` (spline por muestreo;
@@ -224,19 +236,20 @@ de corte al entrar, ocultar el modelo. — 20: sketch 3D, sobre superficie curva
 **Entidades** — ✅ punto, línea, línea de construcción, rectángulo por 2 esquinas, por centro y
 por 3 puntos, polígono inscrito y circunscrito, círculo por centro, por 2 y 3 puntos y tangente
 a 3, arco por 3 puntos, por centro, tangente y tangente desde una línea, elipse, ranura recta,
-recta por centro y en arco por centro, spline por puntos de paso, texto (fuente y tamaño). — 13:
-línea central, polilínea línea-arco. — 16: línea infinita, paralelogramo, arco elíptico,
-parábola, cónica, ranura en arco (3 puntos), estilo y alineación de texto, texto sobre curva. —
-17: spline por puntos de control, manijas de tangencia y curvatura, spline de ajuste. — 18:
+recta por centro y en arco por centro, spline por puntos de paso, texto (fuente y tamaño),
+línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en arco (3 puntos),
+estilo y alineación de texto, texto sobre curva, spline por puntos de control, manijas de
+tangencia (la curvatura, con los polos), spline de ajuste. — 13: línea central, polilínea
+línea-arco. — 18:
 curvas por ecuación explícita y paramétrica, desde archivo, imagen de calco, importar DXF/DWG.
 
 **Edición** — ✅ recortar, recortar al más cercano, extender, dividir, equidistante simple y de
 cadena, redondeo 2D, simetría, patrón lineal en una y dos direcciones, circular, mover, copiar,
 rotar, escalar, arrastrar respetando restricciones, construcción y de vuelta, mover puntos de
-spline, tangencia en los extremos de spline, eliminar. — 11: recortar con arrastre, unir,
-equidistante bidireccional y con extremos cerrados, chaflán 2D (distancia; distancia y ángulo),
-estirar, eliminar duplicados, reparar, cerrar contorno. — 13: simetría dinámica. — 17: agregar y
-eliminar puntos de spline, tangencia en puntos intermedios, simplificar, convertir a spline.
+spline, tangencia en los extremos de spline, eliminar, agregar y eliminar puntos de spline,
+tangencia en puntos intermedios, simplificar, convertir a spline. — 11: recortar con arrastre,
+unir, equidistante bidireccional y con extremos cerrados, chaflán 2D (distancia; distancia y
+ángulo), estirar, eliminar duplicados, reparar, cerrar contorno. — 13: simetría dinámica.
 
 **Referencias al modelo** — ✅ proyectar aristas, convertir entidades del modelo, mantener
 asociatividad, contorno de cara, silueta, intersección, geometría y puntos de otro sketch,
@@ -246,8 +259,8 @@ romper vínculo.
 paralelo, perpendicular, tangente, concéntrico, igual largo, igual radio, simétrico (puntos),
 punto medio, punto sobre línea y círculo, fijo, tangencia en extremos de spline, alineación con
 el origen, restricciones con geometría proyectada, coradial, simétrico de entidades, punto en
-intersección, bloqueo de entidad, punto sobre spline y elipse. — 17: curvatura igual / G2. —
-20: perforación.
+intersección, bloqueo de entidad, punto sobre spline y elipse, curvatura igual / G2. — 20:
+perforación.
 
 **Cotas** — ✅ horizontal, vertical, alineada, angular, radial, diametral, largo de arco,
 punto-línea, entre paralelas, entre centros, simétrica respecto de un eje, impulsora, conducida,
@@ -274,8 +287,8 @@ operación.
 preselección resaltada, lazo, todas las restricciones, todas las cotas.
 
 **Visualización** — ✅ mostrar/ocultar cotas, construcción y puntos, rejilla del visor, colores
-por estado, trazo por tipo, zoom al sketch, mostrar/ocultar restricciones. — 17: peine de
-curvatura, inflexión y radio mínimo.
+por estado, trazo por tipo, zoom al sketch, mostrar/ocultar restricciones, peine de curvatura,
+inflexión y radio mínimo.
 
 **Gestión** — ✅ crear, editar, terminar, descartar, renombrar, copiar y pegar entidades entre
 sketches, sketch compartido entre operaciones, deshacer y rehacer, lista de entidades, lista de

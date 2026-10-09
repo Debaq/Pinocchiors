@@ -2166,6 +2166,159 @@ const scenarios = {
     await b.shot("cotas_restricciones_2");
   },
 
+  async "curvas: spline por polos, punto en spline, tangente en la unión, cónica, paralelogramo, arco elíptico, línea infinita, ranura por 3 puntos, convertir, peine y texto sobre curva"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    const tool = async (label) => {
+      await b.clickText(label);
+      await sleep(250);
+    };
+    const esc = () => b.key("Escape", "Escape", 27);
+    const status = () => b.eval(`window.__cadUi.session().report?.status`);
+    const okStatus = async (what) => {
+      await sleep(900);
+      const st = await status();
+      if (st === "over_constrained" || st === "failed") throw new Error(`${what}: ${st}`);
+    };
+    const of = async (type) => (await sk()).entities.filter((e) => e.geometry.type === type);
+    const P = (s) => new Map(s.points.map((p) => [p.id, [p.x, p.y]]));
+    const { makeBSpline, evalAt, domain } = await import("../src/lib/sketchCurves.ts");
+    // Spline por polos: cuatro clics y Esc
+    await tool("Spline por polos");
+    for (const [x, y] of [[180, 520], [240, 400], [320, 540], [400, 420]]) await b.click(x, y, { wait: 250 });
+    await esc();
+    await sleep(800);
+    let s = await sk();
+    let bs = s.entities.find((e) => e.geometry.type === "bspline");
+    if (!bs || bs.geometry.poles.length !== 4 || bs.geometry.degree !== 3) throw new Error("spline por polos: " + JSON.stringify(bs));
+    // Un polo más con clic sobre la curva: la forma no cambia
+    const curveNow = (s, g) => makeBSpline({ poles: g.poles.map((id) => P(s).get(id)), degree: g.degree, knots: g.knots, weights: g.weights });
+    const before = curveNow(s, bs.geometry);
+    const [u0, u1] = domain(before);
+    const mid = evalAt(before, (u0 + u1) / 2);
+    await tool("Punto en spline");
+    await b.click(...(await at(mid[0], mid[1])), { wait: 1000 });
+    s = await sk();
+    bs = s.entities.find((e) => e.id === bs.id);
+    if (bs.geometry.poles.length !== 5) throw new Error(`polos después de agregar: ${bs.geometry.poles.length}`);
+    const after = curveNow(s, bs.geometry);
+    for (const u of [0.1, 0.4, 0.8]) {
+      const [p, q] = [evalAt(before, u0 + (u1 - u0) * u), evalAt(after, u0 + (u1 - u0) * u)];
+      near(Math.hypot(p[0] - q[0], p[1] - q[1]), 0, 1e-6, "misma forma");
+    }
+    // Línea que llega al primer polo: tangente en la unión
+    const first = P(s).get(bs.geometry.poles[0]);
+    await tool("Línea");
+    await b.click(...(await at(first[0] - 15, first[1] - 6)), { wait: 300 });
+    await b.click(...(await at(first[0], first[1])), { wait: 600 });
+    await esc();
+    await esc();
+    s = await sk();
+    const line = s.entities.find((e) => e.geometry.type === "line" && e.geometry.end === bs.geometry.poles[0]);
+    if (!line) throw new Error("la línea no quedó unida al primer polo");
+    await b.eval(`window.__cadUi.setSelection(${JSON.stringify([line.id, bs.id])})`);
+    await sleep(300);
+    await b.clickText("Tangentes en la unión");
+    await okStatus("tangentes en la unión");
+    s = await sk();
+    {
+      const Q = P(s);
+      const [a, c, d] = [Q.get(line.geometry.start), Q.get(bs.geometry.poles[0]), Q.get(bs.geometry.poles[1])];
+      const cross = (c[0] - a[0]) * (d[1] - c[1]) - (c[1] - a[1]) * (d[0] - c[0]);
+      near(cross / (Math.hypot(c[0] - a[0], c[1] - a[1]) * Math.hypot(d[0] - c[0], d[1] - c[1])), 0, 1e-6, "tangente en la unión");
+    }
+    // Peine de curvatura de la spline por polos
+    await b.eval(`window.__cadUi.setSelection([${bs.id}])`);
+    await sleep(300);
+    await b.clickText("Peine de curvatura");
+    await sleep(500);
+    if (!(await b.eval(`!!document.querySelector("[data-curvature]")?.textContent.includes("Radio mínimo")`))) throw new Error("no se ve la curvatura");
+    // Texto sobre la curva elegida
+    await tool("Texto");
+    await b.eval(`(() => { const i = document.querySelector('input[aria-label="Texto"]'); i.value = "AB"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await b.click(...(await at(first[0] + 2, first[1])), { wait: 1500 });
+    s = await sk();
+    const txt = (s.texts ?? []).find((t) => t.text === "AB");
+    if (!txt || txt.style?.path !== bs.id) throw new Error("texto sobre la curva: " + JSON.stringify(txt?.style));
+    await b.eval(`window.__cadUi.setSelection([])`);
+    // Cónica con rho 0,3
+    await tool("Cónica");
+    await b.eval(`(() => { const i = document.querySelector('input[aria-label="Factor rho"]'); i.value = "0.3"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    for (const [x, y] of [[500, 560], [640, 560], [570, 470]]) await b.click(x, y, { wait: 300 });
+    await sleep(600);
+    const conic = (await of("bspline")).find((e) => e.geometry.weights?.length === 3);
+    if (!conic) throw new Error("no se creó la cónica");
+    near(conic.geometry.weights[1], 0.3 / 0.7, 1e-9, "peso de la cónica");
+    // Paralelogramo
+    await tool("Paralelogramo");
+    for (const [x, y] of [[700, 560], [800, 560], [830, 480]]) await b.click(x, y, { wait: 300 });
+    await sleep(600);
+    s = await sk();
+    if (s.constraints.filter((c) => c.type === "parallel").length < 2) throw new Error("paralelogramo sin paralelas");
+    // Arco elíptico: centro, eje mayor, ancho, comienzo, fin
+    await tool("Arco elíptico");
+    for (const [x, y] of [[300, 260], [380, 260], [300, 225], [380, 250], [230, 250]]) await b.click(x, y, { wait: 300 });
+    await sleep(500);
+    await esc();
+    await okStatus("arco elíptico");
+    s = await sk();
+    const ea = s.entities.find((e) => e.geometry.type === "ellipse_arc");
+    if (!ea) throw new Error("no se creó el arco elíptico");
+    {
+      const Q = P(s);
+      const g = ea.geometry;
+      const [c, ma, mi] = [Q.get(g.center), Q.get(g.major), Q.get(g.minor)];
+      const u = [ma[0] - c[0], ma[1] - c[1]];
+      const [A, B] = [Math.hypot(...u), Math.hypot(mi[0] - c[0], mi[1] - c[1])];
+      for (const id of [g.start, g.end]) {
+        const q = [Q.get(id)[0] - c[0], Q.get(id)[1] - c[1]];
+        const x = (q[0] * u[0] + q[1] * u[1]) / A;
+        const y = (u[0] * q[1] - u[1] * q[0]) / A;
+        near((x / A) ** 2 + (y / B) ** 2, 1, 1e-6, "extremo sobre la elipse");
+      }
+    }
+    // Línea infinita
+    await tool("Línea infinita");
+    await b.click(600, 200, { wait: 300 });
+    await b.click(650, 230, { wait: 600 });
+    s = await sk();
+    const inf = s.entities.find((e) => e.infinite);
+    if (!inf || !inf.construction) throw new Error("línea infinita: " + JSON.stringify(inf));
+    // Ranura en arco por 3 puntos y el ancho
+    const arcsBefore = (await of("arc")).length;
+    await tool("Ranura arco 3 p.");
+    for (const [x, y] of [[860, 300], [930, 240], [1000, 300], [930, 255]]) await b.click(x, y, { wait: 300 });
+    await sleep(500);
+    await esc();
+    await okStatus("ranura por 3 puntos");
+    if ((await of("arc")).length < arcsBefore + 4) throw new Error("la ranura no armó sus arcos");
+    // Spline por puntos convertida a polos («Spline» también es una fila de la lista de entidades: atajo N)
+    await b.eval(`window.__cadUi.setSelection([])`);
+    await b.key("n", "KeyN", 78);
+    await sleep(250);
+    for (const [x, y] of [[200, 680], [260, 630], [330, 690]]) await b.click(x, y, { wait: 250 });
+    await esc();
+    await sleep(700);
+    s = await sk();
+    const sp = s.entities.find((e) => e.geometry.type === "spline" && !(s.texts ?? []).some((t) => t.entities.includes(e.id)));
+    if (!sp) throw new Error("no se creó la spline por puntos");
+    await b.eval(`window.__cadUi.setSelection([${sp.id}])`);
+    await sleep(300);
+    await b.clickText("Convertir a spline por polos");
+    await sleep(800);
+    s = await sk();
+    if (s.entities.some((e) => e.id === sp.id)) throw new Error("la spline por puntos sigue ahí");
+    await okStatus("todo");
+    await b.shot("curvas_16_17");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const ev = await evaluate();
+    const errs = (ev.status ?? []).filter((x) => x.state === "error");
+    if (errs.length) throw new Error("errores al recalcular: " + JSON.stringify(errs));
+  },
+
   async "rectángulo por 3 puntos, círculos por 2 y 3 puntos y tangente, polígono circunscrito, ranuras y colineal"(b) {
     await begin(b);
     await sketchOn(b);

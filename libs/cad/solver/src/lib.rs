@@ -7,6 +7,7 @@
 // Código numérico portado tal cual: índices explícitos a propósito.
 #![allow(clippy::needless_range_loop, clippy::too_many_arguments)]
 
+pub mod bspline;
 pub mod constraint;
 pub mod diagnostics;
 pub mod error;
@@ -17,7 +18,8 @@ pub mod solver;
 pub mod system;
 pub mod types;
 
-pub use constraint::{Constraint, CurvePart, closest_on_spline};
+pub use bspline::BSpline;
+pub use constraint::{BSplineRef, Constraint, CurveEnd, CurvePart, closest_on_spline};
 pub use diagnostics::{DiagnosticResult, DiagnosticStatus, diagnose};
 pub use error::{Result, SolverError};
 pub use fitting::{FitResult, PrimitiveParams, PrimitiveType};

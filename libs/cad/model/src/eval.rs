@@ -1466,14 +1466,7 @@ impl Ctx<'_> {
             }
         };
         let s = self.ev.sketches.get(sketch).ok_or("el sketch del camino no está calculado")?;
-        let ends = |id: u32| -> Option<(u32, u32)> {
-            match &s.sketch.entity(id).ok()?.geometry {
-                Geometry::Line { start, end } => Some((*start, *end)),
-                Geometry::Arc { start, end, .. } => Some((*start, *end)),
-                Geometry::Spline { points, closed: false, .. } => Some((*points.first()?, *points.last()?)),
-                _ => None,
-            }
-        };
+        let ends = |id: u32| -> Option<(u32, u32)> { s.sketch.entity(id).ok()?.geometry.ends() };
         let ids: Vec<u32> = if entities.is_empty() {
             s.sketch.entities.iter().filter(|e| !e.construction && ends(e.id).is_some()).map(|e| e.id).collect()
         } else {
@@ -1521,20 +1514,8 @@ impl Ctx<'_> {
     /// sus extremos (cada cadena, un alambre).
     fn curve_wires(&self, sketch: FeatureId, entities: &[u32]) -> R<Vec<Shape>> {
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
-        let ends = |id: u32| -> Option<(u32, u32)> {
-            match &s.sketch.entity(id).ok()?.geometry {
-                Geometry::Line { start, end } => Some((*start, *end)),
-                Geometry::Arc { start, end, .. } => Some((*start, *end)),
-                Geometry::Spline { points, closed: false, .. } => Some((*points.first()?, *points.last()?)),
-                _ => None,
-            }
-        };
-        let closed = |id: u32| {
-            matches!(
-                s.sketch.entity(id).map(|e| &e.geometry),
-                Ok(Geometry::Circle { .. } | Geometry::Ellipse { .. } | Geometry::Spline { closed: true, .. })
-            )
-        };
+        let ends = |id: u32| -> Option<(u32, u32)> { s.sketch.entity(id).ok()?.geometry.ends() };
+        let closed = |id: u32| s.sketch.entity(id).is_ok_and(|e| e.geometry.is_closed());
         let ids: Vec<u32> = if entities.is_empty() {
             s.sketch.entities.iter().filter(|e| !e.construction && (ends(e.id).is_some() || closed(e.id))).map(|e| e.id).collect()
         } else {
@@ -3034,6 +3015,11 @@ fn entity_midpoint(s: &Sketch, id: u32) -> Option<P2> {
         }
         // La spline pasa por sus puntos: el del medio está sobre la curva
         Geometry::Spline { points, .. } => p(points[points.len() / 2])?,
+        Geometry::EllipseArc { start, .. } => p(*start)?,
+        Geometry::BSpline { .. } => {
+            let pts = crate::regions::sample_entity(s, e.id).ok()?;
+            pts[pts.len() / 2]
+        }
         Geometry::Point { point } => p(*point)?,
         Geometry::Ellipse { major, .. } => p(*major)?,
     })
@@ -3160,7 +3146,52 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
                 let (a, b) = (plane.to_world(a), plane.to_world(b));
                 if piece.reversed { Curve::Arc(b, m, a) } else { Curve::Arc(a, m, b) }
             }
-            Geometry::Spline { points, closed, start_handle, end_handle } if !*closed && (start_handle.is_some() || end_handle.is_some()) => {
+            // Con manijas en puntos intermedios: la dirección en cada uno
+            Geometry::Spline { points, closed, start_handle, end_handle, handles } if !handles.is_empty() => {
+                let mut pts = points.iter().map(|p| w(*p)).collect::<R<Vec<_>>>()?;
+                let n = pts.len();
+                let mut tangents: Vec<Option<P3>> = vec![None; n];
+                for (i, h) in [(0, *start_handle), (n - 1, *end_handle)] {
+                    if !*closed && let Some(h) = h {
+                        tangents[i] = Some(sub(w(h)?, pts[i]));
+                    }
+                }
+                for [i, h] in handles {
+                    if let Some(t) = tangents.get_mut(*i as usize) {
+                        *t = Some(sub(w(*h)?, pts[*i as usize]));
+                    }
+                }
+                if piece.reversed {
+                    pts.reverse();
+                    tangents.reverse();
+                    for t in tangents.iter_mut().flatten() {
+                        *t = scale(*t, -1.0);
+                    }
+                }
+                Curve::SplineTangents { points: pts, tangents, periodic: *closed }
+            }
+            Geometry::BSpline { poles, degree, closed, weights, knots } => {
+                let mut pts = poles.iter().map(|p| w(*p)).collect::<R<Vec<_>>>()?;
+                let n = pts.len();
+                let p = (*degree as usize).clamp(1, n.max(2) - 1);
+                let mut wts = if weights.len() == n { weights.clone() } else { vec![1.0; n] };
+                let mut ks = if *closed || !knots.is_empty() { knots.clone() } else { cad_solver::bspline::clamped_uniform(n, p) };
+                if piece.reversed {
+                    pts.reverse();
+                    wts.reverse();
+                    if !*closed {
+                        let (lo, hi) = (ks[0], ks[ks.len() - 1]);
+                        ks = ks.iter().rev().map(|k| lo + hi - k).collect();
+                    }
+                }
+                Curve::BSpline { poles: pts, weights: wts, knots: ks, degree: p as u32, periodic: *closed }
+            }
+            Geometry::EllipseArc { center, major, minor, start, end } => {
+                let (c, a, b) = (w(*center)?, w(*major)?, w(*minor)?);
+                let (u, v) = (sub(a, c), sub(b, c));
+                Curve::EllipseArc { center: c, normal: plane.normal, major: normalize(u), a: norm(u), b: norm(v), start: w(*start)?, end: w(*end)?, forward: !piece.reversed }
+            }
+            Geometry::Spline { points, closed, start_handle, end_handle, .. } if !*closed && (start_handle.is_some() || end_handle.is_some()) => {
                 let mut pts = points.iter().map(|p| w(*p)).collect::<R<Vec<_>>>()?;
                 let n = pts.len();
                 // Sin manija en un extremo: la dirección hacia el punto vecino

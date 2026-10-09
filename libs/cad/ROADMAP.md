@@ -614,3 +614,11 @@ cargo test -p cad-model
   `PointOnEllipse`, `PointOnCurveSpline`. G2 pasa a la fase 17. Pruebas: Rust
   `model/tests/sketch_constraints2.rs` (10) y unidades en `expr.rs`, node (3 nuevas) y e2e
   "cotas II y restricciones II…".
+- **2026-10-09 Entidades II y splines** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fases 16 y 17):
+  B-spline por polos en el modelo, el solver y OCCT (racional: cónicas y parábolas; cerrada
+  periódica), arco elíptico, línea infinita, paralelogramo, ranura en arco por 3 puntos;
+  texto en negrita, cursiva, alineado y sobre una curva; spline de ajuste, manijas en puntos
+  intermedios, agregar y quitar puntos o polos, simplificar, convertir una cadena a spline por
+  polos, peine de curvatura con inflexiones y radio mínimo, y curvatura igual (G2) con
+  splines por polos. Puente C++: curvas 6 (B-spline), 7 (arco de elipse) y 8 (spline con
+  tangentes por punto).

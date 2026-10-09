@@ -323,7 +323,16 @@ pub fn of_entity(sketch: &Sketch, id: u32) -> Option<Projected> {
         Geometry::Circle { center, radius } => Projected::Circle { center: p(*center)?, radius: *radius },
         Geometry::Arc { center, start, end } => Projected::Arc { center: p(*center)?, start: p(*start)?, end: p(*end)? },
         Geometry::Ellipse { center, major, minor } => Projected::Ellipse { center: p(*center)?, major: p(*major)?, minor: p(*minor)? },
-        Geometry::Spline { points, closed, start_handle, end_handle } => Projected::Spline {
+        // Sin fórmula propia en el otro plano: por muestras
+        Geometry::EllipseArc { .. } | Geometry::BSpline { .. } => {
+            let mut pts = crate::regions::sample_entity(sketch, id).ok()?;
+            let closed = e.geometry.is_closed();
+            if closed {
+                pts.pop();
+            }
+            Projected::Spline { points: resample(&pts, SPLINE_POINTS, closed), closed, handles: None }
+        }
+        Geometry::Spline { points, closed, start_handle, end_handle, .. } => Projected::Spline {
             points: points.iter().map(|q| p(*q)).collect::<Option<_>>()?,
             closed: *closed,
             handles: match (start_handle, end_handle) {
@@ -470,7 +479,7 @@ pub fn fit(sketch: &mut Sketch, id: u32, to: &Projected) -> bool {
             let (a, b) = (near(sketch, major, *a), near(sketch, minor, *b));
             set(sketch, center, *c) && set(sketch, major, a) && set(sketch, minor, b)
         }
-        (Geometry::Spline { points, closed, start_handle, end_handle }, P::Spline { points: q, closed: c, handles }) if closed == *c => {
+        (Geometry::Spline { points, closed, start_handle, end_handle, .. }, P::Spline { points: q, closed: c, handles }) if closed == *c => {
             let mut q = resample(q, points.len(), closed);
             let mut handles = *handles;
             let now: Vec<P2> = points.iter().filter_map(|p| sketch.point(*p).ok()).collect();
@@ -532,6 +541,7 @@ pub fn add_to(sketch: &mut Sketch, p: &Projected) -> u32 {
             closed: *closed,
             start_handle: handles.map(|h| pt(sketch, h[0])),
             end_handle: handles.map(|h| pt(sketch, h[1])),
+            handles: vec![],
         },
     };
     sketch.add_entity(g)

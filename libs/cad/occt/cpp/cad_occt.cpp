@@ -81,6 +81,12 @@
 #include <GeomAPI_Interpolate.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
 #include <Geom_BSplineCurve.hxx>
+#include <GC_MakeArcOfEllipse.hxx>
+#include <TColgp_Array1OfPnt.hxx>
+#include <TColgp_Array1OfVec.hxx>
+#include <TColStd_Array1OfInteger.hxx>
+#include <TColStd_Array1OfReal.hxx>
+#include <TColStd_HArray1OfBoolean.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <Message.hxx>
 #include <Message_Messenger.hxx>
@@ -252,6 +258,70 @@ TopoDS_Edge make_edge(int32_t kind, int32_t count, const double* d) {
             }
             gp_Elips e(gp_Ax2(pnt(d), n, x), a, b);
             return BRepBuilderAPI_MakeEdge(e).Edge();
+        }
+        case 6: {
+            // B-spline por polos: grado, periódica, n polos, k nudos distintos; polos, pesos, nudos y multiplicidades
+            if (count < 4) throw Standard_Failure("b-spline: datos incompletos");
+            int deg = (int)d[0];
+            bool periodic = d[1] != 0;
+            int n = (int)d[2], k = (int)d[3];
+            if (n < 2 || k < 2 || count != 4 + 4 * n + 2 * k) throw Standard_Failure("b-spline: cantidades que no cuadran");
+            TColgp_Array1OfPnt poles(1, n);
+            TColStd_Array1OfReal weights(1, n), knots(1, k);
+            TColStd_Array1OfInteger mults(1, k);
+            const double* q = d + 4;
+            for (int i = 0; i < n; i++) poles.SetValue(i + 1, pnt(q + 3 * i));
+            q += 3 * n;
+            for (int i = 0; i < n; i++) weights.SetValue(i + 1, q[i]);
+            q += n;
+            for (int i = 0; i < k; i++) knots.SetValue(i + 1, q[i]);
+            q += k;
+            for (int i = 0; i < k; i++) mults.SetValue(i + 1, (int)std::lround(q[i]));
+            Handle(Geom_BSplineCurve) c = new Geom_BSplineCurve(poles, weights, knots, mults, deg, periodic);
+            return BRepBuilderAPI_MakeEdge(c).Edge();
+        }
+        case 7: {
+            // Arco de elipse antihorario (alrededor de la normal) de inicio a fin: centro, normal, eje mayor, a, b, inicio, fin y 1 = recorrido así, 0 = al revés
+            if (count != 18) throw Standard_Failure("arco de elipse: se esperaban 18 valores");
+            double a = d[9], b = d[10];
+            if (a <= 0 || b <= 0) throw Standard_Failure("arco de elipse: radio no positivo");
+            gp_Dir n = dir(d + 3);
+            gp_Dir x = dir(d + 6);
+            if (b > a) {
+                x = n.Crossed(x);
+                std::swap(a, b);
+            }
+            gp_Elips e(gp_Ax2(pnt(d), n, x), a, b);
+            GC_MakeArcOfEllipse arc(e, pnt(d + 11), pnt(d + 14), Standard_True);
+            if (!arc.IsDone()) throw Standard_Failure("arco de elipse: no se pudo armar");
+            TopoDS_Edge edge = BRepBuilderAPI_MakeEdge(arc.Value()).Edge();
+            // Al revés: la misma curva recorrida del fin al inicio
+            if (d[17] == 0) edge.Reverse();
+            return edge;
+        }
+        case 8: {
+            // Spline por puntos con tangentes en algunos: periódica, n; puntos y tangentes (cero = libre)
+            if (count < 2) throw Standard_Failure("spline: datos incompletos");
+            bool periodic = d[0] != 0;
+            int n = (int)d[1];
+            if (n < 2 || count != 2 + 6 * n) throw Standard_Failure("spline: cantidades que no cuadran");
+            Handle(TColgp_HArray1OfPnt) pts = new TColgp_HArray1OfPnt(1, n);
+            for (int i = 0; i < n; i++) pts->SetValue(i + 1, pnt(d + 2 + 3 * i));
+            TColgp_Array1OfVec tangents(1, n);
+            Handle(TColStd_HArray1OfBoolean) flags = new TColStd_HArray1OfBoolean(1, n);
+            const double* t = d + 2 + 3 * n;
+            for (int i = 0; i < n; i++) {
+                gp_Vec v(t[3 * i], t[3 * i + 1], t[3 * i + 2]);
+                bool on = v.Magnitude() > Precision::Confusion();
+                flags->SetValue(i + 1, on);
+                tangents.SetValue(i + 1, on ? v : gp_Vec(1, 0, 0));
+            }
+            GeomAPI_Interpolate interp(pts, periodic ? Standard_True : Standard_False, Precision::Confusion());
+            // Solo la dirección: el largo lo ajusta OCCT a la parametrización
+            interp.Load(tangents, flags, Standard_True);
+            interp.Perform();
+            if (!interp.IsDone()) throw Standard_Failure("spline: no se pudo interpolar");
+            return BRepBuilderAPI_MakeEdge(interp.Curve()).Edge();
         }
         default:
             throw Standard_Failure("tipo de curva desconocido");

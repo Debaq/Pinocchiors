@@ -286,3 +286,81 @@ export const Construction = (p: IconProps) => (
     <Dot x={20} y={4} />
   </SketchIcon>
 );
+
+/** Línea infinita: de construcción, sale de los dos lados */
+export const LineInfinite = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M2 22 L22 2" {...dashed} />
+    <Dot x={8} y={16} />
+    <Dot x={16} y={8} />
+  </SketchIcon>
+);
+
+export const Parallelogram = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 18 L15 18 L21 6 L9 6 Z" />
+    <Dot x={3} y={18} />
+    <Dot x={15} y={18} />
+    <Dot x={21} y={6} />
+  </SketchIcon>
+);
+
+export const EllipseArc = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M21 12 A9 5.5 0 0 1 3 12" {...dashed} />
+    <path d="M3 12 A9 5.5 0 0 1 21 12" />
+    <Dot x={12} y={12} />
+    <Dot x={3} y={12} />
+    <Dot x={21} y={12} />
+  </SketchIcon>
+);
+
+/** Cónica: los dos extremos y el vértice del triángulo de control */
+export const Conic = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 19 L12 4 L21 19" {...dashed} />
+    <path d="M3 19 Q12 4 21 19" />
+    <Dot x={3} y={19} />
+    <Dot x={21} y={19} />
+    <Dot x={12} y={4} />
+  </SketchIcon>
+);
+
+export const Parabola = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 4 Q12 28 20 4" />
+    <path d="M12 4 L12 20" {...dashed} />
+    <Dot x={4} y={4} />
+    <Dot x={20} y={4} />
+  </SketchIcon>
+);
+
+/** Spline por polos: el polígono de control punteado */
+export const BSpline = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 19 L7 5 L17 19 L21 5" {...dashed} />
+    <path d="M3 19 C7 6 17 18 21 5" />
+    <Dot x={3} y={19} />
+    <Dot x={7} y={5} />
+    <Dot x={17} y={19} />
+    <Dot x={21} y={5} />
+  </SketchIcon>
+);
+
+/** Ranura en arco por 3 puntos del arco del medio */
+export const SlotArc3 = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M4 18 A10 10 0 0 1 18 4.5 A2.6 2.6 0 0 1 17.6 9.6 A5.4 5.4 0 0 0 9.4 18 A2.6 2.6 0 0 1 4 18 Z" />
+    <Dot x={6.7} y={18} />
+    <Dot x={10.5} y={10.5} />
+    <Dot x={17.8} y={7} />
+  </SketchIcon>
+);
+
+/** Insertar un punto en una spline */
+export const SplinePoint = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 17 C7 4 11 4 12 12 S17 20 21 7" />
+    <path d="M12 7 L12 17 M7 12 L17 12" />
+  </SketchIcon>
+);

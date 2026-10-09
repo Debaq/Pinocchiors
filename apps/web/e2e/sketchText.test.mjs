@@ -41,3 +41,39 @@ test("posición y escala: la línea base en `at`, y hacia arriba", () => {
   assert.ok(Math.abs(Math.max(...ys) - 50 - 0.69 * 20) < 0.3, `alto ${Math.max(...ys) - 50}`);
   assert.ok(Math.min(...pts.map((p) => p[0])) >= 100);
 });
+
+/** Fuente de prueba: cada letra es un cuadrado de `size` con avance `size` */
+const boxFont = {
+  getAdvanceWidth: (text, size) => [...text].length * size,
+  getPath: (text, x, y, size) => ({
+    commands: [...text].flatMap((_, i) => {
+      const x0 = x + i * size;
+      return [
+        { type: "M", x: x0, y },
+        { type: "L", x: x0 + size, y },
+        { type: "L", x: x0 + size, y: y - size },
+        { type: "L", x: x0, y: y - size },
+        { type: "Z" },
+      ];
+    }),
+  }),
+};
+const xs = (contours) => contours.flatMap((c) => c.pieces.flatMap((p) => [p.a[0], p.b[0]]));
+
+test("alineación: izquierda, centro y derecha del ancla", async () => {
+  const { layoutText } = await import("../src/lib/sketchText.ts");
+  const at = [100, 0];
+  assert.equal(Math.min(...xs(layoutText(boxFont, "ab", 10, at, "left"))), 100);
+  assert.equal(Math.min(...xs(layoutText(boxFont, "ab", 10, at, "center"))), 90);
+  assert.equal(Math.max(...xs(layoutText(boxFont, "ab", 10, at, "right"))), 100);
+});
+
+test("texto sobre una curva: cada letra sigue la dirección de la curva", async () => {
+  const { layoutText } = await import("../src/lib/sketchText.ts");
+  // Recta vertical: las letras quedan giradas 90° (la base sube por x = 0)
+  const out = layoutText(boxFont, "ab", 10, [0, 0], "left", [[0, 0], [0, 100]]);
+  assert.equal(out.length, 2);
+  const pts = out[1].pieces.flatMap((p) => [p.a, p.b]);
+  // La segunda letra va de y = 10 a 20, del lado izquierdo de la recta (x ≤ 0)
+  assert.ok(pts.every(([x, y]) => x <= 1e-9 && x >= -10 - 1e-9 && y >= 10 - 1e-9 && y <= 20 + 1e-9), JSON.stringify(pts));
+});

@@ -666,3 +666,65 @@ fn surface_from_an_open_wire() {
     assert!((v - 42.0).abs() < 1e-6 || (v - 48.0).abs() < 1e-6, "volumen {v}");
 }
 
+
+#[test]
+fn bspline_ellipse_arc_and_mid_tangent_faces() {
+    if !require() {
+        return;
+    }
+    // Cuarto de círculo racional (grado 2, peso √2/2) cerrado con dos radios: área π/4·r²
+    let w = std::f64::consts::FRAC_1_SQRT_2;
+    let quarter = Curve::BSpline {
+        poles: vec![[10.0, 0.0, 0.0], [10.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
+        weights: vec![1.0, w, 1.0],
+        knots: vec![0.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        degree: 2,
+        periodic: false,
+    };
+    let face = Shape::face(&[vec![quarter, Curve::Line([0.0, 10.0, 0.0], [0.0; 3]), Curve::Line([0.0; 3], [10.0, 0.0, 0.0])]]).unwrap();
+    assert_relative_eq!(face.mass().unwrap().area, PI * 25.0, epsilon = 1e-6);
+    // Cerrada periódica: una curva sola
+    let closed = Curve::BSpline {
+        poles: vec![[5.0, 0.0, 0.0], [0.0, 5.0, 0.0], [-5.0, 0.0, 0.0], [0.0, -5.0, 0.0]],
+        weights: vec![],
+        knots: vec![],
+        degree: 3,
+        periodic: true,
+    };
+    assert!(Shape::face(&[vec![closed]]).unwrap().mass().unwrap().area > 10.0);
+    // Media elipse (a = 4, b = 2) de (4, 0) a (−4, 0) antihoraria, cerrada con el diámetro
+    let half = Curve::EllipseArc {
+        center: [0.0; 3],
+        normal: [0.0, 0.0, 1.0],
+        major: [1.0, 0.0, 0.0],
+        a: 4.0,
+        b: 2.0,
+        start: [4.0, 0.0, 0.0],
+        end: [-4.0, 0.0, 0.0],
+        forward: true,
+    };
+    let face = Shape::face(&[vec![half, Curve::Line([-4.0, 0.0, 0.0], [4.0, 0.0, 0.0])]]).unwrap();
+    let m = face.mass().unwrap();
+    assert_relative_eq!(m.area, PI * 4.0, epsilon = 1e-6);
+    assert!(m.bbox_max[1] > 1.9, "la mitad de arriba");
+    // Al revés: la misma curva recorrida de (−4, 0) a (4, 0)
+    let back = Curve::EllipseArc {
+        center: [0.0; 3],
+        normal: [0.0, 0.0, 1.0],
+        major: [1.0, 0.0, 0.0],
+        a: 4.0,
+        b: 2.0,
+        start: [4.0, 0.0, 0.0],
+        end: [-4.0, 0.0, 0.0],
+        forward: false,
+    };
+    let m = Shape::face(&[vec![back, Curve::Line([4.0, 0.0, 0.0], [-4.0, 0.0, 0.0])]]).unwrap().mass().unwrap();
+    assert!(m.bbox_max[1] > 1.9, "la misma mitad");
+    // Tangente impuesta en el punto del medio: cambia la forma
+    let pts = vec![[0.0, 0.0, 0.0], [5.0, 3.0, 0.0], [10.0, 0.0, 0.0]];
+    let close = Curve::Line([10.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
+    let free = Shape::face(&[vec![Curve::Spline(pts.clone()), close.clone()]]).unwrap();
+    let tilted = Shape::face(&[vec![Curve::SplineTangents { points: pts, tangents: vec![None, Some([1.0, 1.0, 0.0]), None], periodic: false }, close]]).unwrap();
+    let (a0, a1) = (free.mass().unwrap().area, tilted.mass().unwrap().area);
+    assert!((a1 - a0).abs() > 0.05 * a0, "{a0} → {a1}");
+}

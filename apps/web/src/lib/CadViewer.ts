@@ -10,7 +10,7 @@ import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
-import { deviationColor, ellipsePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
+import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -78,6 +78,8 @@ export interface SketchOverlay {
   problems?: P2[];
   /** Entidades con problemas (encimadas): en rojo */
   warnEntities?: number[];
+  /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
+  curvature?: { comb: [P2, P2][]; inflections: P2[] };
 }
 
 function inPolygon(p: P2, poly: P2[]): boolean {
@@ -129,6 +131,7 @@ export function entityPolyline(g: Sketch["entities"][number]["geometry"], point:
     const [c, a, b] = [point.get(g.center), point.get(g.major), point.get(g.minor)];
     return c && a && b ? ellipsePolyline(c, a, b) : undefined;
   }
+  if (g.type === "bspline" || g.type === "ellipse_arc") return curvePolyline(g, (id) => point.get(id));
   return splineOf(g, (id) => point.get(id));
 }
 
@@ -884,12 +887,23 @@ export class CadViewer {
                 : freeE.has(id)
                   ? themeHex("sketch-free")
                   : normal;
+    // Las líneas infinitas llegan bien lejos del dibujo
+    let reach = 1000;
+    for (const p of sketch.points) reach = Math.max(reach, 20 * Math.abs(p.x), 20 * Math.abs(p.y));
     for (const e of sketch.entities) {
       const g = e.geometry;
       if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
       const color = entityColor(e.id, !!e.construction);
       let pts: P2[] = [];
-      if (g.type === "line") pts = [point.get(g.start)!, point.get(g.end)!];
+      if (g.type === "line" && e.infinite) {
+        const [a, b] = [point.get(g.start)!, point.get(g.end)!];
+        const l = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+        const d: P2 = [(b[0] - a[0]) / l, (b[1] - a[1]) / l];
+        pts = [
+          [a[0] - d[0] * reach, a[1] - d[1] * reach],
+          [a[0] + d[0] * reach, a[1] + d[1] * reach],
+        ];
+      } else if (g.type === "line") pts = [point.get(g.start)!, point.get(g.end)!];
       else if (g.type === "circle") {
         const c = point.get(g.center)!;
         pts = Array.from({ length: 65 }, (_, i) => {
@@ -915,10 +929,21 @@ export class CadViewer {
         ] as const) {
           if (h !== undefined) lines([point.get(end), point.get(h)], construction, true);
         }
-      } else if (g.type === "ellipse") pts = entityPolyline(g, point) ?? [];
+        for (const [i, h] of g.handles ?? []) lines([point.get(g.points[i]), point.get(h)], construction, true);
+      } else if (g.type === "bspline") {
+        pts = entityPolyline(g, point) ?? [];
+        // Polígono de control punteado
+        const poly = g.poles.map((id) => point.get(id));
+        lines(g.closed ? [...poly, poly[0]] : poly, construction, true);
+      } else if (g.type === "ellipse" || g.type === "ellipse_arc") pts = entityPolyline(g, point) ?? [];
       if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
+    if (overlay.curvature) {
+      const combColor = themeHex("purple");
+      for (const [a, b] of overlay.curvature.comb) lines([a, b], combColor);
+      lines(overlay.curvature.comb.map((t) => t[1]), combColor);
+    }
     for (const g of overlay.guides ?? []) lines(g, themeHex("cyan"), true);
 
     // Puntos: libres en amarillo, definidos en verde
@@ -955,6 +980,7 @@ export class CadViewer {
     this.sketchGroup.add(pts);
     if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
     for (const p of overlay.problems ?? []) marker(p, themeHex("error"), 11);
+    for (const p of overlay.curvature?.inflections ?? []) marker(p, themeHex("purple"), 11);
 
     // Ejes del plano
     const axisLen = 20;

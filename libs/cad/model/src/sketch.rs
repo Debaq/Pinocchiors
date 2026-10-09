@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 
-use cad_solver::{Constraint, ConstraintSystem, CurvePart, Point2, SolveStatus};
+use cad_solver::{BSplineRef, Constraint, ConstraintSystem, CurveEnd, CurvePart, Point2, SolveStatus};
 use serde::{Deserialize, Serialize};
 
 use crate::geom::{P2, dist2};
@@ -24,6 +24,10 @@ pub struct SketchEntity {
     /// Geometría de construcción: restringe pero no forma perfiles.
     #[serde(default)]
     pub construction: bool,
+    /// Línea infinita (de construcción, para referencias): se dibuja de punta
+    /// a punta de la vista; para las restricciones es una línea más.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub infinite: bool,
     pub geometry: Geometry,
 }
 
@@ -45,6 +49,10 @@ pub enum Geometry {
         start_handle: Option<u32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end_handle: Option<u32>,
+        /// Manijas en puntos intermedios: `[i, h]` da la dirección en
+        /// `points[i]` (de ese punto a `h`).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        handles: Vec<[u32; 2]>,
     },
     /// Punto suelto (para agujeros y referencias): no forma perfiles.
     Point { point: u32 },
@@ -52,6 +60,23 @@ pub enum Geometry {
     /// perpendicular la pone el solver); acotar sus distancias al centro da
     /// los radios.
     Ellipse { center: u32, major: u32, minor: u32 },
+    /// Arco de elipse antihorario de `start` a `end` (el solver los deja
+    /// sobre la elipse de `center`, `major` y `minor`).
+    EllipseArc { center: u32, major: u32, minor: u32, start: u32, end: u32 },
+    /// B-spline por sus polos: abierta, pasa por el primero y el último;
+    /// cerrada, periódica. Con `weights` es racional (cónicas: grado 2 con
+    /// el peso del medio = rho / (1 − rho)). `knots` vacío = uniforme.
+    #[serde(rename = "bspline")]
+    BSpline {
+        poles: Vec<u32>,
+        degree: u32,
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        weights: Vec<f64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        knots: Vec<f64>,
+    },
 }
 
 impl Geometry {
@@ -60,12 +85,29 @@ impl Geometry {
             Geometry::Line { start, end } => vec![*start, *end],
             Geometry::Circle { center, .. } => vec![*center],
             Geometry::Arc { center, start, end } => vec![*center, *start, *end],
-            Geometry::Spline { points, start_handle, end_handle, .. } => {
-                points.iter().chain(start_handle).chain(end_handle).copied().collect()
+            Geometry::Spline { points, start_handle, end_handle, handles, .. } => {
+                points.iter().chain(start_handle).chain(end_handle).copied().chain(handles.iter().map(|h| h[1])).collect()
             }
             Geometry::Point { point } => vec![*point],
             Geometry::Ellipse { center, major, minor } => vec![*center, *major, *minor],
+            Geometry::EllipseArc { center, major, minor, start, end } => vec![*center, *major, *minor, *start, *end],
+            Geometry::BSpline { poles, .. } => poles.clone(),
         }
+    }
+
+    /// Extremos de una curva abierta (comienzo y fin, en su sentido).
+    pub fn ends(&self) -> Option<(u32, u32)> {
+        match self {
+            Geometry::Line { start, end } | Geometry::Arc { start, end, .. } | Geometry::EllipseArc { start, end, .. } => Some((*start, *end)),
+            Geometry::Spline { points, closed: false, .. } => Some((*points.first()?, *points.last()?)),
+            Geometry::BSpline { poles, closed: false, .. } => Some((*poles.first()?, *poles.last()?)),
+            _ => None,
+        }
+    }
+
+    /// Curva cerrada por sí sola.
+    pub fn is_closed(&self) -> bool {
+        matches!(self, Geometry::Circle { .. } | Geometry::Ellipse { .. } | Geometry::Spline { closed: true, .. } | Geometry::BSpline { closed: true, .. })
     }
 }
 
@@ -154,6 +196,10 @@ pub enum SketchConstraint {
     Intersection { point: u32, a: u32, b: u32 },
     /// Entidad bloqueada entera: sus puntos y su radio quedan donde están.
     Lock { entity: u32 },
+    /// Continuidad de curvatura (G2) donde dos curvas se juntan: tangentes y
+    /// con la misma curvatura. Una de las dos es una B-spline; la otra, una
+    /// línea, un arco u otra B-spline.
+    Curvature { a: u32, b: u32 },
 }
 
 /// Cómo se muestra y se trata una cota (no cambia lo que restringe).
@@ -266,7 +312,7 @@ impl SketchConstraint {
             CurveLength { entities, .. } => entities.iter().any(e),
             // Ids de punto o de entidad
             CircleDistance { a, b, .. } => p(a) || e(a) || p(b) || e(b),
-            Coradial { a, b } => e(a) || e(b),
+            Coradial { a, b } | Curvature { a, b } => e(a) || e(b),
             SymmetricEntities { a, b, line } => e(a) || e(b) || e(line),
             PointOnCurve { point: q, curve } => p(q) || e(curve),
             Intersection { point: q, a, b } => p(q) || e(a) || e(b),
@@ -371,6 +417,30 @@ pub struct SketchText {
     pub anchor: u32,
     pub entities: Vec<u32>,
     pub points: Vec<u32>,
+    /// Negrita, cursiva, alineación y curva que sigue (para rehacerlo igual).
+    #[serde(default, skip_serializing_if = "TextStyle::is_default")]
+    pub style: TextStyle,
+}
+
+/// Cómo se arma un texto del sketch.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TextStyle {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bold: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub italic: bool,
+    /// "left" (o vacío), "center" o "right": respecto del ancla.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub align: String,
+    /// Entidad que siguen las letras (el ancla se proyecta sobre ella).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<u32>,
+}
+
+impl TextStyle {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Sketch {
@@ -414,7 +484,7 @@ impl Sketch {
 
     pub fn add_entity(&mut self, geometry: Geometry) -> u32 {
         let id = self.fresh_id();
-        self.entities.push(SketchEntity { id, construction: false, geometry });
+        self.entities.push(SketchEntity { id, construction: false, infinite: false, geometry });
         id
     }
 
@@ -637,6 +707,14 @@ impl Sketch {
                 let (c, a, b) = (ix(center)?, ix(major)?, ix(minor)?);
                 sys.add_constraint(Constraint::Perpendicular { l1_p1: c, l1_p2: a, l2_p1: c, l2_p2: b });
             }
+            // Arco de elipse: semiejes a 90° y los extremos sobre la elipse
+            if let Geometry::EllipseArc { center, major, minor, start, end } = e.geometry {
+                let (c, a, b) = (ix(center)?, ix(major)?, ix(minor)?);
+                sys.add_constraint(Constraint::Perpendicular { l1_p1: c, l1_p2: a, l2_p1: c, l2_p2: b });
+                for p in [start, end] {
+                    sys.add_constraint(Constraint::PointOnEllipse { p_idx: ix(p)?, center: c, major: a, minor: b });
+                }
+            }
         }
         if let Some(o) = self.origin {
             sys.add_constraint(Constraint::Fixed { p_idx: ix(o)?, position: Point2::new(0.0, 0.0) });
@@ -827,7 +905,12 @@ impl Sketch {
                 Ok(u[0].hypot(u[1]) * sweep)
             }
             Geometry::Circle { radius, .. } => Ok(std::f64::consts::TAU * radius),
-            _ => Err(SketchError::WrongKind(id, "una línea, un arco o un círculo")),
+            // Curvas sin fórmula: por muestras
+            Geometry::BSpline { .. } | Geometry::EllipseArc { .. } | Geometry::Ellipse { .. } | Geometry::Spline { .. } => {
+                let pts = crate::regions::sample_entity(self, id)?;
+                Ok(pts.windows(2).map(|w| dist2(w[0], w[1])).sum())
+            }
+            _ => Err(SketchError::WrongKind(id, "una curva")),
         }
     }
 
@@ -912,6 +995,61 @@ impl Sketch {
             let (a, b) = self.line_points(id)?;
             Ok((ix(a)?, ix(b)?))
         };
+        // B-spline con sus polos como índices del solver
+        let bspline_ref = |id: u32| -> Result<BSplineRef, SketchError> {
+            match &self.entity(id)?.geometry {
+                Geometry::BSpline { poles, degree, closed, weights, knots } => Ok(BSplineRef {
+                    poles: poles.iter().map(|&p| ix(p)).collect::<Result<_, _>>()?,
+                    weights: weights.clone(),
+                    knots: knots.clone(),
+                    degree: *degree as usize,
+                    closed: *closed,
+                }),
+                _ => Err(SketchError::WrongKind(id, "una B-spline")),
+            }
+        };
+        // Extremo común de dos curvas abiertas
+        let shared_end = |a: u32, b: u32| -> Result<u32, SketchError> {
+            let (ea, eb) = (self.entity(a)?.geometry.ends(), self.entity(b)?.geometry.ends());
+            let (Some((a0, a1)), Some((b0, b1))) = (ea, eb) else {
+                return Err(SketchError::Unsupported("hace falta que las dos curvas sean abiertas".into()));
+            };
+            [a0, a1].into_iter().find(|p| *p == b0 || *p == b1).ok_or_else(|| SketchError::Unsupported("las curvas no tienen un extremo en común".into()))
+        };
+        // Tangencia en el extremo común cuando una de las dos es una B-spline:
+        // la tangente en la punta va hacia el polo vecino
+        let bspline_tangent = |a: u32, b: u32| -> Result<Option<Vec<Constraint>>, SketchError> {
+            let (ga, gb) = (&self.entity(a)?.geometry, &self.entity(b)?.geometry);
+            if !matches!(ga, Geometry::BSpline { .. }) && !matches!(gb, Geometry::BSpline { .. }) {
+                return Ok(None);
+            }
+            let shared = shared_end(a, b)?;
+            // (punta, polo vecino) de una B-spline abierta en el extremo común
+            let tip = |g: &Geometry| -> Option<(usize, usize)> {
+                let Geometry::BSpline { poles, .. } = g else { return None };
+                let n = poles.len();
+                let (p, q) = if poles[0] == shared { (poles[0], poles[1]) } else { (poles[n - 1], poles[n - 2]) };
+                Some((ix(p).ok()?, ix(q).ok()?))
+            };
+            let s = ix(shared)?;
+            let other = |g: &Geometry, (tp, nb): (usize, usize)| -> Result<Vec<Constraint>, SketchError> {
+                Ok(match g {
+                    Geometry::Line { start, end } => vec![Constraint::Parallel { l1_p1: ix(*start)?, l1_p2: ix(*end)?, l2_p1: tp, l2_p2: nb }],
+                    Geometry::Arc { center, .. } => vec![Constraint::Perpendicular { l1_p1: ix(*center)?, l1_p2: s, l2_p1: tp, l2_p2: nb }],
+                    Geometry::BSpline { .. } => {
+                        let (_, nb2) = tip(g).ok_or(SketchError::NoEntity(b))?;
+                        // Los dos polos vecinos alineados con la punta
+                        vec![Constraint::PointOnLine { p_idx: nb2, line_p1: nb, line_p2: tp }]
+                    }
+                    _ => return Err(SketchError::Unsupported("tangencia de una B-spline con esa curva".into())),
+                })
+            };
+            Ok(Some(match (tip(ga), tip(gb)) {
+                (Some(t), _) => other(gb, t)?,
+                (None, Some(t)) => other(ga, t)?,
+                _ => unreachable!(),
+            }))
+        };
         // Punto (índice del solver) sobre cualquier curva
         let on_curve = |q: usize, id: u32| -> Result<Vec<Constraint>, SketchError> {
             Ok(match &self.entity(id)?.geometry {
@@ -923,13 +1061,22 @@ impl Sketch {
                 Geometry::Ellipse { center, major, minor } => {
                     vec![Constraint::PointOnEllipse { p_idx: q, center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)? }]
                 }
-                Geometry::Spline { points, closed, start_handle, end_handle } => vec![Constraint::PointOnCurveSpline {
-                    p_idx: q,
-                    points: points.iter().map(|&p| ix(p)).collect::<Result<_, _>>()?,
-                    closed: *closed,
-                    start_handle: start_handle.map(ix).transpose()?,
-                    end_handle: end_handle.map(ix).transpose()?,
-                }],
+                Geometry::Spline { points, closed, start_handle, end_handle, handles } => {
+                    let n = points.len();
+                    let mut hs: Vec<(usize, usize)> = Vec::new();
+                    if !*closed {
+                        hs.extend(start_handle.map(ix).transpose()?.map(|h| (0, h)));
+                        hs.extend(end_handle.map(ix).transpose()?.map(|h| (n.saturating_sub(1), h)));
+                    }
+                    for [i, h] in handles {
+                        hs.push((*i as usize, ix(*h)?));
+                    }
+                    vec![Constraint::PointOnCurveSpline { p_idx: q, points: points.iter().map(|&p| ix(p)).collect::<Result<_, _>>()?, closed: *closed, handles: hs }]
+                }
+                Geometry::EllipseArc { center, major, minor, .. } => {
+                    vec![Constraint::PointOnEllipse { p_idx: q, center: ix(*center)?, major: ix(*major)?, minor: ix(*minor)? }]
+                }
+                Geometry::BSpline { .. } => vec![Constraint::PointOnBSpline { p_idx: q, curve: bspline_ref(id)? }],
                 Geometry::Point { .. } => return Err(SketchError::WrongKind(id, "una curva")),
             })
         };
@@ -978,6 +1125,21 @@ impl Sketch {
                 }
                 _ => return Err(SketchError::Unsupported("igualdad entre entidades de distinto tipo".into())),
             },
+            S::Tangent { a, b } if bspline_tangent(a, b)?.is_some() => bspline_tangent(a, b)?.unwrap_or_default(),
+            S::Curvature { a, b } => {
+                let shared = shared_end(a, b)?;
+                let end_of = |id: u32| -> Result<CurveEnd, SketchError> {
+                    Ok(match &self.entity(id)?.geometry {
+                        Geometry::Line { .. } => CurveEnd::Line,
+                        Geometry::Arc { center, start, .. } => CurveEnd::Arc { center: ix(*center)?, start: ix(*start)?, at_start: *start == shared },
+                        Geometry::BSpline { poles, .. } => CurveEnd::BSpline { curve: bspline_ref(id)?, at_start: poles.first() == Some(&shared) },
+                        _ => return Err(SketchError::WrongKind(id, "una línea, un arco o una B-spline")),
+                    })
+                };
+                let mut out = bspline_tangent(a, b)?.ok_or_else(|| SketchError::Unsupported("la curvatura igual necesita una B-spline".into()))?;
+                out.push(Constraint::EqualCurvature { a: end_of(a)?, b: end_of(b)? });
+                out
+            }
             S::Tangent { a, b } => {
                 // Dos arcos que comparten un extremo: los centros quedan alineados
                 // con el punto de contacto (tangencia en ese punto)
@@ -1167,6 +1329,25 @@ impl Sketch {
                     }
                     (Geometry::Ellipse { center: c1, major: m1, minor: n1 }, Geometry::Ellipse { center: c2, major: m2, minor: n2 }) => {
                         vec![sym(ix(*c1)?, ix(*c2)?), sym(ix(*m1)?, ix(*m2)?), sym(ix(*n1)?, ix(*n2)?)]
+                    }
+                    (
+                        Geometry::EllipseArc { center: c1, major: m1, minor: n1, start: s1, end: e1 },
+                        Geometry::EllipseArc { center: c2, major: m2, minor: n2, start: s2, end: e2 },
+                    ) => vec![
+                        sym(ix(*c1)?, ix(*c2)?),
+                        sym(ix(*m1)?, ix(*m2)?),
+                        sym(ix(*n1)?, ix(*n2)?),
+                        sym(ix(*s1)?, ix(*e2)?),
+                        sym(ix(*e1)?, ix(*s2)?),
+                    ],
+                    (Geometry::BSpline { poles: p1, .. }, Geometry::BSpline { poles: p2, .. }) if p1.len() == p2.len() => {
+                        let (p1, mut p2) = (ids(p1)?, ids(p2)?);
+                        let fwd: f64 = p1.iter().zip(&p2).map(|(&i, &j)| near(i, j)).sum();
+                        let rev: f64 = p1.iter().zip(p2.iter().rev()).map(|(&i, &j)| near(i, j)).sum();
+                        if rev < fwd {
+                            p2.reverse();
+                        }
+                        p1.iter().zip(&p2).map(|(&i, &j)| sym(i, j)).collect()
                     }
                     (
                         Geometry::Spline { points: p1, start_handle: h1, end_handle: k1, .. },

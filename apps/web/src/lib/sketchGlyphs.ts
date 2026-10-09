@@ -28,6 +28,7 @@ export const GLYPHS: Partial<Record<SketchConstraint["type"], string>> = {
   point_on_curve: "∈",
   intersection: "✕",
   lock: "⊞",
+  curvature: "G2",
 };
 
 export interface Glyph {
@@ -64,7 +65,8 @@ export function constraintGlyphs(s: Sketch): Glyph[] {
   };
   const ends = (id: number): number[] => {
     const g = ent.get(id)?.geometry;
-    return g?.type === "line" || g?.type === "arc" ? [g.start, g.end] : [];
+    if (g?.type === "bspline" && !g.closed) return [g.poles[0], g.poles[g.poles.length - 1]];
+    return g?.type === "line" || g?.type === "arc" || g?.type === "ellipse_arc" ? [g.start, g.end] : [];
   };
   const out: Glyph[] = [];
   s.constraints.forEach((c, index) => {
@@ -82,7 +84,8 @@ export function constraintGlyphs(s: Sketch): Glyph[] {
         const [a, b] = [pt.get(c.a), pt.get(c.b)];
         return void put(a && b && [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], `p${Math.min(c.a, c.b)}-${Math.max(c.a, c.b)}`);
       }
-      case "tangent": {
+      case "tangent":
+      case "curvature": {
         // En el punto de contacto si comparten un extremo; si no, en las dos
         const shared = ends(c.a).find((p) => ends(c.b).includes(p));
         if (shared !== undefined) return void onPoint(shared);

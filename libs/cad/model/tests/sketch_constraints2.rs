@@ -265,7 +265,7 @@ fn point_on_ellipse_and_spline() {
     for &q in &ids {
         fix(&mut s, q);
     }
-    let sp = s.add_entity(Geometry::Spline { points: ids.clone(), closed: false, start_handle: None, end_handle: None });
+    let sp = s.add_entity(Geometry::Spline { points: ids.clone(), closed: false, start_handle: None, end_handle: None, handles: vec![] });
     let q = s.add_point(13.0, 6.0);
     s.constrain(SketchConstraint::PointOnCurve { point: q, curve: sp });
     s.solve().unwrap();
@@ -273,7 +273,7 @@ fn point_on_ellipse_and_spline() {
     assert_relative_eq!((x / 6.0).powi(2) + (y / 3.0).powi(2), 1.0, epsilon = 1e-6);
     let pts: Vec<_> = ids.iter().map(|&i| nalgebra::Vector2::new(pt(&s, i)[0], pt(&s, i)[1])).collect();
     let [x, y] = pt(&s, q);
-    let on = cad_solver::closest_on_spline(&pts, false, None, None, nalgebra::Vector2::new(x, y));
+    let on = cad_solver::closest_on_spline(&pts, false, &[], nalgebra::Vector2::new(x, y));
     assert!((on - nalgebra::Vector2::new(x, y)).norm() < 1e-5, "{on:?} vs {x},{y}");
 }
 

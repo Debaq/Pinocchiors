@@ -5,12 +5,14 @@ import { CadViewer, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
-import { outlineContours } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { layoutText } from "../../lib/sketchText";
+import { CONSTRAINT_LABELS, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { clipCenter, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, translation, type Xform } from "../../lib/sketchTransform";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
 import { constraintGlyphs } from "../../lib/sketchGlyphs";
+import { ellipseArcPolyline, ellipseParam, makeBSpline, rhoWeight, sample as sampleCurve } from "../../lib/sketchCurves";
+import { addParallelogram, insertSplinePoint, splineCurvature } from "../../lib/sketchSplines";
 import { addArcSlot, addCircumscribedPolygon, addRect3, addSlot, arcSlotOutline, circumcircle, circumscribedVertices, nearestOnEntity, rectFrom3 } from "../../lib/sketchShapes";
 import type { CadUi, Pick3d, PickFilter, SketchTool } from "../../lib/cadUi";
 import type { MeshData } from "../../lib/Viewer3D";
@@ -51,10 +53,12 @@ type ToolDef = { id: SketchTool; short: string; label: string; key?: string; ico
 const TOOLS: ToolDef[] = [
   { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S", icon: SketchIcons.Select, group: 0 },
   { id: "line", short: "Línea", label: "Línea", key: "L", icon: SketchIcons.Line, group: 1, family: "line" },
+  { id: "line_inf", short: "Línea infinita", label: "Línea infinita de construcción (dos puntos por donde pasa)", icon: SketchIcons.LineInfinite, group: 1, family: "line" },
   { id: "line_mid", short: "Línea centro", label: "Línea desde el centro (centro, extremo: crece igual a los dos lados)", key: "M", icon: SketchIcons.LineMid, group: 1, family: "line" },
   { id: "rect", short: "Rectángulo", label: "Rectángulo", key: "R", icon: SketchIcons.Rect, group: 1, family: "rect" },
   { id: "rect_center", short: "Rect. centro", label: "Rectángulo por el centro (centro, esquina)", icon: SketchIcons.RectCenter, group: 1, family: "rect" },
   { id: "rect3", short: "Rect. 3 p.", label: "Rectángulo por 3 puntos (un lado y el ancho: queda inclinado)", icon: SketchIcons.Rect3, group: 1, family: "rect" },
+  { id: "parallelogram", short: "Paralelogramo", label: "Paralelogramo (tres esquinas seguidas; la cuarta sale sola)", icon: SketchIcons.Parallelogram, group: 1, family: "rect" },
   { id: "circle", short: "Círculo", label: "Círculo", key: "C", icon: SketchIcons.Circle, group: 1, family: "circle" },
   { id: "circle2", short: "Círculo 2 p.", label: "Círculo por 2 puntos (los extremos de un diámetro)", icon: SketchIcons.Circle2, group: 1, family: "circle" },
   { id: "circle3", short: "Círculo 3 p.", label: "Círculo por 3 puntos", icon: SketchIcons.Circle3, group: 1, family: "circle" },
@@ -62,12 +66,18 @@ const TOOLS: ToolDef[] = [
   { id: "arc", short: "Arco", label: "Arco (centro, inicio, fin)", key: "A", icon: SketchIcons.ArcCenter, group: 1, family: "arc" },
   { id: "arc3", short: "Arco 3 p.", label: "Arco por 3 puntos (inicio, fin, uno por donde pasa)", key: "3", icon: SketchIcons.Arc3, group: 1, family: "arc" },
   { id: "tangent", short: "Tangente", label: "Arco tangente (desde el extremo de una línea o arco)", key: "G", icon: SketchIcons.TangentArc, group: 1, family: "arc" },
-  { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1 },
+  { id: "ellipse", short: "Elipse", label: "Elipse (centro, extremo del eje mayor, ancho)", key: "I", icon: SketchIcons.Ellipse, group: 1, family: "ellipse" },
+  { id: "ellipse_arc", short: "Arco elíptico", label: "Arco elíptico (centro, eje mayor, ancho, comienzo y fin antihorario)", icon: SketchIcons.EllipseArc, group: 1, family: "ellipse" },
   { id: "polygon", short: "Polígono", label: "Polígono regular (centro, vértice)", key: "P", icon: SketchIcons.Polygon, group: 1 },
   { id: "slot", short: "Ranura", label: "Ranura (centro, centro, ancho)", key: "U", icon: SketchIcons.Slot, group: 1, family: "slot" },
   { id: "slot_center", short: "Ranura centro", label: "Ranura por el centro (centro, extremo, ancho)", icon: SketchIcons.SlotCenter, group: 1, family: "slot" },
   { id: "slot_arc", short: "Ranura arco", label: "Ranura en arco (centro del arco, comienzo, fin antihorario, ancho)", icon: SketchIcons.SlotArc, group: 1, family: "slot" },
-  { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N", icon: SketchIcons.Spline, group: 1 },
+  { id: "slot_arc3", short: "Ranura arco 3 p.", label: "Ranura en arco por 3 puntos (comienzo, uno por donde pasa, fin, ancho)", icon: SketchIcons.SlotArc3, group: 1, family: "slot" },
+  { id: "spline", short: "Spline", label: "Spline (clics por donde pasa; clic en el primero la cierra, Esc la termina)", key: "N", icon: SketchIcons.Spline, group: 1, family: "spline" },
+  { id: "bspline", short: "Spline por polos", label: "Spline por polos de control (clics en los polos; clic en el primero la cierra, Esc la termina)", icon: SketchIcons.BSpline, group: 1, family: "spline" },
+  { id: "conic", short: "Cónica", label: "Cónica (comienzo, fin y vértice del triángulo; rho da la forma: 0,5 parábola, menos elipse, más hipérbola)", icon: SketchIcons.Conic, group: 1, family: "spline" },
+  { id: "parabola", short: "Parábola", label: "Parábola (comienzo, fin y vértice del triángulo de control)", icon: SketchIcons.Parabola, group: 1, family: "spline" },
+  { id: "spline_point", short: "Punto en spline", label: "Agregar un punto a una spline (o un polo a una spline por polos, sin cambiar su forma): clic sobre la curva", icon: SketchIcons.SplinePoint, group: 1, family: "spline" },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O", icon: SketchIcons.Point, group: 1 },
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar)", key: "T", icon: SketchIcons.Trim, group: 2 },
@@ -81,10 +91,18 @@ const TOOLS: ToolDef[] = [
 ];
 
 /** Nombre de cada familia de variantes (para el botón que abre la lista) */
-const FAMILY_MENU: Record<string, string> = { line: "Más líneas", rect: "Más rectángulos", circle: "Más círculos", arc: "Más arcos", slot: "Más ranuras" };
+const FAMILY_MENU: Record<string, string> = {
+  line: "Más líneas",
+  rect: "Más rectángulos",
+  circle: "Más círculos",
+  arc: "Más arcos",
+  slot: "Más ranuras",
+  ellipse: "Más elipses",
+  spline: "Más splines y cónicas",
+};
 
 /** Herramientas en las que un clic elige algo del sketch: se resalta lo que está bajo el mouse */
-const PRESELECT = new Set<SketchTool>(["select", "trim", "extend", "split", "circle_tan"]);
+const PRESELECT = new Set<SketchTool>(["select", "trim", "extend", "split", "circle_tan", "spline_point"]);
 /** Tope de íconos de restricciones a la vista */
 const MAX_GLYPHS = 500;
 
@@ -145,6 +163,18 @@ async function loadTextFont(): Promise<Font> {
   }
   return textFont.font;
 }
+/** Negrita y cursiva de la fuente incluida (una elegida se usa tal cual) */
+const styledFonts = new Map<string, Font>();
+async function loadStyledFont(bold: boolean, italic: boolean): Promise<Font> {
+  const regular = await loadTextFont();
+  if ((!bold && !italic) || textFont?.name !== "Liberation Sans") return regular;
+  const name = bold && italic ? "BoldItalic" : bold ? "Bold" : "Italic";
+  if (!styledFonts.has(name)) {
+    const res = await fetch(`${import.meta.env.BASE_URL}fonts/LiberationSans-${name}.ttf`);
+    styledFonts.set(name, parseFont(await res.arrayBuffer()));
+  }
+  return styledFonts.get(name)!;
+}
 
 /** Centro del círculo que pasa por tres puntos (nada si están en línea) */
 function circumcenter(a: P2, b: P2, c: P2): P2 | undefined {
@@ -165,6 +195,14 @@ function ellipseMinor(c: P2, a: P2, p: P2): P2 | undefined {
 }
 
 /** Arco de `a` a `b` que pasa por `m`: centro, radio, ángulo inicial y barrido (con signo) */
+/** Punto de la elipse (centro `c`, extremo del eje mayor `a`, del menor `b`) en la dirección paramétrica de `p` */
+function onEllipse(c: P2, a: P2, b: P2, p: P2): P2 {
+  const u: P2 = [a[0] - c[0], a[1] - c[1]];
+  const v: P2 = [b[0] - c[0], b[1] - c[1]];
+  const t = ellipseParam(c, u, v, p);
+  return [c[0] + u[0] * Math.cos(t) + v[0] * Math.sin(t), c[1] + u[1] * Math.cos(t) + v[1] * Math.sin(t)];
+}
+
 function arcThrough(a: P2, b: P2, m: P2): { c: P2; r: number; a0: number; sweep: number } | undefined {
   const c = circumcenter(a, b, m);
   if (!c) return undefined;
@@ -197,7 +235,11 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
   for (const e of s.entities) {
     const g = e.geometry;
     let d = Infinity;
-    if (g.type === "line") d = segDist(p, pt.get(g.start)!, pt.get(g.end)!);
+    if (g.type === "line" && e.infinite) {
+      // Infinita: la distancia a la recta entera
+      const [a, b] = [pt.get(g.start)!, pt.get(g.end)!];
+      d = Math.abs((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) / (dist(a, b) || 1);
+    } else if (g.type === "line") d = segDist(p, pt.get(g.start)!, pt.get(g.end)!);
     else if (g.type === "circle") d = Math.abs(dist(p, pt.get(g.center)!) - g.radius);
     else if (g.type === "arc") d = Math.abs(dist(p, pt.get(g.center)!) - dist(pt.get(g.start)!, pt.get(g.center)!));
     else if (g.type === "point") d = dist(p, pt.get(g.point)!);
@@ -206,7 +248,7 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     else {
-      const pts = splineOf(g, (x) => pt.get(x)) ?? [];
+      const pts = (g.type === "spline" ? splineOf(g, (x) => pt.get(x)) : curvePolyline(g, (x) => pt.get(x))) ?? [];
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
     if (d <= tol && (!best || d < best.d)) best = { id: e.id, d };
@@ -258,6 +300,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Anclaje bajo el cursor: punto resaltado y su glifo junto al puntero
   const [snapView, setSnapView] = createSignal<{ kind: SnapKind; p: P2; x: number; y: number; guides: [P2, P2][]; refs: number[] }>();
   const [polygonSides, setPolygonSides] = createSignal(6);
+  // Cónica: factor rho (0,5 = parábola); spline por polos: grado
+  const [conicRho, setConicRho] = createSignal(0.5);
+  const [bsplineDegree, setBsplineDegree] = createSignal(3);
   // Variante a la vista de cada familia de herramientas, y la lista abierta
   const [familyPick, setFamilyPick] = createSignal<Record<string, SketchTool>>({});
   const [openFamily, setOpenFamily] = createSignal<string>();
@@ -298,18 +343,20 @@ export const CadView: Component<CadViewProps> = (props) => {
   /** Rehace las curvas de un texto en su ancla (mismo ancla y mismo id) */
   const rewriteText = async (id: number, text: string, size: number) => {
     try {
-      const font = await loadTextFont();
+      await loadTextFont();
       const s = ui.session();
       const t = s?.sketch.texts?.find((x) => x.id === id);
       const a = t && s!.sketch.points.find((p) => p.id === t.anchor);
       if (!t || !a || !text.trim()) return;
       const at: P2 = [a.x, a.y];
-      const contours = outlineContours(font.getPath(text, 0, 0, size).commands, at);
+      const style = t.style ?? {};
+      const styled = await loadStyledFont(!!style.bold, !!style.italic);
+      const contours = layoutText(styled, text, size, at, style.align, textPath(s!.sketch, style.path));
       ui.change((sk) => {
         const cur = sk.texts?.find((x) => x.id === id);
         if (!cur) return;
         removeText(sk, cur, true);
-        addText(sk, contours, at, { text, size, font: fontName() }, cur.anchor, cur.id);
+        addText(sk, contours, at, { text, size, font: fontName(), ...(Object.keys(style).length ? { style } : {}) }, cur.anchor, cur.id);
       });
       ui.setSelection([t.anchor]);
       ui.setMessage(undefined);
@@ -318,6 +365,23 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
   };
   const [textValue, setTextValue] = createSignal("Texto");
+  const [textBold, setTextBold] = createSignal(false);
+  const [textItalic, setTextItalic] = createSignal(false);
+  const [textAlign, setTextAlign] = createSignal<"left" | "center" | "right">("left");
+  /** Polilínea de la curva que siguen las letras de un texto */
+  const textPath = (sk: Sketch, id?: number): P2[] | undefined => {
+    const e = id !== undefined ? sk.entities.find((x) => x.id === id) : undefined;
+    if (!e) return undefined;
+    return entityPolyline(e.geometry, new Map(sk.points.map((p) => [p.id, [p.x, p.y] as P2])));
+  };
+  /** Curva elegida que seguiría un texto nuevo (una sola, que no sea un punto ni parte de otro texto) */
+  const textCurve = () => {
+    const s = ui.session();
+    const sel = ui.selection();
+    if (!s || sel.length !== 1) return undefined;
+    const e = s.sketch.entities.find((x) => x.id === sel[0]);
+    return e && e.geometry.type !== "point" && !textOf(s.sketch, e.id) ? e.id : undefined;
+  };
   const [textSize, setTextSize] = createSignal(10);
   const [fontName, setFontName] = createSignal("Liberation Sans");
   const [scanVisible, setScanVisible] = createSignal(true);
@@ -717,6 +781,46 @@ export const CadView: Component<CadViewProps> = (props) => {
         preview.push([c, [m[0], c[1]], m, [c[0], m[1]], c]);
       }
       if (t === "spline" && an.length >= 1) preview.push(splinePolyline([...an, c], false));
+      if (t === "line_inf" && an.length === 1) {
+        const l = dist(an[0], c) || 1;
+        const k = Math.max(50 * l, 1000) / l;
+        preview.push([
+          [an[0][0] - (c[0] - an[0][0]) * k, an[0][1] - (c[1] - an[0][1]) * k],
+          [an[0][0] + (c[0] - an[0][0]) * k, an[0][1] + (c[1] - an[0][1]) * k],
+        ]);
+      }
+      if (t === "parallelogram" && an.length === 1) preview.push([an[0], c]);
+      if (t === "parallelogram" && an.length === 2) preview.push([an[0], an[1], c, [an[0][0] + c[0] - an[1][0], an[0][1] + c[1] - an[1][1]], an[0]]);
+      if (t === "ellipse_arc" && an.length === 1) preview.push([an[0], c]);
+      if (t === "ellipse_arc" && an.length >= 2) {
+        const minor = an.length === 2 ? ellipseMinor(an[0], an[1], c) : ellipseMinor(an[0], an[1], an[2]);
+        if (minor && an.length <= 3) preview.push(ellipsePolyline(an[0], an[1], minor));
+        if (minor && an.length === 3) preview.push([an[0], onEllipse(an[0], an[1], minor, c)]);
+        if (minor && an.length === 4) preview.push(ellipseArcPolyline(an[0], an[1], minor, onEllipse(an[0], an[1], minor, an[3]), onEllipse(an[0], an[1], minor, c)));
+      }
+      if ((t === "conic" || t === "parabola") && an.length === 1) preview.push([an[0], c]);
+      if ((t === "conic" || t === "parabola") && an.length === 2) {
+        const w = rhoWeight(t === "parabola" ? 0.5 : conicRho());
+        const curve = makeBSpline({ poles: [an[0], c, an[1]], weights: [1, w, 1], degree: 2 });
+        preview.push([an[0], c, an[1]]);
+        if (curve) preview.push(sampleCurve(curve, 48));
+      }
+      if (t === "bspline" && an.length >= 1) {
+        const poles = [...an, c];
+        preview.push(poles);
+        const curve = makeBSpline({ poles, degree: bsplineDegree() });
+        if (curve) preview.push(sampleCurve(curve, 16));
+      }
+      if (t === "slot_arc3" && an.length === 1) preview.push([an[0], c]);
+      if (t === "slot_arc3" && an.length >= 2) {
+        // Comienzo, por donde pasa, fin: el arco del medio; después el ancho
+        const arc = an.length === 2 ? arcThrough(an[0], c, an[1]) : arcThrough(an[0], an[2], an[1]);
+        if (arc && an.length === 2) preview.push(Array.from({ length: 33 }, (_, i) => [arc.c[0] + arc.r * Math.cos(arc.a0 + (arc.sweep * i) / 32), arc.c[1] + arc.r * Math.sin(arc.a0 + (arc.sweep * i) / 32)] as P2));
+        if (arc && an.length === 3) {
+          const start: P2 = arc.sweep > 0 ? an[0] : an[2];
+          preview.push(arcSlotOutline(arc.c, start, Math.abs(arc.sweep), Math.max(1e-6, Math.abs(dist(arc.c, c) - arc.r))));
+        }
+      }
       if (t === "ellipse" && an.length === 1) preview.push([an[0], c]);
       if (t === "ellipse" && an.length === 2) {
         const e = ellipseMinor(an[0], an[1], c);
@@ -766,6 +870,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       ],
       freePoints: s.report?.free_points,
       freeEntities: s.report?.free_entities,
+      // Peine de curvatura: dientes de hasta ~60 px
+      curvature: (() => {
+        const id = ui.combEntity();
+        if (id === undefined || !s.sketch.entities.some((x) => x.id === id)) return undefined;
+        return splineCurvature(s.sketch, id, viewer!.pixelSizeMm() * 60);
+      })(),
       linkedEntities: s.sketch.uses?.map((u) => u.entity),
       hideConstruction: !ui.sketchShow().construction,
       hidePoints: !ui.sketchShow().points,
@@ -831,6 +941,18 @@ export const CadView: Component<CadViewProps> = (props) => {
     ui.change((sk) => {
       const points = an.map((a) => placeSnap(sk, a));
       ui.addEntity(sk, { type: "spline", points, closed });
+    });
+  };
+
+  /** Crea la spline por polos con los puntos marcados (abierta o cerrada) */
+  const finishBSpline = (closed: boolean) => {
+    const an = anchor();
+    setAnchor([]);
+    if (an.length < (closed ? 3 : 2)) return;
+    ui.change((sk) => {
+      const poles = an.map((a) => placeSnap(sk, a));
+      const degree = Math.max(1, Math.min(Math.round(bsplineDegree()), poles.length - 1));
+      ui.addEntity(sk, { type: "bspline", poles, degree, ...(closed ? { closed: true } : {}) });
     });
   };
 
@@ -1020,10 +1142,17 @@ export const CadView: Component<CadViewProps> = (props) => {
       const text = textValue().trim();
       if (!text) return ui.setMessage("Escribir el texto en la barra del sketch");
       const at = hit.p;
-      loadTextFont()
+      const path = textCurve();
+      const style = {
+        ...(textBold() ? { bold: true } : {}),
+        ...(textItalic() ? { italic: true } : {}),
+        ...(textAlign() !== "left" ? { align: textAlign() } : {}),
+        ...(path !== undefined ? { path } : {}),
+      };
+      loadStyledFont(textBold(), textItalic())
         .then((font) => {
-          const contours = outlineContours(font.getPath(text, 0, 0, textSize()).commands, at);
-          ui.change((sk) => addText(sk, contours, at, { text, size: textSize(), font: fontName() }));
+          const contours = layoutText(font, text, textSize(), at, textAlign(), textPath(s.sketch, path));
+          ui.change((sk) => addText(sk, contours, at, { text, size: textSize(), font: fontName(), ...(Object.keys(style).length ? { style } : {}) }));
           ui.setMessage(undefined);
         })
         .catch((err) => ui.setMessage(`No se pudo leer la fuente: ${err}`));
@@ -1034,6 +1163,100 @@ export const CadView: Component<CadViewProps> = (props) => {
       // Clic sobre el primer punto: se cierra
       if (an.length >= 3 && dist(an[0].p, hit.p) <= viewer.pixelSizeMm() * 8) return finishSpline(true);
       return setAnchor([...an, hit]);
+    }
+    if (t === "bspline") {
+      const an = anchor();
+      if (an.length >= 3 && dist(an[0].p, hit.p) <= viewer.pixelSizeMm() * 8) return finishBSpline(true);
+      return setAnchor([...an, hit]);
+    }
+    if (t === "line_inf") {
+      const an = anchor();
+      if (!an.length) return setAnchor([hit]);
+      setAnchor([]);
+      if (dist(an[0].p, hit.p) < 1e-9) return;
+      ui.change((sk) => {
+        const id = ui.addEntity(sk, { type: "line", start: placeSnap(sk, an[0]), end: placeSnap(sk, hit) });
+        const e = sk.entities.find((x) => x.id === id)!;
+        e.construction = true;
+        e.infinite = true;
+      });
+      return;
+    }
+    if (t === "parallelogram") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [A, B] = an;
+      setAnchor([]);
+      if (Math.abs((B.p[0] - A.p[0]) * (hit.p[1] - B.p[1]) - (B.p[1] - A.p[1]) * (hit.p[0] - B.p[0])) < 1e-9) return ui.setMessage("Las tres esquinas están en línea");
+      ui.change((sk) => {
+        const [a, b, c] = [placeSnap(sk, A), placeSnap(sk, B), placeSnap(sk, hit)];
+        addParallelogram(sk, a, b, c);
+      });
+      return;
+    }
+    if (t === "ellipse_arc") {
+      const an = anchor();
+      if (an.length < 4) {
+        if (an.length === 2 && !ellipseMinor(an[0].p, an[1].p, hit.p)) return ui.setMessage("La elipse necesita ancho: mover el punto hacia un costado del eje");
+        return setAnchor([...an, hit]);
+      }
+      const [C, M, W, S] = an;
+      const minor = ellipseMinor(C.p, M.p, W.p)!;
+      setAnchor([]);
+      ui.setMessage(undefined);
+      ui.change((sk) => {
+        const center = placeSnap(sk, C);
+        const major = placeSnap(sk, M);
+        const mi = addPoint(sk, minor);
+        const start = addPoint(sk, onEllipse(C.p, M.p, minor, S.p));
+        const end = addPoint(sk, onEllipse(C.p, M.p, minor, hit.p));
+        ui.addEntity(sk, { type: "ellipse_arc", center, major, minor: mi, start, end });
+        if (C.id === undefined || M.id === undefined) dims.push(dim(sk, { type: "distance", a: center, b: major, value: round(dist(C.p, M.p)) }));
+        dims.push(dim(sk, { type: "distance", a: center, b: mi, value: round(dist(C.p, minor)) }));
+      });
+      return askDims(dims);
+    }
+    if (t === "conic" || t === "parabola") {
+      const an = anchor();
+      if (an.length < 2) return setAnchor([...an, hit]);
+      const [A, B] = an;
+      setAnchor([]);
+      const rho = t === "parabola" ? 0.5 : Math.min(0.99, Math.max(0.01, conicRho()));
+      ui.change((sk) => {
+        const [a, b, apex] = [placeSnap(sk, A), placeSnap(sk, B), placeSnap(sk, hit)];
+        ui.addEntity(sk, { type: "bspline", poles: [a, apex, b], degree: 2, weights: [1, rhoWeight(rho), 1] });
+      });
+      return;
+    }
+    if (t === "slot_arc3") {
+      const an = anchor();
+      if (an.length < 3) return setAnchor([...an, hit]);
+      const [S, M, E] = an;
+      setAnchor([]);
+      const arc = arcThrough(S.p, E.p, M.p);
+      if (!arc) return ui.setMessage("Los tres puntos están en línea: mover el del medio hacia un costado");
+      const w = Math.abs(dist(arc.c, hit.p) - arc.r);
+      let msg: string | undefined;
+      ui.change((sk) => {
+        const center = ui.addPoint(sk, arc.c);
+        // Los arcos van antihorarios: si pasa por el otro lado, del fin al comienzo
+        const [first, last] = arc.sweep > 0 ? [S, E] : [E, S];
+        const start = placeSnap(sk, first);
+        const end = placeSnap(sk, last);
+        const r = addArcSlot(sk, center, start, end, w);
+        if (typeof r === "string") return void (msg = r);
+        dims.push(dim(sk, { type: "radius", entity: r.capStart, value: round(w) }));
+      });
+      ui.setMessage(msg);
+      return askDims(dims);
+    }
+    if (t === "spline_point") {
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      let msg: string | undefined = "Clic sobre una spline";
+      if (target !== undefined) ui.change((sk) => void (msg = insertSplinePoint(sk, target, raw)));
+      ui.setMessage(msg);
+      return;
     }
     if (t === "ellipse") {
       const an = anchor();
@@ -1784,6 +2007,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (e.key === "Escape") {
         // La spline se termina con Esc (abierta)
         if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
+        else if (ui.tool() === "bspline" && anchor().length >= 2) finishBSpline(false);
         else if (chain() || anchor().length) resetTool();
         else ui.setTool("select");
       } else if (e.key === "Enter") void ui.finishSketch();
@@ -2529,6 +2753,39 @@ export const CadView: Component<CadViewProps> = (props) => {
                   />
                   mm
                 </label>
+                <div class="flex items-center gap-0.5" role="group" aria-label="Estilo del texto">
+                  <button
+                    aria-pressed={textBold()}
+                    title="Negrita (con la fuente incluida)"
+                    class={clsx("px-1.5 py-0.5 rounded text-xs font-bold", textBold() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
+                    onClick={() => setTextBold(!textBold())}
+                  >
+                    N
+                  </button>
+                  <button
+                    aria-pressed={textItalic()}
+                    title="Cursiva (con la fuente incluida)"
+                    class={clsx("px-1.5 py-0.5 rounded text-xs italic", textItalic() ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
+                    onClick={() => setTextItalic(!textItalic())}
+                  >
+                    K
+                  </button>
+                  <For each={[["left", "Izq."], ["center", "Centro"], ["right", "Der."]] as const}>
+                    {([k, label]) => (
+                      <button
+                        aria-pressed={textAlign() === k}
+                        title="Alineación respecto del clic"
+                        class={clsx("px-1.5 py-0.5 rounded text-[11px]", textAlign() === k ? "bg-accent text-bg" : "text-text-muted hover:bg-surface")}
+                        onClick={() => setTextAlign(k)}
+                      >
+                        {label}
+                      </button>
+                    )}
+                  </For>
+                </div>
+                <span class="text-[11px] text-text-dim whitespace-nowrap" title="Con una curva elegida antes de elegir Texto, las letras la siguen desde el punto más cercano al clic">
+                  {textCurve() !== undefined ? "Sobre la curva elegida" : "En línea recta"}
+                </span>
                 <label class="px-2 py-1 rounded text-xs text-text-muted hover:text-text hover:bg-surface cursor-pointer whitespace-nowrap" title="Fuente .ttf u .otf">
                   {fontName()}…
                   <input
@@ -2584,6 +2841,35 @@ export const CadView: Component<CadViewProps> = (props) => {
                   );
                 }}
               </For>
+              <Show when={ui.tool() === "conic"}>
+                <label class="flex items-center gap-1 text-xs text-text-muted" title="0,5 = parábola; menos, arco de elipse; más, hipérbola">
+                  rho
+                  <input
+                    type="number"
+                    min="0.01"
+                    max="0.99"
+                    step="0.05"
+                    value={conicRho()}
+                    aria-label="Factor rho"
+                    class="w-14 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => setConicRho(Math.min(0.99, Math.max(0.01, parseFloat(e.currentTarget.value) || 0.5)))}
+                  />
+                </label>
+              </Show>
+              <Show when={ui.tool() === "bspline"}>
+                <label class="flex items-center gap-1 text-xs text-text-muted" title="Grado de la curva: 2 cuadrática, 3 cúbica…">
+                  Grado
+                  <input
+                    type="number"
+                    min="1"
+                    max="7"
+                    value={bsplineDegree()}
+                    aria-label="Grado"
+                    class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+                    onChange={(e) => setBsplineDegree(Math.max(1, Math.min(7, parseInt(e.currentTarget.value) || 3)))}
+                  />
+                </label>
+              </Show>
               <Show when={ui.tool() === "polygon"}>
                 <label class="flex items-center gap-1 text-xs text-text-muted">
                   Lados

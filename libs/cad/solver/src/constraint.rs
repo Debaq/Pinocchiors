@@ -205,15 +205,93 @@ pub enum Constraint {
     },
 
     /// Punto sobre una spline suave por sus puntos (tramos de Hermite con
-    /// tangentes de Catmull-Rom: la misma curva que dibuja el sketch). Las
-    /// manijas dan la dirección de salida y de llegada de una abierta.
+    /// tangentes de Catmull-Rom: la misma curva que dibuja el sketch). Cada
+    /// manija `(i, h)` da la dirección en el punto `i` (de `points[i]` a `h`).
     PointOnCurveSpline {
         p_idx: usize,
         points: Vec<usize>,
         closed: bool,
-        start_handle: Option<usize>,
-        end_handle: Option<usize>,
+        handles: Vec<(usize, usize)>,
     },
+
+    /// Punto sobre una B-spline (ver `BSpline::new`)
+    PointOnBSpline { p_idx: usize, curve: BSplineRef },
+
+    /// Misma curvatura (con signo) donde una curva termina y la otra empieza:
+    /// G2 junto con la tangencia, que va aparte
+    EqualCurvature { a: CurveEnd, b: CurveEnd },
+}
+
+/// B-spline cuyos polos son puntos del sistema
+#[derive(Debug, Clone)]
+pub struct BSplineRef {
+    pub poles: Vec<usize>,
+    pub weights: Vec<f64>,
+    pub knots: Vec<f64>,
+    pub degree: usize,
+    pub closed: bool,
+}
+
+impl BSplineRef {
+    pub fn curve(&self, points: &[Point2]) -> Option<crate::BSpline> {
+        let poles: Vec<_> = self.poles.iter().map(|&i| points[i].co).collect();
+        crate::BSpline::new(&poles, &self.weights, self.degree, self.closed, &self.knots)
+    }
+
+    fn remap(&self, r: &impl Fn(&usize) -> usize) -> Self {
+        Self { poles: self.poles.iter().map(r).collect(), ..self.clone() }
+    }
+}
+
+/// Extremo de una curva en una unión G2. `at_start`: la unión está en el
+/// comienzo de la curva. La primera curva de `EqualCurvature` llega a la
+/// unión y la segunda sale de ella: la curvatura se mide en ese avance.
+#[derive(Debug, Clone)]
+pub enum CurveEnd {
+    Line,
+    /// Arco antihorario (curvatura 1/r en su sentido)
+    Arc { center: usize, start: usize, at_start: bool },
+    BSpline { curve: BSplineRef, at_start: bool },
+}
+
+impl CurveEnd {
+    fn indices(&self) -> Vec<usize> {
+        match self {
+            CurveEnd::Line => vec![],
+            CurveEnd::Arc { center, start, .. } => vec![*center, *start],
+            CurveEnd::BSpline { curve, .. } => curve.poles.clone(),
+        }
+    }
+
+    fn remap(&self, r: &impl Fn(&usize) -> usize) -> Self {
+        match self {
+            CurveEnd::Line => CurveEnd::Line,
+            CurveEnd::Arc { center, start, at_start } => CurveEnd::Arc { center: r(center), start: r(start), at_start: *at_start },
+            CurveEnd::BSpline { curve, at_start } => CurveEnd::BSpline { curve: curve.remap(r), at_start: *at_start },
+        }
+    }
+
+    /// Curvatura con signo en la unión, en el sentido de avance de la propia curva
+    fn curvature(&self, points: &[Point2]) -> f64 {
+        match self {
+            CurveEnd::Line => 0.0,
+            CurveEnd::Arc { center, start, .. } => {
+                let r = (points[*start].co - points[*center].co).norm();
+                if r < 1e-15 { 0.0 } else { 1.0 / r }
+            }
+            CurveEnd::BSpline { curve, at_start } => curve.curve(points).map_or(0.0, |c| {
+                let (a, b) = c.domain();
+                c.curvature(if *at_start { a } else { b })
+            }),
+        }
+    }
+
+    fn at_start(&self) -> bool {
+        match self {
+            CurveEnd::Line => false,
+            CurveEnd::Arc { at_start, .. } | CurveEnd::BSpline { at_start, .. } => *at_start,
+        }
+    }
 }
 
 /// Tramo de una cadena para `Constraint::CurveLength`
@@ -264,14 +342,9 @@ fn arc_length(u: nalgebra::Vector2<f64>, v: nalgebra::Vector2<f64>) -> f64 {
 }
 
 /// Punto más cercano a `p` sobre la spline suave por `pts` (ver
-/// `Constraint::PointOnCurveSpline`); `t0`/`t1`: direcciones de las manijas.
-pub fn closest_on_spline(
-    pts: &[nalgebra::Vector2<f64>],
-    closed: bool,
-    t0: Option<nalgebra::Vector2<f64>>,
-    t1: Option<nalgebra::Vector2<f64>>,
-    p: nalgebra::Vector2<f64>,
-) -> nalgebra::Vector2<f64> {
+/// `Constraint::PointOnCurveSpline`); `dirs[i]`: dirección impuesta en el
+/// punto `i` por una manija (vacío = ninguna).
+pub fn closest_on_spline(pts: &[nalgebra::Vector2<f64>], closed: bool, dirs: &[Option<nalgebra::Vector2<f64>>], p: nalgebra::Vector2<f64>) -> nalgebra::Vector2<f64> {
     type V = nalgebra::Vector2<f64>;
     let n = pts.len();
     if n == 0 {
@@ -283,16 +356,17 @@ pub fn closest_on_spline(
     let at = |i: isize| pts[i.rem_euclid(n as isize) as usize];
     let along = |dir: V, r: V| if dir.norm() < 1e-15 { r } else { dir * (r.norm() / dir.norm()) };
     let tangent = |i: usize| -> V {
-        if closed {
-            return (at(i as isize + 1) - at(i as isize - 1)) / 2.0;
-        }
-        if i == 0 {
-            return t0.map_or(pts[1] - pts[0], |t| along(t, pts[1] - pts[0]));
-        }
-        if i == n - 1 {
-            return t1.map_or(pts[n - 1] - pts[n - 2], |t| along(t, pts[n - 1] - pts[n - 2]));
-        }
-        (pts[i + 1] - pts[i - 1]) / 2.0
+        let base = if closed {
+            (at(i as isize + 1) - at(i as isize - 1)) / 2.0
+        } else if i == 0 {
+            pts[1] - pts[0]
+        } else if i == n - 1 {
+            pts[n - 1] - pts[n - 2]
+        } else {
+            (pts[i + 1] - pts[i - 1]) / 2.0
+        };
+        // La manija da la dirección; el largo queda el de Catmull-Rom
+        dirs.get(i).copied().flatten().map_or(base, |d| along(d, base))
     };
     let segs = if closed { n } else { n - 1 };
     let eval = |seg: usize, t: f64| -> V {
@@ -359,6 +433,8 @@ impl Constraint {
             Constraint::RimDistance { .. } => 1,
             Constraint::PointOnEllipse { .. } => 1,
             Constraint::PointOnCurveSpline { .. } => 2,
+            Constraint::PointOnBSpline { .. } => 2,
+            Constraint::EqualCurvature { .. } => 1,
         }
     }
 
@@ -456,9 +532,11 @@ impl Constraint {
                 [Some(*a), *a_rim, Some(*b), *b_end, *b_rim].into_iter().flatten().collect()
             }
             Constraint::PointOnEllipse { p_idx, center, major, minor } => vec![*p_idx, *center, *major, *minor],
-            Constraint::PointOnCurveSpline { p_idx, points, start_handle, end_handle, .. } => {
-                std::iter::once(*p_idx).chain(points.iter().copied()).chain(*start_handle).chain(*end_handle).collect()
+            Constraint::PointOnCurveSpline { p_idx, points, handles, .. } => {
+                std::iter::once(*p_idx).chain(points.iter().copied()).chain(handles.iter().map(|h| h.1)).collect()
             }
+            Constraint::PointOnBSpline { p_idx, curve } => std::iter::once(*p_idx).chain(curve.poles.iter().copied()).collect(),
+            Constraint::EqualCurvature { a, b } => a.indices().into_iter().chain(b.indices()).collect(),
         }
     }
 
@@ -540,13 +618,14 @@ impl Constraint {
             },
             Constraint::PointOnEllipse { p_idx, center, major, minor } =>
                 Constraint::PointOnEllipse { p_idx: r(p_idx), center: r(center), major: r(major), minor: r(minor) },
-            Constraint::PointOnCurveSpline { p_idx, points, closed, start_handle, end_handle } => Constraint::PointOnCurveSpline {
+            Constraint::PointOnCurveSpline { p_idx, points, closed, handles } => Constraint::PointOnCurveSpline {
                 p_idx: r(p_idx),
                 points: points.iter().map(&r).collect(),
                 closed: *closed,
-                start_handle: start_handle.as_ref().map(&r),
-                end_handle: end_handle.as_ref().map(&r),
+                handles: handles.iter().map(|(i, h)| (*i, r(h))).collect(),
             },
+            Constraint::PointOnBSpline { p_idx, curve } => Constraint::PointOnBSpline { p_idx: r(p_idx), curve: curve.remap(&r) },
+            Constraint::EqualCurvature { a, b } => Constraint::EqualCurvature { a: a.remap(&r), b: b.remap(&r) },
         }
     }
 
@@ -743,13 +822,35 @@ impl Constraint {
                 vec![(rho - 1.0) * (ra * rb).sqrt()]
             }
 
-            Constraint::PointOnCurveSpline { p_idx, points: ids, closed, start_handle, end_handle } => {
+            Constraint::PointOnCurveSpline { p_idx, points: ids, closed, handles } => {
                 let pts: Vec<_> = ids.iter().map(|&i| points[i].co).collect();
-                let handle = |h: &Option<usize>, end: usize| h.map(|i| points[i].co - pts[end]);
-                let (t0, t1) = if *closed || pts.is_empty() { (None, None) } else { (handle(start_handle, 0), handle(end_handle, pts.len() - 1)) };
+                let mut dirs = vec![None; pts.len()];
+                for &(i, h) in handles {
+                    if i < pts.len() {
+                        dirs[i] = Some(points[h].co - pts[i]);
+                    }
+                }
                 let p = points[*p_idx].co;
-                let q = closest_on_spline(&pts, *closed, t0, t1, p);
+                let q = closest_on_spline(&pts, *closed, &dirs, p);
                 vec![q.x - p.x, q.y - p.y]
+            }
+
+            Constraint::PointOnBSpline { p_idx, curve } => {
+                let p = points[*p_idx].co;
+                match curve.curve(points) {
+                    Some(c) => {
+                        let q = c.eval(c.closest_param(p));
+                        vec![q.x - p.x, q.y - p.y]
+                    }
+                    None => vec![0.0, 0.0],
+                }
+            }
+
+            Constraint::EqualCurvature { a, b } => {
+                // La primera llega a la unión: si la unión es su comienzo, se recorre al revés
+                let sa = if a.at_start() { -1.0 } else { 1.0 };
+                let sb = if b.at_start() { 1.0 } else { -1.0 };
+                vec![sa * a.curvature(points) - sb * b.curvature(points)]
             }
 
             Constraint::EqualVector { a1, a2, b1, b2 } => {
@@ -1035,7 +1136,9 @@ impl Constraint {
             | Constraint::CurveLength { .. }
             | Constraint::RimDistance { .. }
             | Constraint::PointOnEllipse { .. }
-            | Constraint::PointOnCurveSpline { .. } => self.jacobian_numerical(points),
+            | Constraint::PointOnCurveSpline { .. }
+            | Constraint::PointOnBSpline { .. }
+            | Constraint::EqualCurvature { .. } => self.jacobian_numerical(points),
 
             Constraint::EqualVector { a1, a2, b1, b2 } => vec![
                 (0, *a1, 1.0, 0.0),

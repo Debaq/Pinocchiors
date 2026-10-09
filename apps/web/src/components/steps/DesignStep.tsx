@@ -86,6 +86,7 @@ import type { CadUi } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
 import { measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
 import { selectByKind, type SelectKind } from "../../lib/sketchCheck";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { partKey } from "../../lib/objects";
@@ -4133,8 +4134,13 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       if (axis !== undefined && pairE.length === 2 && pairE[0].geometry.type === pairE[1].geometry.type)
         out.push({ label: "Simétricas (eje: la última línea)", make: () => ({ type: "symmetric_entities", a: pairE[0].id, b: pairE[1].id, line: axis }) });
     }
+    // Con una spline por polos: tangencia y curvatura igual (G2) en el extremo común
+    if (E.length === 2 && P.length === 0 && E.some((e) => e.geometry.type === "bspline") && E.every((e) => ["line", "arc", "bspline"].includes(e.geometry.type))) {
+      out.push({ label: "Tangentes en la unión", make: () => ({ type: "tangent", a: E[0].id, b: E[1].id }) });
+      out.push({ label: "Curvatura igual (G2)", make: () => ({ type: "curvature", a: E[0].id, b: E[1].id }) });
+    }
     const curvesAny = E.filter((e) => e.geometry.type !== "point");
-    if (P.length === 1 && curvesAny.length === 1 && E.length === 1 && ["ellipse", "spline"].includes(curvesAny[0].geometry.type))
+    if (P.length === 1 && curvesAny.length === 1 && E.length === 1 && ["ellipse", "spline", "bspline", "ellipse_arc"].includes(curvesAny[0].geometry.type))
       out.push({ label: "Punto en la curva", make: () => ({ type: "point_on_curve", point: P[0], curve: curvesAny[0].id }) });
     if (P.length === 1 && curvesAny.length === 2 && E.length === 2)
       out.push({ label: "Punto en la intersección", make: () => ({ type: "intersection", point: P[0], a: curvesAny[0].id, b: curvesAny[1].id }) });
@@ -4275,6 +4281,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               Manijas en los extremos sí/no
             </Button>
           </Show>
+          <SplineTools ui={ui} />
           <Show when={selEntities().length > 0}>
             <div class="space-y-1.5 border-t border-border pt-1.5">
               <Show when={lines().length > 0 && selEntities().length > 1}>
@@ -4570,6 +4577,8 @@ const ENTITY_NAMES: Record<Geometry["type"], string> = {
   spline: "Spline",
   point: "Punto",
   ellipse: "Elipse",
+  ellipse_arc: "Arco elíptico",
+  bspline: "B-spline",
 };
 
 /** Usar del modelo: silueta, intersección, otro sketch y romper el vínculo */
@@ -4780,5 +4789,123 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
         )}
       </Show>
     </Section>
+  );
+};
+
+/**
+ * Herramientas de splines del panel: manijas y quitar puntos (punto de una
+ * spline elegido), ajuste a puntos, simplificar, convertir a polos y el peine
+ * de curvatura.
+ */
+const SplineTools: Component<{ ui: CadUi }> = (props) => {
+  const ui = props.ui;
+  const [tol, setTol] = createSignal(0.05);
+  const sketch = () => ui.session()!.sketch;
+  const sel = () => ui.selection();
+  const ents = () => sel().map((id) => sketch().entities.find((e) => e.id === id)).filter((e) => e !== undefined);
+  const pts = () => sel().filter((id) => sketch().points.some((p) => p.id === id));
+  const splines = () => ents().filter((e) => e.geometry.type === "spline" || e.geometry.type === "bspline");
+  /** Spline (por puntos o por polos) a la que pertenece un punto elegido */
+  const owner = () => {
+    if (pts().length !== 1 || ents().length) return undefined;
+    const p = pts()[0];
+    const e = sketch().entities.find((x) => (x.geometry.type === "spline" && x.geometry.points.includes(p)) || (x.geometry.type === "bspline" && x.geometry.poles.includes(p)));
+    return e && { entity: e.id, point: p, kind: e.geometry.type };
+  };
+  const convertible = () => ents().length > 0 && ents().every((e) => ["line", "arc", "spline"].includes(e.geometry.type)) && !ents().every((e) => e.geometry.type === "line");
+  const run = (f: (sk: Sketch) => string | number | undefined, ok?: (r: string | number | undefined) => string | undefined) => {
+    let r: string | number | undefined;
+    ui.change((sk) => void (r = f(sk)));
+    ui.setMessage(typeof r === "string" ? r : ok?.(r));
+  };
+  const comb = () => {
+    const id = ui.combEntity();
+    return id !== undefined ? splineCurvature(sketch(), id, 1) : undefined;
+  };
+  return (
+    <Show when={owner() || splines().length || pts().length >= 3 || convertible() || ui.combEntity() !== undefined}>
+      <div class="space-y-1.5 border-t border-border pt-1.5" data-spline-tools>
+        <div class="text-[11px] text-text-dim">Splines</div>
+        <div class="flex flex-wrap gap-1.5">
+          <Show when={owner()}>
+            {(o) => (
+              <>
+                <Show when={o().kind === "spline"}>
+                  <Button size="sm" title="Un punto que da la dirección de la curva en ese punto (se arrastra)" onClick={() => run((sk) => toggleSplineHandle(sk, o().entity, o().point))}>
+                    Manija en el punto sí/no
+                  </Button>
+                </Show>
+                <Button size="sm" onClick={() => run((sk) => removeSplinePoint(sk, o().entity, o().point), () => void ui.setSelection([]))}>
+                  {o().kind === "spline" ? "Quitar el punto de la spline" : "Quitar el polo"}
+                </Button>
+              </>
+            )}
+          </Show>
+          <Show when={pts().length >= 3 && !ents().length}>
+            <Button
+              size="sm"
+              title="Spline por polos que pasa por el primero y el último y se acerca a los demás (en el orden en que se eligieron)"
+              onClick={() =>
+                run(
+                  (sk) => fitSplineToPoints(sk, pts(), tol()),
+                  (id) => (typeof id === "number" ? void ui.setSelection([id]) : undefined),
+                )
+              }
+            >
+              Spline de ajuste
+            </Button>
+          </Show>
+          <Show when={splines().length === 1}>
+            <Button
+              size="sm"
+              title="Saca puntos (o polos) mientras la curva no se aparte más que la tolerancia"
+              onClick={() => run((sk) => simplifySpline(sk, splines()[0].id, tol()), (n) => (typeof n === "number" ? (n ? `Se sacaron ${n}` : "No hay nada que sacar con esa tolerancia") : undefined))}
+            >
+              Simplificar
+            </Button>
+            <Button size="sm" aria-pressed={ui.combEntity() === splines()[0].id} onClick={() => ui.setCombEntity(ui.combEntity() === splines()[0].id ? undefined : splines()[0].id)}>
+              Peine de curvatura
+            </Button>
+          </Show>
+          <Show when={convertible()}>
+            <Button
+              size="sm"
+              title="Líneas, arcos y splines por puntos unidos por los extremos pasan a una spline por polos (los arcos, con un error de ~0,03 % del radio)"
+              onClick={() =>
+                run(
+                  (sk) => convertToBSpline(sk, ents().map((e) => e.id)),
+                  (id) => (typeof id === "number" ? void ui.setSelection([id]) : undefined),
+                )
+              }
+            >
+              Convertir a spline por polos
+            </Button>
+          </Show>
+        </div>
+        <label class="flex items-center gap-1 text-[11px] text-text-muted">
+          Tolerancia
+          <input
+            type="number"
+            min="0.0001"
+            step="0.01"
+            value={tol()}
+            aria-label="Tolerancia de las splines"
+            class="w-16 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+            onChange={(e) => setTol(Math.max(1e-4, parseFloat(e.currentTarget.value) || 0.05))}
+          />
+          mm
+        </label>
+        <Show when={comb()}>
+          {(c) => (
+            <p class="text-[11px] text-text-muted" data-curvature>
+              Radio mínimo {Number.isFinite(c().minRadius) ? `${+c().minRadius.toFixed(3)} mm` : "— (recta)"} · {c().inflections.length} inflexiones
+              <button class="ml-1 underline hover:text-text" onClick={() => ui.setCombEntity(undefined)}>
+                ocultar
+              </button>
+            </p>
+          )}
+        </Show>
+      </div>
+    </Show>
   );
 };

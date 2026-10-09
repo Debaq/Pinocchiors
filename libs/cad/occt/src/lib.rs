@@ -90,6 +90,16 @@ pub enum Curve {
     SplineEnds { points: Vec<P3>, start: P3, end: P3 },
     /// Elipse completa: `major` es la dirección del semieje `a`; `b` va a 90°.
     Ellipse { center: P3, normal: P3, major: P3, a: f64, b: f64 },
+    /// B-spline por polos (racional si los pesos no son todos 1). Abierta:
+    /// `knots` es el vector completo (con repetidos). Periódica: los polos sin
+    /// repetir y nudos uniformes (`knots` se ignora).
+    BSpline { poles: Vec<P3>, weights: Vec<f64>, knots: Vec<f64>, degree: u32, periodic: bool },
+    /// Arco de elipse de `start` a `end` (los dos sobre la elipse),
+    /// antihorario alrededor de `normal`; con `forward` falso se recorre del
+    /// fin al inicio.
+    EllipseArc { center: P3, normal: P3, major: P3, a: f64, b: f64, start: P3, end: P3, forward: bool },
+    /// Spline interpolada con la dirección impuesta en algunos puntos.
+    SplineTangents { points: Vec<P3>, tangents: Vec<Option<P3>>, periodic: bool },
 }
 
 impl Curve {
@@ -134,6 +144,58 @@ impl Curve {
                 data.push(*a);
                 data.push(*b);
                 4
+            }
+            Curve::BSpline { poles, weights, knots, degree, periodic } => {
+                // Nudos distintos y multiplicidades (OCCT); periódica: uniforme, una vez cada uno
+                let (uniq, mults): (Vec<f64>, Vec<f64>) = if *periodic {
+                    ((0..=poles.len()).map(|i| i as f64).collect(), vec![1.0; poles.len() + 1])
+                } else {
+                    let mut u: Vec<f64> = Vec::new();
+                    let mut m: Vec<f64> = Vec::new();
+                    for &k in knots {
+                        if u.last().is_some_and(|&l| (k - l).abs() < 1e-12) {
+                            *m.last_mut().unwrap() += 1.0;
+                        } else {
+                            u.push(k);
+                            m.push(1.0);
+                        }
+                    }
+                    (u, m)
+                };
+                data.extend_from_slice(&[*degree as f64, if *periodic { 1.0 } else { 0.0 }, poles.len() as f64, uniq.len() as f64]);
+                for p in poles {
+                    data.extend_from_slice(p);
+                }
+                if weights.len() == poles.len() {
+                    data.extend_from_slice(weights);
+                } else {
+                    data.extend(std::iter::repeat_n(1.0, poles.len()));
+                }
+                data.extend_from_slice(&uniq);
+                data.extend_from_slice(&mults);
+                6
+            }
+            Curve::EllipseArc { center, normal, major, a, b, start, end, forward } => {
+                data.extend_from_slice(center);
+                data.extend_from_slice(normal);
+                data.extend_from_slice(major);
+                data.push(*a);
+                data.push(*b);
+                data.extend_from_slice(start);
+                data.extend_from_slice(end);
+                data.push(if *forward { 1.0 } else { 0.0 });
+                7
+            }
+            Curve::SplineTangents { points, tangents, periodic } => {
+                data.push(if *periodic { 1.0 } else { 0.0 });
+                data.push(points.len() as f64);
+                for p in points {
+                    data.extend_from_slice(p);
+                }
+                for i in 0..points.len() {
+                    data.extend_from_slice(&tangents.get(i).copied().flatten().unwrap_or([0.0; 3]));
+                }
+                8
             }
         };
         kinds.push(kind);

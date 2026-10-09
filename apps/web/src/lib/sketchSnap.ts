@@ -147,14 +147,14 @@ function relAngle(p: P2, c: P2, a0: number): number {
 
 /** Curva de un sketch en coordenadas: segmento o círculo (con barrido si es arco) */
 export type Curve =
-  | { id: number; kind: "line"; a: P2; b: P2 }
+  | { id: number; kind: "line"; a: P2; b: P2; infinite?: boolean }
   | { id: number; kind: "circle"; c: P2; r: number; a0?: number; sweep?: number };
 
 function curveOf(pt: Map<number, P2>, e: Sketch["entities"][number]): Curve | undefined {
   const g = e.geometry;
   if (g.type === "line") {
     const [a, b] = [pt.get(g.start), pt.get(g.end)];
-    return a && b ? { id: e.id, kind: "line", a, b } : undefined;
+    return a && b ? { id: e.id, kind: "line", a, b, ...(e.infinite ? { infinite: true } : {}) } : undefined;
   }
   if (g.type === "circle") {
     const c = pt.get(g.center);
@@ -189,7 +189,7 @@ function within(k: Curve, p: P2): boolean {
     const dx = k.b[0] - k.a[0];
     const dy = k.b[1] - k.a[1];
     const t = ((p[0] - k.a[0]) * dx + (p[1] - k.a[1]) * dy) / (dx * dx + dy * dy || 1);
-    return t >= -EPS && t <= 1 + EPS;
+    return !!k.infinite || (t >= -EPS && t <= 1 + EPS);
   }
   return k.sweep === undefined || relAngle(p, k.c, k.a0!) <= k.sweep + EPS;
 }
@@ -427,7 +427,8 @@ export function infer(s: Sketch, cursor: P2, tol: number, opts: InferOptions = {
       const l2 = dx * dx + dy * dy;
       if (l2 === 0) continue;
       const t = ((cursor[0] - a[0]) * dx + (cursor[1] - a[1]) * dy) / l2;
-      if (t > 0 && t < 1) offer({ p: [a[0] + t * dx, a[1] + t * dy], kind: "on_line", entity: e.id });
+      // Sobre el segmento (o en cualquier parte de una línea infinita)
+      if ((t > 0 && t < 1) || e.infinite) offer({ p: [a[0] + t * dx, a[1] + t * dy], kind: "on_line", entity: e.id });
     } else if (g.type === "circle" || g.type === "arc") {
       const c = pt.get(g.center);
       if (!c) continue;

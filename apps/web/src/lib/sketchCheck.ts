@@ -7,7 +7,7 @@
 // las ramas sueltas y suponen que las curvas no se cruzan: esto avisa de
 // cada caso que las rompe.
 
-import { ellipsePolyline, geometryPoints, splineOf, type Geometry, type P2, type Sketch, type SketchEntity } from "./cad.ts";
+import { curvePolyline, ellipsePolyline, geometryPoints, splineOf, type Geometry, type P2, type Sketch, type SketchEntity } from "./cad.ts";
 
 export interface SketchProblems {
   /** Extremos de una sola curva: la rama no cierra (no forma región) */
@@ -23,7 +23,7 @@ const dist = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 /** Curvas que cuentan para las regiones */
 const isCurve = (e: SketchEntity) => !e.construction && e.geometry.type !== "point";
 /** Abiertas: tienen extremos que tienen que unirse a algo */
-const isOpen = (g: Geometry) => g.type === "line" || g.type === "arc" || (g.type === "spline" && !g.closed);
+const isOpen = (g: Geometry) => g.type === "line" || g.type === "arc" || g.type === "ellipse_arc" || ((g.type === "spline" || g.type === "bspline") && !g.closed);
 
 /** Polilínea de una entidad (círculos y arcos muestreados por dentro) */
 export function polylineOf(s: Sketch, g: Geometry): P2[] {
@@ -56,6 +56,9 @@ export function polylineOf(s: Sketch, g: Geometry): P2[] {
       const [c, a, b] = [at(g.center), at(g.major), at(g.minor)];
       return c && a && b ? ellipsePolyline(c, a, b) : [];
     }
+    case "ellipse_arc":
+    case "bspline":
+      return curvePolyline(g, at) ?? [];
     default:
       return [];
   }

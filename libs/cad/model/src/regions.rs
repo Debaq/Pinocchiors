@@ -97,6 +97,48 @@ pub fn sample_entity(s: &Sketch, id: u32) -> Result<Vec<P2>, SketchError> {
                 })
                 .collect()
         }
+        Geometry::EllipseArc { center, major, minor, start, end } => {
+            let (c, a, b) = (s.point(*center)?, s.point(*major)?, s.point(*minor)?);
+            let (p0, p1) = (s.point(*start)?, s.point(*end)?);
+            let (u, v) = ([a[0] - c[0], a[1] - c[1]], [b[0] - c[0], b[1] - c[1]]);
+            // Antihorario en el plano, sea cual sea el lado del semieje menor
+            let sense = if u[0] * v[1] - u[1] * v[0] >= 0.0 { 1.0 } else { -1.0 };
+            let param = |p: P2| {
+                let q = [p[0] - c[0], p[1] - c[1]];
+                let d = |x: [f64; 2], y: [f64; 2]| x[0] * y[0] + x[1] * y[1];
+                (d(q, v) / d(v, v)).atan2(d(q, u) / d(u, u))
+            };
+            let t0 = param(p0);
+            let mut sweep = (param(p1) - t0) * sense;
+            while sweep <= 1e-12 {
+                sweep += 2.0 * PI;
+            }
+            let n = ((sweep / (2.0 * PI) * SEGMENTS_PER_TURN).ceil() as usize).max(4);
+            let mut pts: Vec<P2> = (0..=n)
+                .map(|i| {
+                    let t = t0 + sense * sweep * i as f64 / n as f64;
+                    [c[0] + u[0] * t.cos() + v[0] * t.sin(), c[1] + u[1] * t.cos() + v[1] * t.sin()]
+                })
+                .collect();
+            // Extremos exactos: así se unen con lo que comparte el punto
+            pts[0] = p0;
+            *pts.last_mut().unwrap() = p1;
+            pts
+        }
+        Geometry::BSpline { poles, degree, closed, weights, knots } => {
+            let pts: Vec<nalgebra::Vector2<f64>> = poles.iter().map(|p| s.point(*p).map(|q| nalgebra::Vector2::new(q[0], q[1]))).collect::<Result<_, _>>()?;
+            let curve = cad_solver::BSpline::new(&pts, weights, *degree as usize, *closed, knots)
+                .ok_or_else(|| SketchError::Unsupported("B-spline con nudos que no cuadran con los polos".into()))?;
+            // 16 por tramo y al menos 64 en total (una cónica es un tramo solo)
+            let spans = curve.breaks().len() - 1;
+            let mut out: Vec<P2> = curve.sample(16.max(64usize.div_ceil(spans.max(1)))).into_iter().map(|q| [q.x, q.y]).collect();
+            // Extremos exactos (abierta: el primer y el último polo)
+            if !*closed && let (Some(f), Some(l)) = (pts.first(), pts.last()) {
+                out[0] = [f.x, f.y];
+                *out.last_mut().unwrap() = [l.x, l.y];
+            }
+            out
+        }
     })
 }
 
@@ -226,7 +268,8 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
 
     for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
         let pts = sample_entity(s, e.id)?;
-        let closed_alone = matches!(e.geometry, Geometry::Circle { .. } | Geometry::Ellipse { .. } | Geometry::Spline { closed: true, .. });
+        // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
+        let closed_alone = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
         if closed_alone {
             let mut poly = pts.clone();
             poly.pop();

@@ -113,3 +113,75 @@ export function outlineContours(commands: PathCommand[], at: P2): Contour[] {
   flush();
   return out;
 }
+
+/** Lo que hace falta de una fuente de opentype.js para armar un texto */
+export interface TextFont {
+  getPath(text: string, x: number, y: number, fontSize: number): { commands: PathCommand[] };
+  getAdvanceWidth(text: string, fontSize: number): number;
+}
+
+/** Lleva cada punto de un contorno por `f` (los tramos rectos siguen rectos si `f` es rígida) */
+function mapContour(c: Contour, f: (p: P2) => P2): Contour {
+  if ("closed" in c) return { closed: c.closed.map(f) };
+  return { pieces: c.pieces.map((p) => (p.kind === "line" ? { kind: "line", a: f(p.a), b: f(p.b) } : { kind: "spline", points: p.points.map(f) })) };
+}
+
+/** Punto y dirección a la distancia `d` a lo largo de una polilínea (se estira recta más allá de las puntas) */
+function alongPolyline(pl: P2[], d: number): { p: P2; t: P2 } {
+  const seg = (i: number) => {
+    const v = sub(pl[i + 1], pl[i]);
+    const l = len(v) || 1;
+    return { v: [v[0] / l, v[1] / l] as P2, l };
+  };
+  let acc = 0;
+  for (let i = 0; i + 1 < pl.length; i++) {
+    const { v, l } = seg(i);
+    if (d <= acc + l || i + 2 === pl.length) {
+      const t = d < 0 && i === 0 ? d : d - acc;
+      return { p: [pl[i][0] + v[0] * t, pl[i][1] + v[1] * t], t: v };
+    }
+    acc += l;
+  }
+  return { p: pl[0], t: [1, 0] };
+}
+
+/** Distancia a lo largo de la polilínea del punto más cercano a `q` */
+function projectOnPolyline(pl: P2[], q: P2): number {
+  let best = 0;
+  let bestD = Infinity;
+  let acc = 0;
+  for (let i = 0; i + 1 < pl.length; i++) {
+    const v = sub(pl[i + 1], pl[i]);
+    const l2 = v[0] * v[0] + v[1] * v[1];
+    const t = l2 ? Math.max(0, Math.min(1, ((q[0] - pl[i][0]) * v[0] + (q[1] - pl[i][1]) * v[1]) / l2)) : 0;
+    const d = len(sub(q, [pl[i][0] + v[0] * t, pl[i][1] + v[1] * t]));
+    if (d < bestD) [best, bestD] = [acc + Math.sqrt(l2) * t, d];
+    acc += Math.sqrt(l2);
+  }
+  return best;
+}
+
+/**
+ * Contornos de un texto con la línea base en `at`, alineado a la izquierda,
+ * al centro o a la derecha del ancla. Con `path` (polilínea), las letras
+ * siguen la curva desde el punto de ella más cercano al ancla, cada una
+ * girada según la dirección en su medio.
+ */
+export function layoutText(font: TextFont, text: string, size: number, at: P2, align: "left" | "center" | "right" = "left", path?: P2[]): Contour[] {
+  const width = font.getAdvanceWidth(text, size);
+  const shift = align === "center" ? -width / 2 : align === "right" ? -width : 0;
+  if (!path || path.length < 2) return outlineContours(font.getPath(text, 0, 0, size).commands, [at[0] + shift, at[1]]);
+  const s0 = projectOnPolyline(path, at) + shift;
+  const out: Contour[] = [];
+  let x = 0;
+  for (const ch of [...text]) {
+    const adv = font.getAdvanceWidth(ch, size);
+    const { p, t } = alongPolyline(path, s0 + x + adv / 2);
+    const n: P2 = [-t[1], t[0]];
+    // Origen de la letra: medio avance hacia atrás sobre la tangente
+    const o: P2 = [p[0] - t[0] * (adv / 2), p[1] - t[1] * (adv / 2)];
+    for (const c of outlineContours(font.getPath(ch, 0, 0, size).commands, [0, 0])) out.push(mapContour(c, ([u, v]) => [o[0] + t[0] * u + n[0] * v, o[1] + t[1] * u + n[1] * v]));
+    x += adv;
+  }
+  return out;
+}

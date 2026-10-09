@@ -79,6 +79,14 @@ export type SketchTool =
   | "ellipse"
   | "point"
   | "spline"
+  | "bspline"
+  | "conic"
+  | "parabola"
+  | "spline_point"
+  | "line_inf"
+  | "parallelogram"
+  | "ellipse_arc"
+  | "slot_arc3"
   | "text"
   | "polygon"
   | "slot"
@@ -126,7 +134,7 @@ export interface SketchSession {
 
 const clone = <T>(v: T): T => structuredClone(v);
 /** Herramientas que no dibujan: el modo construcción no marca lo que crean */
-const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "move", "copy", "rotate", "scale", "paste"]);
+const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
 
 /** Qué se ve dentro del sketch */
 export interface SketchShow {
@@ -180,6 +188,8 @@ export function createCadUi(store: CadStore) {
   const [constructionMode, setConstructionMode] = createSignal(false);
   const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
+  /** Spline con el peine de curvatura a la vista */
+  const [combEntity, setCombEntity] = createSignal<number>();
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
   const [clipboard, setClipboard] = createSignal<SketchClip>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
@@ -553,6 +563,8 @@ export function createCadUi(store: CadStore) {
     sketchShow,
     dimLabel,
     setDimLabel,
+    combEntity,
+    setCombEntity,
     /** Cambia las opciones de una cota (bloqueo, lugar del texto, ordenadas) */
     setDimOpts(index: number, patch: Partial<DimOpts>) {
       ui.change((s) => {

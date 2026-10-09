@@ -823,7 +823,7 @@ fn spline_handles_set_end_tangents() {
         let mut s = Sketch::new();
         let p: Vec<u32> = [[0.0, 0.0], [5.0, 3.0], [10.0, 0.0]].iter().map(|q| s.add_point(q[0], q[1])).collect();
         let (h0, h1) = if handles { (Some(s.add_point(0.0, 2.0)), Some(s.add_point(10.0, -2.0))) } else { (None, None) };
-        s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: h0, end_handle: h1 });
+        s.add_entity(Geometry::Spline { points: p.clone(), closed: false, start_handle: h0, end_handle: h1, handles: vec![] });
         s.add_line(p[2], p[0]);
         for &id in &p {
             let q = s.point(id).unwrap();
@@ -978,7 +978,7 @@ fn sketch_text_moves_as_a_block() {
     let p = [s.add_point(1.0, 0.0), s.add_point(2.0, 3.0), s.add_point(4.0, 0.0)];
     let l1 = s.add_line(p[0], p[1]);
     let l2 = s.add_line(p[1], p[2]);
-    s.texts.push(SketchText { id: 99, text: "A".into(), size: 3.0, font: String::new(), anchor, entities: vec![l1, l2], points: p.to_vec() });
+    s.texts.push(SketchText { id: 99, text: "A".into(), size: 3.0, font: String::new(), anchor, entities: vec![l1, l2], points: p.to_vec(), style: Default::default() });
     s.solve_drag(p[1], [12.0, 8.0]).unwrap();
     let at = |id| s.point(id).unwrap();
     assert_relative_eq!(at(anchor)[0], 10.0, epsilon = 1e-6);
@@ -995,7 +995,7 @@ fn sketch_text_keeps_its_regions() {
     let anchor = s.add_point(-1.0, -1.0);
     let p = [s.add_point(0.0, 0.0), s.add_point(4.0, 0.0), s.add_point(4.0, 4.0), s.add_point(0.0, 4.0)];
     let l: Vec<u32> = (0..4).map(|k| s.add_line(p[k], p[(k + 1) % 4])).collect();
-    s.texts.push(SketchText { id: 99, text: "□".into(), size: 4.0, font: String::new(), anchor, entities: l, points: p.to_vec() });
+    s.texts.push(SketchText { id: 99, text: "□".into(), size: 4.0, font: String::new(), anchor, entities: l, points: p.to_vec(), style: Default::default() });
     s.solve().unwrap();
     assert_eq!(find_regions(&s).unwrap().len(), 1);
 }

@@ -2,7 +2,7 @@
 // portapapeles para copiar y pegar (dentro de un sketch o entre sketches).
 // Funciones puras sobre `Sketch`: se prueban con node (e2e/sketchTransform.test.mjs).
 
-import { addEntity, addPoint, constraintIds, geometryPoints, mapConstraintIds, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
+import { addEntity, addPoint, constraintIds, geometryPoints, mapConstraintIds, mapGeometry, splitLineAt, type Geometry, type P2, type Sketch, type SketchConstraint, type SketchEntity, type SketchText } from "./cad.ts";
 
 /** Lleva un punto del plano del sketch a otro lugar */
 export type Xform = (p: P2) => P2;
@@ -499,12 +499,10 @@ export function insertClip(s: Sketch, clip: SketchClip, f: Xform): number[] {
   const id = (x: number) => map.get(x) ?? x;
   const out: number[] = [];
   for (const e of clip.entities) {
-    const g = structuredClone(e.geometry) as Geometry & Record<string, unknown>;
-    for (const k of ["start", "end", "center", "point", "major", "minor", "start_handle", "end_handle"])
-      if (typeof g[k] === "number") (g as Record<string, unknown>)[k] = id(g[k] as number);
-    if (g.type === "spline") g.points = g.points.map(id);
-    const n = addEntity(s, g);
-    if (e.construction) s.entities.find((x) => x.id === n)!.construction = true;
+    const n = addEntity(s, mapGeometry(e.geometry, id));
+    const added = s.entities.find((x) => x.id === n)!;
+    if (e.construction) added.construction = true;
+    if (e.infinite) added.infinite = true;
     map.set(e.id, n);
     out.push(n);
   }
