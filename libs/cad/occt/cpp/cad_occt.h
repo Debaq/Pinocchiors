@@ -191,6 +191,8 @@ CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, i
                    int32_t n_points);
 /* Une superficies por sus bordes; con `solid`, cada concha cerrada se vuelve sólido. */
 CadShape* cad_sew(const CadShape* const* shapes, int32_t n, double tolerance, int32_t solid);
+/* Parte `s` con las herramientas (caras, superficies o sólidos): todos los pedazos. */
+CadShape* cad_split_by(const CadShape* s, const CadShape* const* tools, int32_t n);
 
 // `n` puntos a distancias iguales a lo largo de un alambre (o arista), con la
 // tangente en cada uno: out_p y out_t tienen 3n valores.

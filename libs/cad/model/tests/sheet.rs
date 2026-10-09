@@ -32,7 +32,7 @@ fn flange(doc: &mut Document, point: P3, length: f64, angle: f64, flip: bool) ->
     let body = ev.body.as_ref().unwrap();
     let (edge, _) = body.closest_edge(point, Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let edge = ev.edge_ref(edge).unwrap();
-    doc.add(FeatureKind::Flange { edge: Some(edge), length, angle, flip, radius: None, relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::Round, corner_size: None })
+    doc.add(FeatureKind::Flange { edge: Some(edge), length, angle, flip, radius: None, relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::Round, corner_size: None, closed_corner: false, corner_gap: None })
 }
 
 fn body(doc: &Document) -> Shape {
@@ -132,7 +132,7 @@ fn flange_on_a_flange() {
     let b = ev.body.as_ref().unwrap();
     let (edge, _) = b.closest_edge([50.0, -4.0, 24.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let edge = ev.edge_ref(edge).unwrap();
-    doc.add(FeatureKind::Flange { edge: Some(edge), length: 10.0, angle: 90.0, flip: false, radius: None, relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::Round, corner_size: None });
+    doc.add(FeatureKind::Flange { edge: Some(edge), length: 10.0, angle: 90.0, flip: false, radius: None, relief: BendRelief::Rectangle, relief_width: None, corner_relief: CornerRelief::Round, corner_size: None, closed_corner: false, corner_gap: None });
     let b = body(&doc);
     let bend = PI / 4.0 * (16.0 - 4.0) * 100.0;
     assert_relative_eq!(b.mass().unwrap().volume, 10000.0 + 2.0 * bend + 4000.0 + 2000.0, max_relative = 1e-6);
@@ -149,7 +149,7 @@ fn flange_along(doc: &mut Document, point: P3, dir: P3, relief: BendRelief, corn
     let body = ev.body.as_ref().unwrap();
     let (edge, _) = body.closest_edge(point, Some(dir), 0.99).unwrap();
     let edge = ev.edge_ref(edge).unwrap();
-    doc.add(FeatureKind::Flange { edge: Some(edge), length: 20.0, angle: 90.0, flip: false, radius: None, relief, relief_width: None, corner_relief, corner_size: None })
+    doc.add(FeatureKind::Flange { edge: Some(edge), length: 20.0, angle: 90.0, flip: false, radius: None, relief, relief_width: None, corner_relief, corner_size: None, closed_corner: false, corner_gap: None })
 }
 
 /// Largo de los tramos del desarrollo
@@ -246,3 +246,41 @@ fn corner_relief_where_two_flanges_meet() {
     }
 }
 
+
+#[test]
+fn closed_corner_between_two_flanges() {
+    if !occt() {
+        return;
+    }
+    // Bandeja: pestañas de 20 a 90° en y = 0 y en x = 0; la segunda cierra la esquina
+    let mut doc = plate();
+    flange_along(&mut doc, [50.0, 0.0, 2.0], [1.0, 0.0, 0.0], BendRelief::Rectangle, CornerRelief::None);
+    let ev = doc.evaluate();
+    let (edge, _) = ev.body.as_ref().unwrap().closest_edge([0.0, 25.0, 2.0], Some([0.0, 1.0, 0.0]), 0.99).unwrap();
+    let edge = ev.edge_ref(edge).unwrap();
+    doc.add(FeatureKind::Flange {
+        edge: Some(edge),
+        length: 20.0,
+        angle: 90.0,
+        flip: false,
+        radius: None,
+        relief: BendRelief::Rectangle,
+        relief_width: None,
+        corner_relief: CornerRelief::None,
+        corner_size: None,
+        closed_corner: true,
+        corner_gap: Some(0.2),
+    });
+    let b = body(&doc);
+    let bend = |len: f64| PI / 4.0 * (16.0 - 4.0) * len;
+    let open = 10000.0 + bend(100.0) + bend(50.0) + 2.0 * 20.0 * 150.0;
+    // Esta pared 2 × (R + t = 4) × 20 más; la otra 2 × (R − 0,2 = 1,8) × 20
+    assert_relative_eq!(b.mass().unwrap().volume, open + 160.0 + 72.0, max_relative = 1e-6);
+    // El canto de la primera queda tapado: la caja llega a y = −4 en x = −4
+    let m = b.mass().unwrap();
+    assert_relative_eq!(m.bbox_min[0], -4.0, epsilon = 1e-6);
+    assert_relative_eq!(m.bbox_min[1], -4.0, epsilon = 1e-6);
+    // Y el desarrollo sigue saliendo con los dos dobleces
+    let flat = sheet::flat_pattern(&b, 0.44, Some(2.0), None).unwrap();
+    assert_eq!(flat.bends.len(), 2);
+}

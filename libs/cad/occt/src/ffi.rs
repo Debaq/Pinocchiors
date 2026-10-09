@@ -144,6 +144,7 @@ unsafe extern "C" {
     pub fn cad_thicken(faces: *const CadShape, thickness: f64) -> *mut CadShape;
     pub fn cad_fill(edges: *const *const CadShape, faces: *const *const CadShape, n: i32, points: *const f64, n_points: i32) -> *mut CadShape;
     pub fn cad_sew(shapes: *const *const CadShape, n: i32, tolerance: f64, solid: i32) -> *mut CadShape;
+    pub fn cad_split_by(s: *const CadShape, tools: *const *const CadShape, n: i32) -> *mut CadShape;
     pub fn cad_draft_prism(face: *const CadShape, height: f64, angle: f64) -> *mut CadShape;
     pub fn cad_offset_face(face: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_write_step_parts(

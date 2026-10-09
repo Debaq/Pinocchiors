@@ -170,6 +170,13 @@ pub struct BendInfo {
     /// Normal de la cara de la arista (la chapa queda del otro lado)
     pub normal: P3,
     pub thickness: f64,
+    /// Hacia dónde dobla, normal del canto (afuera), radio interior, ángulo
+    /// (grados) y largo de la pared
+    pub bend: P3,
+    pub outward: P3,
+    pub radius: f64,
+    pub angle: f64,
+    pub length: f64,
 }
 
 /// Lo que una pestaña sabe de su arista, para los alivios.
@@ -184,6 +191,10 @@ struct FlangeGeom {
     m: P3,
     t: f64,
     r: f64,
+    /// Hacia dónde dobla
+    b: P3,
+    angle: f64,
+    length: f64,
 }
 
 /// Estado después de una operación, guardado por la huella de todo lo que
@@ -1735,7 +1746,16 @@ impl Ctx<'_> {
                 self.per_part(groups, |s, fs| s.draft(fs, p.normal, angle.to_radians(), p.origin, p.normal), |_| None)
             }
             FeatureKind::Pattern { features, pattern } => {
-                let transforms = self.pattern_transforms(pattern)?;
+                // Dónde está lo que se copia: el centro de la primera operación (o del sólido)
+                let seed = match features.first() {
+                    Some(id) => self.tool(*id)?.0.shape.mass().map_err(err)?,
+                    None => self.body()?.mass().map_err(err)?,
+                };
+                let seed = scale(add(seed.bbox_min, seed.bbox_max), 0.5);
+                let transforms = self.pattern_transforms(pattern, seed)?;
+                if transforms.is_empty() {
+                    return Ok(());
+                }
                 let copies_of = |src: &Tagged| -> R<Vec<Tagged>> {
                     transforms
                         .iter()
@@ -2081,9 +2101,24 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
-            FeatureKind::Flange { edge, length, angle, flip, radius, relief, relief_width, corner_relief, corner_size } => {
+            FeatureKind::Flange { edge, length, angle, flip, radius, relief, relief_width, corner_relief, corner_size, closed_corner, corner_gap } => {
                 let edge = edge.as_ref().ok_or("elegir la arista del borde de la chapa")?;
                 let (tool, part, g) = self.flange_tool(f.id, edge, *length, *angle, *flip, *radius)?;
+                // Esquinas cerradas: las extensiones de las paredes van con la pestaña
+                let tool = if *closed_corner {
+                    let extra = self.closed_corners(part, &g, corner_gap.unwrap_or(0.2))?;
+                    if extra.is_empty() {
+                        tool
+                    } else {
+                        let mut all = vec![tool.shape.clone()];
+                        all.extend(extra);
+                        let shape = Shape::fuse_all(&all).map_err(err)?;
+                        let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("pestaña:{k}"))]).collect();
+                        Tagged { shape, tags }
+                    }
+                } else {
+                    tool
+                };
                 // Con la chapa de antes: dónde sigue el material al lado del doblez
                 let cut = self.flange_reliefs(f.id, part, &g, *relief, *relief_width, *corner_relief, *corner_size)?;
                 // El alivio se resta antes de unir, de la chapa y de la pestaña: unidas
@@ -2107,7 +2142,19 @@ impl Ctx<'_> {
                 }
                 self.scope = saved;
                 r?;
-                self.ev.bends.push(BendInfo { feature: f.id, part, start: g.start, end: g.end, normal: g.n, thickness: g.t });
+                self.ev.bends.push(BendInfo {
+                    feature: f.id,
+                    part,
+                    start: g.start,
+                    end: g.end,
+                    normal: g.n,
+                    thickness: g.t,
+                    bend: g.b,
+                    outward: g.m,
+                    radius: g.r,
+                    angle: g.angle,
+                    length: g.length,
+                });
                 Ok(())
             }
             FeatureKind::SurfaceExtrude { sketch, entities, extent, reverse } => {
@@ -2165,6 +2212,67 @@ impl Ctx<'_> {
                 let shape = Shape::fill(&boundary, &[]).map_err(err)?;
                 let tool = self.surface_tool(f.id, vec![shape])?;
                 self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SplitBy { parts, tool } => {
+                self.body()?;
+                // La herramienta: el plano como una cara grande que cruza todo, o la otra pieza
+                let (tool_shape, tool_index) = match tool {
+                    SplitTool::Plane { plane } => {
+                        let p = self.plane("plane", plane)?;
+                        let m = self.body()?.mass().map_err(err)?;
+                        let c = scale(add(m.bbox_min, m.bbox_max), 0.5);
+                        let size = 2.0 * norm(sub(m.bbox_max, m.bbox_min)) + 1.0;
+                        let n = normalize(p.normal);
+                        let o = sub(c, scale(n, dot(sub(c, p.origin), n)));
+                        let (x, y) = (normalize(p.x_dir), normalize(p.y_dir()));
+                        let at = |a: f64, b: f64| add(add(o, scale(x, a)), scale(y, b));
+                        (Shape::polygon(&[at(-size, -size), at(size, -size), at(size, size), at(-size, size)]).map_err(err)?, None)
+                    }
+                    SplitTool::Part { part } => {
+                        let i = self.find_parts("tool", std::slice::from_ref(part))?[0];
+                        (self.ev.parts[i].shape.clone(), Some(i))
+                    }
+                };
+                let which: Vec<usize> = if parts.is_empty() {
+                    (0..self.ev.parts.len()).filter(|&i| Some(i) != tool_index && !self.ev.parts[i].is_surface()).collect()
+                } else {
+                    self.find_parts("parts", parts)?
+                };
+                let mut added = 0u32;
+                for &i in which.iter().rev() {
+                    if self.ev.parts[i].is_surface() {
+                        self.warn("las superficies se recortan con Cortar o con una booleana".into());
+                        continue;
+                    }
+                    let whole = self.ev.parts[i].shape.clone();
+                    let (split, h) = with_history(|| whole.split_by(std::slice::from_ref(&tool_shape))).map_err(err)?;
+                    let cut_tags: Vec<Vec<FaceTag>> = (0..tool_shape.face_count()).map(|_| vec![tag(f.id, "corte")]).collect();
+                    let tags = propagate(&[&self.ev.parts[i].tags, &cut_tags], &h, split.face_count()).0;
+                    let solids = split.solids().map_err(err)?;
+                    if solids.len() < 2 {
+                        continue;
+                    }
+                    let pieces: Vec<Tagged> = solids
+                        .iter()
+                        .map(|s| {
+                            let idx = split.face_indices_of(s).map_err(err)?;
+                            Ok(Tagged { tags: idx.iter().map(|k| k.and_then(|k| tags.get(k).cloned()).unwrap_or_default()).collect(), shape: s.clone() })
+                        })
+                        .collect::<R<_>>()?;
+                    let mut it = pieces.into_iter();
+                    let first = it.next().unwrap();
+                    self.ev.parts[i].shape = first.shape;
+                    self.ev.parts[i].tags = first.tags;
+                    for t in it {
+                        self.ev.parts.push(Part { id: PartId { feature: f.id, index: added }, shape: t.shape, tags: t.tags });
+                        added += 1;
+                    }
+                }
+                if added == 0 {
+                    self.warn("no partió ninguna pieza: la herramienta no la cruza".into());
+                }
+                self.sync();
+                Ok(())
             }
             FeatureKind::Sew { parts, solid, tolerance } => {
                 if parts.len() < 2 && !*solid {
@@ -2326,7 +2434,7 @@ impl Ctx<'_> {
         self.doc.get(id).map_or_else(|| format!("{id:?}"), |f| format!("«{}»", f.name))
     }
 
-    fn pattern_transforms(&self, p: &PatternKind) -> R<Vec<ShapeFn>> {
+    fn pattern_transforms(&self, p: &PatternKind, seed: P3) -> R<Vec<ShapeFn>> {
         let mut out: Vec<ShapeFn> = Vec::new();
         match p {
             PatternKind::Linear { direction, count, spacing } => {
@@ -2349,6 +2457,76 @@ impl Ctx<'_> {
                 for (p, _) in pts.into_iter().skip(1) {
                     let v = sub(p, p0);
                     out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                }
+            }
+            PatternKind::Table { offsets } => {
+                if offsets.is_empty() {
+                    return Err("la tabla no tiene filas".into());
+                }
+                for &v in offsets {
+                    out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                }
+            }
+            PatternKind::Fill { sketch, regions, spacing, hex, margin } => {
+                if *spacing <= 0.0 {
+                    return Err("la separación tiene que ser mayor que cero".into());
+                }
+                let s = self.ev.sketches.get(sketch).ok_or("el sketch no está calculado")?;
+                let regions = self.selected_regions(s, regions)?;
+                if regions.is_empty() {
+                    return Err("el sketch no tiene regiones cerradas".into());
+                }
+                let c = s.plane.to_local(seed);
+                // Distancia al borde (contorno y agujeros) de la región que lo contiene
+                let seg = |p: P2, a: P2, b: P2| {
+                    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+                    let l2 = dx * dx + dy * dy;
+                    let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+                    ((p[0] - a[0] - t * dx).powi(2) + (p[1] - a[1] - t * dy).powi(2)).sqrt()
+                };
+                let inside = |p: P2| {
+                    regions.iter().any(|r| {
+                        r.contains(p)
+                            && std::iter::once(&r.outer).chain(&r.holes).all(|l| {
+                                let n = l.polygon.len();
+                                (0..n).all(|i| seg(p, l.polygon[i], l.polygon[(i + 1) % n]) >= *margin)
+                            })
+                    })
+                };
+                let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
+                for r in &regions {
+                    for q in &r.outer.polygon {
+                        for k in 0..2 {
+                            lo[k] = lo[k].min(q[k]);
+                            hi[k] = hi[k].max(q[k]);
+                        }
+                    }
+                }
+                let row = if *hex { spacing * 3f64.sqrt() / 2.0 } else { *spacing };
+                let (j0, j1) = (((lo[1] - c[1]) / row).floor() as i64, ((hi[1] - c[1]) / row).ceil() as i64);
+                let (i0, i1) = (((lo[0] - c[0]) / spacing).floor() as i64 - 1, ((hi[0] - c[0]) / spacing).ceil() as i64 + 1);
+                if ((j1 - j0 + 1) * (i1 - i0 + 1)) > 200_000 {
+                    return Err("demasiadas copias: subir la separación".into());
+                }
+                let at = s.plane.to_world(c);
+                for j in j0..=j1 {
+                    let shift = if *hex && j.rem_euclid(2) == 1 { spacing / 2.0 } else { 0.0 };
+                    for i in i0..=i1 {
+                        if i == 0 && j == 0 {
+                            continue;
+                        }
+                        let p = [c[0] + i as f64 * spacing + shift, c[1] + j as f64 * row];
+                        if inside(p) {
+                            let v = sub(s.plane.to_world(p), at);
+                            out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                        }
+                    }
+                }
+                if out.len() > 2000 {
+                    return Err(format!("demasiadas copias ({}): subir la separación", out.len()));
+                }
+                if out.is_empty() {
+                    self.warn("no entra ninguna copia en la región".into());
                 }
             }
             PatternKind::Circular { axis, count, angle } => {
@@ -2436,8 +2614,54 @@ impl Ctx<'_> {
         };
         let part = self.ev.part_of_face(side.0).ok_or("la arista no es de ninguna pieza")?;
         let tags = (0..shape.face_count()).map(|k| vec![tag(id, format!("pestaña:{k}"))]).collect();
-        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r };
+        let g = FlangeGeom { start: info.start, end: info.end, dir, n, m, t, r, b, angle, length };
         Ok((Tagged { shape, tags }, part, g))
+    }
+
+    /// Esquinas cerradas: en cada extremo que se junta con otra pestaña de la
+    /// misma pieza (las dos a 90°, hacia el mismo lado, mismo espesor y radio),
+    /// la extensión de esta pared hasta tapar el canto de la otra y la de la
+    /// otra hasta quedar a `gap` de esta. Con otras pestañas, aviso.
+    fn closed_corners(&self, part: PartId, g: &FlangeGeom, gap: f64) -> R<Vec<Shape>> {
+        let tol = 1e-6 * (1.0 + norm(sub(g.end, g.start)));
+        let right = |a: f64| (a - 90.0).abs() < 1e-6;
+        let mut out = Vec::new();
+        // La pared ocupa, desde la arista del lado del doblez, [R, R + t] hacia
+        // afuera del canto y [R, R + largo] hacia donde dobla
+        let base = |e: P3, b: P3, n: P3, t: f64| if dot(b, n) > 0.0 { e } else { sub(e, scale(n, t)) };
+        let slab = |p0: P3, a: P3, a0: f64, a1: f64, c: P3, c0: f64, c1: f64, h: P3, h0: f64, h1: f64| -> R<Shape> {
+            let at = |x: f64, y: f64| add(add(add(p0, scale(a, x)), scale(c, y)), scale(h, h0));
+            Shape::polygon(&[at(a0, c0), at(a1, c0), at(a1, c1), at(a0, c1)]).map_err(err)?.prism(scale(h, h1 - h0)).map_err(err)
+        };
+        for (e, sigma) in [(g.start, -1.0), (g.end, 1.0)] {
+            let u = scale(g.dir, sigma);
+            for other in self.ev.bends.iter().filter(|b| b.part == part) {
+                let Some(ue) = [(other.start, -1.0), (other.end, 1.0)]
+                    .iter()
+                    .find(|(p, _)| norm(sub(*p, e)) < tol)
+                    .map(|(_, s)| scale(normalize(sub(other.end, other.start)), *s))
+                else {
+                    continue;
+                };
+                // Pestañas en ángulo recto entre sí: el extremo de cada una apunta afuera de la otra
+                if dot(u, other.outward) < 0.99 || dot(ue, g.m) < 0.99 {
+                    continue;
+                }
+                if !right(g.angle) || !right(other.angle) || dot(g.b, other.bend) < 0.999 || (g.t - other.thickness).abs() > tol || (g.r - other.radius).abs() > tol {
+                    self.warn("la esquina cerrada sale solo con dos pestañas a 90° hacia el mismo lado, del mismo espesor y radio".into());
+                    continue;
+                }
+                let (r, t) = (g.r, g.t);
+                let p0 = base(e, g.b, g.n, t);
+                // Esta: hasta tapar el canto de la otra
+                out.push(slab(p0, g.m, r, r + t, u, 0.0, r + t, g.b, r, r + g.length)?);
+                // La otra: hasta quedar a la holgura de esta
+                if r - gap > 1e-6 {
+                    out.push(slab(p0, other.outward, r, r + t, ue, 0.0, r - gap, g.b, r, r + other.length)?);
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Alivios de una pestaña, para restar después de unirla: en cada extremo,

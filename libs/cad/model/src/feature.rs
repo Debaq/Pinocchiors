@@ -325,6 +325,21 @@ pub enum PatternKind {
     Circular { axis: AxisSpec, count: u32, angle: f64 },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
     Curve { path: SweepPath, count: u32 },
+    /// Copias trasladadas según una tabla de desplazamientos (mm).
+    Table { offsets: Vec<P3> },
+    /// Copias en grilla (cuadrada o hexagonal) que llenan regiones de un
+    /// sketch, a `spacing` entre centros y a `margin` como mínimo del borde.
+    /// La grilla pasa por la operación original (su centro, en el plano).
+    Fill {
+        sketch: FeatureId,
+        #[serde(default)]
+        regions: RegionSelection,
+        spacing: f64,
+        #[serde(default)]
+        hex: bool,
+        #[serde(default)]
+        margin: f64,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -510,6 +525,14 @@ pub enum FeatureKind {
         /// Radio (o medio lado) del alivio de esquina (sin él, el espesor)
         #[serde(default, skip_serializing_if = "Option::is_none")]
         corner_size: Option<f64>,
+        /// Esquina cerrada donde se junta con otra pestaña (las dos a 90° hacia
+        /// el mismo lado): esta pared se extiende hasta tapar el canto de la otra,
+        /// y la otra se alarga hasta quedar a `corner_gap` de esta
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        closed_corner: bool,
+        /// Holgura de la esquina cerrada (sin ella, 0,2 mm)
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        corner_gap: Option<f64>,
     },
     /// Superficie (sin espesor) que deja una curva de un sketch empujada a lo
     /// largo de la normal del plano: ciega, simétrica o a los dos lados.
@@ -539,6 +562,13 @@ pub enum FeatureKind {
         #[serde(default)]
         tangent: bool,
     },
+    /// Partir piezas (vacío = todos los sólidos) con un plano o con otra pieza
+    /// (una superficie curva, por ejemplo): cada pedazo queda como pieza.
+    SplitBy {
+        #[serde(default)]
+        parts: Vec<PartId>,
+        tool: SplitTool,
+    },
     /// Coser: une superficies por sus bordes en una sola; con `solid`, lo que
     /// cierra un volumen queda sólido. Las piezas cosidas dejan de estar.
     Sew {
@@ -549,6 +579,15 @@ pub enum FeatureKind {
         #[serde(default = "default_sew_tolerance")]
         tolerance: f64,
     },
+}
+
+/// Con qué se parte.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SplitTool {
+    Plane { plane: PlaneSpec },
+    /// Otra pieza (queda como estaba)
+    Part { part: PartId },
 }
 
 fn default_sew_tolerance() -> f64 {
@@ -770,12 +809,21 @@ impl FeatureKind {
                 d
             }
             FeatureKind::Sew { parts, .. } => parts.iter().map(|p| p.feature).collect(),
+            FeatureKind::SplitBy { parts, tool } => {
+                let mut d: Vec<FeatureId> = parts.iter().map(|p| p.feature).collect();
+                match tool {
+                    SplitTool::Plane { plane } => d.extend(plane_deps(plane)),
+                    SplitTool::Part { part } => d.push(part.feature),
+                }
+                d
+            }
             FeatureKind::Pattern { features, pattern } => {
                 let mut d = features.clone();
                 match pattern {
                     PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
                     PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
                     PatternKind::Curve { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
+                    PatternKind::Fill { sketch, .. } => d.push(*sketch),
                     _ => {}
                 }
                 d
@@ -832,6 +880,7 @@ impl FeatureKind {
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",
             FeatureKind::Sew { .. } => "Coser",
+            FeatureKind::SplitBy { .. } => "Partir",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
         }

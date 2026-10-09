@@ -19,6 +19,7 @@
 #include <LocOpe_DPrism.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeFilling.hxx>
+#include <BRepAlgoAPI_Splitter.hxx>
 #include <ShapeFix_Solid.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <gp_Lin.hxx>
@@ -728,10 +729,46 @@ CadShape* cad_mirror(const CadShape* s, const double* origin, const double* norm
 CadShape* cad_split_keep(const CadShape* s, const double* origin, const double* normal) {
     return guard("cortar", (CadShape*)nullptr, [&] {
         gp_Pln pl(pnt(origin), dir(normal));
+        // Superficies (sin sólidos): la intersección con el semiespacio infinito
+        // sale vacía; un bloque grande y finito del lado que se conserva sí sirve
+        if (!TopExp_Explorer(s->s, TopAbs_SOLID).More()) {
+            Bnd_Box box;
+            BRepBndLib::Add(s->s, box);
+            if (box.IsVoid()) throw Standard_Failure("nada que cortar");
+            double size = 4.0 * std::sqrt(box.SquareExtent()) + 1.0;
+            gp_Pnt c = box.CornerMin().Translated(gp_Vec(box.CornerMin(), box.CornerMax()) * 0.5);
+            gp_Vec nv(dir(normal));
+            gp_Pnt on = c.Translated(nv * -gp_Vec(pnt(origin), c).Dot(nv));
+            gp_Ax3 ax(on, pl.Axis().Direction());
+            gp_Pln at(ax);
+            TopoDS_Face sq = BRepBuilderAPI_MakeFace(at, -size, size, -size, size).Face();
+            TopoDS_Shape block = BRepPrimAPI_MakePrism(sq, gp_Vec(dir(normal)).Normalized() * (2.0 * size)).Shape();
+            return wrap(boolean_op(s->s, block, 2));
+        }
         TopoDS_Face f = BRepBuilderAPI_MakeFace(pl).Face();
         gp_Pnt ref = pnt(origin).Translated(gp_Vec(dir(normal)));
         TopoDS_Shape half = BRepPrimAPI_MakeHalfSpace(f, ref).Solid();
         return wrap(boolean_op(s->s, half, 2));
+    });
+}
+
+CadShape* cad_split_by(const CadShape* s, const CadShape* const* tools, int32_t n) {
+    return guard("partir", (CadShape*)nullptr, [&] {
+        if (n < 1) throw Standard_Failure("falta con qué partir");
+        TopTools_ListOfShape args, ts;
+        args.Append(s->s);
+        std::vector<TopoDS_Shape> inputs{s->s};
+        for (int32_t i = 0; i < n; i++) {
+            ts.Append(tools[i]->s);
+            inputs.push_back(tools[i]->s);
+        }
+        BRepAlgoAPI_Splitter sp;
+        sp.SetArguments(args);
+        sp.SetTools(ts);
+        sp.Build();
+        if (sp.HasErrors() || !sp.IsDone()) throw Standard_Failure("no se pudo partir");
+        record(sp, inputs, sp.Shape());
+        return wrap(sp.Shape());
     });
 }
 

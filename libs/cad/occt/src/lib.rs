@@ -698,6 +698,13 @@ impl Shape {
         wrap(unsafe { ffi::cad_fill(edges.as_ptr(), faces.as_ptr(), edges.len() as i32, pts.as_ptr(), points.len() as i32) })
     }
 
+    /// Parte la forma con las herramientas (caras, superficies o sólidos); el
+    /// resultado tiene todos los pedazos (con historia, ver `with_history`).
+    pub fn split_by(&self, tools: &[Shape]) -> Result<Shape> {
+        let p = ptrs(tools);
+        wrap(unsafe { ffi::cad_split_by(self.ptr(), p.as_ptr(), p.len() as i32) })
+    }
+
     /// Une superficies por sus bordes (a `tolerance`); con `solid`, lo cerrado
     /// se vuelve sólido (y si algo queda abierto, error).
     pub fn sew(shapes: &[Shape], tolerance: f64, solid: bool) -> Result<Shape> {

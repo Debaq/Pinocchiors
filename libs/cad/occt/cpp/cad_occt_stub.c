@@ -64,6 +64,7 @@ CadShape* cad_make_thread(const double* o, const double* d, const double* x, dou
 CadShape* cad_thicken(const CadShape* f, double t) { (void)f; (void)t; FAIL_PTR; }
 CadShape* cad_fill(const CadShape* const* e, const CadShape* const* f, int32_t n, const double* p, int32_t np) { (void)e; (void)f; (void)n; (void)p; (void)np; FAIL_PTR; }
 CadShape* cad_sew(const CadShape* const* s, int32_t n, double t, int32_t solid) { (void)s; (void)n; (void)t; (void)solid; FAIL_PTR; }
+CadShape* cad_split_by(const CadShape* s, const CadShape* const* t, int32_t n) { (void)s; (void)t; (void)n; FAIL_PTR; }
 CadShape* cad_draft_prism(const CadShape* f, double h, double a) { (void)f; (void)h; (void)a; FAIL_PTR; }
 CadShape* cad_offset_face(const CadShape* f, double d) { (void)f; (void)d; FAIL_PTR; }
 int32_t cad_write_step_parts(const CadShape* const* s, const char* const* nm, const double* c, int32_t n, uint8_t** o, size_t* l) { (void)s; (void)nm; (void)c; (void)n; (void)o; (void)l; FAIL_INT; }

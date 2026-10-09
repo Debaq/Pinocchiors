@@ -665,3 +665,4 @@ fn surface_from_an_open_wire() {
     let v = t.mass().unwrap().volume;
     assert!((v - 42.0).abs() < 1e-6 || (v - 48.0).abs() < 1e-6, "volumen {v}");
 }
+

@@ -167,3 +167,88 @@ fn tangent_fill_closes_a_sphere_cut_at_45_degrees() {
     let v = ev.parts[0].shape.mass().unwrap().volume;
     assert_relative_eq!(v, 4.0 / 3.0 * PI * 125.0, max_relative = 0.03);
 }
+
+#[test]
+fn trim_a_surface_with_a_plane_and_with_a_solid() {
+    if !occt() {
+        return;
+    }
+    // Tubo de superficie de radio 5 y alto 10
+    let mut doc = Document::new();
+    let sk = circle(&mut doc, 5.0);
+    let tube = doc.add(FeatureKind::SurfaceExtrude { sketch: sk, entities: vec![], extent: Extent::Blind { distance: 10.0 }, reverse: false });
+    let surface = evaluate(&doc).parts[0].id;
+    // Cortar por un plano a z = 4, eligiendo la superficie: queda la parte de arriba
+    let mut by_plane = doc.clone();
+    let split = by_plane.add(FeatureKind::Split { plane: PlaneSpec::Custom { plane: Plane::XY.offset(4.0) }, flip: false });
+    by_plane.get_mut(split).unwrap().scope = vec![surface];
+    let ev = evaluate(&by_plane);
+    assert!(ev.parts[0].is_surface());
+    assert_relative_eq!(area(&ev.parts[0].shape), 2.0 * PI * 5.0 * 6.0, max_relative = 1e-6);
+    // Con una caja que la atraviesa: restar se queda con lo de afuera, intersecar con lo de adentro
+    for (op, h) in [(PartBoolean::Subtract, 7.0), (PartBoolean::Intersect, 3.0)] {
+        let mut d = doc.clone();
+        d.add(FeatureKind::Primitive(Primitive {
+            shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 3.0, centered: true, centered_z: false },
+            origin: [0.0, 0.0, 7.0],
+            z: [0.0, 0.0, 1.0],
+            x: [1.0, 0.0, 0.0],
+            op: BodyOp::New,
+            link: None,
+        }));
+        let ev = evaluate(&d);
+        let solid = ev.parts.iter().find(|p| !p.is_surface()).unwrap().id;
+        d.add(FeatureKind::Boolean { op, targets: vec![surface], tools: vec![solid], keep_tools: false });
+        let ev = evaluate(&d);
+        let s = ev.parts.iter().find(|p| p.id.feature == tube).unwrap();
+        assert!(s.is_surface());
+        assert_relative_eq!(area(&s.shape), 2.0 * PI * 5.0 * h, max_relative = 1e-6);
+    }
+}
+
+#[test]
+fn split_a_box_with_a_plane_and_with_a_curved_surface() {
+    if !occt() {
+        return;
+    }
+    let caja = |doc: &mut Document| {
+        doc.add(FeatureKind::Primitive(Primitive {
+            shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 20.0, centered: true, centered_z: true },
+            origin: [0.0, 0.0, 0.0],
+            z: [0.0, 0.0, 1.0],
+            x: [1.0, 0.0, 0.0],
+            op: BodyOp::New,
+            link: None,
+        }))
+    };
+    let volumes = |ev: &Evaluation| {
+        let mut v: Vec<f64> = ev.parts.iter().filter(|p| !p.is_surface()).map(|p| p.shape.mass().unwrap().volume).collect();
+        v.sort_by(f64::total_cmp);
+        v
+    };
+    // Con el plano z = 3: arriba 7 de alto, abajo 13
+    let mut doc = Document::new();
+    caja(&mut doc);
+    doc.add(FeatureKind::SplitBy { parts: vec![], tool: SplitTool::Plane { plane: PlaneSpec::Custom { plane: Plane::XY.offset(3.0) } } });
+    let v = volumes(&evaluate(&doc));
+    assert_eq!(v.len(), 2);
+    assert_relative_eq!(v[0], 2800.0, max_relative = 1e-6);
+    assert_relative_eq!(v[1], 5200.0, max_relative = 1e-6);
+    // Con un tubo de superficie de radio 5 que la atraviesa: el cilindro de adentro y el resto
+    let mut doc = Document::new();
+    caja(&mut doc);
+    let mut s = Sketch::default();
+    let c = s.add_point(0.0, 0.0);
+    s.add_entity(Geometry::Circle { center: c, radius: 5.0 });
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: -15.0, sketch: s });
+    doc.add(FeatureKind::SurfaceExtrude { sketch: sk, entities: vec![], extent: Extent::Blind { distance: 30.0 }, reverse: false });
+    let tube = evaluate(&doc).parts.iter().find(|p| p.is_surface()).unwrap().id;
+    doc.add(FeatureKind::SplitBy { parts: vec![], tool: SplitTool::Part { part: tube } });
+    let ev = evaluate(&doc);
+    let v = volumes(&ev);
+    assert_eq!(v.len(), 2);
+    assert_relative_eq!(v[0], PI * 25.0 * 20.0, max_relative = 1e-6);
+    assert_relative_eq!(v[1], 8000.0 - PI * 25.0 * 20.0, max_relative = 1e-6);
+    // La superficie sigue
+    assert!(ev.parts.iter().any(|p| p.is_surface()));
+}
