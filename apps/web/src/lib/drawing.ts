@@ -1,6 +1,11 @@
 // Planos 2D: vistas proyectadas del diseño sobre una hoja con cajetín, en SVG.
 // La proyección (líneas ocultas exactas) la hace el backend (`cad_drawing`);
 // acá se acomodan las vistas, se elige la escala y se arma el SVG (en mm).
+// Lo dibujado a mano sobre la hoja es un sketch (`doc.drawing.sketch`) en mm de
+// hoja con Y hacia arriba desde la esquina de abajo a la izquierda.
+
+import type { Sketch } from "./cad.ts";
+import { polylineOf } from "./sketchCheck.ts";
 
 export type P2 = [number, number];
 export type P3 = [number, number, number];
@@ -614,11 +619,24 @@ export function dimensionSvg(d: AnyDimension): string {
 }
 
 /** La hoja completa en SVG (unidades en mm) */
+/**
+ * Lo dibujado sobre la hoja como polilíneas (mm de hoja, Y hacia arriba): sin
+ * la construcción, los puntos sueltos ni las capas ocultas.
+ */
+export function sheetLayerLines(s: Sketch | null | undefined): P2[][] {
+  if (!s) return [];
+  const hidden = new Set((s.layers ?? []).filter((l) => l.hidden).map((l) => l.id));
+  return s.entities
+    .filter((e) => !e.construction && e.geometry.type !== "point" && !(e.layer != null && hidden.has(e.layer)))
+    .map((e) => polylineOf(s, e.geometry))
+    .filter((pts) => pts.length >= 2);
+}
+
 export function sheetSvg(
   placed: Placed[],
   sheet: SheetSize,
   info: TitleBlock,
-  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[] },
+  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][] },
 ): string {
   const out: string[] = [];
   out.push(
@@ -669,6 +687,12 @@ export function sheetSvg(
       `<g data-detail="${esc(d.label)}"><circle cx="${n(cx)}" cy="${n(cy)}" r="${n(r)}" fill="none" stroke="#000" stroke-width="0.25"/>` +
         `<text x="${n(cx)}" y="${n(cy + r + 6)}" font-size="3.5" text-anchor="middle" fill="#000">Detalle ${esc(d.label)} (${scaleLabel(v.scale)})</text></g>`,
     );
+  }
+  // Lo dibujado a mano (Y hacia arriba en el sketch, hacia abajo en el SVG)
+  if (opts.layer?.length) {
+    out.push(`<g data-layer="" fill="none" stroke="#000" stroke-width="0.35" stroke-linecap="round" stroke-linejoin="round">`);
+    for (const pts of opts.layer) out.push(`<polyline points="${pts.map((p) => `${n(p[0])},${n(sheet.height - p[1])}`).join(" ")}"/>`);
+    out.push("</g>");
   }
   if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
   for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", 'data-dimension="" data-user-dim=""'));
@@ -722,7 +746,11 @@ export function sheetSvg(
  * corte). `view` exporta solo esa vista a escala 1:1 con sus coordenadas
  * (para láser o CNC); sin ella, la hoja entera con el recuadro.
  */
-export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[] }): string {
+export function sheetDxf(
+  placed: Placed[],
+  sheet: SheetSize,
+  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][] },
+): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
   const section = (name: string, body: () => void) => {
@@ -760,12 +788,13 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
     pair(0, "ENDTAB");
     pair(0, "TABLE");
     pair(2, "LAYER");
-    pair(70, 4);
+    pair(70, 5);
     for (const [name, color, ltype] of [
       ["VISIBLE", 7, "CONTINUOUS"],
       ["OCULTA", 8, "DASHED"],
       ["TANGENTE", 9, "CONTINUOUS"],
       ["COTAS", 3, "CONTINUOUS"],
+      ["DIBUJO", 7, "CONTINUOUS"],
     ] as const) {
       pair(0, "LAYER");
       pair(2, name);
@@ -860,6 +889,8 @@ export function sheetDxf(placed: Placed[], sheet: SheetSize, opts: { hidden: boo
         pair(40, 3.5);
         pair(1, `Detalle ${d.label} (${scaleLabel(v.scale)})`);
       }
+    // Lo dibujado a mano (ya en mm de hoja con Y hacia arriba); no va en una vista sola
+    if (!opts.view) for (const pts of opts.layer ?? []) for (let i = 0; i + 1 < pts.length; i++) line("DIBUJO", pts[i], pts[i + 1]);
     if (!opts.view) {
       const [x0, y0, x1, y1] = [MARGIN, MARGIN, sheet.width - MARGIN, sheet.height - MARGIN];
       line("VISIBLE", [x0, y0], [x1, y0]);

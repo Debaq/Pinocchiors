@@ -4948,8 +4948,10 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           </div>
           <Num label="Paso de la rejilla" suffix="mm" step={1} min={0} value={ui.assist().spacing} onCommit={(v) => v > 0 && ui.setAssist({ spacing: v })} />
           <div class="flex flex-wrap gap-x-3">
-            <Checkbox small label="Corte en el plano" checked={ui.assist().section} onChange={(c) => ui.setAssist({ section: c })} />
-            <Checkbox small label="Ocultar el modelo" checked={ui.assist().hideModel} onChange={(c) => ui.setAssist({ hideModel: c })} />
+            <Show when={!s().sheet}>
+              <Checkbox small label="Corte en el plano" checked={ui.assist().section} onChange={(c) => ui.setAssist({ section: c })} />
+              <Checkbox small label="Ocultar el modelo" checked={ui.assist().hideModel} onChange={(c) => ui.setAssist({ hideModel: c })} />
+            </Show>
           </div>
           <Show
             when={ui.symmetryAxis() !== undefined && entity(ui.symmetryAxis()!)}
@@ -5423,7 +5425,9 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         </Show>
       </Section>
 
-      <SketchModelRefs ui={ui} store={props.store} />
+      <Show when={!s().sheet}>
+        <SketchModelRefs ui={ui} store={props.store} />
+      </Show>
 
       <SketchEntities ui={ui} />
 
@@ -5816,7 +5820,7 @@ const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const [asLines, setAsLines] = createSignal(false);
   const [calLength, setCalLength] = createSignal(100);
   const params = () => Object.fromEntries((props.store.result()?.parameters ?? []).filter((p) => p.value != null).map((p) => [p.key, p.value!]));
-  const name = () => props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch";
+  const name = () => (ui.session()?.sheet ? "hoja" : (props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch"));
 
   /** Puntos → una spline por ellos (cerrada si vuelve al comienzo) o una polilínea */
   const addPoints = (pts: P2[], lines: boolean) => {

@@ -6558,7 +6558,7 @@ export const App: Component = () => {
     try {
       opened = await busy("Abriendo proyecto...", () => invoke<ProjectOpened>("open_project", { path }));
       await restoreProjectUi(opened.ui);
-      cadUi.cancelSketch();
+      cadUi.cancelSketch(false);
       await cad.reload();
       // Proyecto de antes de los objetos: su modelo pasa a ser uno
       await adoptCurrentModel();
@@ -6593,7 +6593,7 @@ export const App: Component = () => {
     setSwitching(true);
     try {
       await invoke("new_project");
-      cadUi.cancelSketch();
+      cadUi.cancelSketch(false);
       await cad.reload();
       clearSkeletonUi();
       // Un proyecto vacío y sin modelo deja la interfaz como al abrir la app

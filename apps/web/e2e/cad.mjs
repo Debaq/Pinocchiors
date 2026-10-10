@@ -2,7 +2,7 @@
 // Tauri: el arnés (cad-harness.html) manda los comandos al puente HTTP.
 //
 //   cargo run -p pinocchio-app --example cad_http        # backend en :8766 (E2E_BRIDGE_PORT: otro)
-//   (cd apps/web && npx vite --port 5173)                 # frontend
+//   (cd apps/web && npx vite --port 5173)                 # frontend (E2E_WEB_PORT: otro)
 //   node apps/web/e2e/cad.mjs [filtro]                    # Chromium headless
 //
 // Capturas en $E2E_OUT (por defecto /tmp/pinocchio-e2e). Cada escenario
@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { launch, sleep } from "./cdp.mjs";
 
 const PORT = process.env.E2E_BRIDGE_PORT ?? "8766";
-const URL = `http://localhost:5173/e2e/cad-harness.html?bridge=${PORT}`;
+const URL = `http://localhost:${process.env.E2E_WEB_PORT ?? "5173"}/e2e/cad-harness.html?bridge=${PORT}`;
 const BRIDGE = `http://127.0.0.1:${PORT}/invoke/`;
 const call = (cmd, args = {}) => fetch(BRIDGE + cmd, { method: "POST", body: JSON.stringify(args) }).then((r) => r.json());
 const SPECULUM = process.env.E2E_STL ?? `${process.env.HOME}/Descargas/macho_especulo.stl`;
@@ -1405,7 +1405,7 @@ const scenarios = {
     if ((await call("cad_get_document")).drawing?.dims?.length !== 2) throw new Error("no se guardaron las cotas");
     await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
     // Corte A-A: el frente rayado y la línea en la planta
-    await b.eval(`[...document.querySelectorAll('[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-hatch="front"] polygon')`)); t++) await sleep(500);
     const cut = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
@@ -1435,9 +1435,64 @@ const scenarios = {
     await sleep(1500);
     const text = existsSync(dxf) ? readFileSync(dxf, "utf8") : "";
     if (!text.includes("OCULTA") || !text.trimEnd().endsWith("EOF")) throw new Error("DXF raro");
-    await b.clickText("Cerrar");
+    // El «Cerrar» del plano (hay otros en la página)
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((x) => x.textContent.trim() === "Cerrar").click()`);
     await sleep(500);
-    if (await b.eval(`!!document.querySelector('[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");
+    if (await b.eval(`!!document.querySelector('div[aria-label="Plano 2D"]')`)) throw new Error("no se cerró");
+  },
+
+  async "plano 2D: dibujar sobre la hoja con el editor del sketch"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await b.clickText("Dibujar");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()?.sheet`)); t++) await sleep(250);
+    const sheet = await b.eval(`(() => { const s = window.__cadUi.session(); return s && { ...s.sheet, open: !!document.querySelector('div[aria-label="Plano 2D"]') }; })()`);
+    if (!sheet || sheet.width !== 297 || sheet.height !== 210 || !String(sheet.backdrop).startsWith("blob:")) throw new Error(`sesión de la hoja: ${JSON.stringify(sheet)}`);
+    if (sheet.open) throw new Error("el plano sigue tapando el visor");
+    if (await b.eval(`[...document.querySelectorAll("button")].some((x) => x.title?.startsWith("Usar arista") && x.offsetParent)`)) throw new Error("Usar arista no va sobre la hoja");
+    await sleep(800);
+    await b.shot("plano_dibujar");
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    // Una línea (mm de hoja) y un círculo
+    await key("l");
+    await b.click(...(await at([40, 40])), { wait: 400 });
+    await b.click(...(await at([100, 40])), { wait: 400 });
+    await key("Escape");
+    await key("c");
+    await b.click(...(await at([150, 60])), { wait: 400 });
+    await b.click(...(await at([160, 60])), { wait: 800 });
+    await key("Escape");
+    const kinds = await b.eval(`window.__cadUi.session().sketch.entities.map((e) => e.geometry.type).sort().join(",")`);
+    if (kinds !== "circle,line") throw new Error(`dibujado: ${kinds}`);
+    const ends = await b.eval(`(() => { const s = window.__cadUi.session().sketch; const l = s.entities.find((e) => e.geometry.type === "line").geometry; return [l.start, l.end].map((id) => { const p = s.points.find((q) => q.id === id); return [p.x, p.y]; }); })()`);
+    near(Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]), 60, 1.5, "largo de la línea");
+    // De vuelta al plano: lo dibujado está en la hoja y en el documento
+    await b.clickText("Volver al plano");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-layer]")`)); t++) await sleep(250);
+    const layer = await b.eval(`document.querySelectorAll("[data-sheet] svg [data-layer] polyline").length`);
+    if (layer !== 2) throw new Error(`en la hoja: ${layer}`);
+    const saved = (await call("cad_get_document")).drawing?.sketch;
+    if (saved?.entities?.length !== 2) throw new Error(`guardado: ${JSON.stringify(saved?.entities)}`);
+    await b.shot("plano_con_dibujo");
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const dxf = `${out}/plano_dibujo.dxf`;
+    rmSync(dxf, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(dxf)}`);
+    await b.clickText("Exportar DXF");
+    await sleep(1500);
+    if (!(existsSync(dxf) && readFileSync(dxf, "utf8").includes("\nDIBUJO\n10\n"))) throw new Error("DXF sin lo dibujado");
+    // Se vuelve a abrir con lo guardado; descartar no cambia nada y vuelve al plano
+    await b.clickText("Dibujar");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()?.sheet`)); t++) await sleep(250);
+    if ((await b.eval(`window.__cadUi.session().sketch.entities.length`)) !== 2) throw new Error("no se abrió lo guardado");
+    await b.clickText("Descartar");
+    await sleep(500);
+    if (!(await b.eval(`!!document.querySelector('div[aria-label="Plano 2D"]') && !window.__cadUi.session()`))) throw new Error("descartar no volvió al plano");
   },
 
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {
@@ -1495,7 +1550,7 @@ const scenarios = {
         const ps = [...document.querySelectorAll('[data-sheet] [data-hatch="front"] polygon')].flatMap((p) => p.getAttribute("points").split(" ").map((q) => Number(q.split(",")[0])));
         return ps.length ? Math.max(...ps) - Math.min(...ps) : 0;
       })()`);
-    await b.eval(`[...document.querySelectorAll('[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
     for (let t = 0; t < 30 && !(await hatchW()); t++) await sleep(500);
     await sleep(800);
     const mid = await hatchW();

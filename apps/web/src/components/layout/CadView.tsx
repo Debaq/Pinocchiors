@@ -388,10 +388,12 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
   onMount(() => window.addEventListener("pointerdown", closeFamily, true));
   onCleanup(() => window.removeEventListener("pointerdown", closeFamily, true));
+  /** Las herramientas a mano: sobre la hoja del plano no hay sólido del que usar aristas */
+  const sheetTools = () => (ui.session()?.sheet ? TOOLS.filter((t) => t.id !== "use") : TOOLS);
   /** Botones de la barra: una entrada por familia (con su lista) o por herramienta suelta */
   const toolSlots = () => {
     const out: { family?: string; group: number; tools: ToolDef[] }[] = [];
-    for (const t of TOOLS) {
+    for (const t of sheetTools()) {
       const prev = t.family && out.find((x) => x.family === t.family);
       if (prev) prev.tools.push(t);
       else out.push({ family: t.family, group: t.group, tools: [t] });
@@ -645,7 +647,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Planos, ejes y puntos de referencia (el ojo del árbol los oculta)
   createEffect(() => {
     const hidden = ui.hiddenSketches();
-    const refs = (store.result()?.references ?? []).filter((r) => !hidden.includes(r.id) && r.id !== ui.session()?.feature);
+    const refs = ui.session()?.sheet ? [] : (store.result()?.references ?? []).filter((r) => !hidden.includes(r.id) && r.id !== ui.session()?.feature);
     const chosen = ui.picks().flatMap((p) => (p.kind === "refplane" ? [p.feature] : []));
     viewer?.setReferences(refs, chosen);
   });
@@ -665,8 +667,9 @@ export const CadView: Component<CadViewProps> = (props) => {
       })),
     );
   });
-  // Dibujando con «ocultar el modelo»
-  createEffect(() => viewer?.setBodyHidden(!!ui.session() && ui.assist().hideModel));
+  // Dibujando con «ocultar el modelo» (y sobre la hoja del plano, que no está en el espacio del modelo)
+  const onSheet = createMemo(() => !!ui.session()?.sheet);
+  createEffect(() => viewer?.setBodyHidden(!!ui.session() && (ui.assist().hideModel || onSheet())));
   // Vista de corte: el plano recorre la caja envolvente del sólido
   createEffect(() => {
     store.mesh();
@@ -674,7 +677,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const body = store.result()?.body;
     // Dibujando con el corte en el plano: se ve lo que queda detrás del sketch
     const sk = ui.session();
-    if (sk && ui.assist().section) {
+    if (sk && !sk.sheet && ui.assist().section) {
       const n = sk.plane.normal;
       return viewer?.setSection({ origin: sk.plane.origin, normal: [-n[0], -n[1], -n[2]] });
     }
@@ -714,7 +717,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const editing = ui.session()?.feature;
     const hidden = ui.hiddenSketches();
     const picks = ui.picks();
-    const list = (store.result()?.sketches ?? [])
+    const list = (onSheet() ? [] : (store.result()?.sketches ?? []))
       .filter((v) => v.id !== editing && !hidden.includes(v.id))
       .map((v) => ({
         id: v.id,
@@ -725,7 +728,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       }));
     viewer?.setVisibleSketches(list);
   });
-  createEffect(() => viewer?.setGridVisible(props.showGrid !== false));
+  createEffect(() => viewer?.setGridVisible(props.showGrid !== false && !onSheet()));
   createEffect(() => props.lights && viewer?.setLights(props.lights));
   createEffect(() => viewer && (viewer.trackpad = props.trackpad === true));
   // Planos base: visibles fuera de la edición si no se ocultaron. Al elegir
@@ -779,7 +782,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     props.scanMesh;
     viewer?.setScanDeviation(ui.deviation());
   });
-  createEffect(() => viewer?.setScanVisible(scanVisible(), scanOpacity()));
+  createEffect(() => viewer?.setScanVisible(scanVisible() && !onSheet(), scanOpacity()));
 
   // Sketch: vista de frente al entrar, normal al salir
   // Memo: el efecto corre al entrar o salir de un sketch, no con cada cambio
@@ -794,9 +797,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         const s = ui.session();
         if (feature !== undefined && s) {
           viewer.saveView();
-          // Un sketch con algo dibujado se encuadra entero (puede estar lejos del origen)
+          // Un sketch con algo dibujado se encuadra entero (puede estar lejos del origen); la hoja del plano, entera
           const pts = s.sketch.points.filter((p) => p.id !== s.sketch.origin);
-          if (s.sketch.entities.length && pts.length) {
+          if (s.sheet) viewer.lookAtPlane(s.plane, { center: [s.sheet.width / 2, s.sheet.height / 2], size: Math.max(s.sheet.width, s.sheet.height) });
+          else if (s.sketch.entities.length && pts.length) {
             const xs = pts.map((p) => p.x);
             const ys = pts.map((p) => p.y);
             const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
@@ -1015,7 +1019,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketch: withoutLayers(s.sketch, false),
       regions: s.regions,
       grid,
-      images: s.sketch.images,
+      // Sobre la hoja del plano, la hoja de fondo (no se elige ni se guarda)
+      images: s.sheet?.backdrop
+        ? [{ id: -1, name: "Hoja", data: s.sheet.backdrop, at: [0, 0], width: s.sheet.width, height: s.sheet.height, opacity: 1 }, ...(s.sketch.images ?? [])]
+        : s.sketch.images,
       // Un texto elegido (su ancla) se resalta entero
       selected: [...ui.selection(), ...(s.sketch.texts ?? []).flatMap((t) => (ui.selection().includes(t.anchor) ? t.entities : []))],
       hiddenPoints: (s.sketch.texts ?? []).flatMap((t) => t.points.filter((p) => p !== t.anchor)),
@@ -1070,7 +1077,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const solid = createMemo(() => {
     const plane = ui.session()?.plane;
     const m = store.mesh();
-    if (!plane || !viewer) return undefined;
+    if (!plane || !viewer || onSheet()) return undefined;
     const s = viewer.mmPerUnit;
     const edges: P3[][] = [];
     let start = 0;
@@ -2594,7 +2601,7 @@ export const CadView: Component<CadViewProps> = (props) => {
           e.stopPropagation();
           return;
         }
-        const t = TOOLS.find((x) => x.key?.toLowerCase() === key);
+        const t = sheetTools().find((x) => x.key?.toLowerCase() === key);
         if (!t) return;
         ui.setTool(t.id);
         resetTool();
@@ -3625,7 +3632,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 fallback={
                   <>
                     <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
-                      Terminar sketch
+                      {ui.session()?.sheet ? "Volver al plano" : "Terminar sketch"}
                     </Button>
                     <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
                       Descartar

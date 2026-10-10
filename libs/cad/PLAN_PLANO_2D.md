@@ -37,22 +37,26 @@ peor resultado).
 
 ## Fases
 
-### F1 — Capa de dibujo en la hoja
+### F1 — Capa de dibujo en la hoja ✅
 
-- Modelo: `doc.drawing.sketch` (un `Sketch` en mm de hoja, origen abajo a la izquierda).
-  `doc.drawing` ya es JSON libre (`Document.drawing: Option<Value>`); pasa a tener tipo en Rust
-  si hace falta validar.
-- Editor: botón «Dibujar» en el plano abre el editor del sketch sobre un plano virtual con la
-  hoja de fondo (SVG de las vistas como textura o líneas), cámara ortográfica normal y sin
-  órbita. Se reutilizan la barra de herramientas del sketch, el panel y los atajos; se apagan
-  las que no tienen sentido (usar del modelo, texto sobre cara, extruir).
-- Las líneas de las vistas no se editan: son referencia (ver F2).
-- Salida: lo dibujado va al SVG, PDF y DXF (capa propia en DXF; la construcción no se exporta).
-- Deshacer y rehacer con las pilas del sketch (`undoSketch`) y, al cerrar, una entrada en el
-  historial del documento.
-- **Primer paso de la fase**: tabla de cobertura de la lista del usuario contra el editor del
-  sketch, ítem por ítem, verificada en el código (la auditoría quedó a medias el 2026-10-10). Lo
-  que falte va a F5.
+*Hecha el 2026-10-10.* «Dibujar» en el plano abre el editor del sketch sobre la hoja
+(`cadUi.editSheet`, sesión con `feature = SHEET_SKETCH` y `sheet { width, height, backdrop }`,
+plano XY del visor en mm de hoja, Y hacia arriba desde la esquina de abajo a la izquierda). La
+hoja de fondo es el SVG del plano sin el papel, rasterizado (hasta 4096 px, invertido en el
+tema oscuro) y puesto como calco que no se guarda. Con la hoja abierta el visor oculta el
+sólido, el escaneo, los planos, las referencias, los otros sketches y la rejilla, y no ancla a
+aristas del sólido; la barra no tiene «Usar» y el panel no tiene «Usar del modelo» ni corte u
+ocultar modelo. «Volver al plano» guarda en `doc.drawing.sketch` (las fórmulas quedan en sus
+cotas) y vuelve a abrir el plano; «Descartar» vuelve sin guardar. Lo dibujado sale en el SVG y
+el PDF (`sheetLayerLines` + `layer` en `sheetSvg`) y en el DXF de la hoja (capa DIBUJO; no en
+una vista sola a 1:1). Deshacer: el del sketch mientras se dibuja, y una entrada del documento
+al volver. Pruebas: node `drawing.test.mjs` (lo dibujado: construcción y capas ocultas fuera, Y
+invertida en SVG, DXF en tramos) y e2e "plano 2D: dibujar sobre la hoja con el editor del
+sketch". De paso, el e2e del plano buscaba `[aria-label="Plano 2D"]` y daba con el botón de
+la barra izquierda (fallaba «no se cerró» aunque se cerraba): ahora `div[aria-label=…]`.
+
+Pendiente de F1 para más adelante: las cotas de lo dibujado no se exportan (son del sketch; con
+F2 las de referencia pasan a la hoja) y la vista se puede girar sobre la hoja (no molesta).
 
 ### F2 — Las vistas como referencia
 
@@ -86,17 +90,100 @@ peor resultado).
   marco, y exportable sola a PNG. En el PDF va incrustada; en el DXF, solo el contorno.
 - Rayado según el material (patrón y ángulo por pieza en ensambles).
 
-### F5 — Lo que le falte al editor (sirve para sketch y hoja)
+### F5 — Lo que le falta al editor (sirve para sketch y hoja)
 
-Sale de la tabla de cobertura de F1. Candidatos a confirmar en esa revisión (no verificados
-todavía): campo flotante junto al cursor también en las herramientas de edición (desfase,
-redondeo, patrones, mover), Tab entre campos y recordar el último valor por herramienta;
-ciclar entre entidades encimadas y elegir similares; cursor distinto por herramienta;
-quitar restricciones en conflicto desde el aviso; dividir en N partes; desfase con varias
-copias, original a construcción y distancia como cota; redondeo en varias esquinas con esquina
-virtual, radios iguales vinculados y «no recortar»; patrón asociativo editable con copias
-omitidas; alternar recortar/extender con una tecla; extender splines; arrastre sin
-restricciones con una tecla.
+Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo
+que cambia el uso diario (vista previa y campo flotante en las herramientas del panel, clic
+derecho, extender arcos, redondeo y chaflán con esquina virtual y en varias esquinas, patrón
+asociativo y omitir copias), después lo demás.
+
+## Cobertura de la lista (editor del sketch, que es el de la hoja)
+
+Revisada en el código el 2026-10-10. Ojo: equidistante, redondeo, chaflán, simetría, patrones y
+transformar por números son **botones del panel** (sin vista previa, campos `type=number`); en
+el visor solo hay recortar, extender, partir, estirar, mover, copiar, girar y escalar.
+
+**Comportamiento general** — ✅ herramienta activa hasta Esc (salvo pegar y calibrar), atajos,
+deshacer por acción, conserva restricciones, crea restricciones, colores al instante, sin
+retardo, aviso de conflicto. 🟡 vista previa (no en las del panel); resaltado bajo el cursor
+(solo elegir, recortar, extender, partir, círculo tangente, punto en spline); Esc sí, clic
+derecho no cancela (mueve la vista); Enter termina el sketch entero, no la operación; elegir
+primero o herramienta primero (mover/copiar/girar/escalar piden elegir antes; recortar,
+extender y partir solo herramienta primero); cursor (cruz o flecha, no por herramienta);
+mensaje del paso (texto fijo por herramienta); quitar en conflicto desde el aviso (solo la
+última cota).
+
+**Entrada de valores** — 🟡 campo flotante (al terminar una forma, junto a la cota; no en vivo
+ni en las de edición); escribir sin clic y Tab (solo cotas recién dibujadas); expresiones,
+parámetros y unidades (en cotas sí; en el panel y las coordenadas no); recordar el último valor
+(en memoria, no entre sesiones); rueda (panel sí, campo flotante no). ❌ ajustar arrastrando
+manipuladores.
+
+**Recortar** — ✅ clic, arrastre, hasta el cruce más cercano, sin cruces borra entera,
+coincidencias en los extremos nuevos, punto sobre curva en el corte. 🟡 vista previa (resalta la
+entidad entera, no el tramo); aristas proyectadas como límite (solo líneas, círculos y arcos que
+no son de construcción). ❌ límite elegido a mano; recortar splines y elipses.
+
+**Extender** — ✅ hasta lo más cercano, clic cerca del extremo. ❌ vista previa, límite elegido,
+arcos, splines, alternar con recortar por tecla.
+
+**Dividir y unir** — ✅ partir con clic (no splines), unir alineadas o del mismo círculo,
+conserva restricciones (las cotas de largo se quitan). 🟡 en intersecciones (de a una; en bloque
+solo con Reparar). ❌ en N partes iguales.
+
+**Desfase** — ✅ a los dos lados, extremos redondos o rectos. 🟡 cadena (doble clic + botón);
+distancia (valor, no arrastre); esquinas (en punta, redondea sola si no se cruzan; sin
+opción). ❌ lado según el cursor (va por el signo), original a construcción, distancia como
+cota, recorte de autointersecciones, varias copias.
+
+**Redondeo 2D** — ✅ tangencias, recorta las vecinas, deja la cota de radio. 🟡 se elige el
+punto común de dos líneas (no dos entidades, no línea con arco); radio por valor (no
+arrastre). ❌ varias esquinas, vista previa, esquina virtual, radios iguales vinculados, no
+recortar.
+
+**Chaflán 2D** — ✅ distancia igual, dos distancias, distancia y ángulo. ❌ varias esquinas,
+vista previa, esquina virtual, cotas editables (no deja restricciones y quita las cotas de
+largo de las dos líneas).
+
+**Simetría** — ✅ restricción automática, extremos sobre el eje compartidos. 🟡 línea de simetría
+(cualquier línea, la primera elegida; los ejes X/Y del sketch no son entidades); solo copia (no
+mover); dinámica al dibujar (se refleja al confirmar, no en la vista previa).
+
+**Patrones** — ✅ lineal en una o dos direcciones, circular, restricciones entre copias. 🟡
+cantidad y espaciado (después solo el espaciado, con la cota del primer par); espaciado (lineal
+solo entre copias, circular solo ángulo total). ❌ omitir copias, vista previa, patrón asociativo
+(son copias sueltas con `equal_offset`/`equal_rotation`).
+
+**Mover, copiar, rotar, escalar** — ✅ punto base, desde-hasta, girar y escalar por valor o por
+referencia, anclajes, fantasma. 🟡 mover (clic-clic o coordenadas; no arrastrando lo elegido);
+copias múltiples (una por clic). ❌ elegir mantener o romper restricciones externas.
+
+**Estirar** — ✅ ventana de cruce, solo los puntos de adentro, conexiones.
+
+**Arrastre directo** — ✅ extremos, puntos y manijas de spline, solver en vivo, flechas de lo
+libre. 🟡 solo puntos (no una línea o curva entera); centro sí, radio del círculo no; bloqueo de
+lo definido (vuelve solo, sin aviso). ❌ arrastre sin restricciones con una tecla.
+
+**Splines** — ✅ quitar punto, mover, peine en vivo (con cada respuesta del solver). 🟡 agregar
+(no en por polos cerrada); manijas (solo tangencia: el largo se ignora, sin curvatura); paso →
+polos sí, polos → paso no; simplificar (no por polos cerrada ni racional). ❌ cerrar o abrir una
+spline ya dibujada.
+
+**Construcción** — ✅ Q y botón, punteada. 🟡 varias a la vez (invierte cada una, no iguala; un
+punto suelto no cambia).
+
+**Eliminación y limpieza** — ✅ sin restricciones huérfanas, solo restricciones o solo cotas,
+cerrar huecos (Cerrar contorno no tiene distancia máxima). 🟡 duplicados (solo exactos), muy
+cortas y fusionar puntos (dentro de Reparar; solo extremos de curvas abiertas); informe
+(resumen y marcas, sin lista navegable; los cruces no se cuentan).
+
+**Selección** — ✅ clic, ventana, cruce (y lazo con Ctrl), cadena con doble clic, por tipo. 🟡
+agregar y quitar (Mayús sí; Ctrl no; clic sobre lo elegido no lo quita). ❌ similares, ciclar
+entre encimadas, filtros durante la herramienta.
+
+**Retroalimentación visual** — ✅ símbolos de restricciones, contornos cerrados, extremos
+sueltos, colores. 🟡 marcas de cruces (solo el anclaje bajo el cursor); herramienta activa
+(botón y pista, sin rótulo en el visor).
 
 ## Pruebas
 

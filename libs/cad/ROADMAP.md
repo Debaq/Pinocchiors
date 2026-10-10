@@ -665,3 +665,6 @@ cargo test -p cad-model
   los dos lados del eje), barrido (camino con ramas) y transición (sección con varias
   regiones). Pruebas: node `sketchFormula`, `sketchFiles`, `sketchBlocks`; Rust
   `validation.rs`; e2e "archivos y fórmulas…" y "organización…".
+- **2026-10-10 Dibujar sobre la hoja del plano** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md), fase 1): el
+  editor del sketch sobre la hoja (con la hoja de fondo), guardado en `doc.drawing.sketch` y
+  exportado en SVG, PDF y DXF. Tabla de cobertura de la lista de edición 2D en el plan.

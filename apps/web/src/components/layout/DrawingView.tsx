@@ -17,6 +17,7 @@ import {
   placeDetails,
   scaleLabel,
   sheetDxf,
+  sheetLayerLines,
   sheetSvg,
   viewSpec,
   type Detail,
@@ -97,7 +98,10 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const r = layout(v, sheet(), projection(), scaleChoice() === "auto" ? undefined : Number(scaleChoice()), hatch());
     return { ...r, placed: [...r.placed, ...placeDetails(r.placed, details(), sheet())] };
   });
-  const svg = createMemo(() => {
+  // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja)
+  const layerSketch = () => props.store.doc()?.drawing?.sketch;
+  const layer = createMemo(() => sheetLayerLines(layerSketch()));
+  const sheetOf = (withLayer: boolean) => {
     const r = result();
     if (!r) return "";
     const today = new Date().toISOString().slice(0, 10);
@@ -113,9 +117,36 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         projection: projection(),
         sheet: sheet().name,
       },
-      { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), section: section() ? { label: "A", at: sectionAt() } : undefined, userDims: userDims() },
+      {
+        hidden: hidden(),
+        smooth: smooth(),
+        dimensions: dimensions(),
+        section: section() ? { label: "A", at: sectionAt() } : undefined,
+        userDims: userDims(),
+        layer: withLayer ? layer() : undefined,
+      },
     );
-  });
+  };
+  const svg = createMemo(() => sheetOf(true));
+
+  /**
+   * Dibujar sobre la hoja: se abre el editor del sketch con la hoja de fondo
+   * (sin el papel blanco, en el color del texto del tema). Al terminar se
+   * vuelve acá.
+   */
+  const startDrawing = async () => {
+    const sh = sheet();
+    try {
+      const backdrop = await rasterSheet(sheetOf(false), sh.width, sh.height);
+      // La de la vez anterior ya no se usa
+      if (lastBackdrop) URL.revokeObjectURL(lastBackdrop);
+      lastBackdrop = backdrop;
+      props.ui.setDrawingOpen(false);
+      props.ui.editSheet(layerSketch(), { width: sh.width, height: sh.height, backdrop });
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
 
   const exportSvg = async () => {
     const path = await save({ filters: [{ name: "SVG", extensions: ["svg"] }], defaultPath: `${title().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "plano"}.svg` });
@@ -149,7 +180,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const path = await save({ filters: [{ name: "DXF", extensions: ["dxf"] }], defaultPath: name });
     if (!path) return;
     try {
-      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), userDims: userDims(), view: what === "sheet" ? undefined : what });
+      const content = sheetDxf(r.placed, sheet(), { hidden: hidden(), smooth: smooth(), dimensions: dimensions(), userDims: userDims(), layer: layer(), view: what === "sheet" ? undefined : what });
       const bytes = await invoke<number>("cad_write_text", { path, content });
       setMessage(`Exportado (${Math.round(bytes / 1024)} KB)`);
     } catch (e) {
@@ -369,6 +400,9 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           value={author()}
           onInput={(e) => setAuthor(e.currentTarget.value)}
         />
+        <Button size="sm" disabled={!svg()} title="Líneas, arcos, curvas y cotas propias sobre la hoja, con las herramientas del sketch" onClick={() => void startDrawing()}>
+          Dibujar
+        </Button>
         <div class="flex-1" />
         <Show when={busy()}>
           <span class="text-[11px] text-text-dim">Proyectando…</span>
@@ -414,3 +448,34 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     </div>
   );
 };
+
+/** Hoja de fondo de la última vez que se dibujó (se libera al preparar otra) */
+let lastBackdrop: string | undefined;
+
+/**
+ * La hoja como imagen para dibujar encima: el SVG sin el papel blanco, con
+ * las líneas en el color del texto del tema (claras en el oscuro). Devuelve
+ * una URL de objeto (PNG), a lo sumo 4096 px de lado.
+ */
+async function rasterSheet(svg: string, width: number, height: number): Promise<string> {
+  const k = Math.min(12, 4096 / Math.max(width, height));
+  const [w, h] = [Math.round(width * k), Math.round(height * k)];
+  const clean = svg.replace(/<rect width="[\d.]+" height="[\d.]+" fill="#fff"\/>/, "").replace(/width="[\d.]+mm" height="[\d.]+mm"/, `width="${w}" height="${h}"`);
+  const url = URL.createObjectURL(new Blob([clean], { type: "image/svg+xml" }));
+  try {
+    const img = new Image();
+    img.src = url;
+    await img.decode();
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext("2d")!;
+    if (document.documentElement.dataset.theme !== "light") ctx.filter = "invert(1)";
+    ctx.drawImage(img, 0, 0, w, h);
+    const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, "image/png"));
+    if (!blob) throw new Error("No se pudo preparar la hoja para dibujar");
+    return URL.createObjectURL(blob);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}

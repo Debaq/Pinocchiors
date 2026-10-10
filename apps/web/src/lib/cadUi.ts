@@ -20,6 +20,7 @@ import {
   breakLinks,
   addRectangle,
   ensureOrigin,
+  emptySketch,
   removeEntity,
   removeText,
   type AxisSpec,
@@ -167,7 +168,21 @@ export interface SketchSession {
   sketch: Sketch;
   report?: SolveReport;
   regions: Region[];
+  /** Dibujando sobre la hoja del plano 2D (no es una operación: `feature` es `SHEET_SKETCH`) */
+  sheet?: SheetEdit;
 }
+
+/** La hoja en la que se dibuja: tamaño (mm) y la hoja de fondo como imagen (URL) */
+export interface SheetEdit {
+  width: number;
+  height: number;
+  backdrop?: string;
+}
+
+/** `feature` de la sesión que dibuja sobre la hoja del plano 2D */
+export const SHEET_SKETCH = -1;
+/** El plano del visor donde se dibuja la hoja (mm de hoja, Y hacia arriba) */
+const SHEET_PLANE: Plane = { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0, 0] };
 
 const clone = <T>(v: T): T => structuredClone(v);
 /** Herramientas que no dibujan: el modo construcción no marca lo que crean */
@@ -477,6 +492,25 @@ export function createCadUi(store: CadStore) {
       setCalibration(undefined);
       resetHistory();
       return true;
+    },
+
+    /**
+     * Empieza a dibujar sobre la hoja del plano 2D: el sketch guardado en el
+     * documento (o uno nuevo) con la hoja de fondo
+     */
+    editSheet(saved: Sketch | null | undefined, sheet: SheetEdit) {
+      ui.cancelPick();
+      setSelection([]);
+      setTool(saved?.entities.length ? "select" : "line");
+      const sketch = saved ? clone(saved) : emptySketch();
+      ensureOrigin(sketch);
+      setSession({ feature: SHEET_SKETCH, plane: SHEET_PLANE, sketch, regions: [], sheet });
+      setSymmetryAxis(undefined);
+      setActiveLayer(undefined);
+      setBlockEdit(undefined);
+      setCalibration(undefined);
+      resetHistory();
+      void solve(clone(sketch));
     },
 
     /** Cambia el sketch en edición y lo resuelve */
@@ -844,6 +878,12 @@ export function createCadUi(store: CadStore) {
         delete (c as { expr?: string }).expr;
         return e;
       });
+      // La hoja: el sketch va al plano del documento (las fórmulas quedan en sus cotas) y el plano se vuelve a abrir
+      if (s.sheet) {
+        await store.commit((d) => void (d.drawing = { ...(d.drawing ?? {}), sketch: clone(s.sketch) }));
+        setDrawingOpen(true);
+        return;
+      }
       const prefix = `${s.feature}.kind.sketch.constraints.`;
       await store.commit((d) => {
         const f = d.features.find((x) => x.id === s.feature);
@@ -857,7 +897,9 @@ export function createCadUi(store: CadStore) {
       });
     },
 
-    cancelSketch() {
+    /** Sale sin guardar; dibujando sobre la hoja, vuelve al plano (salvo `toDrawing` false: abrir otro proyecto) */
+    cancelSketch(toDrawing = true) {
+      if (toDrawing && session()?.sheet) setDrawingOpen(true);
       setBlockEdit(undefined);
       setSession(undefined);
       setSelection([]);

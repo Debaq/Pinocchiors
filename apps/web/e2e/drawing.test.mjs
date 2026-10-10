@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { layout, sheetSvg, sheetDxf, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -219,4 +219,38 @@ test("detalle: recorta al círculo, amplía y no pisa las vistas", () => {
 test("ángulo: un clic un poco fuera de la recta no cambia el valor", () => {
   const a = angleBetween([[10, 0], [-10, 0]], [[-10, 0], [-5, 10]], [-4, 0.8], [-8.3, 4.1]);
   assert.ok(Math.abs(a.degrees - (Math.atan2(10, 5) * 180) / Math.PI) < 1e-9, String(a.degrees));
+});
+
+test("lo dibujado sobre la hoja: sin construcción ni capas ocultas, Y hacia arriba en el SVG y el DXF", () => {
+  const pt = (id, x, y) => ({ id, x, y });
+  const line = (id, a, b, extra = {}) => ({ id, geometry: { type: "line", start: a, end: b }, construction: false, ...extra });
+  const sketch = {
+    points: [pt(0, 0, 0), pt(1, 20, 30), pt(2, 60, 30), pt(3, 20, 50), pt(4, 60, 50), pt(5, 100, 100)],
+    entities: [
+      line(10, 1, 2),
+      line(11, 3, 4, { construction: true }),
+      line(12, 2, 4, { layer: 7 }),
+      { id: 13, geometry: { type: "circle", center: 5, radius: 10 }, construction: false },
+      { id: 14, geometry: { type: "point", point: 0 }, construction: false },
+    ],
+    constraints: [],
+    layers: [{ id: 7, name: "Oculta", hidden: true }],
+  };
+  const lines = sheetLayerLines(sketch);
+  assert.equal(lines.length, 2, "la línea y el círculo");
+  assert.deepEqual(lines[0], [[20, 30], [60, 30]]);
+  assert.deepEqual(sheetLayerLines(null), []);
+  const a4 = SHEETS[0];
+  const { placed } = layout({ front: rect(40, 10) }, a4, "first");
+  const info = { title: "x", date: "2026-10-10", scale: "1:1", projection: "first", sheet: "A4" };
+  const svg = sheetSvg(placed, a4, info, { hidden: true, smooth: false, layer: lines });
+  // En el SVG la Y crece hacia abajo: y = alto de la hoja − y del sketch
+  assert.ok(svg.includes(`<polyline points="20,${a4.height - 30} 60,${a4.height - 30}"/>`), "la línea dibujada en el SVG");
+  assert.ok(!sheetSvg(placed, a4, info, { hidden: true, smooth: false }).includes("data-layer"));
+  const dxf = sheetDxf(placed, a4, { hidden: true, smooth: false, layer: lines });
+  const segments = dxf.split("\n").filter((l, i, all) => l === "DIBUJO" && all[i - 1] === "8" && all[i - 2] === "LINE").length;
+  assert.equal(segments, 1 + 64, "la línea y el círculo en tramos");
+  assert.ok(/LINE\n8\nDIBUJO\n10\n20\n20\n30\n/.test(dxf), "en mm de hoja con Y hacia arriba");
+  // Una vista sola a 1:1 no lleva lo dibujado sobre la hoja
+  assert.ok(!sheetDxf(placed, a4, { hidden: true, smooth: false, layer: lines, view: "front" }).includes("\nDIBUJO\n10"));
 });
