@@ -156,6 +156,52 @@ const scenarios = {
     if (!part?.includes("bg-accent/20")) throw new Error(`la fila de la pieza no se marcó: ${part}`);
   },
 
+  async "caja: cambiar sus medidas en el diálogo cambia el sólido"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    // Con el diálogo abierto (borrador): el ancho a 50 escribiendo en el campo
+    const setField = (label, value) =>
+      b.eval(`(() => {
+        const l = [...document.querySelectorAll("label")].find((x) => x.querySelector("span")?.textContent.trim() === ${JSON.stringify(label)});
+        const i = l?.querySelector("input");
+        if (!i) return "sin campo";
+        i.focus();
+        i.value = ${JSON.stringify(String(value))};
+        i.dispatchEvent(new Event("change", { bubbles: true }));
+        return i.value;
+      })()`);
+    const probe = async (what) => {
+      const st = await b.eval(`(() => {
+        const draft = window.__cadStore.draft();
+        const f = (draft?.doc ?? window.__cadStore.doc()).features.find((x) => x.kind.type === "primitive");
+        const r = window.__cadStore.result();
+        return { shape: f?.kind.shape, bbox: r?.body ? [r.body.bbox_min, r.body.bbox_max] : null, draft: !!draft, field: [...document.querySelectorAll("label")].find((x) => x.querySelector("span")?.textContent.trim() === "Ancho (X)")?.querySelector("input")?.value };
+      })()`);
+      console.log(`    ${what}: ${JSON.stringify(st)}`);
+      return st;
+    };
+    await probe("al crear");
+    console.log("    campo:", await setField("Ancho (X)", 50));
+    await sleep(2500);
+    const p1 = await probe("con el diálogo, ancho 50");
+    if (p1.shape.dx !== 50) throw new Error("el borrador no tomó el ancho");
+    if (p1.field !== "50") throw new Error(`el campo no muestra lo escrito: ${p1.field}`);
+    near(p1.bbox[1][0] - p1.bbox[0][0], 50, 1e-6, "ancho de la vista previa");
+    // La rueda baja de a uno desde lo que se ve (antes bajaba siempre desde el valor viejo)
+    for (let i = 0; i < 3; i++) {
+      await b.eval(`[...document.querySelectorAll("label")].find((x) => x.querySelector("span")?.textContent.trim() === "Ancho (X)").querySelector("input").dispatchEvent(new WheelEvent("wheel", { deltaY: 100, bubbles: true, cancelable: true }))`);
+      await sleep(900);
+    }
+    const p3 = await probe("tres pasos de rueda hacia abajo");
+    if (p3.shape.dx !== 47 || p3.field !== "47") throw new Error(`rueda: ${p3.shape.dx} / ${p3.field}`);
+    await accept(b);
+    await sleep(1500);
+    await probe("aceptada");
+    const r = await evaluate();
+    near(r.body.bbox_max[0] - r.body.bbox_min[0], 47, 1e-6, "ancho del sólido");
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");
@@ -1863,6 +1909,107 @@ const scenarios = {
     const isoDir = (await sheets()).viewDirs?.iso;
     if (!isoDir) throw new Error("no se guardó el giro de la isométrica");
     await b.shot("plano_girar_mover");
+  },
+
+  async "plano 2D: cortes por línea y escalonados, medio corte, rotura, vista 3D cortada y sombreada"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Caja de 40 × 20 × 10 con dos agujeros pasantes verticales (en x = −10 y x = 10)
+    const doc = await call("cad_get_document");
+    Object.assign(doc.features.find((f) => f.kind.type === "primitive").kind.shape, { dx: 40, dy: 20, dz: 10 });
+    for (const [x, y] of [[-10, -3], [10, 3]]) {
+      doc.features.push({ id: doc.next_id, name: `Agujero ${x}`, suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 2, height: 40 }, origin: [x, y, -20], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } });
+      doc.next_id += 1;
+    }
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].scale = 2; })`);
+    await sleep(1500);
+    // Punto de una vista (mm de la pieza) → pantalla
+    const at = (view, p) =>
+      b.eval(`(() => {
+        const sh = window.__cadStore.doc().drawing.sheets[0];
+        const svg = document.querySelector("[data-sheet] svg");
+        const g = svg.querySelector('[data-view="${view}"]');
+        const pts = [...g.querySelectorAll("polyline")].flatMap((l) => l.getAttribute("points").split(" ").map((q) => q.split(",").map(Number)));
+        const xs = pts.map((q) => q[0]), ys = pts.map((q) => q[1]);
+        // Centro de la vista en la hoja y la escala (2:1)
+        const [cx, cy] = [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+        const q = new DOMPoint(cx + ${p[0]} * 2, cy - ${p[1]} * 2).matrixTransform(svg.getScreenCTM());
+        return [q.x, q.y];
+      })()`);
+    const tool = (name) => b.eval(`document.querySelector('button[aria-label="${name}"]').click()`);
+    const count = (sel) => b.eval(`document.querySelectorAll('[data-sheet] ${sel}').length`);
+    const wait = async (sel, what) => {
+      for (let t = 0; t < 40 && !(await count(sel)); t++) await sleep(300);
+      if (!(await count(sel))) throw new Error(`no apareció: ${what}`);
+    };
+    // 1. Corte recto B-B por el medio de la superior (de izquierda a derecha: se mira hacia atrás)
+    await tool("Corte");
+    await b.click(...(await at("top", [-22, 0])), { wait: 300 });
+    await b.click(...(await at("top", [22, 0])), { wait: 300 });
+    await b.key("Enter", "Enter", 13);
+    await wait('[data-hatch="corte-B"] polygon', "rayado del corte B-B");
+    await wait('[data-cut-line="B"]', "línea de corte B");
+    if (!(await b.eval(`[...document.querySelectorAll("[data-sheet] [data-view-label]")].some((t) => t.textContent === "Corte B-B")`))) throw new Error("sin rótulo Corte B-B");
+    // 2. Escalonado C-C: pasa por los dos agujeros (y = −3 y y = 3)
+    await tool("Corte");
+    for (const p of [[-22, -3], [0, -3], [0, 3], [22, 3]]) await b.click(...(await at("top", p)), { wait: 300 });
+    await b.key("Enter", "Enter", 13);
+    await wait('[data-hatch="corte-C"] polygon', "rayado del corte escalonado");
+    if (!(await b.eval(`document.querySelector('[data-outliner-row="drawing-1:cut:C"]')?.textContent.includes("escalonado")`))) throw new Error("el Outliner no dice escalonado");
+    // 3. Medio corte del frente (derecha)
+    await b.eval(`document.querySelector('[data-outliner-row="drawing-1:view:front"]').click()`);
+    await sleep(400);
+    await b.eval(`[...document.querySelectorAll('[aria-label="Medio corte"] button')].find((x) => x.textContent === "Derecha").click()`);
+    await wait('[data-hatch="front"] polygon', "rayado del medio corte");
+    await wait('[data-center-line="front"]', "línea central del medio corte");
+    // 4. Rotura en la lateral izquierda
+    await tool("Rotura");
+    for (const p of [[-4, -2], [4, -2], [4, 3], [-4, 3]]) await b.click(...(await at("left", p)), { wait: 300 });
+    await b.key("Enter", "Enter", 13);
+    await wait('[data-break-line="left"]', "contorno de la rotura");
+    await wait('[data-hatch="left"] polygon', "rayado de la rotura");
+    // 5. Isométrica cortada en un cuarto y sombreada
+    await b.eval(`document.querySelector('[data-outliner-row="drawing-1:view:iso"]').click()`);
+    await sleep(400);
+    await b.eval(`[...document.querySelectorAll('[aria-label="Cortar la vista 3D"] button')].find((x) => x.textContent === "Un cuarto").click()`);
+    await wait('[data-hatch="iso"] polygon', "rayado de la isométrica cortada");
+    await b.eval(`[...document.querySelectorAll('[data-drawing-props] label')].find((l) => l.textContent.trim() === "Sombreada").querySelector("input").click()`);
+    await wait('[data-view-image="iso"]', "imagen sombreada");
+    await b.shot("plano_cortes");
+    // Las vistas de los cortes entran en la hoja
+    const inside = await b.eval(`(() => { const svg = document.querySelector("[data-sheet] svg"); const W = svg.viewBox.baseVal.width, H = svg.viewBox.baseVal.height; return ["corte-B", "corte-C"].map((n) => { const r = svg.querySelector('[data-view="' + n + '"]').getBBox(); return r.x >= 10 && r.y >= 10 && r.x + r.width <= W - 10 && r.y + r.height <= H - 10; }); })()`);
+    if (inside.some((x) => !x)) throw new Error(`las vistas de los cortes se salen de la hoja: ${inside}`);
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const png = `${out}/iso_sombreada.png`;
+    rmSync(png, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(png)}`);
+    await b.clickText("Guardar imagen PNG");
+    await sleep(1500);
+    if (!existsSync(png) || readFileSync(png).subarray(1, 4).toString() !== "PNG") throw new Error("no se guardó el PNG");
+    // El PDF lleva la imagen
+    const pdf = `${out}/plano_cortes.pdf`;
+    rmSync(pdf, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(pdf)}`);
+    await b.clickText("Exportar PDF");
+    await sleep(3000);
+    if (!existsSync(pdf)) throw new Error("no se exportó el PDF");
+    const { execSync } = await import("node:child_process");
+    try {
+      const list = execSync(`pdfimages -list ${pdf}`).toString();
+      if (list.trim().split("\n").length < 3) throw new Error(`el PDF no tiene la imagen: ${list}`);
+    } catch (e) {
+      if (String(e).includes("no tiene")) throw e;
+    }
+    await b.key("Escape", "Escape", 27);
+    await sleep(400);
+    await b.shot("plano_cortes_hoja");
   },
 
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {

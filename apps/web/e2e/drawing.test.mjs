@@ -356,13 +356,45 @@ test("la vista de la cámara del visor (Y arriba) pasada al CAD (Z arriba)", () 
   assert.deepEqual(projectPolylines([[[3, 7, 2]]], d)[0][0], [3, 2]);
 });
 
-test("vistas nuevas: en una columna a la derecha de todo, con su nombre (y la escala si es propia)", () => {
+test("vistas de más (nuevas y de cortes): en el lugar libre de la hoja, sin pisar nada; si no entran lo dicen", () => {
   const { placed, scale } = layout({ front: rect(40, 10), top: rect(40, 20) }, SHEETS[1], "first", 1);
-  const extra = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }, { name: "vista-2", title: "Detrás", lines: rect(10, 10), scale: 2 }], scale);
-  const right = Math.max(...placed.map((v) => v.x + 40 * v.scale));
-  assert.ok(extra[0].x > right && extra[1].x === extra[0].x, "a la derecha, en columna");
-  assert.ok(extra[1].y > extra[0].y);
-  assert.deepEqual(extra.map((v) => v.label), ["Vista 1", "Detrás (2:1)"]);
-  const moved = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }], scale, { "vista-1": [10, 20] });
-  assert.deepEqual([moved[0].x, moved[0].y, moved[0].moved], [10, 20, true]);
+  const r = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }, { name: "corte-B", title: "Corte B-B", lines: rect(10, 10), scale: 2 }], scale, SHEETS[1]);
+  assert.ok(r.fits);
+  const box = (v) => {
+    const b = bounds(v.lines);
+    return [v.x + b.min[0] * v.scale, v.y - b.max[1] * v.scale, v.x + b.max[0] * v.scale, v.y - b.min[1] * v.scale];
+  };
+  const all = [...placed, ...r.placed].map(box);
+  for (let i = 0; i < all.length; i++)
+    for (let j = i + 1; j < all.length; j++) assert.ok(!(all[i][0] < all[j][2] && all[i][2] > all[j][0] && all[i][1] < all[j][3] && all[i][3] > all[j][1]), `se pisan ${i} y ${j}`);
+  for (const b of r.placed.map(box)) assert.ok(b[0] >= 10 && b[2] <= SHEETS[1].width - 10 && b[1] >= 10 && b[3] <= SHEETS[1].height - 10, "dentro del recuadro");
+  assert.deepEqual(r.placed.map((v) => v.label), ["Vista 1", "Corte B-B (2:1)"]);
+  // Una enorme no entra: avisa
+  assert.equal(placeExtraViews(placed, [{ name: "vista-2", title: "V", lines: rect(500, 500) }], scale, SHEETS[1]).fits, false);
+  const moved = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }], scale, SHEETS[1], { "vista-1": [10, 20] });
+  assert.deepEqual([moved.placed[0].x, moved.placed[0].y, moved.placed[0].moved], [10, 20, true]);
+});
+
+test("cortes en la hoja: línea con flechas y letras, central del medio corte, rotura, rayados por estilo e imagen sombreada", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20) };
+  const { placed } = layout(views, SHEETS[1], "first", 1);
+  const top = placed.find((p) => p.name === "top");
+  const front = placed.find((p) => p.name === "front");
+  const hatched = [
+    { ...front, hatch: [[[0, 0], [10, 0], [0, 10]]], hatchStyle: { angle: 135, spacing: 3, cross: true } },
+    { ...top, hatch: [[[0, 0], [10, 0], [0, 10]]], image: { href: "data:image/png;base64,AAAA", min: [0, 0], max: [40, 20], lines: false } },
+  ];
+  const info = { title: "x", date: "2026-10-10", scale: "1:1", projection: "first", sheet: "A3" };
+  const svg = sheetSvg(hatched, SHEETS[1], info, {
+    hidden: true,
+    smooth: false,
+    marks: { lines: [{ view: "top", points: [[-5, 10], [45, 10]], arrow: [0, 1], label: "B" }], centers: [{ view: "front", a: [20, -2], b: [20, 12] }], breaks: [{ view: "front", index: 0, points: [[1, 1], [5, 1], [5, 5]] }] },
+  });
+  assert.ok(svg.includes('data-cut-line="B"') && (svg.match(/>B<\/text>/g) ?? []).length === 2, "dos letras B, una por flecha");
+  assert.ok(svg.includes('data-center-line="front"') && svg.includes('data-break-line="front" data-break-index="0"'));
+  assert.ok(svg.includes('patternTransform="rotate(135)"') && svg.includes('fill="url(#rayado-1)"'), "el rayado propio del frente");
+  // Sombreada sin líneas: la imagen, sin sus polilíneas ni su rayado
+  assert.ok(svg.includes('data-view-image="top"'));
+  assert.equal((svg.match(/<g data-view="top"[^>]*>\s*<\/g>/g) ?? []).length, 1, "las líneas de la superior no van");
+  assert.ok(!svg.includes('data-hatch="top"'));
 });

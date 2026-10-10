@@ -186,6 +186,7 @@ pub fn run() {
             cad::cad_assembly_interference,
             cad::cad_deviation,
             cad::cad_write_text,
+            cad::cad_write_bytes,
             cad::cad_write_pdf,
             cad::cad_export,
             cad::cad_project_edge,

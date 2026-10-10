@@ -200,6 +200,17 @@ export interface Placed {
   label?: string;
   /** Puesta a mano (no sigue a la disposición automática) */
   moved?: boolean;
+  /** Rayado de sus caras cortadas (sin él, 45° cada 2 mm) */
+  hatchStyle?: { angle: number; spacing: number; cross?: boolean };
+  /** Vista sombreada: la imagen (URL) y qué parte de la vista cubre (coordenadas de la vista) */
+  image?: { href: string; min: P2; max: P2; lines: boolean };
+}
+
+/** Marcas de los cortes sobre las vistas: la línea con sus flechas y letras, la línea central del medio corte y el contorno de una rotura (coordenadas de la vista) */
+export interface CutMarks {
+  lines?: { view: string; points: P2[]; arrow: P2; label: string }[];
+  centers?: { view: string; a: P2; b: P2 }[];
+  breaks?: { view: string; index: number; points: P2[] }[];
 }
 
 /**
@@ -318,28 +329,55 @@ export function layout(
 }
 
 /**
- * Vistas de más (las nuevas, giradas a gusto): en una columna a la derecha de
- * todo, con su nombre debajo (y la escala si es propia). Las puestas a mano,
- * donde se dejaron.
+ * Vistas de más (las nuevas, giradas a gusto, y las de los cortes): cada una en
+ * el primer lugar libre de la hoja (de arriba abajo y de izquierda a derecha)
+ * sin pisar otras vistas (con lugar para sus cotas y su rótulo) ni el
+ * cajetín, con su nombre debajo (y la escala si es propia). Las puestas a
+ * mano, donde se dejaron. `fits` dice si todas entraron en la hoja.
  */
 export function placeExtraViews(
   placed: Placed[],
   extras: { name: string; title: string; lines: DrawingLine[]; scale?: number | null }[],
   sheetScale: number,
+  sheet: SheetSize,
   viewAt?: Partial<Record<string, P2>>,
-): Placed[] {
-  const right = Math.max(MARGIN + GAP, ...placed.filter((v) => v.lines.length).map((v) => sheetBox(v)[2] + GAP));
-  let y = MARGIN + GAP;
-  return extras.flatMap((e) => {
+): { placed: Placed[]; fits: boolean } {
+  // Lo ocupado (cajas en la hoja, Y hacia abajo), con margen para cotas y rótulos
+  const pad = GAP / 2;
+  const taken: number[][] = placed.filter((v) => v.lines.length).map((v) => {
+    const b = sheetBox(v);
+    return [b[0] - pad, b[1] - pad, b[2] + pad, b[3] + pad + (v.label ? 8 : 0)];
+  });
+  taken.push([sheet.width - MARGIN - TITLE_W, sheet.height - MARGIN - TITLE_H, sheet.width, sheet.height]);
+  const hit = (a: number[], c: number[]) => a[0] < c[2] && a[2] > c[0] && a[1] < c[3] && a[3] > c[1];
+  const [x0, y0, x1, y1] = [MARGIN + GAP / 2, MARGIN + GAP / 2, sheet.width - MARGIN - GAP / 2, sheet.height - MARGIN - GAP / 2];
+  let fits = true;
+  const out = extras.flatMap((e) => {
     if (!e.lines.length) return [];
     const k = e.scale ?? sheetScale;
     const b = bounds(e.lines);
     const label = `${e.title}${e.scale && e.scale !== sheetScale ? ` (${scaleLabel(k)})` : ""}`;
-    const v: Placed = { name: e.name, scale: k, lines: e.lines, x: right - b.min[0] * k, y: y + b.max[1] * k, label };
-    y += (b.max[1] - b.min[1]) * k + GAP + 6;
+    const [w, h] = [(b.max[0] - b.min[0]) * k, (b.max[1] - b.min[1]) * k + 8];
     const at = viewAt?.[e.name];
-    return [at ? { ...v, x: at[0], y: at[1], moved: true } : v];
+    if (at) return [{ name: e.name, scale: k, lines: e.lines, x: at[0], y: at[1], label, moved: true } as Placed];
+    // El primer lugar libre, en pasos de 2 mm
+    let spot: [number, number] | undefined;
+    for (let y = y0; !spot && y + h <= y1; y += 2)
+      for (let x = x0; x + w <= x1; x += 2)
+        if (!taken.some((t) => hit([x, y, x + w, y + h], t))) {
+          spot = [x, y];
+          break;
+        }
+    if (!spot) {
+      // No entra: a la derecha de todo (la escala automática baja hasta que entre)
+      fits = false;
+      spot = [Math.max(x0, ...taken.slice(0, -1).map((t) => t[2])), y0];
+    }
+    const v: Placed = { name: e.name, scale: k, lines: e.lines, x: spot[0] - b.min[0] * k, y: spot[1] + b.max[1] * k, label };
+    taken.push([spot[0] - pad, spot[1] - pad, spot[0] + w + pad, spot[1] + h + pad]);
+    return [v];
   });
+  return { placed: out, fits };
 }
 
 /**
@@ -852,32 +890,51 @@ export function sheetSvg(
   placed: Placed[],
   sheet: SheetSize,
   info: TitleBlock,
-  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[] },
+  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; marks?: CutMarks },
 ): string {
   const out: string[] = [];
   out.push(
     `<svg xmlns="http://www.w3.org/2000/svg" width="${sheet.width}mm" height="${sheet.height}mm" viewBox="0 0 ${sheet.width} ${sheet.height}" font-family="sans-serif">`,
   );
   out.push(`<rect width="${sheet.width}" height="${sheet.height}" fill="#fff"/>`);
-  // Rayado a 45° para las caras cortadas
-  out.push(
-    `<defs><pattern id="rayado" patternUnits="userSpaceOnUse" width="2" height="2" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="2" stroke="#000" stroke-width="0.25"/></pattern></defs>`,
-  );
+  // Rayados de las caras cortadas: uno por estilo (45° cada 2 mm si no se eligió otro)
+  const styles = new Map<string, string>();
+  const hatchId = (h?: Placed["hatchStyle"]) => {
+    const st = h ?? { angle: 45, spacing: 2 };
+    const key = `${st.angle}|${st.spacing}|${st.cross ? 1 : 0}`;
+    if (!styles.has(key)) styles.set(key, styles.size ? `rayado-${styles.size}` : "rayado");
+    return styles.get(key)!;
+  };
+  hatchId();
+  for (const v of placed) if (v.hatch?.length) hatchId(v.hatchStyle);
+  const defs = [...styles].map(([key, id]) => {
+    const [angle, spacing, cross] = key.split("|").map(Number);
+    const across = cross ? `<line x1="0" y1="${n(spacing / 2)}" x2="${n(spacing)}" y2="${n(spacing / 2)}" stroke="#000" stroke-width="0.25"/>` : "";
+    return `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${n(spacing)}" height="${n(spacing)}" patternTransform="rotate(${n(angle)})"><line x1="0" y1="0" x2="0" y2="${n(spacing)}" stroke="#000" stroke-width="0.25"/>${across}</pattern>`;
+  });
+  out.push(`<defs>${defs.join("")}</defs>`);
   out.push(`<rect x="${MARGIN}" y="${MARGIN}" width="${n(sheet.width - 2 * MARGIN)}" height="${n(sheet.height - 2 * MARGIN)}" fill="none" stroke="#000" stroke-width="0.7"/>`);
   for (const v of placed) {
-    if (v.hatch?.length) {
+    // Sombreada: la imagen debajo de las líneas (o sola)
+    if (v.image) {
+      const im = v.image;
+      out.push(
+        `<image data-view-image="${v.name}" href="${im.href}" x="${n(v.x + im.min[0] * v.scale)}" y="${n(v.y - im.max[1] * v.scale)}" width="${n((im.max[0] - im.min[0]) * v.scale)}" height="${n((im.max[1] - im.min[1]) * v.scale)}" preserveAspectRatio="none"/>`,
+      );
+    }
+    if (v.hatch?.length && !v.image) {
       // En un detalle, solo lo que cae en su círculo
       const clip = v.detail ? `clip-${v.name}` : "";
       if (v.detail)
         out.push(
           `<clipPath id="${clip}"><circle cx="${n(v.x + v.detail.center[0] * v.scale)}" cy="${n(v.y - v.detail.center[1] * v.scale)}" r="${n(v.detail.radius * v.scale)}"/></clipPath>`,
         );
-      out.push(`<g data-hatch="${v.name}" fill="url(#rayado)" stroke="none"${clip ? ` clip-path="url(#${clip})"` : ""}>`);
+      out.push(`<g data-hatch="${v.name}" fill="url(#${hatchId(v.hatchStyle)})" stroke="none"${clip ? ` clip-path="url(#${clip})"` : ""}>`);
       for (const t of v.hatch) out.push(`<polygon points="${t.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}"/>`);
       out.push("</g>");
     }
     out.push(`<g data-view="${v.name}" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
-    for (const l of v.lines) {
+    for (const l of v.image && !v.image.lines ? [] : v.lines) {
       // La isométrica va sin ocultas (como se acostumbra)
       if ((!opts.hidden || isPictorial(v.name)) && (l.kind === "hidden" || l.kind === "hidden_outline")) continue;
       if (!opts.smooth && l.kind === "smooth") continue;
@@ -885,6 +942,48 @@ export function sheetSvg(
       out.push(`<polyline data-kind="${l.kind}" points="${pts}" ${STYLE[l.kind]}/>`);
     }
     out.push("</g>");
+  }
+  // Cortes: la línea de corte (trazo y punto, gruesa en las puntas y en los quiebres) con sus
+  // flechas y letras; la línea central del medio corte; el contorno de las roturas (fino)
+  const at = (name: string) => placed.find((v) => v.name === name && !v.detail);
+  for (const c of opts.marks?.lines ?? []) {
+    const v = at(c.view);
+    if (!v || c.points.length < 2) continue;
+    const pts = c.points.map((p): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale]);
+    // Las flechas, en la hoja (Y hacia abajo)
+    const [ax, ay] = [c.arrow[0], -c.arrow[1]];
+    const head = (p: P2) => {
+      const tip: P2 = [p[0] + ax * 7, p[1] + ay * 7];
+      const [bx, by] = [p[0] + ax * 4.5, p[1] + ay * 4.5];
+      const [px, py] = [-ay, ax];
+      return (
+        `<line x1="${n(p[0])}" y1="${n(p[1])}" x2="${n(bx)}" y2="${n(by)}" stroke-width="0.35"/>` +
+        `<polygon points="${n(tip[0])},${n(tip[1])} ${n(bx + px * 1.1)},${n(by + py * 1.1)} ${n(bx - px * 1.1)},${n(by - py * 1.1)}" stroke="none"/>` +
+        `<text x="${n(tip[0] + ax * 3)}" y="${n(tip[1] + ay * 3 + 1.4)}" font-size="4" text-anchor="middle" stroke="none">${esc(c.label)}</text>`
+      );
+    };
+    // 3 mm gruesos en cada punta y quiebre, hacia los tramos vecinos
+    const thick = pts.map((p, i) => {
+      const seg = (q: P2) => {
+        const l = Math.hypot(q[0] - p[0], q[1] - p[1]) || 1;
+        return `<line x1="${n(p[0])}" y1="${n(p[1])}" x2="${n(p[0] + ((q[0] - p[0]) / l) * 3)}" y2="${n(p[1] + ((q[1] - p[1]) / l) * 3)}" stroke-width="0.7"/>`;
+      };
+      return (i > 0 ? seg(pts[i - 1]) : "") + (i < pts.length - 1 ? seg(pts[i + 1]) : "");
+    });
+    out.push(
+      `<g data-cut-line="${esc(c.label)}" stroke="#000" fill="#000"><polyline points="${pts.map((p) => `${n(p[0])},${n(p[1])}`).join(" ")}" fill="none" stroke-width="0.25" stroke-dasharray="8 1.5 1.5 1.5"/>${thick.join("")}${head(pts[0])}${head(pts[pts.length - 1])}</g>`,
+    );
+  }
+  for (const c of opts.marks?.centers ?? []) {
+    const v = at(c.view);
+    if (!v) continue;
+    const [a, b] = [c.a, c.b].map((p): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale]);
+    out.push(`<line data-center-line="${esc(c.view)}" x1="${n(a[0])}" y1="${n(a[1])}" x2="${n(b[0])}" y2="${n(b[1])}" stroke="#000" stroke-width="0.25" stroke-dasharray="8 1.5 1.5 1.5"/>`);
+  }
+  for (const c of opts.marks?.breaks ?? []) {
+    const v = at(c.view);
+    if (!v || c.points.length < 3) continue;
+    out.push(`<polygon data-break-line="${esc(c.view)}" data-break-index="${c.index}" points="${c.points.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}" fill="none" stroke="#000" stroke-width="0.25"/>`);
   }
   // Detalles: el círculo con su letra en la vista y el rótulo bajo la ampliación
   for (const v of placed) {

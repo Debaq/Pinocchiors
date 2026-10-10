@@ -1073,6 +1073,30 @@ pub struct DrawingViewSpec {
     /// Vista en corte: se conserva el lado de `normal` del plano por `origin`
     #[serde(default)]
     pub section: Option<DrawingSection>,
+    /// Material que se quita: la unión de estos prismas (cortes por una línea o escalonados,
+    /// medio corte, rotura). Las caras que quedan sobre sus planos se rayan.
+    #[serde(default)]
+    pub cut: Vec<CutPrism>,
+    /// Devolver también la malla de lo que se ve (para la vista sombreada)
+    #[serde(default)]
+    pub shaded: bool,
+}
+
+/// Un polígono plano (mm, cerrado) extruido por `dir` (el largo va en el vector).
+#[derive(Debug, Clone, Deserialize)]
+pub struct CutPrism {
+    pub points: Vec<[f64; 3]>,
+    pub dir: [f64; 3],
+}
+
+/// Malla de una vista sombreada: posiciones y normales (mm, de a tres), triángulos y cuáles
+/// están sobre un plano de corte (para pintarlos aparte).
+#[derive(Debug, Clone, Serialize)]
+pub struct DrawingMesh {
+    pub positions: Vec<f32>,
+    pub normals: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub cut: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1086,6 +1110,8 @@ pub struct DrawingSection {
 pub struct DrawingViewResult {
     pub lines: Vec<DrawingLine>,
     pub hatch: Vec<[[f64; 2]; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<DrawingMesh>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1112,14 +1138,36 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
         .iter()
         .map(|v| {
             // Corte: la mitad del lado de la normal; sus caras sobre el plano se rayan
-            let cut = match &v.section {
-                Some(s) => Some(body.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?),
+            let mut planes: Vec<([f64; 3], [f64; 3])> = Vec::new();
+            let mut cut = match &v.section {
+                Some(s) => {
+                    planes.push((s.origin, s.normal));
+                    Some(body.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?)
+                }
                 None => None,
             };
+            // Prismas que quitan material (unidos): sus caras laterales y tapas son planos de corte
+            if !v.cut.is_empty() {
+                let tools = v
+                    .cut
+                    .iter()
+                    .map(|p| {
+                        planes.extend(prism_planes(p));
+                        cad_model::Shape::polygon(&p.points).and_then(|f| f.prism(p.dir))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                let tool = if tools.len() == 1 { tools.into_iter().next().unwrap() } else { cad_model::Shape::fuse_all(&tools).map_err(|e| e.to_string())? };
+                let from = cut.as_ref().unwrap_or(body);
+                cut = Some(from.cut(&tool).map_err(|e| format!("No se pudo cortar la vista: {e}"))?);
+            }
             let shape = cut.as_ref().unwrap_or(body);
-            let hatch = match (&v.section, &cut) {
-                (Some(s), Some(c)) => section_hatch(c, s, v, size),
-                _ => Vec::new(),
+            let (hatch, mesh) = match &cut {
+                Some(c) => {
+                    let (h, m) = section_hatch(c, &planes, v, size);
+                    (h, if v.shaded { Some(m) } else { None })
+                }
+                None => (Vec::new(), if v.shaded { shaded_mesh(shape, size) } else { None }),
             };
             let lines = shape.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
             let lines = lines
@@ -1135,37 +1183,83 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
                     points: l.points,
                 })
                 .collect();
-            Ok(DrawingViewResult { lines, hatch })
+            Ok(DrawingViewResult { lines, hatch, mesh })
         })
         .collect()
 }
 
-/// Triángulos (en la vista) de las caras de `cut` que quedaron sobre el plano de corte.
-fn section_hatch(cut: &cad_model::Shape, s: &DrawingSection, v: &DrawingViewSpec, size: f64) -> Vec<[[f64; 2]; 3]> {
+/// Planos de las caras de un prisma de corte: uno por lado del polígono y las dos tapas.
+fn prism_planes(p: &CutPrism) -> Vec<([f64; 3], [f64; 3])> {
+    let cross = |a: [f64; 3], b: [f64; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let n = p.points.len();
+    let mut out: Vec<([f64; 3], [f64; 3])> = (0..n)
+        .filter_map(|i| {
+            let (a, b) = (p.points[i], p.points[(i + 1) % n]);
+            let e = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let m = cross(e, p.dir);
+            let l = (m[0] * m[0] + m[1] * m[1] + m[2] * m[2]).sqrt();
+            (l > 1e-12).then(|| (a, m.map(|c| c / l)))
+        })
+        .collect();
+    if let Some(&a) = p.points.first() {
+        out.push((a, p.dir));
+        out.push(([a[0] + p.dir[0], a[1] + p.dir[1], a[2] + p.dir[2]], p.dir));
+    }
+    out
+}
+
+/// Malla para la vista sombreada (sin nada cortado).
+fn shaded_mesh(shape: &cad_model::Shape, size: f64) -> Option<DrawingMesh> {
+    let t = shape.tessellate(size * 1e-3, 0.3).ok()?;
+    Some(DrawingMesh {
+        positions: t.positions.iter().flat_map(|p| p.map(|c| c as f32)).collect(),
+        normals: t.normals.iter().flat_map(|p| p.map(|c| c as f32)).collect(),
+        indices: t.triangles.iter().flatten().copied().collect(),
+        cut: Vec::new(),
+    })
+}
+
+/// Triángulos (en la vista) de las caras de `cut` que quedaron sobre algún plano de corte, y
+/// la malla entera con esos triángulos marcados (para la vista sombreada).
+fn section_hatch(cut: &cad_model::Shape, planes: &[([f64; 3], [f64; 3])], v: &DrawingViewSpec, size: f64) -> (Vec<[[f64; 2]; 3]>, DrawingMesh) {
     let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    let len = dot(s.normal, s.normal).sqrt().max(1e-12);
-    let n = s.normal.map(|c| c / len);
+    let planes: Vec<([f64; 3], [f64; 3])> = planes
+        .iter()
+        .map(|&(o, n)| {
+            let len = dot(n, n).sqrt().max(1e-12);
+            (o, n.map(|c| c / len))
+        })
+        .collect();
     let on_plane: Vec<bool> = (0..cut.face_count())
         .map(|i| {
             cut.face_info(i).is_ok_and(|f| {
                 f.surface == cad_model::occt::SurfaceKind::Plane
-                    && dot(f.normal, n).abs() > 0.999
-                    && (dot(f.point, n) - dot(s.origin, n)).abs() < size * 1e-6
+                    && planes.iter().any(|&(o, n)| dot(f.normal, n).abs() > 0.999 && (dot(f.point, n) - dot(o, n)).abs() < size * 1e-6)
             })
         })
         .collect();
-    let Ok(t) = cut.tessellate(size * 1e-3, 0.3) else { return Vec::new() };
+    let empty = DrawingMesh { positions: Vec::new(), normals: Vec::new(), indices: Vec::new(), cut: Vec::new() };
+    let Ok(t) = cut.tessellate(size * 1e-3, 0.3) else { return (Vec::new(), empty) };
     // Coordenadas de la vista: x = derecha de la hoja, y = eye × x
     let e = v.eye;
     let x = v.xdir;
     let y = [e[1] * x[2] - e[2] * x[1], e[2] * x[0] - e[0] * x[2], e[0] * x[1] - e[1] * x[0]];
     let proj = |p: [f64; 3]| [dot(p, x), dot(p, y)];
-    t.triangles
+    let is_cut = |f: &u32| on_plane.get(*f as usize).copied().unwrap_or(false);
+    let hatch = t
+        .triangles
         .iter()
         .zip(&t.triangle_face)
-        .filter(|(_, f)| on_plane.get(**f as usize).copied().unwrap_or(false))
+        .filter(|(_, f)| is_cut(f))
         .map(|(tri, _)| tri.map(|k| proj(t.positions[k as usize])))
-        .collect()
+        .collect();
+    let mesh = DrawingMesh {
+        positions: t.positions.iter().flat_map(|p| p.map(|c| c as f32)).collect(),
+        normals: t.normals.iter().flat_map(|p| p.map(|c| c as f32)).collect(),
+        indices: t.triangles.iter().flatten().copied().collect(),
+        cut: t.triangle_face.iter().enumerate().filter(|(_, f)| is_cut(f)).map(|(i, _)| i as u32).collect(),
+    };
+    (hatch, mesh)
 }
 
 /// SVG (de un plano) a PDF del mismo tamaño, con las fuentes del sistema para los textos.
@@ -1183,6 +1277,13 @@ fn svg_to_pdf(svg: &str) -> Result<Vec<u8>, String> {
 #[tauri::command]
 pub async fn cad_write_pdf(path: String, svg: String) -> Result<u64, String> {
     let bytes = svg_to_pdf(&svg)?;
+    std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+    Ok(bytes.len() as u64)
+}
+
+/// Escribe un archivo binario (la imagen PNG de una vista).
+#[tauri::command]
+pub async fn cad_write_bytes(path: String, bytes: Vec<u8>) -> Result<u64, String> {
     std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
     Ok(bytes.len() as u64)
 }
@@ -1762,6 +1863,11 @@ pub mod bridge {
             "cad_write_pdf" => {
                 let (path, svg): (String, String) = (arg(args, "path")?, arg(args, "svg")?);
                 let bytes = svg_to_pdf(&svg)?;
+                std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
+                ok(bytes.len() as u64)
+            }
+            "cad_write_bytes" => {
+                let (path, bytes): (String, Vec<u8>) = (arg(args, "path")?, arg(args, "bytes")?);
                 std::fs::write(&path, &bytes).map_err(|e| format!("No se pudo escribir {path}: {e}"))?;
                 ok(bytes.len() as u64)
             }

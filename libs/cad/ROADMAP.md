@@ -682,3 +682,6 @@ cargo test -p cad-model
   fase 3): vistas que se arrastran alineadas (y lo dibujado encima va con ellas), vistas nuevas
   que se giran a gusto (botones, cámara del visor, Ctrl+arrastrar con vista previa), escala
   siempre a la vista y la hoja ya no cambia de tamaño en pantalla con los avisos.
+- **2026-10-10 Plano 2D: cortes e imágenes** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md), fase 4): cortes
+  por una línea (rectos y escalonados) con su vista, medio corte, rotura, vistas 3D cortadas,
+  vistas sombreadas (hoja, PDF y PNG), estilo del rayado; barra izquierda propia del plano.

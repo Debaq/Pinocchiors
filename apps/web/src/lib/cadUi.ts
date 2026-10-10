@@ -194,7 +194,7 @@ export interface SheetEdit {
 export const SHEET_SKETCH = -1;
 
 /** Herramienta del plano 2D: cotas a mano, detalle o la línea de un corte */
-export type DrawingTool = "" | "dim" | "distance" | "angle" | "detail" | "section";
+export type DrawingTool = "" | "dim" | "distance" | "angle" | "detail" | "section" | "break";
 
 /** Lo que el plano abierto ofrece a la barra izquierda (lo registra DrawingView) */
 export interface DrawingActions {

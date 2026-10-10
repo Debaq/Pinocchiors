@@ -146,16 +146,37 @@ verdad…").
 - Queda: vista auxiliar proyectada desde otra (perpendicular a una arista inclinada) y mover
   los detalles a mano.
 
-### F4 — Cortes e imágenes de secciones
+### F4 — Cortes e imágenes de secciones ✅ (con pendientes)
 
-- Cortes por cualquier plano: dibujar la línea de corte sobre una vista (B-B, C-C…), con
-  flechas y letra; corte escalonado (línea quebrada), medio corte y corte parcial (rotura).
-- Corte en una vista 3D: la isométrica (o cualquier girada en F3) cortada, con la cara cortada
-  rayada o pintada.
-- **Imágenes de secciones**: vista sombreada (render del visor con la orientación de la vista,
-  a la resolución de la hoja) de la pieza entera o cortada, puesta en la hoja como imagen con
-  marco, y exportable sola a PNG. En el PDF va incrustada; en el DXF, solo el contorno.
-- Rayado según el material (patrón y ángulo por pieza en ensambles).
+*Hecha el 2026-10-10* (backend: `DrawingViewSpec.cut` = prismas que quitan material, unidos;
+raya las caras sobre cualquiera de sus planos; `shaded` devuelve la malla; `cad_write_bytes`.
+Front: `lib/drawingCuts.ts`, `lib/drawingShade.ts`; pruebas node `drawingCuts.test.mjs`,
+`drawing.test.mjs`; e2e "plano 2D: cortes por línea y escalonados…").
+- **Corte por una línea** (herramienta Corte de la barra izquierda: dos clics sobre una vista;
+  más clics, **escalonado**; doble clic o Enter termina): `DrawingSheet.sections`, letra libre
+  (`nextLabel`), línea de trazo y punto gruesa en puntas y quiebres con flechas y letras; su
+  vista «Corte B-B» mira en el sentido de las flechas (`sectionViewDir`) y quita lo de atrás de
+  la línea (`sectionPrism`). «Invertir el sentido» en su ventana.
+- **Medio corte** de una vista (derecha o izquierda: quita el cuarto hacia quien mira,
+  `halfPrism`) con la línea central.
+- **Rotura** (herramienta Rotura: contorno de clics, doble clic o Enter): corte local hasta una
+  profundidad (`breakPrism`), con su contorno fino; la profundidad en su ventana.
+- **Vista 3D cortada** (isométrica y vistas nuevas): «Un cuarto» o con cualquier corte.
+- **Imágenes**: «Sombreada» (con o sin líneas) en cualquier vista: la malla (entera o cortada,
+  las caras cortadas en otro color) dibujada con three.js fuera de pantalla mirando desde la
+  vista; va en la hoja, en el PDF (svg2pdf incrusta la imagen) y se guarda sola como PNG.
+- **Rayado**: ángulo, separación y cruzado, de la hoja y de cada corte.
+- Las vistas de más (nuevas y de cortes) van en el **lugar libre** de la hoja; con la escala
+  automática, la mayor con la que también ellas entran (antes quedaban fuera de la hoja).
+- De paso (pedido del usuario): la **barra izquierda** con el plano abierto muestra las
+  herramientas del plano, no las de Diseñar.
+
+Queda de F4:
+- Rayado según el material (patrón por material y por pieza en un ensamble).
+- DXF: las líneas de corte, el rayado y el contorno de las vistas sombreadas no salen.
+- La vista del corte va donde haya lugar, no alineada con la vista de donde sale (proyectada).
+- Las letras de dos cortes que terminan en el mismo lugar se pisan; el contorno de la rotura
+  es de tramos rectos (no la línea a mano alzada de la norma).
 
 ### F5 — Lo que le falta al editor (sirve para sketch y hoja)
 

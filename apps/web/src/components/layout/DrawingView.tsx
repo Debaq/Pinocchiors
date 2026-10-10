@@ -34,6 +34,7 @@ import {
   sheetSvg,
   userDimensions,
   viewSpec,
+  type CutMarks,
   type Detail,
   type DrawingLine,
   type P2,
@@ -48,6 +49,7 @@ import {
   addCustomView,
   addDrawing,
   customViewName,
+  nextLabel,
   viewDirOf,
   drawingSheets,
   elementDeletable,
@@ -61,6 +63,23 @@ import {
   type DrawingSheet,
 } from "../../lib/drawingDoc";
 import { applySheetLinks, applySheetOwners, sheetSketchDims } from "../../lib/sheetRefs";
+import {
+  DEFAULT_HATCH,
+  breakPrism,
+  halfPrism,
+  quarterPrism,
+  reachOf,
+  sectionArrow,
+  sectionPrism,
+  sectionViewDir,
+  sectionViewName,
+  viewCenter,
+  type Box3,
+  type CutPrism,
+  type HatchStyle,
+  type SectionDef,
+} from "../../lib/drawingCuts";
+import { dataUrlBytes, shadeView, type DrawingMesh } from "../../lib/drawingShade";
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
 
@@ -123,6 +142,13 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const [orbitDir, setOrbitDir] = createSignal<{ name: string; dir: ViewDir }>();
   let dragged = false;
   let firstLine: { view: string; ref: P2 } | null = null;
+  // Corte o rotura a medias: la vista y los puntos (coordenadas de la vista)
+  const [cutPts, setCutPts] = createSignal<{ view: string; pts: P2[] }>();
+  /** ¿El punto de la hoja (mm, Y abajo) cae en la caja de la vista (con margen en mm de hoja)? */
+  const insideBox = (v: Placed, pt: { x: number; y: number }, pad: number) => {
+    const b = sheetBox(v);
+    return pt.x >= b[0] - pad && pt.x <= b[2] + pad && pt.y >= b[1] - pad && pt.y <= b[3] + pad;
+  };
   const [views, setViews] = createSignal<Partial<Record<string, DrawingLine[]>>>();
   const [hatch, setHatch] = createSignal<Partial<Record<string, [P2, P2, P2][]>>>({});
   const [sectionAt, setSectionAt] = createSignal(0);
@@ -133,17 +159,53 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const projection = (): Projection => d()?.projection ?? "first";
   // Lo que se pide al backend (nombre y desde dónde se mira), como texto: el
   // efecto corre solo si cambia. La que se está girando va con su giro del momento
+  // Caja de la pieza (para que los prismas de corte la atraviesen entera)
+  const box = createMemo((): Box3 | undefined => {
+    const b = store.result()?.body;
+    return b ? { min: b.bbox_min as P3, max: b.bbox_max as P3 } : undefined;
+  });
   const requests = createMemo(() => {
     const s = d();
     if (!s) return "[]";
+    const bx = box();
+    const reach = bx ? reachOf(bx) : 1000;
+    const out: { name: string; eye: P3; xdir: P3; cut: CutPrism[]; shaded: boolean }[] = [];
+    const sectionCut = (label: string) => {
+      const def = s.sections?.find((c) => c.label === label);
+      const parent = def && viewDirOf(s, def.view);
+      return def && parent && def.points.length >= 2 ? sectionPrism(def, parent, reach) : undefined;
+    };
     const names = [...VIEW_NAMES.filter((v) => !s.hiddenViews.includes(v)), ...(s.customViews ?? []).filter((v) => !v.hidden).map((v) => customViewName(v.id))];
-    return JSON.stringify(names.map((name) => ({ name, ...viewDirOf(s, name)! })));
+    for (const name of names) {
+      const dir = viewDirOf(s, name)!;
+      const cut: CutPrism[] = [];
+      const half = s.halves?.[name];
+      if (half && bx && !isPictorial(name)) cut.push(halfPrism(dir, bx, half));
+      if (bx) for (const br of s.breaks?.[name] ?? []) if (br.points.length >= 3) cut.push(breakPrism(dir, br, bx));
+      const by = s.cutBy?.[name];
+      if (by && bx && isPictorial(name)) {
+        const p = by === "quarter" ? quarterPrism(bx) : sectionCut(by);
+        if (p) cut.push(p);
+      }
+      out.push({ name, ...dir, cut, shaded: !!s.shaded?.[name] });
+    }
+    // La vista de cada corte: mira en el sentido de las flechas, sin lo de atrás de la línea
+    for (const def of s.sections ?? []) {
+      const parent = viewDirOf(s, def.view);
+      const p = sectionCut(def.label);
+      if (def.hidden || !parent || !p) continue;
+      const name = sectionViewName(def.label);
+      out.push({ name, ...sectionViewDir(def, parent), cut: [p], shaded: !!s.shaded?.[name] });
+    }
+    return JSON.stringify(out);
   });
+  // Mallas de las vistas sombreadas (con su dirección), y sus imágenes
+  const [images, setImages] = createSignal<Record<string, { href: string; min: P2; max: P2 }>>({});
   const sectionOn = createMemo(() => !!d()?.section && !d()!.section!.hidden);
   const sectionY = createMemo(() => d()?.section?.y ?? undefined);
   createEffect(
     on([() => store.result()?.version, requests, sectionOn, sectionY], async () => {
-      const asked = JSON.parse(requests()) as { name: string; eye: P3; xdir: P3 }[];
+      const asked = JSON.parse(requests()) as { name: string; eye: P3; xdir: P3; cut: CutPrism[]; shaded: boolean }[];
       const names = asked.map((x) => x.name);
       const n = ++seq;
       if (!names.length) return setViews({});
@@ -152,11 +214,23 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         // El corte va por el medio del sólido, paralelo al frente: se queda la mitad de atrás
         const body = store.result()?.body;
         const at = sectionY() ?? (body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0);
-        const specs = asked.map(({ name, eye, xdir }) => (name === "front" && sectionOn() ? { eye, xdir, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir }));
-        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][] }[]>("cad_drawing", { views: specs });
+        const specs = asked.map(({ name, eye, xdir, cut, shaded }) =>
+          name === "front" && sectionOn() ? { eye, xdir, cut, shaded, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir, cut, shaded },
+        );
+        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][]; mesh?: DrawingMesh }[]>("cad_drawing", { views: specs });
         if (n === seq) {
           setViews(Object.fromEntries(names.map((v, i) => [v, res[i].lines])));
           setHatch(Object.fromEntries(names.map((v, i) => [v, res[i].hatch])));
+          // Las sombreadas: la malla dibujada mirando desde la vista, cubriendo lo que cubren sus líneas
+          const imgs: Record<string, { href: string; min: P2; max: P2 }> = {};
+          asked.forEach((a, i) => {
+            const mesh = res[i].mesh;
+            if (!a.shaded || !mesh || !res[i].lines.length) return;
+            const b = bounds(res[i].lines);
+            const href = shadeView(mesh, { eye: a.eye, xdir: a.xdir }, b.min, b.max, 1600 / Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], 1e-9));
+            if (href) imgs[a.name] = { href, min: b.min, max: b.max };
+          });
+          setImages(imgs);
           setSectionAt(at);
           setMessage(undefined);
         }
@@ -178,16 +252,55 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const g = dragAt();
     if (g) at[g.view] = g.at;
     const std = Object.fromEntries(VIEW_NAMES.filter((n) => v[n]).map((n) => [n, v[n]!])) as Partial<Record<ViewName, DrawingLine[]>>;
-    const r = layout(std, sheet(), projection(), s.scale ?? undefined, hatch() as Partial<Record<ViewName, [P2, P2, P2][]>>, s.viewScales, at);
-    // Las vistas nuevas, en una columna a la derecha (o donde se dejaron)
-    const extras = placeExtraViews(
-      r.placed,
-      (s.customViews ?? []).filter((c) => !c.hidden && v[customViewName(c.id)]).map((c) => ({ name: customViewName(c.id), title: c.name, lines: v[customViewName(c.id)]!, scale: s.viewScales?.[customViewName(c.id)] })),
-      r.scale,
-      at,
-    );
-    const all = [...r.placed, ...extras];
+    const extraViews = [
+      ...(s.customViews ?? []).filter((c) => !c.hidden && v[customViewName(c.id)]).map((c) => ({ name: customViewName(c.id), title: c.name, lines: v[customViewName(c.id)]!, scale: s.viewScales?.[customViewName(c.id)] })),
+      ...(s.sections ?? [])
+        .filter((c) => !c.hidden && v[sectionViewName(c.label)])
+        .map((c) => ({ name: sectionViewName(c.label), title: `Corte ${c.label}-${c.label}`, lines: v[sectionViewName(c.label)]!, scale: s.viewScales?.[sectionViewName(c.label)] })),
+    ];
+    // Las vistas nuevas y las de los cortes, en el lugar libre (o donde se dejaron). Con la
+    // escala automática, la mayor con la que también ellas entran en la hoja
+    const arrange = (fixed?: number) => {
+      const r = layout(std, sheet(), projection(), fixed, hatch() as Partial<Record<ViewName, [P2, P2, P2][]>>, s.viewScales, at);
+      return { r, extra: placeExtraViews(r.placed, extraViews, r.scale, sheet(), at) };
+    };
+    let { r, extra } = arrange(s.scale ?? undefined);
+    if (!s.scale && !extra.fits)
+      for (const k of SCALES.filter((x) => x < r.scale)) {
+        const next = arrange(k);
+        ({ r, extra } = next);
+        if (extra.fits) break;
+      }
+    const extras = extra.placed;
+    // Cada vista con su rayado y su imagen sombreada
+    const imgs = images();
+    const style = (name: string): HatchStyle => (name.startsWith("corte-") ? s.sections?.find((c) => sectionViewName(c.label) === name)?.hatch : undefined) ?? s.hatch ?? DEFAULT_HATCH;
+    const dress = (p: Placed): Placed => ({
+      ...p,
+      hatch: p.hatch ?? (hatch()[p.name] as [P2, P2, P2][] | undefined),
+      hatchStyle: style(p.name),
+      image: imgs[p.name] ? { ...imgs[p.name], lines: s.shaded?.[p.name]?.lines !== false } : undefined,
+    });
+    const all = [...r.placed, ...extras].map(dress);
     return { ...r, placed: [...all, ...placeDetails(all, s.details.filter((x) => !x.hidden), sheet())] };
+  });
+  // Marcas de los cortes en las vistas: líneas de corte, la central del medio corte, las roturas
+  const marks = createMemo((): CutMarks => {
+    const s = d();
+    const r = result();
+    const bx = box();
+    if (!s || !r) return {};
+    const lines = (s.sections ?? []).filter((c) => !c.hidden && c.points.length >= 2).map((c) => ({ view: c.view, points: c.points, arrow: sectionArrow(c), label: c.label }));
+    const centers = Object.entries(s.halves ?? {}).flatMap(([name, side]) => {
+      const v = r.placed.find((p) => p.name === name && !p.detail);
+      const dir = viewDirOf(s, name);
+      if (!side || !v || !dir || !bx) return [];
+      const c = viewCenter(dir, bx);
+      const b = bounds(v.lines);
+      return [{ view: name, a: [c[0], b.min[1] - 3 / v.scale] as P2, b: [c[0], b.max[1] + 3 / v.scale] as P2 }];
+    });
+    const breaks = Object.entries(s.breaks ?? {}).flatMap(([view, list]) => (list ?? []).map((br, index) => ({ view, index, points: br.points })));
+    return { lines, centers, breaks };
   });
   // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja), con lo ligado
   // a las vistas donde están hoy sus líneas
@@ -228,6 +341,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         userDims: s.dims,
         layer: withLayer ? layer() : undefined,
         layerDims: withLayer ? layerDims() : undefined,
+        marks: marks(),
       },
     );
   };
@@ -294,9 +408,14 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
 
   /** Una vista de la hoja como elemento: de las seis (o la isométrica) o una nueva */
   const asElement = (name: string): DrawingElement =>
-    name.startsWith("vista-") ? { kind: "custom", id: Number(name.slice(6)) } : { kind: "view", view: name as ViewName };
+    name.startsWith("vista-")
+      ? { kind: "custom", id: Number(name.slice(6)) }
+      : name.startsWith("corte-")
+        ? { kind: "cut", label: name.slice(6) }
+        : { kind: "view", view: name as ViewName };
   /** El nombre en la hoja de una vista elegida */
-  const viewNameOf = (el: DrawingElement | undefined) => (el?.kind === "view" ? el.view : el?.kind === "custom" ? customViewName(el.id) : undefined);
+  const viewNameOf = (el: DrawingElement | undefined) =>
+    el?.kind === "view" ? el.view : el?.kind === "custom" ? customViewName(el.id) : el?.kind === "cut" ? sectionViewName(el.label) : undefined;
 
   /** Sin herramienta: lo que está bajo el clic (el elemento del SVG o la vista que lo contiene) */
   const elementAt = (e: MouseEvent): DrawingElement | undefined => {
@@ -305,6 +424,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     if (dim?.dataset.userDim) return { kind: "dim", index: Number(dim.dataset.userDim) };
     const det = t.closest("[data-detail], [data-detail-mark]") as HTMLElement | null;
     if (det) return { kind: "detail", label: det.dataset.detail ?? det.dataset.detailMark! };
+    const cutLine = t.closest("[data-cut-line]") as HTMLElement | null;
+    if (cutLine?.dataset.cutLine) return { kind: "cut", label: cutLine.dataset.cutLine };
+    const br = t.closest("[data-break-line]") as HTMLElement | null;
+    if (br?.dataset.breakLine) return { kind: "break", view: br.dataset.breakLine, index: Number(br.dataset.breakIndex ?? 0) };
+    const hatched = (t.closest("[data-hatch]") as HTMLElement | null)?.dataset.hatch;
+    if (hatched?.startsWith("corte-")) return { kind: "cut", label: hatched.slice(6) };
     if (t.closest("[data-hatch], [data-section-line], [data-section-label]")) return { kind: "section" };
     if (t.closest("[data-layer]")) return { kind: "sketch" };
     if (t.closest("[data-overall-dim]")) return { kind: "overall" };
@@ -347,6 +472,19 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     if (!t) return ui.setDrawingSel(elementAt(e));
     const pt = sheetPoint(e);
     if (!pt) return;
+    // Corte o rotura: puntos sobre una vista (la del primer clic); doble clic o Enter termina
+    if (t === "section" || t === "break") {
+      const cur = cutPts();
+      const v = cur ? r.placed.find((p) => p.name === cur.view && !p.detail) : r.placed.find((p) => !p.detail && !isPictorial(p.name) && !p.name.startsWith("corte-") && insideBox(p, pt, 6));
+      if (!v) return setMessage(t === "section" ? "Clic sobre una vista (o al lado): ahí empieza la línea de corte" : "Clic sobre una vista: el contorno de la rotura");
+      const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
+      const pts = cur?.pts ?? [];
+      const last = pts[pts.length - 1];
+      if (last && Math.hypot(p[0] - last[0], p[1] - last[1]) * v.scale < 0.8) return;
+      setCutPts({ view: v.name, pts: [...pts, p] });
+      setMessage(t === "section" ? "Más clics para escalonarla; doble clic o Enter termina" : "Más puntos del contorno; doble clic o Enter lo cierra");
+      return;
+    }
     // Primero los detalles (están encima, ampliados)
     const order = [...r.placed].sort((a, b) => Number(!!b.detail) - Number(!!a.detail));
     for (const v of order) {
@@ -449,6 +587,30 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     // La vista queda donde se soltó hasta que llega el documento nuevo
     void Promise.resolve(store.commit((doc) => void updateDrawing(doc, id, (x) => (x.viewAt = { ...(x.viewAt ?? {}), [g.view]: g.at })))).finally(() => setDragAt(undefined));
   };
+  /** Los puntos del corte o de la rotura a medias, en la hoja */
+  const cutPreview = createMemo(() => {
+    const cur = cutPts();
+    const v = cur && result()?.placed.find((p) => p.name === cur.view && !p.detail);
+    if (!cur || !v) return undefined;
+    const pts = cur.pts.map((p): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale]);
+    const ring = tool() === "break" && pts.length > 2 ? [...pts, pts[0]] : pts;
+    return { points: ring.map((p) => `${p[0].toFixed(2)},${p[1].toFixed(2)}`).join(" "), dots: pts };
+  });
+
+  /** Guarda la imagen sombreada de una vista como PNG */
+  const savePng = async (name: string) => {
+    const im = images()[name];
+    if (!im) return setMessage("La vista no está sombreada");
+    const path = await save({ filters: [{ name: "PNG", extensions: ["png"] }], defaultPath: `${fileBase()}_${name}.png` });
+    if (!path) return;
+    try {
+      const bytes = await invoke<number>("cad_write_bytes", { path, bytes: dataUrlBytes(im.href) });
+      setMessage(`Imagen guardada (${Math.round(bytes / 1024)} KB)`);
+    } catch (e) {
+      setMessage(String(e));
+    }
+  };
+
   /** Avisos de las vistas puestas a mano (se salen de la hoja, pisan otra) */
   const problems = createMemo(() => {
     const r = result();
@@ -487,11 +649,54 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return pre.map((l) => l.map((p) => `${(v.x + (p[0] - cx1 + cx0) * v.scale).toFixed(2)},${(v.y - (p[1] - cy1 + cy0) * v.scale).toFixed(2)}`).join(" ")).join("|");
   });
 
-  // Esc suelta la herramienta o lo elegido; Supr borra lo elegido (si se puede)
+  /**
+   * Termina el corte (dos puntos o más: recto o escalonado) o la rotura (tres o
+   * más: un contorno) y los elige (se abre su ventana)
+   */
+  const finishCut = () => {
+    const cur = cutPts();
+    const t = tool();
+    setCutPts(undefined);
+    setMessage(undefined);
+    if (!cur) return;
+    if (t === "section") {
+      if (cur.pts.length < 2) return setMessage("El corte necesita dos puntos o más");
+      let label = "";
+      void Promise.resolve(
+        upd2((x) => {
+          label = nextLabel(x);
+          x.sections = [...(x.sections ?? []), { label, view: cur.view, points: cur.pts }];
+        }),
+      ).then(() => label && ui.setDrawingSel({ kind: "cut", label }));
+      setTool("");
+    } else if (t === "break") {
+      if (cur.pts.length < 3) return setMessage("La rotura necesita un contorno de tres puntos o más");
+      const s = d();
+      const dir = s && viewDirOf(s, cur.view);
+      const bx = box();
+      // Hasta la mitad de lo hondo de la pieza en esa vista
+      const depth = dir && bx ? Math.round(Math.abs((bx.max[0] - bx.min[0]) * dir.eye[0] + (bx.max[1] - bx.min[1]) * dir.eye[1] + (bx.max[2] - bx.min[2]) * dir.eye[2]) * 5) / 10 || 5 : 5;
+      let index = 0;
+      void Promise.resolve(
+        upd2((x) => {
+          const list = [...(x.breaks?.[cur.view] ?? [])];
+          index = list.length;
+          list.push({ points: cur.pts, depth });
+          x.breaks = { ...(x.breaks ?? {}), [cur.view]: list };
+        }),
+      ).then(() => ui.setDrawingSel({ kind: "break", view: cur.view, index }));
+      setTool("");
+    }
+  };
+
+  // Esc suelta la herramienta o lo elegido; Supr borra lo elegido (si se puede); Enter termina un corte o una rotura
   const onKey = (e: KeyboardEvent) => {
     if ((e.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]")) return;
-    if (e.key === "Escape") {
-      if (tool()) setTool("");
+    if (e.key === "Enter" && cutPts()) {
+      finishCut();
+    } else if (e.key === "Escape") {
+      if (cutPts()) setCutPts(undefined);
+      else if (tool()) setTool("");
       else ui.setDrawingSel(undefined);
       firstLine = null;
     } else if ((e.key === "Delete" || e.key === "Backspace") && sel() && elementDeletable(sel()!)) {
@@ -529,6 +734,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         return lines([`[data-layer] *`]) + texts([`[data-layer]`]);
       case "sheet":
         return lines([`[data-title-block] rect`]);
+      case "cut":
+        return lines([`[data-cut-line="${el.label}"] *`, `[data-view="corte-${el.label}"] polyline`]) + texts([`[data-cut-line="${el.label}"]`]) + `${S} [data-cut-line="${el.label}"] polygon { fill: ${c} !important; }`;
+      case "break":
+        return lines([`[data-break-line="${el.view}"][data-break-index="${el.index}"]`]);
+      case "custom":
+        return lines([`[data-view="vista-${el.id}"] polyline`]);
     }
   });
 
@@ -548,8 +759,17 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     arrange: () => upd((x) => (x.viewAt = {})),
     canArrange: () => !!Object.keys(d()?.viewAt ?? {}).length,
   });
-  // Cambiar de herramienta suelta la primera recta elegida
-  createEffect(on(tool, () => (firstLine = null), { defer: true }));
+  // Cambiar de herramienta suelta la primera recta elegida y los puntos de un corte a medias
+  createEffect(
+    on(
+      tool,
+      () => {
+        firstLine = null;
+        setCutPts(undefined);
+      },
+      { defer: true },
+    ),
+  );
 
   // Lugar disponible para la hoja (se sigue con cada cambio de tamaño)
   let areaRef: HTMLDivElement | undefined;
@@ -634,6 +854,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           style={sheetSize() ? { width: `${sheetSize()![0]}px`, height: `${sheetSize()![1]}px` } : { width: "100%" }}
           innerHTML={svg()}
           onClick={onSheetClick}
+          onDblClick={() => cutPts() && finishCut()}
           onPointerDown={onSheetDown}
           onPointerMove={onSheetMove}
           onPointerUp={onSheetUp}
@@ -644,6 +865,18 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
             setOrbitDir(undefined);
           }}
         />
+        {/* Corte o rotura a medias: sus puntos sobre la vista */}
+        <Show when={cutPreview() && sheetSize()}>
+          <svg
+            data-cut-preview
+            class="pointer-events-none absolute"
+            style={{ width: `${sheetSize()![0]}px`, height: `${sheetSize()![1]}px` }}
+            viewBox={`0 0 ${sheet().width} ${sheet().height}`}
+          >
+            <polyline points={cutPreview()!.points} fill="none" stroke={themeColor("accent")} stroke-width="0.4" stroke-dasharray={tool() === "section" ? "6 1.5 1.5 1.5" : undefined} />
+            <For each={cutPreview()!.dots}>{(p) => <circle cx={p[0]} cy={p[1]} r="0.9" fill={themeColor("accent")} />}</For>
+          </svg>
+        </Show>
         <Show when={orbitPreview() && sheetSize()}>
           <svg
             data-orbit-preview
@@ -667,6 +900,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
               const pose = ui.viewer()?.cameraPose();
               return pose ? viewDirFromCamera(pose) : undefined;
             }}
+            hasImage={(name) => !!images()[name]}
+            savePng={(name) => void savePng(name)}
             height={sheet().height}
             dimValue={(i) => {
               const r = result();
@@ -706,6 +941,8 @@ export const DrawingSideTools: Component<{ ui: CadUi }> = (props) => {
       {tool("angle", "Ángulo", D.DimAngle, "Clic en dos rectas que se cruzan")}
       <SideSep />
       {tool("detail", "Detalle", D.DrawingDetail, "Clic en una vista: amplía esa zona aparte")}
+      {tool("section", "Corte", D.DrawingSection, "Clic en dos puntos sobre una vista (más clics: escalonado); doble clic o Enter termina. La vista del corte sale aparte")}
+      {tool("break", "Rotura", D.DrawingDetail, "Clic en los puntos de un contorno sobre una vista; doble clic o Enter lo cierra: corte local hasta una profundidad")}
       <SideButton label="Corte A-A" icon={D.DrawingSection} tip="El frente cortado por un plano paralelo a él, rayado, con la línea de corte en la planta" disabled={!act()?.canSectionAA()} onClick={() => act()?.sectionAA()} />
       <SideButton label="Vista nueva" icon={D.DrawingNewView} tip="Una vista más que se gira a gusto (Ctrl+arrastrar en la hoja, o con los botones de su ventana)" onClick={() => act()?.newView()} />
       <SideSep />
@@ -730,6 +967,8 @@ const ElementWindow: Component<{
   height: number;
   /** Desde dónde mira la cámara del visor de Diseñar */
   cameraDir: () => ViewDir | undefined;
+  hasImage: (name: string) => boolean;
+  savePng: (name: string) => void;
   dimValue: (index: number) => string | undefined;
   update: (change: (s: DrawingSheet) => void) => void;
   close: () => void;
@@ -779,6 +1018,32 @@ const ElementWindow: Component<{
     </label>
   );
   const num = (v: string) => Number(v.trim().replace(",", "."));
+  /** Rayado: ángulo, separación y cruzado */
+  const hatchControls = (h: HatchStyle, set: (h: HatchStyle) => void) => (
+    <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-text-muted" aria-label="Rayado">
+      <span>Rayado</span>
+      <input
+        aria-label="Ángulo del rayado"
+        type="number"
+        step="15"
+        class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+        value={h.angle}
+        onChange={(e) => isFinite(num(e.currentTarget.value)) && set({ ...h, angle: num(e.currentTarget.value) })}
+      />
+      <span>° cada</span>
+      <input
+        aria-label="Separación del rayado"
+        type="number"
+        min="0.5"
+        step="0.5"
+        class="w-12 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+        value={h.spacing}
+        onChange={(e) => num(e.currentTarget.value) > 0 && set({ ...h, spacing: num(e.currentTarget.value) })}
+      />
+      <span>mm</span>
+      {check("Cruzado", !!h.cross, (on) => set({ ...h, cross: on }))}
+    </div>
+  );
   const scaleOptions = (auto: number) => [{ value: "auto", label: `Auto (${scaleLabel(auto)})` }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))];
 
   return (
@@ -840,12 +1105,84 @@ const ElementWindow: Component<{
               {check("Ocultas", props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
               {check("Tangentes", props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
             </div>
+            {hatchControls(props.sheet.hatch ?? DEFAULT_HATCH, (h) => props.update((s) => (s.hatch = h)))}
             {row("Título", <input aria-label="Título del plano" class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
             {row("Autor", <input aria-label="Autor" placeholder="Autor" class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
           </Match>
-          <Match when={(() => { const x = el(); return x.kind === "view" ? x.view : x.kind === "custom" ? customViewName(x.id) : undefined; })()}>
+          <Match
+            when={(() => {
+              const x = el();
+              return x.kind === "view" ? x.view : x.kind === "custom" ? customViewName(x.id) : x.kind === "cut" ? sectionViewName(x.label) : undefined;
+            })()}
+          >
             {(view) => (
               <>
+                <Show when={el().kind === "cut" && (el() as { label: string }).label}>
+                  {(label) => {
+                    const def = () => props.sheet.sections?.find((c) => c.label === label());
+                    const edit = (change: (c: SectionDef) => void) =>
+                      props.update((s) => {
+                        s.sections = (s.sections ?? []).map((c) => {
+                          if (c.label !== label()) return c;
+                          const x = { ...c };
+                          change(x);
+                          return x;
+                        });
+                      });
+                    return (
+                      <>
+                        <p class="text-[11px] text-text-dim">
+                          {(def()?.points.length ?? 0) > 2 ? "Escalonado" : "Recto"}, sobre {(VIEW_LABELS as Record<string, string>)[def()?.view ?? ""] ?? def()?.view}. Se mira en el sentido de las flechas.
+                        </p>
+                        <Button size="sm" variant="ghost" fullWidth onClick={() => edit((c) => (c.flip = !c.flip))}>
+                          Invertir el sentido
+                        </Button>
+                        {hatchControls(def()?.hatch ?? props.sheet.hatch ?? DEFAULT_HATCH, (h) => edit((c) => (c.hatch = h)))}
+                      </>
+                    );
+                  }}
+                </Show>
+                <Show when={el().kind === "view" && !isPictorial(view())}>
+                  <div class="flex items-center justify-between text-[11px] text-text-muted" aria-label="Medio corte">
+                    <span>Medio corte</span>
+                    <span class="flex gap-0.5">
+                      {(["", "right", "left"] as const).map((side) => (
+                        <button
+                          class={clsx("px-1.5 py-0.5 rounded border border-border", (props.sheet.halves?.[view()] ?? "") === side ? "bg-accent text-bg" : "hover:bg-surface")}
+                          onClick={() => props.update((s) => (s.halves = { ...(s.halves ?? {}), [view()]: side || undefined }))}
+                        >
+                          {side === "" ? "No" : side === "right" ? "Derecha" : "Izquierda"}
+                        </button>
+                      ))}
+                    </span>
+                  </div>
+                </Show>
+                <Show when={isPictorial(view())}>
+                  <div class="space-y-1 text-[11px] text-text-muted" aria-label="Cortar la vista 3D">
+                    <span>Cortar</span>
+                    <div class="flex flex-wrap gap-0.5">
+                      {[["", "Entera"], ["quarter", "Un cuarto"], ...(props.sheet.sections ?? []).map((c) => [c.label, `Corte ${c.label}-${c.label}`])].map(([v, label]) => (
+                        <button
+                          class={clsx("px-1.5 py-0.5 rounded border border-border", (props.sheet.cutBy?.[view()] ?? "") === v ? "bg-accent text-bg" : "hover:bg-surface")}
+                          onClick={() => props.update((s) => (s.cutBy = { ...(s.cutBy ?? {}), [view()]: v || undefined }))}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </Show>
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+                  {check("Sombreada", !!props.sheet.shaded?.[view()], (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: on ? { lines: true } : undefined })))}
+                  <Show when={props.sheet.shaded?.[view()]}>
+                    {check("Con líneas", props.sheet.shaded?.[view()]?.lines !== false, (on) => props.update((s) => (s.shaded = { ...(s.shaded ?? {}), [view()]: { lines: on } })))}
+                  </Show>
+                </div>
+                <Show when={props.hasImage(view())}>
+                  <Button size="sm" variant="ghost" fullWidth onClick={() => props.savePng(view())}>
+                    Guardar imagen PNG
+                  </Button>
+                </Show>
                 <Show when={el().kind === "custom" && (el() as { id: number }).id}>
                   {(id) =>
                     row(
@@ -1025,6 +1362,33 @@ const ElementWindow: Component<{
               </span>
             </p>
             <p class="text-[11px] text-text-dim">Sigue al modelo: si cambia el diseño, se vuelve a medir.</p>
+          </Match>
+          <Match when={el().kind === "break" && (el() as { view: string; index: number })}>
+            {(br) => (
+              <>
+                {row(
+                  "Hondo (mm)",
+                  <input
+                    aria-label="Profundidad de la rotura"
+                    type="number"
+                    min="0.1"
+                    step="0.5"
+                    class={input}
+                    value={props.sheet.breaks?.[br().view]?.[br().index]?.depth ?? ""}
+                    onChange={(e) => {
+                      const v = num(e.currentTarget.value);
+                      if (v > 0)
+                        props.update((s) => {
+                          const list = [...(s.breaks?.[br().view] ?? [])];
+                          if (list[br().index]) list[br().index] = { ...list[br().index], depth: v };
+                          s.breaks = { ...(s.breaks ?? {}), [br().view]: list };
+                        });
+                    }}
+                  />,
+                )}
+                <p class="text-[11px] text-text-dim">Cuánto entra el corte local desde lo más cercano a quien mira.</p>
+              </>
+            )}
           </Match>
           <Match when={el().kind === "sketch"}>
             <Button size="sm" fullWidth onClick={() => props.editDrawing()}>

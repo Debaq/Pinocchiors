@@ -10,6 +10,7 @@ import type { CadDocument, Sketch } from "./cad.ts";
 import { VIEW_LABELS, scaleLabel, viewSpec, type ViewDir, type Detail, type Projection, type UserDim, type ViewName } from "./drawing.ts";
 import type { SceneNode } from "./scene-tree.ts";
 import type { SheetLink, SheetOwner } from "./sheetRefs.ts";
+import { sectionViewName, type BreakDef, type HatchStyle, type SectionDef } from "./drawingCuts.ts";
 
 export interface DrawingSheet {
   id: number;
@@ -34,6 +35,18 @@ export interface DrawingSheet {
   viewDirs?: Partial<Record<string, ViewDir>>;
   /** Vistas nuevas (`vista-<id>`): miran desde donde se las gire, con su nombre debajo */
   customViews?: { id: number; name: string; hidden?: boolean }[];
+  /** Cortes por una línea dibujada en una vista (cada uno con su vista `corte-<letra>`) */
+  sections?: SectionDef[];
+  /** Medio corte de una vista (qué mitad se ve cortada) */
+  halves?: Partial<Record<string, "right" | "left">>;
+  /** Roturas (cortes locales) de cada vista */
+  breaks?: Partial<Record<string, BreakDef[]>>;
+  /** Vistas 3D cortadas: por un corte (su letra) o un cuarto («quarter») */
+  cutBy?: Partial<Record<string, string>>;
+  /** Vistas sombreadas (como imagen), con las líneas encima o sin ellas */
+  shaded?: Partial<Record<string, { lines: boolean }>>;
+  /** Rayado de la hoja (los cortes pueden tener el suyo) */
+  hatch?: HatchStyle;
   /** Ya con las seis vistas (antes había una sola lateral, "side") */
   sixViews?: boolean;
   /** Corte A-A paralelo al frente: `y` del plano (mm del modelo; sin ella, por el medio) */
@@ -141,6 +154,8 @@ export type DrawingElement =
   | { kind: "sheet" }
   | { kind: "view"; view: ViewName }
   | { kind: "custom"; id: number }
+  | { kind: "cut"; label: string }
+  | { kind: "break"; view: string; index: number }
   | { kind: "overall" }
   | { kind: "section" }
   | { kind: "detail"; label: string }
@@ -153,7 +168,19 @@ export const sameElement = (a: DrawingElement | undefined, b: DrawingElement | u
 export function elementNodeId(drawing: number, el?: DrawingElement): string {
   if (!el) return `drawing-${drawing}`;
   const key =
-    el.kind === "view" ? `view:${el.view}` : el.kind === "detail" ? `detail:${el.label}` : el.kind === "dim" ? `dim:${el.index}` : el.kind === "custom" ? `custom:${el.id}` : el.kind;
+    el.kind === "view"
+      ? `view:${el.view}`
+      : el.kind === "detail"
+        ? `detail:${el.label}`
+        : el.kind === "dim"
+          ? `dim:${el.index}`
+          : el.kind === "custom"
+            ? `custom:${el.id}`
+            : el.kind === "cut"
+              ? `cut:${el.label}`
+              : el.kind === "break"
+                ? `break:${el.view}/${el.index}`
+                : el.kind;
   return `drawing-${drawing}:${key}`;
 }
 
@@ -167,6 +194,9 @@ export function parseElementNode(id: string): { drawing: number; element?: Drawi
   if (kind === "detail" && arg) return { drawing, element: { kind, label: arg } };
   if (kind === "dim" && arg !== undefined && /^\d+$/.test(arg)) return { drawing, element: { kind, index: Number(arg) } };
   if (kind === "custom" && arg !== undefined && /^\d+$/.test(arg)) return { drawing, element: { kind, id: Number(arg) } };
+  if (kind === "cut" && arg) return { drawing, element: { kind, label: arg } };
+  const br = kind === "break" && arg ? /^(.+)\/(\d+)$/.exec(arg) : null;
+  if (br) return { drawing, element: { kind: "break", view: br[1], index: Number(br[2]) } };
   if (kind === "sheet" || kind === "overall" || kind === "section" || kind === "sketch") return { drawing, element: { kind } };
   return undefined;
 }
@@ -184,6 +214,10 @@ export function hasElement(s: DrawingSheet, el: DrawingElement): boolean {
       return !!s.sketch;
     case "custom":
       return !!s.customViews?.some((v) => v.id === el.id);
+    case "cut":
+      return !!s.sections?.some((c) => c.label === el.label);
+    case "break":
+      return !!s.breaks?.[el.view]?.[el.index];
     default:
       return true;
   }
@@ -224,6 +258,8 @@ export function elementVisible(s: DrawingSheet, el: DrawingElement): boolean {
       return !!s.sketch && !s.sketchHidden;
     case "custom":
       return !s.customViews?.find((v) => v.id === el.id)?.hidden;
+    case "cut":
+      return !s.sections?.find((c) => c.label === el.label)?.hidden;
     default:
       return true;
   }
@@ -254,11 +290,32 @@ export function toggleElement(s: DrawingSheet, el: DrawingElement) {
     case "custom":
       s.customViews = (s.customViews ?? []).map((v) => (v.id === el.id ? { ...v, hidden: !on } : v));
       break;
+    case "cut":
+      s.sections = (s.sections ?? []).map((c) => (c.label === el.label ? { ...c, hidden: !on } : c));
+      break;
   }
 }
 
 /** Se puede borrar (las vistas, las cotas generales y la hoja solo se ocultan) */
-export const elementDeletable = (el: DrawingElement) => el.kind === "section" || el.kind === "detail" || el.kind === "dim" || el.kind === "sketch" || el.kind === "custom";
+export const elementDeletable = (el: DrawingElement) =>
+  el.kind === "section" || el.kind === "detail" || el.kind === "dim" || el.kind === "sketch" || el.kind === "custom" || el.kind === "cut" || el.kind === "break";
+
+/** Saca lo que cuelga de una vista que se va (cotas, detalles, lugar, escala, cortes de ella) */
+function dropView(s: DrawingSheet, name: string) {
+  s.dims = s.dims.filter((d) => d.view !== name);
+  s.details = s.details.filter((d) => d.view !== name);
+  for (const k of ["viewDirs", "viewAt", "viewScales", "halves", "breaks", "cutBy", "shaded"] as const) {
+    const m = { ...((s[k] as Record<string, unknown> | undefined) ?? {}) };
+    delete m[name];
+    (s as unknown as Record<string, unknown>)[k] = m;
+  }
+}
+
+/** Letra libre para un corte o un detalle (la A es del corte A-A) */
+export function nextLabel(s: DrawingSheet): string {
+  const used = new Set([...s.details.map((d) => d.label), ...(s.sections ?? []).map((c) => c.label)]);
+  return "BCDEFGHJKLMNPQRSTUVWXYZ".split("").find((l) => !used.has(l)) ?? `${used.size + 1}`;
+}
 
 export function removeElement(s: DrawingSheet, el: DrawingElement) {
   if (el.kind === "section") s.section = null;
@@ -268,13 +325,17 @@ export function removeElement(s: DrawingSheet, el: DrawingElement) {
     s.sketch = null;
     s.sketchHidden = false;
   } else if (el.kind === "custom") {
-    const name = customViewName(el.id);
     s.customViews = (s.customViews ?? []).filter((v) => v.id !== el.id);
-    const dirs = { ...(s.viewDirs ?? {}) };
-    delete dirs[name];
-    s.viewDirs = dirs;
-    s.dims = s.dims.filter((d) => d.view !== name);
-    s.details = s.details.filter((d) => d.view !== name);
+    dropView(s, customViewName(el.id));
+  } else if (el.kind === "cut") {
+    s.sections = (s.sections ?? []).filter((c) => c.label !== el.label);
+    dropView(s, sectionViewName(el.label));
+    // Las vistas 3D que se cortaban con él vuelven a enteras
+    s.cutBy = Object.fromEntries(Object.entries(s.cutBy ?? {}).filter(([, v]) => v !== el.label));
+  } else if (el.kind === "break") {
+    const list = [...(s.breaks?.[el.view] ?? [])];
+    list.splice(el.index, 1);
+    s.breaks = { ...(s.breaks ?? {}), [el.view]: list };
   }
 }
 
@@ -307,6 +368,13 @@ export function elementLabel(s: DrawingSheet, el: DrawingElement): string {
       const k = s.viewScales?.[customViewName(el.id)];
       return `${v?.name ?? "Vista"}${k ? ` (${scaleLabel(k)})` : ""}`;
     }
+    case "cut": {
+      const k = s.viewScales?.[sectionViewName(el.label)];
+      const c = s.sections?.find((x) => x.label === el.label);
+      return `Corte ${el.label}-${el.label}${c && c.points.length > 2 ? " (escalonado)" : ""}${k ? ` (${scaleLabel(k)})` : ""}`;
+    }
+    case "break":
+      return `Rotura ${el.index + 1} · ${(VIEW_LABELS as Record<string, string>)[el.view] ?? el.view}`;
   }
 }
 
@@ -316,6 +384,8 @@ export function sheetElements(s: DrawingSheet): DrawingElement[] {
     { kind: "sheet" },
     ...VIEW_NAMES.map((view): DrawingElement => ({ kind: "view", view })),
     ...(s.customViews ?? []).map((v): DrawingElement => ({ kind: "custom", id: v.id })),
+    ...(s.sections ?? []).map((c): DrawingElement => ({ kind: "cut", label: c.label })),
+    ...Object.entries(s.breaks ?? {}).flatMap(([view, list]) => (list ?? []).map((_, index): DrawingElement => ({ kind: "break", view, index }))),
     { kind: "overall" },
     ...(s.section ? [{ kind: "section" } as const] : []),
     ...s.details.map((d): DrawingElement => ({ kind: "detail", label: d.label })),
@@ -328,6 +398,8 @@ const ELEMENT_TYPE: Record<DrawingElement["kind"], SceneNode["type"]> = {
   sheet: "drawing_sheet",
   view: "drawing_view",
   custom: "drawing_view",
+  cut: "drawing_section",
+  break: "drawing_section",
   overall: "drawing_dim",
   section: "drawing_section",
   detail: "drawing_detail",
