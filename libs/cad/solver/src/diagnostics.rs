@@ -270,14 +270,34 @@ fn rank_without_rows(jac: &nalgebra::DMatrix<f64>, start_row: usize, n_rows: usi
 }
 
 /// DOF de un punto: 2 - rank de las 2 columnas del Jacobiano correspondientes.
-/// Base del espacio nulo (columnas) por autovectores de JᵀJ.
+/// Base ortonormal del espacio nulo (columnas): el complemento de las filas
+/// del jacobiano. Las filas salen del SVD (valores singulares por encima de
+/// 1e-5 del mayor) y el complemento de la Q de un QR de [filas | I]. Antes eran
+/// los autovectores de JᵀJ, pero `SymmetricEigen` devolvía NaN con jacobianos
+/// casi vacíos (decenas de líneas sueltas y pocas restricciones) y el SVD que
+/// venía después entraba en pánico.
 pub fn nullspace(jac: &nalgebra::DMatrix<f64>) -> nalgebra::DMatrix<f64> {
+    use nalgebra::DMatrix;
     let n = jac.ncols();
-    let jtj = jac.transpose() * jac;
-    let eig = nalgebra::SymmetricEigen::new(jtj);
-    let max = eig.eigenvalues.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
-    let keep: Vec<usize> = (0..n).filter(|&i| eig.eigenvalues[i].abs() <= 1e-10 * max.max(1.0)).collect();
-    nalgebra::DMatrix::from_fn(n, keep.len(), |r, c| eig.eigenvectors[(r, keep[c])])
+    if jac.nrows() == 0 || n == 0 {
+        return DMatrix::identity(n, n);
+    }
+    let Some(svd) = jac.clone().try_svd(false, true, f64::EPSILON, 0) else {
+        return DMatrix::zeros(n, 0);
+    };
+    let v_t = svd.v_t.as_ref().expect("SVD con Vᵀ");
+    let max = svd.singular_values.iter().fold(0.0f64, |m, &v| m.max(v));
+    let rows: Vec<usize> = (0..svd.singular_values.len()).filter(|&i| svd.singular_values[i] > 1e-5 * max.max(1.0)).collect();
+    let r = rows.len();
+    if r == 0 {
+        return DMatrix::identity(n, n);
+    }
+    if r >= n {
+        return DMatrix::zeros(n, 0);
+    }
+    let m = DMatrix::from_fn(n, r + n, |i, j| if j < r { v_t[(rows[j], i)] } else if i == j - r { 1.0 } else { 0.0 });
+    let q = m.qr().q();
+    q.columns(r, n - r).into_owned()
 }
 
 /// Grados libres de un punto y, si es uno solo, hacia dónde se mueve.

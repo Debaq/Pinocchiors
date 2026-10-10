@@ -1776,7 +1776,11 @@ impl Ctx<'_> {
     fn feature(&mut self, f: &Feature) -> R<()> {
         match &f.kind {
             FeatureKind::Sketch { plane, offset, sketch } => {
-                let plane = self.plane("plane", plane)?.offset(*offset);
+                let x = match &sketch.x_axis {
+                    Some(a) => Some(self.axis("x_axis", a)?.dir),
+                    None => None,
+                };
+                let plane = self.plane("plane", plane)?.offset(*offset).oriented(x, sketch.flip_normal);
                 let mut solved = sketch.clone();
                 if !solved.uses.is_empty() {
                     self.project_uses(&plane, &mut solved);

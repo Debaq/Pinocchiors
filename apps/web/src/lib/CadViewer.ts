@@ -80,6 +80,8 @@ export interface SketchOverlay {
   warnEntities?: number[];
   /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
   curvature?: { comb: [P2, P2][]; inflections: P2[] };
+  /** Rejilla del sketch (segmentos en el plano; los principales más marcados) */
+  grid?: { a: P2; b: P2; major: boolean }[];
   /** Grados libres: puntos con una sola dirección (y cuál), puntos libres del todo y círculos con el radio libre */
   freedom?: { dirs: [number, P2][]; free: number[]; radius: number[] };
 }
@@ -191,6 +193,8 @@ export class CadViewer {
   private frame = 0;
 
   private body?: THREE.Mesh;
+  /** Modelo oculto (dibujando un sketch con «ocultar el modelo») */
+  private bodyHidden = false;
   private bodyEdges?: THREE.LineSegments;
   private bodyData: CadMesh | null = null;
   private tool?: THREE.Group;
@@ -600,7 +604,20 @@ export class CadViewer {
     }
     this.paintBody();
     this.applySection();
+    this.applyBodyHidden();
     this.requestRender();
+  }
+
+  /** Oculta el sólido (y su tapa de corte) sin sacarlo */
+  setBodyHidden(hidden: boolean) {
+    if (this.bodyHidden === hidden) return;
+    this.bodyHidden = hidden;
+    this.applyBodyHidden();
+    this.requestRender();
+  }
+
+  private applyBodyHidden() {
+    for (const o of [this.body, this.bodyEdges, this.sectionGroup]) if (o) o.visible = !this.bodyHidden;
   }
 
   /**
@@ -900,6 +917,20 @@ export class CadViewer {
       this.sketchGroup.add(mesh);
     }
 
+    // Rejilla del sketch: debajo de todo, apenas visible
+    if (overlay.grid?.length) {
+      for (const major of [false, true]) {
+        const segs = overlay.grid.filter((g) => g.major === major);
+        if (!segs.length) continue;
+        const g = new THREE.BufferGeometry().setFromPoints(segs.flatMap((s) => [w(s.a), w(s.b)]));
+        const m = new THREE.LineBasicMaterial({ color: themeHex("comment"), transparent: true, opacity: major ? 0.45 : 0.2, depthTest: false });
+        const l = new THREE.LineSegments(g, m);
+        l.renderOrder = 5;
+        l.userData.sketchGrid = true;
+        this.sketchGroup.add(l);
+      }
+    }
+
     const lines = (pts: (P2 | undefined)[], color: number, dashed = false) => {
       if (pts.some((p) => !p)) return;
       const g = new THREE.BufferGeometry().setFromPoints((pts as P2[]).map(w));
@@ -939,7 +970,8 @@ export class CadViewer {
     for (const e of sketch.entities) {
       const g = e.geometry;
       if (overlay.hideConstruction && e.construction && !selected.has(e.id) && !hover.has(e.id)) continue;
-      const color = entityColor(e.id, !!e.construction);
+      // La línea central se distingue (es el eje que se toma sin elegirlo)
+      const color = e.axis && !selected.has(e.id) && !hover.has(e.id) ? themeHex("accent") : entityColor(e.id, !!e.construction);
       let pts: P2[] = [];
       if (g.type === "line" && e.infinite) {
         const [a, b] = [point.get(g.start)!, point.get(g.end)!];

@@ -194,3 +194,14 @@ fn partial_solve_satisfies_everything_but_the_conflict() {
 fn dist(a: P2, b: P2) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
+
+/// Muchas líneas sueltas y pocas restricciones: el espacio nulo por
+/// autovectores de JᵀJ daba NaN y el diagnóstico entraba en pánico (se caía
+/// el programa al unir dos líneas en el sketch).
+#[test]
+fn jacobiano_casi_vacio_no_da_nan() {
+    let mut s: Sketch = serde_json::from_str(r#"{"points":[{"id":0,"x":0,"y":0},{"id":1,"x":0,"y":30},{"id":2,"x":40,"y":30},{"id":3,"x":0,"y":50},{"id":4,"x":40,"y":50},{"id":5,"x":10,"y":20},{"id":7,"x":30,"y":20},{"id":8,"x":30,"y":60},{"id":9,"x":60,"y":0},{"id":11,"x":85,"y":0},{"id":12,"x":0,"y":-30},{"id":13,"x":20,"y":-30},{"id":14,"x":20,"y":-10},{"id":15,"x":50,"y":-40},{"id":16,"x":70,"y":-40},{"id":17,"x":70,"y":-20},{"id":18,"x":100,"y":0},{"id":19,"x":110,"y":0},{"id":20,"x":110,"y":0},{"id":21,"x":100,"y":0},{"id":22,"x":100,"y":20},{"id":23,"x":120,"y":20},{"id":24,"x":120.01,"y":20},{"id":25,"x":110,"y":35},{"id":60,"x":10,"y":30},{"id":61,"x":30,"y":30},{"id":65,"x":10,"y":50},{"id":66,"x":30,"y":50}],"entities":[{"id":40,"geometry":{"type":"line","start":1,"end":60}},{"id":41,"geometry":{"type":"line","start":3,"end":65}},{"id":42,"geometry":{"type":"line","start":5,"end":60}},{"id":43,"geometry":{"type":"line","start":7,"end":61}},{"id":44,"geometry":{"type":"line","start":9,"end":11}},{"id":46,"geometry":{"type":"line","start":12,"end":13}},{"id":47,"geometry":{"type":"line","start":13,"end":14}},{"id":48,"geometry":{"type":"line","start":15,"end":16}},{"id":49,"geometry":{"type":"line","start":16,"end":17}},{"id":50,"geometry":{"type":"line","start":18,"end":19}},{"id":51,"geometry":{"type":"line","start":20,"end":21}},{"id":52,"geometry":{"type":"line","start":22,"end":23}},{"id":53,"geometry":{"type":"line","start":24,"end":25}},{"id":54,"geometry":{"type":"line","start":25,"end":22}},{"id":62,"geometry":{"type":"line","start":61,"end":2}},{"id":63,"geometry":{"type":"line","start":60,"end":65}},{"id":64,"geometry":{"type":"line","start":61,"end":66}},{"id":67,"geometry":{"type":"line","start":66,"end":4}},{"id":69,"geometry":{"type":"line","start":66,"end":8}}],"constraints":[{"type":"horizontal","line":44},{"type":"parallel","a":42,"b":63},{"type":"parallel","a":43,"b":64},{"type":"parallel","a":64,"b":69}],"next_id":70,"origin":0}"#).unwrap();
+    let r = s.solve().unwrap();
+    assert_eq!(r.status, SketchStatus::UnderConstrained);
+    assert!(r.free_dirs.iter().all(|(_, d)| d.iter().all(|v| v.is_finite())));
+}

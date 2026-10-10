@@ -1,4 +1,4 @@
-import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
+import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import { clsx } from "clsx";
@@ -90,9 +90,10 @@ import {
 import type { CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { flipSketchY, measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
-import { selectByKind, type SelectKind } from "../../lib/sketchCheck";
+import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
+import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
@@ -1153,6 +1154,68 @@ export const FeatureEditor: Component<{
                 <>
                   <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)), lost("plane").length > 0)}</Row>
                   {field("Desplazamiento", "kind.offset", k().offset, (x, v) => x.type === "sketch" && (x.offset = v), "mm")}
+                  <Row label="Horizontal">
+                    <Select
+                      options={[
+                        { value: "plane", label: "La del plano" },
+                        ...(k().sketch.x_axis && !["x", "y", "z", "reference"].includes(k().sketch.x_axis!.type)
+                          ? [{ value: "picked", label: k().sketch.x_axis!.type === "edge" ? "Arista del sólido" : "Línea de otro sketch" }]
+                          : []),
+                        { value: "x", label: "Eje X" },
+                        { value: "y", label: "Eje Y" },
+                        { value: "z", label: "Eje Z" },
+                        ...refOptions(props.store, "axis"),
+                      ]}
+                      value={(() => {
+                        const a = k().sketch.x_axis;
+                        if (!a) return "plane";
+                        if (a.type === "reference") return `ref:${a.feature}`;
+                        return ["x", "y", "z"].includes(a.type) ? a.type : "picked";
+                      })()}
+                      onChange={(v) =>
+                        update((x) => {
+                          if (x.type !== "sketch" || v === "picked") return;
+                          x.sketch.x_axis = v === "plane" ? null : v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" };
+                        })
+                      }
+                    />
+                  </Row>
+                  <Button
+                    size="sm"
+                    fullWidth
+                    title="El eje x del sketch sigue a esa arista (o línea de otro sketch) proyectada al plano; el dibujo gira con él"
+                    variant={(props.ui.pick() as { owner?: string }).owner === `${f().id}:horizontal` ? "primary" : "default"}
+                    onClick={() =>
+                      props.ui.setPick({
+                        kind: "axis",
+                        owner: `${f().id}:horizontal`,
+                        sketch: -1,
+                        prompt: "Clic en la arista del sólido que da la dirección horizontal del sketch",
+                        done: (axis) =>
+                          update((x) => {
+                            if (x.type !== "sketch") return;
+                            // Una línea del mismo sketch no puede orientarlo (dependería de sí mismo)
+                            if (axis.type === "sketch_line" && axis.sketch === f().id) return;
+                            x.sketch.x_axis = axis;
+                          }),
+                      })
+                    }
+                  >
+                    Horizontal según una arista
+                  </Button>
+                  <Checkbox
+                    small
+                    label="Invertir la normal"
+                    checked={!!k().sketch.flip_normal}
+                    onChange={(c) =>
+                      update((x) => {
+                        if (x.type !== "sketch" || !!x.sketch.flip_normal === c) return;
+                        // El dibujo se refleja para quedar en el mismo lugar visto del otro lado
+                        flipSketchY(x.sketch);
+                        x.sketch.flip_normal = c || undefined;
+                      })
+                    }
+                  />
                   <p class="text-[11px] text-text-dim">
                     {k().sketch.entities.length} entidades · {k().sketch.constraints.length} restricciones · {view()?.regions.length ?? 0} regiones
                   </p>
@@ -4381,6 +4444,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = createSignal(5);
   const [offsetDist, setOffsetDist] = createSignal(2);
+  const [offsetBoth, setOffsetBoth] = createSignal(false);
+  const [offsetCaps, setOffsetCaps] = createSignal<OffsetCaps>("open");
+  const [chamferDist, setChamferDist] = createSignal(2);
+  const [chamferMode, setChamferMode] = createSignal<"equal" | "distance" | "angle">("equal");
+  const [chamferSecond, setChamferSecond] = createSignal(45);
+  const [repairTol, setRepairTol] = createSignal(0.05);
   const [moveBy, setMoveBy] = createSignal<P2>([10, 0]);
   const [turnBy, setTurnBy] = createSignal(90);
   const [scaleBy, setScaleBy] = createSignal(2);
@@ -4557,6 +4626,15 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       const ax: SketchConstraint = { type: "axis_diameter", point: P[0], line: L[0], value: 0 };
       out.push({ label: "Diámetro respecto del eje", make: () => ({ ...ax, value: measure(ax) }) });
     }
+    // Con una línea central en el sketch: el diámetro de cada punto elegido sin elegir el eje
+    const centerline = sketch().entities.find((e) => e.axis && e.geometry.type === "line");
+    if (centerline && P.length >= 1 && L.length === 0 && C.length === 0) {
+      const dims = P.map((p): SketchConstraint => {
+        const c: SketchConstraint = { type: "axis_diameter", point: p, line: centerline.id, value: 0 };
+        return { ...c, value: measure(c) } as SketchConstraint;
+      });
+      out.push({ label: P.length > 1 ? "Diámetros respecto de la línea central" : "Diámetro respecto de la línea central", make: () => dims });
+    }
     if (P.length === 1 && C.length === 1) out.push({ label: "Punto en el círculo", make: () => ({ type: "point_on_circle", point: P[0], circle: C[0] }) });
     if (P.length === 2 && L.length === 0) {
       const [a, b] = [point(P[0])!, point(P[1])!];
@@ -4684,6 +4762,78 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             </p>
           )}
         </Show>
+        <div class="space-y-1.5 border-b border-border pb-2" aria-label="Ayudas al dibujar">
+          <div class="flex flex-wrap gap-x-3">
+            <Checkbox small label="Rejilla" checked={ui.assist().grid} onChange={(c) => ui.setAssist({ grid: c })} />
+            <Checkbox small label="Anclar a la rejilla" checked={ui.assist().gridSnap} onChange={(c) => ui.setAssist({ gridSnap: c })} />
+          </div>
+          <Num label="Paso de la rejilla" suffix="mm" step={1} min={0} value={ui.assist().spacing} onCommit={(v) => v > 0 && ui.setAssist({ spacing: v })} />
+          <div class="flex flex-wrap gap-x-3">
+            <Checkbox small label="Corte en el plano" checked={ui.assist().section} onChange={(c) => ui.setAssist({ section: c })} />
+            <Checkbox small label="Ocultar el modelo" checked={ui.assist().hideModel} onChange={(c) => ui.setAssist({ hideModel: c })} />
+          </div>
+          <Show
+            when={ui.symmetryAxis() !== undefined && entity(ui.symmetryAxis()!)}
+            fallback={
+              <Show when={lines().length === 1 && selEntities().length === 1}>
+                <Button size="sm" title="Lo que se dibuje desde ahora sale reflejado en la línea elegida y atado por simetría" onClick={() => ui.setSymmetryAxis(lines()[0]!.id)}>
+                  Simetría al dibujar (eje: la línea elegida)
+                </Button>
+              </Show>
+            }
+          >
+            <div class="flex items-center gap-2 text-xs" data-symmetry-axis={ui.symmetryAxis()}>
+              <span class="flex-1 text-accent">Simetría al dibujar activa</span>
+              <Button size="sm" variant="ghost" onClick={() => ui.setSymmetryAxis(undefined)}>
+                Apagar
+              </Button>
+            </div>
+          </Show>
+        </div>
+        <div class="space-y-1.5" aria-label="Revisar el contorno">
+          <Show when={problemsText(checkSketch(sketch()))}>{(t) => <p class="text-xs text-error">{t()}</p>}</Show>
+          <Num label="Tolerancia" suffix="mm" step={0.01} min={0} value={repairTol()} onCommit={setRepairTol} />
+          <div class="flex flex-wrap gap-1.5">
+            <Button
+              size="sm"
+              title="Junta los extremos a menos de la tolerancia, quita lo más corto que ella y parte las curvas en los cruces y las T"
+              onClick={() => {
+                let r: ReturnType<typeof repairSketch> | undefined;
+                ui.change((sk) => (r = repairSketch(sk, repairTol())));
+                const n = r!.joined + r!.removed + r!.split;
+                ui.setMessage(
+                  n
+                    ? `Reparado: ${r!.joined} extremos juntados, ${r!.removed} entidades cortísimas quitadas, ${r!.split} cruces partidos`
+                    : "No había nada que reparar con esa tolerancia",
+                );
+              }}
+            >
+              Reparar
+            </Button>
+            <Button
+              size="sm"
+              title="Quita las líneas, círculos y arcos repetidos (lo que las nombraba pasa a la que queda)"
+              onClick={() => {
+                let n = 0;
+                ui.change((sk) => (n = removeDuplicates(sk)));
+                ui.setMessage(n ? `${n} ${n === 1 ? "entidad repetida quitada" : "entidades repetidas quitadas"}` : "No hay entidades repetidas");
+              }}
+            >
+              Eliminar duplicados
+            </Button>
+            <Button
+              size="sm"
+              title="Une con una línea los extremos sueltos, de a pares, primero los más cercanos"
+              onClick={() => {
+                let made: number[] = [];
+                ui.change((sk) => (made = closeContour(sk)));
+                ui.setMessage(made.length ? `${made.length} ${made.length === 1 ? "línea nueva" : "líneas nuevas"} cierran el contorno` : "No hay extremos sueltos para unir");
+              }}
+            >
+              Cerrar contorno
+            </Button>
+          </div>
+        </div>
       </Section>
 
       <Section title="Definir">
@@ -4743,13 +4893,14 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
       <Section title={`Elegido (${sel().length})`}>
         <Show when={sel().length > 0} fallback={<p class="text-xs text-text-dim">Nada elegido</p>}>
           <div class="flex flex-wrap gap-1.5">
-            <For each={suggestions()}>
+            {/* Index: si el sketch cambia entre apretar y soltar (se confirma una cota abierta) el botón sigue siendo el mismo y el clic no se pierde */}
+            <Index each={suggestions()}>
               {(sug) => (
-                <Button size="sm" onClick={() => add(sug.make())}>
-                  {sug.label}
+                <Button size="sm" onClick={() => add(sug().make())}>
+                  {sug().label}
                 </Button>
               )}
-            </For>
+            </Index>
           </div>
           <Show when={selPoints().length === 1 && selEntities().length === 0 && pierceCurves().length > 0}>
             <div class="flex flex-wrap items-center gap-1.5" aria-label="Perforar">
@@ -4787,6 +4938,76 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 Redondear esquina
               </Button>
             </div>
+            <div class="space-y-1" aria-label="Chaflán de la esquina">
+              <Num label="Chaflán" suffix="mm" step={0.5} value={chamferDist()} onCommit={setChamferDist} />
+              <div class="flex items-center gap-1.5">
+                <div class="w-24 shrink-0">
+                  <Select
+                    options={[
+                      { value: "equal", label: "Igual" },
+                      { value: "distance", label: "Dos dist." },
+                      { value: "angle", label: "Ángulo" },
+                    ]}
+                    value={chamferMode()}
+                    onChange={(v) => {
+                      setChamferMode(v as "equal" | "distance" | "angle");
+                      setChamferSecond(v === "angle" ? 45 : chamferDist());
+                    }}
+                  />
+                </div>
+                <Show when={chamferMode() !== "equal"}>
+                  <div class="flex-1 min-w-0">
+                    <input
+                      type="number"
+                      aria-label={chamferMode() === "angle" ? "Ángulo del chaflán" : "Segunda distancia del chaflán"}
+                      title={chamferMode() === "angle" ? "Ángulo (°) entre el chaflán y la primera línea" : "Distancia (mm) sobre la segunda línea"}
+                      value={chamferSecond()}
+                      step={chamferMode() === "angle" ? 5 : 0.5}
+                      class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent [appearance:textfield]"
+                      onChange={(e) => {
+                        const v = parseFloat(e.currentTarget.value);
+                        if (!Number.isNaN(v)) setChamferSecond(v);
+                      }}
+                    />
+                  </div>
+                </Show>
+                <Button
+                  size="sm"
+                  title="La primera distancia va sobre la primera línea de la esquina; el ángulo, entre el chaflán y esa línea"
+                  onClick={() => {
+                    let msg: string | undefined;
+                    const second = chamferMode() === "angle" ? { angle: chamferSecond() } : { distance: chamferMode() === "equal" ? chamferDist() : chamferSecond() };
+                    ui.change((sk) => (msg = chamferCorner(sk, selPoints()[0], chamferDist(), second)));
+                    if (msg) ui.setMessage(msg);
+                    else ui.setSelection([]);
+                  }}
+                >
+                  Achaflanar
+                </Button>
+              </div>
+            </div>
+          </Show>
+          <Show
+            when={
+              selEntities().length === 2 &&
+              selPoints().length === 0 &&
+              selEntities()[0]!.geometry.type === selEntities()[1]!.geometry.type &&
+              ["line", "arc"].includes(selEntities()[0]!.geometry.type)
+            }
+          >
+            <Button
+              size="sm"
+              title="Dos líneas alineadas o dos arcos del mismo círculo con un extremo común pasan a ser una sola entidad"
+              onClick={() => {
+                const [a, b] = selEntities().map((e) => e!.id);
+                let msg: string | undefined;
+                ui.change((sk) => (msg = joinEntities(sk, a, b)));
+                ui.setMessage(msg);
+                if (!msg) ui.setSelection([a]);
+              }}
+            >
+              Unir
+            </Button>
           </Show>
           <Show when={selEntities().length > 0}>
             <div class="flex items-end gap-1.5">
@@ -4795,17 +5016,38 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               </div>
               <Button
                 size="sm"
-                title="Positivo: hacia afuera del lazo"
+                title="En un lazo cerrado, positivo es hacia afuera; en una cadena abierta, a la izquierda del recorrido"
                 onClick={() => {
                   let msg: string | undefined;
                   const regions = s().regions;
                   const ids = selEntities().map((e) => e!.id);
-                  ui.change((sk) => (msg = offsetEntities(sk, regions, ids, offsetDist())));
+                  const chain = orderChain(sketch(), ids);
+                  // Lazos de líneas y círculos: como siempre (positivo hacia afuera); cadenas abiertas, con arcos o a los dos lados: por la cadena
+                  const byChain = typeof chain !== "string" && (offsetBoth() || !chain.closed || selEntities().some((e) => e!.geometry.type === "arc"));
+                  ui.change((sk) => {
+                    if (!byChain) return void (msg = offsetEntities(sk, regions, ids, offsetDist()));
+                    const r = offsetChain(sk, ids, offsetDist(), { both: offsetBoth(), caps: offsetCaps() });
+                    if (typeof r === "string") msg = r;
+                  });
                   ui.setMessage(msg);
                 }}
               >
                 Equidistante
               </Button>
+            </div>
+            <div class="flex items-center gap-2" aria-label="Opciones del equidistante">
+              <Checkbox small label="A los dos lados" checked={offsetBoth()} onChange={setOffsetBoth} />
+              <div class="flex-1 min-w-0">
+                <Select
+                  options={[
+                    { value: "open", label: "Extremos abiertos" },
+                    { value: "round", label: "Extremos redondos" },
+                    { value: "line", label: "Extremos rectos" },
+                  ]}
+                  value={offsetCaps()}
+                  onChange={(v) => setOffsetCaps(v as OffsetCaps)}
+                />
+              </div>
             </div>
           </Show>
           <Show when={selEntities().length === 1 && selEntities()[0]!.geometry.type === "spline"}>

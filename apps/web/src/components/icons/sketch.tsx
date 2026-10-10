@@ -170,6 +170,26 @@ export const Extend = (p: IconProps) => (
   </SketchIcon>
 );
 
+/** Línea central: raya y punto, con las flechas de giro */
+export const Centerline = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M12 2 L12 7 M12 10 L12 11 M12 14 L12 19 M12 21.5 L12 22" />
+    <path d="M7 8 A6 3 0 0 0 7 15" stroke-width="1.2" />
+    <path d="M17 8 A6 3 0 0 1 17 15" stroke-width="1.2" />
+    <path d="M15.5 13.3 L17 15 L18.8 13.8" stroke-width="1.2" />
+  </SketchIcon>
+);
+
+/** Estirar: la caja de cruce toma la punta y solo esa se corre */
+export const Stretch = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 17 L9 17 L9 9 L3 9" {...dashed} />
+    <path d="M3 17 L14 17 L14 9 L3 9" />
+    <rect x="11" y="6" width="9" height="14" rx="0.5" stroke-dasharray="1.5 1.5" stroke-width="1.1" />
+    <path d="M16 13 L21 13 M19 11 L21 13 L19 15" />
+  </SketchIcon>
+);
+
 /** Usar arista: la del sólido proyectada al plano, ligada a él */
 export const Use = (p: IconProps) => (
   <SketchIcon {...p}>

@@ -635,3 +635,17 @@ cargo test -p cad-model
   siempre en el desarrollo de la cara); perforación (un punto del perfil donde la curva cruza
   su plano). Puente C++: `cad_face_eval`, `cad_plane_hits`. Pruebas: Rust
   `model/tests/sketch3d.rs` (7) y e2e "sketch 3D…".
+- **2026-10-09 Edición II del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 11): recortar
+  arrastrando, unir líneas y arcos, chaflán 2D, equidistante de cadena a los dos lados y con
+  extremos cerrados, estirar (W), reparar, eliminar duplicados y cerrar contorno
+  (`lib/sketchEdit.ts`). Arreglo del solver: el espacio nulo por autovectores daba NaN y el
+  programa se caía; ahora SVD + QR. Pruebas: node `sketchEdit.test.mjs` (15), Rust
+  `jacobiano_casi_vacio_no_da_nan` y e2e "edición II…".
+- **2026-10-09 Asistencia al dibujo y plano del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+  fases 13 y 15): inferencias sí/no, rejilla del sketch con anclaje, coordenadas escritas
+  (absolutas, relativas y polares), polilínea línea-arco (A), simetría al dibujar, línea
+  central (`SketchEntity.axis`: eje de revolución y diámetros sin elegirla); horizontal del
+  sketch según un eje o arista (`Sketch.x_axis`), invertir la normal (`Sketch.flip_normal`, el
+  dibujo se refleja para quedar en su lugar), corte en el plano y modelo oculto al dibujar.
+  Pruebas: node `sketchInput.test.mjs` y `sketchTransform.test.mjs`, Rust
+  `sketch_x_axis_and_flipped_normal`, e2e "asistencia al dibujo…" y "plano del sketch…".

@@ -25,6 +25,7 @@ const SKETCH_CLICK: Partial<Record<SketchTool, string>> = {
   split: "donde se parte",
   paste: "dónde va lo pegado",
   trim: "el tramo que se quita",
+  stretch: "caja sobre las puntas, punto base y destino",
   extend: "cerca del extremo",
   circle_tan: "cada línea o curva, cerca de donde toca",
 };
@@ -39,7 +40,9 @@ export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
             { keys: "Doble clic", label: "cadena" },
             { keys: "Ctrl+arrastrar", label: "lazo" },
           ]
-        : []),
+        : ui.tool() === "trim"
+          ? [{ keys: "Arrastrar", label: "recortar todo lo que cruza" }]
+          : []),
       { keys: "Mayús", label: "sin anclajes" },
       { keys: "Q", label: "construcción" },
       { keys: "Ctrl+C / Ctrl+V", label: "copiar y pegar" },

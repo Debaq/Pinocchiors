@@ -103,3 +103,41 @@ fn old_extrudes_still_read() {
     assert_eq!(e.thin, None);
     assert!(!serde_json::to_string(&FeatureKind::Extrude(e)).unwrap().contains("draft"));
 }
+
+/// Sketch con la horizontal según un eje y la normal invertida: el plano gira
+/// y la extrusión sale hacia el otro lado.
+#[test]
+fn sketch_x_axis_and_flipped_normal() {
+    if !occt() {
+        return;
+    }
+    // Rectángulo 20 × 4 desde el origen: con x a lo largo de Y del mundo queda parado
+    let mut s = Sketch::default();
+    let p = [[0.0, 0.0], [20.0, 0.0], [20.0, 4.0], [0.0, 4.0]].map(|q: [f64; 2]| s.add_point(q[0], q[1]));
+    for k in 0..4 {
+        s.add_line(p[k], p[(k + 1) % 4]);
+    }
+    s.x_axis = Some(AxisSpec::Y);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s.clone() });
+    doc.add(FeatureKind::Extrude(extrude(sk, Extent::Blind { distance: 5.0 })));
+    let ev = doc.evaluate();
+    let plane = ev.sketches[&sk].plane;
+    assert_relative_eq!(plane.x_dir[1], 1.0, epsilon = 1e-12);
+    let (lo, hi) = bbox(&doc);
+    assert_relative_eq!(hi[1] - lo[1], 20.0, epsilon = 1e-9);
+    assert_relative_eq!(hi[0] - lo[0], 4.0, epsilon = 1e-9);
+    assert_relative_eq!(lo[2], 0.0, epsilon = 1e-9);
+
+    // Normal invertida: hacia −Z
+    s.flip_normal = true;
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(extrude(sk, Extent::Blind { distance: 5.0 })));
+    assert_relative_eq!(vol(&doc), 400.0, max_relative = 1e-9);
+    let (lo, hi) = bbox(&doc);
+    assert_relative_eq!(lo[2], -5.0, epsilon = 1e-9);
+    assert_relative_eq!(hi[2], 0.0, epsilon = 1e-9);
+    // La dependencia del eje sale en las del sketch (acá ninguna: es un eje del mundo)
+    assert!(doc.features[0].kind.dependencies().is_empty());
+}

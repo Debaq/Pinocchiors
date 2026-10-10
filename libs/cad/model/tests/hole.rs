@@ -24,7 +24,7 @@ fn plate() -> (Document, FeatureId) {
     let mut s = Sketch::default();
     for x in [-10.0, 10.0] {
         let p = s.add_point(x, 0.0);
-        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Point { point: p }, construction: false, infinite: false });
+        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Point { point: p }, construction: false, infinite: false, axis: false });
         s.next_id += 1;
     }
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: ev.face_ref(top).unwrap() }, offset: 0.0, sketch: s });
@@ -242,11 +242,11 @@ fn hole_from_a_base_plane_goes_into_the_block_above() {
     let mut s = Sketch::default();
     let c = [(-20.0, -20.0), (20.0, -20.0), (20.0, 20.0), (-20.0, 20.0)].map(|(x, y)| s.add_point(x, y));
     for k in 0..4 {
-        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Line { start: c[k], end: c[(k + 1) % 4] }, construction: false, infinite: false });
+        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Line { start: c[k], end: c[(k + 1) % 4] }, construction: false, infinite: false, axis: false });
         s.next_id += 1;
     }
     let o = s.add_point(0.0, 0.0);
-    s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Circle { center: o, radius: 8.0 }, construction: false, infinite: false });
+    s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Circle { center: o, radius: 8.0 }, construction: false, infinite: false, axis: false });
     s.next_id += 1;
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
     doc.add(FeatureKind::Extrude(Extrude {

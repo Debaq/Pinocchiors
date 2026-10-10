@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–4, 6–10, 12, 14, 16, 17 y 20 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–17 y 20 están hechas (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -105,6 +105,26 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     cota acepta `1 in`. Barra del sketch: Valor / Nombre (`d1`, `d2`… o el parámetro) /
     Fórmula. Clic derecho en una cota: bloquear, devolver el texto, suplementario, quitar.*
 
+11. **Edición II**: recortar con arrastre, unir, equidistante a los dos lados y con extremos
+    cerrados, chaflán 2D, estirar, eliminar duplicados, reparar, cerrar contorno. *Hecha el
+    2026-10-09: `lib/sketchEdit.ts` (puro, `e2e/sketchEdit.test.mjs`). Recortar con el botón
+    apretado traza una línea y quita cada tramo que cruza, en orden (un clic sigue quitando
+    uno). Unir: dos líneas alineadas con un extremo común o dos arcos seguidos del mismo
+    círculo (con la vuelta entera queda el círculo); lo que nombraba a la segunda pasa a la
+    unida y el punto del medio queda sobre ella si lo usa otra cosa. Chaflán en una esquina de
+    dos líneas: distancia igual, dos distancias o distancia y ángulo. Equidistante de cadena
+    (`offsetChain`, líneas y arcos, abierta o cerrada): esquinas por cruce de las curvas
+    desplazadas o redondeadas alrededor del vértice si no se tocan, arcos concéntricos con el
+    mismo centro, líneas paralelas (u horizontal/vertical como la original); a los dos lados y
+    con extremos redondos o rectos queda un contorno cerrado. Estirar (W): caja sobre las
+    puntas, punto base y destino; se mueven solo esos puntos (`transformSelection` con ids de
+    puntos). En la sección Sketch del panel: Reparar con tolerancia (junta extremos, quita lo
+    cortísimo, parte cruces y T), Eliminar duplicados y Cerrar contorno. De paso, el espacio
+    nulo del diagnóstico daba NaN con jacobianos casi vacíos (`SymmetricEigen` de nalgebra) y
+    el SVD siguiente entraba en pánico: se caía el programa al unir dos líneas en un sketch
+    con muchas sueltas. Ahora sale del SVD del jacobiano y el QR de [filas | I] (mismo tiempo;
+    prueba `jacobiano_casi_vacio_no_da_nan`). e2e "edición II…".*
+
 12. **Restricciones II**: coradial, simetría de entidades, punto en intersección, bloquear
     entidad, punto sobre spline y elipse. *Hecha el 2026-10-09: `Coradial`, `SymmetricEntities`
     (puntos, líneas, círculos, arcos, elipses y splines con la misma cantidad de puntos; los
@@ -117,6 +137,23 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     curvatura que se iguala no es la del modelo. Pruebas: Rust `model/tests/sketch_constraints2.rs`
     (10), unidades en `expr.rs`, node `sketchTransform.test.mjs` y `sketchGlyphs.test.mjs`, e2e
     "cotas II y restricciones II…".*
+
+13. **Asistencia al dibujo**: inferencias sí/no, rejilla del sketch, coordenadas escritas,
+    polilínea línea-arco, simetría dinámica, línea central. *Hecha el 2026-10-09: botón
+    «Inferir» en la barra (Mayús sigue valiendo para un clic) y «Rejilla»; en el panel, paso de
+    la rejilla y «Anclar a la rejilla» (los clics que no se pegan a nada caen en un nudo). Las
+    ayudas se recuerdan (`cadUi.assist`, localStorage). Cuadro de coordenadas en la barra
+    (`lib/sketchInput.ts`, `e2e/sketchInput.test.mjs`): `x, y`, `@dx, dy` desde el último punto,
+    `@d<ángulo`; Enter hace el clic de la herramienta en ese punto (si ya hay un punto ahí, lo
+    usa). Dibujando líneas encadenadas, A alterna el próximo tramo a arco tangente (y vuelve
+    sola a línea). «Simetría al dibujar» con una línea elegida: lo que se dibuja sale reflejado
+    y atado (`ui.change` refleja lo nuevo; los tramos de líneas partidas al pegarse no,
+    `splitRests`; `mirrorEntities` reusa el punto reflejado que ya exista). Línea central
+    (familia de líneas): construcción con `SketchEntity.axis`, una por sketch; la revolución la
+    toma de eje y con puntos elegidos aparece «Diámetro respecto de la línea central». De paso:
+    los botones de restricciones sugeridas perdían el primer clic después de dibujar (al
+    apretar se confirmaba la cota abierta, la lista se recreaba y el clic caía en un botón
+    nuevo); ahora van con `Index`. e2e "asistencia al dibujo…".*
 
 14. **Solver II**: grados libres por entidad a la vista, sugerir restricciones faltantes,
     definir completamente, cambios grandes de cota sin invertir, resolución parcial con
@@ -137,6 +174,17 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     lado corto. Conflicto: se vuelve a resolver sin el conjunto mínimo que choca (todo lo demás
     se cumple entero, `partial`). Comandos `cad_sketch_suggest`, `cad_sketch_define`; sección
     «Definir» del panel. Pruebas: Rust `model/tests/sketch_solver2.rs` (6); e2e "solver II…".*
+
+15. **Plano y vista**: dirección horizontal, invertir la normal, corte y modelo oculto al
+    dibujar. *Hecha el 2026-10-09: `Sketch.x_axis` (un `AxisSpec`: ejes, referencia, arista o
+    línea de otro sketch, proyectado al plano; `Plane::oriented`) y `Sketch.flip_normal`. En el
+    diálogo de la operación Sketch: «Horizontal» (y «Horizontal según una arista»: el dibujo
+    gira con la dirección) e «Invertir la normal», que refleja el dibujo en 2D
+    (`flipSketchY`: arcos, fijos, cotas verticales y ángulos con signo) para que quede en el
+    mismo lugar visto del otro lado; la extrusión sale para el otro lado. En el panel del
+    sketch: «Corte en el plano» (se ve lo que queda detrás del sketch) y «Ocultar el modelo»
+    (`CadViewer.setBodyHidden`), recordados. Prueba Rust `sketch_x_axis_and_flipped_normal`,
+    e2e "plano del sketch…".*
 
 16. **Entidades II**: línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en
     arco por 3 puntos, estilo y alineación del texto, texto sobre una curva. *Hecha el
@@ -198,39 +246,6 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
 
 Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
 
-### 11. Edición II (M)
-
-- **Recortar con arrastre**: con Recortar, arrastrar quita cada tramo que toca el trazo.
-- **Unir**: dos líneas colineales con un extremo común pasan a ser una; dos arcos del mismo
-  círculo, uno.
-- **Equidistante a los dos lados** y **con extremos cerrados** (una curva abierta se convierte en
-  un contorno cerrado con arcos o líneas en las puntas).
-- **Chaflán 2D** por distancia y por distancia y ángulo (como el redondeo de esquina).
-- **Estirar**: con caja de cruce se eligen los puntos de adentro y solo esos se mueven.
-- **Eliminar duplicados** (las encimadas exactas que ya marca la revisión).
-- **Reparar**: unir extremos a menos de una tolerancia, quitar entidades cortísimas, partir en
-  los cruces y las T sin partir (lo que marca la revisión).
-- **Cerrar contorno**: unir los extremos sueltos más cercanos con una línea.
-
-### 13. Asistencia al dibujo (M)
-
-- **Activar o desactivar las inferencias** con un botón (Mayús sigue valiendo para un clic).
-- **Rejilla del sketch**: espaciado configurable, mostrar u ocultar, anclaje a los nudos.
-- **Coordenadas al dibujar**: un cuadro para el próximo punto que acepta `x, y` (absoluta),
-  `@dx, dy` (relativa) y `@d < ángulo` (polar).
-- **Polilínea línea-arco**: dibujando líneas, la tecla A alterna el próximo tramo a arco tangente.
-- **Simetría dinámica**: con una línea de simetría activa, lo que se dibuja sale reflejado y
-  atado mientras se dibuja.
-- **Línea central / eje de revolución** como herramienta (construcción marcada como eje; la
-  toman la revolución y el diámetro respecto del eje sin elegirla).
-
-### 15. Plano y vista (S–M, backend)
-
-- **Dirección horizontal del sketch** elegida con una arista o un eje.
-- **Invertir la normal** del sketch.
-- **Vista de corte automática** al entrar (opción recordada) y **ocultar el modelo** mientras se
-  dibuja.
-
 ### 18. Archivos y fórmulas (M)
 
 - **Curva por ecuación** explícita `y = f(x)` y paramétrica `x(t), y(t)` (spline por muestreo;
@@ -255,8 +270,8 @@ Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo dem�
 ✅ hecho · número = fase que lo trae.
 
 **Soporte y planos** — ✅ planos de origen, de referencia y caras planas; cambiar el plano;
-origen y ejes propios; vista normal al entrar; sketch 3D, sobre superficie curva. — 15:
-dirección horizontal, invertir normal, vista de corte al entrar, ocultar el modelo.
+origen y ejes propios; vista normal al entrar; sketch 3D, sobre superficie curva; dirección
+horizontal, invertir normal, vista de corte al entrar, ocultar el modelo.
 
 **Entidades** — ✅ punto, línea, línea de construcción, rectángulo por 2 esquinas, por centro y
 por 3 puntos, polígono inscrito y circunscrito, círculo por centro, por 2 y 3 puntos y tangente
@@ -264,7 +279,7 @@ a 3, arco por 3 puntos, por centro, tangente y tangente desde una línea, elipse
 recta por centro y en arco por centro, spline por puntos de paso, texto (fuente y tamaño),
 línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en arco (3 puntos),
 estilo y alineación de texto, texto sobre curva, spline por puntos de control, manijas de
-tangencia (la curvatura, con los polos), spline de ajuste. — 13: línea central, polilínea
+tangencia (la curvatura, con los polos), spline de ajuste, línea central, polilínea
 línea-arco. — 18:
 curvas por ecuación explícita y paramétrica, desde archivo, imagen de calco, importar DXF/DWG.
 
@@ -272,9 +287,9 @@ curvas por ecuación explícita y paramétrica, desde archivo, imagen de calco, 
 cadena, redondeo 2D, simetría, patrón lineal en una y dos direcciones, circular, mover, copiar,
 rotar, escalar, arrastrar respetando restricciones, construcción y de vuelta, mover puntos de
 spline, tangencia en los extremos de spline, eliminar, agregar y eliminar puntos de spline,
-tangencia en puntos intermedios, simplificar, convertir a spline. — 11: recortar con arrastre,
-unir, equidistante bidireccional y con extremos cerrados, chaflán 2D (distancia; distancia y
-ángulo), estirar, eliminar duplicados, reparar, cerrar contorno. — 13: simetría dinámica.
+tangencia en puntos intermedios, simplificar, convertir a spline, recortar con arrastre, unir,
+equidistante bidireccional y con extremos cerrados, chaflán 2D (distancia; distancia y ángulo),
+estirar, eliminar duplicados, reparar, cerrar contorno, simetría dinámica.
 
 **Referencias al modelo** — ✅ proyectar aristas, convertir entidades del modelo, mantener
 asociatividad, contorno de cara, silueta, intersección, geometría y puntos de otro sketch,
@@ -301,7 +316,7 @@ invertir, resolución parcial.
 **Asistencia al dibujo** — ✅ inferencia automática, ajuste a extremos, medios, centros,
 cuadrantes, intersecciones, tangentes, perpendiculares y geometría proyectada, líneas de
 inferencia, entrada numérica (cotas al dibujar), cota automática, vista previa, dibujo
-encadenado. — 13: activar/desactivar inferencias, rejilla configurable con anclaje, coordenadas
+encadenado, activar/desactivar inferencias, rejilla configurable con anclaje, coordenadas
 absolutas, relativas y polares.
 
 **Perfiles y regiones** — ✅ perfiles cerrados, regiones, islas, elegir regiones, contornos

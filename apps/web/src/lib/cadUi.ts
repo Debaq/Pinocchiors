@@ -6,6 +6,9 @@ import { batch, createEffect, createSignal, on } from "solid-js";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
 import {
+  geometryPoints,
+  mirrorEntities,
+  splitRests,
   constraintPath,
   constraintValue,
   isReference,
@@ -68,6 +71,7 @@ export type SketchTool =
   | "select"
   | "line"
   | "line_mid"
+  | "centerline"
   | "rect"
   | "rect_center"
   | "rect3"
@@ -98,6 +102,7 @@ export type SketchTool =
   | "extend"
   | "use"
   | "split"
+  | "stretch"
   | "move"
   | "copy"
   | "rotate"
@@ -145,7 +150,7 @@ export interface SketchSession {
 
 const clone = <T>(v: T): T => structuredClone(v);
 /** Herramientas que no dibujan: el modo construcción no marca lo que crean */
-const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
+const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "stretch", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
 
 /** Qué se ve dentro del sketch */
 export interface SketchShow {
@@ -156,6 +161,49 @@ export interface SketchShow {
   /** Flechas de lo que todavía se puede mover */
   freedom: boolean;
 }
+/** Ayudas al dibujar: inferencias y rejilla del sketch (se recuerdan entre sesiones) */
+export interface SketchAssist {
+  /** Anclajes e inferencias (Mayús los apaga para un clic) */
+  infer: boolean;
+  grid: boolean;
+  /** Los clics libres caen en los nudos de la rejilla */
+  gridSnap: boolean;
+  /** Paso de la rejilla, en mm */
+  spacing: number;
+  /** Al dibujar: corte en el plano del sketch (se ve lo de atrás) */
+  section: boolean;
+  /** Al dibujar: el modelo oculto */
+  hideModel: boolean;
+}
+const ASSIST_KEY = "pinocchio.sketchAssist";
+function loadAssist(): SketchAssist {
+  const base: SketchAssist = { infer: true, grid: false, gridSnap: false, spacing: 5, section: false, hideModel: false };
+  try {
+    const v = JSON.parse(localStorage.getItem(ASSIST_KEY) ?? "null");
+    return v && typeof v === "object" ? { ...base, ...v } : base;
+  } catch {
+    return base;
+  }
+}
+
+/** Si la entidad está entera sobre el eje (reflejarla daría la misma) */
+function onAxis(s: Sketch, id: number, axis: number): boolean {
+  const ax = s.entities.find((e) => e.id === axis)?.geometry;
+  const e = s.entities.find((x) => x.id === id);
+  if (ax?.type !== "line" || !e) return false;
+  const at = (pid: number): P2 | undefined => {
+    const q = s.points.find((x) => x.id === pid);
+    return q && [q.x, q.y];
+  };
+  const [a, b] = [at(ax.start), at(ax.end)];
+  if (!a || !b) return false;
+  const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+  return geometryPoints(e.geometry).every((pid) => {
+    const p = at(pid);
+    return !!p && Math.abs((b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])) / len <= 1e-9 * Math.max(1, len);
+  });
+}
+
 /** Qué dice la etiqueta de una cota: el valor, su nombre (d1, d2… o el parámetro) o la fórmula con el valor */
 export type DimLabel = "value" | "name" | "expr";
 
@@ -201,6 +249,18 @@ export function createCadUi(store: CadStore) {
   const [constructionMode, setConstructionMode] = createSignal(false);
   const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
+  const [assist, setAssistRaw] = createSignal<SketchAssist>(loadAssist());
+  const setAssist = (patch: Partial<SketchAssist>) => {
+    const next = { ...assist(), ...patch };
+    setAssistRaw(next);
+    try {
+      localStorage.setItem(ASSIST_KEY, JSON.stringify(next));
+    } catch {
+      // Sin almacenamiento: vale para esta sesión
+    }
+  };
+  // Simetría dinámica: lo que se dibuja sale reflejado en esta línea
+  const [symmetryAxis, setSymmetryAxis] = createSignal<number>();
   // Sketch 3D: lo elegido (puntos y entidades) y dónde está el cursor
   const [sel3d, setSel3d] = createSignal<number[]>([]);
   const [cursor3d, setCursor3d] = createSignal<P3>();
@@ -376,6 +436,7 @@ export function createCadUi(store: CadStore) {
         if (expr) (c as { expr?: string }).expr = expr;
       });
       setSession({ feature, plane: view.plane, sketch, report: view.report, regions: view.regions });
+      setSymmetryAxis(undefined);
       resetHistory();
       return true;
     },
@@ -391,6 +452,13 @@ export function createCadUi(store: CadStore) {
         const before = new Set(s.sketch.entities.map((e) => e.id));
         mutate(next);
         if (constructionMode() && !NOT_DRAWING.has(tool())) for (const e of next.entities) if (!before.has(e.id)) e.construction = true;
+        // Simetría dinámica: lo dibujado (no los tramos de líneas partidas ni lo que cae sobre el eje) se refleja atado
+        const axis = symmetryAxis();
+        if (axis !== undefined && !NOT_DRAWING.has(tool()) && next.entities.some((e) => e.id === axis)) {
+          const rests = splitRests.get(next);
+          const drawn = next.entities.filter((e) => !before.has(e.id) && !rests?.has(e.id) && !onAxis(next, e.id, axis)).map((e) => e.id);
+          if (drawn.length) mirrorEntities(next, drawn, axis);
+        }
         // Lo que no cambia nada (una herramienta que avisa un error) no es un paso
         if (JSON.stringify(next) !== JSON.stringify(s.sketch)) remember(s.sketch);
         // Los índices cambian si se agregan o quitan restricciones
@@ -580,6 +648,10 @@ export function createCadUi(store: CadStore) {
 
     constructionMode,
     setConstructionMode,
+    assist,
+    setAssist,
+    symmetryAxis,
+    setSymmetryAxis,
     sketchShow,
     dimLabel,
     setDimLabel,

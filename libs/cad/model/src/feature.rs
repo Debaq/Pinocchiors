@@ -781,6 +781,9 @@ impl FeatureKind {
         match self {
             FeatureKind::Sketch { plane, sketch, .. } => {
                 let mut d = plane_deps(plane);
+                if let Some(a) = &sketch.x_axis {
+                    d.extend(axis_dep(a));
+                }
                 // Las curvas que lo perforan
                 d.extend(sketch.constraints.iter().filter_map(|c| match c {
                     crate::sketch::SketchConstraint::Pierce { curve, .. } => Some(FeatureId(*curve)),

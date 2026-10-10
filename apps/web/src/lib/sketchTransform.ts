@@ -577,3 +577,25 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
   }
   return "Solo se parten líneas, arcos y círculos";
 }
+
+// ─── Reflejo para invertir la normal ──────────────────────────────────────
+
+/**
+ * Refleja el sketch en su eje x (y → −y) para que, con la normal invertida,
+ * el dibujo quede en el mismo lugar del espacio. Los arcos cambian de sentido
+ * y las cotas con signo (vertical, ángulo, fijos, textos corridos) también.
+ */
+export function flipSketchY(s: Sketch): void {
+  for (const p of s.points) p.y = -p.y || 0;
+  for (const e of s.entities) {
+    const g = e.geometry;
+    if (g.type === "arc" || g.type === "ellipse_arc") [g.start, g.end] = [g.end, g.start];
+  }
+  for (const c of s.constraints) {
+    if (c.type === "fixed") c.y = -c.y || 0;
+    else if (c.type === "vertical_distance") c.value = -c.value || 0;
+    else if (c.type === "angle") c.degrees = -c.degrees || 0;
+    const o = (c as { opts?: { offset?: [number, number] } }).opts;
+    if (o?.offset) o.offset = [o.offset[0], -o.offset[1] || 0];
+  }
+}

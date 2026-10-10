@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { addEntity, addPoint, addRectangle } from "../src/lib/cad.ts";
 import {
   clipCenter,
+  flipSketchY,
   constraintHolds,
   extractClip,
   insertClip,
@@ -222,4 +223,33 @@ test("ids de las restricciones con lista de entidades; lo bloqueado no se mueve 
   assert.equal(s.constraints.find((k) => k.type === "length" && k.line === l[0]).value, 10);
   // El copiar no lleva el bloqueo
   assert.ok(!extractClip(s, l).constraints.some((k) => k.type === "lock"));
+});
+
+test("invertir la normal: el dibujo se refleja en y, los arcos y las cotas con signo también", () => {
+  const s = sketch();
+  const c = addPoint(s, [0, 5]);
+  const a = addPoint(s, [3, 5]);
+  const b = addPoint(s, [0, 8]);
+  const arc = addEntity(s, { type: "arc", center: c, start: a, end: b });
+  const l1 = addEntity(s, { type: "line", start: c, end: a });
+  const l2 = addEntity(s, { type: "line", start: c, end: b });
+  s.constraints.push(
+    { type: "fixed", point: c, x: 0, y: 5 },
+    { type: "vertical_distance", a: 0, b: c, value: 5 },
+    { type: "angle", a: l1, b: l2, degrees: 90 },
+    { type: "radius", entity: arc, value: 3 },
+  );
+  const before = Object.fromEntries(s.constraints.map((k) => [k.type, measureConstraint(s, k)]));
+  flipSketchY(s);
+  assert.deepEqual(at(s, b), [0, -8]);
+  // El arco sigue siendo el cuarto entre a y b (antihorario, ahora de b a a)
+  const g = s.entities.find((e) => e.id === arc).geometry;
+  assert.deepEqual([g.start, g.end], [b, a]);
+  // Cada cota con signo sigue midiendo lo que dice
+  for (const k of s.constraints) {
+    const m = measureConstraint(s, k);
+    if (m !== undefined) near(m, k.type === "angle" ? k.degrees : k.value, k.type);
+  }
+  near(s.constraints.find((k) => k.type === "fixed").y, -5, "fijo");
+  near(before.radius, 3, "radio");
 });

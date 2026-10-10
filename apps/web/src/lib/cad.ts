@@ -205,6 +205,8 @@ export interface SketchEntity {
   construction?: boolean;
   /** Línea infinita (de construcción): se dibuja de punta a punta de la vista */
   infinite?: boolean;
+  /** Línea central: eje de revolución y de los diámetros, tomado sin elegirlo */
+  axis?: boolean;
   geometry: Geometry;
 }
 
@@ -288,6 +290,10 @@ export interface Sketch {
   texts?: SketchText[];
   /** Entidades ligadas al modelo: siguen a su fuente proyectada (para el solver, fijas) */
   uses?: SketchUse[];
+  /** Dirección horizontal del sketch: la de este eje o arista proyectada al plano */
+  x_axis?: AxisSpec | null;
+  /** Normal invertida (se mira y se extruye desde el otro lado) */
+  flip_normal?: boolean;
 }
 
 /** Entidad ligada: a una arista del sólido (`edge`) o a otra fuente */
@@ -1351,7 +1357,11 @@ export function dependencies(kind: FeatureKind): number[] {
   const point = (p: PointSpec) => (p.type === "reference" ? [p.feature] : []);
   switch (kind.type) {
     case "sketch":
-      return [...plane(kind.plane), ...kind.sketch.constraints.flatMap((c) => (c.type === "pierce" ? [c.curve] : []))];
+      return [
+        ...plane(kind.plane),
+        ...(kind.sketch.x_axis ? axis(kind.sketch.x_axis) : []),
+        ...kind.sketch.constraints.flatMap((c) => (c.type === "pierce" ? [c.curve] : [])),
+      ];
     case "sketch3d":
       return kind.sketch.constraints.flatMap((c) => (c.type === "attach" ? point(c.target) : c.type === "on_plane" ? plane(c.plane) : []));
     case "draft":
@@ -1751,6 +1761,13 @@ export function mirrorEntities(s: Sketch, ids: number[], axis: number): string |
     if (Math.hypot(P[0] - foot[0], P[1] - foot[1]) <= tol) {
       made.set(p, p);
       return p;
+    }
+    // Ya reflejado antes (la simetría dinámica refleja de a un tramo): el mismo punto
+    const twin = s.constraints.find((k) => k.type === "symmetric" && k.line === axis && (k.a === p || k.b === p)) as { a: number; b: number } | undefined;
+    if (twin) {
+      const q = twin.a === p ? twin.b : twin.a;
+      made.set(p, q);
+      return q;
     }
     const q = addPoint(s, [2 * foot[0] - P[0], 2 * foot[1] - P[1]]);
     s.constraints.push({ type: "symmetric", a: p, b: q, line: axis });
@@ -2224,6 +2241,12 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
  * comparten el punto); la cota de largo de la línea entera pasa a ser la
  * distancia entre sus extremos. Devuelve la mitad nueva.
  */
+/**
+ * Tramos nuevos que salieron de partir una línea durante un cambio (no son
+ * dibujo nuevo: la simetría dinámica no los refleja)
+ */
+export const splitRests = new WeakMap<Sketch, Set<number>>();
+
 export function splitLineAt(s: Sketch, lineId: number, point: number): number | undefined {
   const line = s.entities.find((e) => e.id === lineId);
   if (!line || line.geometry.type !== "line") return;
@@ -2233,6 +2256,8 @@ export function splitLineAt(s: Sketch, lineId: number, point: number): number | 
   g.end = point;
   const rest = addEntity(s, { type: "line", start: point, end: oldEnd });
   if (line.construction) s.entities.find((e) => e.id === rest)!.construction = true;
+  if (!splitRests.has(s)) splitRests.set(s, new Set());
+  splitRests.get(s)!.add(rest);
   let axis = false;
   for (const k of [...s.constraints]) {
     if ((k.type === "horizontal" || k.type === "vertical") && k.line === lineId) {

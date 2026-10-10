@@ -28,6 +28,10 @@ pub struct SketchEntity {
     /// a punta de la vista; para las restricciones es una línea más.
     #[serde(default, skip_serializing_if = "is_false")]
     pub infinite: bool,
+    /// Línea central (de construcción): el eje de revolución y de las cotas
+    /// de diámetro que se toma sin elegirlo.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub axis: bool,
     pub geometry: Geometry,
 }
 
@@ -415,6 +419,13 @@ pub struct Sketch {
     /// arista proyectada cada vez que se recalcula; para el solver, fija.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub uses: Vec<SketchUse>,
+    /// Dirección horizontal (x) del sketch: la de este eje o arista
+    /// proyectada al plano. Sin ella, la del plano.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub x_axis: Option<crate::feature::AxisSpec>,
+    /// Normal invertida (se mira y se extruye desde el otro lado).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub flip_normal: bool,
 }
 
 /// Entidad ligada al modelo: sigue a una arista del sólido (`edge`) o a otra
@@ -520,7 +531,7 @@ impl Sketch {
 
     pub fn add_entity(&mut self, geometry: Geometry) -> u32 {
         let id = self.fresh_id();
-        self.entities.push(SketchEntity { id, construction: false, infinite: false, geometry });
+        self.entities.push(SketchEntity { id, construction: false, infinite: false, axis: false, geometry });
         id
     }
 

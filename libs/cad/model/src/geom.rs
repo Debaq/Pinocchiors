@@ -80,6 +80,22 @@ impl Plane {
         Plane { origin: add(self.origin, scale(self.normal, distance)), ..*self }
     }
 
+    /// El mismo plano con x en la dirección `x` proyectada (si no es
+    /// perpendicular a él) y la normal invertida con `flip`.
+    pub fn oriented(&self, x: Option<P3>, flip: bool) -> Plane {
+        let mut p = *self;
+        if let Some(x) = x {
+            let d = sub(x, scale(p.normal, dot(x, p.normal)));
+            if dot(d, d) > 1e-18 {
+                p.x_dir = normalize(d);
+            }
+        }
+        if flip {
+            p.normal = scale(p.normal, -1.0);
+        }
+        p
+    }
+
     pub fn flipped(&self) -> Plane {
         Plane { normal: scale(self.normal, -1.0), x_dir: self.x_dir, origin: self.origin }
     }

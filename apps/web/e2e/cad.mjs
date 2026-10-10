@@ -2405,6 +2405,304 @@ const scenarios = {
     await b.shot("solver-ii");
   },
 
+  async "edición II: recortar arrastrando, unir, chaflán, equidistante a los dos lados, estirar, duplicados, reparar y cerrar"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    const L = (id, start, end) => ({ id, geometry: { type: "line", start, end } });
+    const sketch = {
+      points: [
+        P(0, 0, 0),
+        // Numeral: dos horizontales y dos verticales cruzadas
+        P(1, 0, 30), P(2, 40, 30), P(3, 0, 50), P(4, 40, 50), P(5, 10, 20), P(6, 10, 60), P(7, 30, 20), P(8, 30, 60),
+        // Dos líneas alineadas seguidas
+        P(9, 60, 0), P(10, 70, 0), P(11, 85, 0),
+        // Esquina para el chaflán
+        P(12, 0, -30), P(13, 20, -30), P(14, 20, -10),
+        // Cadena abierta para el equidistante
+        P(15, 50, -40), P(16, 70, -40), P(17, 70, -20),
+        // Línea repetida (al revés, con sus propios puntos)
+        P(18, 100, 0), P(19, 110, 0), P(20, 110, 0), P(21, 100, 0),
+        // Triángulo con un extremo corrido 0,01
+        P(22, 100, 20), P(23, 120, 20), P(24, 120.01, 20), P(25, 110, 35),
+      ],
+      entities: [
+        L(40, 1, 2), L(41, 3, 4), L(42, 5, 6), L(43, 7, 8),
+        L(44, 9, 10), L(45, 10, 11),
+        L(46, 12, 13), L(47, 13, 14),
+        L(48, 15, 16), L(49, 16, 17),
+        L(50, 18, 19), L(51, 20, 21),
+        L(52, 22, 23), L(53, 24, 25), L(54, 25, 22),
+      ],
+      constraints: [{ type: "horizontal", line: 45 }],
+      next_id: 60,
+      origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Edición", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    const id = doc.next_id;
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${id})`);
+    await sleep(1500);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    const pos = (s, id) => {
+      const p = s.points.find((q) => q.id === id);
+      return [p.x, p.y];
+    };
+    const ends = (s, e) => [pos(s, e.geometry.start), pos(s, e.geometry.end)];
+    const select = async (ids) => {
+      await b.eval(`window.__cadUi.setTool("select"); window.__cadUi.setSelection(${JSON.stringify(ids)})`);
+      await sleep(400);
+    };
+
+    // Recortar arrastrando: un trazo por x = 20 quita el tramo del medio de las dos horizontales
+    await b.key("t", "KeyT");
+    const [x0, y0] = await at(20, 24);
+    const [x1, y1] = await at(20, 56);
+    await b.drag(x0, y0, x1, y1, 12);
+    await sleep(800);
+    let s = await sk();
+    const horiz = s.entities.filter((e) => e.geometry.type === "line" && [30, 50].includes(Math.round(pos(s, e.geometry.start)[1])) && Math.abs(pos(s, e.geometry.start)[1] - pos(s, e.geometry.end)[1]) < 1e-9);
+    if (horiz.length !== 4) throw new Error(`trozos de horizontal después del trazo: ${horiz.length}`);
+    if (horiz.some((e) => Math.min(...ends(s, e).map((p) => p[0])) < 20 && Math.max(...ends(s, e).map((p) => p[0])) > 20)) throw new Error("quedó algo cruzando x = 20");
+    // Un clic sigue recortando un solo tramo: la punta de arriba de la vertical izquierda
+    await b.click(...(await at(10, 57)), { wait: 800 });
+    s = await sk();
+    if (s.entities.some((e) => e.geometry.type === "line" && ends(s, e).some((p) => p[0] === 10 && p[1] === 60))) throw new Error("el clic no recortó la punta");
+
+    // Unir las dos alineadas
+    await select([44, 45]);
+    await b.clickText("Unir");
+    await sleep(900);
+    s = await sk();
+    const joined = s.entities.find((e) => e.id === 44);
+    if (s.entities.some((e) => e.id === 45) || JSON.stringify(ends(s, joined)) !== "[[60,0],[85,0]]") throw new Error(`unir: ${JSON.stringify(joined && ends(s, joined))}`);
+    if (!s.constraints.some((c) => c.type === "horizontal" && c.line === 44)) throw new Error("la horizontal no pasó a la unida");
+
+    // Chaflán de 4 mm en la esquina (20, -30)
+    await select([13]);
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Chaflán de la esquina"] input'); i.focus(); })()`);
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Chaflán de la esquina"] input'); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set; set.call(i, "4"); i.dispatchEvent(new Event("input", { bubbles: true })); i.dispatchEvent(new Event("change", { bubbles: true })); i.blur(); })()`);
+    await sleep(300);
+    await b.clickText("Achaflanar");
+    await sleep(900);
+    s = await sk();
+    const chamfer = s.entities.find((e) => e.geometry.type === "line" && JSON.stringify(ends(s, e).map((p) => p.map((v) => +v.toFixed(6)))) === "[[16,-30],[20,-26]]");
+    if (!chamfer) throw new Error("no está el chaflán de 4 mm: " + JSON.stringify(s.entities.filter((e) => e.id > 59).map((e) => ends(s, e))));
+
+    // Equidistante a los dos lados con extremos redondos: contorno cerrado alrededor de la cadena
+    await select([48, 49]);
+    await b.clickText("A los dos lados");
+    await b.clickText("Extremos abiertos");
+    await sleep(300);
+    await b.clickText("Extremos redondos");
+    await sleep(300);
+    const before = (await sk()).entities.length;
+    await b.clickText("Equidistante");
+    await sleep(1000);
+    s = await sk();
+    const made = s.entities.slice(before);
+    if (made.length !== 6 || made.filter((e) => e.geometry.type === "arc").length !== 2) throw new Error(`equidistante: ${made.map((e) => e.geometry.type)}`);
+    const { checkSketch } = await import("../src/lib/sketchCheck.ts");
+    if (checkSketch({ ...s, entities: made }).looseEnds.length) throw new Error("el contorno equidistante quedó abierto");
+    if (!(await b.eval(`window.__cadUi.session().regions.length`))) throw new Error("el contorno equidistante no forma región");
+
+    // Estirar: caja sobre la punta derecha de la unida y 10 mm a la derecha
+    await select([]);
+    await b.key("w", "KeyW");
+    const [bx0, by0] = await at(82, 3);
+    const [bx1, by1] = await at(88, -3);
+    await b.drag(bx0, by0, bx1, by1, 6);
+    await sleep(400);
+    const taken = await b.eval(`window.__cadUi.selection()`);
+    if (taken.length !== 1) throw new Error(`puntos tomados por la caja: ${taken}`);
+    await b.click(...(await at(85, 0)), { wait: 400 });
+    await b.click(...(await at(95, 0)), { wait: 1000 });
+    s = await sk();
+    const stretched = s.entities.find((e) => e.id === 44);
+    const xs = ends(s, stretched).map((p) => +p[0].toFixed(3)).sort((a, c) => a - c);
+    if (xs[0] !== 60 || Math.abs(xs[1] - 95) > 0.5) throw new Error(`estirar: ${xs}`);
+
+    // Eliminar duplicados: la línea repetida se va
+    await select([]);
+    await b.clickText("Eliminar duplicados");
+    await sleep(900);
+    s = await sk();
+    if (s.entities.some((e) => e.id === 51) || !s.entities.some((e) => e.id === 50)) throw new Error("duplicados: sigue la repetida");
+
+    // Reparar: el triángulo cierra y forma región
+    const regionsBefore = await b.eval(`window.__cadUi.session().regions.length`);
+    await b.clickText("Reparar");
+    await sleep(1200);
+    s = await sk();
+    if (s.points.some((p) => p.id === 24) && s.points.some((p) => p.id === 23)) throw new Error("reparar: los extremos del triángulo siguen separados");
+    const regionsAfter = await b.eval(`window.__cadUi.session().regions.length`);
+    if (!(regionsAfter > regionsBefore)) throw new Error(`reparar: regiones ${regionsBefore} → ${regionsAfter}`);
+
+    // Cerrar contorno sobre una U suelta (lo demás borrado)
+    await b.eval(`window.__cadUi.change((s) => {
+      s.entities = []; s.constraints = []; s.points = s.points.filter((p) => p.id === 0);
+      s.points.push({ id: 200, x: 0, y: 0.5 }, { id: 201, x: 20, y: 0.5 }, { id: 202, x: 20, y: 10 }, { id: 203, x: 0, y: 10 });
+      s.entities.push({ id: 204, geometry: { type: "line", start: 200, end: 201 } }, { id: 205, geometry: { type: "line", start: 201, end: 202 } }, { id: 206, geometry: { type: "line", start: 202, end: 203 } });
+      s.next_id = 210;
+    })`);
+    await sleep(900);
+    await b.clickText("Cerrar contorno");
+    await sleep(1200);
+    if ((await b.eval(`window.__cadUi.session().regions.length`)) !== 1) throw new Error("cerrar contorno: no quedó una región");
+    await b.shot("edicion-ii");
+  },
+
+  async "asistencia al dibujo: coordenadas escritas, polilínea línea-arco, rejilla sin inferencias, simetría al dibujar y línea central"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const type = async (text) => {
+      await b.eval(`(() => {
+        const i = document.querySelector('[aria-label="Coordenadas del próximo punto"]');
+        i.value = ${JSON.stringify(text)};
+        i.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      })()`);
+      await sleep(700);
+    };
+    const key = async (k) => {
+      await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)}, bubbles: true }))`);
+      await sleep(300);
+    };
+    const pos = (s, id) => {
+      const p = s.points.find((q) => q.id === id);
+      return [+p.x.toFixed(6), +p.y.toFixed(6)];
+    };
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    await b.eval(`window.__cadUi.setTool("line")`);
+    // Coordenadas: absoluta (el origen), relativa y polar
+    await type("0, 0");
+    await type("@20, 0");
+    await type("@10<90");
+    let s = await sk();
+    const lines = s.entities.filter((e) => e.geometry.type === "line");
+    const segs = lines.map((e) => [pos(s, e.geometry.start), pos(s, e.geometry.end)]);
+    if (JSON.stringify(segs) !== "[[[0,0],[20,0]],[[20,0],[20,10]]]") throw new Error(`coordenadas: ${JSON.stringify(segs)}`);
+    if (lines[0].geometry.start !== s.origin) throw new Error("el primer punto no tomó el origen");
+    // A: el próximo tramo es un arco tangente (de (20,10) hacia arriba, hasta (10,20): centro (10,10))
+    await key("a");
+    await type("@-10, 10");
+    s = await sk();
+    const arc = s.entities.find((e) => e.geometry.type === "arc");
+    if (!arc || JSON.stringify(pos(s, arc.geometry.center)) !== "[10,10]") throw new Error("arco tangente: " + JSON.stringify(arc && pos(s, arc.geometry.center)));
+    if (!s.constraints.some((c) => c.type === "tangent" && c.b === arc.id)) throw new Error("el arco no quedó tangente");
+    // Vuelve a línea solo
+    await type("@-10, 0");
+    s = await sk();
+    if (s.entities.filter((e) => e.geometry.type === "line").length !== 3) throw new Error("después del arco no siguió con línea");
+    await key("Escape");
+
+    // Sin inferencias y anclado a la rejilla de 5: un punto cerca de (31,2) cae en (30,0)
+    await b.eval(`window.__cadUi.setAssist({ infer: false, grid: true, gridSnap: true, spacing: 5 })`);
+    await sleep(500);
+    if ((await b.eval(`document.querySelector('[aria-label="Inferencias"]').getAttribute("aria-pressed")`)) !== "false") throw new Error("el botón de inferencias no se apagó");
+    await b.eval(`window.__cadUi.setTool("point")`);
+    await b.click(...(await at(31.2, 1.9)), { wait: 800 });
+    s = await sk();
+    const pt = s.entities.find((e) => e.geometry.type === "point");
+    if (!pt || JSON.stringify(pos(s, pt.geometry.point)) !== "[30,0]") throw new Error("punto en la rejilla: " + JSON.stringify(pt && pos(s, pt.geometry.point)));
+    await b.shot("asistencia-rejilla");
+    await b.eval(`window.__cadUi.setAssist({ infer: true, grid: false, gridSnap: false })`);
+
+    // Línea central vertical por x = 40 y simetría al dibujar en ella
+    await b.eval(`window.__cadUi.setTool("centerline")`);
+    await type("40, -10");
+    await type("40, 40");
+    s = await sk();
+    const axis = s.entities.find((e) => e.axis);
+    if (!axis || !axis.construction) throw new Error("no hay línea central");
+    await b.eval(`window.__cadUi.setTool("select"); window.__cadUi.setSelection([${axis.id}])`);
+    await sleep(400);
+    await b.clickContains("Simetría al dibujar");
+    await sleep(300);
+    await b.eval(`window.__cadUi.setTool("line")`);
+    await type("35, 30");
+    await type("25, 30");
+    await key("Escape");
+    s = await sk();
+    const mirrored = s.entities.filter((e) => e.geometry.type === "line" && !e.construction).map((e) => [pos(s, e.geometry.start), pos(s, e.geometry.end)]);
+    if (!mirrored.some(([p, q]) => JSON.stringify([p, q].sort()) === "[[45,30],[55,30]]")) throw new Error("no salió reflejada: " + JSON.stringify(mirrored));
+    if (s.constraints.filter((c) => c.type === "symmetric" && c.line === axis.id).length !== 2) throw new Error("faltan las simetrías");
+    // Diámetro respecto de la línea central sin elegirla: el punto (25, 30) está a 15 → 30
+    const far = s.points.find((p) => Math.abs(p.x - 25) < 1e-6 && Math.abs(p.y - 30) < 1e-6);
+    await b.eval(`window.__cadUi.setSymmetryAxis(undefined); window.__cadUi.setTool("select"); window.__cadUi.setSelection([${far.id}])`);
+    await sleep(400);
+    await b.clickText("Diámetro respecto de la línea central");
+    await sleep(900);
+    s = await sk();
+    const d = s.constraints.find((c) => c.type === "axis_diameter" && c.line === axis.id);
+    if (!d || Math.abs(d.value - 30) > 1e-6) throw new Error("diámetro al eje: " + JSON.stringify(d));
+    await b.shot("asistencia");
+  },
+
+  async "plano del sketch: horizontal según un eje, invertir la normal, corte y modelo oculto al dibujar"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    const L = (id, start, end) => ({ id, geometry: { type: "line", start, end } });
+    const sketch = {
+      points: [P(0, 0, 0), P(1, 20, 0), P(2, 20, 4), P(3, 0, 4)],
+      entities: [L(10, 0, 1), L(11, 1, 2), L(12, 2, 3), L(13, 3, 0)],
+      constraints: [],
+      next_id: 20,
+      origin: 0,
+    };
+    const sid = doc.next_id;
+    doc.features.push({ id: sid, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.features.push({ id: sid + 1, name: "Bloque", suppressed: false, kind: { type: "extrude", sketch: sid, regions: { type: "all" }, extent: { type: "blind", distance: 5 }, reverse: false, op: "join", draft: 0 } });
+    doc.next_id += 2;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const box = async () => {
+      const bd = await body();
+      return [...bd.bbox_min, ...bd.bbox_max].map((v) => +v.toFixed(4));
+    };
+    if (JSON.stringify(await box()) !== "[0,0,0,20,4,5]") throw new Error("bloque al empezar: " + (await box()));
+    // Horizontal según el eje Y: el rectángulo queda a lo largo de Y
+    await clickRow(b, "Perfil");
+    await b.clickText("La del plano");
+    await sleep(300);
+    await b.clickText("Eje Y");
+    await sleep(1200);
+    await accept(b, 2000);
+    let bb = await box();
+    if (Math.abs(bb[4] - bb[1] - 20) > 1e-6 || Math.abs(bb[3] - bb[0] - 4) > 1e-6) throw new Error("horizontal según Y: " + bb);
+    // Invertir la normal: el dibujo queda en el mismo lugar y la extrusión va hacia −Z
+    await clickRow(b, "Perfil");
+    // Seguía elegida: el clic la soltó
+    if (!(await b.eval(`[...document.querySelectorAll("label")].some((l) => l.textContent === "Invertir la normal" && l.offsetParent !== null)`))) await clickRow(b, "Perfil");
+    await b.clickText("Invertir la normal");
+    await sleep(1200);
+    await accept(b, 2000);
+    const bb2 = await box();
+    if (JSON.stringify(bb2.slice(0, 2)) !== JSON.stringify(bb.slice(0, 2)) || JSON.stringify(bb2.slice(3, 5)) !== JSON.stringify(bb.slice(3, 5))) throw new Error(`se movió el dibujo: ${bb} → ${bb2}`);
+    if (bb2[2] !== -5 || bb2[5] !== 0) throw new Error("la extrusión no se dio vuelta: " + bb2);
+    const saved = (await call("cad_get_document")).features.find((f) => f.id === sid).kind.sketch;
+    if (!saved.flip_normal || saved.x_axis?.type !== "y") throw new Error("no se guardó: " + JSON.stringify({ f: saved.flip_normal, x: saved.x_axis }));
+    // Dibujando: corte en el plano y modelo oculto; al salir vuelve todo
+    await b.eval(`window.__cadUi.setAssist({ section: true, hideModel: true })`);
+    await b.eval(`window.__cadUi.editSketch(${sid})`);
+    await sleep(1200);
+    const state = () => b.eval(`({ section: !!window.__cadViewer.section, visible: window.__cadViewer.body?.visible })`);
+    let st = await state();
+    if (!st.section || st.visible !== false) throw new Error("dibujando: " + JSON.stringify(st));
+    await b.shot("plano-sketch");
+    await b.eval(`window.__cadUi.cancelSketch()`);
+    await sleep(1500);
+    st = await state();
+    if (st.section || st.visible !== true) throw new Error("al salir: " + JSON.stringify(st));
+    await b.eval(`window.__cadUi.setAssist({ section: false, hideModel: false })`);
+  },
+
   async "curvas: spline por polos, punto en spline, tangente en la unión, cónica, paralelogramo, arco elíptico, línea infinita, ranura por 3 puntos, convertir, peine y texto sobre curva"(b) {
     await begin(b);
     await sketchOn(b);

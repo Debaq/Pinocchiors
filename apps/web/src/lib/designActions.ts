@@ -293,8 +293,9 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     if (!s || s.kind.type !== "sketch") return say("Primero hace falta un sketch con una región cerrada");
     if (!picked && noRegions(s)) return;
     ui.clearPicks();
-    // Eje: la primera línea de construcción del sketch, o Z
-    const axisLine = s.kind.sketch.entities.find((e) => e.construction && e.geometry.type === "line");
+    // Eje: la línea central del sketch, si no la primera de construcción, o Z
+    const lines = s.kind.sketch.entities.filter((e) => e.geometry.type === "line");
+    const axisLine = lines.find((e) => e.axis) ?? lines.find((e) => e.construction);
     const axis: AxisSpec = axisLine ? { type: "sketch_line", sketch: s.id, line: axisLine.id } : { type: "z" };
     const regions: RegionSelection = picked ? { type: "points", points: picked.points } : { type: "all" };
     void store.addFeature({ type: "revolve", sketch: s.id, regions, axis, angle: 360, op: "join" });

@@ -660,11 +660,8 @@ fn rank_null(j: &DMatrix<f64>, n: usize) -> (usize, DMatrix<f64>) {
     if j.nrows() == 0 {
         return (0, DMatrix::identity(n, n));
     }
-    let jtj = j.transpose() * j;
-    let eig = nalgebra::SymmetricEigen::new(jtj);
-    let max = eig.eigenvalues.iter().fold(0.0f64, |m, v| m.max(v.abs())).max(1e-300);
-    let keep: Vec<usize> = (0..n).filter(|&i| eig.eigenvalues[i].abs() <= 1e-10 * max.max(1.0)).collect();
-    (n - keep.len(), DMatrix::from_fn(n, keep.len(), |r, c| eig.eigenvectors[(r, keep[c])]))
+    let null = cad_solver::nullspace(j);
+    (n - null.ncols(), null)
 }
 
 /// Qué nombra del modelo cada restricción (para que el historial lo resuelva).
