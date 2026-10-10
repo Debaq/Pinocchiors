@@ -3,6 +3,7 @@
 // sketch en edición.
 
 import { batch, createEffect, createSignal, on } from "solid-js";
+import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
 import {
@@ -108,7 +109,11 @@ export type SketchTool =
   | "rotate"
   | "scale"
   /** Pegar lo copiado (Ctrl+V): no está en la barra */
-  | "paste";
+  | "paste"
+  /** Insertar una copia del bloque elegido en el panel (clic donde va su origen) */
+  | "block_insert"
+  /** Calibrar un calco: dos clics sobre la imagen (después, la medida en el panel) */
+  | "calibrate";
 
 /** Qué hace un clic en el visor */
 export type PickMode =
@@ -150,7 +155,7 @@ export interface SketchSession {
 
 const clone = <T>(v: T): T => structuredClone(v);
 /** Herramientas que no dibujan: el modo construcción no marca lo que crean */
-const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "stretch", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
+const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "stretch", "block_insert", "calibrate", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
 
 /** Qué se ve dentro del sketch */
 export interface SketchShow {
@@ -261,6 +266,16 @@ export function createCadUi(store: CadStore) {
   };
   // Simetría dinámica: lo que se dibuja sale reflejado en esta línea
   const [symmetryAxis, setSymmetryAxis] = createSignal<number>();
+  // Capa donde caen las entidades nuevas
+  const [activeLayer, setActiveLayer] = createSignal<number>();
+  // Editando un bloque: el sketch de la sesión es el del bloque; `parent` es el sketch de afuera
+  const [blockEdit, setBlockEdit] = createSignal<{ block: number; name: string; parent: Sketch }>();
+  // Bloque a insertar con la herramienta block_insert
+  const [blockToInsert, setBlockToInsert] = createSignal<{ block: number; angle: number; scale: number }>();
+  // Calco a calibrar (con la herramienta calibrate) y los dos puntos marcados sobre él
+  const [calibration, setCalibration] = createSignal<{ image: number; a?: P2; b?: P2 }>();
+  // Sketch entero copiado (para pegarlo como un sketch nuevo en otro plano)
+  const [sketchCopy, setSketchCopy] = createSignal<Sketch>();
   // Sketch 3D: lo elegido (puntos y entidades) y dónde está el cursor
   const [sel3d, setSel3d] = createSignal<number[]>([]);
   const [cursor3d, setCursor3d] = createSignal<P3>();
@@ -437,6 +452,9 @@ export function createCadUi(store: CadStore) {
       });
       setSession({ feature, plane: view.plane, sketch, report: view.report, regions: view.regions });
       setSymmetryAxis(undefined);
+      setActiveLayer(undefined);
+      setBlockEdit(undefined);
+      setCalibration(undefined);
       resetHistory();
       return true;
     },
@@ -452,6 +470,9 @@ export function createCadUi(store: CadStore) {
         const before = new Set(s.sketch.entities.map((e) => e.id));
         mutate(next);
         if (constructionMode() && !NOT_DRAWING.has(tool())) for (const e of next.entities) if (!before.has(e.id)) e.construction = true;
+        // Capa activa: lo nuevo cae en ella
+        const layer = activeLayer();
+        if (layer !== undefined && next.layers?.some((l) => l.id === layer)) for (const e of next.entities) if (!before.has(e.id)) e.layer = layer;
         // Simetría dinámica: lo dibujado (no los tramos de líneas partidas ni lo que cae sobre el eje) se refleja atado
         const axis = symmetryAxis();
         if (axis !== undefined && !NOT_DRAWING.has(tool()) && next.entities.some((e) => e.id === axis)) {
@@ -638,6 +659,8 @@ export function createCadUi(store: CadStore) {
       if (selectedConstraints().length) return ui.removeConstraints(selectedConstraints());
       const ids = new Set(selection());
       ui.change((s) => {
+        // Lo de capas bloqueadas no se toca
+        for (const id of layerState(s).locked) ids.delete(id);
         // Un texto se borra entero (alcanza con elegir una de sus curvas o su ancla)
         for (const t of [...(s.texts ?? [])]) if ([t.anchor, ...t.entities].some((x) => ids.has(x))) removeText(s, t);
         // Un punto suelto se elige por su punto
@@ -648,6 +671,51 @@ export function createCadUi(store: CadStore) {
 
     constructionMode,
     setConstructionMode,
+    activeLayer,
+    setActiveLayer,
+    blockEdit,
+    blockToInsert,
+    setBlockToInsert,
+    calibration,
+    setCalibration,
+    sketchCopy,
+    setSketchCopy,
+    /** Abre un bloque para editarlo (el sketch de afuera queda guardado hasta terminar) */
+    editBlock(id: number) {
+      const s = session();
+      const b = s?.sketch.blocks?.find((x) => x.id === id);
+      if (!s || !b || blockEdit()) return;
+      setBlockEdit({ block: id, name: b.name, parent: clone(s.sketch) });
+      setSelection([]);
+      setSession({ ...s, sketch: blockSketch(b), report: undefined, regions: [] });
+      resetHistory();
+      ui.change(() => {});
+    },
+    /** Guarda el bloque editado (todas sus copias se rehacen) y vuelve al sketch */
+    finishBlock(): string | undefined {
+      const be = blockEdit();
+      const s = session();
+      if (!be || !s) return;
+      const edited = clone(s.sketch);
+      setBlockEdit(undefined);
+      setSelection([]);
+      setSession({ ...s, sketch: be.parent });
+      resetHistory();
+      let msg: string | undefined;
+      ui.change((sk) => (msg = saveBlock(sk, be.block, edited)));
+      return msg;
+    },
+    /** Sale del bloque sin guardar */
+    cancelBlock() {
+      const be = blockEdit();
+      const s = session();
+      if (!be || !s) return;
+      setBlockEdit(undefined);
+      setSelection([]);
+      setSession({ ...s, sketch: be.parent });
+      resetHistory();
+      ui.change(() => {});
+    },
     assist,
     setAssist,
     symmetryAxis,
@@ -741,6 +809,8 @@ export function createCadUi(store: CadStore) {
 
     /** Guarda el sketch en el documento y sale */
     async finishSketch() {
+      // Con un bloque abierto, primero se guarda el bloque
+      if (blockEdit()) ui.finishBlock();
       const s = session();
       if (!s) return;
       setSession(undefined);
@@ -768,6 +838,7 @@ export function createCadUi(store: CadStore) {
     },
 
     cancelSketch() {
+      setBlockEdit(undefined);
       setSession(undefined);
       setSelection([]);
       resetHistory();

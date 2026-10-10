@@ -32,6 +32,9 @@ pub struct SketchEntity {
     /// de diámetro que se toma sin elegirlo.
     #[serde(default, skip_serializing_if = "is_false")]
     pub axis: bool,
+    /// Capa (ver `Sketch::layers`): para ocultar o bloquear por grupo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer: Option<u32>,
     pub geometry: Geometry,
 }
 
@@ -426,6 +429,59 @@ pub struct Sketch {
     /// Normal invertida (se mira y se extruye desde el otro lado).
     #[serde(default, skip_serializing_if = "is_false")]
     pub flip_normal: bool,
+    /// Capas del dibujo (ocultar o bloquear por grupo; solo para editar).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub layers: Vec<SketchLayer>,
+    /// Bloques: dibujos con su propio origen que se insertan varias veces
+    /// (cada copia es un `SketchText` con `block`, rígido con su ancla).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<SketchBlock>,
+    /// Imágenes de calco (solo se ven al dibujar).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<SketchImage>,
+}
+
+/// Capa del sketch.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchLayer {
+    pub id: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub locked: bool,
+}
+
+/// Definición de un bloque: puntos, entidades y restricciones respecto de su
+/// origen (0, 0).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchBlock {
+    pub id: u32,
+    pub name: String,
+    pub points: Vec<SketchPoint>,
+    pub entities: Vec<SketchEntity>,
+    #[serde(default)]
+    pub constraints: Vec<SketchConstraint>,
+}
+
+/// Imagen de referencia: `data` (URL de datos), esquina de abajo a la
+/// izquierda en `at`, tamaño en mm y giro en grados alrededor de `at`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SketchImage {
+    pub id: u32,
+    pub name: String,
+    pub data: String,
+    pub at: P2,
+    pub width: f64,
+    pub height: f64,
+    #[serde(default)]
+    pub angle: f64,
+    #[serde(default = "one")]
+    pub opacity: f64,
+}
+
+fn one() -> f64 {
+    1.0
 }
 
 /// Entidad ligada al modelo: sigue a una arista del sólido (`edge`) o a otra
@@ -467,6 +523,9 @@ pub struct SketchText {
     /// Negrita, cursiva, alineación y curva que sigue (para rehacerlo igual).
     #[serde(default, skip_serializing_if = "TextStyle::is_default")]
     pub style: TextStyle,
+    /// Copia de un bloque (`Sketch::blocks`) en vez de un texto: se rehace desde él.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block: Option<u32>,
 }
 
 /// Cómo se arma un texto del sketch.
@@ -535,7 +594,7 @@ impl Sketch {
 
     pub fn add_entity(&mut self, geometry: Geometry) -> u32 {
         let id = self.fresh_id();
-        self.entities.push(SketchEntity { id, construction: false, infinite: false, axis: false, geometry });
+        self.entities.push(SketchEntity { id, construction: false, infinite: false, axis: false, layer: None, geometry });
         id
     }
 

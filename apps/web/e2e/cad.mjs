@@ -2742,6 +2742,200 @@ const scenarios = {
     await b.eval(`window.__cadUi.setAssist({ section: false, hideModel: false })`);
   },
 
+  async "archivos y fórmulas: curva por ecuación con parámetro, CSV, DXF importado y exportado, SVG y calco calibrado"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.addParameter("amp", "5")`);
+    await sleep(1200);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    // Archivos: el selector del sistema se reemplaza por el archivo que prepara la prueba
+    await b.eval(`(() => {
+      const orig = HTMLInputElement.prototype.click;
+      HTMLInputElement.prototype.click = function () {
+        if (this.type === "file" && window.__nextFile) {
+          const dt = new DataTransfer();
+          dt.items.add(window.__nextFile);
+          window.__nextFile = undefined;
+          this.files = dt.files;
+          this.dispatchEvent(new Event("change"));
+          return;
+        }
+        return orig.call(this);
+      };
+    })()`);
+    const giveFile = (name, content, type = "text/plain") => b.eval(`window.__nextFile = new File([${JSON.stringify(content)}], ${JSON.stringify(name)}, { type: ${JSON.stringify(type)} })`);
+    const setField = (label, value) =>
+      b.eval(`(() => {
+        const i = document.querySelector('input[aria-label=${JSON.stringify(label)}]');
+        i.value = ${JSON.stringify(value)};
+        i.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+    // y = amp·sin(x/5) de 0 a 30: la spline pasa por los picos de altura 5 (el parámetro)
+    await setField("y(x)", "amp * sin(x / 5)");
+    await setInput(b, "x desde", 0);
+    await setInput(b, "hasta", 30);
+    await setInput(b, "Puntos", 31);
+    await sleep(300);
+    await b.clickText("Agregar curva");
+    await sleep(1200);
+    let s = await sk();
+    const curve = s.entities.find((e) => e.geometry.type === "spline");
+    if (!curve || curve.geometry.points.length !== 31) throw new Error("curva por ecuación: " + JSON.stringify(curve?.geometry.points.length));
+    const ys = curve.geometry.points.map((id) => s.points.find((p) => p.id === id).y);
+    near(Math.max(...ys), 5 * Math.sin(8 / 5), 0.2, "pico");
+    // CSV con punto y coma y coma decimal, como polilínea
+    await b.clickText("Como polilínea");
+    await giveFile("perfil.csv", "x;y\n0;-10\n10;-10\n10;-15,5\n0;-15,5\n");
+    await b.clickText("Curva desde archivo…");
+    await sleep(1200);
+    s = await sk();
+    if (!s.points.some((p) => p.x === 10 && p.y === -15.5)) throw new Error("CSV: falta (10; -15,5)");
+    // DXF: un cuadrado cerrado de 20 en (40, 0) en una polilínea: una región más
+    const regions0 = await b.eval(`window.__cadUi.session().regions.length`);
+    const dxf = ["0", "SECTION", "2", "ENTITIES", "0", "LWPOLYLINE", "90", "4", "70", "1", "10", "40", "20", "0", "10", "60", "20", "0", "10", "60", "20", "20", "10", "40", "20", "20", "0", "ENDSEC", "0", "EOF"].join("\n");
+    await giveFile("cuadrado.dxf", dxf);
+    await b.clickText("Importar DXF…");
+    await sleep(1500);
+    if ((await b.eval(`window.__cadUi.session().regions.length`)) !== regions0 + 1) throw new Error("el DXF no dio una región");
+    // Exportar DXF y SVG del sketch
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    for (const ext of ["dxf", "svg"]) {
+      const path = `${out}/sketch.${ext}`;
+      rmSync(path, { force: true });
+      await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+      await b.clickText(`Exportar ${ext.toUpperCase()}`);
+      await sleep(1200);
+      const text = existsSync(path) ? readFileSync(path, "utf8") : "";
+      if (ext === "dxf" && !(text.includes("LWPOLYLINE") === false && (text.match(/\nLINE\n/g) ?? []).length >= 7 && text.includes("POLYLINE"))) throw new Error("DXF exportado raro");
+      if (ext === "svg" && !text.includes("<polyline")) throw new Error("SVG exportado raro");
+    }
+    // Calco: imagen de 200 × 100 px, 100 mm de ancho; calibrar: lo que hay de 0 a 50 mide 100 → el doble
+    const png = await b.eval(`(() => { const c = document.createElement("canvas"); c.width = 200; c.height = 100; const g = c.getContext("2d"); g.fillStyle = "#c33"; g.fillRect(0, 0, 200, 100); return c.toDataURL("image/png"); })()`);
+    await b.eval(`window.__nextFile = new File([Uint8Array.from(atob(${JSON.stringify(png.split(",")[1])}), (c) => c.charCodeAt(0))], "plano.png", { type: "image/png" })`);
+    await b.clickText("Agregar calco…");
+    await sleep(1500);
+    s = await sk();
+    if (s.images?.length !== 1 || s.images[0].width !== 100 || s.images[0].height !== 50) throw new Error("calco: " + JSON.stringify(s.images?.map((i) => [i.width, i.height])));
+    await b.clickText("Calibrar");
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([0, 0, 0])`)), { modifiers: 8, wait: 400 });
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([50, 0, 0])`)), { modifiers: 8, wait: 600 });
+    await setInput(b, "Eso mide", 100);
+    await sleep(300);
+    await b.clickText("Aplicar la medida");
+    await sleep(1000);
+    s = await sk();
+    near(s.images[0].width, 200, 1e-3, "ancho calibrado");
+    near(s.images[0].at[0], 0, 1e-3, "esquina");
+    await b.shot("archivos-formulas");
+    // Se guarda con el sketch
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const saved = (await call("cad_get_document")).features.find((f) => f.kind.type === "sketch").kind.sketch;
+    if (!(Math.abs((saved.images?.[0]?.width ?? 0) - 200) < 1e-3)) throw new Error("el calco no se guardó");
+  },
+
+  async "organización: bloques con copias que cambian juntas, capas ocultas y bloqueadas, pegar el sketch en otro plano y validar la revolución"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = (id, x, y) => ({ id, x, y });
+    const L = (id, start, end) => ({ id, geometry: { type: "line", start, end } });
+    const sketch = {
+      points: [P(0, 0, 0), P(1, 0, 0.0001), P(2, 10, 0), P(3, 10, 6), P(4, 0, 6), P(5, 0, 20), P(6, 30, 20)],
+      entities: [L(10, 1, 2), L(11, 2, 3), L(12, 3, 4), L(13, 4, 1), L(14, 5, 6)],
+      constraints: [{ type: "horizontal", line: 10 }],
+      next_id: 30,
+      origin: 0,
+    };
+    const sid = doc.next_id;
+    doc.features.push({ id: sid, name: "Piezas", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.eval(`window.__cadUi.editSketch(${sid})`);
+    await sleep(1200);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const at = (x, y) => b.eval(`window.__cadViewer.screenOf([${x}, ${y}, 0])`);
+    // Bloque con el rectángulo (origen: su esquina de abajo a la izquierda)
+    await b.eval(`window.__cadUi.setTool("select"); window.__cadUi.setSelection([10, 11, 12, 13, 1])`);
+    await sleep(400);
+    await b.eval(`(() => { const i = document.querySelector('input[aria-label="Nombre del bloque"]'); i.value = "Placa"; i.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+    await b.clickText("Hacer bloque");
+    await sleep(900);
+    let s = await sk();
+    if (s.blocks?.length !== 1 || s.texts?.[0]?.block !== s.blocks[0].id) throw new Error("bloque: " + JSON.stringify({ b: s.blocks?.length, t: s.texts }));
+    // Insertar una copia con el origen en (40, 0)
+    await b.clickText("Insertar");
+    await b.click(...(await at(40, 0)), { modifiers: 8, wait: 900 });
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`);
+    s = await sk();
+    if (s.texts.length !== 2) throw new Error("copias: " + s.texts.length);
+    if (!s.points.some((p) => Math.abs(p.x - 50) < 0.1 && Math.abs(p.y - 6) < 0.1)) throw new Error("la copia no está en (40, 0)");
+    // Editar el bloque: 10 → 14 de ancho; las dos copias cambian
+    await b.clickText("Editar");
+    await sleep(900);
+    if (!(await b.eval(`!!window.__cadUi.blockEdit()`))) throw new Error("no abrió el bloque");
+    await b.eval(`window.__cadUi.change((k) => { for (const p of k.points) if (Math.abs(p.x - 10) < 1e-6) p.x = 14; })`);
+    await sleep(800);
+    await b.clickText("Terminar bloque");
+    await sleep(1200);
+    s = await sk();
+    // La copia se insertó con un clic (el origen cae a centésimas de 40)
+    const anchor2 = s.points.find((p) => p.id === s.texts[1].anchor);
+    for (const x of [14, anchor2.x + 14]) if (!s.points.some((p) => Math.abs(p.x - x) < 1e-6)) throw new Error(`falta el ancho nuevo en x = ${x}: ${JSON.stringify(s.texts[1].points.map((id) => s.points.find((p) => p.id === id)))}`);
+    if (!s.entities.some((e) => e.id === 14)) throw new Error("la línea suelta se perdió al editar el bloque");
+
+    // Capas: la línea suelta a una capa; oculta no se elige, bloqueada tampoco
+    await b.clickText("Nueva capa");
+    await sleep(500);
+    await b.eval(`window.__cadUi.setSelection([14])`);
+    await sleep(300);
+    await b.eval(`[...document.querySelectorAll('[aria-label="Pasar lo elegido a una capa"] button')].find((e) => e.textContent === "Capa 1").click()`);
+    await sleep(800);
+    s = await sk();
+    const layer = s.layers?.[0]?.id;
+    if (s.entities.find((e) => e.id === 14).layer !== layer) throw new Error("no pasó a la capa");
+    const clickLine = async () => {
+      await b.eval(`window.__cadUi.setTool("select"); window.__cadUi.setSelection([])`);
+      await b.click(...(await at(15, 20)), { wait: 500 });
+      return b.eval(`window.__cadUi.selection()`);
+    };
+    if (!(await clickLine()).includes(14)) throw new Error("visible y libre se elige");
+    await b.eval(`document.querySelector('[aria-label="Ver Capa 1"]').click()`);
+    await sleep(500);
+    if ((await clickLine()).includes(14)) throw new Error("oculta se eligió");
+    await b.eval(`document.querySelector('[aria-label="Ver Capa 1"]').click(); document.querySelector('[aria-label="Bloquear Capa 1"]').click()`);
+    await sleep(500);
+    if ((await clickLine()).includes(14)) throw new Error("bloqueada se eligió");
+    await b.shot("organizacion");
+
+    // Copiar el sketch entero y pegarlo en el frente
+    await b.clickText("Copiar el sketch entero");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    await b.eval(`window.__cadUi.pickToggle({ kind: "plane", plane: "xz" }, false)`);
+    await b.clickText("Pegar sketch");
+    await sleep(2500);
+    const feats = (await call("cad_get_document")).features.filter((f) => f.kind.type === "sketch");
+    if (feats.length !== 2 || feats[1].kind.plane.type !== "xz") throw new Error("pegar: " + JSON.stringify(feats.map((f) => f.kind.plane)));
+    const pasted = feats[1].kind.sketch;
+    if (pasted.entities.length !== feats[0].kind.sketch.entities.length || pasted.blocks?.length !== 1) throw new Error("el pegado no trae lo mismo");
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error("no abrió el pegado");
+    await b.eval(`window.__cadUi.cancelSketch()`);
+
+    // Validación: revolución de un rectángulo a los dos lados del eje Z (en el frente)
+    const d2 = await call("cad_get_document");
+    const rid = d2.next_id;
+    d2.features.push({ id: rid, name: "Perfil cruzado", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 30, sketch: { points: [P(0, 0, 0), P(1, -2, 0), P(2, 5, 0), P(3, 5, 8), P(4, -2, 8)], entities: [L(10, 1, 2), L(11, 2, 3), L(12, 3, 4), L(13, 4, 1)], constraints: [], next_id: 20, origin: 0 } } });
+    d2.features.push({ id: rid + 1, name: "Giro", suppressed: false, kind: { type: "revolve", sketch: rid, regions: { type: "all" }, axis: { type: "z" }, angle: 360, op: "join" } });
+    d2.next_id += 2;
+    await call("cad_set_document", { document: d2 });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const st = await b.eval(`JSON.stringify(window.__cadStore.result().status.find((x) => x.id === ${rid + 1}))`);
+    if (!st.includes("cruza el eje")) throw new Error("la revolución no avisó: " + st);
+  },
+
   async "curvas: spline por polos, punto en spline, tangente en la unión, cónica, paralelogramo, arco elíptico, línea infinita, ranura por 3 puntos, convertir, peine y texto sobre curva"(b) {
     await begin(b);
     await sketchOn(b);

@@ -26,6 +26,8 @@ const SKETCH_CLICK: Partial<Record<SketchTool, string>> = {
   paste: "dónde va lo pegado",
   trim: "el tramo que se quita",
   stretch: "caja sobre las puntas, punto base y destino",
+  block_insert: "dónde va el origen de la copia (Esc termina)",
+  calibrate: "dos puntos de la imagen a una distancia conocida",
   extend: "cerca del extremo",
   circle_tan: "cada línea o curva, cerca de donde toca",
 };

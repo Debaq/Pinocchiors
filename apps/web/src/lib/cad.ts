@@ -207,6 +207,8 @@ export interface SketchEntity {
   infinite?: boolean;
   /** Línea central: eje de revolución y de los diámetros, tomado sin elegirlo */
   axis?: boolean;
+  /** Capa (`Sketch.layers`) */
+  layer?: number | null;
   geometry: Geometry;
 }
 
@@ -294,6 +296,41 @@ export interface Sketch {
   x_axis?: AxisSpec | null;
   /** Normal invertida (se mira y se extruye desde el otro lado) */
   flip_normal?: boolean;
+  /** Capas: ocultar o bloquear por grupo (solo al editar) */
+  layers?: SketchLayer[];
+  /** Bloques: dibujos con su origen que se insertan varias veces (cada copia es un `SketchText` con `block`) */
+  blocks?: SketchBlock[];
+  /** Imágenes de calco (solo se ven al dibujar) */
+  images?: SketchImage[];
+}
+
+export interface SketchLayer {
+  id: number;
+  name: string;
+  hidden?: boolean;
+  locked?: boolean;
+}
+
+/** Definición de un bloque: un sketch chico con su origen (punto 0 en (0, 0)) */
+export interface SketchBlock {
+  id: number;
+  name: string;
+  points: SketchPoint[];
+  entities: SketchEntity[];
+  constraints: SketchConstraint[];
+}
+
+/** Imagen de referencia: esquina de abajo a la izquierda en `at`, tamaño en mm, giro en grados alrededor de `at` */
+export interface SketchImage {
+  id: number;
+  name: string;
+  /** URL de datos (data:image/...) */
+  data: string;
+  at: P2;
+  width: number;
+  height: number;
+  angle?: number;
+  opacity?: number;
 }
 
 /** Entidad ligada: a una arista del sólido (`edge`) o a otra fuente */
@@ -380,6 +417,8 @@ export interface SketchText {
   entities: number[];
   points: number[];
   style?: TextStyle;
+  /** Copia de un bloque (`Sketch.blocks`) en vez de un texto: se rehace desde él */
+  block?: number | null;
 }
 
 /** Negrita, cursiva, alineación respecto del ancla y curva que siguen las letras */

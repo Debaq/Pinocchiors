@@ -10,7 +10,7 @@ import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
 import { THEME_EVENT, themeHex } from "./theme";
-import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d } from "./cad";
+import { deviationColor, ellipsePolyline, curvePolyline, splineOf, type BodyOp, type ScanDeviation, type CadMesh, type P2, type P3, type Plane, type RefView, type Region, type Sketch, type Sketch3d, type SketchImage } from "./cad";
 import type { MeshData } from "./Viewer3D";
 
 export type BasePlane = "xy" | "xz" | "yz";
@@ -80,6 +80,8 @@ export interface SketchOverlay {
   warnEntities?: number[];
   /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
   curvature?: { comb: [P2, P2][]; inflections: P2[] };
+  /** Imágenes de calco en el plano del sketch */
+  images?: SketchImage[];
   /** Rejilla del sketch (segmentos en el plano; los principales más marcados) */
   grid?: { a: P2; b: P2; major: boolean }[];
   /** Grados libres: puntos con una sola dirección (y cuál), puntos libres del todo y círculos con el radio libre */
@@ -879,6 +881,18 @@ export class CadViewer {
 
   // ─── Sketch ─────────────────────────────────────────────────────────────
 
+  /** Texturas de los calcos por su URL de datos (se decodifican una vez) */
+  private imageTextures = new Map<string, THREE.Texture>();
+  private imageTexture(data: string): THREE.Texture {
+    let tex = this.imageTextures.get(data);
+    if (!tex) {
+      tex = new THREE.TextureLoader().load(data, () => this.requestRender());
+      tex.colorSpace = THREE.SRGBColorSpace;
+      this.imageTextures.set(data, tex);
+    }
+    return tex;
+  }
+
   setSketch(overlay: SketchOverlay | null) {
     for (const child of [...this.sketchGroup.children]) {
       this.sketchGroup.remove(child);
@@ -917,6 +931,21 @@ export class CadViewer {
       this.sketchGroup.add(mesh);
     }
 
+    // Calcos: debajo de todo, con su transparencia
+    for (const im of overlay.images ?? []) {
+      const tex = this.imageTexture(im.data);
+      const a = ((im.angle ?? 0) * Math.PI) / 180;
+      const [c, s] = [Math.cos(a), Math.sin(a)];
+      const corner = (u: number, v: number): P2 => [im.at[0] + u * c - v * s, im.at[1] + u * s + v * c];
+      const g = new THREE.BufferGeometry().setFromPoints([corner(0, 0), corner(im.width, 0), corner(im.width, im.height), corner(0, im.height)].map(w));
+      g.setIndex([0, 1, 2, 0, 2, 3]);
+      g.setAttribute("uv", new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
+      const m = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: im.opacity ?? 0.6, side: THREE.DoubleSide, depthWrite: false, depthTest: false });
+      const mesh = new THREE.Mesh(g, m);
+      mesh.renderOrder = 4;
+      mesh.userData.sketchImage = im.id;
+      this.sketchGroup.add(mesh);
+    }
     // Rejilla del sketch: debajo de todo, apenas visible
     if (overlay.grid?.length) {
       for (const major of [false, true]) {

@@ -72,6 +72,9 @@ import {
   type PlaneSpec,
   type ScanPick,
   type Sketch,
+  type SketchImage,
+  type SketchLayer,
+  breakLinks,
   type SketchEntity,
   type Geometry,
   type SketchConstraint,
@@ -96,6 +99,9 @@ import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline,
 import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
 import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
+import { sampleCurve } from "../../lib/sketchFormula";
+import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
+import { addLayer, createBlock, explodeBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
@@ -5275,6 +5281,9 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
 
       <SketchEntities ui={ui} />
 
+      <SketchFiles ui={ui} store={props.store} />
+      <SketchOrganize ui={ui} />
+
       <Section title="Restricciones">
         <Show when={sketch().constraints.length > 0} fallback={<p class="text-xs text-text-dim">Sin restricciones</p>}>
           <div class="flex flex-wrap gap-1" aria-label="Elegir restricciones">
@@ -5607,6 +5616,445 @@ const SketchEntities: Component<{ ui: CadUi }> = (props) => {
  * spline elegido), ajuste a puntos, simplificar, convertir a polos y el peine
  * de curvatura.
  */
+/** Elige un archivo con el selector del sistema y lo lee como texto o como URL de datos */
+function pickFile(accept: string, as: "text" | "data"): Promise<{ name: string; content: string; size: number } | undefined> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = accept;
+    input.setAttribute("data-sketch-file", accept);
+    input.style.display = "none";
+    input.onchange = () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (!f) return resolve(undefined);
+      const r = new FileReader();
+      r.onload = () => resolve({ name: f.name, content: String(r.result), size: f.size });
+      r.onerror = () => resolve(undefined);
+      if (as === "text") r.readAsText(f);
+      else r.readAsDataURL(f);
+    };
+    document.body.appendChild(input);
+    input.click();
+  });
+}
+
+/** Imagen como URL de datos chica: las grandes se achican a 1600 px en JPEG (el calco viaja con el sketch) */
+async function shrinkImage(data: string, size: number): Promise<{ data: string; w: number; h: number }> {
+  const img = new Image();
+  await new Promise<void>((ok, fail) => {
+    img.onload = () => ok();
+    img.onerror = () => fail(new Error("no es una imagen"));
+    img.src = data;
+  });
+  const [w, h] = [img.naturalWidth || 1, img.naturalHeight || 1];
+  if (size <= 400_000 && Math.max(w, h) <= 1600) return { data, w, h };
+  const k = Math.min(1, 1600 / Math.max(w, h));
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * k);
+  c.height = Math.round(h * k);
+  c.getContext("2d")!.drawImage(img, 0, 0, c.width, c.height);
+  return { data: c.toDataURL("image/jpeg", 0.85), w, h };
+}
+
+/** Curvas por ecuación y desde archivo, DXF y SVG, calcos */
+const SketchFiles: Component<{ ui: CadUi; store: CadStore }> = (props) => {
+  const ui = props.ui;
+  const sketch = () => ui.session()!.sketch;
+  const [kind, setKind] = createSignal<"explicit" | "parametric">("explicit");
+  const [fx, setFx] = createSignal("10 * sin(x / 10)");
+  const [fy, setFy] = createSignal("20 * sin(t)");
+  const [from, setFrom] = createSignal(0);
+  const [to, setTo] = createSignal(60);
+  const [samples, setSamples] = createSignal(40);
+  const [asLines, setAsLines] = createSignal(false);
+  const [calLength, setCalLength] = createSignal(100);
+  const params = () => Object.fromEntries((props.store.result()?.parameters ?? []).filter((p) => p.value != null).map((p) => [p.key, p.value!]));
+  const name = () => props.store.doc()?.features.find((f) => f.id === ui.session()?.feature)?.name ?? "sketch";
+
+  /** Puntos → una spline por ellos (cerrada si vuelve al comienzo) o una polilínea */
+  const addPoints = (pts: P2[], lines: boolean) => {
+    const closed = pts.length > 2 && Math.hypot(pts[0][0] - pts[pts.length - 1][0], pts[0][1] - pts[pts.length - 1][1]) < 1e-9;
+    let made: number[] = [];
+    ui.change((sk) => {
+      made = lines
+        ? addShapes(sk, pts.slice(1).map((p, i) => ({ kind: "line" as const, a: pts[i], b: p })))
+        : addShapes(sk, [{ kind: "spline", points: pts, closed }]);
+    });
+    ui.setSelection(made);
+  };
+  const addCurve = () => {
+    const pts = sampleCurve({ kind: kind(), fx: fx(), fy: fy(), from: from(), to: to(), samples: samples() }, params());
+    if (typeof pts === "string") return ui.setMessage(pts);
+    ui.setMessage(undefined);
+    addPoints(pts, false);
+  };
+  const fromCoordinates = async () => {
+    const f = await pickFile(".csv,.txt,.xyz,.dat,text/plain", "text");
+    if (!f) return;
+    const pts = parseCoordinates(f.content);
+    if (typeof pts === "string") return ui.setMessage(pts);
+    addPoints(pts, asLines());
+    ui.setMessage(`${pts.length} puntos de ${f.name}`);
+  };
+  const importDxf = async () => {
+    const f = await pickFile(".dxf", "text");
+    if (!f) return;
+    const r = parseDxf(f.content);
+    if (typeof r === "string") return ui.setMessage(r);
+    let made: number[] = [];
+    ui.change((sk) => (made = addShapes(sk, r.shapes)));
+    ui.setSelection(made);
+    const skipped = Object.entries(r.skipped).map(([k, n]) => `${n} ${k}`);
+    ui.setMessage(`${made.length} entidades de ${f.name}${skipped.length ? ` (salteadas: ${skipped.join(", ")})` : ""}`);
+  };
+  const exportAs = async (ext: "dxf" | "svg") => {
+    const path = await save({ filters: [{ name: ext.toUpperCase(), extensions: [ext] }], defaultPath: `${name().replace(/[^\p{L}\p{N}_-]+/gu, "_") || "sketch"}.${ext}` });
+    if (!path) return;
+    try {
+      const bytes = await invoke<number>("cad_write_text", { path, content: ext === "dxf" ? sketchToDxf(sketch()) : sketchToSvg(sketch()) });
+      ui.setMessage(`Exportado (${Math.max(1, Math.round(bytes / 1024))} KB)`);
+    } catch (e) {
+      ui.setMessage(String(e));
+    }
+  };
+  const addImage = async () => {
+    const f = await pickFile("image/*", "data");
+    if (!f) return;
+    try {
+      const img = await shrinkImage(f.content, f.size);
+      // 100 mm de ancho para empezar (después se calibra con dos puntos)
+      ui.change((sk) => {
+        const id = Math.max(0, ...(sk.images ?? []).map((i) => i.id)) + 1;
+        sk.images = [...(sk.images ?? []), { id, name: f.name, data: img.data, at: [0, 0], width: 100, height: (100 * img.h) / img.w, angle: 0, opacity: 0.6 }];
+      });
+      ui.setMessage("Calco agregado: calibrarlo con dos puntos de medida conocida");
+    } catch (e) {
+      ui.setMessage(String(e));
+    }
+  };
+  const setImage = (id: number, patch: Partial<SketchImage>) =>
+    ui.change((sk) => {
+      sk.images = (sk.images ?? []).map((i) => (i.id === id ? { ...i, ...patch } : i));
+    });
+  /** Escala el calco para que lo marcado mida `calLength` (desde el primer punto marcado) */
+  const applyCalibration = () => {
+    const cal = ui.calibration();
+    if (!cal?.a || !cal.b) return;
+    const d = Math.hypot(cal.b[0] - cal.a[0], cal.b[1] - cal.a[1]);
+    if (!(d > 1e-9) || !(calLength() > 0)) return ui.setMessage("Marcar dos puntos distintos y una medida positiva");
+    const k = calLength() / d;
+    const a = cal.a;
+    ui.change((sk) => {
+      sk.images = (sk.images ?? []).map((i) =>
+        i.id === cal.image ? { ...i, width: i.width * k, height: i.height * k, at: [a[0] + (i.at[0] - a[0]) * k, a[1] + (i.at[1] - a[1]) * k] as P2 } : i,
+      );
+    });
+    ui.setCalibration(undefined);
+    ui.setMessage(`Calco escalado ×${+k.toFixed(4)}`);
+  };
+
+  return (
+    <Section title="Archivos y fórmulas">
+      <div class="space-y-1.5" aria-label="Curva por ecuación">
+        <Select
+          options={[
+            { value: "explicit", label: "y = f(x)" },
+            { value: "parametric", label: "x(t), y(t)" },
+          ]}
+          value={kind()}
+          onChange={(v) => setKind(v as "explicit" | "parametric")}
+        />
+        <input
+          aria-label={kind() === "explicit" ? "y(x)" : "x(t)"}
+          class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+          value={fx()}
+          placeholder={kind() === "explicit" ? "y = …x…" : "x = …t…"}
+          onChange={(e) => setFx(e.currentTarget.value)}
+        />
+        <Show when={kind() === "parametric"}>
+          <input
+            aria-label="y(t)"
+            class="w-full px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+            value={fy()}
+            placeholder="y = …t…"
+            onChange={(e) => setFy(e.currentTarget.value)}
+          />
+        </Show>
+        <Num label={kind() === "explicit" ? "x desde" : "t desde"} step={1} value={from()} onCommit={setFrom} />
+        <Num label="hasta" step={1} value={to()} onCommit={setTo} />
+        <Num label="Puntos" step={5} min={2} value={samples()} onCommit={(v) => setSamples(Math.max(2, Math.round(v)))} />
+        <p class="text-[11px] text-text-dim">
+          Con + − * / ^, sin cos tan sqrt abs exp ln log, pi y los parámetros del diseño; ángulos en radianes.
+        </p>
+        <Button size="sm" onClick={addCurve}>
+          Agregar curva
+        </Button>
+      </div>
+      <div class="space-y-1.5 border-t border-border pt-1.5">
+        <div class="flex flex-wrap items-center gap-1.5">
+          <Button size="sm" title="Un punto por fila: x, y (o x; y con coma decimal); la z se ignora" onClick={() => void fromCoordinates()}>
+            Curva desde archivo…
+          </Button>
+          <Checkbox small label="Como polilínea" checked={asLines()} onChange={setAsLines} />
+        </div>
+        <div class="flex flex-wrap gap-1.5">
+          <Button size="sm" title="Líneas, arcos, círculos, polilíneas, splines, elipses y puntos (DWG no: guardarlo como DXF)" onClick={() => void importDxf()}>
+            Importar DXF…
+          </Button>
+          <Button size="sm" onClick={() => void exportAs("dxf")}>
+            Exportar DXF
+          </Button>
+          <Button size="sm" onClick={() => void exportAs("svg")}>
+            Exportar SVG
+          </Button>
+        </div>
+      </div>
+      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Calcos">
+        <Button size="sm" title="Una imagen de referencia para dibujar encima (solo se ve al editar el sketch)" onClick={() => void addImage()}>
+          Agregar calco…
+        </Button>
+        <For each={sketch().images ?? []}>
+          {(im) => (
+            <div class="space-y-1 rounded border border-border p-1.5" data-sketch-image={im.id}>
+              <div class="flex items-center gap-1.5 text-xs">
+                <span class="flex-1 truncate text-text-muted" title={im.name}>
+                  {im.name}
+                </span>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  title="Clic en dos puntos de la imagen y después su medida real"
+                  onClick={() => {
+                    ui.setCalibration({ image: im.id });
+                    ui.setTool("calibrate");
+                    ui.setMessage("Clic en dos puntos de la imagen a una distancia conocida");
+                  }}
+                >
+                  Calibrar
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.images = (sk.images ?? []).filter((i) => i.id !== im.id)))}>
+                  Quitar
+                </Button>
+              </div>
+              <Show when={ui.calibration()?.image === im.id && ui.calibration()?.b}>
+                <div class="flex items-end gap-1.5">
+                  <div class="flex-1 min-w-0">
+                    <Num label="Eso mide" suffix="mm" step={1} value={calLength()} onCommit={setCalLength} />
+                  </div>
+                  <Button size="sm" variant="primary" onClick={applyCalibration}>
+                    Aplicar la medida
+                  </Button>
+                </div>
+              </Show>
+              <Num label="Ancho" suffix="mm" step={10} value={im.width} onCommit={(v) => v > 0 && setImage(im.id, { width: v, height: (im.height * v) / im.width })} />
+              <Num label="Giro" suffix="°" step={5} value={im.angle ?? 0} onCommit={(v) => setImage(im.id, { angle: v })} />
+              <div class="flex gap-1.5">
+                <Num label="X" suffix="mm" step={5} value={im.at[0]} onCommit={(v) => setImage(im.id, { at: [v, im.at[1]] })} />
+                <Num label="Y" suffix="mm" step={5} value={im.at[1]} onCommit={(v) => setImage(im.id, { at: [im.at[0], v] })} />
+              </div>
+              <Slider value={im.opacity ?? 0.6} min={0.05} max={1} step={0.05} onChange={(v) => setImage(im.id, { opacity: v })} />
+            </div>
+          )}
+        </For>
+      </div>
+    </Section>
+  );
+};
+
+/** Capas, bloques y copiar el sketch entero */
+const SketchOrganize: Component<{ ui: CadUi }> = (props) => {
+  const ui = props.ui;
+  const sketch = () => ui.session()!.sketch;
+  const [blockName, setBlockName] = createSignal("");
+  const [insertAngle, setInsertAngle] = createSignal(0);
+  const [insertScale, setInsertScale] = createSignal(1);
+  const sel = () => ui.selection();
+  /** La copia de bloque elegida (por una de sus curvas o su ancla) */
+  const selectedCopy = () => (sketch().texts ?? []).find((t) => t.block != null && sel().some((id) => t.anchor === id || t.entities.includes(id)));
+  const copies = (block: number) => (sketch().texts ?? []).filter((t) => t.block === block).length;
+  const setLayerProp = (id: number, patch: Partial<SketchLayer>) =>
+    ui.change((sk) => {
+      sk.layers = (sk.layers ?? []).map((l) => (l.id === id ? { ...l, ...patch } : l));
+    });
+
+  return (
+    <Section title="Organización">
+      <div class="space-y-1" aria-label="Capas">
+        <div class="flex items-center gap-1.5">
+          <span class="flex-1 text-xs text-text-muted">Capas</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              let id = 0;
+              ui.change((sk) => (id = addLayer(sk, `Capa ${(sk.layers?.length ?? 0) + 1}`)));
+              ui.setActiveLayer(id);
+            }}
+          >
+            Nueva capa
+          </Button>
+        </div>
+        <For each={sketch().layers ?? []}>
+          {(l) => (
+            <div class="flex items-center gap-1 text-xs" data-layer={l.id}>
+              <input
+                type="radio"
+                name="capa-activa"
+                aria-label={`Dibujar en ${l.name}`}
+                title="Lo que se dibuja cae en esta capa"
+                checked={ui.activeLayer() === l.id}
+                onChange={() => ui.setActiveLayer(l.id)}
+              />
+              <input
+                class="flex-1 min-w-0 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                value={l.name}
+                onChange={(e) => setLayerProp(l.id, { name: e.currentTarget.value || l.name })}
+              />
+              <button aria-label={`Ver ${l.name}`} aria-pressed={!l.hidden} class={clsx("px-1 rounded hover:bg-surface", l.hidden && "text-text-dim line-through")} onClick={() => setLayerProp(l.id, { hidden: !l.hidden })}>
+                Ver
+              </button>
+              <button aria-label={`Bloquear ${l.name}`} aria-pressed={!!l.locked} class={clsx("px-1 rounded hover:bg-surface", l.locked ? "text-warning" : "text-text-dim")} onClick={() => setLayerProp(l.id, { locked: !l.locked })}>
+                {l.locked ? "Bloq." : "Libre"}
+              </button>
+              <IconButton
+                aria-label={`Borrar ${l.name}`}
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  ui.change((sk) => removeLayer(sk, l.id));
+                  if (ui.activeLayer() === l.id) ui.setActiveLayer(undefined);
+                }}
+              >
+                <Icons.X size={11} />
+              </IconButton>
+            </div>
+          )}
+        </For>
+        <Show when={(sketch().layers?.length ?? 0) > 0}>
+          <label class="flex items-center gap-1.5 text-xs text-text-muted">
+            <input type="radio" name="capa-activa" checked={ui.activeLayer() === undefined} onChange={() => ui.setActiveLayer(undefined)} />
+            Dibujar sin capa
+          </label>
+          <Show when={sel().length > 0}>
+            <div class="flex flex-wrap items-center gap-1 text-xs" aria-label="Pasar lo elegido a una capa">
+              <span class="text-text-muted">Pasar lo elegido a:</span>
+              <For each={sketch().layers ?? []}>
+                {(l) => (
+                  <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => setLayer(sk, sel(), l.id))}>
+                    {l.name}
+                  </Button>
+                )}
+              </For>
+              <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => setLayer(sk, sel(), null))}>
+                Sin capa
+              </Button>
+            </div>
+          </Show>
+        </Show>
+      </div>
+      <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Bloques">
+        <Show when={sel().length > 0 && !selectedCopy()}>
+          <div class="flex items-center gap-1.5">
+            <input
+              aria-label="Nombre del bloque"
+              class="flex-1 min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+              placeholder={`Bloque ${(sketch().blocks?.length ?? 0) + 1}`}
+              value={blockName()}
+              onInput={(e) => setBlockName(e.currentTarget.value)}
+            />
+            <Button
+              size="sm"
+              title="Lo elegido pasa a ser un bloque (origen: el punto elegido o el centro); se inserta varias veces y editarlo cambia todas las copias"
+              onClick={() => {
+                const ids = sel();
+                const nm = blockName().trim() || `Bloque ${(sketch().blocks?.length ?? 0) + 1}`;
+                let msg: string | undefined;
+                ui.change((sk) => {
+                  const r = createBlock(sk, ids, nm);
+                  if (typeof r === "string") msg = r;
+                });
+                ui.setMessage(msg);
+                if (!msg) setBlockName("");
+              }}
+            >
+              Hacer bloque
+            </Button>
+          </div>
+        </Show>
+        <Show when={selectedCopy()}>
+          {(t) => (
+            <Button size="sm" title="La copia queda suelta (con las restricciones del bloque) y deja de cambiar con él" onClick={() => ui.change((sk) => explodeBlock(sk, t().id))}>
+              Desarmar la copia de «{t().text}»
+            </Button>
+          )}
+        </Show>
+        <For each={sketch().blocks ?? []}>
+          {(b) => (
+            <div class="flex items-center gap-1 text-xs" data-block={b.id}>
+              <span class="flex-1 truncate text-text-muted">
+                {b.name} <span class="text-text-dim">· {copies(b.id)} copias</span>
+              </span>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  ui.setBlockToInsert({ block: b.id, angle: insertAngle(), scale: insertScale() });
+                  ui.setTool("block_insert");
+                  ui.setMessage(`Clic donde va el origen de «${b.name}» (Esc termina)`);
+                }}
+              >
+                Insertar
+              </Button>
+              <Button size="sm" variant="ghost" disabled={!!ui.blockEdit()} onClick={() => ui.editBlock(b.id)}>
+                Editar
+              </Button>
+              <Show when={copies(b.id) === 0}>
+                <IconButton aria-label={`Borrar el bloque ${b.name}`} size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.blocks = (sk.blocks ?? []).filter((x) => x.id !== b.id)))}>
+                  <Icons.X size={11} />
+                </IconButton>
+              </Show>
+            </div>
+          )}
+        </For>
+        <Show when={(sketch().blocks?.length ?? 0) > 0}>
+          <div class="space-y-1" aria-label="Copias nuevas">
+            <Num label="Giro" suffix="°" step={15} value={insertAngle()} onCommit={(v) => {
+              setInsertAngle(v);
+              const bi = ui.blockToInsert();
+              if (bi) ui.setBlockToInsert({ ...bi, angle: v });
+            }} />
+            <Num label="Escala" suffix="×" step={0.5} value={insertScale()} onCommit={(v) => {
+              if (!(v > 0)) return;
+              setInsertScale(v);
+              const bi = ui.blockToInsert();
+              if (bi) ui.setBlockToInsert({ ...bi, scale: v });
+            }} />
+          </div>
+        </Show>
+      </div>
+      <div class="border-t border-border pt-1.5">
+        <Button
+          size="sm"
+          title="Para pegarlo como un sketch nuevo en otro plano o cara («Pegar sketch» en la barra de Diseño)"
+          onClick={() => {
+            const copy: Sketch = structuredClone(sketch());
+            // Lo ligado al modelo y lo que nombra otras operaciones no viaja
+            breakLinks(copy, copy.entities.map((e) => e.id));
+            copy.constraints = copy.constraints.filter((c) => c.type !== "pierce");
+            delete copy.x_axis;
+            delete copy.flip_normal;
+            ui.setSketchCopy(copy);
+            ui.setMessage("Sketch copiado: «Pegar sketch» en la barra de Diseño");
+          }}
+        >
+          Copiar el sketch entero
+        </Button>
+      </div>
+    </Section>
+  );
+};
+
 const SplineTools: Component<{ ui: CadUi }> = (props) => {
   const ui = props.ui;
   const [tol, setTol] = createSignal(0.05);

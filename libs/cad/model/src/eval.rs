@@ -1664,6 +1664,12 @@ impl Ctx<'_> {
         let mut left: Vec<(u32, (u32, u32))> = ids.iter().map(|&i| ends(i).map(|e| (i, e)).ok_or_else(|| "el camino tiene que ser de líneas, arcos o splines abiertas".to_string())).collect::<R<_>>()?;
         // Arranque: una entidad con un extremo que no comparte con nadie
         let degree = |p: u32, l: &[(u32, (u32, u32))]| l.iter().filter(|(_, (a, b))| *a == p || *b == p).count();
+        // Un camino es una sola cadena: sin puntos donde lleguen tres tramos o más
+        if let Some((_, (a, b))) = left.iter().find(|(_, (a, b))| degree(*a, &left) > 2 || degree(*b, &left) > 2) {
+            let p = if degree(*a, &left) > 2 { *a } else { *b };
+            let at = s.sketch.point(p).map(|q| format!(" en ({:.2}, {:.2})", q[0], q[1])).unwrap_or_default();
+            return Err(format!("el camino tiene ramas{at}: llegan {} tramos al mismo punto (elegir solo las entidades del camino)", degree(p, &left)));
+        }
         let first = left
             .iter()
             .position(|(_, (a, b))| degree(*a, &left) == 1 || degree(*b, &left) == 1)
@@ -1847,6 +1853,7 @@ impl Ctx<'_> {
             }
             FeatureKind::Revolve(r) => {
                 let axis = self.axis("axis", &r.axis)?;
+                self.check_revolve_profile(r.sketch, &r.regions, axis)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
                 let angle = r.angle.to_radians();
                 if angle.abs() < 1e-9 {
@@ -2537,10 +2544,10 @@ impl Ctx<'_> {
                 }
                 let mut faces = Vec::new();
                 let mut samples = Vec::new();
-                for s in &l.sections {
+                for (i, s) in l.sections.iter().enumerate() {
                     let (fs, _, sm) = self.profile(s.sketch, &s.regions)?;
                     if fs.len() != 1 {
-                        return Err("cada sección tiene que ser una sola región".into());
+                        return Err(format!("la sección {} tiene {} regiones: cada sección tiene que ser una sola (elegir cuál)", i + 1, fs.len()));
                     }
                     faces.extend(fs);
                     samples.push(sm);
@@ -3111,6 +3118,34 @@ impl Ctx<'_> {
     /// Caras B-Rep de las regiones elegidas, el punto medio (en el mundo) de
     /// cada entidad que las borde y un punto interior de cada región.
     #[allow(clippy::type_complexity)]
+    /// La revolución no puede tener perfil a los dos lados del eje: el sólido
+    /// se cortaría a sí mismo. Tocarlo o estar sobre él está bien.
+    fn check_revolve_profile(&self, sketch: FeatureId, sel: &RegionSelection, axis: Axis) -> R<()> {
+        let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
+        let n = s.plane.normal;
+        let dir = normalize(axis.dir);
+        // Eje perpendicular al plano del sketch: no hay lados
+        if norm(cross(dir, n)) < 1e-9 {
+            return Ok(());
+        }
+        let regions = self.selected_regions(s, sel)?;
+        let size = regions.iter().flat_map(|r| r.outer.polygon.iter()).fold(1.0f64, |m, p| m.max(p[0].abs()).max(p[1].abs()));
+        let tol = 1e-6 * size;
+        let (mut lo, mut hi) = (0.0f64, 0.0f64);
+        for r in &regions {
+            for p in &r.outer.polygon {
+                let w = s.plane.to_world(*p);
+                let side = dot(cross(dir, sub(w, axis.origin)), n);
+                lo = lo.min(side);
+                hi = hi.max(side);
+            }
+        }
+        if lo < -tol && hi > tol {
+            return Err("el perfil cruza el eje de revolución: el sólido se cortaría a sí mismo (dejar el perfil de un solo lado del eje)".into());
+        }
+        Ok(())
+    }
+
     fn profile(&self, sketch: FeatureId, sel: &RegionSelection) -> R<(Vec<Shape>, Vec<(u32, P3)>, Vec<P3>)> {
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch no está calculado")?;
         let regions = self.selected_regions(s, sel)?;

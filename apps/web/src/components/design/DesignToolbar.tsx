@@ -207,6 +207,9 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
       <Show when={!ui.assemblyMode()}>
         <div class="flex items-center gap-0.5 flex-wrap">
           <For each={main}>{(t) => <ToolButton tool={t} disabled={!!t.needsBody && !hasBody()} />}</For>
+          <Show when={ui.sketchCopy()}>
+            <ToolButton tool={{ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" }} disabled={false} />
+          </Show>
           <Sep />
           <ToolMenu label="Sólidos" tools={solids} hasBody={hasBody()} />
           <ToolMenu label="Modificar" tools={modify} hasBody={hasBody()} />

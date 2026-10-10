@@ -651,3 +651,11 @@ cargo test -p cad-model
   dibujar.
   Pruebas: node `sketchInput.test.mjs` y `sketchTransform.test.mjs`, Rust
   `sketch_x_axis_and_flipped_normal`, e2e "asistencia al dibujo…" y "plano del sketch…".
+- **2026-10-09 Archivos, fórmulas y organización del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+  fases 18 y 19; con esto el plan del sketch está completo): curvas por ecuación con los
+  parámetros del diseño, desde CSV/TXT, importar DXF, exportar DXF y SVG, calcos con escala
+  por dos puntos; bloques (copias rígidas que cambian juntas al editar el bloque), capas
+  ocultas o bloqueadas, copiar y pegar el sketch entero; validación de revolución (perfil a
+  los dos lados del eje), barrido (camino con ramas) y transición (sección con varias
+  regiones). Pruebas: node `sketchFormula`, `sketchFiles`, `sketchBlocks`; Rust
+  `validation.rs`; e2e "archivos y fórmulas…" y "organización…".

@@ -93,6 +93,9 @@ export function selectedEntities(s: Sketch, ids: number[]): SketchEntity[] {
 export function heldEntities(s: Sketch): Set<number> {
   const out = new Set((s.uses ?? []).map((u) => u.entity));
   for (const c of s.constraints) if (c.type === "lock") out.add(c.entity);
+  // Las de capas bloqueadas tampoco
+  const locked = new Set((s.layers ?? []).filter((l) => l.locked).map((l) => l.id));
+  for (const e of s.entities) if (e.layer != null && locked.has(e.layer)) out.add(e.id);
   return out;
 }
 

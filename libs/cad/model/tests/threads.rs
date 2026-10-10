@@ -91,7 +91,7 @@ fn plate(doc: &mut Document, op: BodyOp) -> (FeatureId, FeatureId) {
     let mut s = Sketch::default();
     for x in [-10.0, 10.0] {
         let p = s.add_point(x, 0.0);
-        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Point { point: p }, construction: false, infinite: false, axis: false });
+        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Point { point: p }, construction: false, infinite: false, axis: false, layer: None });
         s.next_id += 1;
     }
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Face { face: ev.face_ref(top).unwrap() }, offset: 0.0, sketch: s });

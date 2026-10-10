@@ -19,6 +19,7 @@ import {
   type P2,
   type PartId,
   type PlaneSpec,
+  type Sketch,
   type PrimitiveShape,
   type RegionSelection,
 } from "./cad";
@@ -41,13 +42,16 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   // ─── Agregar operaciones ─────────────────────────────────────────────
 
-  const newSketch = async (plane: PlaneSpec) => {
-    const id = await store.addFeature({ type: "sketch", plane, offset: 0, sketch: emptySketch() });
+  const createSketch = async (plane: PlaneSpec, content?: Sketch) => {
+    const id = await store.addFeature({ type: "sketch", plane, offset: 0, sketch: content ?? emptySketch() });
+    // Pegado: se calcula antes de abrirlo (necesita su plano)
+    if (content) await store.settled();
     ui.editSketch(id);
   };
 
-  /** Nuevo sketch en el plano o la cara elegida; sin elegir, se pide dónde */
-  const startSketch = async () => {
+  /** Nuevo sketch en el plano o la cara elegida; sin elegir, se pide dónde. Con `content`, pega ese dibujo */
+  const startSketch = async (content?: Sketch) => {
+    const newSketch = (plane: PlaneSpec) => createSketch(plane, content);
     const picks = ui.picks();
     const plane = picks.find((p) => p.kind === "plane");
     if (plane?.kind === "plane") {
@@ -65,7 +69,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       ui.clearPicks();
       return newSketch({ type: "face", face: ref });
     }
-    ui.setPick({ kind: "place", prompt: "Elegir dónde va el sketch: un plano base o una cara plana", done: (spec) => void newSketch(spec) });
+    ui.setPick({ kind: "place", prompt: content ? "Elegir dónde se pega el sketch: un plano base o una cara plana" : "Elegir dónde va el sketch: un plano base o una cara plana", done: (spec) => void newSketch(spec) });
+  };
+
+  /** Pega el sketch entero copiado como un sketch nuevo (en el plano elegido o se pide uno) */
+  const pasteSketch = () => {
+    const copy = ui.sketchCopy();
+    if (!copy) return say("No hay un sketch copiado («Copiar el sketch entero» en el panel del sketch)");
+    void startSketch(structuredClone(copy));
   };
 
   /** Sketch envuelto en la cara elegida (o se pide una) */
@@ -508,6 +519,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     notice,
     say,
     startSketch,
+    pasteSketch,
     addExtrude,
     addRevolve,
     addSweep,

@@ -2,7 +2,7 @@
 
 Plan del sketch, rearmado el 2026-10-09 para cubrir **toda** la lista de funciones de sketch
 de un CAD de referencia (Onshape, SolidWorks, Fusion) que entregó el usuario. Reemplaza a los
-planes anteriores (sketch completo y anclajes). Las fases 1–17 y 20 están hechas (la 5 pasó a
+planes anteriores (sketch completo y anclajes). Las fases 1–20 están hechas (el plan está completo) (la 5 pasó a
 ser la 8). Lo hecho está también en la bitácora de [ROADMAP.md](ROADMAP.md). Al final, la
 **cobertura**: cada ítem de la lista con su estado o la fase que lo trae.
 
@@ -224,6 +224,33 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     `sketchCurves.test.mjs` (7), `sketchSplines.test.mjs` (6), `sketchText.test.mjs` (+2); e2e
     "curvas: spline por polos…".*
 
+18. **Archivos y fórmulas**: curvas por ecuación y desde archivo, calco, DXF y SVG. *Hecha el
+    2026-10-09: `lib/sketchFormula.ts` (evaluador propio: + − * / ^, funciones, `pi`,
+    multiplicación implícita, los parámetros del diseño; `y = f(x)` o `x(t), y(t)` muestreadas
+    en una spline por puntos de paso). `lib/sketchFiles.ts`: coordenadas de CSV/TXT (coma,
+    punto y coma con coma decimal, tabulación, espacios; spline o polilínea), lector DXF
+    ($INSUNITS; LINE, ARC, CIRCLE, LWPOLYLINE y POLYLINE con curvatura, SPLINE por polos con
+    nudos y pesos o por puntos de paso, ELLIPSE, POINT; extremos compartidos para que cierren
+    las regiones; lo demás se cuenta como salteado) y escritores DXF R12 (capas del sketch y
+    CONSTRUCCION) y SVG. Los archivos se leen con el selector del navegador (anda en Tauri y en
+    el arnés). Calcos: `Sketch.images` (URL de datos; las grandes se achican a 1600 px en
+    JPEG porque viajan con el sketch), con ancho, giro, posición y transparencia; «Calibrar»
+    = dos clics y la medida real. Solo se ven al editar el sketch. e2e "archivos y fórmulas…".*
+
+19. **Organización**: copiar el sketch entero, bloques, capas, validación según la operación.
+    *Hecha el 2026-10-09: `lib/sketchBlocks.ts`. Bloques en `Sketch.blocks` (un sketch chico con
+    su origen); cada copia es un `SketchText` con `block`, rígida con su ancla como los textos
+    (sin las restricciones internas, que quedan en el bloque). «Hacer bloque» con lo elegido,
+    «Insertar» (giro y escala), «Editar» abre el bloque solo en la misma sesión y al terminar
+    rehace todas las copias (mismo ancla, giro y escala), «Desarmar» deja una copia suelta con
+    las restricciones del bloque. Capas en `Sketch.layers` y `SketchEntity.layer`: capa activa
+    para lo nuevo, ocultar (no se dibuja ni se elige ni ancla) y bloquear (no se elige ni se
+    mueve ni se borra). «Copiar el sketch entero» y «Pegar sketch» en la barra de Diseño (sin
+    lo ligado al modelo ni las perforaciones). Validación en el backend: la revolución con el
+    perfil a los dos lados del eje es un error claro, el barrido avisa si el camino tiene
+    ramas (dónde y cuántos tramos) y la transición dice qué sección tiene más de una región
+    (`model/tests/validation.rs`). e2e "organización…".*
+
 20. **Sketch 3D**: líneas, arcos y splines en el espacio con restricciones 3D, sketch sobre
     superficie curva, perforación. *Hecha el 2026-10-09: operación `Sketch3d`
     (`cad_model::sketch3d`): puntos xyz, línea, arco por 3 puntos, spline por puntos y punto;
@@ -247,32 +274,9 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
     (superficie, derivadas y normal en (u, v)) y `cad_plane_hits`. Pruebas: Rust
     `model/tests/sketch3d.rs` (7); e2e "sketch 3D…".*
 
-## Fases que faltan
-
-Orden propuesto: primero lo que más se usa a diario y lo que sostiene a lo demás.
-
-### 18. Archivos y fórmulas (M)
-
-- **Curva por ecuación** explícita `y = f(x)` y paramétrica `x(t), y(t)` (spline por muestreo;
-  usa los parámetros del documento).
-- **Curva desde un archivo de coordenadas** (CSV o TXT).
-- **Imagen de referencia (calco)** con escala (dos puntos y una medida) y rotación.
-- **Importar DXF** al sketch (líneas, arcos, círculos, polilíneas, splines). DWG no: formato
-  cerrado (convertir a DXF antes).
-- **Exportar el sketch a DXF y SVG** (reusar `drawing.ts`).
-
-### 19. Organización (M)
-
-- **Copiar y pegar un sketch entero** (operación nueva con la misma geometría, en otro plano).
-- **Bloques reutilizables**: un grupo de entidades con su propio origen que se inserta varias
-  veces; editar el bloque cambia todas las copias. Hace las veces de **subsketch**.
-- **Capas o grupos**: ocultar o bloquear por grupo.
-- **Validación según la operación**: revolución (el perfil no cruza el eje), barrido (camino
-  sin ramas), transición (una región por sección).
-
 ## Cobertura de la lista
 
-✅ hecho · número = fase que lo trae.
+✅ hecho: la lista entera está cubierta.
 
 **Soporte y planos** — ✅ planos de origen, de referencia y caras planas; cambiar el plano;
 origen y ejes propios; vista normal al entrar; sketch 3D, sobre superficie curva; dirección
@@ -285,8 +289,8 @@ recta por centro y en arco por centro, spline por puntos de paso, texto (fuente 
 línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en arco (3 puntos),
 estilo y alineación de texto, texto sobre curva, spline por puntos de control, manijas de
 tangencia (la curvatura, con los polos), spline de ajuste, línea central, polilínea
-línea-arco. — 18:
-curvas por ecuación explícita y paramétrica, desde archivo, imagen de calco, importar DXF/DWG.
+línea-arco, curvas por ecuación explícita y paramétrica, desde archivo, imagen de calco,
+importar DXF (DWG no: formato cerrado).
 
 **Edición** — ✅ recortar, recortar al más cercano, extender, dividir, equidistante simple y de
 cadena, redondeo 2D, simetría, patrón lineal en una y dos direcciones, circular, mover, copiar,
@@ -325,7 +329,7 @@ encadenado, activar/desactivar inferencias, rejilla configurable con anclaje, co
 absolutas, relativas y polares.
 
 **Perfiles y regiones** — ✅ perfiles cerrados, regiones, islas, elegir regiones, contornos
-(cadena), abiertos, cruces, superpuestas, extremos sueltos, sombreado. — 19: validación según la
+(cadena), abiertos, cruces, superpuestas, extremos sueltos, sombreado, validación según la
 operación.
 
 **Selección** — ✅ clic, ventana, cruce, cadena, por tipo, construcción, subdefinidas,
@@ -337,8 +341,8 @@ inflexión y radio mínimo.
 
 **Gestión** — ✅ crear, editar, terminar, descartar, renombrar, copiar y pegar entidades entre
 sketches, sketch compartido entre operaciones, deshacer y rehacer, lista de entidades, lista de
-restricciones, propiedades. — 18: exportar a DXF/SVG. — 19: copiar y pegar el sketch entero,
-bloques, subsketches, capas.
+restricciones, propiedades, exportar a DXF/SVG, copiar y pegar el sketch entero, bloques,
+subsketches (editar un bloque), capas.
 
 ## Pruebas
 

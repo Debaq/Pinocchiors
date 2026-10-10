@@ -10,6 +10,7 @@ import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type S
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke } from "../../lib/sketchEdit";
+import { insertBlock, layerState } from "../../lib/sketchBlocks";
 import { gridSegments, parseCoords, snapToGrid } from "../../lib/sketchInput";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
 import { constraintGlyphs } from "../../lib/sketchGlyphs";
@@ -235,7 +236,27 @@ function segDist(p: P2, a: P2, b: P2): number {
 }
 
 /** Entidad o punto bajo el cursor (ids), los puntos primero */
+/**
+ * El sketch sin lo de capas ocultas (y, con `locked`, tampoco lo de capas
+ * bloqueadas): lo que se ve, o lo que se puede elegir y arrastrar. Los puntos
+ * que solo usa lo sacado también se van.
+ */
+function withoutLayers(s: Sketch, locked: boolean): Sketch {
+  const { hidden, locked: lk } = layerState(s);
+  const out = new Set([...hidden, ...(locked ? lk : [])]);
+  if (!out.size) return s;
+  const used = new Set<number>();
+  const usedOut = new Set<number>();
+  for (const e of s.entities) for (const p of geometryPoints(e.geometry)) (out.has(e.id) ? usedOut : used).add(p);
+  return {
+    ...s,
+    entities: s.entities.filter((e) => !out.has(e.id)),
+    points: s.points.filter((p) => used.has(p.id) || !usedOut.has(p.id)),
+  };
+}
+
 function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number } {
+  s = withoutLayers(s, true);
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
   let best: { id: number; d: number } | undefined;
   for (const q of withPoints ? s.points : []) {
@@ -916,6 +937,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       if (t === "slot" && an.length === 1) preview.push([an[0], c]);
       if (t === "centerline" && an.length === 1) preview.push([an[0], c]);
+      const cal = ui.calibration();
+      if (t === "calibrate" && cal?.a && !cal.b) preview.push([cal.a, c]);
       if (t === "slot" && an.length === 2) preview.push(slotOutline(an[0], an[1], slotRadius(an[0], an[1], c)));
     }
     const as = ui.assist();
@@ -929,9 +952,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     }
     viewer.setSketch({
       plane: s.plane,
-      sketch: s.sketch,
+      sketch: withoutLayers(s.sketch, false),
       regions: s.regions,
       grid,
+      images: s.sketch.images,
       selected: ui.selection(),
       hover: [
         ...ui.hoverIds(),
@@ -1011,7 +1035,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     // Dibujando una línea: puede salir paralela, perpendicular o tangente
     // (la línea desde el centro sale del centro con la misma dirección)
     const from = ui.tool() === "line" || ui.tool() === "line_mid" ? chain()?.last : undefined;
-    const r = infer(s.sketch, p, viewer.pixelSizeMm() * 8, {
+    const r = infer(withoutLayers(s.sketch, false), p, viewer.pixelSizeMm() * 8, {
       exclude: dragging !== undefined ? [dragging] : [],
       from,
       solid: solid(),
@@ -1597,6 +1621,28 @@ export const CadView: Component<CadViewProps> = (props) => {
       ui.setTool("select");
       return;
     }
+    if (t === "block_insert") {
+      const bi = ui.blockToInsert();
+      if (!bi) return ui.setTool("select");
+      let msg: string | undefined;
+      ui.change((sk) => {
+        const r = insertBlock(sk, bi.block, hit.p, bi.angle, bi.scale);
+        if (typeof r === "string") msg = r;
+      });
+      // Sigue insertando copias hasta Esc
+      return ui.setMessage(msg);
+    }
+    if (t === "calibrate") {
+      const cal = ui.calibration();
+      if (!cal) return ui.setTool("select");
+      if (!cal.a || cal.b) ui.setCalibration({ image: cal.image, a: hit.p });
+      else {
+        ui.setCalibration({ ...cal, b: hit.p });
+        ui.setMessage("Escribir en el panel cuánto mide eso de verdad");
+        ui.setTool("select");
+      }
+      return;
+    }
     if (TRANSFORMS.includes(t)) {
       if (!ui.selection().length) return ui.setMessage("Elegir primero (con «Elegir») lo que se transforma");
       const pts = anchor().map((a) => a.p);
@@ -2046,13 +2092,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       return ins;
     };
     const scr = (p: P2) => viewer!.screenOf(planeToWorld(s.plane, p));
+    // Lo de capas ocultas o bloqueadas no se elige
+    const pick = withoutLayers(s.sketch, true);
     const point = new Map(s.sketch.points.map((q) => [q.id, [q.x, q.y] as P2]));
     const found: number[] = [];
-    for (const e of s.sketch.entities) {
+    for (const e of pick.entities) {
       const pl = e.geometry.type === "point" ? [point.get(e.geometry.point)].filter((p): p is P2 => !!p) : entityPolyline(e.geometry, point);
       if (pl?.length && pl.map(scr).every(inside)) found.push(e.id);
     }
-    for (const q of s.sketch.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
+    for (const q of pick.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
     ui.setSelection((cur) => (lassoAdditive ? [...new Set([...cur, ...found])] : found));
   };
   /** Estirar: los puntos dentro de la caja (en cualquier sentido) son los que se corren */
@@ -2111,16 +2159,18 @@ export const CadView: Component<CadViewProps> = (props) => {
       const side = (p: [number, number], q: [number, number], o: [number, number]) => Math.sign((q[0] - p[0]) * (o[1] - p[1]) - (q[1] - p[1]) * (o[0] - p[0]));
       return edges.some(([p, q]) => side(a, c, p) !== side(a, c, q) && side(p, q, a) !== side(p, q, c));
     };
+    // Lo de capas ocultas o bloqueadas no se elige
+    const pick = withoutLayers(s.sketch, true);
     const point = new Map(s.sketch.points.map((q) => [q.id, [q.x, q.y] as P2]));
     const found: number[] = [];
-    for (const e of s.sketch.entities) {
+    for (const e of pick.entities) {
       const poly = e.geometry.type === "point" ? [point.get(e.geometry.point)].filter((p): p is P2 => !!p) : entityPolyline(e.geometry, point);
       if (!poly?.length) continue;
       const sp = poly.map(scr);
       const hit = window ? sp.every(inside) : sp.some(inside) || sp.some((p, i) => i > 0 && crosses(sp[i - 1], p));
       if (hit) found.push(e.id);
     }
-    for (const q of s.sketch.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
+    for (const q of pick.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
     ui.setSelection(additive ? [...new Set([...sketchBoxBefore, ...found])] : found);
   };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
@@ -2363,6 +2413,17 @@ export const CadView: Component<CadViewProps> = (props) => {
   onCleanup(() => window.removeEventListener("keydown", onKey, true));
 
   /** Íconos de las restricciones: en fila junto a lo que atan */
+  /** Restricciones que nombran algo de una capa oculta: no se muestran */
+  const hiddenConstraints = createMemo(() => {
+    const s = ui.session();
+    const out = new Set<number>();
+    if (!s?.sketch.layers?.some((l) => l.hidden)) return out;
+    const hidden = layerState(s.sketch).hidden;
+    s.sketch.constraints.forEach((c, i) => {
+      if (constraintIds(c).some((id) => hidden.has(id))) out.add(i);
+    });
+    return out;
+  });
   const glyphs = createMemo(() => {
     viewTick();
     const s = ui.session();
@@ -2372,6 +2433,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const sel = new Set(ui.selectedConstraints());
     const conflict = new Set(s.report?.conflicting ?? []);
     return constraintGlyphs(s.sketch)
+      .filter((g) => !hiddenConstraints().has(g.index))
       .slice(0, MAX_GLYPHS)
       .map((g) => {
         const k = count.get(g.host) ?? 0;
@@ -2381,8 +2443,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       });
   });
 
+  /** Cotas del sketch en edición (sin las de capas ocultas) */
+  const dimensions = () => allDimensions().filter((d) => !hiddenConstraints().has(d.index));
   /** Cotas del sketch en edición: dónde dibujar cada valor */
-  const dimensions = createMemo(() => {
+  const allDimensions = createMemo(() => {
     viewTick();
     const s = ui.session();
     if (!s || !viewer) return [];
@@ -3283,12 +3347,33 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </For>
               </div>
               <div class="w-px h-5 bg-border mx-1" />
-              <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
-                Terminar sketch
-              </Button>
-              <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
-                Descartar
-              </Button>
+              <Show
+                when={ui.blockEdit()}
+                fallback={
+                  <>
+                    <Button size="sm" variant="primary" onClick={() => void ui.finishSketch()}>
+                      Terminar sketch
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => ui.cancelSketch()}>
+                      Descartar
+                    </Button>
+                  </>
+                }
+              >
+                {(be) => (
+                  <>
+                    <span class="text-xs text-accent px-1" data-block-edit={be().block}>
+                      Bloque «{be().name}»
+                    </span>
+                    <Button size="sm" variant="primary" title="Guarda el bloque: todas sus copias cambian" onClick={() => ui.setMessage(ui.finishBlock())}>
+                      Terminar bloque
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={() => ui.cancelBlock()}>
+                      Descartar bloque
+                    </Button>
+                  </>
+                )}
+              </Show>
             </div>
           )}
         </Show>
