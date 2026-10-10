@@ -64,6 +64,8 @@ export type Pick3d =
   /** Vértice del sólido, por posición (mm) */
   | { kind: "vertex"; at: P3 }
   | { kind: "region"; sketch: number; region: number }
+  /** Un sketch entero (clic en una de sus curvas) */
+  | { kind: "sketch"; sketch: number }
   | { kind: "plane"; plane: BasePlane }
   /** Plano de referencia del historial */
   | { kind: "refplane"; feature: number };

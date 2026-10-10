@@ -1374,6 +1374,17 @@ export const App: Component = () => {
   };
 
   /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen; las reemplazadas, tachadas) */
+  /** Piezas con algo suyo elegido en el visor (una cara o una arista): su fila se marca en el Outliner */
+  const pickedParts = createMemo(() => {
+    const parts = cad.result()?.parts ?? [];
+    const keys = new Set<string>();
+    for (const p of cadUi.picks()) {
+      const inside = (i: number, [a, b]: [number, number]) => i >= a && i < b;
+      const part = p.kind === "face" ? parts.find((x) => inside(p.face, x.faces)) : p.kind === "edge" ? parts.find((x) => inside(p.edge, x.edges)) : undefined;
+      if (part) keys.add(partKey(part.id));
+    }
+    return keys;
+  });
   const objectRows = (): ObjectRow[] => {
     const doc = cad.committed();
     const parts = cad.result()?.parts ?? [];
@@ -1422,7 +1433,7 @@ export const App: Component = () => {
           active: isActive,
           modifications,
           meshLabel: "Malla generada",
-          selected: isActive || extraObjects().includes(o.id),
+          selected: isActive || extraObjects().includes(o.id) || (!!view && pickedParts().has(partKey(view.id))),
           visible: inDesign() ? !view || !partHidden(doc, view) : isActive ? viewSettings().showMesh : !hiddenGhosts().includes(o.id),
           readonly: inDesign() ? !view : !isActive && !o.ui,
           deletable: true,

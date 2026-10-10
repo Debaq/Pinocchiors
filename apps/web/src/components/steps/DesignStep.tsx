@@ -784,6 +784,8 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   const doc = () => store.doc();
   const count = () => doc()?.features.length ?? 0;
   const rollback = () => doc()?.rollback ?? null;
+  /** Sketches con una región o una curva elegida en el visor: su fila se marca como elegida */
+  const pickedSketches = createMemo(() => new Set(props.ui.picks().flatMap((p) => (p.kind === "region" || p.kind === "sketch" ? [p.sketch] : []))));
   /** Hueco donde está la barra de retroceso (al final si no hay) */
   const barAt = () => rollback() ?? count();
   let list: HTMLDivElement | undefined;
@@ -966,7 +968,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       "group flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer select-none",
                       folder() && "ml-3",
                       hidden() && "hidden",
-                      store.selected() === f().id || inRange(i()) ? "bg-accent/20 text-text" : "hover:bg-surface text-text-muted",
+                      store.selected() === f().id || inRange(i()) || pickedSketches().has(f().id) ? "bg-accent/20 text-text" : "hover:bg-surface text-text-muted",
                       (f().suppressed || rolled()) && "opacity-50",
                       drag()?.kind === "feature" && (drag() as { id: number }).id === f().id && "ring-1 ring-accent",
                     )}

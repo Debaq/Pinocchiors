@@ -123,6 +123,39 @@ const scenarios = {
     if (!r.body.valid) throw new Error("sólido inválido");
   },
 
+  async "outliner: lo elegido en el visor se marca en su fila"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    // Una línea suelta (sketch abierto: sin regiones) lejos de la caja
+    await key("l");
+    await b.click(...(await at([12, -15, 0])), { wait: 400 });
+    await b.click(...(await at([18, -15, 0])), { wait: 400 });
+    await key("Escape");
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const name = (await call("cad_get_document")).features.find((f) => f.kind.type === "sketch").name;
+    // Clic en la curva: se elige el sketch entero y su fila queda marcada
+    await b.click(...(await at([15, -15, 0])), { wait: 600 });
+    const picks = await b.eval(`JSON.stringify(window.__cadUi.picks())`);
+    if (!picks.includes('"kind":"sketch"')) {
+      const dbg = await b.eval(`(() => { const [x, y] = window.__cadViewer.screenOf([15, -15, 0]); const h = window.__cadViewer.pick(x, y, { regions: true, faces: true, planes: true }); const vs = window.__cadStore.result().sketches.map((v) => ({ id: v.id, n: v.sketch.entities.length, pts: v.sketch.points.map((p) => [p.x, p.y]) })); return JSON.stringify({ x, y, h: h && h.kind, vs, filter: window.__cadUi.pickFilter() }); })()`);
+      throw new Error(`clic en la curva: ${picks} ${dbg}`);
+    }
+    if (!(await b.eval(`[...document.querySelectorAll("[data-feature-row]")].some((r) => r.textContent.includes(${JSON.stringify(name)}) && r.className.includes("bg-accent/20"))`)))
+      throw new Error("la fila del sketch no se marcó");
+    // Clic en una cara de la caja: se marca la fila de su pieza
+    const face = await b.eval(`(() => { for (let y = 200; y < 800; y += 15) for (let x = 300; x < 1050; x += 15) { const h = window.__cadViewer.pick(x, y, { faces: true }); if (h && h.kind === "face") return [x, y]; } })()`);
+    if (!face) throw new Error("no encontré una cara");
+    await b.click(...face, { wait: 600 });
+    const part = await b.eval(`(() => { const e = [...document.querySelectorAll("span")].find((x) => x.textContent.trim() === "Pieza 1" && x.offsetParent); const row = e?.closest("[class*='rounded']"); return row ? row.className : null; })()`);
+    if (!part?.includes("bg-accent/20")) throw new Error(`la fila de la pieza no se marcó: ${part}`);
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");

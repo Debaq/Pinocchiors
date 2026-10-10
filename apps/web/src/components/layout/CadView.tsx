@@ -725,6 +725,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         sketch: v.sketch,
         regions: v.regions,
         selected: picks.flatMap((p) => (p.kind === "region" && p.sketch === v.id ? [p.region] : [])),
+        whole: picks.some((p) => p.kind === "sketch" && p.sketch === v.id),
       }));
     viewer?.setVisibleSketches(list);
   });
@@ -2162,6 +2163,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         else if (hit.kind === "edge") ui.pickToggle({ kind: "edge", edge: hit.edge }, additive);
         else if (hit.kind === "vertex") ui.pickToggle({ kind: "vertex", at: hit.at }, additive);
         else if (hit.kind === "region") ui.pickToggle({ kind: "region", sketch: hit.sketch, region: hit.region }, additive);
+        else if (hit.kind === "sketch") ui.pickToggle({ kind: "sketch", sketch: hit.sketch }, additive);
         else if (hit.kind === "refplane") ui.pickToggle({ kind: "refplane", feature: hit.feature }, additive);
         else ui.pickToggle({ kind: "plane", plane: hit.plane }, additive);
         ui.setMessage(undefined);

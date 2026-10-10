@@ -38,6 +38,8 @@ export type CadPick =
   | { kind: "scan"; triangle: number; point: THREE.Vector3 }
   /** Región cerrada de un sketch visible (índice en `regions`) */
   | { kind: "region"; sketch: number; region: number; point: THREE.Vector3 }
+  /** Una curva de un sketch visible: el sketch entero */
+  | { kind: "sketch"; sketch: number; point: THREE.Vector3 }
   /** Uno de los planos base */
   | { kind: "plane"; plane: BasePlane; point: THREE.Vector3 }
   /** Un plano de referencia del historial */
@@ -51,6 +53,8 @@ export interface VisibleSketch {
   regions: Region[];
   /** Índices de las regiones elegidas */
   selected: number[];
+  /** El sketch entero elegido (clic en una de sus curvas): sus curvas resaltadas */
+  whole?: boolean;
 }
 
 export interface SketchOverlay {
@@ -204,6 +208,8 @@ function preselectKey(p: CadPick): string {
       return `${p.triangle}`;
     case "region":
       return `${p.sketch}:${p.region}`;
+    case "sketch":
+      return `sketch:${p.sketch}`;
     case "plane":
       return p.plane;
     case "refplane":
@@ -945,7 +951,8 @@ export class CadViewer {
     for (const o of groups.flatMap((g) => g.children)) {
       // Líneas de un sketch visible: ámbar si su operación está bajo el mouse
       if (o.userData.sketchLine !== undefined) {
-        ((o as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(o.userData.sketchLine === this.hoverSketch ? color : o.userData.lineColor);
+        const hot = o.userData.sketchLine === this.hoverSketch || (pre?.kind === "sketch" && pre.sketch === o.userData.sketchLine);
+        ((o as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(hot ? color : o.userData.lineColor);
         continue;
       }
       const base = o.userData.base as { color: number; opacity: number; outline?: THREE.LineSegments } | undefined;
@@ -1299,7 +1306,7 @@ export class CadViewer {
         const pts = entityPolyline(e.geometry, point);
         if (!pts) continue;
         const g = new THREE.BufferGeometry().setFromPoints(pts.map(w));
-        const color = themeHex(e.construction ? "comment" : "fg");
+        const color = themeHex(vs.whole ? "cyan" : e.construction ? "comment" : "fg");
         const l = e.construction
           ? new THREE.Line(g, new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit }))
           : new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
@@ -1824,6 +1831,11 @@ export class CadViewer {
       if (hit) {
         const u = hit.object.userData as { sketch: number; region: number };
         candidates.push({ d: hit.distance - eps, rank: 0, pick: { kind: "region", sketch: u.sketch, region: u.region, point: hit.point } });
+      } else {
+        // Fuera de las regiones, una curva del sketch (los abiertos no tienen región): el sketch entero
+        this.raycaster.params.Line = { threshold: dist * 0.006 };
+        const line = this.raycaster.intersectObjects(this.sketchesGroup.children.filter((o) => o.userData.sketchLine !== undefined))[0];
+        if (line) candidates.push({ d: line.distance - eps, rank: 0, pick: { kind: "sketch", sketch: line.object.userData.sketchLine, point: line.point } });
       }
     }
     if (want.faces && this.body) {
