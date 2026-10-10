@@ -22,6 +22,8 @@ export interface SceneNode {
   hint?: string;
   /** Atenuado (operación suprimida o después de la barra de retroceso) */
   muted?: boolean;
+  /** Tachado: pieza reemplazada por un corte que la partió o por una unión */
+  struck?: boolean;
   /** Con error al calcular */
   error?: boolean;
   /** Muestra de color (piezas del CAD) */

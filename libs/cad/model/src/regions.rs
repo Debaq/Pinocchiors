@@ -4,8 +4,10 @@
 //! del grafo es un lazo. Círculos y splines cerradas son lazos sueltos. Un lazo
 //! dentro de otro es su agujero; el de adentro también es región propia.
 //!
-//! Supone que las curvas no se cruzan (se tocan en sus extremos), que es lo que
-//! dejan las herramientas de dibujo. Las ramas sueltas se ignoran.
+//! Las curvas que se cruzan (o donde el extremo de una toca el medio de otra)
+//! se parten ahí: dos cuadrados superpuestos dan tres regiones (lo de cada uno
+//! y lo común), como las áreas que delimitan las líneas en el dibujo. Las ramas
+//! sueltas se ignoran.
 
 use std::collections::HashMap;
 use std::f64::consts::PI;
@@ -16,10 +18,14 @@ use crate::geom::{P2, dist2};
 use crate::sketch::{Geometry, Sketch, SketchError};
 
 /// Un tramo de lazo: entidad recorrida en su sentido o al revés.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LoopPiece {
     pub entity: u32,
     pub reversed: bool,
+    /// Solo un tramo de la entidad (partida donde la cruza otra): desde dónde
+    /// hasta dónde, en el sentido natural de la entidad.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub span: Option<[P2; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -246,6 +252,224 @@ struct Edge {
     nodes: [usize; 2],
     /// Puntos en sentido natural (de nodes[0] a nodes[1]).
     pts: Vec<P2>,
+    /// Tramo de la entidad (None: entera).
+    span: Option<[P2; 2]>,
+}
+
+/// Forma exacta de una entidad, para que los cruces caigan justo sobre la curva
+/// (el muestreo de un círculo queda hasta 0,1 % del radio adentro).
+#[derive(Clone, Copy)]
+enum Exact {
+    Line(P2, P2),
+    Circle(P2, f64),
+}
+
+fn exact(s: &Sketch, g: &Geometry) -> Option<Exact> {
+    match g {
+        Geometry::Line { start, end } => Some(Exact::Line(s.point(*start).ok()?, s.point(*end).ok()?)),
+        Geometry::Circle { center, radius } => Some(Exact::Circle(s.point(*center).ok()?, *radius)),
+        Geometry::Arc { center, start, .. } => {
+            let c = s.point(*center).ok()?;
+            Some(Exact::Circle(c, dist2(c, s.point(*start).ok()?)))
+        }
+        _ => None,
+    }
+}
+
+/// Lleva un cruce aproximado al cruce exacto más cercano de dos formas.
+fn refine(a: Exact, b: Exact, x: P2) -> P2 {
+    let near = |cands: Vec<P2>| cands.into_iter().min_by(|p, q| dist2(*p, x).total_cmp(&dist2(*q, x))).unwrap_or(x);
+    let line_circle = |p: P2, q: P2, c: P2, r: f64| {
+        let d = [q[0] - p[0], q[1] - p[1]];
+        let f = [p[0] - c[0], p[1] - c[1]];
+        let (aa, bb, cc) = (d[0] * d[0] + d[1] * d[1], 2.0 * (f[0] * d[0] + f[1] * d[1]), f[0] * f[0] + f[1] * f[1] - r * r);
+        let disc = (bb * bb - 4.0 * aa * cc).max(0.0).sqrt();
+        if aa <= 0.0 {
+            return x;
+        }
+        near([(-bb - disc) / (2.0 * aa), (-bb + disc) / (2.0 * aa)].iter().map(|t| [p[0] + t * d[0], p[1] + t * d[1]]).collect())
+    };
+    match (a, b) {
+        (Exact::Line(..), Exact::Line(..)) => x,
+        (Exact::Line(p, q), Exact::Circle(c, r)) | (Exact::Circle(c, r), Exact::Line(p, q)) => line_circle(p, q, c, r),
+        (Exact::Circle(c0, r0), Exact::Circle(c1, r1)) => {
+            let d = dist2(c0, c1);
+            if d <= 0.0 {
+                return x;
+            }
+            let a = (r0 * r0 - r1 * r1 + d * d) / (2.0 * d);
+            let h = (r0 * r0 - a * a).max(0.0).sqrt();
+            let u = [(c1[0] - c0[0]) / d, (c1[1] - c0[1]) / d];
+            let m = [c0[0] + a * u[0], c0[1] + a * u[1]];
+            near(vec![[m[0] - h * u[1], m[1] + h * u[0]], [m[0] + h * u[1], m[1] - h * u[0]]])
+        }
+    }
+}
+
+/// Cruce de los segmentos ab y cd: parámetros en cada uno (sin los paralelos).
+fn seg_cross(a: P2, b: P2, c: P2, d: P2, eps: f64) -> Option<(f64, f64)> {
+    let r = [b[0] - a[0], b[1] - a[1]];
+    let q = [d[0] - c[0], d[1] - c[1]];
+    let den = r[0] * q[1] - r[1] * q[0];
+    let (lr, lq) = ((r[0] * r[0] + r[1] * r[1]).sqrt(), (q[0] * q[0] + q[1] * q[1]).sqrt());
+    if den.abs() <= 1e-12 * lr * lq {
+        return None;
+    }
+    let w = [c[0] - a[0], c[1] - a[1]];
+    let t = (w[0] * q[1] - w[1] * q[0]) / den;
+    let u = (w[0] * r[1] - w[1] * r[0]) / den;
+    // Margen en longitud: un extremo apoyado justo sobre el otro tramo cuenta
+    let (et, eu) = (eps / lr.max(1e-300), eps / lq.max(1e-300));
+    ((-et..=1.0 + et).contains(&t) && (-eu..=1.0 + eu).contains(&u)).then_some((t.clamp(0.0, 1.0), u.clamp(0.0, 1.0)))
+}
+
+/// Una curva a partir: sus puntos (cerrada: el último repite el primero) y los
+/// cortes como (segmento + parámetro, punto).
+struct Cuttable {
+    entity: u32,
+    pts: Vec<P2>,
+    closed: bool,
+    exact: Option<Exact>,
+    cuts: Vec<(f64, P2)>,
+}
+
+/// Parte las curvas donde se cruzan o donde una toca el medio de otra.
+fn cut_crossings(curves: &mut [Cuttable], tol: f64) {
+    let bbox = |p: &[P2]| {
+        p.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, q| [b[0].min(q[0]), b[1].min(q[1]), b[2].max(q[0]), b[3].max(q[1])])
+    };
+    let boxes: Vec<[f64; 4]> = curves.iter().map(|c| bbox(&c.pts)).collect();
+    let touch = tol * 100.0;
+    for i in 0..curves.len() {
+        for j in i + 1..curves.len() {
+            let (a, b) = (boxes[i], boxes[j]);
+            if a[0] > b[2] + touch || b[0] > a[2] + touch || a[1] > b[3] + touch || b[1] > a[3] + touch {
+                continue;
+            }
+            let mut found: Vec<(f64, f64, P2)> = Vec::new();
+            for (si, w) in curves[i].pts.windows(2).enumerate() {
+                let sb = bbox(w);
+                for (sj, v) in curves[j].pts.windows(2).enumerate() {
+                    let vb = bbox(v);
+                    if sb[0] > vb[2] + touch || vb[0] > sb[2] + touch || sb[1] > vb[3] + touch || vb[1] > sb[3] + touch {
+                        continue;
+                    }
+                    let Some((t, u)) = seg_cross(w[0], w[1], v[0], v[1], touch) else { continue };
+                    // Un extremo de una curva sobre la otra: el punto es ese extremo
+                    let x = if t == 0.0 || t == 1.0 {
+                        w[t as usize]
+                    } else if u == 0.0 || u == 1.0 {
+                        v[u as usize]
+                    } else {
+                        let p = [w[0][0] + t * (w[1][0] - w[0][0]), w[0][1] + t * (w[1][1] - w[0][1])];
+                        match (curves[i].exact, curves[j].exact) {
+                            (Some(ea), Some(eb)) => refine(ea, eb, p),
+                            _ => p,
+                        }
+                    };
+                    if !found.iter().any(|f| dist2(f.2, x) <= touch) {
+                        found.push((si as f64 + t, sj as f64 + u, x));
+                    }
+                }
+            }
+            for (ti, tj, x) in found {
+                curves[i].cuts.push((ti, x));
+                curves[j].cuts.push((tj, x));
+            }
+        }
+    }
+}
+
+/// Parte una curva en sus cortes: tramos (puntos en sentido natural, tramo).
+fn split_curve(c: &Cuttable, tol: f64) -> Vec<(Vec<P2>, Option<[P2; 2]>)> {
+    let n = c.pts.len();
+    let at = |k: f64| -> P2 {
+        let i = (k.floor() as usize).min(n - 2);
+        let t = k - i as f64;
+        let (a, b) = (c.pts[i], c.pts[i + 1]);
+        [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
+    };
+    let mut cuts = c.cuts.clone();
+    cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let touch = tol * 100.0;
+    // Sin cortes sobre los extremos de una abierta (ahí ya hay un nodo) ni repetidos
+    let mut keep: Vec<(f64, P2)> = Vec::new();
+    for (k, x) in cuts {
+        if !c.closed && (dist2(x, c.pts[0]) <= touch || dist2(x, c.pts[n - 1]) <= touch) {
+            continue;
+        }
+        if keep.iter().any(|q| dist2(q.1, x) <= touch) {
+            continue;
+        }
+        keep.push((k, x));
+    }
+    // Tramo entre dos posiciones (k0 < k1) con sus extremos exactos
+    let piece = |k0: f64, p0: P2, k1: f64, p1: P2| -> Vec<P2> {
+        let mut out = vec![p0];
+        out.extend((0..n).filter(|&i| (i as f64) > k0 && (i as f64) < k1).map(|i| c.pts[i]));
+        out.push(p1);
+        out
+    };
+    if c.closed {
+        // Cerrada: con menos de dos cortes sigue siendo un lazo suelto
+        if keep.len() < 2 {
+            return vec![(c.pts.clone(), None)];
+        }
+        let last = (n - 1) as f64;
+        let mut out = Vec::new();
+        for w in 0..keep.len() {
+            let (k0, p0) = keep[w];
+            if w + 1 < keep.len() {
+                let (k1, p1) = keep[w + 1];
+                out.push((piece(k0, p0, k1, p1), Some([p0, p1])));
+            } else {
+                // El último da la vuelta por el comienzo
+                let (k1, p1) = keep[0];
+                let mut a = piece(k0, p0, last, at(last));
+                a.pop();
+                a.extend(piece(0.0, c.pts[0], k1, p1));
+                out.push((a, Some([p0, p1])));
+            }
+        }
+        return out;
+    }
+    if keep.is_empty() {
+        return vec![(c.pts.clone(), None)];
+    }
+    let mut stops = vec![(0.0, c.pts[0])];
+    stops.extend(keep);
+    stops.push(((n - 1) as f64, c.pts[n - 1]));
+    stops.windows(2).map(|w| (piece(w[0].0, w[0].1, w[1].0, w[1].1), Some([w[0].1, w[1].1]))).collect()
+}
+
+/// Puntos del tramo de una entidad que usa un lazo (en el sentido natural).
+pub fn piece_points(s: &Sketch, piece: &LoopPiece) -> Result<Vec<P2>, SketchError> {
+    let pts = sample_entity(s, piece.entity)?;
+    let Some([from, to]) = piece.span else { return Ok(pts) };
+    let closed = s.entity(piece.entity)?.geometry.is_closed();
+    let c = Cuttable { entity: piece.entity, pts: pts.clone(), closed, exact: None, cuts: Vec::new() };
+    let pos = |p: P2| -> f64 {
+        let mut best = (f64::MAX, 0.0);
+        for (i, w) in pts.windows(2).enumerate() {
+            let d = [w[1][0] - w[0][0], w[1][1] - w[0][1]];
+            let l2 = d[0] * d[0] + d[1] * d[1];
+            let t = if l2 > 0.0 { (((p[0] - w[0][0]) * d[0] + (p[1] - w[0][1]) * d[1]) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            let e = dist2(p, [w[0][0] + t * d[0], w[0][1] + t * d[1]]);
+            if e < best.0 {
+                best = (e, i as f64 + t);
+            }
+        }
+        best.1
+    };
+    let mut c = c;
+    c.cuts = vec![(pos(from), from), (pos(to), to)];
+    // Cerrada: el tramo que empieza en `from`; abierta: el que va de uno a otro
+    let parts = split_curve(&c, 0.0);
+    Ok(parts
+        .into_iter()
+        .find(|(_, span)| span.is_some_and(|[a, b]| dist2(a, from) <= 1e-12 && dist2(b, to) <= 1e-12) || (!closed && span.is_some_and(|[a, _]| dist2(a, from) <= 1e-12)))
+        .map(|(p, _)| p)
+        .unwrap_or(pts))
 }
 
 /// Todas las regiones cerradas del sketch (sin geometría de construcción).
@@ -258,7 +482,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
 
     let mut nodes: Vec<P2> = Vec::new();
     let mut node_of = |p: P2| -> usize {
-        if let Some(i) = nodes.iter().position(|q| dist2(*q, p) <= tol) {
+        if let Some(i) = nodes.iter().position(|q| dist2(*q, p) <= tol * 100.0) {
             return i;
         }
         nodes.push(p);
@@ -266,26 +490,37 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
     };
     let mut edges: Vec<Edge> = Vec::new();
 
+    let mut curves: Vec<Cuttable> = Vec::new();
     for e in s.entities.iter().filter(|e| !e.construction && !matches!(e.geometry, Geometry::Point { .. })) {
         let pts = sample_entity(s, e.id)?;
         // También una abierta que termina donde empieza (una spline cerrada pasada a polos)
-        let closed_alone = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
-        if closed_alone {
-            let mut poly = pts.clone();
-            poly.pop();
-            let a = signed_area(&poly);
-            let reversed = a < 0.0;
-            if reversed {
-                poly.reverse();
-            }
-            loops.push(Loop { pieces: vec![LoopPiece { entity: e.id, reversed }], area: a.abs(), polygon: poly });
+        let closed = e.geometry.is_closed() || e.geometry.ends().is_some_and(|(a, b)| a == b);
+        if pts.len() < 2 {
             continue;
         }
-        let (a, b) = (node_of(pts[0]), node_of(*pts.last().unwrap()));
-        if a == b {
-            continue; // curva abierta que vuelve sobre sí misma: no soportada
+        curves.push(Cuttable { entity: e.id, pts, closed, exact: exact(s, &e.geometry), cuts: Vec::new() });
+    }
+    cut_crossings(&mut curves, tol);
+
+    for c in &curves {
+        for (pts, span) in split_curve(c, tol) {
+            if span.is_none() && c.closed {
+                let mut poly = pts.clone();
+                poly.pop();
+                let a = signed_area(&poly);
+                let reversed = a < 0.0;
+                if reversed {
+                    poly.reverse();
+                }
+                loops.push(Loop { pieces: vec![LoopPiece { entity: c.entity, reversed, span: None }], area: a.abs(), polygon: poly });
+                continue;
+            }
+            let (a, b) = (node_of(pts[0]), node_of(*pts.last().unwrap()));
+            if a == b {
+                continue; // curva abierta que vuelve sobre sí misma: no soportada
+            }
+            edges.push(Edge { entity: c.entity, nodes: [a, b], pts, span });
         }
-        edges.push(Edge { entity: e.id, nodes: [a, b], pts });
     }
 
     // Podar ramas sueltas
@@ -367,7 +602,7 @@ pub fn find_regions(s: &Sketch) -> Result<Vec<Region>, SketchError> {
             }
             let a = signed_area(&poly);
             if a > tol {
-                let pieces = face.iter().map(|&(e, r)| LoopPiece { entity: edges[e].entity, reversed: r }).collect();
+                let pieces = face.iter().map(|&(e, r)| LoopPiece { entity: edges[e].entity, reversed: r, span: edges[e].span }).collect();
                 loops.push(Loop { pieces, polygon: poly, area: a });
             }
         }

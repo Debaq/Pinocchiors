@@ -1,4 +1,4 @@
-import { Component, For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { Component, For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount } from "solid-js";
 import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -216,6 +216,27 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     </label>
   );
 
+  // Lugar disponible para la hoja (se sigue con cada cambio de tamaño)
+  let areaRef: HTMLDivElement | undefined;
+  const [area, setArea] = createSignal<[number, number]>([0, 0]);
+  onMount(() => {
+    if (!areaRef) return;
+    const measure = () => setArea([areaRef!.clientWidth - 32, areaRef!.clientHeight - 32]);
+    const ro = new ResizeObserver(measure);
+    ro.observe(areaRef);
+    measure();
+    onCleanup(() => ro.disconnect());
+  });
+  /** Ancho y alto en pantalla para que la hoja se vea completa */
+  const sheetSize = createMemo((): [number, number] | undefined => {
+    const m = /viewBox="([\d.\s-]+)"/.exec(svg() ?? "");
+    const vb = m?.[1].trim().split(/\s+/).map(Number);
+    const [aw, ah] = area();
+    if (!vb || vb.length !== 4 || !(vb[2] > 0 && vb[3] > 0) || aw <= 0 || ah <= 0) return undefined;
+    const k = Math.min(aw / vb[2], ah / vb[3]);
+    return [Math.floor(vb[2] * k), Math.floor(vb[3] * k)];
+  });
+
   return (
     <div class="absolute inset-0 z-[6] flex flex-col bg-bg-darker" aria-label="Plano 2D">
       <div class="flex flex-wrap items-center gap-2 border-b border-border bg-bg-lighter px-2 py-1.5">
@@ -380,11 +401,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       <Show when={message()}>
         <p class="px-2 py-1 text-xs text-text-muted">{message()}</p>
       </Show>
-      <div class="flex-1 overflow-auto p-4">
-        {/* La hoja ocupa el ancho disponible, con su proporción */}
+      <div ref={areaRef} class="flex-1 min-h-0 overflow-auto p-4 flex items-center justify-center">
+        {/* La hoja entra entera en lo que hay (ancho o alto, lo que limite), con su proporción */}
         <div
           data-sheet
-          class={clsx("mx-auto max-w-[1400px] shadow-lg [&>svg]:block [&>svg]:h-auto [&>svg]:w-full", tool() && "cursor-crosshair")}
+          class={clsx("shrink-0 shadow-lg [&>svg]:block [&>svg]:h-full [&>svg]:w-full", tool() && "cursor-crosshair")}
+          style={sheetSize() ? { width: `${sheetSize()![0]}px`, height: `${sheetSize()![1]}px` } : { width: "100%" }}
           innerHTML={svg()}
           onClick={onSheetClick}
         />

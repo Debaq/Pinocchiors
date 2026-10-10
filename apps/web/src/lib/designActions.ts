@@ -9,6 +9,9 @@ import {
   boltLengthFor,
   type P3,
   emptySketch,
+  addEntity,
+  addPoint,
+  addProjected,
   offsetPlane,
   samePart,
   type AxisSpec,
@@ -42,8 +45,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   // ─── Agregar operaciones ─────────────────────────────────────────────
 
-  const createSketch = async (plane: PlaneSpec, content?: Sketch) => {
-    const id = await store.addFeature({ type: "sketch", plane, offset: 0, sketch: content ?? emptySketch() });
+  const createSketch = async (plane: PlaneSpec, content?: Sketch, offset = 0) => {
+    const id = await store.addFeature({ type: "sketch", plane, offset, sketch: content ?? emptySketch() });
     // Pegado: se calcula antes de abrirlo (necesita su plano)
     if (content) await store.settled();
     ui.editSketch(id);
@@ -51,8 +54,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
 
   /** Nuevo sketch en el plano o la cara elegida; sin elegir, se pide dónde. Con `content`, pega ese dibujo */
   const startSketch = async (content?: Sketch) => {
-    const newSketch = (plane: PlaneSpec) => createSketch(plane, content);
+    const newSketch = (plane: PlaneSpec, offset?: number) => createSketch(plane, content, offset);
     const picks = ui.picks();
+    // Una región de otro sketch: el nuevo va en el mismo plano, encima (el otro no cambia)
+    const region = picks.find((p) => p.kind === "region");
+    const host = region?.kind === "region" ? features().find((f) => f.id === region.sketch) : undefined;
+    if (host?.kind.type === "sketch") {
+      ui.clearPicks();
+      return newSketch(host.kind.plane, host.kind.offset);
+    }
     const plane = picks.find((p) => p.kind === "plane");
     if (plane?.kind === "plane") {
       ui.clearPicks();
@@ -69,7 +79,11 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       ui.clearPicks();
       return newSketch({ type: "face", face: ref });
     }
-    ui.setPick({ kind: "place", prompt: content ? "Elegir dónde se pega el sketch: un plano base o una cara plana" : "Elegir dónde va el sketch: un plano base o una cara plana", done: (spec) => void newSketch(spec) });
+    ui.setPick({
+      kind: "place",
+      prompt: content ? "Elegir dónde se pega el sketch: un plano base, una cara plana u otro sketch" : "Elegir dónde va el sketch: un plano base, una cara plana u otro sketch",
+      done: (spec, offset) => void newSketch(spec, offset),
+    });
   };
 
   /** Pega el sketch entero copiado como un sketch nuevo (en el plano elegido o se pide uno) */
@@ -204,11 +218,59 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   };
 
   /** Agujero M6 pasante en los puntos del sketch elegido (o el último) */
-  const addHole = () => {
-    const s = targetSketch();
-    if (!s) return say("Primero un sketch con puntos (o círculos) donde van los agujeros, por ejemplo sobre una cara");
+  /** Sketch con centros para agujeros: puntos sueltos o círculos */
+  const hasCenters = (f: Feature) =>
+    f.kind.type === "sketch" && f.kind.sketch.entities.some((e) => !e.construction && (e.geometry.type === "point" || e.geometry.type === "circle"));
+  const holeIn = (sketch: number) => {
     const m6 = METRIC_HOLES.find((h) => h.size === "M6")!;
-    void store.addFeature({ type: "hole", sketch: s.id, points: [], diameter: m6.clearance, depth: { type: "through_all" }, style: { type: "simple" }, tip_angle: 118, thread: null });
+    void store.addFeature({ type: "hole", sketch, points: [], diameter: m6.clearance, depth: { type: "through_all" }, style: { type: "simple" }, tip_angle: 118, thread: null });
+  };
+  /**
+   * Agujero en una cara plana sin dibujar antes: el sketch con el centro se
+   * crea solo (aparece en el árbol, sin entrar a editarlo). Sin `at`, en el
+   * centro de la cara
+   */
+  const holeOnFace = async (face: number, at?: P3) => {
+    const info = await invoke<{ surface: string; point: P3 }>("cad_face_info", { face });
+    if (info.surface !== "plane") return say("Esa cara no es plana: el agujero va en una cara plana");
+    const ref = await store.faceRef(face);
+    const p = at ?? info.point;
+    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, "Centros del agujero");
+    await store.settled();
+    const plane = store.sketchView(id)?.plane;
+    if (!plane) return say("No se pudo ubicar el plano de la cara");
+    const d = [p[0] - plane.origin[0], p[1] - plane.origin[1], p[2] - plane.origin[2]];
+    const [x, n] = [plane.x_dir, plane.normal];
+    const y = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+    const dot = (a: number[], b: number[]) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    // Redondeado a la milésima: el centro de la cara no queda en 9.9999999
+    const xy: P2 = [Math.round(dot(d, x) * 1000) / 1000, Math.round(dot(d, y) * 1000) / 1000];
+    await store.updateFeature(id, (f) => {
+      if (f.kind.type === "sketch") addEntity(f.kind.sketch, { type: "point", point: addPoint(f.kind.sketch, xy) });
+    });
+    await store.settled();
+    holeIn(id);
+  };
+  /**
+   * Agujero: en los centros del sketch elegido (o del último, si tiene); con
+   * una cara elegida, en su centro; si no, se hace clic en la cara donde va
+   */
+  const addHole = () => {
+    const sel = selectedFeature();
+    if (sel && hasCenters(sel)) return holeIn(sel.id);
+    const face = ui.picks().find((p) => p.kind === "face");
+    if (face?.kind === "face") {
+      ui.clearPicks();
+      return void holeOnFace(face.face);
+    }
+    const last = [...sketches()].pop();
+    if (last && hasCenters(last)) return holeIn(last.id);
+    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    ui.setPick({
+      kind: "hole",
+      prompt: "Clic en la cara plana donde va el agujero (cerca del centro de la cara, se ancla al centro)",
+      done: (face, at) => void holeOnFace(face, at),
+    });
   };
 
   /** Transición entre los dos últimos sketches con regiones */
@@ -218,9 +280,36 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "loft", sections: list.map((s) => ({ sketch: s.id, regions: { type: "all" } })), ruled: false, op: "join" });
   };
 
+  /**
+   * Extruir una cara plana del sólido: se crea solo (sin entrar a editarlo) un
+   * sketch en la cara con su contorno ligado a las aristas, así sigue al
+   * sólido si cambia, y se extruye esa región
+   */
+  const extrudeFace = async (face: number) => {
+    const info = await invoke<{ surface: string }>("cad_face_info", { face });
+    if (info.surface !== "plane") return say("Esa cara no es plana: se extruyen caras planas (o regiones de un sketch)");
+    const ref = await store.faceRef(face);
+    const id = await store.addFeature({ type: "sketch", plane: { type: "face", face: ref }, offset: 0, sketch: emptySketch() }, "Contorno de la cara");
+    await store.settled();
+    const plane = store.sketchView(id)?.plane;
+    if (!plane) return say("No se pudo ubicar el plano de la cara");
+    const edges = await store.projectFace(face, plane);
+    await store.updateFeature(id, (f) => {
+      if (f.kind.type === "sketch") addProjected(f.kind.sketch, edges, (i) => ({ edge: edges[i].ref }));
+    });
+    await store.settled();
+    void store.addFeature({ type: "extrude", sketch: id, regions: { type: "all" }, extent: { type: "blind", distance: 10 }, reverse: false, op: "join" });
+  };
+
   const addExtrude = () => {
-    // Con regiones elegidas en el visor se extruyen esas; si no, todo el sketch
+    // Con regiones elegidas en el visor se extruyen esas; con una cara plana, esa
+    // cara; si no, todo el sketch
     const picked = pickedRegions();
+    const face = ui.picks().find((p) => p.kind === "face");
+    if (!picked && face?.kind === "face") {
+      ui.clearPicks();
+      return void extrudeFace(face.face);
+    }
     const s = picked ? sketches().find((f) => f.id === picked.sketch) : targetSketch();
     if (!s) return say("Primero hace falta un sketch con una región cerrada");
     if (!picked && noRegions(s)) return;

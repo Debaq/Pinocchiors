@@ -1,3 +1,4 @@
+import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
 import { Component, For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, untrack, type JSX } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -900,8 +901,11 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
               const state = () => store.stateOf(f().id);
               const tone = createMemo(() => featureTone(f(), state()));
               const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
+              const sketchHidden = () => editsAsSketch(f().kind) && props.ui.hiddenSketches().includes(f().id);
               const folder = () => folderAt(i());
-              const hidden = () => !!folder()?.f.collapsed && folder()!.range![0] !== undefined;
+              // Plegada en su carpeta, o no coincide con el buscador del Outliner (que abre las carpetas)
+              const hidden = () =>
+                outlinerQuery().trim() ? !matchesOutliner(f().name) : !!folder()?.f.collapsed && folder()!.range![0] !== undefined;
               return (
                 <>
                   <Show when={folder() && folder()!.range![0] === i() && folder()}>
@@ -975,6 +979,8 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       store.select(store.selected() === f().id ? undefined : f().id);
                     }}
                     onDblClick={() => editsAsSketch(f().kind) && void store.settled().then(() => props.ui.editSketch(f().id))}
+                    onMouseEnter={() => props.ui.setHoverFeature(f().id)}
+                    onMouseLeave={() => props.ui.hoverFeature() === f().id && props.ui.setHoverFeature(undefined)}
                     title={tone()?.why}
                   >
                     <Show
@@ -985,10 +991,21 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                     </Show>
                     <span
                       data-tone={tone()?.tone}
-                      class={clsx("flex-1 truncate", f().suppressed && "line-through", tone()?.tone === "error" && "text-error", tone()?.tone === "empty" && "text-sketch-free")}
+                      data-sketch-hidden={sketchHidden() ? "" : undefined}
+                      class={clsx(
+                        "flex-1 truncate",
+                        f().suppressed && "line-through",
+                        tone()?.tone === "error" && "text-error",
+                        tone()?.tone === "empty" && "text-sketch-free",
+                        // Sketch oculto en el visor: atenuado (los que se ven, con su color)
+                        sketchHidden() && "italic text-text-dim",
+                      )}
                     >
                       {f().name}
                     </span>
+                    <Show when={sketchHidden()}>
+                      <Icons.EyeSlash size={12} class="shrink-0 text-text-dim group-hover:hidden" aria-label="Oculto en el visor" />
+                    </Show>
                     {/* Las lentas dicen cuánto tardan (para saber qué frena el diseño) */}
                     <Show when={(state()?.ms ?? 0) >= 100}>
                       <span class="text-[10px] font-mono text-text-dim group-hover:hidden" title="Lo que tardó la última vez que se calculó">
@@ -1680,6 +1697,7 @@ export const FeatureEditor: Component<{
                     owner={`${f().id}:aristas`}
                     kind="edges"
                     label="Aristas"
+                    live={f().id}
                     lost={lost("edges")}
                     refs={(k() as { edges: EdgeRef[] }).edges}
                     onChange={(refs) =>
@@ -1937,6 +1955,7 @@ export const FeatureEditor: Component<{
                 </Row>
                 <PartChecklist
                   store={props.store}
+                  ui={props.ui}
                   featureId={f().id}
                   label={k().op === "subtract" ? "Piezas que quedan" : "Piezas"}
                   empty="Elegir las piezas"
@@ -1947,6 +1966,7 @@ export const FeatureEditor: Component<{
                 <Show when={k().op !== "union" || k().tools.length > 0}>
                   <PartChecklist
                     store={props.store}
+                    ui={props.ui}
                     featureId={f().id}
                     label={k().op === "subtract" ? "Piezas que restan" : "Con"}
                     empty={k().op === "subtract" ? "Elegir con qué restar" : "Ninguna más"}
@@ -1966,6 +1986,7 @@ export const FeatureEditor: Component<{
               <>
                 <PartChecklist
                   store={props.store}
+                  ui={props.ui}
                   featureId={f().id}
                   label="Piezas a partir"
                   empty="Todos los sólidos"
@@ -2008,6 +2029,7 @@ export const FeatureEditor: Component<{
               return (
                 <PartChecklist
                   store={props.store}
+                  ui={props.ui}
                   featureId={f().id}
                   label={kind.type === "split_parts" ? "Piezas a separar" : "Piezas a borrar"}
                   empty={kind.type === "split_parts" ? "Todas" : "Elegir las piezas"}
@@ -2629,6 +2651,7 @@ export const FeatureEditor: Component<{
               <>
                 <PartChecklist
                   store={props.store}
+                  ui={props.ui}
                   featureId={f().id}
                   label="Superficies"
                   empty="Elegir las superficies"
@@ -2942,6 +2965,7 @@ export const FeatureEditor: Component<{
         <Show when={f().kind.type === "hole" || ("op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new")}>
           <PartChecklist
             store={props.store}
+            ui={props.ui}
             featureId={f().id}
             label={f().kind.type === "hole" ? "En las piezas" : "Con las piezas"}
             empty={f().kind.type === "hole" ? "La más cercana" : "Las que toca"}
@@ -3121,8 +3145,14 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
 // ─── Piezas en los diálogos ───────────────────────────────────────────────
 
 /** Lista de piezas que hay antes de la operación para tildar; las perdidas en rojo */
+/**
+ * Con qué piezas une o resta una operación: se eligen con clic en el visor
+ * (otra vez la quita), y la lista muestra solo las elegidas (con muchas piezas,
+ * una lista de casillas no sirve). Sin elegir, las que toca.
+ */
 const PartChecklist: Component<{
   store: CadStore;
+  ui: CadUi;
   featureId: number;
   label: string;
   /** Qué significa no elegir ninguna */
@@ -3134,6 +3164,9 @@ const PartChecklist: Component<{
   missing?: number[];
   onChange: (v: PartId[]) => void;
 }> = (props) => {
+  const ui = props.ui;
+  const owner = () => `${props.featureId}:piezas:${props.label}`;
+  const active = () => (ui.pick() as { owner?: string }).owner === owner();
   const [parts, setParts] = createSignal<PartView[]>([]);
   let seq = 0;
   createEffect(() => {
@@ -3141,23 +3174,68 @@ const PartChecklist: Component<{
     const n = ++seq;
     void props.store.partsBefore(props.featureId).then((p) => n === seq && setParts(p));
   });
-  const shown = () => (props.value.length > 0 ? props.value : (props.auto ?? []));
+  // Las elegidas solas: al elegir se ve el sólido de antes y el cálculo no
+  // las trae, así que valen las últimas conocidas
+  const [lastAuto, setLastAuto] = createSignal<PartId[]>([]);
+  createEffect(() => props.auto && setLastAuto(props.auto));
+  const shown = () => (props.value.length > 0 ? props.value : (props.auto ?? lastAuto()));
   const has = (id: PartId) => shown().some((x) => samePart(x, id));
+  const nameOf = (id: PartId) => parts().find((p) => samePart(p.id, id))?.name ?? props.store.result()?.parts.find((p) => samePart(p.id, id))?.name;
   const gone = () => props.value.filter((v, i) => (props.missing ?? []).includes(i) || (parts().length > 0 && !parts().some((p) => samePart(p.id, v))));
+  const toggle = (id: PartId) => props.onChange(has(id) ? shown().filter((x) => !samePart(x, id)) : [...shown(), id]);
+  // Se elige sobre el sólido de antes de la operación (lo que resta ya no se ve en la vista previa)
+  const activate = () => {
+    void props.store.setSelecting(true);
+    ui.setPick({ kind: "parts", owner: owner(), prompt: "Clic en las piezas (otra vez para quitarla)", toggle: (id) => toggle(id) });
+  };
+  // Elegidas resaltadas en el visor mientras se elige
+  createEffect(() => {
+    if (!active()) return;
+    const faces = (props.store.result()?.parts ?? []).filter((p) => has(p.id)).flatMap((p) => Array.from({ length: p.faces[1] - p.faces[0] }, (_, k) => p.faces[0] + k));
+    ui.setHighlight({ faces, edges: [] });
+  });
+  createEffect(
+    on(active, (now, before) => {
+      if (now || !before) return;
+      ui.setHighlight({ faces: [], edges: [] });
+      if (ui.pick().kind === "none") void props.store.setSelecting(false);
+    }),
+  );
+  onCleanup(() => {
+    if (active()) ui.cancelPick();
+  });
   return (
     <div class="space-y-1" aria-label={props.label}>
       <span class="text-xs text-text-muted">{props.label}</span>
       <Show when={parts().length > 0} fallback={<p class="text-[11px] text-text-dim">Todavía no hay piezas</p>}>
-        <For each={parts()}>
-          {(p) => (
-            <Checkbox
-              small
-              label={p.name}
-              checked={has(p.id)}
-              onChange={(c) => props.onChange(c ? [...shown(), p.id] : shown().filter((x) => !samePart(x, p.id)))}
-            />
+        <div
+          data-parts-box
+          class={clsx(
+            "min-h-[2rem] rounded border px-1.5 py-1 cursor-pointer text-xs",
+            active() ? "border-accent bg-accent/10" : "border-border bg-surface/40 hover:border-border-hover",
           )}
-        </For>
+          onClick={() => (active() ? ui.cancelPick() : activate())}
+        >
+          <Show when={shown().length > 0} fallback={<span class="text-text-dim">{active() ? "Clic en las piezas" : `${props.empty}: clic para elegir`}</span>}>
+            <For each={shown()}>
+              {(id) => (
+                <div class="group flex items-center justify-between gap-1 rounded px-1 hover:bg-surface">
+                  <span class={clsx(props.value.length ? "text-text" : "text-text-muted")}>{nameOf(id) ?? "Pieza"}</span>
+                  <button
+                    class="opacity-0 group-hover:opacity-100 text-text-muted hover:text-text"
+                    aria-label={`Quitar ${nameOf(id) ?? "la pieza"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggle(id);
+                    }}
+                  >
+                    <Icons.X size={10} />
+                  </button>
+                </div>
+              )}
+            </For>
+          </Show>
+        </div>
       </Show>
       <For each={gone()}>
         {(g) => (
@@ -3169,8 +3247,8 @@ const PartChecklist: Component<{
           </div>
         )}
       </For>
-      <Show when={props.value.length === 0}>
-        <p class="text-[11px] text-text-dim">{props.empty}</p>
+      <Show when={props.value.length === 0 && shown().length > 0}>
+        <p class="text-[11px] text-text-dim">{props.empty} (elegidas solas)</p>
       </Show>
     </div>
   );
@@ -3312,6 +3390,12 @@ const SelectionBox: Component<{
   refs: (EdgeRef | FaceRef)[];
   /** Referencias que el último cálculo no encontró (posiciones en `refs`) */
   lost?: number[];
+  /**
+   * Redondeo y chaflán: se elige sobre la vista previa de esta operación (se
+   * ve cómo queda a medida que se suman o quitan aristas, y escribir la medida
+   * no deja de elegir)
+   */
+  live?: number;
   onChange: (refs: (EdgeRef | FaceRef)[]) => void;
 }> = (props) => {
   const ui = props.ui;
@@ -3324,7 +3408,8 @@ const SelectionBox: Component<{
   createEffect(() => {
     const refs = props.refs;
     const version = props.store.result()?.version;
-    if (!active() || version === undefined) return setResolved([]);
+    // En vivo lo elegido ya está redondeado: no hay aristas que resolver
+    if (!active() || version === undefined || props.live !== undefined) return setResolved([]);
     const n = ++seq;
     const edges = props.kind === "edges";
     void props.store.resolveRefs(edges ? [] : (refs as FaceRef[]), edges ? (refs as EdgeRef[]) : []).then((r) => {
@@ -3348,7 +3433,7 @@ const SelectionBox: Component<{
 
   // Con la caja activa manda lo que se ve (el sólido de antes de la operación);
   // si no, lo que dijo el último cálculo
-  const isLost = (i: number) => (active() ? resolved()[i] === null : (props.lost ?? []).includes(i));
+  const isLost = (i: number) => (active() && props.live === undefined ? resolved()[i] === null : (props.lost ?? []).includes(i));
   const toggleRef = (ref: EdgeRef | FaceRef, index: number) => {
     const at = resolved().indexOf(index);
     if (at >= 0) return props.onChange(props.refs.filter((_, i) => i !== at));
@@ -3356,9 +3441,46 @@ const SelectionBox: Component<{
     const gone = props.refs.findIndex((_, i) => resolved()[i] === null);
     props.onChange(gone >= 0 ? props.refs.map((r, i) => (i === gone ? ref : r)) : [...props.refs, ref]);
   };
+  /** En vivo: la arista cuya recta pasa más cerca de `p` (lo redondeado está junto a ella) */
+  const removeNear = (p: P3) => {
+    const refs = props.refs as EdgeRef[];
+    const d = (r: EdgeRef) => {
+      const v = [p[0] - r.point[0], p[1] - r.point[1], p[2] - r.point[2]];
+      const n = Math.hypot(...r.direction) || 1;
+      const along = (v[0] * r.direction[0] + v[1] * r.direction[1] + v[2] * r.direction[2]) / n;
+      const all = Math.hypot(...v);
+      return Math.sqrt(Math.max(0, all * all - along * along)) + 0.1 * all;
+    };
+    let best = -1;
+    refs.forEach((r, i) => (best < 0 || d(r) < d(refs[best]) ? (best = i) : 0));
+    if (best >= 0) props.onChange(refs.filter((_, i) => i !== best));
+  };
+  const same = (a: EdgeRef, b: EdgeRef) => Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1], a.point[2] - b.point[2]) < 1e-6;
   const activate = () => {
-    void props.store.setSelecting(true);
     const base = { prompt: PROMPTS[props.kind], owner: props.owner };
+    const live = props.live;
+    if (props.kind === "edges" && live !== undefined) {
+      return ui.setPick({
+        ...base,
+        prompt: "Clic en las aristas o en una cara (todas sus aristas); clic en lo redondeado lo quita",
+        kind: "edges",
+        toggle: (r) => {
+          const refs = props.refs as EdgeRef[];
+          if (!refs.some((x) => same(x, r))) props.onChange([...refs, r]);
+        },
+        live: {
+          feature: live,
+          remove: removeNear,
+          // Una cara: suma sus aristas; si ya estaban todas, las quita
+          face: (edges) => {
+            const refs = props.refs as EdgeRef[];
+            const fresh = edges.filter((e) => !refs.some((x) => same(x, e)));
+            props.onChange(fresh.length ? [...refs, ...fresh] : refs.filter((x) => !edges.some((e) => same(x, e))));
+          },
+        },
+      });
+    }
+    void props.store.setSelecting(true);
     if (props.kind === "edges") ui.setPick({ ...base, kind: "edges", toggle: (r, i) => toggleRef(r, i) });
     else if (props.kind === "faces") ui.setPick({ ...base, kind: "faces", toggle: (r, i) => toggleRef(r, i) });
     else ui.setPick({ ...base, kind: "face", done: (r) => props.onChange([r]) });
@@ -3372,7 +3494,7 @@ const SelectionBox: Component<{
       () => !!props.store.draft(),
       (open, wasOpen) => {
         if (!open) return;
-        if (untrack(() => props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
+        if (untrack(() => props.live !== undefined || props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
         else if (!wasOpen && props.kind !== "face" && untrack(props.store.draft)?.isNew) queueMicrotask(() => ui.pick().kind === "none" && props.store.draft() && activate());
       },
     ),

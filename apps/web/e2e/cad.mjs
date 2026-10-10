@@ -223,8 +223,8 @@ const scenarios = {
     await b.eval(`document.querySelector('[aria-label="Quitar arista 1"]').click()`);
     await sleep(1200);
     if (!(await b.eval(`document.querySelector('[aria-label="Aristas"]').textContent.includes("Clic en las aristas")`))) throw new Error("la caja no quedó vacía");
-    // Con la caja activa se ve el sólido de antes: elegir la arista de adelante
-    near((await body()).volume, 8000, 1e-6, "sólido de antes al elegir");
+    // Sin aristas no hay redondeo: se ve el sólido entero
+    near((await body()).volume, 8000, 1e-6, "sin aristas");
     await b.click(...A, { wait: 1200 });
     await b.key("Escape", "Escape", 27);
     await sleep(1500);
@@ -233,12 +233,11 @@ const scenarios = {
     await sleep(1500);
     const doc = await call("cad_get_document");
     if (doc.features[1]?.kind.edges.length !== 1) throw new Error("no quedó una arista");
-    // Editar: la caja se activa con clic y vuelve a mostrar el sólido de antes
+    // Editar: la caja ya está eligiendo y se ve el redondeo mientras tanto
     await clickRow(b, "Redondeo 1");
-    await sleep(1000);
-    await b.eval(`document.querySelector('[aria-label="Aristas"]').click()`);
     await sleep(2000);
-    near((await body()).volume, 8000, 1e-6, "editar: sólido de antes");
+    if ((await b.eval(`__cadUi.pick().kind`)) !== "edges") throw new Error("al editar no quedó eligiendo");
+    near((await body()).volume, 8000 - (1 - Math.PI / 4) * 20, 0.05, "editar: con el redondeo");
     await b.click(...B, { wait: 1200 });
     if ((await items()).length !== 2) throw new Error(`editar: ${await items()}`);
     await b.key("Escape", "Escape", 27);
@@ -249,7 +248,7 @@ const scenarios = {
     if ((await call("cad_get_document")).features[1].kind.edges.length !== 2) throw new Error("no quedaron dos aristas");
   },
 
-  async "redondeo: escribir el radio deja de elegir y se ve"(b) {
+  async "redondeo: se ve mientras se elige y escribir el radio sigue eligiendo"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const radius = `[...document.querySelectorAll("label")].find((l) => l.textContent.startsWith("Radio"))?.querySelector("input")`;
     await begin(b);
@@ -260,11 +259,12 @@ const scenarios = {
     await sleep(1500);
     await b.click(...(await at([0, -10, 10])), { wait: 1500 });
     await b.click(...(await at([10, 0, 10])), { wait: 1500 });
-    near((await body()).volume, 8000, 1e-6, "eligiendo: sólido de antes");
-    // Clic en el campo y escribir como el usuario (Enter lo confirma)
+    await sleep(1000);
+    near((await body()).volume, 8000 - 2 * (1 - Math.PI / 4) * 20, 0.2, "eligiendo: ya redondeado");
+    // Clic en el campo y escribir como el usuario (Enter lo confirma): se sigue eligiendo
     const r = await b.eval(`(() => { const r = ${radius}.getBoundingClientRect(); return [r.x + 10, r.y + r.height / 2]; })()`);
     await b.click(...r, { wait: 600 });
-    if ((await b.eval(`__cadUi.pick().kind`)) !== "none") throw new Error("tocar el campo no dejó de elegir");
+    if ((await b.eval(`__cadUi.pick().kind`)) !== "edges") throw new Error("tocar el campo dejó de elegir");
     await b.eval(`(() => { const i = document.activeElement; i.select(); document.execCommand("insertText", false, "4"); })()`);
     await b.key("Enter", "Enter", 13);
     await sleep(2500);
@@ -896,16 +896,14 @@ const scenarios = {
     if (!existsSync(ui) || statSync(ui).size !== statSync(one).size) throw new Error("Exportar no sacó la pieza sola");
   },
 
-  async "piezas: booleana, separar y borrar"(b) {
+  async "piezas: booleana, corte que separa y borrar"(b) {
     const parts = async () => (await evaluate()).parts;
-    /** Tilda una pieza dentro de la lista con ese título */
-    const tick = (list, name) =>
-      b.eval(`(() => {
-        const box = document.querySelector('[aria-label=${JSON.stringify(list)}]');
-        const l = [...box.querySelectorAll("label")].find((x) => x.textContent.trim() === ${JSON.stringify(name)});
-        l.click();
-        return !!l;
-      })()`);
+    /** Activa la caja de piezas con ese título y hace clic en el visor en `p` (mm) */
+    const tick = async (list, p) => {
+      await b.eval(`document.querySelector('[aria-label=${JSON.stringify(list)}] [data-parts-box]').click()`);
+      await sleep(1500);
+      await b.click(...(await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`)), { wait: 800 });
+    };
     await begin(b);
     await b.clickText("Caja");
     await sleep(1500);
@@ -922,9 +920,10 @@ const scenarios = {
     // Booleana: restar el cilindro de la caja
     await b.clickText("Booleana");
     await sleep(1500);
-    await tick("Piezas que quedan", "Pieza 1");
+    await tick("Piezas que quedan", [-5, -10, 0]);
     await sleep(800);
-    await tick("Piezas que restan", "Pieza 2");
+    await tick("Piezas que restan", [10, -4, 16]);
+    await b.key("Escape", "Escape", 27);
     await sleep(1500);
     await accept(b);
     let ps = await parts();
@@ -937,12 +936,9 @@ const scenarios = {
     await call("cad_set_document", { document: d2 });
     await b.eval(`window.__cadStore.reload()`);
     await sleep(2000);
-    if ((await parts()).length !== 1) throw new Error("la ranura separó piezas sola");
-    await b.clickText("Separar");
-    await sleep(1500);
-    await accept(b);
+    // El corte parte la pieza en dos: cada pedazo queda como pieza, sin Separar
     ps = await parts();
-    if (ps.length !== 2) throw new Error(`separar: ${ps.length} piezas`);
+    if (ps.length !== 2) throw new Error(`la ranura no separó las piezas: ${ps.length}`);
     // Borrar la segunda desde la lista de piezas
     const total = ps[0].volume + ps[1].volume;
     await tab(b, "Pieza");
@@ -953,7 +949,7 @@ const scenarios = {
     if (ps.length !== 1) throw new Error(`borrar: ${ps.length} piezas`);
     if (!(ps[0].volume < total)) throw new Error("no se borró");
     const kinds = (await call("cad_get_document")).features.map((f) => f.kind.type);
-    if (kinds.join(",") !== "primitive,primitive,boolean,primitive,split_parts,delete_parts") throw new Error(`historial: ${kinds}`);
+    if (kinds.join(",") !== "primitive,primitive,boolean,primitive,delete_parts") throw new Error(`historial: ${kinds}`);
   },
 
   async "material por pieza y masa total"(b) {
@@ -1179,15 +1175,19 @@ const scenarios = {
     // Pasante, pero solo en la de arriba (la más cercana), y el panel la muestra marcada
     const hole = Math.PI * 3.3 * 3.3 * 20;
     near((await body()).volume, 16000 - hole, 0.05, "solo la de arriba");
-    const boxes = () =>
-      b.eval(`[...document.querySelectorAll('[aria-label="En las piezas"] input[type=checkbox]')].map((i) => [i.closest("label, div")?.textContent ?? "", i.checked])`);
-    const list = await boxes();
-    if (list.length !== 2 || list.filter(([, c]) => c).length !== 1) throw new Error(`piezas: ${JSON.stringify(list)}`);
-    // Marcar también la de abajo: atraviesa las dos
-    await b.eval(`(() => { const i = [...document.querySelectorAll('[aria-label="En las piezas"] input[type=checkbox]')].find((i) => !i.checked); i.click(); })()`);
+    const chosen = () => b.eval(`document.querySelector('[aria-label="En las piezas"] [data-parts-box]').querySelectorAll("button").length`);
+    if ((await chosen()) !== 1) throw new Error(`piezas: ${await chosen()}`);
+    // Sumar la de abajo con un clic en ella: atraviesa las dos
+    await b.eval(`document.querySelector('[aria-label="En las piezas"] [data-parts-box]').click()`);
+    await sleep(1500);
+    // La de abajo queda fuera de cuadro: encuadrar todo
+    await b.key("Home", "Home", 36);
+    await sleep(800);
+    await b.click(...(await at([0, -10, -40])), { wait: 800 });
+    await b.key("Escape", "Escape", 27);
     await sleep(2000);
     near((await body()).volume, 16000 - 2 * hole, 0.05, "las dos");
-    if ((await boxes()).some(([, c]) => !c)) throw new Error("la de abajo no quedó marcada");
+    if ((await chosen()) !== 2) throw new Error("la de abajo no quedó elegida");
     await accept(b);
   },
 
@@ -3364,7 +3364,7 @@ const scenarios = {
     await sleep(1500);
   },
 
-  async "revisión del sketch: extremos sueltos, cruces y aviso al extruir"(b) {
+  async "revisión del sketch: extremos sueltos y aviso al extruir"(b) {
     await begin(b);
     await sketchOn(b);
     const problems = () => b.eval(`document.querySelector("[data-sketch-problems]")?.textContent ?? ""`);
@@ -3381,8 +3381,8 @@ const scenarios = {
     await b.click(490, 400, { modifiers: 8, wait: 800 });
     await b.key("Escape", "Escape", 27);
     await b.key("Escape", "Escape", 27);
-    if (!(await problems()).includes("1 cruce sin unir")) throw new Error(`cruce: "${await problems()}"`);
-    if (!(await problems()).includes("4 extremos sueltos")) throw new Error(`extremos: "${await problems()}"`);
+    // El cruce no es un problema (las regiones se parten ahí): siguen los extremos sueltos
+    if ((await problems()) !== "4 extremos sueltos") throw new Error(`extremos: "${await problems()}"`);
     await b.shot("revision_del_sketch");
     await b.clickText("Terminar sketch");
     await sleep(1500);
@@ -3391,7 +3391,7 @@ const scenarios = {
     await b.clickText("Extrusión");
     await sleep(1000);
     const text = await b.eval(`document.body.innerText`);
-    if (!text.includes("El sketch no tiene regiones cerradas: 4 extremos sueltos · 1 cruce sin unir")) throw new Error("falta el aviso de por qué no hay regiones");
+    if (!text.includes("El sketch no tiene regiones cerradas: 4 extremos sueltos")) throw new Error("falta el aviso de por qué no hay regiones");
     if ((await b.eval(`window.__cadStore.doc().features.length`)) !== n) throw new Error("se creó la extrusión igual");
   },
 
@@ -5651,6 +5651,178 @@ const scenarios = {
     const at = got.indexOf("Pieza 1");
     if (got[at + 1] !== "Malla generada" || got[at + 2] !== "Escalar para fabricar") throw new Error(`árbol del objeto: ${JSON.stringify(got.slice(at))}`);
     await b.shot("objetos-rehecho");
+  },
+
+  async "redondeo en vivo: cara entera y quitar con clic"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].length`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    // Clic en la tapa: sus cuatro aristas
+    await b.click(...(await at([3, -4, 10])), { wait: 2500 });
+    if ((await items()) !== 4) throw new Error(`cara: ${await items()} aristas`);
+    near((await body()).volume, 8000 - 4 * (1 - Math.PI / 4) * 20, 1, "tapa redondeada");
+    // Clic en lo redondeado de adelante: se quita esa
+    await b.click(...(await at([0, -10, 10])), { wait: 2500 });
+    if ((await items()) !== 3) throw new Error(`quitar: ${await items()} aristas`);
+    // Otra vez en el mismo lugar (ahora arista recta): vuelve
+    await b.click(...(await at([0, -10, 10])), { wait: 2500 });
+    if ((await items()) !== 4) throw new Error(`sumar: ${await items()} aristas`);
+    await accept(b, 2000);
+    if ((await call("cad_get_document")).features[1].kind.edges.length !== 4) throw new Error("no quedaron 4 aristas");
+  },
+
+  async "chaflán en vivo: una cara entera"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].length`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Chaflán");
+    await sleep(1500);
+    await b.click(...(await at([3, -10, -3])), { wait: 2500 });
+    if ((await items()) !== 4) throw new Error(`chaflán: ${await items()} aristas`);
+    await accept(b, 2000);
+    const r = await evaluate();
+    if (r.status.some((x) => x.state !== "ok")) throw new Error(JSON.stringify(r.status));
+    // Las esquinas comparten un pedacito (≈1,3 mm³)
+    near(r.body.volume, 8000 - 4 * 0.5 * 20, 2, "cuatro chaflanes de 1 mm");
+  },
+
+  async "agujero en una cara sin sketch y extruir una cara"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Agujero: se pide la cara; cerca del centro se ancla al centro
+    await b.clickText("Agujero");
+    await sleep(500);
+    if ((await b.eval(`__cadUi.pick().kind`)) !== "hole") throw new Error("no pidió la cara");
+    await b.click(...(await at([0.3, 0.2, 10])), { wait: 3000 });
+    const doc = await call("cad_get_document");
+    const sk = doc.features.find((f) => f.name === "Centros del agujero");
+    if (!sk) throw new Error("no se creó el sketch de los centros");
+    const p = sk.kind.sketch.points.find((q) => sk.kind.sketch.entities.some((e) => e.geometry.type === "point" && e.geometry.point === q.id));
+    if (!p || Math.hypot(p.x, p.y) > 1e-6) throw new Error(`centro: ${JSON.stringify(p)}`);
+    if (await b.eval(`!!__cadUi.session()`)) throw new Error("entró al sketch");
+    await accept(b, 2500);
+    const r = await evaluate();
+    if (r.status.some((x) => x.state !== "ok")) throw new Error(JSON.stringify(r.status));
+    if (!(r.body.volume < 8000 - 100)) throw new Error(`no agujereó: ${r.body.volume}`);
+    // Extruir la cara de adelante: elegirla y Extrusión
+    await b.click(...(await at([5, -10, -5])), { wait: 800 });
+    await b.clickText("Extrusión");
+    await sleep(3000);
+    await accept(b, 2500);
+    const after = await evaluate();
+    if (after.status.some((x) => x.state !== "ok")) throw new Error(JSON.stringify(after.status));
+    near(after.body.volume, r.body.volume + 20 * 20 * 10, 1, "cara extruida 10 mm");
+  },
+
+  async "sketch encima de otro sketch, anclado a sus puntos"(b) {
+    // Pantalla de un punto del primer sketch (coordenadas del plano)
+    const screen = (p) =>
+      b.eval(`(() => { const v = __cadStore.result().sketches[0]; const pl = v.plane, p = ${JSON.stringify(p)}; const [o, n, x] = [pl.origin, pl.normal, pl.x_dir]; const y = [n[1]*x[2]-n[2]*x[1], n[2]*x[0]-n[0]*x[2], n[0]*x[1]-n[1]*x[0]]; return __cadViewer.screenOf([0,1,2].map((k) => o[k] + x[k]*p[0] + y[k]*p[1])); })()`);
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(700, 500);
+    await sleep(800);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const a = (await b.eval(`JSON.parse(JSON.stringify(__cadStore.doc()))`)).features[0];
+    const sample = await b.eval(`__cadStore.result().sketches[0].regions[0].sample`);
+    // Sketch nuevo: clic dentro de la región del primero
+    await b.clickText("Sketch");
+    await sleep(500);
+    await b.click(...(await screen(sample)), { wait: 2500 });
+    const doc = await b.eval(`JSON.parse(JSON.stringify(__cadStore.doc()))`);
+    const c = doc.features.filter((f) => f.kind.type === "sketch")[1];
+    if (!c || JSON.stringify(a.kind.plane) !== JSON.stringify(c.kind.plane)) throw new Error("no quedó en el mismo plano");
+    if (!(await b.eval(`!!__cadUi.session()`))) throw new Error("no entró al sketch nuevo");
+    // Línea desde una esquina del primero: se ancla y el primero no cambia
+    const corner = a.kind.sketch.points.find((p) => p.id !== a.kind.sketch.origin);
+    const [cx, cy] = await screen([corner.x, corner.y]);
+    await b.clickText("Línea");
+    await b.click(cx + 2, cy + 2);
+    await b.click(cx + 150, cy - 90, { wait: 800 });
+    await b.key("Escape", "Escape", 27);
+    await b.key("Escape", "Escape", 27);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    const after = await b.eval(`JSON.parse(JSON.stringify(__cadStore.doc()))`);
+    if (JSON.stringify(after.features[0].kind.sketch) !== JSON.stringify(a.kind.sketch)) throw new Error("cambió el primer sketch");
+    const s2 = after.features[1].kind.sketch;
+    if (!s2.points.some((p) => Math.hypot(p.x - corner.x, p.y - corner.y) < 1e-6)) throw new Error("la línea no se ancló a la esquina del primero");
+  },
+
+  async "regiones de formas que se cruzan"(b) {
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300, { modifiers: 8 });
+    await b.click(600, 450, { modifiers: 8 });
+    await sleep(600);
+    await b.clickText("Rectángulo");
+    await b.click(500, 375, { modifiers: 8 });
+    await b.click(700, 520, { modifiers: 8 });
+    await sleep(1200);
+    const n = await b.eval(`__cadUi.session().regions.length`);
+    if (n !== 3) throw new Error(`regiones: ${n}`);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    // Elegir solo lo común y extruirlo
+    const pick = await b.eval(`(() => { const v = __cadStore.result().sketches[0]; const r = v.regions.reduce((m, x) => (x.outer.area < m.outer.area ? x : m)); return __cadViewer.screenOf((() => { const pl = v.plane, p = r.sample; const [o, n, x] = [pl.origin, pl.normal, pl.x_dir]; const y = [n[1]*x[2]-n[2]*x[1], n[2]*x[0]-n[0]*x[2], n[0]*x[1]-n[1]*x[0]]; return [0,1,2].map((k) => o[k] + x[k]*p[0] + y[k]*p[1]); })()); })()`);
+    await b.click(...pick, { wait: 800 });
+    await b.clickText("Extrusión");
+    await sleep(2500);
+    await accept(b, 2500);
+    const r = await evaluate();
+    if (r.status.some((x) => x.state !== "ok")) throw new Error(JSON.stringify(r.status));
+    const small = await b.eval(`Math.min(...__cadStore.result().sketches[0].regions.map((x) => x.outer.area))`);
+    near(r.body.volume, small * 10, small * 0.01, "solo lo común");
+  },
+
+  async "texto: caja, se elige entero y doble clic lo cambia"(b) {
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Texto");
+    await sleep(300);
+    await b.click(450, 400, { wait: 2500 });
+    await b.key("Escape", "Escape", 27);
+    await sleep(300);
+    await b.eval(`document.querySelector('[aria-label="Elegir"]').click()`);
+    await sleep(300);
+    const t = await b.eval(`JSON.parse(JSON.stringify(__cadUi.session().sketch.texts[0]))`);
+    if (!t) throw new Error("no se creó el texto");
+    // Clic dentro de la caja: el ancla (todo el texto)
+    const box = await b.eval(`(() => { const s = __cadUi.session(); const t = s.sketch.texts[0]; const at = new Map(s.sketch.points.map((p) => [p.id, p])); const xs = t.points.map((i) => at.get(i).x), ys = t.points.map((i) => at.get(i).y); return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2]; })()`);
+    const pl = await b.eval(`__cadUi.session().plane`);
+    const world = [0, 1, 2].map((k) => pl.origin[k] + pl.x_dir[k] * box[0] + [pl.normal[1] * pl.x_dir[2] - pl.normal[2] * pl.x_dir[1], pl.normal[2] * pl.x_dir[0] - pl.normal[0] * pl.x_dir[2], pl.normal[0] * pl.x_dir[1] - pl.normal[1] * pl.x_dir[0]][k] * box[1]);
+    const [x, y] = await b.eval(`__cadViewer.screenOf(${JSON.stringify(world)})`);
+    await b.click(x, y, { wait: 900 });
+    const sel = await b.eval(`__cadUi.selection()`);
+    if (sel.length !== 1 || sel[0] !== t.anchor) throw new Error(`elegido: ${JSON.stringify(sel)}`);
+    // Doble clic: el campo encima de la caja
+    await b.click(x, y, { wait: 50 });
+    await b.click(x, y, { wait: 0 });
+    await sleep(600);
+    if (!(await b.eval(`!!document.querySelector("[data-text-edit]")`))) throw new Error("no apareció el campo");
+    const focused = await b.eval(`document.activeElement?.matches("[data-text-edit]")`);
+    if (!focused) throw new Error("el campo no tiene el foco");
+    await b.eval(`(() => { const i = document.querySelector("[data-text-edit]"); i.select(); document.execCommand("insertText", false, "Hola"); })()`);
+    await b.key("Enter", "Enter", 13);
+    await sleep(2500);
+    const now = await b.eval(`__cadUi.session().sketch.texts[0].text`);
+    if (now !== "Hola") throw new Error(`texto: ${now}`);
+    await b.shot("texto-caja");
   },
 };
 

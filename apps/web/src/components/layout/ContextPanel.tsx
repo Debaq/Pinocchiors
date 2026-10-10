@@ -1,4 +1,5 @@
-import { Component, Switch, Match, Show, For, createEffect, on, type JSX } from "solid-js";
+import { outlinerQuery, setOutlinerQuery } from "../../lib/outlinerFilter";
+import { Component, Switch, Match, Show, For, createEffect, createSignal, on, onCleanup, onMount, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { stepInfo, workspaceOf, type PipelineStepId } from "../../lib/pipeline";
 import { createPersisted, startDrag } from "../../lib/ui-state";
@@ -131,7 +132,12 @@ const MIN_OUTLINER = 60;
 export const ContextPanel: Component<ContextPanelProps> = (props) => {
   const [width, setWidth] = createPersisted("dock.width", 320);
   const [outlinerOpen, setOutlinerOpen] = createPersisted("dock.outliner.open", true);
-  const [outlinerHeight, setOutlinerHeight] = createPersisted("dock.outliner.height", 180);
+  // Alto del Outliner como parte del panel: al empezar 3 de 5 (3:2 con las propiedades)
+  const [outlinerRatio, setOutlinerRatio] = createPersisted("dock.outliner.ratio", 0.6);
+  const [dockHeight, setDockHeight] = createSignal(600);
+  /** Alto que queda para el Outliner y las propiedades (sin los encabezados) */
+  const free = () => Math.max(200, dockHeight() - 8 - 32 - 4);
+  const outlinerHeight = () => Math.max(MIN_OUTLINER, Math.min(free() - 160, Math.round(free() * outlinerRatio())));
   const [storedTab, setTab] = createPersisted<string>("dock.tab", "section");
   const tab = (): TabId => (FIXED_TABS.some((t) => t.id === storedTab()) ? (storedTab() as TabId) : "section");
 
@@ -169,10 +175,17 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
   };
 
   let dockRef: HTMLElement | undefined;
+  onMount(() => {
+    if (!dockRef) return;
+    const ro = new ResizeObserver(() => setDockHeight(dockRef!.clientHeight));
+    ro.observe(dockRef);
+    setDockHeight(dockRef.clientHeight);
+    onCleanup(() => ro.disconnect());
+  });
   const resizeOutliner = (e: PointerEvent) => {
     const start = outlinerHeight();
-    const max = (dockRef?.clientHeight ?? 600) - 160;
-    startDrag(e, "row-resize", (_, dy) => setOutlinerHeight(Math.min(max, Math.max(MIN_OUTLINER, start + dy))));
+    const max = free() - 160;
+    startDrag(e, "row-resize", (_, dy) => setOutlinerRatio(Math.min(max, Math.max(MIN_OUTLINER, start + dy)) / free()));
   };
 
   return (
@@ -195,6 +208,28 @@ export const ContextPanel: Component<ContextPanelProps> = (props) => {
           open={outlinerOpen()}
           onToggle={() => setOutlinerOpen(!outlinerOpen())}
         >
+          {/* Buscador: filtra por nombre (objetos, planos, operaciones, huesos…) */}
+          <div class="relative w-32 shrink min-w-0">
+            <Icons.MagnifyingGlass size={11} class="absolute left-1.5 top-1/2 -translate-y-1/2 text-text-dim pointer-events-none" />
+            <input
+              type="search"
+              aria-label="Buscar en el Outliner"
+              placeholder="Buscar"
+              value={outlinerQuery()}
+              class="w-full h-5 pl-5 pr-1 rounded bg-surface/40 border border-border text-[11px] text-text outline-none focus:border-accent placeholder:text-text-dim"
+              onInput={(e) => {
+                setOutlinerQuery(e.currentTarget.value);
+                if (!outlinerOpen()) setOutlinerOpen(true);
+              }}
+              onKeyDown={(e) => {
+                e.stopPropagation();
+                if (e.key === "Escape") {
+                  setOutlinerQuery("");
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          </div>
           <Tooltip content="Ocultar panel (N)" placement="left">
             <button
               class="w-5 h-5 flex items-center justify-center rounded text-text-muted hover:text-text hover:bg-surface/50"

@@ -532,6 +532,8 @@ export const App: Component = () => {
   };
   /** Visor del diseño: en Diseñar y mientras se exporta el diseño */
   const showCad = () => inDesign() || (exportDesign() && pipeline.activeStep() === "export");
+  /** Dónde pone Diseñar sus herramientas: la barra izquierda */
+  const [cadToolsMount, setCadToolsMount] = createSignal<HTMLDivElement>();
 
   // History (undo/redo)
   // Pasos del historial como datos (se guardan en el proyecto); cada tipo
@@ -1356,7 +1358,22 @@ export const App: Component = () => {
     return { planes, featureTree, featureCount: doc.features.length };
   };
 
-  /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen) */
+  /** Operación que reemplazó a la pieza (un corte que la partió o una unión), si fue así */
+  const replacedEntry = (part: PartId) => cad.result()?.replaced?.find((r) => r.from.some((x) => partKey(x.id) === partKey(part)));
+  /** Las piezas de hoy que salieron de `part` (siguiendo cortes y uniones) */
+  const piecesOf = (part: PartId, depth = 0): PartId[] => {
+    const parts = cad.result()?.parts ?? [];
+    if (parts.some((p) => partKey(p.id) === partKey(part))) return [part];
+    const r = depth < 64 ? replacedEntry(part) : undefined;
+    return r ? [...new Map(r.into.flatMap((x) => piecesOf(x, depth + 1)).map((x) => [partKey(x), x])).values()] : [];
+  };
+  /** Objetos de las piezas que salieron de una tachada */
+  const piecesObjects = (part: PartId) => {
+    const keys = new Set(piecesOf(part).map(partKey));
+    return objects().filter((o) => isCadObject(o) && keys.has(partKey(o.source.part)));
+  };
+
+  /** Filas de los objetos para el Outliner (las piezas que ya no están y nunca tuvieron malla no salen; las reemplazadas, tachadas) */
   const objectRows = (): ObjectRow[] => {
     const doc = cad.committed();
     const parts = cad.result()?.parts ?? [];
@@ -1379,6 +1396,24 @@ export const App: Component = () => {
       if (isCadObject(o)) {
         const i = parts.findIndex((p) => partKey(p.id) === partKey(o.source.part));
         const view = parts[i];
+        // Partida por un corte o unida con otras: tachada; un clic elige lo que salió de ella
+        const replaced = !view ? replacedEntry(o.source.part) : undefined;
+        if (replaced && !isActive) {
+          const into = piecesObjects(o.source.part).map((x) => x.name);
+          return [{
+            id: `obj-${o.id}`,
+            type: "part",
+            label: o.name,
+            active: false,
+            modifications,
+            selected: false,
+            visible: false,
+            readonly: true,
+            deletable: false,
+            struck: true,
+            hint: `${replaced.from.length > 1 ? "Unida con otras" : "Partida"}${into.length ? ` en ${into.join(", ")}` : ""}: clic elige ${into.length > 1 ? "esas" : "esa"}`,
+          }];
+        }
         if (!view && !materialized(o, active)) return [];
         return [{
           id: `obj-${o.id}`,
@@ -6875,6 +6910,14 @@ export const App: Component = () => {
       setExtraObjects((list) => (list.includes(object.id) ? list.filter((i) => i !== object.id) : [...list, object.id]));
       return;
     }
+    // Tachada: se eligen las piezas que salieron de ella
+    if (isCadObject(object) && !cad.result()?.parts.some((p) => partKey(p.id) === partKey(object.source.part)) && replacedEntry(object.source.part)) {
+      const pieces = piecesObjects(object.source.part);
+      if (!pieces.length) return;
+      setExtraObjects(pieces.slice(1).map((x) => x.id));
+      void activateObject(pieces[0].id);
+      return;
+    }
     if (object) {
       setExtraObjects([]);
       if (isCadObject(object) && inDesign()) {
@@ -6927,9 +6970,10 @@ export const App: Component = () => {
             disabledReason={toolDisabledReason}
             activeTool={activeTool()}
             onToolChange={(tool) => useTool(tool)}
-            onResetView={() => viewerRef?.resetView()}
-            canUndo={inDesign() ? cad.canUndo() : history.canUndo()}
-            canRedo={inDesign() ? cad.canRedo() : history.canRedo()}
+            onResetView={showCad() ? undefined : () => viewerRef?.resetView()}
+            toolsMount={showCad() ? setCadToolsMount : undefined}
+            canUndo={inDesign() ? (cadUi.session() ? cadUi.sketchHistory().undo > 0 : cad.canUndo()) : history.canUndo()}
+            canRedo={inDesign() ? (cadUi.session() ? cadUi.sketchHistory().redo > 0 : cad.canRedo()) : history.canRedo()}
             onUndo={undo}
             onRedo={redo}
           />
@@ -7078,7 +7122,7 @@ export const App: Component = () => {
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions}
+              <CadView store={cad} ui={cadUi} toolsMount={cadToolsMount()} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions}
                 lights={lights()}
                 trackpad={trackpadNavigation()}
                 initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}

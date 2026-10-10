@@ -77,8 +77,8 @@ fn join_merges_what_it_touches_and_otherwise_makes_a_part() {
     doc.add(cube(30.0, 10.0, BodyOp::Join));
     let ev = doc.evaluate();
     assert_eq!(ev.parts.len(), 2, "unir sin tocar nada es una pieza nueva");
-    // Un puente que toca las dos: queda una sola pieza, con el id de la primera
-    doc.add(FeatureKind::Primitive(Primitive {
+    // Un puente que toca las dos: las dos salen y queda una pieza nueva del puente
+    let bridge = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Box { dx: 30.0, dy: 4.0, dz: 4.0, centered: false, centered_z: false },
         origin: [5.0, 3.0, 3.0],
         z: [0.0, 0.0, 1.0],
@@ -88,8 +88,11 @@ fn join_merges_what_it_touches_and_otherwise_makes_a_part() {
     }));
     let ev = doc.evaluate();
     assert_eq!(ev.parts.len(), 1);
-    assert_eq!(ev.parts[0].id, PartId { feature: a, index: 0 });
+    assert_eq!(ev.parts[0].id, PartId { feature: bridge, index: 0 });
     assert_relative_eq!(volumes(&ev)[0], 2000.0 + 20.0 * 16.0, max_relative = 1e-9);
+    assert_eq!(ev.replaced.len(), 1);
+    assert_eq!(ev.replaced[0].from[0], PartId { feature: a, index: 0 });
+    assert_eq!(ev.replaced[0].into, vec![PartId { feature: bridge, index: 0 }]);
     // Apoyada sobre otra (comparte una cara): también se unen
     let mut doc = Document::new();
     doc.add(cube(0.0, 10.0, BodyOp::Join));
@@ -238,30 +241,39 @@ fn boolean_split_and_delete_parts() {
     assert_relative_eq!(volumes(&ev)[0], 500.0, max_relative = 1e-9);
     assert!(doc.get(s).unwrap().kind.dependencies().contains(&b));
 
-    // Separar: una pieza con dos sólidos sueltos (un corte por el medio)
+    // Un corte por el medio deja dos sólidos: la pieza sale y cada pedazo es
+    // una pieza nueva (del más grande al más chico)
     let mut doc = Document::new();
     let a = doc.add(cube(0.0, 10.0, BodyOp::Join));
-    doc.add(FeatureKind::Primitive(Primitive {
+    let cut = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Box { dx: 2.0, dy: 20.0, dz: 20.0, centered: false, centered_z: false },
-        origin: [4.0, -5.0, -5.0],
+        origin: [3.0, -5.0, -5.0],
         z: [0.0, 0.0, 1.0],
         x: [1.0, 0.0, 0.0],
         op: BodyOp::Cut,
         link: None,
     }));
-    assert_eq!(doc.evaluate().parts.len(), 1);
-    let sp = doc.add(FeatureKind::SplitParts { parts: vec![] });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     assert_eq!(ev.parts.len(), 2);
-    assert_eq!(ev.parts[0].id, part(a));
-    assert_eq!(ev.parts[1].id, PartId { feature: sp, index: 0 });
-    assert_relative_eq!(volumes(&ev).iter().sum::<f64>(), 800.0, max_relative = 1e-9);
+    assert_eq!(ev.parts[0].id, PartId { feature: cut, index: 0 });
+    assert_eq!(ev.parts[1].id, PartId { feature: cut, index: 1 });
+    assert_relative_eq!(volumes(&ev)[0], 500.0, max_relative = 1e-9);
+    assert_relative_eq!(volumes(&ev)[1], 300.0, max_relative = 1e-9);
+    assert_eq!(ev.replaced, vec![Replaced { feature: cut, from: vec![part(a)], into: vec![ev.parts[0].id, ev.parts[1].id] }]);
     // Las caras conservan su origen (la de abajo de la caja original)
     assert!(ev.parts[1].tags.iter().any(|t| t.iter().any(|t| t.feature == a)));
-    // Borrar la nueva
-    doc.add(FeatureKind::DeleteParts { parts: vec![PartId { feature: sp, index: 0 }] });
+    // Separar ya no tiene nada que hacer: avisa
+    doc.add(FeatureKind::SplitParts { parts: vec![] });
+    let ev = doc.evaluate();
+    assert_eq!(ev.parts.len(), 2);
+    assert!(!ev.status.iter().all(|s| s.state == FeatureState::Ok));
+    // Borrar la chica
+    doc.add(FeatureKind::DeleteParts { parts: vec![PartId { feature: cut, index: 1 }] });
     let ev = doc.evaluate();
     assert_eq!(ev.parts.len(), 1);
-    assert_relative_eq!(volumes(&ev)[0], 400.0, max_relative = 1e-9);
+    assert_relative_eq!(volumes(&ev)[0], 500.0, max_relative = 1e-9);
+    // Lo que nombra a la original vale por sus pedazos (aquí, el que queda)
+    doc.add(FeatureKind::DeleteParts { parts: vec![part(a)] });
+    assert_eq!(doc.evaluate().parts.len(), 0);
 }

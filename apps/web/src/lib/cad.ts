@@ -817,19 +817,37 @@ export interface PartView {
   center: P3;
   /** Superficie (sin volumen) en vez de sólido */
   surface?: boolean;
+  /** Salió de un corte o una unión: hereda color, material y visibilidad de esa pieza */
+  inherit?: PartId;
 }
 
-/** Colores de pieza por defecto (la primera, el de siempre) */
-export const PART_COLORS = ["#9aa4b8", "#c9a96e", "#8fb98b", "#c48b9f", "#7fa7c9", "#b39ddb", "#d4a373", "#80cbc4"];
+/** Piezas que reemplazó una operación (un corte que las partió o una unión): se ven tachadas */
+export interface ReplacedParts {
+  feature: number;
+  from: { id: PartId; name: string }[];
+  into: PartId[];
+}
+
+/** Ajustes de la pieza: los propios o los de la pieza de la que salió */
+function partEntry(doc: CadDocument | null | undefined, p: PartView) {
+  return doc?.parts?.find((x) => samePart(x.part, p.id)) ?? (p.inherit ? doc?.parts?.find((x) => samePart(x.part, p.inherit!)) : undefined);
+}
+
+/**
+ * Colores de pieza por defecto (la primera, el de siempre). Ninguno cerca del
+ * ámbar de pasar el mouse, del violeta de lo elegido ni del celeste/naranja de
+ * las aristas: si no, esas marcas no se verían sobre la pieza
+ */
+export const PART_COLORS = ["#9aa4b8", "#8fb98b", "#c48b9f", "#7fa7c9", "#6f9e86", "#b5a6a0"];
 
 /** Color de la pieza `i`: el elegido o uno de la paleta */
 export function partColor(doc: CadDocument | null | undefined, p: PartView, i: number): string {
-  return doc?.parts?.find((x) => samePart(x.part, p.id))?.color ?? PART_COLORS[i % PART_COLORS.length];
+  return partEntry(doc, p)?.color ?? PART_COLORS[i % PART_COLORS.length];
 }
 
 /** Material de la pieza: el propio o el del diseño */
 export function partMaterial(doc: CadDocument | null | undefined, p: PartView): Material | null {
-  return doc?.parts?.find((x) => samePart(x.part, p.id))?.material ?? doc?.material ?? null;
+  return partEntry(doc, p)?.material ?? doc?.material ?? null;
 }
 
 /** Masa en gramos (mm³ × kg/m³ × 1e−6), o null sin material */
@@ -858,7 +876,7 @@ export function designMass(doc: CadDocument | null | undefined, r: CadResult | n
 }
 
 export function partHidden(doc: CadDocument | null | undefined, p: PartView): boolean {
-  return !!doc?.parts?.find((x) => samePart(x.part, p.id))?.hidden;
+  return !!partEntry(doc, p)?.hidden;
 }
 
 /** Carpeta: las operaciones de `first` a `last` en el orden actual */
@@ -1070,6 +1088,8 @@ export interface CadResult {
   /** Operaciones calculadas en este recálculo (las demás salieron de la caché) */
   recomputed: number;
   parts: PartView[];
+  /** Piezas reemplazadas por cortes que las partieron o uniones */
+  replaced?: ReplacedParts[];
   references: RefView[];
   assembly: AssemblyView | null;
   /** Roscas, para coordinarlas */
@@ -3574,6 +3594,10 @@ export function createCadStore() {
     /** Medidas de una o dos cosas elegidas en el sólido mostrado */
     measure: (items: MeasureItem[]) => invoke<Measurement>("cad_measure", { items }),
     edgeRef: (edge: number) => invoke<EdgeRef>("cad_edge_ref", { edge }),
+    /** Caras del sólido mostrado que vienen de la operación `feature` */
+    featureFaces: (feature: number) => invoke<number[]>("cad_feature_faces", { feature }),
+    /** Aristas del borde de una cara del sólido mostrado */
+    faceEdges: (face: number) => invoke<number[]>("cad_face_edges", { face }),
     /** Vértice del sólido en `point` como punto que lo sigue (extremo de una arista) */
     vertexSpec: (point: P3) => invoke<PointSpec>("cad_vertex_spec", { point }),
     projectEdge: (edge: number, plane: Plane) => invoke<ProjectedEdge>("cad_project_edge", { edge, plane }),

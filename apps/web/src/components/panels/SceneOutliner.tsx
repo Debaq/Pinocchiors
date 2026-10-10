@@ -1,6 +1,7 @@
 import { Component, For, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
 import type { SceneNode } from "../../lib/scene-tree";
+import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
 
@@ -110,8 +111,9 @@ const OutlinerNode: Component<{
           "flex-1 truncate",
           isGroup ? "text-[10px] font-semibold uppercase tracking-wide text-text-muted" : "text-xs",
           !isGroup && (props.node.error ? "text-red" : props.node.selected ? "text-accent font-medium" : "text-text"),
-          (!props.node.visible || props.node.muted) && "opacity-50",
-          props.node.muted && "italic"
+          (!props.node.visible || props.node.muted || props.node.struck) && "opacity-50",
+          props.node.muted && "italic",
+          props.node.struck && "line-through"
         )}>
           {props.node.label}
         </span>
@@ -187,9 +189,27 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
   const onToggleExpanded = (node: SceneNode) =>
     setOpenState((prev) => ({ ...prev, [node.id]: !isExpanded(node) }));
 
+  // Con búsqueda: quedan los que coinciden y sus padres, abiertos; los grupos
+  // con contenido propio (operaciones) filtran adentro
+  const filter = (node: SceneNode): SceneNode | null => {
+    if (node.content) return node;
+    const children = node.children.map(filter).filter((c): c is SceneNode => !!c);
+    if (node.type !== "group" && matchesOutliner(node.label)) return { ...node, children: node.children };
+    return children.length ? { ...node, children, expanded: true } : null;
+  };
+  const roots = () => {
+    const list = props.tree.children;
+    if (!outlinerQuery().trim()) return list;
+    return list.map(filter).filter((c): c is SceneNode => !!c);
+  };
+  const expandedNow = (node: SceneNode) => (outlinerQuery().trim() ? node.expanded || isExpanded(node) : isExpanded(node));
+
   return (
     <div class="space-y-0.5" data-outliner>
-      <For each={props.tree.children}>
+      <Show when={outlinerQuery().trim() && roots().length === 0}>
+        <p class="px-2 py-1 text-xs text-text-dim">Nada coincide con «{outlinerQuery().trim()}»</p>
+      </Show>
+      <For each={roots()}>
         {(node) => (
           <OutlinerNode
             node={node}
@@ -197,7 +217,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onToggleVisibility={props.onToggleVisibility}
             onSelectNode={props.onSelectNode}
             onDeleteNode={props.onDeleteNode}
-            isExpanded={isExpanded}
+            isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}
           />
         )}

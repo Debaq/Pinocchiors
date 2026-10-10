@@ -40,6 +40,7 @@ import {
   type SketchConstraint,
   type SolveReport,
   editsAsSketch,
+  type PartId,
 } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
@@ -121,7 +122,18 @@ export type PickMode =
   /** Elegir una cara del sólido: se avisa a `done` */
   | { kind: "face"; prompt: string; owner?: string; done: (face: FaceRef, index: number) => void }
   /** Marcar/desmarcar aristas: `toggle` con cada clic */
-  | { kind: "edges"; prompt: string; owner?: string; toggle: (edge: EdgeRef, index: number) => void }
+  | {
+      kind: "edges";
+      prompt: string;
+      owner?: string;
+      toggle: (edge: EdgeRef, index: number) => void;
+      /**
+       * Redondeo o chaflán en vivo: se elige sobre la vista previa de la
+       * operación `feature`. Clic en lo que ella hizo quita la arista más
+       * cercana a `near`; clic en una cara suma (o quita) todas sus aristas
+       */
+      live?: { feature: number; remove: (near: P3) => void; face: (edges: EdgeRef[]) => void };
+    }
   /** Marcar/desmarcar caras: `toggle` con cada clic */
   | { kind: "faces"; prompt: string; owner?: string; toggle: (face: FaceRef, index: number) => void }
   /** Elegir una zona del escaneo */
@@ -130,8 +142,12 @@ export type PickMode =
   | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
   /** Un eje: una línea del sketch `sketch` o una arista del sólido */
   | { kind: "axis"; prompt: string; owner?: string; sketch: number; done: (axis: AxisSpec) => void }
-  /** Dónde va un sketch nuevo: un plano base o una cara plana */
-  | { kind: "place"; prompt: string; done: (spec: PlaneSpec) => void }
+  /** Dónde va un sketch nuevo: un plano base, una cara plana o el plano de otro sketch (con su corrimiento) */
+  | { kind: "place"; prompt: string; done: (spec: PlaneSpec, offset?: number) => void }
+  /** Piezas con un clic sobre ellas (otra vez la quita) */
+  | { kind: "parts"; prompt: string; owner?: string; toggle: (part: PartId) => void }
+  /** Dónde va un agujero: una cara plana y el punto del clic (mm) */
+  | { kind: "hole"; prompt: string; done: (face: number, at: P3) => void }
   /** Una cara de la malla del ensamble (su índice) */
   | { kind: "asm_face"; prompt: string; done: (face: number) => void }
   /** Sketch 3D: clic en un punto o una curva del sketch, un vértice del sólido o el plano activo; `from` es donde arranca lo que se dibuja */
@@ -226,6 +242,8 @@ export function createCadUi(store: CadStore) {
   const [selectedConstraints, setSelectedConstraints] = createSignal<number[]>([]);
   // Lo que nombra la restricción bajo el mouse en el panel (resaltado en el visor)
   const [hoverIds, setHoverIds] = createSignal<number[]>([]);
+  /** Operación bajo el mouse en el árbol (se resalta en el visor) */
+  const [hoverFeature, setHoverFeature] = createSignal<number>();
   // Selección en el visor (caras, aristas, regiones, planos), como en Onshape
   const [picks, setPicks] = createSignal<Pick3d[]>([]);
   const [hiddenSketches, setHiddenSketches] = createSignal<number[]>([]);
@@ -368,6 +386,8 @@ export function createCadUi(store: CadStore) {
     selection,
     setSelection,
     hoverIds,
+    hoverFeature,
+    setHoverFeature,
     setHoverIds,
 
     // ─── Selección en el visor ────────────────────────────────────────────

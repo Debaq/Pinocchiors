@@ -1,4 +1,4 @@
-import { Component, For } from "solid-js";
+import { Component, For, Show } from "solid-js";
 import { clsx } from "clsx";
 import { IconButton, Tooltip } from "../ui";
 import type { ToolDef, ToolId } from "../../lib/tools";
@@ -16,6 +16,11 @@ export interface ToolbarProps {
   onUndo?: () => void;
   onRedo?: () => void;
   onResetView?: () => void;
+  /**
+   * Las herramientas las pone otro componente (Diseñar las cambia según haya
+   * un sketch abierto o no): recibe el lugar donde dibujarlas
+   */
+  toolsMount?: (el: HTMLDivElement) => void;
 }
 
 const toolIcons: Record<ToolId, Component<{ size?: number | string; class?: string }>> = {
@@ -38,7 +43,10 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
       )}
     >
       {/* Tools */}
-      <For each={props.tools}>
+      <Show when={props.toolsMount}>
+        <div ref={(el) => props.toolsMount?.(el)} class="flex flex-col items-center w-full min-h-0 overflow-y-auto overflow-x-hidden [scrollbar-width:none]" />
+      </Show>
+      <For each={props.toolsMount ? [] : props.tools}>
         {(tool) => {
           const ToolIcon = toolIcons[tool.id];
           const reason = () => props.disabledReason?.(tool.id);
@@ -63,20 +71,22 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
         }}
       </For>
 
-      {/* Separator */}
-      <div class="w-6 h-px bg-border my-1" />
+      <Show when={props.onResetView}>
+        {/* Separator */}
+        <div class="w-6 h-px bg-border my-1" />
 
-      {/* Reset View */}
-      <Tooltip content="Ver todo (Inicio)" placement="right">
-        <IconButton
-          aria-label="Ver todo"
-          variant="ghost"
-          size="md"
-          onClick={props.onResetView}
-        >
-          <Icons.House size={16} />
-        </IconButton>
-      </Tooltip>
+        {/* Reset View */}
+        <Tooltip content="Ver todo (Inicio)" placement="right">
+          <IconButton
+            aria-label="Ver todo"
+            variant="ghost"
+            size="md"
+            onClick={props.onResetView}
+          >
+            <Icons.House size={16} />
+          </IconButton>
+        </Tooltip>
+      </Show>
 
       {/* Spacer */}
       <div class="flex-1" />

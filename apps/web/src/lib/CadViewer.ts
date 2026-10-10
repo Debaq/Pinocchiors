@@ -9,6 +9,8 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
 import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
@@ -89,6 +91,10 @@ export interface SketchOverlay {
   grid?: { a: P2; b: P2; major: boolean }[];
   /** Grados libres: puntos con una sola dirección (y cuál), puntos libres del todo y círculos con el radio libre */
   freedom?: { dirs: [number, P2][]; free: number[]; radius: number[] };
+  /** Puntos que no se dibujan (los de las letras de un texto) */
+  hiddenPoints?: number[];
+  /** Cajas de los textos (se eligen enteros); la elegida, resaltada */
+  textBoxes?: { min: P2; max: P2; selected: boolean }[];
 }
 
 /** Sketch 3D en edición: lo elegido, lo libre, lo que choca, el plano activo y lo que se está dibujando */
@@ -245,6 +251,9 @@ export class CadViewer {
   /** Luces del panel Luces, como en el visor principal */
   private lightRig: LightRig;
   private highlightedFaces = new Set<number>();
+  /** Operación bajo el mouse en el árbol: sus caras, o el sketch si es uno */
+  private hoverFaces = new Set<number>();
+  private hoverSketch?: number;
   private highlightedEdges = new Set<number>();
   /** Lo que elegiría un clic, bajo el puntero (preselección) */
   private preselect: CadPick | null = null;
@@ -351,6 +360,7 @@ export class CadViewer {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     if (this.preselectMark instanceof LineSegments2) this.preselectMark.material.resolution.set(w, h);
+    for (const o of this.sketchGroup.children) if (o instanceof Line2) o.material.resolution.set(w, h);
     this.requestRender();
   }
 
@@ -872,6 +882,15 @@ export class CadViewer {
   }
 
   /** Caras y aristas resaltadas (selección de referencias) */
+  /** Resalta lo de una operación (al pasar el mouse por el árbol): sus caras o el sketch */
+  setFeatureHover(faces: number[], sketch?: number) {
+    this.hoverFaces = new Set(faces);
+    this.hoverSketch = sketch;
+    this.paintBody();
+    this.tintPreselected();
+    this.requestRender();
+  }
+
   setHighlight(faces: number[], edges: number[]) {
     this.highlightedFaces = new Set(faces);
     this.highlightedEdges = new Set(edges);
@@ -924,13 +943,19 @@ export class CadViewer {
     const color = themeHex("preselect");
     const groups = [this.planesGroup, this.refsGroup, this.sketchesGroup];
     for (const o of groups.flatMap((g) => g.children)) {
+      // Líneas de un sketch visible: ámbar si su operación está bajo el mouse
+      if (o.userData.sketchLine !== undefined) {
+        ((o as THREE.Line).material as THREE.LineBasicMaterial).color.setHex(o.userData.sketchLine === this.hoverSketch ? color : o.userData.lineColor);
+        continue;
+      }
       const base = o.userData.base as { color: number; opacity: number; outline?: THREE.LineSegments } | undefined;
       if (!base) continue;
       const u = o.userData;
       const on =
         (pre?.kind === "plane" && u.plane === pre.plane) ||
         (pre?.kind === "refplane" && u.refPlane === pre.feature) ||
-        (pre?.kind === "region" && u.sketch === pre.sketch && u.region === pre.region);
+        (pre?.kind === "region" && u.sketch === pre.sketch && u.region === pre.region) ||
+        (u.sketch !== undefined && u.sketch === this.hoverSketch);
       const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial;
       m.color.setHex(on ? color : base.color);
       m.opacity = on ? Math.max(base.opacity, 0.32) : base.opacity;
@@ -957,7 +982,7 @@ export class CadViewer {
       for (let t = 0; t < this.bodyData.triangleFace.length; t++) {
         const f = this.bodyData.triangleFace[t];
         let c = this.highlightedFaces.has(f) ? hi : faceColor(f);
-        if (f === preFace) c = c.clone().lerp(pre, 0.6);
+        if (f === preFace || this.hoverFaces.has(f)) c = c.clone().lerp(pre, 0.6);
         for (let k = 0; k < 3; k++) colors.setXYZ(idx[t * 3 + k], c.r, c.g, c.b);
       }
       colors.needsUpdate = true;
@@ -1059,8 +1084,26 @@ export class CadViewer {
       }
     }
 
-    const lines = (pts: (P2 | undefined)[], color: number, dashed = false) => {
+    const lines = (pts: (P2 | undefined)[], color: number, dashed = false, width = 1) => {
       if (pts.some((p) => !p)) return;
+      if (width > 1) {
+        // Las líneas de WebGL tienen 1 px: las gruesas (elegidas, bajo el mouse) van con Line2
+        const g = new LineGeometry().setPositions((pts as P2[]).flatMap((p) => w(p).toArray()));
+        const m = new LineMaterial({
+          color,
+          linewidth: width,
+          resolution: this.renderer.getSize(new THREE.Vector2()),
+          depthTest: false,
+          dashed,
+          dashSize: 2 / this.mmPerUnit,
+          gapSize: 1.5 / this.mmPerUnit,
+        });
+        const l = new Line2(g, m);
+        if (dashed) l.computeLineDistances();
+        l.renderOrder = 8;
+        this.sketchGroup.add(l);
+        return;
+      }
       const g = new THREE.BufferGeometry().setFromPoints((pts as P2[]).map(w));
       const m = dashed
         ? new THREE.LineDashedMaterial({ color, dashSize: 2 / this.mmPerUnit, gapSize: 1.5 / this.mmPerUnit, depthTest: false })
@@ -1078,11 +1121,12 @@ export class CadViewer {
     const linkedE = new Set(overlay.linkedEntities ?? []);
     // Como Onshape: azul = le falta definir, color del texto = definida, rojo = en conflicto,
     // violeta = sigue al modelo
+    // Lo elegido sigue naranja aunque esté bajo el mouse: así se ve que el clic lo tomó
     const entityColor = (id: number, construct: boolean) =>
-      hover.has(id)
-        ? themeHex("cyan")
-        : selected.has(id)
-          ? sel
+      selected.has(id)
+        ? sel
+        : hover.has(id)
+          ? themeHex("cyan")
           : conflictE.has(id)
             ? themeHex("error")
             : construct
@@ -1142,7 +1186,9 @@ export class CadViewer {
         const poly = g.poles.map((id) => point.get(id));
         lines(g.closed ? [...poly, poly[0]] : poly, construction, true);
       } else if (g.type === "ellipse" || g.type === "ellipse_arc") pts = entityPolyline(g, point) ?? [];
-      if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction);
+      // Elegida: gruesa (más aún bajo el mouse); preseleccionada: algo más gruesa
+      const width = selected.has(e.id) ? (hover.has(e.id) ? 5 : 3.5) : hover.has(e.id) ? 2.5 : 1;
+      if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction, width);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
     if (overlay.curvature) {
@@ -1152,7 +1198,15 @@ export class CadViewer {
     }
     for (const g of overlay.guides ?? []) lines(g, themeHex("cyan"), true);
 
+    // Textos: una caja punteada alrededor (se eligen enteros)
+    for (const b of overlay.textBoxes ?? []) {
+      const [x0, y0] = b.min;
+      const [x1, y1] = b.max;
+      lines([[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]], b.selected ? sel : construction, true, b.selected ? 2 : 1);
+    }
+
     // Puntos: libres en amarillo, definidos en verde
+    const hiddenPts = new Set(overlay.hiddenPoints ?? []);
     const free = new Set(overlay.freePoints ?? []);
     const pos: number[] = [];
     const col: number[] = [];
@@ -1167,14 +1221,15 @@ export class CadViewer {
     };
     for (const p of sketch.points) {
       if (p.id === sketch.origin) {
-        marker([p.x, p.y], hover.has(p.id) ? themeHex("cyan") : selected.has(p.id) ? themeHex("orange") : themeHex("purple"), 10);
+        marker([p.x, p.y], selected.has(p.id) ? themeHex("orange") : hover.has(p.id) ? themeHex("cyan") : themeHex("purple"), 10);
         continue;
       }
       if (overlay.hidePoints && !selected.has(p.id) && !hover.has(p.id)) continue;
+      if (hiddenPts.has(p.id)) continue;
       const v = w([p.x, p.y]);
       pos.push(v.x, v.y, v.z);
       const c = new THREE.Color(
-        hover.has(p.id) ? themeHex("cyan") : selected.has(p.id) ? themeHex("orange") : free.has(p.id) ? themeHex("yellow") : themeHex("green"),
+        selected.has(p.id) ? themeHex("orange") : hover.has(p.id) ? themeHex("cyan") : free.has(p.id) ? themeHex("yellow") : themeHex("green"),
       );
       col.push(c.r, c.g, c.b);
     }
@@ -1250,6 +1305,7 @@ export class CadViewer {
           : new THREE.Line(g, new THREE.LineBasicMaterial({ color }));
         if (e.construction) l.computeLineDistances();
         l.renderOrder = 5;
+        l.userData = { sketchLine: vs.id, lineColor: color };
         this.sketchesGroup.add(l);
       }
     }

@@ -1,6 +1,6 @@
-// Barra de herramientas de Diseñar, arriba del visor: lo más usado a la vista
-// (ícono y texto) y el resto en menús por categoría. Durante un sketch la
-// reemplaza la barra del sketch.
+// Barras de herramientas de Diseñar: a la izquierda lo más usado (como las
+// herramientas de los otros espacios) y arriba el modo y el resto en menús por
+// categoría. Durante un sketch las reemplazan las del sketch.
 
 import { Component, For, JSX, Show, createSignal, onCleanup } from "solid-js";
 import { clsx } from "clsx";
@@ -22,18 +22,109 @@ interface Tool {
   tip?: string;
 }
 
-const ToolButton: Component<{ tool: Tool; disabled: boolean }> = (props) => (
-  <Tooltip content={props.tool.tip ?? props.tool.label}>
+/** Botón de la barra izquierda: solo el ícono; el nombre en la ayuda */
+export const SideButton: Component<{ label: string; icon: IconC; tip?: string; shortcut?: string; active?: boolean; disabled?: boolean; onClick: () => void }> = (props) => (
+  <Tooltip content={`${props.shortcut ? `${props.label} (${props.shortcut})` : props.label}${props.tip ? `: ${props.tip}` : ""}`} placement="right">
     <button
-      class="flex items-center gap-1.5 h-7 px-2 rounded text-xs text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none whitespace-nowrap"
+      aria-label={props.label}
+      class={clsx(
+        "flex items-center justify-center w-8 h-7 shrink-0 rounded disabled:opacity-40 disabled:pointer-events-none",
+        props.active ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
+      )}
       disabled={props.disabled}
-      onClick={() => props.tool.run()}
+      onClick={() => props.onClick()}
     >
-      <props.tool.icon size={16} />
-      <span>{props.tool.label}</span>
+      <props.icon size={18} />
+      {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
+      <span class="sr-only">{props.label}</span>
     </button>
   </Tooltip>
 );
+
+/** Separador de la barra izquierda */
+export const SideSep = () => <div class="w-6 h-px bg-border my-0.5 shrink-0" />;
+
+/**
+ * Botón de la barra izquierda con variantes: la esquina ▸ abre la lista a la
+ * derecha (como las familias de herramientas del sketch)
+ */
+const SideFamily: Component<{ name: string; tools: Tool[]; hasBody: boolean }> = (props) => {
+  const [open, setOpen] = createSignal(false);
+  let row!: HTMLDivElement;
+  const close = (e: PointerEvent) => {
+    if (!row.contains(e.target as Node) && !(e.target as HTMLElement).closest?.("[data-family-list]")) setOpen(false);
+  };
+  document.addEventListener("pointerdown", close, true);
+  onCleanup(() => document.removeEventListener("pointerdown", close, true));
+  const main = props.tools[0];
+  return (
+    <div ref={row} class="relative">
+      <SideButton label={main.label} icon={main.icon} tip={main.tip} disabled={!!main.needsBody && !props.hasBody} onClick={main.run} />
+      <div class="absolute right-0 bottom-0" data-toolbar-menu={props.name} data-items={JSON.stringify(props.tools.map((t) => t.label))}>
+        <button class="flex items-end justify-end w-3 h-3 text-text-dim hover:text-text" title={props.name} onClick={() => setOpen(!open())}>
+          <Icons.CaretRight size={8} />
+          <span class="sr-only">{props.name}</span>
+        </button>
+      </div>
+      <Show when={open()}>
+        <div
+          role="menu"
+          data-family-list
+          class="fixed z-30 min-w-44 rounded-md border border-border bg-bg-lighter shadow-lg py-1"
+          style={{ left: `${row.getBoundingClientRect().right + 6}px`, top: `${row.getBoundingClientRect().top}px` }}
+        >
+          <For each={props.tools}>
+            {(t) => (
+              <button
+                class="w-full flex items-center gap-2 px-2 py-1 text-xs text-left text-text-muted hover:text-text hover:bg-surface disabled:opacity-40 disabled:pointer-events-none"
+                title={t.tip}
+                disabled={!!t.needsBody && !props.hasBody}
+                onClick={() => {
+                  setOpen(false);
+                  t.run();
+                }}
+              >
+                <t.icon size={16} />
+                {t.label}
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+    </div>
+  );
+};
+
+/** Herramientas de Diseñar en la barra izquierda (sin sketch abierto) */
+export const DesignSideTools: Component<{ store: CadStore; ui: CadUi; actions: DesignActions }> = (props) => {
+  const a = props.actions;
+  const ui = props.ui;
+  const hasBody = () => !!props.store.result()?.body;
+  const sketches: Tool[] = [
+    { label: "Sketch", icon: D.Sketch, run: () => void a.startSketch(), tip: "En el plano o la cara elegida (o sobre otro sketch); si no hay nada elegido, se elige en el visor" },
+    { label: "Sketch 3D", icon: D.Sketch3d, run: a.addSketch3d, tip: "Líneas, arcos y splines en el espacio (caminos de barrido): clic en un plano o en un vértice del sólido" },
+    { label: "Sketch envuelto", icon: D.SurfaceSketch, run: () => void a.startSurfaceSketch(), needsBody: true, tip: "Un sketch dibujado en el desarrollo de una cara y llevado sobre ella (cilindros, conos…)" },
+  ];
+  const main: Tool[] = [
+    { label: "Extrusión", icon: D.Extrude, run: a.addExtrude, tip: "Las regiones elegidas en el visor o una cara plana del sólido; si no hay nada elegido, todo el último sketch" },
+    { label: "Revolución", icon: D.Revolve, run: a.addRevolve, tip: "Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" },
+    { label: "Redondeo", icon: D.Fillet, run: () => void a.startEdges("fillet"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
+    { label: "Chaflán", icon: D.Chamfer, run: () => void a.startEdges("chamfer"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
+    { label: "Agujero", icon: D.Hole, run: a.addHole, needsBody: true, tip: "En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado" },
+  ];
+  const button = (t: Tool) => <SideButton label={t.label} icon={t.icon} tip={t.tip} disabled={!!t.needsBody && !hasBody()} onClick={t.run} />;
+  return (
+    <Show when={!ui.assemblyMode()}>
+      <SideFamily name="Más sketches" tools={sketches} hasBody={hasBody()} />
+      <For each={main}>{button}</For>
+      <Show when={ui.sketchCopy()}>
+        {button({ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" })}
+      </Show>
+      <SideSep />
+      {button({ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" })}
+    </Show>
+  );
+};
 
 /** Menú desplegable: un botón con el nombre de la categoría y sus herramientas debajo */
 const ToolMenu: Component<{ label: string; tools: (Tool | "-")[]; hasBody: boolean }> = (props) => {
@@ -104,15 +195,6 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
   const store = props.store;
   const hasBody = () => !!store.result()?.body;
 
-  const main: Tool[] = [
-    { label: "Sketch", icon: D.Sketch, run: () => void a.startSketch(), tip: "En el plano o la cara elegida; si no hay nada elegido, se elige en el visor" },
-    { label: "Extrusión", icon: D.Extrude, run: a.addExtrude, tip: "Las regiones elegidas en el visor; si no hay, todo el último sketch" },
-    { label: "Revolución", icon: D.Revolve, run: a.addRevolve, tip: "Las regiones elegidas; eje: la primera línea de construcción del sketch, o Z" },
-    { label: "Redondeo", icon: D.Fillet, run: () => void a.startEdges("fillet"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
-    { label: "Chaflán", icon: D.Chamfer, run: () => void a.startEdges("chamfer"), needsBody: true, tip: "Las aristas elegidas (o se eligen en el diálogo)" },
-    { label: "Agujero", icon: D.Hole, run: a.addHole, needsBody: true, tip: "En los puntos (o círculos) del sketch elegido o el último: simple, con caja o avellanado" },
-  ];
-
   const solids: (Tool | "-")[] = [
     { label: "Barrido", icon: D.Sweep, run: a.addSweep, tip: "Un perfil a lo largo de un camino dibujado en otro sketch" },
     { label: "Transición", icon: D.Loft, run: a.addLoft, tip: "Un sólido que pasa por regiones de varios sketches" },
@@ -175,8 +257,6 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
     { label: "Punto", icon: D.Point, run: () => void a.addReference("point") },
     { label: "Hélice", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas" },
-    { label: "Sketch 3D", icon: D.Sketch3d, run: a.addSketch3d, tip: "Líneas, arcos y splines en el espacio (caminos de barrido): clic en un plano o en un vértice del sólido" },
-    { label: "Sketch envuelto", icon: D.SurfaceSketch, run: () => void a.startSurfaceSketch(), needsBody: true, tip: "Un sketch dibujado en el desarrollo de una cara y llevado sobre ella (cilindros, conos…)" },
   ];
 
   return (
@@ -203,14 +283,9 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
           )}
         </For>
       </div>
-      <Sep />
       <Show when={!ui.assemblyMode()}>
+        <Sep />
         <div class="flex items-center gap-0.5 flex-wrap">
-          <For each={main}>{(t) => <ToolButton tool={t} disabled={!!t.needsBody && !hasBody()} />}</For>
-          <Show when={ui.sketchCopy()}>
-            <ToolButton tool={{ label: "Pegar sketch", icon: D.Sketch, run: a.pasteSketch, tip: "El sketch copiado, como uno nuevo en el plano o la cara elegida" }} disabled={false} />
-          </Show>
-          <Sep />
           <ToolMenu label="Sólidos" tools={solids} hasBody={hasBody()} />
           <ToolMenu label="Modificar" tools={modify} hasBody={hasBody()} />
           <ToolMenu label="Patrones" tools={patterns} hasBody={hasBody()} />
@@ -218,23 +293,8 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
           <ToolMenu label="Chapa" tools={sheet} hasBody={hasBody()} />
           <ToolMenu label="Superficies" tools={surfaces} hasBody={hasBody()} />
           <ToolMenu label="Referencias" tools={refs} hasBody={hasBody()} />
-          <Sep />
-          <ToolButton tool={{ label: "Plano 2D", icon: D.Drawing, run: () => ui.setDrawingOpen(true), needsBody: true, tip: "Vistas, líneas ocultas, cotas y cajetín" }} disabled={!hasBody()} />
         </div>
-        <Sep />
       </Show>
-      <Tooltip content="Deshacer (Ctrl+Z)">
-        <button class="p-1 rounded text-text-muted hover:text-text hover:bg-surface disabled:opacity-40" disabled={!store.canUndo()} onClick={() => store.undo()}>
-          <Icons.ArrowCounterClockwise size={15} />
-          <span class="sr-only">Deshacer</span>
-        </button>
-      </Tooltip>
-      <Tooltip content="Rehacer (Ctrl+Shift+Z)">
-        <button class="p-1 rounded text-text-muted hover:text-text hover:bg-surface disabled:opacity-40" disabled={!store.canRedo()} onClick={() => store.redo()}>
-          <Icons.ArrowClockwise size={15} />
-          <span class="sr-only">Rehacer</span>
-        </button>
-      </Tooltip>
     </div>
   );
 };

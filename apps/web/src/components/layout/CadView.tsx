@@ -23,7 +23,8 @@ import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
 import { DrawingView } from "./DrawingView";
 import { FlatPatternView } from "./FlatPatternView";
-import { DesignToolbar } from "../design/DesignToolbar";
+import { DesignSideTools, DesignToolbar, SideButton, SideSep } from "../design/DesignToolbar";
+import { Portal } from "solid-js/web";
 import { FeatureEditor, pickSummary } from "../steps/DesignStep";
 import type { DesignActions } from "../../lib/designActions";
 import * as Icons from "../icons";
@@ -49,6 +50,8 @@ export interface CadViewProps {
   initialPose?: CameraPose;
   /** Al salir, la cámara de acá para el visor principal */
   onLeave?: (pose: CameraPose) => void;
+  /** La barra izquierda del programa: ahí van las herramientas */
+  toolsMount?: HTMLDivElement;
 }
 
 // Grupos de la barra: elegir · dibujar · modificar
@@ -255,6 +258,34 @@ function withoutLayers(s: Sketch, locked: boolean): Sketch {
   };
 }
 
+/** Caja de un texto del sketch (sus letras con un margen) en coordenadas del sketch */
+function textBox(s: Sketch, t: { entities: number[]; size: number }): { min: P2; max: P2 } | undefined {
+  const at = new Map(s.points.map((p) => [p.id, [p.x, p.y] as P2]));
+  let [x0, y0, x1, y1] = [Infinity, Infinity, -Infinity, -Infinity];
+  for (const id of t.entities) {
+    const e = s.entities.find((x) => x.id === id);
+    for (const q of (e && entityPolyline(e.geometry, at)) ?? []) {
+      [x0, y0, x1, y1] = [Math.min(x0, q[0]), Math.min(y0, q[1]), Math.max(x1, q[0]), Math.max(y1, q[1])];
+    }
+  }
+  if (!Number.isFinite(x0)) return undefined;
+  const m = t.size * 0.15;
+  return { min: [x0 - m, y0 - m], max: [x1 + m, y1 + m] };
+}
+
+/** El texto (no bloque) cuya caja contiene `p`; el más chico si hay varios */
+function textAt(s: Sketch, p: P2) {
+  let best: { t: NonNullable<Sketch["texts"]>[number]; area: number } | undefined;
+  for (const t of s.texts ?? []) {
+    if (t.block != null) continue;
+    const b = textBox(s, t);
+    if (!b || p[0] < b.min[0] || p[0] > b.max[0] || p[1] < b.min[1] || p[1] > b.max[1]) continue;
+    const area = (b.max[0] - b.min[0]) * (b.max[1] - b.min[1]);
+    if (!best || area < best.area) best = { t, area };
+  }
+  return best?.t;
+}
+
 function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number } {
   s = withoutLayers(s, true);
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
@@ -446,6 +477,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   let planarFaces = new Map<number, boolean>();
   // Para el doble clic sobre una entidad (elige la cadena)
   let lastEntityClick: { id: number; t: number } | undefined;
+  let lastTextClick: { id: number; t: number } | undefined;
+  let textEditAt = 0;
+  /** Texto que se está cambiando en su caja (doble clic) */
+  const [textEdit, setTextEdit] = createSignal<number>();
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
   const [viewTick, setViewTick] = createSignal(0);
   const [editingDim, setEditingDim] = createSignal<number>();
@@ -579,6 +614,20 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
     }),
   );
+  // Operación bajo el mouse en el árbol: su sketch o sus caras en ámbar
+  let hoverSeq = 0;
+  createEffect(() => {
+    const id = ui.hoverFeature();
+    store.result();
+    const n = ++hoverSeq;
+    const f = id !== undefined ? store.doc()?.features.find((x) => x.id === id) : undefined;
+    if (!f) return viewer?.setFeatureHover([]);
+    if (f.kind.type === "sketch") return viewer?.setFeatureHover([], f.id);
+    void store.featureFaces(f.id).then(
+      (faces) => n === hoverSeq && viewer?.setFeatureHover(faces),
+      () => n === hoverSeq && viewer?.setFeatureHover([]),
+    );
+  });
   createEffect(() => {
     const h = ui.highlight();
     const picks = ui.picks();
@@ -679,14 +728,19 @@ export const CadView: Component<CadViewProps> = (props) => {
   createEffect(() => viewer?.setGridVisible(props.showGrid !== false));
   createEffect(() => props.lights && viewer?.setLights(props.lights));
   createEffect(() => viewer && (viewer.trackpad = props.trackpad === true));
-  // Planos base: visibles fuera de la edición (y al elegir dónde va un sketch)
+  // Planos base: visibles fuera de la edición si no se ocultaron. Al elegir
+  // dónde va un sketch también se respeta lo oculto (se ocultan para no
+  // elegirlos); solo si no queda nada que elegir se muestran igual
   const [planesReady, setPlanesReady] = createSignal(0);
   createEffect(() => {
     planesReady();
-    const show = ui.showPlanes() && !ui.session();
     const selected = ui.picks().flatMap((p) => (p.kind === "plane" ? [p.plane] : []));
     const place = ui.pick().kind === "place";
-    viewer?.setPlanes(show || place, selected, place ? [] : ui.hiddenPlanes());
+    const hidden = ui.hiddenPlanes();
+    const r = store.result();
+    const noneLeft = (!ui.showPlanes() || hidden.length >= 3) && !r?.body && !(r?.sketches ?? []).some((v) => v.regions.length);
+    const fallback = place && noneLeft;
+    viewer?.setPlanes(!ui.session() && (ui.showPlanes() || fallback), selected, fallback ? [] : hidden);
   });
   // Herramienta de la operación en el diálogo (translúcida, verde o roja)
   createEffect(() => {
@@ -962,7 +1016,13 @@ export const CadView: Component<CadViewProps> = (props) => {
       regions: s.regions,
       grid,
       images: s.sketch.images,
-      selected: ui.selection(),
+      // Un texto elegido (su ancla) se resalta entero
+      selected: [...ui.selection(), ...(s.sketch.texts ?? []).flatMap((t) => (ui.selection().includes(t.anchor) ? t.entities : []))],
+      hiddenPoints: (s.sketch.texts ?? []).flatMap((t) => t.points.filter((p) => p !== t.anchor)),
+      textBoxes: (s.sketch.texts ?? []).flatMap((t) => {
+        const b = t.block == null ? textBox(s.sketch, t) : undefined;
+        return b ? [{ ...b, selected: ui.selection().includes(t.anchor) }] : [];
+      }),
       hover: [
         ...ui.hoverIds(),
         ...(snapView()?.refs ?? []),
@@ -994,7 +1054,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       linkedEntities: s.sketch.uses?.map((u) => u.entity),
       hideConstruction: !ui.sketchShow().construction,
       hidePoints: !ui.sketchShow().points,
-      problems: [...(problems()?.looseEnds.map((x) => x.p) ?? []), ...(problems()?.crossings.map((x) => x.p) ?? [])],
+      problems: problems()?.looseEnds.map((x) => x.p) ?? [],
       warnEntities: problems()?.overlaps.flat(),
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
         const c = s.sketch.constraints[i];
@@ -1010,18 +1070,29 @@ export const CadView: Component<CadViewProps> = (props) => {
   const solid = createMemo(() => {
     const plane = ui.session()?.plane;
     const m = store.mesh();
-    if (!plane || !m || !viewer) return undefined;
+    if (!plane || !viewer) return undefined;
     const s = viewer.mmPerUnit;
     const edges: P3[][] = [];
     let start = 0;
-    for (const end of m.edgeEnds) {
+    for (const end of m?.edgeEnds ?? []) {
       const poly: P3[] = [];
       for (let i = start; i < end; i++) {
-        const [x, y, z] = m.edgePoints.subarray(i * 3, i * 3 + 3);
+        const [x, y, z] = m!.edgePoints.subarray(i * 3, i * 3 + 3);
         poly.push([x * s, -z * s, y * s]);
       }
       edges.push(poly);
       start = end;
+    }
+    // También lo dibujado en los otros sketches visibles (anclajes fijos: el otro no cambia)
+    const editing = ui.session()?.feature;
+    const hidden = ui.hiddenSketches();
+    for (const v of store.result()?.sketches ?? []) {
+      if (v.id === editing || hidden.includes(v.id)) continue;
+      const at = new Map(v.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+      for (const e of v.sketch.entities) {
+        const pts = entityPolyline(e.geometry, at);
+        if (pts && pts.length >= 2) edges.push(pts.map((p) => planeToWorld(v.plane, p)));
+      }
     }
     return solidRefs(edges, plane);
   });
@@ -1115,6 +1186,24 @@ export const CadView: Component<CadViewProps> = (props) => {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const h = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8);
       if (!e.shiftKey) ui.setSelectedConstraints([]);
+      // Un texto se elige entero (por su ancla, que lo arrastra): una letra o
+      // dentro de su caja. Doble clic: cambiar lo que dice
+      const hitId = h.point ?? h.entity;
+      const text = hitId !== undefined ? textOf(s.sketch, hitId) : textAt(s.sketch, raw);
+      if (text && text.block == null) {
+        const now = e.timeStamp;
+        if (lastTextClick && lastTextClick.id === text.id && now - lastTextClick.t < 500) {
+          lastTextClick = undefined;
+          textEditAt = performance.now();
+          setTextEdit(text.id);
+          return;
+        }
+        lastTextClick = { id: text.id, t: now };
+        dragging = text.anchor;
+        if (e.shiftKey) ui.setSelection((sel) => (sel.includes(text.anchor) ? sel.filter((x) => x !== text.anchor) : [...sel, text.anchor]));
+        else ui.setSelection([text.anchor]);
+        return;
+      }
       if (h.point !== undefined) {
         dragging = h.point;
         if (e.shiftKey) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
@@ -1884,10 +1973,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       case "asm_face":
         return { faces: true };
       case "edges":
+        // En vivo también las caras (una cara suma todas sus aristas)
+        return mode.live ? { edges: true, faces: true } : { edges: true };
       case "axis":
         return { edges: true };
       case "place":
-        return { faces: true, planes: true, refPlanes: true };
+        return { faces: true, planes: true, refPlanes: true, regions: true };
+      case "hole":
+      case "parts":
+        return { faces: true };
       default:
         return undefined;
     }
@@ -1902,7 +1996,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const hit = viewer.pick(at.x, at.y, want);
     if (!hit || hit.kind === "scan") return viewer.setPreselect(null);
     // Un sketch solo va en caras planas: las curvas no se preseleccionan
-    if (hit.kind === "face" && ui.pick().kind === "place") {
+    if (hit.kind === "face" && (ui.pick().kind === "place" || ui.pick().kind === "hole")) {
       const planar = planarFaces.get(hit.face);
       if (planar === undefined) {
         viewer.setPreselect(null);
@@ -1951,6 +2045,21 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (!mode.owner) ui.setHighlight({ faces: [hit.face], edges: [] });
         ui.setPick({ kind: "none" });
         mode.done(ref, hit.face);
+      } else if (mode.kind === "edges" && mode.live) {
+        // Sobre la vista previa: lo que hizo la operación la quita, una cara suma sus aristas
+        const live = mode.live;
+        const mine = (tags?: { feature: number }[]) => !!tags?.some((t) => t.feature === live.feature);
+        const hit = viewer.pick(e.clientX, e.clientY, { edges: true, faces: true });
+        if (hit?.kind === "edge") {
+          const ref = await store.edgeRef(hit.edge);
+          if (ref.sides?.some(mine)) live.remove(ref.point);
+          else mode.toggle(ref, hit.edge);
+        } else if (hit?.kind === "face") {
+          const ref = await store.faceRef(hit.face);
+          if (mine(ref.tags)) return live.remove(ref.point);
+          const refs = await Promise.all((await store.faceEdges(hit.face)).map((i) => store.edgeRef(i)));
+          live.face(refs.filter((r) => !r.sides?.some(mine)));
+        }
       } else if (mode.kind === "edges") {
         // La caja de selección resalta lo que tiene
         const hit = viewer.pick(e.clientX, e.clientY, { edges: true });
@@ -1987,15 +2096,35 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
         mode.done(result, hit.triangle);
+      } else if (mode.kind === "parts") {
+        // La pieza de la cara bajo el clic (en el sólido mostrado)
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        if (hit?.kind !== "face") return;
+        const part = store.result()?.parts.find((p) => p.faces[0] <= hit.face && hit.face < p.faces[1]);
+        if (part) mode.toggle(part.id);
+      } else if (mode.kind === "hole") {
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
+        if (hit?.kind !== "face") return;
+        const info = await invoke<{ surface: string; point: P3 }>("cad_face_info", { face: hit.face });
+        if (info.surface !== "plane") return ui.setMessage("Esa cara no es plana: elegir una cara plana");
+        // Cerca del centro de la cara (en pantalla), al centro
+        const at = viewer.fromView(hit.point);
+        const [cx, cy] = viewer.screenOf(info.point);
+        ui.setPick({ kind: "none" });
+        mode.done(hit.face, Math.hypot(cx - e.clientX, cy - e.clientY) <= 16 ? info.point : at);
       } else if (mode.kind === "asm_face") {
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });
         if (hit?.kind !== "face") return;
         ui.setPick({ kind: "none" });
         mode.done(hit.face);
       } else if (mode.kind === "place") {
-        // Dónde va el sketch: un plano base o una cara plana
-        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true, refPlanes: true });
-        if (hit?.kind === "plane") {
+        // Dónde va el sketch: un plano base, una cara plana o el plano de otro sketch
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, planes: true, refPlanes: true, regions: true });
+        const host = hit?.kind === "region" ? store.doc()?.features.find((f) => f.id === hit.sketch) : undefined;
+        if (host?.kind.type === "sketch") {
+          ui.setPick({ kind: "none" });
+          mode.done(host.kind.plane, host.kind.offset);
+        } else if (hit?.kind === "plane") {
           ui.setPick({ kind: "none" });
           mode.done({ type: hit.plane });
         } else if (hit?.kind === "refplane") {
@@ -2014,7 +2143,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         const hit = viewer.pick(e.clientX, e.clientY, FILTER_WANT[ui.pickFilter()]);
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (!hit || hit.kind === "scan") {
-          if (!additive) ui.clearPicks();
+          // En el vacío se suelta todo: lo elegido en el visor y la operación
+          // elegida en el árbol (con un diálogo abierto, el diálogo sigue)
+          if (!additive) {
+            ui.clearPicks();
+            if (!store.draft()) store.select(undefined);
+          }
           return ui.setMessage(undefined);
         }
         if (hit.kind === "face") ui.pickToggle({ kind: "face", face: hit.face }, additive);
@@ -2516,6 +2650,20 @@ export const CadView: Component<CadViewProps> = (props) => {
       });
   });
 
+  /** Dónde va el campo del texto en edición (arriba a la izquierda de su caja) */
+  const textEditView = createMemo(() => {
+    viewTick();
+    const id = textEdit();
+    const s = ui.session();
+    const t = id !== undefined ? s?.sketch.texts?.find((x) => x.id === id) : undefined;
+    const b = t && textBox(s!.sketch, t);
+    if (!t || !b || !viewer) return undefined;
+    const rect = container.getBoundingClientRect();
+    const [x0, y0] = viewer.screenOf(planeToWorld(s!.plane, [b.min[0], b.max[1]]));
+    const [x1] = viewer.screenOf(planeToWorld(s!.plane, [b.max[0], b.max[1]]));
+    return { id: t.id, text: t.text, size: t.size, x: x0 - rect.left, y: y0 - rect.top - 30, w: Math.abs(x1 - x0) };
+  });
+
   /** Cotas del sketch en edición (sin las de capas ocultas) */
   const dimensions = () => allDimensions().filter((d) => !hiddenConstraints().has(d.index));
   /** Cotas del sketch en edición: dónde dibujar cada valor */
@@ -2896,6 +3044,36 @@ export const CadView: Component<CadViewProps> = (props) => {
       </svg>
 
       {/* Cotas del sketch: clic para cambiar el valor, arrastrar para mover el texto */}
+      {/* Texto en edición: un campo sobre su caja (Enter lo rehace, Esc lo deja) */}
+      <Show when={textEditView()}>
+        {(v) => (
+          <input
+            ref={(el) => queueMicrotask(() => (el.focus(), el.select()))}
+            aria-label="Cambiar el texto"
+            data-text-edit
+            class="absolute z-10 px-1.5 py-0.5 rounded bg-bg-lighter border border-accent text-sm text-text outline-none shadow"
+            style={{ left: `${v().x}px`, top: `${v().y}px`, "min-width": `${Math.max(80, v().w)}px` }}
+            value={v().text}
+            onPointerDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Escape") setTextEdit(undefined);
+              if (e.key !== "Enter") return;
+              // Todo leído antes de cerrar (después `v` ya no vale)
+              const value = e.currentTarget.value;
+              const { id, text, size } = v();
+              setTextEdit(undefined);
+              if (value.trim() && value !== text) void rewriteText(id, value, size);
+            }}
+            onBlur={(e) => {
+              // La misma pulsación que lo abrió le saca el foco al soltar: se lo devuelve
+              const el = e.currentTarget;
+              if (performance.now() - textEditAt < 400) return void setTimeout(() => el.focus());
+              setTextEdit(undefined);
+            }}
+          />
+        )}
+      </Show>
       <Index each={dimensions()}>
         {(d) => (
           <Show
@@ -2984,6 +3162,95 @@ export const CadView: Component<CadViewProps> = (props) => {
           </Show>
         )}
       </Index>
+
+      {/* Barra izquierda: lo más usado de Diseñar o, con un sketch abierto, sus herramientas de dibujo */}
+      <Show when={props.toolsMount} keyed>
+        {(mount) => (
+          <Portal mount={mount} ref={(el) => (el.className = "flex flex-col items-center w-full")}>
+            <Show when={ui.session()} fallback={<DesignSideTools store={store} ui={ui} actions={props.actions} />}>
+              <For each={toolSlots()}>
+                {(slot, i) => {
+                  const shown = () => TOOLS.find((t) => t.id === (slot.family ? (familyPick()[slot.family] ?? slot.tools[0].id) : slot.tools[0].id))!;
+                  const variants = slot.tools;
+                  let row!: HTMLDivElement;
+                  return (
+                    <>
+                      <Show when={i() > 0 && toolSlots()[i() - 1].group !== slot.group}>
+                        <SideSep />
+                      </Show>
+                      <div ref={row} class="relative">
+                        <SideButton
+                          label={shown().short}
+                          shortcut={shown().key}
+                          tip={shown().label !== shown().short ? shown().label : undefined}
+                          icon={shown().icon}
+                          active={variants.some((t) => t.id === ui.tool())}
+                          onClick={() => {
+                            ui.setTool(shown().id);
+                            resetTool();
+                          }}
+                        />
+                        {/* Variantes de la familia: la esquina abre la lista a la derecha */}
+                        <Show when={variants.length > 1}>
+                          <div class="absolute right-0 bottom-0" data-toolbar-menu={FAMILY_MENU[slot.family!]} data-items={JSON.stringify(variants.map((t) => t.short))}>
+                            <button
+                              class="flex items-end justify-end w-3 h-3 text-text-dim hover:text-text"
+                              title={FAMILY_MENU[slot.family!]}
+                              onClick={() => setOpenFamily(openFamily() === slot.family ? undefined : slot.family)}
+                            >
+                              <Icons.CaretRight size={8} />
+                              <span class="sr-only">{FAMILY_MENU[slot.family!]}</span>
+                            </button>
+                          </div>
+                          <Show when={openFamily() === slot.family}>
+                            <div
+                              class="fixed z-30 min-w-44 rounded-md border border-border bg-bg-lighter shadow-lg py-1"
+                              style={{ left: `${row.getBoundingClientRect().right + 6}px`, top: `${row.getBoundingClientRect().top}px` }}
+                              data-family-list
+                            >
+                              <For each={variants}>
+                                {(t) => (
+                                  <button
+                                    class={clsx(
+                                      "w-full flex items-center gap-2 px-2 py-1 text-xs text-left",
+                                      ui.tool() === t.id ? "text-accent" : "text-text-muted hover:text-text hover:bg-surface",
+                                    )}
+                                    title={t.label}
+                                    onClick={() => {
+                                      ui.setTool(t.id);
+                                      resetTool();
+                                      setOpenFamily(undefined);
+                                    }}
+                                  >
+                                    <t.icon size={16} />
+                                    {t.short}
+                                    <Show when={t.key}>
+                                      <span class="ml-auto pl-3 text-text-dim">{t.key}</span>
+                                    </Show>
+                                  </button>
+                                )}
+                              </For>
+                            </div>
+                          </Show>
+                        </Show>
+                      </div>
+                    </>
+                  );
+                }}
+              </For>
+              <SideSep />
+              <SideButton
+                label="Construcción"
+                shortcut="Q"
+                tip="con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción (no cuenta para las regiones)"
+                icon={SketchIcons.Construction}
+                active={ui.constructionMode()}
+                onClick={() => ui.construction()}
+              />
+            </Show>
+          </Portal>
+        )}
+      </Show>
 
       {/* Barra superior: herramientas, vista y el diálogo de la operación abierta */}
       <div class="absolute top-2 left-2 right-36 flex flex-col items-start gap-1.5 pointer-events-none">
@@ -3089,6 +3356,8 @@ export const CadView: Component<CadViewProps> = (props) => {
                       class="overflow-y-auto px-2.5 pb-2.5"
                       onFocusIn={(e) => {
                         // Escribir un valor termina la elección en el visor: se ve la vista previa
+                        // (el redondeo y el chaflán eligen sobre la vista previa: siguen eligiendo)
+                        if (!store.draft()?.selecting) return;
                         if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) ui.cancelPick();
                       }}
                     >
@@ -3103,86 +3372,6 @@ export const CadView: Component<CadViewProps> = (props) => {
         >
           {(s) => (
             <div class="flex flex-wrap items-center gap-1 rounded-md border border-border bg-bg-lighter/90 px-1.5 py-1 pointer-events-auto">
-              <For each={toolSlots()}>
-                {(slot, i) => {
-                  const shown = () => TOOLS.find((t) => t.id === (slot.family ? (familyPick()[slot.family] ?? slot.tools[0].id) : slot.tools[0].id))!;
-                  const variants = slot.tools;
-                  return (
-                    <>
-                      <Show when={i() > 0 && toolSlots()[i() - 1].group !== slot.group}>
-                        <div class="w-px h-5 bg-border mx-0.5" />
-                      </Show>
-                      <div class="relative flex items-center">
-                        <Tooltip content={shown().key ? `${shown().label} (${shown().key})` : shown().label}>
-                          <button
-                            aria-label={shown().short}
-                            class={clsx(
-                              "p-1 rounded",
-                              variants.some((t) => t.id === ui.tool()) ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface",
-                            )}
-                            onClick={() => {
-                              ui.setTool(shown().id);
-                              resetTool();
-                            }}
-                          >
-                            {(() => {
-                              const Icon = shown().icon;
-                              return <Icon size={18} />;
-                            })()}
-                            {/* El nombre para lectores de pantalla (y las pruebas que buscan por texto) */}
-                            <span class="sr-only">{shown().short}</span>
-                          </button>
-                        </Tooltip>
-                        <Show when={variants.length > 1}>
-                          <div data-toolbar-menu={FAMILY_MENU[slot.family!]} data-items={JSON.stringify(variants.map((t) => t.short))}>
-                            <button
-                              class="px-0.5 py-1 rounded text-text-dim hover:text-text hover:bg-surface"
-                              onClick={() => setOpenFamily(openFamily() === slot.family ? undefined : slot.family)}
-                            >
-                              <Icons.CaretDown size={10} />
-                              <span class="sr-only">{FAMILY_MENU[slot.family!]}</span>
-                            </button>
-                          </div>
-                          <Show when={openFamily() === slot.family}>
-                            <div class="absolute top-full left-0 mt-1 z-20 min-w-44 rounded-md border border-border bg-bg-lighter shadow-lg py-1" data-family-list>
-                              <For each={variants}>
-                                {(t) => (
-                                  <button
-                                    class={clsx(
-                                      "w-full flex items-center gap-2 px-2 py-1 text-xs text-left",
-                                      ui.tool() === t.id ? "text-accent" : "text-text-muted hover:text-text hover:bg-surface",
-                                    )}
-                                    title={t.label}
-                                    onClick={() => {
-                                      ui.setTool(t.id);
-                                      resetTool();
-                                      setOpenFamily(undefined);
-                                    }}
-                                  >
-                                    <t.icon size={16} />
-                                    {t.short}
-                                  </button>
-                                )}
-                              </For>
-                            </div>
-                          </Show>
-                        </Show>
-                      </div>
-                    </>
-                  );
-                }}
-              </For>
-              <div class="w-px h-5 bg-border mx-0.5" />
-              <Tooltip content="Construcción (Q): con algo elegido lo pasa a construcción o de vuelta; sin nada elegido, lo que se dibuja sale de construcción (no cuenta para las regiones)">
-                <button
-                  aria-label="Construcción"
-                  class={clsx("p-1 rounded", ui.constructionMode() ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
-                  onClick={() => ui.construction()}
-                >
-                  <SketchIcons.Construction size={18} />
-                  <span class="sr-only">Construcción</span>
-                </button>
-              </Tooltip>
               <Show when={ui.tool() === "text"}>
                 <input
                   type="text"
@@ -3340,7 +3529,9 @@ export const CadView: Component<CadViewProps> = (props) => {
                   {polygonCircumscribed() ? "Circunscrito" : "Inscrito"}
                 </button>
               </Show>
-              <div class="w-px h-5 bg-border mx-1" />
+              <Show when={ui.tool() === "text" || selectedText() || ui.tool() === "conic" || ui.tool() === "bspline" || ui.tool() === "polygon"}>
+                <div class="w-px h-5 bg-border mx-1" />
+              </Show>
               <Tooltip content="Deshacer en el sketch (Ctrl+Z)">
                 <IconButton aria-label="Deshacer en el sketch" size="sm" disabled={!ui.sketchHistory().undo} onClick={() => ui.undoSketch()}>
                   <Icons.ArrowCounterClockwise size={15} />

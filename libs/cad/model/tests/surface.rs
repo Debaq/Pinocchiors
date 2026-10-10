@@ -210,8 +210,9 @@ fn trim_a_surface_with_a_plane_and_with_a_solid() {
         let solid = ev.parts.iter().find(|p| !p.is_surface()).unwrap().id;
         d.add(FeatureKind::Boolean { op, targets: vec![surface], tools: vec![solid], keep_tools: false });
         let ev = evaluate(&d);
-        let s = ev.parts.iter().find(|p| p.id.feature == tube).unwrap();
-        assert!(s.is_surface());
+        // Intersecar da una pieza nueva (la superficie original queda reemplazada)
+        let s = ev.parts.iter().find(|p| p.is_surface()).unwrap();
+        assert!(op == PartBoolean::Subtract || s.id.feature != tube);
         assert_relative_eq!(area(&s.shape), 2.0 * PI * 5.0 * h, max_relative = 1e-6);
     }
 }

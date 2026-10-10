@@ -1,18 +1,18 @@
 // Revisión del contorno de un sketch: lo que hace que una región no se cierre
-// (extremos sueltos, curvas que se cruzan o se tocan sin un punto común,
-// entidades encimadas), y selección por cadena y por tipo.
+// (extremos sueltos, entidades encimadas), los cruces sin un punto común (para
+// «Reparar») y selección por cadena y por tipo.
 // Funciones puras: se prueban con node (e2e/sketchCheck.test.mjs).
 //
-// Las regiones (model/src/regions.rs) unen extremos por posición, descartan
-// las ramas sueltas y suponen que las curvas no se cruzan: esto avisa de
-// cada caso que las rompe.
+// Las regiones (model/src/regions.rs) unen extremos por posición, parten las
+// curvas donde se cruzan y descartan las ramas sueltas: esto avisa de cada
+// caso que deja una rama sin cerrar.
 
 import { curvePolyline, ellipsePolyline, geometryPoints, splineOf, type Geometry, type P2, type Sketch, type SketchEntity } from "./cad.ts";
 
 export interface SketchProblems {
-  /** Extremos de una sola curva: la rama no cierra (no forma región) */
+  /** Extremos de una sola curva que no tocan otra: la rama no cierra (no forma región) */
   looseEnds: { p: P2; entity: number }[];
-  /** Curvas que se cruzan o se tocan sin compartir un punto */
+  /** Curvas que se cruzan o se tocan sin compartir un punto (las regiones se parten ahí) */
   crossings: { p: P2; a: number; b: number }[];
   /** Entidades encimadas (la misma recta o el mismo círculo) */
   overlaps: [number, number][];
@@ -153,7 +153,7 @@ export function checkSketch(s: Sketch): SketchProblems {
       nodeOf(pl[pl.length - 1], e.id);
     }
   }
-  const looseEnds = nodes.filter((n) => n.ents.length === 1).map((n) => ({ p: n.p, entity: n.ents[0] }));
+  const ones = nodes.filter((n) => n.ents.length === 1);
 
   // Encimadas
   const overlaps: [number, number][] = [];
@@ -185,6 +185,8 @@ export function checkSketch(s: Sketch): SketchProblems {
           if (!crossings.some((c) => dist(c.p, x) <= tol * 10)) crossings.push({ p: x, a, b });
         }
     }
+  // Un extremo apoyado en el medio de otra curva (en T) no queda suelto
+  const looseEnds = ones.filter((n) => !crossings.some((c) => dist(c.p, n.p) <= tol * 10)).map((n) => ({ p: n.p, entity: n.ents[0] }));
   return { looseEnds, crossings, overlaps };
 }
 
@@ -193,7 +195,6 @@ export function problemsText(p: SketchProblems): string | undefined {
   const parts: string[] = [];
   const n = (k: number, one: string, many: string) => k && parts.push(`${k} ${k === 1 ? one : many}`);
   n(p.looseEnds.length, "extremo suelto", "extremos sueltos");
-  n(p.crossings.length, "cruce sin unir", "cruces sin unir");
   n(p.overlaps.length, "entidad encimada", "entidades encimadas");
   return parts.length ? parts.join(" · ") : undefined;
 }

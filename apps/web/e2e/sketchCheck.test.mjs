@@ -50,7 +50,10 @@ test("cruce de líneas sin punto común y una que toca otra sin partirla", () =>
   const p = checkSketch(s);
   assert.equal(p.crossings.length, 2);
   assert.ok(p.crossings.some((c) => Math.abs(c.p[0] - 5) < 1e-6 && Math.abs(c.p[1] - 5) < 1e-6));
-  assert.ok(p.crossings.some((c) => Math.abs(c.p[0] - 25) < 1e-6 && Math.abs(c.p[1]) < 1e-6));
+  assert.ok(p.crossings.some((c) => Math.abs(c.p[0] - 25) < 1e-6 && Math.abs(c.p[1]) < 1e-6));  // El extremo de la T no está suelto (la región se parte ahí); los otros sí
+  assert.ok(!p.looseEnds.some((x) => Math.abs(x.p[0] - 25) < 1e-6 && Math.abs(x.p[1]) < 1e-6));
+  assert.equal(p.looseEnds.length, 7);
+  assert.equal(problemsText(p), "7 extremos sueltos");
 });
 
 test("línea que cruza un círculo", () => {

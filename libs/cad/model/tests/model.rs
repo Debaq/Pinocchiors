@@ -978,7 +978,7 @@ fn sketch_text_moves_as_a_block() {
     let p = [s.add_point(1.0, 0.0), s.add_point(2.0, 3.0), s.add_point(4.0, 0.0)];
     let l1 = s.add_line(p[0], p[1]);
     let l2 = s.add_line(p[1], p[2]);
-    s.texts.push(SketchText { id: 99, text: "A".into(), size: 3.0, font: String::new(), anchor, entities: vec![l1, l2], points: p.to_vec(), style: Default::default() });
+    s.texts.push(SketchText { id: 99, text: "A".into(), size: 3.0, font: String::new(), anchor, entities: vec![l1, l2], points: p.to_vec(), style: Default::default(), block: None });
     s.solve_drag(p[1], [12.0, 8.0]).unwrap();
     let at = |id| s.point(id).unwrap();
     assert_relative_eq!(at(anchor)[0], 10.0, epsilon = 1e-6);
@@ -995,7 +995,7 @@ fn sketch_text_keeps_its_regions() {
     let anchor = s.add_point(-1.0, -1.0);
     let p = [s.add_point(0.0, 0.0), s.add_point(4.0, 0.0), s.add_point(4.0, 4.0), s.add_point(0.0, 4.0)];
     let l: Vec<u32> = (0..4).map(|k| s.add_line(p[k], p[(k + 1) % 4])).collect();
-    s.texts.push(SketchText { id: 99, text: "□".into(), size: 4.0, font: String::new(), anchor, entities: l, points: p.to_vec(), style: Default::default() });
+    s.texts.push(SketchText { id: 99, text: "□".into(), size: 4.0, font: String::new(), anchor, entities: l, points: p.to_vec(), style: Default::default(), block: None });
     s.solve().unwrap();
     assert_eq!(find_regions(&s).unwrap().len(), 1);
 }
@@ -1041,4 +1041,95 @@ fn used_edge_follows_the_solid() {
     let mut moved = solved.clone();
     moved.solve_drag(a, [0.0, 0.0]).unwrap();
     assert_relative_eq!(moved.point(a).unwrap()[1], -10.0, epsilon = 1e-6);
+}
+
+/// Las áreas que delimitan las líneas, aunque las formas se crucen: dos
+/// cuadrados superpuestos dan lo de cada uno y lo común.
+#[test]
+fn crossing_shapes_split_into_regions() {
+    let areas = |s: &Sketch| {
+        let mut a: Vec<f64> = find_regions(s).unwrap().iter().map(|r| r.area()).collect();
+        a.sort_by(f64::total_cmp);
+        a
+    };
+    // Cuadrado centrado en el origen y otro centrado en su esquina
+    let mut s = Sketch::new();
+    s.rectangle([-10.0, -10.0], [10.0, 10.0]);
+    s.rectangle([0.0, 0.0], [20.0, 20.0]);
+    let a = areas(&s);
+    assert_eq!(a.len(), 3, "{a:?}");
+    assert_relative_eq!(a[0], 100.0, max_relative = 1e-9);
+    assert_relative_eq!(a[1], 300.0, max_relative = 1e-9);
+    assert_relative_eq!(a[2], 300.0, max_relative = 1e-9);
+    let regions = find_regions(&s).unwrap();
+    let common = regions.iter().find(|r| r.contains([5.0, 5.0])).unwrap();
+    assert_relative_eq!(common.area(), 100.0, max_relative = 1e-9);
+    assert!(!common.contains([-5.0, -5.0]));
+
+    // Círculo que cruza un rectángulo: lo de adentro y lo de afuera del círculo
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [40.0, 20.0]);
+    s.circle([40.0, 10.0], 10.0);
+    let a = areas(&s);
+    assert_eq!(a.len(), 3, "{a:?}");
+    let half = PI * 100.0 / 2.0;
+    assert_relative_eq!(a[0], half, max_relative = 2e-3);
+    assert_relative_eq!(a[1], half, max_relative = 2e-3);
+    assert_relative_eq!(a[2], 800.0 - half, max_relative = 2e-3);
+
+    // Línea que llega al medio de otra (T) y la cruza hasta el otro lado
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [30.0, 10.0]);
+    s.line([10.0, 0.0], [10.0, 10.0]);
+    s.line([20.0, -5.0], [20.0, 15.0]);
+    let a = areas(&s);
+    assert_eq!(a.len(), 3, "{a:?}");
+    for x in a {
+        assert_relative_eq!(x, 100.0, max_relative = 1e-9);
+    }
+}
+
+/// Extruir solo lo común de dos cuadrados cruzados, y solo lo que sobra del segundo.
+#[test]
+fn extrude_part_of_crossing_shapes() {
+    if !occt() {
+        return;
+    }
+    for (point, area) in [([5.0, 5.0], 100.0), ([15.0, 15.0], 300.0)] {
+        let mut s = Sketch::new();
+        s.rectangle([-10.0, -10.0], [10.0, 10.0]);
+        s.rectangle([0.0, 0.0], [20.0, 20.0]);
+        let mut doc = Document::new();
+        let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+        doc.add(FeatureKind::Extrude(Extrude {
+            sketch: sk,
+            regions: RegionSelection::Points { points: vec![point] },
+            extent: Extent::Blind { distance: 10.0 },
+            reverse: false,
+            op: BodyOp::Join,
+            draft: 0.0,
+            thin: None,
+        }));
+        let ev = doc.evaluate();
+        assert_all_ok(&ev);
+        assert_relative_eq!(volume(&ev), area * 10.0, max_relative = 1e-6);
+    }
+    // Con un círculo: el gajo del rectángulo dentro del círculo
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [40.0, 20.0]);
+    s.circle([40.0, 10.0], 10.0);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        regions: RegionSelection::Points { points: vec![[35.0, 10.0]] },
+        extent: Extent::Blind { distance: 10.0 },
+        reverse: false,
+        op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
+    }));
+    let ev = doc.evaluate();
+    assert_all_ok(&ev);
+    assert_relative_eq!(volume(&ev), PI * 100.0 / 2.0 * 10.0, max_relative = 1e-6);
 }

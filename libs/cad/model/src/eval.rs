@@ -172,6 +172,19 @@ pub struct Evaluation {
     pub threads: Vec<ThreadAxis>,
     /// Dobleces de las pestañas, en orden (para los alivios de esquina).
     pub bends: Vec<BendInfo>,
+    /// Piezas reemplazadas por cortes que las parten y uniones, en orden.
+    pub replaced: Vec<Replaced>,
+}
+
+/// Piezas que una operación consumió y las que salieron: un corte que parte
+/// una pieza en varias, o una unión de varias en una. Las de `from` ya no
+/// están (el Outliner las muestra tachadas); las referencias a ellas pasan a
+/// las de `into`.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Replaced {
+    pub feature: FeatureId,
+    pub from: Vec<PartId>,
+    pub into: Vec<PartId>,
 }
 
 /// Arista de la chapa de la que sale una pestaña.
@@ -227,6 +240,7 @@ struct CacheEntry {
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
     bends: Vec<BendInfo>,
+    replaced: Vec<Replaced>,
     auto_scope: Vec<PartId>,
     handle: Option<Handle>,
     /// Para descartar las menos usadas.
@@ -571,6 +585,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             }
             ctx.ev.threads.extend(e.threads.iter().cloned());
             ctx.ev.bends.extend(e.bends.iter().cloned());
+            ctx.ev.replaced.extend(e.replaced.iter().cloned());
             ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handle: e.handle.clone() });
             continue;
         }
@@ -610,6 +625,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
                 bends: ctx.ev.bends.iter().filter(|b| b.feature == f.id).cloned().collect(),
+                replaced: ctx.ev.replaced.iter().filter(|r| r.feature == f.id).cloned().collect(),
                 auto_scope: ctx.auto_scope.clone(),
                 handle: ctx.handle.borrow().clone(),
                 used: 0,
@@ -645,8 +661,14 @@ impl Ctx<'_> {
         }
     }
 
+    /// Próximo índice libre de pieza para la operación (cuenta también las que ya reemplazó)
+    fn next_part_index(&self, feature: FeatureId) -> u32 {
+        let ids = self.ev.parts.iter().map(|p| p.id).chain(self.ev.replaced.iter().flat_map(|r| r.from.iter().chain(&r.into).copied()));
+        ids.filter(|p| p.feature == feature).map(|p| p.index + 1).max().unwrap_or(0)
+    }
+
     fn new_part(&mut self, feature: FeatureId, tool: Tagged) {
-        let index = self.ev.parts.iter().filter(|p| p.id.feature == feature).count() as u32;
+        let index = self.next_part_index(feature);
         self.ev.parts.push(Part { id: PartId { feature, index }, shape: tool.shape, tags: tool.tags });
     }
 
@@ -718,18 +740,26 @@ impl Ctx<'_> {
     /// como referencias perdidas del campo `field` (falla si no queda ninguna).
     fn find_parts(&self, field: &str, ids: &[PartId]) -> R<Vec<usize>> {
         let mut out = Vec::new();
+        let mut found = 0;
         for (k, id) in ids.iter().enumerate() {
-            match self.ev.parts.iter().position(|p| p.id == *id) {
-                Some(i) if !out.contains(&i) => out.push(i),
-                Some(_) => {}
-                None => self.miss(field, k),
+            // Una pieza reemplazada (partida o unida) vale por las que salieron de ella
+            let now = self.current_parts(*id);
+            if now.is_empty() {
+                self.miss(field, k);
+                continue;
+            }
+            found += 1;
+            for i in now {
+                if !out.contains(&i) {
+                    out.push(i);
+                }
             }
         }
         if out.is_empty() && !ids.is_empty() {
             return Err("no se encontró ninguna de las piezas elegidas".into());
         }
-        if out.len() < ids.len() {
-            self.warn(format!("faltan {} de {} piezas", ids.len() - out.len(), ids.len()));
+        if found < ids.len() {
+            self.warn(format!("faltan {} de {} piezas", ids.len() - found, ids.len()));
         }
         Ok(out)
     }
@@ -767,13 +797,14 @@ impl Ctx<'_> {
                     let (new, h) = with_history(|| Shape::fuse_all(&shapes)).map_err(err)?;
                     let tag_lists: Vec<&[Vec<FaceTag>]> = inputs.iter().map(|t| t.tags.as_slice()).collect();
                     let tags = propagate(&tag_lists, &h, new.face_count()).0;
-                    let first = touched[0];
-                    for &i in touched.iter().skip(1).rev() {
-                        self.ev.parts.remove(i);
+                    if touched.len() == 1 {
+                        let p = &mut self.ev.parts[touched[0]];
+                        p.shape = new;
+                        p.tags = tags;
+                    } else {
+                        // Une varias piezas: salen y queda una nueva
+                        self.replace_parts(feature, touched, vec![Tagged { shape: new, tags }]);
                     }
-                    let p = &mut self.ev.parts[first];
-                    p.shape = new;
-                    p.tags = tags;
                 }
             }
             BodyOp::Cut => {
@@ -783,6 +814,7 @@ impl Ctx<'_> {
                 }
                 for i in targets.into_iter().rev() {
                     let part = self.ev.parts[i].shape.clone();
+                    let solids_before = part.solids().map(|v| v.len()).unwrap_or(1);
                     let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
                     let n = new.face_count();
                     if n == 0 {
@@ -793,6 +825,7 @@ impl Ctx<'_> {
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
                     p.tags = tags;
+                    self.split_loose(feature, i, solids_before)?;
                 }
             }
             BodyOp::Intersect => {
@@ -808,6 +841,7 @@ impl Ctx<'_> {
                         continue;
                     }
                     let part = self.ev.parts[i].shape.clone();
+                    let solids_before = part.solids().map(|v| v.len()).unwrap_or(1);
                     let (new, h) = with_history(|| part.intersect(&tool.shape)).map_err(err)?;
                     let n = new.face_count();
                     if n == 0 {
@@ -818,10 +852,73 @@ impl Ctx<'_> {
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
                     p.tags = tags;
+                    self.split_loose(feature, i, solids_before)?;
                 }
             }
         }
         self.sync();
+        Ok(())
+    }
+
+    /// Índices de las piezas que hoy son `id`: ella misma o, si la reemplazó
+    /// una operación, las que salieron (siguiendo la cadena).
+    fn current_parts(&self, id: PartId) -> Vec<usize> {
+        if let Some(i) = self.ev.parts.iter().position(|p| p.id == id) {
+            return vec![i];
+        }
+        let mut out = Vec::new();
+        for r in self.ev.replaced.iter().filter(|r| r.from.contains(&id)) {
+            for &n in &r.into {
+                for i in self.current_parts(n) {
+                    if !out.contains(&i) {
+                        out.push(i);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// Saca las piezas `old` y agrega `new` al final como piezas nuevas de la
+    /// operación; queda anotado qué reemplazó a qué.
+    fn replace_parts(&mut self, feature: FeatureId, mut old: Vec<usize>, new: Vec<Tagged>) {
+        old.sort_unstable();
+        old.dedup();
+        let from: Vec<PartId> = old.iter().map(|&i| self.ev.parts[i].id).collect();
+        for &i in old.iter().rev() {
+            self.ev.parts.remove(i);
+        }
+        let mut into = Vec::new();
+        for t in new {
+            let id = PartId { feature, index: self.next_part_index(feature) };
+            self.ev.parts.push(Part { id, shape: t.shape, tags: t.tags });
+            into.push(id);
+        }
+        self.ev.replaced.push(Replaced { feature, from, into });
+    }
+
+    /// Si la pieza `i` quedó en más sólidos sueltos que antes (un corte la
+    /// partió), sale de las piezas y cada pedazo pasa a ser una pieza nueva al
+    /// final (del más grande al más chico).
+    fn split_loose(&mut self, feature: FeatureId, i: usize, solids_before: usize) -> R<()> {
+        let whole = self.ev.parts[i].shape.clone();
+        if is_surface(&whole) {
+            return Ok(());
+        }
+        let solids = whole.solids().map_err(err)?;
+        if solids.len() < 2 || solids.len() <= solids_before {
+            return Ok(());
+        }
+        let tags_of = |s: &Shape| -> R<Vec<Vec<FaceTag>>> {
+            let idx = whole.face_indices_of(s).map_err(err)?;
+            Ok(idx.iter().map(|k| k.and_then(|k| self.ev.parts[i].tags.get(k).cloned()).unwrap_or_default()).collect())
+        };
+        let mut pieces: Vec<(f64, Tagged)> = solids
+            .iter()
+            .map(|s| Ok((s.mass().map(|m| m.volume).unwrap_or(0.0), Tagged { tags: tags_of(s)?, shape: s.clone() })))
+            .collect::<R<_>>()?;
+        pieces.sort_by(|a, b| b.0.total_cmp(&a.0));
+        self.replace_parts(feature, vec![i], pieces.into_iter().map(|(_, t)| t).collect());
         Ok(())
     }
 
@@ -873,7 +970,7 @@ impl Ctx<'_> {
     }
 
     /// Booleana entre piezas ya hechas.
-    fn boolean(&mut self, op: PartBoolean, targets: &[PartId], tools: &[PartId], keep_tools: bool) -> R<()> {
+    fn boolean(&mut self, feature: FeatureId, op: PartBoolean, targets: &[PartId], tools: &[PartId], keep_tools: bool) -> R<()> {
         if targets.is_empty() {
             return Err("elegir las piezas".into());
         }
@@ -894,10 +991,10 @@ impl Ctx<'_> {
                     return Err("hacen falta al menos dos piezas para unir".into());
                 }
                 let fused = fuse_tagged(all.iter().map(|&i| tagged(i)).collect())?;
-                let p = &mut self.ev.parts[all[0]];
-                p.shape = fused.shape;
-                p.tags = fused.tags;
-                remove.extend(&all[1..]);
+                // Las unidas salen y queda una nueva
+                self.replace_parts(feature, all, vec![fused]);
+                self.sync();
+                return Ok(());
             }
             PartBoolean::Subtract => {
                 let tl: Vec<usize> = tl.into_iter().filter(|i| !t.contains(i)).collect();
@@ -905,8 +1002,11 @@ impl Ctx<'_> {
                     return Err("elegir las piezas que restan".into());
                 }
                 let tool = fuse_tagged(tl.iter().map(|&i| tagged(i)).collect())?;
+                // Las que quedan partidas se separan al final (por id: los índices cambian al sacar)
+                let mut split: Vec<(PartId, usize)> = Vec::new();
                 for &i in &t {
                     let part = self.ev.parts[i].shape.clone();
+                    let before = part.solids().map(|v| v.len()).unwrap_or(1);
                     let (new, h) = with_history(|| part.cut(&tool.shape)).map_err(err)?;
                     let n = new.face_count();
                     if n == 0 {
@@ -917,9 +1017,20 @@ impl Ctx<'_> {
                     let p = &mut self.ev.parts[i];
                     p.shape = new;
                     p.tags = tags;
+                    split.push((p.id, before));
                 }
                 if !keep_tools {
                     remove.extend(tl);
+                }
+                remove.sort_unstable();
+                remove.dedup();
+                for i in remove.drain(..).rev() {
+                    self.ev.parts.remove(i);
+                }
+                for (id, before) in split {
+                    if let Some(i) = self.ev.parts.iter().position(|p| p.id == id) {
+                        self.split_loose(feature, i, before)?;
+                    }
                 }
             }
             PartBoolean::Intersect => {
@@ -940,13 +1051,13 @@ impl Ctx<'_> {
                     let tags = propagate(&[&acc.tags, &other.tags], &h, new.face_count()).0;
                     acc = Tagged { shape: new, tags };
                 }
-                remove.extend(&all[1..]);
                 if acc.shape.face_count() == 0 {
-                    remove.push(all[0]);
+                    remove.extend(&all);
                 } else {
-                    let p = &mut self.ev.parts[all[0]];
-                    p.shape = acc.shape;
-                    p.tags = acc.tags;
+                    // Las intersecadas salen y queda una nueva con lo común
+                    self.replace_parts(feature, all, vec![acc]);
+                    self.sync();
+                    return Ok(());
                 }
             }
         }
@@ -1676,12 +1787,12 @@ impl Ctx<'_> {
             .unwrap_or(0);
         let (id, (a, b)) = left.remove(first);
         let reversed = degree(a, &left) > 0 && degree(b, &left) == 0;
-        let mut pieces = vec![LoopPiece { entity: id, reversed }];
+        let mut pieces = vec![LoopPiece { entity: id, reversed, span: None }];
         let mut tip = if reversed { a } else { b };
         while let Some(k) = left.iter().position(|(_, (a, b))| *a == tip || *b == tip) {
             let (id, (a, b)) = left.remove(k);
             let reversed = b == tip;
-            pieces.push(LoopPiece { entity: id, reversed });
+            pieces.push(LoopPiece { entity: id, reversed, span: None });
             tip = if reversed { a } else { b };
         }
         if !left.is_empty() {
@@ -1720,7 +1831,7 @@ impl Ctx<'_> {
         let mut left: Vec<(u32, (u32, u32))> = Vec::new();
         for &id in &ids {
             if closed(id) {
-                chains.push(vec![LoopPiece { entity: id, reversed: false }]);
+                chains.push(vec![LoopPiece { entity: id, reversed: false, span: None }]);
             } else {
                 left.push((id, ends(id).ok_or("las curvas tienen que ser líneas, arcos, círculos, elipses o splines")?));
             }
@@ -1731,12 +1842,12 @@ impl Ctx<'_> {
             let first = left.iter().position(|(_, (a, b))| degree(*a, &left) == 1 || degree(*b, &left) == 1).unwrap_or(0);
             let (id, (a, b)) = left.remove(first);
             let reversed = degree(a, &left) > 0 && degree(b, &left) == 0;
-            let mut pieces = vec![LoopPiece { entity: id, reversed }];
+            let mut pieces = vec![LoopPiece { entity: id, reversed, span: None }];
             let mut tip = if reversed { a } else { b };
             while let Some(k) = left.iter().position(|(_, (a, b))| *a == tip || *b == tip) {
                 let (id, (a, b)) = left.remove(k);
                 let reversed = b == tip;
-                pieces.push(LoopPiece { entity: id, reversed });
+                pieces.push(LoopPiece { entity: id, reversed, span: None });
                 tip = if reversed { a } else { b };
             }
             chains.push(pieces);
@@ -2030,7 +2141,7 @@ impl Ctx<'_> {
                 }
                 Ok(())
             }
-            FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(*op, targets, tools, *keep_tools),
+            FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(f.id, *op, targets, tools, *keep_tools),
             FeatureKind::Sweep(sw) => {
                 let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
                 let spine = self.path_wire(&sw.path, samples.first().copied())?;
@@ -3357,6 +3468,29 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
     let mut out = Vec::new();
     for piece in &l.pieces {
         let e = s.entity(piece.entity).map_err(err)?;
+        // Tramo de una entidad partida por un cruce
+        if let Some(span) = piece.span {
+            let [from, to] = if piece.reversed { [span[1], span[0]] } else { span };
+            let c = match &e.geometry {
+                Geometry::Line { .. } => Curve::Line(plane.to_world(from), plane.to_world(to)),
+                Geometry::Arc { center, .. } | Geometry::Circle { center, .. } => {
+                    // El punto medio del tramo en el sentido natural (antihorario)
+                    let c = s.point(*center).map_err(err)?;
+                    let r = dist2(c, span[0]);
+                    let mid_ang = (span[0][1] - c[1]).atan2(span[0][0] - c[0]) + arc_sweep(c, span[0], span[1]) / 2.0;
+                    Curve::Arc(plane.to_world(from), plane.to_world([c[0] + r * mid_ang.cos(), c[1] + r * mid_ang.sin()]), plane.to_world(to))
+                }
+                _ => {
+                    let mut pts: Vec<P3> = crate::regions::piece_points(s, piece).map_err(err)?.into_iter().map(|p| plane.to_world(p)).collect();
+                    if piece.reversed {
+                        pts.reverse();
+                    }
+                    Curve::Spline(pts)
+                }
+            };
+            out.push(c);
+            continue;
+        }
         let c = match &e.geometry {
             Geometry::Line { start, end } => {
                 let (a, b) = (w(*start)?, w(*end)?);

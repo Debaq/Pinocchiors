@@ -134,6 +134,38 @@ pub struct CadResult {
     /// Roscas (agujeros roscados, roscas, tornillos y tuercas): para
     /// coordinarlas entre sí
     pub threads: Vec<cad_model::ThreadAxis>,
+    /// Piezas que reemplazó un corte que las partió o una unión (se ven tachadas)
+    pub replaced: Vec<ReplacedView>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReplacedView {
+    pub feature: cad_model::FeatureId,
+    /// Las que salieron, con el nombre que tenían
+    pub from: Vec<PartLabel>,
+    pub into: Vec<cad_model::PartId>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PartLabel {
+    pub id: cad_model::PartId,
+    pub name: String,
+}
+
+/// Número de cada pieza ("Pieza n"), contando también las reemplazadas, por
+/// orden de creación: las que salen de un corte siguen después de las que ya
+/// había y la tachada conserva el suyo.
+fn part_numbers(doc: &Document, eval: &cad_model::Evaluation) -> HashMap<cad_model::PartId, usize> {
+    let mut ids: Vec<cad_model::PartId> = eval.parts.iter().map(|p| p.id).collect();
+    for r in &eval.replaced {
+        for id in r.from.iter().chain(&r.into) {
+            if !ids.contains(id) {
+                ids.push(*id);
+            }
+        }
+    }
+    ids.sort_by_key(|id| (doc.index_of(id.feature), id.index));
+    ids.into_iter().enumerate().map(|(n, id)| (id, n + 1)).collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -169,6 +201,21 @@ pub struct PartView {
     pub center: [f64; 3],
     /// Superficie (sin volumen) en vez de sólido
     pub surface: bool,
+    /// Salió de un corte o una unión: la pieza de la que hereda color,
+    /// material y si está oculta (la más cercana que los tiene puestos)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inherit: Option<cad_model::PartId>,
+}
+
+fn inherit_from(doc: &Document, eval: &cad_model::Evaluation, id: cad_model::PartId) -> Option<cad_model::PartId> {
+    let mut cur = id;
+    for _ in 0..64 {
+        if cur != id && doc.parts.iter().any(|p| p.part == cur) {
+            return Some(cur);
+        }
+        cur = *eval.replaced.iter().find(|r| r.into.contains(&cur))?.from.first()?;
+    }
+    None
 }
 
 /// "#rrggbb" → (r, g, b) en 0..1.
@@ -268,6 +315,16 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     sketches3d.sort_by_key(|s| doc.index_of(s.id));
     let body = m.body;
     let parts = part_views(doc, eval, &m.parts);
+    let numbers = part_numbers(doc, eval);
+    let replaced = eval
+        .replaced
+        .iter()
+        .map(|r| ReplacedView {
+            feature: r.feature,
+            from: r.from.iter().map(|&id| PartLabel { id, name: part_name(doc, id, numbers.get(&id).copied().unwrap_or(0)) }).collect(),
+            into: r.into.clone(),
+        })
+        .collect();
     let assembly = doc.assembly.as_ref().map(|a| {
         let mut h = std::collections::hash_map::DefaultHasher::new();
         hash.hash(&mut h);
@@ -278,6 +335,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
     references.sort_by_key(|r| doc.index_of(r.id));
     Ok(CadResult {
         parts,
+        replaced,
         references,
         assembly,
         status: eval.status.clone(),
@@ -655,6 +713,34 @@ fn edge_ref_impl(state: &AppState, edge: usize) -> Result<EdgeRef, String> {
     cache.as_ref().and_then(|c| c.eval.edge_ref(edge)).ok_or_else(|| "Esa arista no existe".to_string())
 }
 
+/// Caras del sólido que vienen de la operación `feature` (para resaltarla al
+/// pasar el mouse por el árbol).
+#[tauri::command]
+pub async fn cad_feature_faces(app: AppHandle, feature: u32) -> Result<Vec<usize>, String> {
+    in_background(app, move |state| feature_faces_impl(state, feature)).await
+}
+
+fn feature_faces_impl(state: &AppState, feature: u32) -> Result<Vec<usize>, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let Some(c) = cache.as_ref() else { return Ok(Vec::new()) };
+    Ok(c.eval.face_tags.iter().enumerate().filter(|(_, ts)| ts.iter().any(|t| t.feature.0 == feature)).map(|(f, _)| f).collect())
+}
+
+/// Aristas del borde de una cara (para redondear o achaflanar la cara entera).
+#[tauri::command]
+pub async fn cad_face_edges(app: AppHandle, face: usize) -> Result<Vec<usize>, String> {
+    in_background(app, move |state| face_edges_impl(state, face)).await
+}
+
+fn face_edges_impl(state: &AppState, face: usize) -> Result<Vec<usize>, String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("Todavía no hay un sólido")?;
+    let pairs = body.edge_face_pairs().map_err(|e| e.to_string())?;
+    Ok(pairs.iter().enumerate().filter(|(_, p)| p.contains(&Some(face))).map(|(e, _)| e).collect())
+}
+
 /// Vértice del sólido en `point` como punto que lo sigue: el extremo de una
 /// arista que termina ahí.
 #[tauri::command]
@@ -957,6 +1043,7 @@ fn parts_at_impl(state: &AppState, mut doc: Document, index: usize) -> Result<Ve
 }
 
 fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad_model::occt::MassInfo>]) -> Vec<PartView> {
+    let numbers = part_numbers(doc, eval);
     eval.part_ranges()
         .into_iter()
         .zip(masses)
@@ -965,13 +1052,14 @@ fn part_views(doc: &Document, eval: &cad_model::Evaluation, masses: &[Option<cad
             let m = *m;
             PartView {
                 id,
-                name: part_name(doc, id, i + 1),
+                name: part_name(doc, id, numbers.get(&id).copied().unwrap_or(i + 1)),
                 faces: [f.start, f.end],
                 edges: [e.start, e.end],
                 volume: m.map_or(0.0, |m| m.volume),
                 area: m.map_or(0.0, |m| m.area),
                 center: m.map_or([0.0; 3], |m| m.center),
                 surface: eval.parts.get(i).is_some_and(|p| p.is_surface()),
+                inherit: if doc.parts.iter().any(|p| p.part == id) { None } else { inherit_from(doc, eval, id) },
             }
         })
         .collect()
@@ -1663,6 +1751,8 @@ pub mod bridge {
             "cad_edge_ref" => ok(edge_ref_impl(state, arg(args, "edge")?)?),
             "cad_vertex_spec" => ok(vertex_spec_impl(state, arg(args, "point")?)?),
             "cad_face_info" => ok(face_info_impl(state, arg(args, "face")?)?),
+            "cad_face_edges" => ok(face_edges_impl(state, arg(args, "face")?)?),
+            "cad_feature_faces" => ok(feature_faces_impl(state, arg(args, "feature")?)?),
             "cad_deviation" => deviation_impl(state, arg(args, "tolerance")?).map(Reply::Bytes),
             "cad_assembly_mesh" => assembly_mesh_impl(state).map(Reply::Bytes),
             "cad_assembly_faces" => ok(assembly_faces_impl(state)?),
