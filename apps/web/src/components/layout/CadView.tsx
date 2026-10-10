@@ -438,6 +438,12 @@ export const CadView: Component<CadViewProps> = (props) => {
   let lassoAdditive = false;
   // Entidad o punto bajo el mouse (preselección)
   const [preHover, setPreHover] = createSignal<number>();
+  // Preselección en 3D: plano, cara, arista, vértice o región bajo el mouse,
+  // según lo que se puede elegir en ese momento
+  let preFrame = 0;
+  let prePointer: { x: number; y: number } | undefined;
+  // Caras planas (para «dónde va el sketch»), por cara; se vacía con cada modelo nuevo
+  let planarFaces = new Map<number, boolean>();
   // Para el doble clic sobre una entidad (elige la cadena)
   let lastEntityClick: { id: number; t: number } | undefined;
   // Cambia con cada cuadro dibujado: las cotas HTML siguen a la cámara
@@ -1866,6 +1872,70 @@ export const CadView: Component<CadViewProps> = (props) => {
     });
   });
 
+  /** Qué se puede elegir con un clic ahora mismo, para la preselección (nada dentro de un sketch) */
+  const preselectWant = (): Parameters<CadViewer["pick"]>[2] | undefined => {
+    if (ui.session()) return undefined;
+    const mode = ui.pick();
+    switch (mode.kind) {
+      case "none":
+        return FILTER_WANT[ui.pickFilter()];
+      case "face":
+      case "faces":
+      case "asm_face":
+        return { faces: true };
+      case "edges":
+      case "axis":
+        return { edges: true };
+      case "place":
+        return { faces: true, planes: true, refPlanes: true };
+      default:
+        return undefined;
+    }
+  };
+
+  const updatePreselect = () => {
+    preFrame = 0;
+    const at = prePointer;
+    const want = preselectWant();
+    if (!viewer) return;
+    if (!at || !want || overCube() || handleHot()) return viewer.setPreselect(null);
+    const hit = viewer.pick(at.x, at.y, want);
+    if (!hit || hit.kind === "scan") return viewer.setPreselect(null);
+    // Un sketch solo va en caras planas: las curvas no se preseleccionan
+    if (hit.kind === "face" && ui.pick().kind === "place") {
+      const planar = planarFaces.get(hit.face);
+      if (planar === undefined) {
+        viewer.setPreselect(null);
+        const faces = planarFaces;
+        void invoke<{ surface: string }>("cad_face_info", { face: hit.face }).then(
+          (info) => {
+            faces.set(hit.face, info.surface === "plane");
+            if (faces === planarFaces) schedulePreselect();
+          },
+          () => faces.set(hit.face, false),
+        );
+        return;
+      }
+      if (!planar) return viewer.setPreselect(null);
+    }
+    viewer.setPreselect(hit);
+  };
+  const schedulePreselect = () => {
+    if (!preFrame) preFrame = requestAnimationFrame(updatePreselect);
+  };
+  const clearPreselect = () => {
+    prePointer = undefined;
+    schedulePreselect();
+  };
+  // Cambia el modo o el modelo: lo que había bajo el mouse puede no valer
+  createEffect(
+    on([ui.pick, ui.session, ui.pickFilter, store.mesh], () => {
+      planarFaces = new Map();
+      schedulePreselect();
+    }),
+  );
+  onCleanup(() => cancelAnimationFrame(preFrame));
+
   const pickClick = async (e: PointerEvent) => {
     if (!viewer) return;
     const mode = ui.pick();
@@ -1983,6 +2053,9 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    // Al girar o arrastrar no hay preselección
+    prePointer = e.buttons === 0 ? { x: e.clientX, y: e.clientY } : undefined;
+    schedulePreselect();
     const mode3 = ui.pick();
     if (mode3.kind === "sketch3d" && e.buttons === 0) ui.setCursor3d(hit3d(e, mode3.feature, mode3.plane)?.at);
     const ts = trimStroke();
@@ -2745,7 +2818,10 @@ export const CadView: Component<CadViewProps> = (props) => {
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        onPointerLeave={() => setSnapView(undefined)}
+        onPointerLeave={() => {
+          setSnapView(undefined);
+          clearPreselect();
+        }}
         onContextMenu={(e) => e.preventDefault()}
       />
 

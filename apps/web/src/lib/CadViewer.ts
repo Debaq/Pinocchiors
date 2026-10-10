@@ -6,6 +6,9 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { LineSegments2 } from "three/addons/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/addons/lines/LineSegmentsGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
 import { CameraRig, type CameraPose } from "./cameraRig";
 import { buildGridLines } from "./gridLines";
 import { LightRig, configureRenderer, type LightSettings } from "./lightRig";
@@ -182,6 +185,26 @@ export function entityPolyline(g: Sketch["entities"][number]["geometry"], point:
   return splineOf(g, (id) => point.get(id));
 }
 
+/** Identidad de lo elegido, para no repintar si el puntero sigue sobre lo mismo */
+function preselectKey(p: CadPick): string {
+  switch (p.kind) {
+    case "face":
+      return `${p.face}`;
+    case "edge":
+      return `${p.edge}`;
+    case "vertex":
+      return p.at.join(",");
+    case "scan":
+      return `${p.triangle}`;
+    case "region":
+      return `${p.sketch}:${p.region}`;
+    case "plane":
+      return p.plane;
+    case "refplane":
+      return `${p.feature}`;
+  }
+}
+
 export class CadViewer {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -223,6 +246,10 @@ export class CadViewer {
   private lightRig: LightRig;
   private highlightedFaces = new Set<number>();
   private highlightedEdges = new Set<number>();
+  /** Lo que elegiría un clic, bajo el puntero (preselección) */
+  private preselect: CadPick | null = null;
+  /** Vértice o arista preseleccionados, dibujados aparte (la arista, gruesa) */
+  private preselectMark?: THREE.Points | LineSegments2;
   /** Color y visibilidad de cada pieza (rangos de caras y aristas del cuerpo) */
   private partStyles: PartStyle[] = [];
   private hiddenFaces = new Set<number>();
@@ -323,6 +350,7 @@ export class CadViewer {
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    if (this.preselectMark instanceof LineSegments2) this.preselectMark.material.resolution.set(w, h);
     this.requestRender();
   }
 
@@ -503,6 +531,7 @@ export class CadViewer {
 
   setBody(data: CadMesh | null) {
     this.bodyData = data;
+    if (this.preselect?.kind === "face" || this.preselect?.kind === "edge" || this.preselect?.kind === "vertex") this.setPreselect(null);
     this.fitPlanes(data?.positions);
     this.buildBody();
   }
@@ -850,17 +879,85 @@ export class CadViewer {
     this.requestRender();
   }
 
+  /**
+   * Preselección: lo que está bajo el puntero y elegiría un clic se tiñe de
+   * ámbar (caras, aristas, planos y regiones; los vértices, con un punto)
+   */
+  setPreselect(pick: CadPick | null) {
+    const a = this.preselect;
+    if (a === pick || (a && pick && a.kind === pick.kind && preselectKey(a) === preselectKey(pick))) return;
+    const bodyChanged = a?.kind === "face" || a?.kind === "edge" || pick?.kind === "face" || pick?.kind === "edge";
+    this.preselect = pick;
+    if (bodyChanged) this.paintBody();
+    this.tintPreselected();
+    if (this.preselectMark) {
+      this.scene.remove(this.preselectMark);
+      this.preselectMark.geometry.dispose();
+      (this.preselectMark.material as THREE.Material).dispose();
+      this.preselectMark = undefined;
+    }
+    if (pick?.kind === "vertex") {
+      const g = new THREE.BufferGeometry().setFromPoints([this.toView(pick.at)]);
+      this.preselectMark = new THREE.Points(g, new THREE.PointsMaterial({ color: themeHex("preselect"), size: 10, sizeAttenuation: false, depthTest: false }));
+    } else if (pick?.kind === "edge" && this.bodyEdges) {
+      // Las líneas de WebGL tienen 1 px: la arista preseleccionada va aparte, de 3 px
+      const segEdge: number[] = this.bodyEdges.geometry.userData.segEdge;
+      const pos = this.bodyEdges.geometry.getAttribute("position").array as Float32Array;
+      const segs: number[] = [];
+      segEdge.forEach((e, i) => {
+        if (e === pick.edge) for (let k = 0; k < 6; k++) segs.push(pos[i * 6 + k]);
+      });
+      const size = this.renderer.getSize(new THREE.Vector2());
+      const m = new LineMaterial({ color: themeHex("preselect"), linewidth: 3, resolution: size, depthTest: false });
+      this.preselectMark = new LineSegments2(new LineSegmentsGeometry().setPositions(segs), m);
+    }
+    if (this.preselectMark) {
+      this.preselectMark.renderOrder = 7;
+      this.scene.add(this.preselectMark);
+    }
+    this.requestRender();
+  }
+
+  /** Planos base, planos de referencia y regiones: el preseleccionado en ámbar, el resto con su color */
+  private tintPreselected() {
+    const pre = this.preselect;
+    const color = themeHex("preselect");
+    const groups = [this.planesGroup, this.refsGroup, this.sketchesGroup];
+    for (const o of groups.flatMap((g) => g.children)) {
+      const base = o.userData.base as { color: number; opacity: number; outline?: THREE.LineSegments } | undefined;
+      if (!base) continue;
+      const u = o.userData;
+      const on =
+        (pre?.kind === "plane" && u.plane === pre.plane) ||
+        (pre?.kind === "refplane" && u.refPlane === pre.feature) ||
+        (pre?.kind === "region" && u.sketch === pre.sketch && u.region === pre.region);
+      const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial;
+      m.color.setHex(on ? color : base.color);
+      m.opacity = on ? Math.max(base.opacity, 0.32) : base.opacity;
+      if (base.outline) {
+        const lm = base.outline.material as THREE.LineBasicMaterial;
+        const lb = base.outline.userData.base as { color: number; opacity: number };
+        lm.color.setHex(on ? color : lb.color);
+        lm.opacity = on ? 1 : lb.opacity;
+      }
+    }
+  }
+
   private paintBody() {
     if (this.body && this.bodyData) {
       const base = new THREE.Color(BODY_COLOR);
       const hi = new THREE.Color(themeHex("accent"));
+      // Preselección: el color de la cara, mezclado con ámbar
+      const preFace = this.preselect?.kind === "face" ? this.preselect.face : -1;
+      const pre = new THREE.Color(themeHex("preselect"));
       const partColors = this.partStyles.map((p) => ({ faces: p.faces, color: new THREE.Color(p.color) }));
       const faceColor = (f: number) => partColors.find((p) => p.faces[0] <= f && f < p.faces[1])?.color ?? base;
       const colors = this.body.geometry.getAttribute("color") as THREE.BufferAttribute;
       const idx = this.bodyData.indices;
       for (let t = 0; t < this.bodyData.triangleFace.length; t++) {
         const f = this.bodyData.triangleFace[t];
-        const c = this.highlightedFaces.has(f) ? hi : faceColor(f);
+        let c = this.highlightedFaces.has(f) ? hi : faceColor(f);
+        if (f === preFace) c = c.clone().lerp(pre, 0.6);
         for (let k = 0; k < 3; k++) colors.setXYZ(idx[t * 3 + k], c.r, c.g, c.b);
       }
       colors.needsUpdate = true;
@@ -869,9 +966,11 @@ export class CadViewer {
       const segEdge: number[] = this.bodyEdges.geometry.userData.segEdge;
       const base = new THREE.Color(themeHex("bg-darker"));
       const hi = new THREE.Color(themeHex("orange"));
+      const pre = new THREE.Color(themeHex("preselect"));
+      const preEdge = this.preselect?.kind === "edge" ? this.preselect.edge : -1;
       const colors = this.bodyEdges.geometry.getAttribute("color") as THREE.BufferAttribute;
       segEdge.forEach((e, s) => {
-        const c = this.highlightedEdges.has(e) ? hi : base;
+        const c = e === preEdge ? pre : this.highlightedEdges.has(e) ? hi : base;
         colors.setXYZ(s * 2, c.r, c.g, c.b);
         colors.setXYZ(s * 2 + 1, c.r, c.g, c.b);
       });
@@ -1124,10 +1223,10 @@ export class CadViewer {
           pos.setXYZ(i, v.x, v.y, v.z);
         }
         const picked = chosen.has(index);
+        const fill = { color: themeHex(picked ? "cyan" : "accent"), opacity: picked ? 0.5 : 0.1 };
         const m = new THREE.MeshBasicMaterial({
-          color: themeHex(picked ? "cyan" : "accent"),
+          ...fill,
           transparent: true,
-          opacity: picked ? 0.5 : 0.1,
           side: THREE.DoubleSide,
           depthWrite: false,
           // Delante de la cara donde está dibujado
@@ -1137,7 +1236,7 @@ export class CadViewer {
         });
         const mesh = new THREE.Mesh(g, m);
         mesh.renderOrder = 4;
-        mesh.userData = { sketch: vs.id, region: index };
+        mesh.userData = { sketch: vs.id, region: index, base: fill };
         this.sketchesGroup.add(mesh);
       });
       const point = new Map(vs.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
@@ -1154,6 +1253,7 @@ export class CadViewer {
         this.sketchesGroup.add(l);
       }
     }
+    this.tintPreselected();
     this.requestRender();
   }
 
@@ -1173,14 +1273,14 @@ export class CadViewer {
         const basis = new THREE.Matrix4().makeBasis(x, y, n).setPosition(this.toView(r.plane.origin));
         const g = new THREE.PlaneGeometry(size, size);
         const picked = chosen.includes(r.id);
-        const mesh = new THREE.Mesh(
-          g,
-          new THREE.MeshBasicMaterial({ color: picked ? themeHex("cyan") : color, transparent: true, opacity: picked ? 0.3 : 0.1, side: THREE.DoubleSide, depthWrite: false }),
-        );
+        const fill = { color: picked ? themeHex("cyan") : color, opacity: picked ? 0.3 : 0.1 };
+        const mesh = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ ...fill, transparent: true, side: THREE.DoubleSide, depthWrite: false }));
         mesh.applyMatrix4(basis);
-        mesh.userData = { refPlane: r.id };
         mesh.renderOrder = 2;
-        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ color: picked ? themeHex("cyan") : color, transparent: true, opacity: 0.7 }));
+        const line = { color: fill.color, opacity: 0.7 };
+        const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ ...line, transparent: true }));
+        edges.userData = { base: line };
+        mesh.userData = { refPlane: r.id, base: { ...fill, outline: edges } };
         edges.applyMatrix4(basis);
         this.refsGroup.add(mesh, edges);
       } else if (r.kind === "axis") {
@@ -1205,6 +1305,7 @@ export class CadViewer {
         this.refsGroup.add(pts);
       }
     }
+    this.tintPreselected();
     this.requestRender();
   }
 
@@ -1222,25 +1323,20 @@ export class CadViewer {
       if (this.hiddenPlanes.has(d.id)) continue;
       const picked = this.selectedPlanes.has(d.id);
       const g = new THREE.PlaneGeometry(size, size);
-      const m = new THREE.MeshBasicMaterial({
-        color: themeHex(picked ? "cyan" : "comment"),
-        transparent: true,
-        opacity: picked ? 0.35 : 0.06,
-        side: THREE.DoubleSide,
-        depthWrite: false,
-      });
+      const fill = { color: themeHex(picked ? "cyan" : "comment"), opacity: picked ? 0.35 : 0.06 };
+      const m = new THREE.MeshBasicMaterial({ ...fill, transparent: true, side: THREE.DoubleSide, depthWrite: false });
       const mesh = new THREE.Mesh(g, m);
       mesh.rotation.copy(d.rot);
-      mesh.userData = { plane: d.id };
       mesh.renderOrder = 2;
       this.planesGroup.add(mesh);
-      const edges = new THREE.LineSegments(
-        new THREE.EdgesGeometry(g),
-        new THREE.LineBasicMaterial({ color: themeHex(picked ? "cyan" : "comment"), transparent: true, opacity: picked ? 0.9 : 0.4 }),
-      );
+      const line = { color: fill.color, opacity: picked ? 0.9 : 0.4 };
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g), new THREE.LineBasicMaterial({ ...line, transparent: true }));
       edges.rotation.copy(d.rot);
+      edges.userData = { base: line };
+      mesh.userData = { plane: d.id, base: { ...fill, outline: edges } };
       this.planesGroup.add(edges);
     }
+    this.tintPreselected();
     this.requestRender();
   }
 

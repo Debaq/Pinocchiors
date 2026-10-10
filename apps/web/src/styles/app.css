@@ -35,6 +35,8 @@
   --color-info: #8be9fd;
   /* Sketch: entidad a la que le falta definir (azul, como en Onshape) */
   --color-sketch-free: #82aaff;
+  /* CAD: lo que elegiría un clic, bajo el mouse (preselección) */
+  --color-preselect: #ffc53d;
 
   /* Texto */
   --color-text: #f8f8f2;
@@ -113,6 +115,7 @@
   --color-error: #c92a2a;
   --color-info: #0a6f8c;
   --color-sketch-free: #2457c5;
+  --color-preselect: #e09600;
 
   --color-text: #1f2030;
   --color-text-muted: #545a73;

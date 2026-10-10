@@ -120,6 +120,62 @@ const scenarios = {
     if (!r.body.valid) throw new Error("sólido inválido");
   },
 
+  async "preselección: lo que está bajo el mouse se resalta"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const pre = () => b.eval(`(() => { const p = window.__cadViewer.preselect; return p && { kind: p.kind, plane: p.plane, face: p.face, edge: p.edge }; })()`);
+    const hover = async (x, y) => {
+      // Sin botón: con "left" Chromium manda el movimiento como arrastre
+      await b.mouse("mouseMoved", x, y, { button: "none", buttons: 0 });
+      await sleep(250);
+      return pre();
+    };
+    // Primer punto de la grilla de pantalla donde el visor ve `kind`
+    const find = (want, kind) =>
+      b.eval(`(() => {
+        for (let y = 150; y < 800; y += 20) for (let x = 300; x < 1100; x += 20) {
+          const h = window.__cadViewer.pick(x, y, ${JSON.stringify(want)});
+          if (h && h.kind === ${JSON.stringify(kind)}) return [x, y];
+        }
+      })()`);
+    // Dónde va el sketch: el plano base y las caras planas se tiñen
+    await b.clickText("Sketch");
+    await sleep(400);
+    const s = await b.eval(`window.__cadViewer.planeSize`);
+    let onPlane;
+    for (const [u, v] of [[0.47, -0.47], [-0.47, -0.47], [0.47, 0.47], [-0.47, 0.47]]) {
+      const [x, y] = await b.eval(`window.__cadViewer.screenOf([${u * s}, ${v * s}, 0])`);
+      const h = await b.eval(`window.__cadViewer.pick(${x}, ${y}, { faces: true, planes: true })`);
+      if (h?.kind === "plane") onPlane = [x, y];
+      if (onPlane) break;
+    }
+    if (!onPlane) throw new Error("no encontré un punto libre de un plano base");
+    const p1 = await hover(...onPlane);
+    if (p1?.kind !== "plane") throw new Error("el plano bajo el mouse no se preselecciona: " + JSON.stringify(p1));
+    await b.shot("preselect_plane");
+    const onFace = await find({ faces: true, planes: true }, "face");
+    if (!onFace) throw new Error("no encontré una cara de la caja");
+    await hover(...onFace);
+    await sleep(500);
+    const p2 = await pre();
+    if (p2?.kind !== "face") throw new Error("la cara plana bajo el mouse no se preselecciona: " + JSON.stringify(p2));
+    await b.shot("preselect_face");
+    // Fuera del visor no queda nada resaltado
+    await b.eval(`document.querySelector(".cursor-crosshair")?.dispatchEvent(new PointerEvent("pointerleave"))`);
+    await sleep(250);
+    if (await pre()) throw new Error("la preselección queda al salir del visor");
+    await b.key("Escape");
+    await sleep(400);
+    // Sin herramienta: también las aristas
+    const onEdge = await find({ edges: true }, "edge");
+    if (!onEdge) throw new Error("no encontré una arista");
+    const p3 = await hover(...onEdge);
+    if (p3?.kind !== "edge") throw new Error("la arista bajo el mouse no se preselecciona: " + JSON.stringify(p3));
+    await b.shot("preselect_edge");
+  },
+
   async "redondeo eligiendo aristas y cambio de radio"(b) {
     await begin(b);
     await b.clickText("Caja");
