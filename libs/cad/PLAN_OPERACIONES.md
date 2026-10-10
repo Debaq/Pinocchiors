@@ -267,8 +267,7 @@ abran los proyectos viejos.
 
 ## Pendientes heredados de planes borrados
 
-- Escaneo → CAD: unir y separar planos grandes en `detect_all`; alinear el escaneo a ejes y
-  proponer cortes; reconocer conos, esferas, toros y redondeos.
+- Escaneo → CAD: pasó a [PLAN_ESCANEO.md](PLAN_ESCANEO.md) (2026-10-10).
 - Visor: canvas único (que el visor principal dibuje las capas del CAD y CadView use ese
   canvas). La cámara común ya está (`lib/cameraRig.ts`).
 - Chapa: más allá de pestañas, alivios y esquinas cerradas (dobladillos, pestañas en arista

@@ -8,7 +8,9 @@ nuevo **escaneo → CAD** que conecta orizon3d con sólidos editables.
 [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md) (desde el 2026-10-10: dibujo y edición sobre la hoja,
 vistas que se giran en 3D, cortes e imágenes de secciones) y
 [PLAN_ENGRANES.md](PLAN_ENGRANES.md) (desde el 2026-10-10: engranes paramétricos, pares
-coordinados y relaciones en el ensamble; **no se borra en limpiezas de planes**). Los planes anteriores se borraron y
+coordinados y relaciones en el ensamble; **no se borra en limpiezas de planes**) y
+[PLAN_ESCANEO.md](PLAN_ESCANEO.md) (desde el 2026-10-10: diseñar sobre escaneos y mallas STL/OBJ,
+primero piezas que calzan y después reconstrucción). Los planes anteriores se borraron y
 lo hecho queda en esta bitácora.
 
 Decisiones (2026-10-05):
