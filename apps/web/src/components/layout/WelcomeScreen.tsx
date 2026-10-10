@@ -1,7 +1,30 @@
 import { Component, For, Show, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import * as Icons from "../icons";
-import logo from "../../assets/logo.svg";
+import splashOpen from "../../assets/splash/open.svg";
+import splashScan from "../../assets/splash/scan.svg";
+import splashAnimate from "../../assets/splash/animate.svg";
+import splashDesign from "../../assets/splash/design.svg";
+import splashFabricate from "../../assets/splash/fabricate.svg";
+
+/** Una lámina por forma de empezar (scripts/logo.py) */
+const SPLASHES = [splashOpen, splashScan, splashAnimate, splashDesign, splashFabricate];
+const SPLASH_KEY = "pinocchio.splash";
+
+/** Lámina de este arranque: al azar, sin repetir la del arranque anterior */
+function pickSplash(): string {
+  let last = -1;
+  try {
+    last = Number(localStorage.getItem(SPLASH_KEY) ?? -1);
+  } catch {}
+  let i = Math.floor(Math.random() * (SPLASHES.length - 1));
+  if (i >= last && last >= 0) i++;
+  try {
+    localStorage.setItem(SPLASH_KEY, String(i));
+  } catch {}
+  return SPLASHES[i];
+}
+const splash = pickSplash();
 
 export interface WelcomeScreenProps {
   /** Un solo diálogo para proyectos .pinocchio y modelos 3D */
@@ -30,8 +53,9 @@ interface Choice {
 }
 
 /**
- * Inicio sin trabajo abierto: el logo en una lámina a la izquierda y las
- * formas de empezar a la derecha. También se puede soltar un modelo sobre el visor
+ * Inicio sin trabajo abierto: la marioneta haciendo una de las formas de empezar
+ * en una lámina a la izquierda (cambia en cada arranque) y las formas de empezar
+ * a la derecha. También se puede soltar un modelo sobre el visor
  */
 export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
   const formats = () => (props.formats?.length ? props.formats.map((f) => f.toUpperCase()).join(", ") : "GLB, GLTF, OBJ, STL");
@@ -80,7 +104,7 @@ export const WelcomeScreen: Component<WelcomeScreenProps> = (props) => {
         )}
       >
         <div class="sm:w-[44%] shrink-0 bg-splash flex flex-col items-center justify-center px-6 pt-6 pb-5">
-          <img src={logo} alt="" class="w-full max-w-60 select-none" draggable={false} />
+          <img src={splash} alt="" class="w-full max-w-60 select-none" draggable={false} />
           <div class="text-center mt-3">
             <div class="text-2xl font-bold tracking-tight text-splash-text">Pinocchio</div>
             <div class="text-[11px] text-splash-muted">Escanear, reparar, animar y fabricar modelos 3D</div>
