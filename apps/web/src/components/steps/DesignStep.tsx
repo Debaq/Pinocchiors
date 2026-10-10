@@ -5518,6 +5518,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           {/* Con números (con el mouse: herramientas Mover, Copiar, Girar y Escalar de la barra) */}
           <div class="space-y-1.5 border-t border-border pt-1.5" aria-label="Transformar">
             <span class="text-xs text-text-muted">Transformar lo elegido (girar y escalar desde su centro)</span>
+            <Checkbox
+              small
+              label="Soltar de lo que no se mueve"
+              checked={ui.detachOnMove()}
+              onChange={ui.setDetachOnMove}
+            />
             <div class="flex items-end gap-1.5">
               <Num label="X" suffix="mm" step={1} value={moveBy()[0]} onCommit={(v) => setMoveBy([v, moveBy()[1]])} />
               <Num label="Y" suffix="mm" step={1} value={moveBy()[1]} onCommit={(v) => setMoveBy([moveBy()[0], v])} />

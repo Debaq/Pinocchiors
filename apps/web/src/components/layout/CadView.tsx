@@ -11,6 +11,10 @@ import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../l
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
 import { extendAny, trimAny } from "../../lib/sketchTrim";
+import { offsetChain } from "../../lib/sketchEdit";
+import { polylineOf } from "../../lib/sketchCheck";
+import { passesFilter, SKETCH_FILTERS, type SketchFilter } from "../../lib/sketchPick";
+import { parseTypedTransform, TYPED_HINT } from "../../lib/sketchTyped";
 import { CONSTRAINT_TOOLS, pickSuggestion, type ConstraintTool } from "../../lib/sketchSuggest";
 import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
@@ -100,6 +104,7 @@ const TOOLS: ToolDef[] = [
   { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar, o arrastrar: quita todo lo que toca el trazo; Ctrl+clic elige con qué se corta)", key: "T", icon: SketchIcons.Trim, group: 2 },
   { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo; Ctrl+clic elige hasta dónde)", key: "E", icon: SketchIcons.Extend, group: 2 },
   { id: "use", short: "Usar", label: "Usar arista o cara del sólido (una cara trae todo su contorno; queda ligado: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
+  { id: "offset", short: "Equidistante", label: "Equidistante (clic en una curva: toda su cadena; el lado y la distancia con el cursor, o escribiendo la distancia)", key: "F", icon: SketchIcons.Offset, group: 2 },
   { id: "split", short: "Partir", label: "Partir una línea, arco o círculo (clic donde se parte)", key: "D", icon: SketchIcons.Split, group: 2 },
   { id: "stretch", short: "Estirar", label: "Estirar (caja sobre los puntos que se corren, después punto base y destino: lo demás se estira)", key: "W", icon: SketchIcons.Stretch, group: 3 },
   { id: "move", short: "Mover", label: "Mover lo elegido (punto base, destino)", key: "V", icon: SketchIcons.Move, group: 3 },
@@ -306,6 +311,9 @@ function textAt(s: Sketch, p: P2) {
   return best?.t;
 }
 
+/** El filtro de selección del sketch (lo pone el componente) */
+let sketchFilterNow: () => SketchFilter = () => "all";
+
 function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number } {
   return hitAll(s, p, tol, withPoints)[0] ?? {};
 }
@@ -342,7 +350,9 @@ function hitAll(s: Sketch, p: P2, tol: number, withPoints = true): { point?: num
     if (d <= tol) curves.push({ id: e.id, d });
   }
   const by = (a: { d: number }, b: { d: number }) => a.d - b.d;
-  return [...points.sort(by).map((x) => ({ point: x.id })), ...curves.sort(by).map((x) => ({ entity: x.id }))];
+  const all = [...points.sort(by).map((x) => ({ point: x.id })), ...curves.sort(by).map((x) => ({ entity: x.id }))];
+  const f = sketchFilterNow();
+  return f === "all" ? all : all.filter((h) => passesFilter(s, h, f));
 }
 
 /** Vértices de un polígono regular de centro `c` con un vértice en `v` */
@@ -390,6 +400,12 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Arco tangente: desde qué punto, en qué dirección y de qué entidad viene
   const [tangentFrom, setTangentFrom] = createSignal<{ point: number; dir: P2; entity: number }>();
   const [anchor, setAnchor] = createSignal<Snap[]>([]);
+  sketchFilterNow = () => ui.sketchFilter();
+  // Equidistante en el visor: la cadena elegida (después, el lado y la distancia con el cursor)
+  const [offsetFrom, setOffsetFrom] = createSignal<number[]>();
+  // Dónde está el mouse en el visor (px), para el campo flotante
+  const [pointerPx, setPointerPx] = createSignal<[number, number]>();
+  let typedInput: HTMLInputElement | undefined;
   // Recortar arrastrando: el trazo en el plano y hasta dónde se alejó en pantalla del comienzo
   const [trimStroke, setTrimStroke] = createSignal<P2[]>();
   let trimFrom: { x: number; y: number; far: number } | undefined;
@@ -551,6 +567,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   });
 
   const resetTool = () => {
+    setOffsetFrom(undefined);
+    ui.clearPreview();
     setChain(undefined);
     setChainArc(false);
     setAnchor([]);
@@ -1319,6 +1337,16 @@ export const CadView: Component<CadViewProps> = (props) => {
         else ui.setSelection([text.anchor]);
         return;
       }
+      // Ctrl+Mayús+arrastrar: arrastre libre (se sueltan las restricciones de lo arrastrado)
+      if (e.shiftKey && (e.ctrlKey || e.metaKey) && (h.point ?? h.entity) !== undefined) {
+        const id = (h.point ?? h.entity)!;
+        const n = ui.freeDrag(id);
+        ui.setMessage(n ? `Arrastre libre: se ${n === 1 ? "soltó 1 restricción" : `soltaron ${n} restricciones`}` : "Arrastre libre (no tenía restricciones)");
+        ui.setSelection([id]);
+        if (h.point !== undefined) dragging = h.point;
+        else entityDrag = { id, start: raw, from: structuredClone(ui.session()!.sketch), moved: false };
+        return;
+      }
       if (h.point !== undefined) {
         dragging = h.point;
         if (add) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
@@ -1872,6 +1900,22 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       return;
     }
+    if (t === "offset") {
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const from = offsetFrom();
+      if (!from) {
+        const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+        if (target === undefined) return ui.setMessage("Clic en la curva (se toma toda su cadena)");
+        const chainIds = connectedChain(s.sketch, target);
+        setOffsetFrom(chainIds);
+        ui.setSelection(chainIds);
+        ui.setMessage("Llevar el cursor al lado y a la distancia, y clic (o escribir la distancia)");
+        return;
+      }
+      const d = offsetAt(from, raw);
+      if (d !== undefined) commitOffset(from, d);
+      return;
+    }
     if ((t === "trim" || t === "extend") && (e.ctrlKey || e.metaKey)) {
       // Ctrl+clic: elegir (o soltar) con qué se recorta o hasta dónde se extiende
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
@@ -2321,6 +2365,19 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   const onPointerMove = (e: PointerEvent) => {
     if (e.buttons === 0) setOverCube(viewer?.cubeHover(e.clientX, e.clientY) ?? false);
+    const rect0 = container.getBoundingClientRect();
+    setPointerPx([e.clientX - rect0.left, e.clientY - rect0.top]);
+    // Equidistante: la vista previa del lado y la distancia del cursor
+    const from = offsetFrom();
+    const so = ui.session();
+    if (from && so && viewer && ui.tool() === "offset" && e.buttons === 0) {
+      const p = viewer.planePoint(e.clientX, e.clientY, so.plane);
+      const d = p ? offsetAt(from, p) : undefined;
+      if (d !== undefined) {
+        ui.previewOf(() => ui.change((sk) => void offsetChain(sk, from, d)));
+        ui.setMessage(`Equidistante a ${+Math.abs(d).toFixed(4)} mm: clic (o escribir la distancia)`);
+      }
+    }
     // Al girar o arrastrar no hay preselección
     prePointer = e.buttons === 0 ? { x: e.clientX, y: e.clientY } : undefined;
     schedulePreselect();
@@ -2348,6 +2405,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
       setPreHover(h.point ?? h.entity);
       setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits(), trimBounds()) : undefined);
+      // Extender: hasta dónde llegaría, antes del clic
+      if (ui.tool() === "extend") {
+        const id = h.entity;
+        if (raw && id !== undefined) ui.previewOf(() => ui.change((sk) => void extendAny(sk, id, raw, sheetLimits(), trimBounds())));
+        else ui.clearPreview();
+      }
     } else {
       if (preHover() !== undefined) setPreHover(undefined);
       if (trimGone()) setTrimGone(undefined);
@@ -2531,6 +2594,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (pendingCon()) {
       setPendingCon(undefined);
       ui.setMessage(undefined);
+    } else if (offsetFrom()) {
+      resetTool();
+      ui.setSelection([]);
+      ui.setMessage(undefined);
     } else if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
     else if (ui.tool() === "bspline" && anchor().length >= 2) finishBSpline(false);
     else if (chain() || anchor().length) resetTool();
@@ -2538,6 +2605,66 @@ export const CadView: Component<CadViewProps> = (props) => {
       ui.setSelection([]);
       ui.setMessage("Corta todo lo que cruza");
     } else ui.setTool("select");
+  };
+  /**
+   * Equidistante de la cadena `ids` hasta el punto `p`: la distancia es la del
+   * punto a la cadena (redondeada según el zoom) y el lado, el del punto
+   */
+  const offsetAt = (ids: number[], p: P2, given?: number): number | undefined => {
+    const s = ui.session();
+    if (!s) return undefined;
+    const lines = ids.map((id) => s.sketch.entities.find((e) => e.id === id)).filter((e) => !!e).map((e) => polylineOf(s.sketch, e!.geometry));
+    const near = (pl: P2[][]) => Math.min(...pl.map((l) => l.slice(1).reduce((m, q, i) => Math.min(m, segDist(p, l[i], q)), Infinity)));
+    const d = given ?? round(near(lines));
+    if (!(d > 0)) return undefined;
+    // El lado: el de la prueba que queda más cerca del cursor
+    const side = (k: number) => {
+      const c = structuredClone(s.sketch);
+      const r = offsetChain(c, ids, k);
+      if (typeof r === "string") return Infinity;
+      return near(r.entities.map((id) => polylineOf(c, c.entities.find((e) => e.id === id)!.geometry)));
+    };
+    return side(d) <= side(-d) ? d : -d;
+  };
+  const commitOffset = (ids: number[], d: number) => {
+    let msg: string | undefined;
+    ui.clearPreview();
+    ui.change((sk) => {
+      const r = offsetChain(sk, ids, d);
+      if (typeof r === "string") msg = r;
+    });
+    ui.setMessage(msg ?? `Equidistante a ${+Math.abs(d).toFixed(4)} mm`);
+    setOffsetFrom(undefined);
+    ui.setSelection([]);
+  };
+  /** Campo flotante: al mover, copiar, girar o escalar (con el punto base) y en el equidistante */
+  const typedField = createMemo(() => {
+    const t = ui.tool();
+    const at = pointerPx();
+    if (!ui.session() || !at) return undefined;
+    if (t === "offset" && offsetFrom()) return { tool: t, hint: "distancia (el lado, el del cursor)", x: at[0], y: at[1] };
+    if ((t === "move" || t === "copy" || t === "rotate" || t === "scale") && anchor().length >= 1) return { tool: t, hint: TYPED_HINT[t], x: at[0], y: at[1] };
+    return undefined;
+  });
+  const applyTyped = (text: string) => {
+    const t = ui.tool();
+    const c = cursor();
+    if (t === "offset") {
+      const from = offsetFrom();
+      const v = parseFloat(text.trim().replace(",", "."));
+      if (!from || !(v > 0)) return ui.setMessage("La distancia tiene que ser un número mayor que 0");
+      const d = offsetAt(from, c ?? [0, 0], v);
+      if (d !== undefined) commitOffset(from, d);
+      return;
+    }
+    if (t !== "move" && t !== "copy" && t !== "rotate" && t !== "scale") return;
+    const base = anchor()[0]?.p;
+    if (!base) return;
+    const r = parseTypedTransform(t, text, c ? [c[0] - base[0], c[1] - base[1]] : undefined);
+    if (typeof r === "string") return ui.setMessage(r);
+    const xf = "delta" in r ? { f: translation(r.delta) } : "degrees" in r ? { f: rotation(base, r.degrees) } : { f: scaling(base, r.factor), scale: r.factor };
+    ui.setMessage(ui.transformSelected(xf.f, { scale: xf.scale, copy: t === "copy" }));
+    setAnchor([]);
   };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;
@@ -2687,6 +2814,14 @@ export const CadView: Component<CadViewProps> = (props) => {
   const onKey = (e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
     if (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable) return;
+    // Con el campo flotante a la vista, lo que se escribe va a él
+    if (typedField() && typedInput && !e.ctrlKey && !e.metaKey && !e.altKey && /^[0-9.,;<\-x]$/.test(e.key)) {
+      typedInput.focus();
+      typedInput.value += e.key;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     // Vistas estándar, también dibujando: Mayús + 1…7 como Onshape, y 1/3/7
     // (con Ctrl la opuesta) como en el resto de la app
     const view = viewForKey(e);
@@ -3202,6 +3337,30 @@ export const CadView: Component<CadViewProps> = (props) => {
       <Show when={menu()}>{(m) => <ContextMenu x={m().x} y={m().y} items={m().items} onClose={() => setMenu(undefined)} />}</Show>
 
       {/* A qué se pega el cursor (anclaje) */}
+      <Show when={typedField()}>
+        {(f) => (
+          <input
+            ref={(el) => {
+              typedInput = el;
+              setTimeout(() => el.focus());
+            }}
+            type="text"
+            data-typed-field={f().tool}
+            aria-label="Valor escrito"
+            placeholder={f().hint}
+            class="absolute z-20 w-40 px-1.5 py-0.5 rounded text-xs font-mono bg-bg-lighter/95 border border-accent text-text outline-none"
+            style={{ left: `${f().x + 16}px`, top: `${f().y + 16}px` }}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") applyTyped(e.currentTarget.value);
+              else if (e.key === "Escape") {
+                e.currentTarget.blur();
+                cancelStep();
+              }
+            }}
+          />
+        )}
+      </Show>
       <Show when={snapView()}>
         {(v) => (
           <span
@@ -3843,6 +4002,15 @@ export const CadView: Component<CadViewProps> = (props) => {
                   </button>
                 )}
               </For>
+              <select
+                aria-label="Filtro de selección"
+                title="Qué se puede elegir con el mouse (también al recortar, extender o partir)"
+                class="bg-transparent text-[11px] text-text-muted rounded px-0.5 hover:bg-surface outline-none"
+                value={ui.sketchFilter()}
+                onChange={(e) => ui.setSketchFilter(e.currentTarget.value as SketchFilter)}
+              >
+                <For each={SKETCH_FILTERS}>{(f) => <option value={f.value} title={f.tip}>{f.value === "all" ? "Elegir: todo" : `Solo ${f.label.toLowerCase()}`}</option>}</For>
+              </select>
               <div class="w-px h-5 bg-border mx-1" />
               <button
                 aria-label="Inferencias"

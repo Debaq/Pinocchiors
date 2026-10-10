@@ -432,6 +432,15 @@ function curveCrossings(p: OffsetPiece, q: OffsetPiece): P2[] {
  * (lo más cerca de donde estaban) o, si no se tocan, con un arco alrededor
  * del vértice original (`at` = tramo que empieza en ese vértice).
  */
+/** Punto del medio de una pieza de la equidistante */
+function pieceMid(o: OffsetPiece): P2 {
+  if (o.kind === "line") return mul(add(o.a, o.b), 0.5);
+  const [from, to] = o.ccw ? [o.a, o.b] : [o.b, o.a];
+  const a0 = Math.atan2(from[1] - o.c[1], from[0] - o.c[0]);
+  const t = a0 + ccwSweep(o.c, from, to) / 2;
+  return [o.c[0] + o.r * Math.cos(t), o.c[1] + o.r * Math.sin(t)];
+}
+
 function joinOffsets(pieces: OffsetPiece[], closed: boolean, tol: number): { pieces: OffsetPiece[]; rounds: { at: number; a: P2; b: P2 }[] } {
   const rounds: { at: number; a: P2; b: P2 }[] = [];
   const n = pieces.length;
@@ -441,6 +450,15 @@ function joinOffsets(pieces: OffsetPiece[], closed: boolean, tol: number): { pie
     if (dist(p.b, q.a) <= tol) {
       q.a = p.b;
       continue;
+    }
+    // Dos rectas sobre la misma recta (quedó afuera lo del medio): se siguen
+    if (p.kind === "line" && q.kind === "line") {
+      const dp = sub(p.b, p.a);
+      const l = len(dp) || 1;
+      if (Math.abs(cross(dp, sub(q.b, q.a))) <= tol * l * len(sub(q.b, q.a)) + 1e-12 && Math.abs(cross(dp, sub(q.a, p.a))) / l <= tol * 10) {
+        q.a = p.b;
+        continue;
+      }
     }
     const guess: P2 = mul(add(p.b, q.a), 0.5);
     const near = curveCrossings(p, q).sort((x, y) => dist(x, guess) - dist(y, guess))[0];
@@ -478,14 +496,40 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
   const sides = opts.both ? [Math.abs(d), -Math.abs(d)] : [d];
   const made: number[] = [];
   const sideEnds: { head: number; tail: number }[] = [];
+  // El original, para ver qué queda demasiado cerca de él
+  const source = pieces.map((pc) => polylineOf(s, s.entities.find((e) => e.id === pc.entity)!.geometry));
+  const nearSource = (p: P2) => Math.min(...source.map((pl) => pl.slice(1).reduce((m, q, i) => Math.min(m, segDist(p, pl[i], q)), Infinity)));
   for (const side of sides) {
-    const off: OffsetPiece[] = [];
+    let off: OffsetPiece[] = [];
     for (const pc of pieces) {
       const o = offsetPiece(s, pc, side);
       if (typeof o === "string") return o;
       off.push(o);
     }
-    const { rounds } = joinOffsets(off, closed, tol);
+    // Una pieza que, ya unida a sus vecinas, queda más cerca del original que
+    // la distancia (una muesca angosta, una línea corta que se da vuelta) hace
+    // que la equidistante se cruce consigo misma: se saca y se unen las vecinas
+    let verts = [...vertexIds];
+    let rounds: ReturnType<typeof joinOffsets>["rounds"] = [];
+    const slack = Math.abs(side) * 1e-3 + tol;
+    for (let guard = 0; guard <= pieces.length; guard++) {
+      const trial = off.map((o) => ({ ...o }));
+      rounds = joinOffsets(trial, closed, tol).rounds;
+      let worst = -1;
+      let worstGap = 0;
+      trial.forEach((o, i) => {
+        // Una recta que quedó sin largo también sobra
+        const gap = o.kind === "line" && dist(o.a, o.b) <= slack ? 2 * slack : Math.abs(side) - nearSource(pieceMid(o));
+        if (gap > slack && gap > worstGap) [worst, worstGap] = [i, gap];
+      });
+      if (worst < 0 || off.length <= 2) {
+        off = trial;
+        break;
+      }
+      off = off.filter((_, i) => i !== worst);
+      // Su esquina de comienzo también (la que sigue conserva la suya)
+      verts = verts.filter((_, i) => i !== worst);
+    }
     // Puntos: uno por esquina compartida
     const pointAt = new Map<string, number>();
     const pid = (p: P2) => {
@@ -502,7 +546,7 @@ export function offsetChain(s: Sketch, ids: number[], d: number, opts: { both?: 
       const r = roundsAt.get(i);
       if (r && (closed || i > 0)) {
         // Arco alrededor del vértice original: antihorario según de qué lado va
-        const v = vertexIds[i];
+        const v = verts[i] ?? vertexIds[i];
         const [a, b] = side > 0 ? [r.b, r.a] : [r.a, r.b];
         made.push(addEntity(s, { type: "arc", center: v, start: pid(a), end: pid(b) }));
       }

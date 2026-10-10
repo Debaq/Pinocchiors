@@ -23,6 +23,7 @@ const SKETCH_CLICK: Partial<Record<SketchTool, string>> = {
   rotate: "centro, desde y hasta",
   scale: "punto base, desde y hasta",
   split: "donde se parte",
+  offset: "la curva, después el lado",
   paste: "dónde va lo pegado",
   trim: "el tramo que se quita",
   stretch: "caja sobre las puntas, punto base y destino",
@@ -41,6 +42,7 @@ export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
         ? [
             { keys: "Doble clic", label: "cadena" },
             { keys: "Ctrl+arrastrar", label: "lazo" },
+            { keys: "Ctrl+Mayús+arrastrar", label: "arrastre libre" },
           ]
         : ui.tool() === "trim"
           ? [

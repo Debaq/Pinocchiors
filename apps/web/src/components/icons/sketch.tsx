@@ -170,6 +170,15 @@ export const Extend = (p: IconProps) => (
   </SketchIcon>
 );
 
+/** Equidistante: la curva y su paralela */
+export const Offset = (p: IconProps) => (
+  <SketchIcon {...p}>
+    <path d="M3 18 L9 9 L21 9" />
+    <path d="M3 22 L11 13 L21 13" {...dashed} />
+    <path d="M15 9 L15 13 M14 10.5 L15 9 L16 10.5" />
+  </SketchIcon>
+);
+
 /** Línea central: raya y punto, con las flechas de giro */
 export const Centerline = (p: IconProps) => (
   <SketchIcon {...p}>

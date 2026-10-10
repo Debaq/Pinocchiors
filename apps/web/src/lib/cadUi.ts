@@ -2,6 +2,8 @@
 // (CadView) y el panel (DesignStep): qué se está eligiendo con el mouse y el
 // sketch en edición.
 
+import { detachSelection, freeFromConstraints } from "./sketchFree";
+import type { SketchFilter } from "./sketchPick";
 import { batch, createEffect, createSignal, on } from "solid-js";
 import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
@@ -107,6 +109,7 @@ export type SketchTool =
   | "slot_center"
   | "slot_arc"
   | "trim"
+  | "offset"
   | "tangent"
   | "extend"
   | "use"
@@ -212,7 +215,7 @@ const SHEET_PLANE: Plane = { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0,
 
 const clone = <T>(v: T): T => structuredClone(v);
 /** Herramientas que no dibujan: el modo construcción no marca lo que crean */
-const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "extend", "use", "split", "stretch", "block_insert", "calibrate", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
+const NOT_DRAWING = new Set<SketchTool>(["select", "trim", "offset", "extend", "use", "split", "stretch", "block_insert", "calibrate", "move", "copy", "rotate", "scale", "paste", "spline_point"]);
 
 /** Qué se ve dentro del sketch */
 export interface SketchShow {
@@ -334,6 +337,10 @@ export function createCadUi(store: CadStore) {
   const [message, setMessage] = createSignal<string>();
   // Modo construcción (como Onshape): lo que se dibuja sale de construcción
   const [constructionMode, setConstructionMode] = createSignal(false);
+  // Qué se puede elegir en el visor (también dentro de recortar, extender…)
+  const [sketchFilter, setSketchFilter] = createSignal<SketchFilter>("all");
+  // Mover, girar y escalar sueltan lo elegido de lo que no se mueve (en vez de estirarlo)
+  const [detachOnMove, setDetachOnMove] = createSignal(false);
   const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true, crossings: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
   const [assist, setAssistRaw] = createSignal<SketchAssist>(loadAssist());
@@ -686,6 +693,10 @@ export function createCadUi(store: CadStore) {
       ui.change((sk) => (made = insertClip(sk, clip, translation([at[0] - c[0], at[1] - c[1]]))));
       setSelection(made);
     },
+    sketchFilter,
+    setSketchFilter,
+    detachOnMove,
+    setDetachOnMove,
     /**
      * Mueve, gira o escala lo elegido (`scale`: el factor, para radios y
      * textos); con `copy` deja lo elegido y pone una copia llevada por `f`
@@ -695,7 +706,10 @@ export function createCadUi(store: CadStore) {
       const sel = selection();
       let msg: string | undefined;
       let made: number[] | undefined;
+      let freed: { points: number; constraints: number } | undefined;
       ui.change((sk) => {
+        // Soltar: lo elegido se lleva copias de los puntos compartidos y deja sus relaciones con lo demás
+        if (!opts.copy && detachOnMove()) freed = detachSelection(sk, sel);
         if (opts.copy) {
           const clip = extractClip(sk, sel);
           if (!clip) msg = "Elegir primero lo que se copia";
@@ -712,7 +726,14 @@ export function createCadUi(store: CadStore) {
         } else msg = transformSelection(sk, sel, f, opts.scale ?? 1);
       });
       if (made && !dry) setSelection(made);
+      if (!msg && freed && freed.points + freed.constraints) msg = `Se soltó de lo demás: ${freed.points} uniones y ${freed.constraints} restricciones`;
       return msg;
+    },
+    /** Arrastre libre: quita lo que sujeta el punto o la entidad (un paso de deshacer) */
+    freeDrag(id: number): number {
+      let n = 0;
+      ui.change((sk) => void (n = freeFromConstraints(sk, id)));
+      return n;
     },
     /** Lleva un punto a `to` respetando las restricciones (un paso de deshacer) */
     movePoint(point: number, to: P2) {

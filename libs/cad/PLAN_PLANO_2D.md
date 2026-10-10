@@ -180,7 +180,7 @@ corte **alineada** con la de donde sale, del lado que pide el diedro (si no hay 
 primer lugar libre con su rótulo); letras de cortes que no se pisan y rotura a mano alzada
 (`breakOutline`).
 
-### F5 — Lo que le falta al editor (sirve para sketch y hoja) — en curso
+### F5 — Lo que le falta al editor (sirve para sketch y hoja) — hecha
 
 Hecho el 2026-10-10 (pruebas node `sketchEdit.test.mjs`; e2e "sketch: barra de restricciones…"
 y los 45 del sketch y el plano):
@@ -221,10 +221,31 @@ spline** por puntos (sigue la tangente) y un **arco de elipse**, **límite elegi
 (Ctrl+clic en recortar o extender: solo eso corta; Esc lo suelta) y **polos → puntos de paso**
 (adaptativo, se aparta a lo sumo 0,5 %).
 
-Queda de F5: campo flotante en las herramientas de edición, patrón asociativo y omitir copias,
-filtros de selección dentro de la herramienta, arrastre sin restricciones, mantener o romper
-restricciones al transformar, limpieza (duplicados parciales, fusionar puntos sueltos, informe
-navegable), marcas de cruces.
+Cuarto lote (e2e "sketch edición V…", pruebas `sketchPatterns.test.mjs` y `sketchEdit.test.mjs`):
+**patrones que se vuelven a editar** (`lib/sketchPatterns.ts`; quedan en `Sketch.patterns`, campo
+libre en Rust): al elegir una copia aparece su patrón con «Editar el patrón» (carga cantidad y
+paso en los campos y el botón pasa a «Rehacer el patrón»), «Omitir esta copia» (queda de
+construcción: no se corta la cadena de restricciones y sigue omitida al rehacer), «Rehacer con
+el original» (si se le agregó algo) y «Soltar el patrón»; **duplicados parciales** (líneas que se
+pisan en parte y arcos del mismo círculo se juntan, con «Eliminar duplicados»), Reparar **junta
+los puntos sueltos** con el punto que tengan encima, **lista navegable** de los problemas (clic:
+elige y centra la vista) y **marcas de cruces** (× amarilla; «Cruces» en las opciones de mostrar).
+
+Quinto lote (e2e "sketch edición VI…", pruebas `sketchFree`, `sketchTyped`, `sketchPick` y
+`sketchEdit`): herramienta **Equidistante en el visor** (F: clic en la curva toma su cadena; el
+**lado y la distancia salen del cursor**, con vista previa, o se escribe la distancia), el
+equidistante **saca las piezas que quedan más cerca del original que la distancia** (una muesca
+angosta ya no lo cruza consigo mismo; las vecinas se vuelven a unir), **campo flotante** al mover,
+copiar, girar y escalar después del punto base (distancia hacia el cursor, `dx; dy`, `d<ángulo`,
+grados o factor; escribir sin hacer clic), **«Soltar de lo que no se mueve»** (lo elegido se lleva
+copias de los puntos compartidos y deja sus restricciones con lo demás; si no, como siempre, lo de
+al lado se estira), **arrastre libre** con Ctrl+Mayús (suelta las restricciones de lo arrastrado) y
+**filtro de selección** en la barra del sketch (todo, puntos, líneas, círculos, splines; vale
+también al recortar, extender y partir) y **vista previa de Extender** (hasta dónde llega, antes
+del clic).
+
+F5 cerrada: de la tabla de abajo (el estado del 2026-10-10, antes de F5) queda solo «ajustar
+arrastrando manipuladores» (flechas sobre la vista previa para cambiar el valor arrastrando).
 
 Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo
 que cambia el uso diario (vista previa y campo flotante en las herramientas del panel, clic

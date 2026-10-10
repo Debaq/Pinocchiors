@@ -618,10 +618,13 @@ const scenarios = {
     await b.eval(`(() => { const sel = document.querySelector('select[aria-label="Filtro de selección"]'); sel.value = "lines"; sel.dispatchEvent(new Event("change", { bubbles: true })); })()`);
     await sleep(300);
     s = await sk();
-    const sideStart = pos(s, s.entities.find((e) => e.id === side).geometry.end);
-    await b.click(...(await at(sideStart)), { wait: 500 });
+    const sideStart = pos(s, s.entities.find((e) => e.id === side).geometry.start);
+    await b.eval(`window.__cadUi.setSelection([])`);
+    const xy = await at(sideStart);
+    await b.click(...xy, { wait: 500 });
     const picked = await b.eval(`window.__cadUi.selection()`);
-    if (picked.length !== 1 || !s.entities.some((e) => e.id === picked[0] && e.geometry.type === "line")) throw new Error(`filtro: eligió ${picked}`);
+    if (picked.length !== 1 || !s.entities.some((e) => e.id === picked[0] && e.geometry.type === "line"))
+      throw new Error(`filtro: eligió ${picked} (filtro ${await b.eval(`window.__cadUi.sketchFilter()`)}, encima ${await b.eval(`document.elementFromPoint(${xy[0]}, ${xy[1]})?.outerHTML.slice(0, 120)`)})`);
     await b.shot("sketch_equidistante_cursor");
   },
 
@@ -3721,7 +3724,8 @@ const scenarios = {
     await b.clickText("Extremos redondos");
     await sleep(300);
     const before = (await sk()).entities.length;
-    await b.clickText("Equidistante");
+    // El botón del panel (la barra izquierda también tiene la herramienta «Equidistante»)
+    await b.eval(`[...document.querySelectorAll("button[data-preview]")].find((x) => x.textContent.trim() === "Equidistante").click()`);
     await sleep(1000);
     s = await sk();
     const made = s.entities.slice(before);
@@ -5295,7 +5299,8 @@ const scenarios = {
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(550, 500, { wait: 500 });
     await setInput(b, "Distancia", 5);
-    await b.clickText("Equidistante");
+    // El botón del panel (la barra izquierda también tiene la herramienta «Equidistante»)
+    await b.eval(`[...document.querySelectorAll("button[data-preview]")].find((x) => x.textContent.trim() === "Equidistante").click()`);
     await sleep(1200);
     if (!(await sketchText(b, "/\\d+ regiones cerradas/")).startsWith("2")) throw new Error("equidistante");
   },
