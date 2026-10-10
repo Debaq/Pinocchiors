@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { dragAxis, placementProblems, placeExtraViews, projectPolylines, rotateViewDir, viewDirFromCamera, viewUp, layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { breakOutline, hatchSegments, dragAxis, placementProblems, placeExtraViews, projectPolylines, rotateViewDir, viewDirFromCamera, viewUp, layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -397,4 +397,42 @@ test("cortes en la hoja: línea con flechas y letras, central del medio corte, r
   assert.ok(svg.includes('data-view-image="top"'));
   assert.equal((svg.match(/<g data-view="top"[^>]*>\s*<\/g>/g) ?? []).length, 1, "las líneas de la superior no van");
   assert.ok(!svg.includes('data-hatch="top"'));
+});
+
+test("DXF de los cortes: rayado como líneas (con su ángulo), líneas de corte con letras, rotura; contorno a mano alzada", () => {
+  // Un triángulo rayado a 45°: líneas paralelas cada 2 mm, todas dentro
+  const segs = hatchSegments([[0, 0], [10, 0], [0, 10]], 45, 2);
+  assert.ok(segs.length >= 3);
+  for (const [p, q] of segs) {
+    assert.ok(Math.abs((q[1] - p[1]) - (q[0] - p[0])) < 1e-9, "a 45°");
+    for (const r of [p, q]) assert.ok(r[0] >= -1e-9 && r[1] >= -1e-9 && r[0] + r[1] <= 10 + 1e-9);
+  }
+  const views = { front: rect(40, 10), top: rect(40, 20) };
+  const { placed } = layout(views, SHEETS[1], "first", 1);
+  const front = { ...placed.find((p) => p.name === "front"), hatch: [[[0, 0], [10, 0], [0, 10]]], hatchStyle: { angle: 45, spacing: 2 } };
+  const dxf = sheetDxf([front, placed.find((p) => p.name === "top")], SHEETS[1], {
+    hidden: true,
+    smooth: false,
+    marks: { lines: [{ view: "top", points: [[-5, 10], [45, 10]], arrow: [0, 1], label: "B" }], breaks: [{ view: "front", index: 0, points: [[1, 1], [5, 1], [5, 5]] }] },
+  });
+  const layerCount = (name) => dxf.split("\n").filter((l, i, all) => l === name && all[i - 1] === "8" && all[i - 2] === "LINE").length;
+  assert.ok(layerCount("RAYADO") >= 3);
+  assert.equal(layerCount("CORTES"), 1 + 2 + 3, "la línea, las dos flechas y los tres lados de la rotura");
+  assert.equal((dxf.match(/\n1\nB\n/g) ?? []).length, 2, "dos letras B");
+  // A mano alzada: más puntos que el contorno y cerca de él
+  const wavy = breakOutline([[0, 0], [20, 0], [20, 10]]);
+  assert.ok(wavy.length > 10 && wavy.every((p) => p[1] >= -0.61));
+});
+
+test("la vista de un corte va alineada con la vista de donde sale (si hay lugar), del lado pedido", () => {
+  const { placed, scale } = layout({ front: rect(40, 10), top: rect(40, 20) }, SHEETS[2], "first", 1);
+  const top = placed.find((p) => p.name === "top");
+  // A un costado (comparte la y de la superior), a la derecha
+  const side = placeExtraViews(placed, [{ name: "corte-B", title: "Corte B-B", lines: rect(20, 20), align: { parent: "top", axis: "y", dir: 1 } }], scale, SHEETS[2]).placed[0];
+  assert.equal(side.y, top.y, "a la misma altura (alineada)");
+  assert.ok(side.x > top.x + 40, "a la derecha");
+  // Debajo (comparte la x)
+  const below = placeExtraViews(placed, [{ name: "corte-C", title: "Corte C-C", lines: rect(40, 10), align: { parent: "top", axis: "x", dir: 1 } }], scale, SHEETS[2]).placed[0];
+  assert.equal(below.x, top.x, "en la misma columna");
+  assert.ok(below.y > top.y);
 });

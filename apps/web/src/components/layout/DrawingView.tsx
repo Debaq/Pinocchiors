@@ -2,7 +2,7 @@ import { Component, For, Match, Show, Switch, createEffect, createMemo, createSi
 import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import type { CadStore } from "../../lib/cad";
+import { partMaterial, type CadStore } from "../../lib/cad";
 import type { CadUi, DrawingTool } from "../../lib/cadUi";
 import * as D from "../icons/design";
 import * as SketchIcons from "../icons/sketch";
@@ -23,6 +23,7 @@ import {
   projectPolylines,
   rotateViewDir,
   viewDirFromCamera,
+  viewUp,
   type ViewDir,
   dimText,
   layout,
@@ -66,6 +67,8 @@ import { applySheetLinks, applySheetOwners, sheetSketchDims } from "../../lib/sh
 import {
   DEFAULT_HATCH,
   breakPrism,
+  materialHatch,
+  partHatch,
   halfPrism,
   quarterPrism,
   reachOf,
@@ -151,6 +154,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   };
   const [views, setViews] = createSignal<Partial<Record<string, DrawingLine[]>>>();
   const [hatch, setHatch] = createSignal<Partial<Record<string, [P2, P2, P2][]>>>({});
+  // Con varias piezas: de qué pieza es cada triángulo del rayado
+  const [hatchParts, setHatchParts] = createSignal<Partial<Record<string, number[]>>>({});
   const [sectionAt, setSectionAt] = createSignal(0);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal<string>();
@@ -217,10 +222,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         const specs = asked.map(({ name, eye, xdir, cut, shaded }) =>
           name === "front" && sectionOn() ? { eye, xdir, cut, shaded, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir, cut, shaded },
         );
-        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][]; mesh?: DrawingMesh }[]>("cad_drawing", { views: specs });
+        const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][]; hatch_part?: number[]; mesh?: DrawingMesh }[]>("cad_drawing", { views: specs });
         if (n === seq) {
           setViews(Object.fromEntries(names.map((v, i) => [v, res[i].lines])));
           setHatch(Object.fromEntries(names.map((v, i) => [v, res[i].hatch])));
+          setHatchParts(Object.fromEntries(names.flatMap((v, i) => (res[i].hatch_part?.length ? [[v, res[i].hatch_part!]] : []))));
           // Las sombreadas: la malla dibujada mirando desde la vista, cubriendo lo que cubren sus líneas
           const imgs: Record<string, { href: string; min: P2; max: P2 }> = {};
           asked.forEach((a, i) => {
@@ -256,7 +262,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       ...(s.customViews ?? []).filter((c) => !c.hidden && v[customViewName(c.id)]).map((c) => ({ name: customViewName(c.id), title: c.name, lines: v[customViewName(c.id)]!, scale: s.viewScales?.[customViewName(c.id)] })),
       ...(s.sections ?? [])
         .filter((c) => !c.hidden && v[sectionViewName(c.label)])
-        .map((c) => ({ name: sectionViewName(c.label), title: `Corte ${c.label}-${c.label}`, lines: v[sectionViewName(c.label)]!, scale: s.viewScales?.[sectionViewName(c.label)] })),
+        .map((c) => ({ name: sectionViewName(c.label), title: `Corte ${c.label}-${c.label}`, lines: v[sectionViewName(c.label)]!, scale: s.viewScales?.[sectionViewName(c.label)], align: sectionAlign(s, c) })),
     ];
     // Las vistas nuevas y las de los cortes, en el lugar libre (o donde se dejaron). Con la
     // escala automática, la mayor con la que también ellas entran en la hoja
@@ -272,15 +278,26 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         if (extra.fits) break;
       }
     const extras = extra.placed;
-    // Cada vista con su rayado y su imagen sombreada
+    // Cada vista con su rayado y su imagen sombreada. Rayado: el elegido para ese corte; si no,
+    // según el material (cada pieza el suyo; las vecinas con el ángulo al revés) o el de la hoja
     const imgs = images();
-    const style = (name: string): HatchStyle => (name.startsWith("corte-") ? s.sections?.find((c) => sectionViewName(c.label) === name)?.hatch : undefined) ?? s.hatch ?? DEFAULT_HATCH;
-    const dress = (p: Placed): Placed => ({
-      ...p,
-      hatch: p.hatch ?? (hatch()[p.name] as [P2, P2, P2][] | undefined),
-      hatchStyle: style(p.name),
-      image: imgs[p.name] ? { ...imgs[p.name], lines: s.shaded?.[p.name]?.lines !== false } : undefined,
-    });
+    const doc = store.doc();
+    const parts = store.result()?.parts ?? [];
+    const byMaterial = s.hatchByMaterial !== false;
+    const own = (name: string) => (name.startsWith("corte-") ? s.sections?.find((c) => sectionViewName(c.label) === name)?.hatch : undefined);
+    const style = (name: string): HatchStyle => own(name) ?? (byMaterial ? materialHatch(doc?.material?.name) : (s.hatch ?? DEFAULT_HATCH));
+    const partStyles = Object.fromEntries(parts.map((p, i) => [i, partHatch(partMaterial(doc, p)?.name, i)]));
+    const dress = (p: Placed): Placed => {
+      const hp = hatchParts()[p.name];
+      return {
+        ...p,
+        hatch: p.hatch ?? (hatch()[p.name] as [P2, P2, P2][] | undefined),
+        hatchStyle: style(p.name),
+        hatchPart: hp,
+        hatchStyles: hp && byMaterial && !own(p.name) ? partStyles : undefined,
+        image: imgs[p.name] ? { ...imgs[p.name], lines: s.shaded?.[p.name]?.lines !== false } : undefined,
+      };
+    };
     const all = [...r.placed, ...extras].map(dress);
     return { ...r, placed: [...all, ...placeDetails(all, s.details.filter((x) => !x.hidden), sheet())] };
   });
@@ -394,7 +411,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return write("dxf", `${fileBase()}${what === "sheet" ? "" : `_${what}_1a1`}.dxf`, (path) =>
       invoke<number>("cad_write_text", {
         path,
-        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), layerDims: layerDims(), view: what === "sheet" ? undefined : what }),
+        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), layerDims: layerDims(), marks: marks(), view: what === "sheet" ? undefined : what }),
       }),
     );
   };
@@ -587,6 +604,25 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     // La vista queda donde se soltó hasta que llega el documento nuevo
     void Promise.resolve(store.commit((doc) => void updateDrawing(doc, id, (x) => (x.viewAt = { ...(x.viewAt ?? {}), [g.view]: g.at })))).finally(() => setDragAt(undefined));
   };
+  /**
+   * Dónde va la vista de un corte respecto de la vista de donde sale: alineada
+   * (comparte su x o su y en la hoja) del lado que pide el diedro: en el
+   * primero, hacia donde miran las flechas; en el tercero, del otro lado
+   */
+  const sectionAlign = (s: DrawingSheet, c: SectionDef): { parent: string; axis: "x" | "y"; dir: 1 | -1 } | undefined => {
+    const parent = viewDirOf(s, c.view);
+    if (!parent || isPictorial(c.view)) return undefined;
+    const sec = sectionViewDir(c, parent);
+    const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const a = sectionArrow(c);
+    const toward = (projection() === "first" ? 1 : -1) as 1 | -1;
+    // Misma derecha que la madre: va arriba o abajo (las flechas en vertical)
+    if (dot(sec.xdir, parent.xdir) > 0.999 && Math.abs(a[1]) > 0.999) return { parent: c.view, axis: "x", dir: (a[1] > 0 ? -toward : toward) as 1 | -1 };
+    // Mismo arriba: a un costado (las flechas en horizontal)
+    if (dot(viewUp(sec), viewUp(parent)) > 0.999 && Math.abs(a[0]) > 0.999) return { parent: c.view, axis: "y", dir: (a[0] > 0 ? toward : -toward) as 1 | -1 };
+    return undefined;
+  };
+
   /** Los puntos del corte o de la rotura a medias, en la hoja */
   const cutPreview = createMemo(() => {
     const cur = cutPts();
@@ -1105,7 +1141,8 @@ const ElementWindow: Component<{
               {check("Ocultas", props.sheet.hiddenLines, (v) => props.update((s) => (s.hiddenLines = v)))}
               {check("Tangentes", props.sheet.smooth, (v) => props.update((s) => (s.smooth = v)))}
             </div>
-            {hatchControls(props.sheet.hatch ?? DEFAULT_HATCH, (h) => props.update((s) => (s.hatch = h)))}
+            {check("Rayado según el material", props.sheet.hatchByMaterial !== false, (on) => props.update((s) => (s.hatchByMaterial = on)))}
+            <Show when={props.sheet.hatchByMaterial === false}>{hatchControls(props.sheet.hatch ?? DEFAULT_HATCH, (h) => props.update((s) => (s.hatch = h)))}</Show>
             {row("Título", <input aria-label="Título del plano" class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
             {row("Autor", <input aria-label="Autor" placeholder="Autor" class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
           </Match>

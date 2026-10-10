@@ -201,9 +201,20 @@ export interface Placed {
   /** Puesta a mano (no sigue a la disposición automática) */
   moved?: boolean;
   /** Rayado de sus caras cortadas (sin él, 45° cada 2 mm) */
-  hatchStyle?: { angle: number; spacing: number; cross?: boolean };
+  hatchStyle?: HatchLook;
+  /** Con varias piezas: de qué pieza es cada triángulo de `hatch`, y el rayado de cada una */
+  hatchPart?: number[];
+  hatchStyles?: Record<number, HatchLook>;
   /** Vista sombreada: la imagen (URL) y qué parte de la vista cubre (coordenadas de la vista) */
   image?: { href: string; min: P2; max: P2; lines: boolean };
+}
+
+/** Cómo se raya: ángulo, separación (mm de hoja), cruzado y el dibujo de cada línea */
+export interface HatchLook {
+  angle: number;
+  spacing: number;
+  cross?: boolean;
+  pattern?: "single" | "double" | "dashed";
 }
 
 /** Marcas de los cortes sobre las vistas: la línea con sus flechas y letras, la línea central del medio corte y el contorno de una rotura (coordenadas de la vista) */
@@ -337,7 +348,18 @@ export function layout(
  */
 export function placeExtraViews(
   placed: Placed[],
-  extras: { name: string; title: string; lines: DrawingLine[]; scale?: number | null }[],
+  extras: {
+    name: string;
+    title: string;
+    lines: DrawingLine[];
+    scale?: number | null;
+    /**
+     * Alineada con otra vista (la de un corte con la vista de donde sale): comparte su x
+     * en la hoja (`axis: "x"`, va arriba o abajo) o su y (`"y"`, va a un costado); `dir` +1
+     * hacia la derecha o abajo, −1 hacia la izquierda o arriba
+     */
+    align?: { parent: string; axis: "x" | "y"; dir: 1 | -1 };
+  }[],
   sheetScale: number,
   sheet: SheetSize,
   viewAt?: Partial<Record<string, P2>>,
@@ -352,16 +374,34 @@ export function placeExtraViews(
   const hit = (a: number[], c: number[]) => a[0] < c[2] && a[2] > c[0] && a[1] < c[3] && a[3] > c[1];
   const [x0, y0, x1, y1] = [MARGIN + GAP / 2, MARGIN + GAP / 2, sheet.width - MARGIN - GAP / 2, sheet.height - MARGIN - GAP / 2];
   let fits = true;
-  const out = extras.flatMap((e) => {
-    if (!e.lines.length) return [];
+  const out: Placed[] = [];
+  for (const e of extras) {
+    if (!e.lines.length) continue;
     const k = e.scale ?? sheetScale;
     const b = bounds(e.lines);
     const label = `${e.title}${e.scale && e.scale !== sheetScale ? ` (${scaleLabel(k)})` : ""}`;
     const [w, h] = [(b.max[0] - b.min[0]) * k, (b.max[1] - b.min[1]) * k + 8];
     const at = viewAt?.[e.name];
-    if (at) return [{ name: e.name, scale: k, lines: e.lines, x: at[0], y: at[1], label, moved: true } as Placed];
-    // El primer lugar libre, en pasos de 2 mm
+    if (at) {
+      out.push({ name: e.name, scale: k, lines: e.lines, x: at[0], y: at[1], label, moved: true });
+      continue;
+    }
+    // Alineada con su vista madre (a la misma escala), corriéndose hacia su lado hasta que haya lugar
     let spot: [number, number] | undefined;
+    const parent = e.align && [...placed, ...out].find((p) => p.name === e.align!.parent && !p.detail);
+    if (e.align && parent && Math.abs(parent.scale - k) < 1e-12) {
+      const pb = sheetBox(parent);
+      const free = (x: number, y: number) => x >= x0 && y >= y0 && x + w <= x1 && y + h <= y1 && !taken.some((t) => hit([x, y, x + w, y + h], t));
+      // Esquina de arriba a la izquierda de la caja con el origen alineado
+      const left = parent.x + b.min[0] * k;
+      const top = parent.y - b.max[1] * k;
+      for (let d = GAP; d < Math.max(sheet.width, sheet.height) && !spot; d += 2) {
+        const [x, y] =
+          e.align.axis === "x" ? [left, e.align.dir > 0 ? pb[3] + d : pb[1] - d - h] : [e.align.dir > 0 ? pb[2] + d : pb[0] - d - w, top];
+        if (free(x, y)) spot = [x, y];
+      }
+    }
+    // Si no, el primer lugar libre, en pasos de 2 mm
     for (let y = y0; !spot && y + h <= y1; y += 2)
       for (let x = x0; x + w <= x1; x += 2)
         if (!taken.some((t) => hit([x, y, x + w, y + h], t))) {
@@ -373,10 +413,9 @@ export function placeExtraViews(
       fits = false;
       spot = [Math.max(x0, ...taken.slice(0, -1).map((t) => t[2])), y0];
     }
-    const v: Placed = { name: e.name, scale: k, lines: e.lines, x: spot[0] - b.min[0] * k, y: spot[1] + b.max[1] * k, label };
+    out.push({ name: e.name, scale: k, lines: e.lines, x: spot[0] - b.min[0] * k, y: spot[1] + b.max[1] * k, label });
     taken.push([spot[0] - pad, spot[1] - pad, spot[0] + w + pad, spot[1] + h + pad]);
-    return [v];
-  });
+  }
   return { placed: out, fits };
 }
 
@@ -899,18 +938,24 @@ export function sheetSvg(
   out.push(`<rect width="${sheet.width}" height="${sheet.height}" fill="#fff"/>`);
   // Rayados de las caras cortadas: uno por estilo (45° cada 2 mm si no se eligió otro)
   const styles = new Map<string, string>();
-  const hatchId = (h?: Placed["hatchStyle"]) => {
+  const hatchId = (h?: HatchLook) => {
     const st = h ?? { angle: 45, spacing: 2 };
-    const key = `${st.angle}|${st.spacing}|${st.cross ? 1 : 0}`;
+    const key = `${st.angle}|${st.spacing}|${st.cross ? 1 : 0}|${st.pattern ?? "single"}`;
     if (!styles.has(key)) styles.set(key, styles.size ? `rayado-${styles.size}` : "rayado");
     return styles.get(key)!;
   };
   hatchId();
-  for (const v of placed) if (v.hatch?.length) hatchId(v.hatchStyle);
+  for (const v of placed) if (v.hatch?.length) [v.hatchStyle, ...Object.values(v.hatchStyles ?? {})].forEach((h) => hatchId(h));
   const defs = [...styles].map(([key, id]) => {
-    const [angle, spacing, cross] = key.split("|").map(Number);
-    const across = cross ? `<line x1="0" y1="${n(spacing / 2)}" x2="${n(spacing)}" y2="${n(spacing / 2)}" stroke="#000" stroke-width="0.25"/>` : "";
-    return `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${n(spacing)}" height="${n(spacing)}" patternTransform="rotate(${n(angle)})"><line x1="0" y1="0" x2="0" y2="${n(spacing)}" stroke="#000" stroke-width="0.25"/>${across}</pattern>`;
+    const [a, sp, cr, pattern] = key.split("|");
+    const [angle, spacing, cross] = [Number(a), Number(sp), cr === "1"];
+    const line = (x: number, dash = "") => `<line x1="${n(x)}" y1="0" x2="${n(x)}" y2="${n(spacing)}" stroke="#000" stroke-width="0.25"${dash}/>`;
+    // Acero: de a pares; latón: una llena y una cortada (el patrón mide el doble)
+    const w = pattern === "dashed" ? 2 * spacing : spacing;
+    const lines =
+      pattern === "double" ? line(0) + line(spacing * 0.3) : pattern === "dashed" ? line(0) + line(spacing, ` stroke-dasharray="${n(spacing * 0.4)} ${n(spacing * 0.3)}"`) : line(0);
+    const across = cross ? `<line x1="0" y1="${n(spacing / 2)}" x2="${n(w)}" y2="${n(spacing / 2)}" stroke="#000" stroke-width="0.25"/>` : "";
+    return `<pattern id="${id}" patternUnits="userSpaceOnUse" width="${n(w)}" height="${n(spacing)}" patternTransform="rotate(${n(angle)})">${lines}${across}</pattern>`;
   });
   out.push(`<defs>${defs.join("")}</defs>`);
   out.push(`<rect x="${MARGIN}" y="${MARGIN}" width="${n(sheet.width - 2 * MARGIN)}" height="${n(sheet.height - 2 * MARGIN)}" fill="none" stroke="#000" stroke-width="0.7"/>`);
@@ -929,9 +974,18 @@ export function sheetSvg(
         out.push(
           `<clipPath id="${clip}"><circle cx="${n(v.x + v.detail.center[0] * v.scale)}" cy="${n(v.y - v.detail.center[1] * v.scale)}" r="${n(v.detail.radius * v.scale)}"/></clipPath>`,
         );
-      out.push(`<g data-hatch="${v.name}" fill="url(#${hatchId(v.hatchStyle)})" stroke="none"${clip ? ` clip-path="url(#${clip})"` : ""}>`);
-      for (const t of v.hatch) out.push(`<polygon points="${t.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}"/>`);
-      out.push("</g>");
+      // Un grupo por rayado (con varias piezas, cada una con el suyo)
+      const groups = new Map<string, [P2, P2, P2][]>();
+      v.hatch.forEach((t, i) => {
+        const part = v.hatchPart?.[i];
+        const id = hatchId((part !== undefined && v.hatchStyles?.[part]) || v.hatchStyle);
+        groups.set(id, [...(groups.get(id) ?? []), t]);
+      });
+      for (const [id, tris] of groups) {
+        out.push(`<g data-hatch="${v.name}" fill="url(#${id})" stroke="none"${clip ? ` clip-path="url(#${clip})"` : ""}>`);
+        for (const t of tris) out.push(`<polygon points="${t.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}"/>`);
+        out.push("</g>");
+      }
     }
     out.push(`<g data-view="${v.name}" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
     for (const l of v.image && !v.image.lines ? [] : v.lines) {
@@ -946,6 +1000,14 @@ export function sheetSvg(
   // Cortes: la línea de corte (trazo y punto, gruesa en las puntas y en los quiebres) con sus
   // flechas y letras; la línea central del medio corte; el contorno de las roturas (fino)
   const at = (name: string) => placed.find((v) => v.name === name && !v.detail);
+  // Letras ya puestas: la de otro corte en el mismo lugar se corre al costado
+  const letters: P2[] = [];
+  const free = (p: P2, side: P2): P2 => {
+    let q = p;
+    for (let k = 0; k < 6 && letters.some((l) => Math.hypot(l[0] - q[0], l[1] - q[1]) < 4.5); k++) q = [q[0] + side[0] * 5, q[1] + side[1] * 5];
+    letters.push(q);
+    return q;
+  };
   for (const c of opts.marks?.lines ?? []) {
     const v = at(c.view);
     if (!v || c.points.length < 2) continue;
@@ -959,7 +1021,10 @@ export function sheetSvg(
       return (
         `<line x1="${n(p[0])}" y1="${n(p[1])}" x2="${n(bx)}" y2="${n(by)}" stroke-width="0.35"/>` +
         `<polygon points="${n(tip[0])},${n(tip[1])} ${n(bx + px * 1.1)},${n(by + py * 1.1)} ${n(bx - px * 1.1)},${n(by - py * 1.1)}" stroke="none"/>` +
-        `<text x="${n(tip[0] + ax * 3)}" y="${n(tip[1] + ay * 3 + 1.4)}" font-size="4" text-anchor="middle" stroke="none">${esc(c.label)}</text>`
+        (() => {
+          const q = free([tip[0] + ax * 3, tip[1] + ay * 3], [px, py]);
+          return `<text x="${n(q[0])}" y="${n(q[1] + 1.4)}" font-size="4" text-anchor="middle" stroke="none">${esc(c.label)}</text>`;
+        })()
       );
     };
     // 3 mm gruesos en cada punta y quiebre, hacia los tramos vecinos
@@ -983,7 +1048,9 @@ export function sheetSvg(
   for (const c of opts.marks?.breaks ?? []) {
     const v = at(c.view);
     if (!v || c.points.length < 3) continue;
-    out.push(`<polygon data-break-line="${esc(c.view)}" data-break-index="${c.index}" points="${c.points.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ")}" fill="none" stroke="#000" stroke-width="0.25"/>`);
+    // A mano alzada (como pide la norma): cada tramo con una onda suave
+    const pts = breakOutline(c.points.map((p): P2 => [v.x + p[0] * v.scale, v.y - p[1] * v.scale]));
+    out.push(`<polygon data-break-line="${esc(c.view)}" data-break-index="${c.index}" points="${pts.map((p) => `${n(p[0])},${n(p[1])}`).join(" ")}" fill="none" stroke="#000" stroke-width="0.25"/>`);
   }
   // Detalles: el círculo con su letra en la vista y el rótulo bajo la ampliación
   for (const v of placed) {
@@ -1061,6 +1128,48 @@ export function sheetSvg(
   return out.join("\n");
 }
 
+/** Contorno de una rotura a mano alzada: cada tramo con una onda de 0,6 mm cada ~4 mm (mm de hoja) */
+export function breakOutline(pts: P2[]): P2[] {
+  const out: P2[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [a, b] = [pts[i], pts[(i + 1) % pts.length]];
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const k = Math.max(2, Math.round(len / 1));
+    const waves = Math.max(1, Math.round(len / 4));
+    const [nx, ny] = len ? [-(b[1] - a[1]) / len, (b[0] - a[0]) / len] : [0, 0];
+    for (let j = 0; j < k; j++) {
+      const t = j / k;
+      const w = 0.6 * Math.sin(t * waves * 2 * Math.PI);
+      out.push([a[0] + (b[0] - a[0]) * t + nx * w, a[1] + (b[1] - a[1]) * t + ny * w]);
+    }
+  }
+  return out;
+}
+
+/** Líneas de un rayado dentro de un triángulo (mm de hoja): segmentos paralelos a `angle` cada `spacing` */
+export function hatchSegments(tri: [P2, P2, P2], angle: number, spacing: number): [P2, P2][] {
+  const r = (angle * Math.PI) / 180;
+  const [d, m]: [P2, P2] = [[Math.cos(r), Math.sin(r)], [-Math.sin(r), Math.cos(r)]];
+  const off = tri.map((p) => p[0] * m[0] + p[1] * m[1]);
+  const out: [P2, P2][] = [];
+  for (let o = Math.ceil(Math.min(...off) / spacing) * spacing; o <= Math.max(...off); o += spacing) {
+    // Cruces de la recta {p·m = o} con los lados
+    const hits: P2[] = [];
+    for (let i = 0; i < 3; i++) {
+      const [a, b] = [tri[i], tri[(i + 1) % 3]];
+      const [oa, ob] = [off[i], off[(i + 1) % 3]];
+      if ((oa - o) * (ob - o) > 0 || oa === ob) continue;
+      const t = (o - oa) / (ob - oa);
+      hits.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]);
+    }
+    if (hits.length >= 2) {
+      hits.sort((p, q) => p[0] * d[0] + p[1] * d[1] - (q[0] * d[0] + q[1] * d[1]));
+      out.push([hits[0], hits[hits.length - 1]]);
+    }
+  }
+  return out;
+}
+
 /** Dónde va el rótulo de cada vista con escala propia (centrado debajo, pasando las cotas generales) */
 function viewLabels(placed: Placed[], dimensions: boolean | undefined, section: boolean): [Placed, P2][] {
   return placed
@@ -1082,7 +1191,7 @@ function viewLabels(placed: Placed[], dimensions: boolean | undefined, section: 
 export function sheetDxf(
   placed: Placed[],
   sheet: SheetSize,
-  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[] },
+  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; marks?: CutMarks },
 ): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
@@ -1121,13 +1230,15 @@ export function sheetDxf(
     pair(0, "ENDTAB");
     pair(0, "TABLE");
     pair(2, "LAYER");
-    pair(70, 5);
+    pair(70, 7);
     for (const [name, color, ltype] of [
       ["VISIBLE", 7, "CONTINUOUS"],
       ["OCULTA", 8, "DASHED"],
       ["TANGENTE", 9, "CONTINUOUS"],
       ["COTAS", 3, "CONTINUOUS"],
       ["DIBUJO", 7, "CONTINUOUS"],
+      ["CORTES", 1, "CONTINUOUS"],
+      ["RAYADO", 8, "CONTINUOUS"],
     ] as const) {
       pair(0, "LAYER");
       pair(2, name);
@@ -1222,6 +1333,50 @@ export function sheetDxf(
         pair(40, 3.5);
         pair(1, `Detalle ${d.label} (${scaleLabel(v.scale)})`);
       }
+    // Rayado de las caras cortadas (como líneas: cada programa de CAD lo lee) y las marcas de los cortes
+    if (!opts.view) {
+      const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
+      for (const v of placed) {
+        v.hatch?.forEach((t, i) => {
+          const part = v.hatchPart?.[i];
+          const st = (part !== undefined && v.hatchStyles?.[part]) || v.hatchStyle || { angle: 45, spacing: 2 };
+          const tri = t.map((p) => up([v.x + p[0] * v.scale, v.y - p[1] * v.scale])) as [P2, P2, P2];
+          // El patrón del SVG son líneas verticales giradas `angle` con Y hacia abajo: en la hoja
+          // con Y hacia arriba van a −(angle + 90)°
+          const a0 = -(st.angle + 90);
+          for (const a of st.cross ? [a0, a0 + 90] : [a0]) for (const [p, q] of hatchSegments(tri, a, st.spacing)) line("RAYADO", p, q);
+        });
+      }
+      const view = (name: string) => placed.find((v) => v.name === name && !v.detail);
+      const S = (v: Placed, p: P2): P2 => [v.x + p[0] * v.scale, sheet.height - (v.y - p[1] * v.scale)];
+      for (const c of opts.marks?.lines ?? []) {
+        const v = view(c.view);
+        if (!v) continue;
+        const pts = c.points.map((p) => S(v, p));
+        for (let i = 0; i + 1 < pts.length; i++) line("CORTES", pts[i], pts[i + 1]);
+        for (const p of [pts[0], pts[pts.length - 1]]) {
+          const tip: P2 = [p[0] + c.arrow[0] * 7, p[1] + c.arrow[1] * 7];
+          line("CORTES", p, tip);
+          pair(0, "TEXT");
+          pair(8, "CORTES");
+          pair(10, tip[0] + c.arrow[0] * 3 - 1.2);
+          pair(20, tip[1] + c.arrow[1] * 3 - 1.4);
+          pair(30, 0);
+          pair(40, 4);
+          pair(1, c.label);
+        }
+      }
+      for (const c of opts.marks?.centers ?? []) {
+        const v = view(c.view);
+        if (v) line("CORTES", S(v, c.a), S(v, c.b));
+      }
+      for (const c of opts.marks?.breaks ?? []) {
+        const v = view(c.view);
+        if (!v) continue;
+        const pts = c.points.map((p) => S(v, p));
+        for (let i = 0; i < pts.length; i++) line("CORTES", pts[i], pts[(i + 1) % pts.length]);
+      }
+    }
     // Rótulos de las vistas con escala propia
     if (!opts.view)
       for (const [v, at] of viewLabels(placed, opts.dimensions, false)) {

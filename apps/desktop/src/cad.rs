@@ -1110,6 +1110,9 @@ pub struct DrawingSection {
 pub struct DrawingViewResult {
     pub lines: Vec<DrawingLine>,
     pub hatch: Vec<[[f64; 2]; 3]>,
+    /// Con varias piezas: de qué pieza (índice en `parts`) es cada triángulo del rayado
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hatch_part: Vec<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mesh: Option<DrawingMesh>,
 }
@@ -1132,6 +1135,8 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
     evaluate_committed(state)?;
     let cache = state.cad_cache.lock().unwrap();
     let body = cache.as_ref().and_then(|c| c.eval.body.as_ref()).ok_or("El diseño todavía no tiene un sólido")?;
+    // Con varias piezas, el rayado sale pieza por pieza (cada una con el suyo, según su material)
+    let all_parts: Vec<&cad_model::Part> = cache.as_ref().map(|c| c.eval.parts.iter().collect()).unwrap_or_default();
     let m = body.mass().map_err(|e| e.to_string())?;
     let size = (0..3).map(|k| m.bbox_max[k] - m.bbox_min[k]).fold(0.0, f64::max).max(1.0);
     views
@@ -1162,13 +1167,32 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
                 cut = Some(from.cut(&tool).map_err(|e| format!("No se pudo cortar la vista: {e}"))?);
             }
             let shape = cut.as_ref().unwrap_or(body);
-            let (hatch, mesh) = match &cut {
+            let (mut hatch, mesh) = match &cut {
                 Some(c) => {
                     let (h, m) = section_hatch(c, &planes, v, size);
                     (h, if v.shaded { Some(m) } else { None })
                 }
                 None => (Vec::new(), if v.shaded { shaded_mesh(shape, size) } else { None }),
             };
+            // Varias piezas: el mismo corte en cada una, para saber de cuál es cada triángulo
+            let mut hatch_part = Vec::new();
+            if cut.is_some() && all_parts.len() > 1 {
+                let mut per = Vec::new();
+                for (i, part) in all_parts.iter().enumerate() {
+                    if part.is_surface() {
+                        continue;
+                    }
+                    let Ok(Some(c)) = cut_shape(&part.shape, v) else { continue };
+                    let (h, _) = section_hatch(&c, &planes, v, size);
+                    hatch_part.extend(std::iter::repeat(i as u32).take(h.len()));
+                    per.extend(h);
+                }
+                if per.is_empty() {
+                    hatch_part.clear();
+                } else {
+                    hatch = per;
+                }
+            }
             let lines = shape.hlr(v.eye, v.xdir, size * 2e-4).map_err(|e| e.to_string())?;
             let lines = lines
                 .into_iter()
@@ -1183,9 +1207,23 @@ fn drawing_impl(state: &AppState, views: &[DrawingViewSpec]) -> Result<Vec<Drawi
                     points: l.points,
                 })
                 .collect();
-            Ok(DrawingViewResult { lines, hatch, mesh })
+            Ok(DrawingViewResult { lines, hatch, hatch_part, mesh })
         })
         .collect()
+}
+
+/// Una pieza cortada como la vista (el plano del corte y los prismas); `None` si no lleva corte.
+fn cut_shape(shape: &cad_model::Shape, v: &DrawingViewSpec) -> Result<Option<cad_model::Shape>, String> {
+    let mut cut = match &v.section {
+        Some(s) => Some(shape.split_keep(s.origin, s.normal).map_err(|e| e.to_string())?),
+        None => None,
+    };
+    if !v.cut.is_empty() {
+        let tools = v.cut.iter().map(|p| cad_model::Shape::polygon(&p.points).and_then(|f| f.prism(p.dir))).collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())?;
+        let tool = if tools.len() == 1 { tools.into_iter().next().unwrap() } else { cad_model::Shape::fuse_all(&tools).map_err(|e| e.to_string())? };
+        cut = Some(cut.as_ref().unwrap_or(shape).cut(&tool).map_err(|e| e.to_string())?);
+    }
+    Ok(cut)
 }
 
 /// Planos de las caras de un prisma de corte: uno por lado del polígono y las dos tapas.

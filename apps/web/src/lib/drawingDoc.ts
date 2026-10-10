@@ -45,8 +45,9 @@ export interface DrawingSheet {
   cutBy?: Partial<Record<string, string>>;
   /** Vistas sombreadas (como imagen), con las líneas encima o sin ellas */
   shaded?: Partial<Record<string, { lines: boolean }>>;
-  /** Rayado de la hoja (los cortes pueden tener el suyo) */
+  /** Rayado de la hoja (los cortes pueden tener el suyo); sin `hatchByMaterial` false, según el material */
   hatch?: HatchStyle;
+  hatchByMaterial?: boolean;
   /** Ya con las seis vistas (antes había una sola lateral, "side") */
   sixViews?: boolean;
   /** Corte A-A paralelo al frente: `y` del plano (mm del modelo; sin ella, por el medio) */

@@ -13,13 +13,38 @@ export interface CutPrism {
   dir: P3;
 }
 
-/** Rayado: ángulo (grados), separación (mm de hoja) y cruzado */
+/**
+ * Rayado: ángulo (grados), separación (mm de hoja), cruzado y el dibujo de
+ * cada línea: simple, de a pares (acero) o alternando llena y cortada (latón)
+ */
 export interface HatchStyle {
   angle: number;
   spacing: number;
   cross?: boolean;
+  pattern?: "single" | "double" | "dashed";
 }
 export const DEFAULT_HATCH: HatchStyle = { angle: 45, spacing: 2 };
+
+/**
+ * Rayado según el material (como los de ANSI/ISO para planos de taller):
+ * aceros de a pares, latón y bronce alternado, aluminio más apretado,
+ * plásticos y gomas cruzado, madera en vertical; el resto, el general.
+ */
+export function materialHatch(name: string | null | undefined): HatchStyle {
+  const n = (name ?? "").toLowerCase();
+  if (/acero|steel/.test(n)) return { angle: 45, spacing: 3, pattern: "double" };
+  if (/lat[oó]n|bronce|cobre|brass|bronze|copper/.test(n)) return { angle: 45, spacing: 2.5, pattern: "dashed" };
+  if (/alumin/.test(n)) return { angle: 45, spacing: 1.5 };
+  if (/pla|petg|abs|nail|nylon|resina|pl[aá]stic|goma|caucho|tpu/.test(n)) return { angle: 45, spacing: 2, cross: true };
+  if (/madera|pino|wood/.test(n)) return { angle: 90, spacing: 1.5 };
+  return DEFAULT_HATCH;
+}
+
+/** El de una pieza en un conjunto: según su material, y las vecinas (índice impar) con el ángulo al revés */
+export function partHatch(material: string | null | undefined, index: number): HatchStyle {
+  const h = materialHatch(material);
+  return index % 2 ? { ...h, angle: (h.angle + 90) % 180 } : h;
+}
 
 /**
  * Un corte dibujado sobre una vista: la línea (dos puntos o más, escalonada)
