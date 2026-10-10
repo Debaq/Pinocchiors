@@ -4,9 +4,11 @@ Traer a Pinocchiors el CAD de `cad-blender` (addon de Blender) sin Blender: núc
 B-Rep con OpenCASCADE desde el inicio (sin etapa intermedia de mallas) y el flujo
 nuevo **escaneo → CAD** que conecta orizon3d con sólidos editables.
 
-**Planes vigentes**: [PLAN_OPERACIONES.md](PLAN_OPERACIONES.md) (desde el 2026-10-09) y
+**Planes vigentes**: [PLAN_OPERACIONES.md](PLAN_OPERACIONES.md) (desde el 2026-10-09),
 [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md) (desde el 2026-10-10: dibujo y edición sobre la hoja,
-vistas que se giran en 3D, cortes e imágenes de secciones). Los planes anteriores se borraron y
+vistas que se giran en 3D, cortes e imágenes de secciones) y
+[PLAN_ENGRANES.md](PLAN_ENGRANES.md) (desde el 2026-10-10: engranes paramétricos, pares
+coordinados y relaciones en el ensamble; **no se borra en limpiezas de planes**). Los planes anteriores se borraron y
 lo hecho queda en esta bitácora.
 
 Decisiones (2026-10-05):
