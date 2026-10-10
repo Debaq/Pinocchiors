@@ -221,6 +221,20 @@ abran los proyectos viejos.
 
 ### F8 — Referencias y curvas
 
+- **Primero (usuario, 2026-10-10: «los planos de referencia se construyen de una forma
+  ridícula, con datos, no clics ni referencias a los objetos, líneas ni nada»).** Hoy el plano,
+  el eje y el punto de referencia se arman escribiendo números en el diálogo. Tienen que
+  armarse como en Onshape: clic en lo que lo define y el tipo se deduce de lo elegido, ligado a
+  esas referencias (siguen al modelo). Plano: una cara plana o un plano (desfasado con flecha
+  arrastrable y valor), dos caras o planos (plano medio), cara + arista (en ángulo alrededor de
+  la arista), tres puntos o vértices, una arista + un punto, una línea de sketch + un punto,
+  normal a una arista o curva en un punto, tangente a una cara curva por un punto. Eje: una
+  arista recta o línea de sketch, el eje de una cara cilíndrica o cónica, dos puntos, la
+  intersección de dos planos. Punto: vértice, medio de arista, centro de círculo o esfera, punto
+  de sketch, intersección arista-cara. Vista previa en vivo mientras se elige y la lista de
+  referencias en el diálogo (cada una se quita o se cambia), como las demás operaciones con
+  cajas de selección. Los datos escritos quedan solo para el desfase y el ángulo.
+
 - `PlaneDef::Tangent { face, through: PointSpec | angle }`,
   `PlaneDef::NormalToCurve { edge, at }` (tangente de `BRepAdaptor_Curve::D1`).
 - `FeatureKind::Frame { origin: PointSpec, z: AxisSpec, x: AxisSpec }`: sistema de coordenadas
