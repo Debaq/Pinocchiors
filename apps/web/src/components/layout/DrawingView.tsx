@@ -29,6 +29,7 @@ import {
   type ViewName,
 } from "../../lib/drawing";
 import {
+  VIEW_LABELS,
   VIEW_NAMES,
   addDrawing,
   drawingSheets,
@@ -434,9 +435,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           <Select
             options={[
               { value: "sheet", label: "DXF: hoja entera" },
-              { value: "front", label: "DXF: frente 1:1" },
-              { value: "top", label: "DXF: planta 1:1" },
-              { value: "side", label: "DXF: lateral 1:1" },
+              ...VIEW_NAMES.filter((v) => v !== "iso").map((v) => ({ value: v, label: `DXF: ${VIEW_LABELS[v].toLowerCase()} 1:1` })),
             ]}
             value={dxfWhat()}
             onChange={(v) => setDxfWhat(v as "sheet" | ViewName)}

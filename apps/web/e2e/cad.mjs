@@ -1404,7 +1404,7 @@ const scenarios = {
       const hidden = svg.querySelectorAll('[data-view="front"] [data-kind="hidden"], [data-view="front"] [data-kind="hidden_outline"]').length;
       return { views, hidden, text: svg.textContent };
     })()`);
-    if (info.views.join(",") !== "front,top,side,iso") throw new Error(`vistas: ${info.views}`);
+    if (info.views.join(",") !== "front,top,left,iso") throw new Error(`vistas: ${info.views}`);
     if (info.hidden !== 2) throw new Error(`ocultas del frente: ${info.hidden}`);
     // 20 mm en A4: escala 2:1 (o mayor)
     if (!/[25]:1/.test(info.text)) throw new Error(`escala: ${info.text}`);
@@ -1580,6 +1580,40 @@ const scenarios = {
     const doc = (await call("cad_get_document")).drawing;
     if (doc?.sheets?.length !== 2 || !doc.sheets[1].hiddenViews.includes("iso") || doc.sheets[1].name !== "Cortes") throw new Error(`guardado: ${JSON.stringify(doc)}`);
     await b.shot("planos_outliner");
+  },
+
+  async "plano 2D: seis vistas en primer y tercer diedro"(b) {
+    await begin(b);
+    // Caja de 30 × 20 × 10 corrida: cada vista tiene otra forma
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    const shown = () => b.eval(`[...document.querySelectorAll("[data-sheet] svg [data-view]")].map((g) => g.dataset.view).join(",")`);
+    if ((await shown()) !== "front,top,left,iso") throw new Error(`al empezar: ${await shown()}`);
+    // Prender las que faltan con el ojo del Outliner
+    for (const v of ["bottom", "right", "back"]) await b.eval(`[...document.querySelector('[data-outliner-row="drawing-1:view:${v}"]').querySelectorAll("button")].pop().click()`);
+    for (let t = 0; t < 40 && (await shown()) !== "front,top,bottom,left,right,back,iso"; t++) await sleep(250);
+    if ((await shown()) !== "front,top,bottom,left,right,back,iso") throw new Error(`las seis: ${await shown()}`);
+    const boxes = () =>
+      b.eval(`Object.fromEntries([...document.querySelectorAll("[data-sheet] svg [data-view]")].map((g) => { const r = g.getBBox(); return [g.dataset.view, { cx: r.x + r.width / 2, cy: r.y + r.height / 2 }]; }))`);
+    const check = (v, first) => {
+      const [up, down, l, r] = first ? ["bottom", "top", "right", "left"] : ["top", "bottom", "left", "right"];
+      if (!(v[up].cy < v.front.cy && v[down].cy > v.front.cy)) throw new Error(`${first ? "1.er" : "3.er"} diedro arriba/abajo: ${JSON.stringify(v)}`);
+      if (!(v[l].cx < v.front.cx && v[r].cx > v.front.cx && v.back.cx > v[r].cx)) throw new Error(`${first ? "1.er" : "3.er"} diedro costados: ${JSON.stringify(v)}`);
+    };
+    check(await boxes(), true);
+    await b.shot("plano_seis_vistas_iso_e");
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].projection = "third"; })`);
+    for (let t = 0; t < 40; t++) {
+      const v = await boxes();
+      if (v.top && v.front && v.top.cy < v.front.cy) break;
+      await sleep(250);
+    }
+    await sleep(500);
+    check(await boxes(), false);
+    await b.shot("plano_seis_vistas_iso_a");
   },
 
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {

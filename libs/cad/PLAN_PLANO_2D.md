@@ -74,6 +74,17 @@ flotante arrastrable con sus propiedades; Esc la cierra y Supr borra lo elegido.
 arriba quedó con las herramientas (Cota, Distancia, Ángulo, Detalle, Corte A-A, Dibujar, Hoja)
 y exportar. Pruebas: node `drawingDoc.test.mjs` y e2e "planos 2D en el Outliner…".
 
+### Seis vistas ✅
+
+*Hecho el 2026-10-10 (el usuario: «el primer diedro tiene 6 vistas y acá se hacen solo 3 más
+el 3d»).* `ViewName` = frente, superior, inferior, lateral izquierda y derecha, posterior e
+isométrica; cada vista es la misma en los dos diedros (`viewSpec`, arriba de la hoja = eye ×
+xdir como `gp_Ax2`) y `viewSlots` dice dónde va: primer diedro (ISO E) superior abajo, inferior
+arriba, izquierda a la derecha y derecha a la izquierda; tercero (ISO A) al revés; la posterior
+al final de la fila del frente. Al empezar se ven frente, superior, la lateral que va a la
+derecha del frente e isométrica; las otras se prenden con su ojo. Los planos con la vieja
+«side» la pasan a izquierda (primer diedro) o derecha (tercero), también en cotas y detalles.
+
 ### F2 — Las vistas como referencia
 
 - Cada línea de vista entra al sketch de la hoja como entidad fija ligada

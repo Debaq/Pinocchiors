@@ -25,6 +25,8 @@ export interface DrawingSheet {
   overall: boolean;
   /** Vistas que no se muestran */
   hiddenViews: ViewName[];
+  /** Ya con las seis vistas (antes había una sola lateral, "side") */
+  sixViews?: boolean;
   /** Corte A-A paralelo al frente: `y` del plano (mm del modelo; sin ella, por el medio) */
   section?: { y?: number | null; hidden?: boolean } | null;
   title: string;
@@ -46,20 +48,51 @@ export interface DrawingData {
   sketch?: Sketch | null;
 }
 
-export const VIEW_NAMES: ViewName[] = ["front", "top", "side", "iso"];
-export const VIEW_LABELS: Record<ViewName, string> = { front: "Frente", top: "Planta", side: "Lateral", iso: "Isométrica" };
+export const VIEW_NAMES: ViewName[] = ["front", "top", "bottom", "left", "right", "back", "iso"];
+export const VIEW_LABELS: Record<ViewName, string> = {
+  front: "Frente",
+  top: "Superior (planta)",
+  bottom: "Inferior",
+  left: "Lateral izquierda",
+  right: "Lateral derecha",
+  back: "Posterior",
+  iso: "Isométrica",
+};
+
+/** Las que no se ven al empezar: frente, superior, una lateral (la que va a la derecha del frente) e isométrica a la vista */
+export const defaultHiddenViews = (projection: Projection): ViewName[] => ["bottom", projection === "first" ? "right" : "left", "back"];
 const DIM_LABELS: Record<UserDim["kind"], string> = { length: "Largo", diameter: "Diámetro", radius: "Radio", distance: "Distancia", angle: "Ángulo" };
 
 export function newSheet(id: number, name = `Plano ${id}`): DrawingSheet {
-  return { id, name, sheet: "A4", projection: "first", scale: null, hiddenLines: true, smooth: false, overall: true, hiddenViews: [], section: null, title: "Diseño", author: "", dims: [], details: [], sketch: null };
+  return { id, name, sheet: "A4", projection: "first", scale: null, hiddenLines: true, smooth: false, overall: true, hiddenViews: defaultHiddenViews("first"), sixViews: true, section: null, title: "Diseño", author: "", dims: [], details: [], sketch: null };
+}
+
+/**
+ * Planos de antes de las seis vistas: la lateral ("side") era la que va a la
+ * derecha del frente (la izquierda en primer diedro, la derecha en tercero);
+ * las vistas nuevas empiezan ocultas.
+ */
+function sixViews(s: DrawingSheet): DrawingSheet {
+  if (s.sixViews) return s;
+  const side: ViewName = s.projection === "third" ? "right" : "left";
+  const map = (v: string) => (v === "side" ? side : v);
+  const hidden = new Set<ViewName>([...defaultHiddenViews(s.projection), ...(s.hiddenViews as string[]).map(map)] as ViewName[]);
+  if (!(s.hiddenViews as string[]).includes("side")) hidden.delete(side);
+  return {
+    ...s,
+    sixViews: true,
+    hiddenViews: VIEW_NAMES.filter((v) => hidden.has(v)),
+    dims: s.dims.map((d) => ({ ...d, view: map(d.view) })),
+    details: s.details.map((d) => ({ ...d, view: map(d.view) as ViewName })),
+  };
 }
 
 /** Los planos del documento (el viejo, como «Plano 1»); no cambia el documento */
 export function drawingSheets(doc: Pick<CadDocument, "drawing"> | null | undefined): DrawingSheet[] {
   const d = doc?.drawing as DrawingData | null | undefined;
   if (!d) return [];
-  if (d.sheets) return d.sheets.map((s) => ({ ...newSheet(s.id), ...s }));
-  if (d.dims?.length || d.details?.length || d.sketch) return [{ ...newSheet(1), dims: d.dims ?? [], details: d.details ?? [], sketch: d.sketch ?? null }];
+  if (d.sheets) return d.sheets.map((s) => sixViews({ ...newSheet(s.id), sixViews: false, ...s }));
+  if (d.dims?.length || d.details?.length || d.sketch) return [sixViews({ ...newSheet(1), sixViews: false, hiddenViews: [], dims: d.dims ?? [], details: d.details ?? [], sketch: d.sketch ?? null })];
   return [];
 }
 

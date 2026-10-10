@@ -66,7 +66,7 @@ test("ocultar y quitar elementos; las vistas solo se ocultan", () => {
     s.dims = [{ view: "top", kind: "diameter", refs: [[0, 0]] }, { view: "front", kind: "length", refs: [[1, 0]] }];
   });
   const s = drawingSheets(doc)[0];
-  assert.deepEqual(sheetElements(s).map((e) => e.kind), ["sheet", "view", "view", "view", "view", "overall", "section", "detail", "dim", "dim"]);
+  assert.deepEqual(sheetElements(s).map((e) => e.kind), ["sheet", ...Array(7).fill("view"), "overall", "section", "detail", "dim", "dim"]);
   for (const el of [{ kind: "view", view: "iso" }, { kind: "section" }, { kind: "detail", label: "B" }, { kind: "dim", index: 1 }, { kind: "overall" }]) {
     assert.ok(elementVisible(s, el));
     toggleElement(s, el);
@@ -92,4 +92,20 @@ test("árbol: el plano abierto y lo elegido se marcan", () => {
   const view = tree[1].children.find((c) => c.id === "drawing-2:view:front");
   assert.ok(!view.deletable && view.visible);
   assert.equal(drawingTree(drawingSheets(doc), id, undefined)[1].selected, true, "sin nada elegido se marca el plano");
+});
+
+test("seis vistas: al empezar se ven frente, superior, la lateral de la derecha del frente e isométrica; los planos viejos pasan su «side»", () => {
+  const doc = {};
+  addDrawing(doc);
+  assert.deepEqual(drawingSheets(doc)[0].hiddenViews, ["bottom", "right", "back"]);
+  // Plano de antes en tercer diedro con la isométrica oculta y una cota en la lateral
+  const old = { drawing: { sheets: [{ id: 1, name: "P", projection: "third", hiddenViews: ["iso"], dims: [{ view: "side", kind: "length", refs: [[0, 0]] }], details: [{ label: "B", view: "side", center: [0, 0], radius: 2 }] }], next_id: 2 } };
+  const [s] = drawingSheets(old);
+  assert.deepEqual(s.hiddenViews, ["bottom", "left", "back", "iso"]);
+  assert.equal(s.dims[0].view, "right");
+  assert.equal(s.details[0].view, "right");
+  // Del formato de un solo plano (primer diedro): la lateral es la izquierda
+  const [one] = drawingSheets({ drawing: { dims: [{ view: "side", kind: "length", refs: [[0, 0]] }] } });
+  assert.equal(one.dims[0].view, "left");
+  assert.ok(!one.hiddenViews.includes("left"));
 });

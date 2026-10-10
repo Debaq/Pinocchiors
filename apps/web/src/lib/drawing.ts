@@ -17,21 +17,35 @@ export interface DrawingLine {
   points: P2[];
 }
 
-export type ViewName = "front" | "top" | "side" | "iso";
+/**
+ * Las seis vistas principales (frente, superior, inferior, lateral izquierda
+ * y derecha, posterior) más la isométrica. Cada vista es la misma en los dos
+ * diedros: lo que cambia es dónde va en la hoja (`layout`).
+ */
+export type ViewName = "front" | "top" | "bottom" | "left" | "right" | "back" | "iso";
 
-/** Desde dónde se mira cada vista (hacia quien mira) y la derecha de la hoja; Z arriba */
-export function viewSpec(name: ViewName, projection: Projection): { eye: P3; xdir: P3 } {
+/**
+ * Desde dónde se mira cada vista (hacia quien mira) y la derecha de la hoja;
+ * Z arriba. El arriba de la hoja es eye × xdir (como `gp_Ax2` en el backend).
+ */
+export function viewSpec(name: ViewName, _projection?: Projection): { eye: P3; xdir: P3 } {
   const s = Math.SQRT1_2;
   const t = 1 / Math.sqrt(3);
   switch (name) {
     case "front":
       return { eye: [0, -1, 0], xdir: [1, 0, 0] };
+    case "back":
+      return { eye: [0, 1, 0], xdir: [-1, 0, 0] };
+    // Desde arriba: lo de atrás de la pieza queda arriba en la hoja
     case "top":
       return { eye: [0, 0, 1], xdir: [1, 0, 0] };
-    // Primer diedro: la vista desde la izquierda va a la derecha del frente;
-    // tercer diedro: la de la derecha, a la derecha
-    case "side":
-      return projection === "first" ? { eye: [-1, 0, 0], xdir: [0, -1, 0] } : { eye: [1, 0, 0], xdir: [0, 1, 0] };
+    // Desde abajo: lo de adelante queda arriba
+    case "bottom":
+      return { eye: [0, 0, -1], xdir: [1, 0, 0] };
+    case "left":
+      return { eye: [-1, 0, 0], xdir: [0, -1, 0] };
+    case "right":
+      return { eye: [1, 0, 0], xdir: [0, 1, 0] };
     case "iso":
       return { eye: [t, -t, t], xdir: [s, s, 0] };
   }
@@ -125,10 +139,20 @@ export interface SectionInfo {
 }
 
 /**
- * Acomoda frente, planta y lateral en cruz (planta debajo del frente en primer
- * diedro, arriba en tercero; lateral a la derecha) y la isométrica arriba a la
- * derecha. Elige la escala normalizada más grande con la que todo entra.
- * Coordenadas de hoja: x a la derecha, y hacia abajo (como SVG).
+ * Qué vista va en cada lugar alrededor del frente. Primer diedro (ISO E): la
+ * superior debajo, la inferior arriba, la lateral izquierda a la derecha y la
+ * derecha a la izquierda. Tercer diedro (ISO A): al revés, cada una del lado
+ * de donde se mira. La posterior, en los dos, al final de la fila del frente.
+ */
+export function viewSlots(projection: Projection): { above: ViewName; below: ViewName; leftOf: ViewName; rightOf: ViewName } {
+  return projection === "first" ? { above: "bottom", below: "top", leftOf: "right", rightOf: "left" } : { above: "top", below: "bottom", leftOf: "left", rightOf: "right" };
+}
+
+/**
+ * Acomoda las vistas en cruz alrededor del frente según el diedro (ver
+ * `viewSlots`), la posterior al final de la fila del frente y la isométrica
+ * arriba a la derecha. Elige la escala normalizada más grande con la que todo
+ * entra. Coordenadas de hoja: x a la derecha, y hacia abajo (como SVG).
  */
 export function layout(
   views: Partial<Record<ViewName, DrawingLine[]>>,
@@ -139,35 +163,52 @@ export function layout(
 ): { placed: Placed[]; scale: number } {
   const b = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, bounds(v!)])) as Record<ViewName, Bounds>;
   const sz = (n: ViewName): P2 => (views[n] ? size(b[n]) : [0, 0]);
-  const [fw, fh] = sz("front");
-  const [tw, th] = sz("top");
-  const [sw, sh] = sz("side");
-  const [iw, ih] = sz("iso");
+  const { above, below, leftOf, rightOf } = viewSlots(projection);
   const areaW = sheet.width - 2 * MARGIN;
   const areaH = sheet.height - 2 * MARGIN - TITLE_H;
+  // Tamaño de la cruz a escala s: columna del frente (con la de arriba y la de
+  // abajo), fila del frente (laterales y posterior) e isométrica aparte
+  const measure = (s: number) => {
+    const colW = Math.max(sz("front")[0], sz(above)[0], sz(below)[0]) * s;
+    const row = [leftOf, "col", rightOf, "back", "iso"] as const;
+    const widths = row.map((n) => (n === "col" ? colW : views[n] ? sz(n)[0] * s : 0)).filter((w) => w > 0);
+    const w = widths.reduce((a, x) => a + x, 0) + GAP * Math.max(0, widths.length - 1);
+    const midH = Math.max(...(["front", leftOf, rightOf, "back"] as ViewName[]).map((n) => sz(n)[1])) * s;
+    const h = (views[above] ? sz(above)[1] * s + GAP : 0) + midH + (views[below] ? GAP + sz(below)[1] * s : 0);
+    return { colW, midH, w, h: Math.max(h, views.iso ? sz("iso")[1] * s : 0) };
+  };
   const fits = (s: number) => {
-    const w = Math.max(fw, tw) * s + (views.side ? GAP + sw * s : 0) + (views.iso ? GAP + iw * s : 0) + 2 * GAP;
-    const h = Math.max(Math.max(fh, sh) * s + (views.top ? GAP + th * s : 0), views.iso ? ih * s : 0) + 2 * GAP;
-    return w <= areaW && h <= areaH;
+    const m = measure(s);
+    return m.w + 2 * GAP <= areaW && m.h + 2 * GAP <= areaH;
   };
   const scale = fixedScale ?? SCALES.find(fits) ?? SCALES[SCALES.length - 1];
-  // Columna de frente y planta; la lateral al lado del frente; la isométrica al final
-  const left = MARGIN + GAP;
-  const colW = Math.max(fw, tw) * scale;
+  const { colW, midH } = measure(scale);
   const top = MARGIN + GAP;
-  const frontY = projection === "first" || !views.top ? top : top + th * scale + GAP;
-  const topY = projection === "first" ? top + fh * scale + GAP : top;
-  const placed: Placed[] = [];
+  const midY = top + (views[above] ? sz(above)[1] * scale + GAP : 0);
+  const out = new Map<ViewName, Placed>();
   // En la hoja y crece hacia abajo: el punto (u, v) de la vista va a (x + u·s, y − v·s)
   const put = (name: ViewName, x0: number, y0: number, w: number) => {
     const bb = b[name];
-    placed.push({ name, scale, lines: views[name]!, hatch: hatch?.[name], x: x0 + (w - (bb.max[0] - bb.min[0]) * scale) / 2 - bb.min[0] * scale, y: y0 + bb.max[1] * scale });
+    out.set(name, { name, scale, lines: views[name]!, hatch: hatch?.[name], x: x0 + (w - (bb.max[0] - bb.min[0]) * scale) / 2 - bb.min[0] * scale, y: y0 + bb.max[1] * scale });
   };
-  if (views.front) put("front", left, frontY, colW);
-  if (views.top) put("top", left, topY, colW);
-  if (views.side) put("side", left + colW + GAP, frontY, sw * scale);
-  if (views.iso) put("iso", left + colW + (views.side ? GAP + sw * scale : 0) + GAP, top, iw * scale);
-  return { placed, scale };
+  let x = MARGIN + GAP;
+  if (views[leftOf]) {
+    put(leftOf, x, midY, sz(leftOf)[0] * scale);
+    x += sz(leftOf)[0] * scale + GAP;
+  }
+  if (views.front) put("front", x, midY, colW);
+  if (views[above]) put(above, x, top, colW);
+  if (views[below]) put(below, x, midY + midH + GAP, colW);
+  if (colW > 0) x += colW + GAP;
+  for (const n of [rightOf, "back"] as ViewName[]) {
+    if (!views[n]) continue;
+    put(n, x, midY, sz(n)[0] * scale);
+    x += sz(n)[0] * scale + GAP;
+  }
+  if (views.iso) put("iso", x, top, sz("iso")[0] * scale);
+  // En el orden de siempre (frente, superior, inferior, laterales, posterior, isométrica)
+  const order: ViewName[] = ["front", "top", "bottom", "left", "right", "back", "iso"];
+  return { placed: order.flatMap((n) => (out.has(n) ? [out.get(n)!] : [])), scale };
 }
 
 export interface TitleBlock {

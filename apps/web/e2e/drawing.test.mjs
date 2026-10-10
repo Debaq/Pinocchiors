@@ -12,19 +12,52 @@ const rect = (w, h) => [
   { kind: "visible", points: [[0, h], [0, 0]] },
 ];
 
-test("vistas: frente desde −Y, planta desde +Z y lateral según el diedro", () => {
-  assert.deepEqual(viewSpec("front", "first"), { eye: [0, -1, 0], xdir: [1, 0, 0] });
-  assert.deepEqual(viewSpec("top", "first").eye, [0, 0, 1]);
-  assert.deepEqual(viewSpec("side", "first").eye, [-1, 0, 0]);
-  assert.deepEqual(viewSpec("side", "third").eye, [1, 0, 0]);
+test("seis vistas: desde dónde se mira y qué queda arriba en la hoja (eye × xdir)", () => {
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  const want = {
+    front: { eye: [0, -1, 0], up: [0, 0, 1] },
+    back: { eye: [0, 1, 0], up: [0, 0, 1] },
+    left: { eye: [-1, 0, 0], up: [0, 0, 1] },
+    right: { eye: [1, 0, 0], up: [0, 0, 1] },
+    // Superior: lo de atrás arriba; inferior: lo de adelante arriba
+    top: { eye: [0, 0, 1], up: [0, 1, 0] },
+    bottom: { eye: [0, 0, -1], up: [0, -1, 0] },
+  };
+  for (const [name, w] of Object.entries(want)) {
+    const v = viewSpec(name);
+    assert.deepEqual(v.eye, w.eye, name);
+    assert.deepEqual(cross(v.eye, v.xdir).map((x) => x + 0), w.up, name);
+  }
+  // La misma vista en los dos diedros: cambia el lugar, no la vista
+  assert.deepEqual(viewSpec("left", "first"), viewSpec("left", "third"));
+});
+
+test("primer diedro: superior abajo, inferior arriba, izquierda a la derecha; tercero al revés; posterior al final", () => {
+  const box = { front: rect(40, 10), back: rect(40, 10), top: rect(40, 20), bottom: rect(40, 20), left: rect(20, 10), right: rect(20, 10) };
+  const at = (pl, name) => pl.find((p) => p.name === name);
+  const first = layout(box, SHEETS[2], "first", 1).placed;
+  const third = layout(box, SHEETS[2], "third", 1).placed;
+  const f = (n) => at(first, n);
+  const t = (n) => at(third, n);
+  assert.ok(f("top").y > f("front").y && f("bottom").y < f("front").y, "primer diedro: arriba y abajo");
+  assert.ok(f("left").x > f("front").x && f("right").x < f("front").x, "primer diedro: los costados");
+  assert.ok(t("top").y < t("front").y && t("bottom").y > t("front").y, "tercer diedro: arriba y abajo");
+  assert.ok(t("left").x < t("front").x && t("right").x > t("front").x, "tercer diedro: los costados");
+  for (const pl of [first, third]) {
+    const xs = pl.map((p) => p.x);
+    assert.equal(at(pl, "back").x, Math.max(...xs), "la posterior al final");
+    // Alineadas: la fila del frente a la misma altura, la columna al mismo x
+    for (const n of ["left", "right", "back"]) assert.equal(at(pl, n).y, at(pl, "front").y);
+    for (const n of ["top", "bottom"]) assert.equal(at(pl, n).x, at(pl, "front").x);
+  }
 });
 
 test("escala normalizada: la mayor con la que todo entra en la hoja", () => {
   const a4 = SHEETS[0];
   // Pieza de 40 × 20 × 10: a 2:1 entra en A4; una de 400 no, va a 1:5 o menos
-  const small = { front: rect(40, 10), top: rect(40, 20), side: rect(20, 10) };
+  const small = { front: rect(40, 10), top: rect(40, 20), left: rect(20, 10) };
   assert.equal(scaleLabel(layout(small, a4, "first").scale), "2:1");
-  const big = { front: rect(400, 100), top: rect(400, 200), side: rect(200, 100) };
+  const big = { front: rect(400, 100), top: rect(400, 200), left: rect(200, 100) };
   const s = layout(big, a4, "first").scale;
   assert.ok(s <= 1 / 5, scaleLabel(s));
   assert.equal(scaleLabel(1 / 20), "1:20");
@@ -192,7 +225,7 @@ test("detalle: recorta al círculo, amplía y no pisa las vistas", () => {
   assert.equal(detailScale(1), 2);
   assert.equal(detailScale(1 / 2), 1);
   assert.equal(detailScale(2), 5);
-  const views = { front: rect(40, 10), top: rect(40, 20), side: rect(20, 10) };
+  const views = { front: rect(40, 10), top: rect(40, 20), left: rect(20, 10) };
   const { placed, scale } = layout(views, SHEETS[1], "first");
   const det = placeDetails(placed, [{ label: "B", view: "front", center: [40, 10], radius: 4 }], SHEETS[1]);
   assert.equal(det.length, 1);
