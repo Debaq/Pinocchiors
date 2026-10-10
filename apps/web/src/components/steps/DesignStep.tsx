@@ -1114,11 +1114,19 @@ export const FeatureEditor: Component<{
   const field = (label: string, rel: string, raw: number, write: (k: FeatureKind, v: number) => void, suffix?: string) => {
     const path = () => `${f().id}.${rel}`;
     const res = () => props.store.bindingResult(path());
+    // El valor de ahora de la operación (del borrador con el diálogo abierto), leído por su
+    // ruta: `raw` es el del momento en que se armó el campo y no se actualiza (el campo
+    // volvía a mostrar el viejo y la rueda bajaba de a uno desde ahí)
+    const live = () => {
+      let v: unknown = f();
+      for (const k of rel.split(".")) v = v == null ? undefined : (v as Record<string, unknown>)[k];
+      return typeof v === "number" ? v : raw;
+    };
     return (
       <Formula
         label={label}
         suffix={suffix}
-        value={res()?.value ?? raw}
+        value={res()?.value ?? live()}
         expr={props.store.bindingOf(path())}
         error={res()?.error}
         onCommit={(text) => props.store.setField(f().id, path(), text, (x, v) => write(x.kind, v))}
