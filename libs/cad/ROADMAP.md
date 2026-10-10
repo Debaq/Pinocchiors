@@ -689,3 +689,8 @@ cargo test -p cad-model
 - **2026-10-10 Plano 2D: cortes e imágenes** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md), fase 4): cortes
   por una línea (rectos y escalonados) con su vista, medio corte, rotura, vistas 3D cortadas,
   vistas sombreadas (hoja, PDF y PNG), estilo del rayado; barra izquierda propia del plano.
+- **2026-10-10 Escaneo E0** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md)): ejemplos `scanify` (STL/OBJ
+  limpio → escaneo simulado) y `mesh_boolean` (banco de booleanas contra mallas).
+  `cad_from_mesh` arma el sólido directo si la malla es cerrada, manifold y orientada (20 k
+  triángulos: 9 s cosiendo → 0,8 s). OCCT alcanza para E2 si la malla se prepara por vóxeles +
+  isótropo (meshopt deja caras espalda con espalda y cruces).

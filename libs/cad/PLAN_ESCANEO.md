@@ -22,7 +22,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Detección automática (plano, cilindro, esfera) | ✅ (`cad_scan::detect_all`, `merge_coplanar`) |
 | Desviación diseño ↔ escaneo | ✅ (`cad_scan::deviation`, mapa de color) |
 | Limpiar la malla (reparar, remallar, simplificar, suavizar) | ✅ (Preparar) |
-| Escaneo como cuerpo para booleanas | ❌ (`Shape::from_mesh` existe en `cad-occt`, sin usar) (E2) |
+| Escaneo como cuerpo para booleanas | ❌ motor decidido en E0: OCCT + vóxeles/isótropo + sólido directo (E2) |
 | Elegir qué objeto es el escaneo | ❌ hoy es «el modelo cargado» (`with_scan`) (E1) |
 | Alinear el escaneo por rasgos | ❌ Objeto solo da piso/frente (E1) |
 | Referencias (punto, plano, eje) tomadas de la malla | 🟡 solo plano de zona plana (E1) |
@@ -36,21 +36,54 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Asistente de reconstrucción | ❌ (E9) |
 | Superficies libres ajustadas a la malla | ❌ (E10) |
 
+## Problema anotado: las mallas que vienen del CAD se ven y se trabajan mal (2026-10-10)
+
+El usuario: «nuestro gran problema». Un cubo hecho en Diseñar y pasado a Fabricar muestra
+abollones en las caras donde se juntan los vértices de los triángulos; con retopología queda
+redondeado (malo para piezas cuadradas, sobre todo de CAD a Fabricar); «reparar» al pasar a
+malla queda terrible. El STL exportado directo desde el diseño se ve perfecto en OrcaSlicer,
+pero **el mismo STL importado en Pinocchiors se ve y se trabaja mal**: el archivo está bien y el
+problema es cómo lo toma la app.
+
+Hipótesis a verificar (no revisadas todavía):
+- Sombreado suave: vértices soldados con normales promediadas sobre aristas vivas y
+  triángulos largos y finos de teselado CAD → degradés en caras planas. `lib/autoSmooth.ts`
+  ya anota que el arreglo real es duplicar vértices en aristas vivas solo para dibujar.
+- Reparar / remallar / retopología no conservan aristas vivas ni caras planas de piezas
+  mecánicas (la retopología redondea por diseño; Instant Meshes suaviza).
+- Fabricar toca la malla (soldar, recalcular normales, subdividir) antes de mostrarla.
+
+Meta: un STL de CAD tiene que verse y medirse igual que en un laminador, y pasar de Diseñar a
+Fabricar sin perder caras planas ni aristas vivas. Va antes de E1: B también parte de piezas
+de CAD y de STL.
+
 ## Fases — B (diseñar sobre el escaneo)
 
-### E0 — Banco sin escáner
+### E0 — Banco sin escáner ✅ (2026-10-10)
 
-- Ejemplo `cad-scan --example scanify <entrada> <salida> [opciones]`: vuelve «escaneo» un STL/OBJ
-  limpio: ruido sobre la normal (σ en mm), huecos (parches borrados), densidad dispareja
-  (remallado isótropo con tamaño variable), base recortada (como apoyado en la mesa del
-  escáner) y pose al azar (rotación + traslación). Semilla fija para repetir.
-- Lista de modelos de `~/Descargas` con su uso: orgánicos para B (gonfoterio, conejo, oído
-  interno), mecánicos para A (piezas de Onshape «Part Studio …», molde, espéculo, audiómetro).
-- **Medición que decide el motor de E2**: booleana OCCT contra el escaneo cosido a 5 k, 20 k y
-  50 k triángulos (tiempo y si falla). La bitácora ya anota que OCCT hace mal las booleanas
-  orgánicas y que manifold podía volver para eso. Si OCCT pasa de ~2 s en 20 k o falla,
-  las booleanas con escaneo van por mallas (manifold) y el resultado es una pieza malla
-  (exporta STL/3MF/OBJ, no STEP; se avisa).
+- `cargo run --release -p cad-scan --example scanify -- entrada salida.(stl|obj) [opciones]`:
+  remallado isótropo sin aristas vivas (vóxeles si la malla no es manifold), oclusión de plato
+  giratorio (2 alturas × N giros, buffer de profundidad; no ve desde abajo de la mesa), huecos
+  de borde irregular, ruido sobre la normal, ondulación suave y `--pose` (matriz en
+  `salida.pose.txt`). Conejo: queda 54 % del área (es una placa: la cara de abajo no se ve);
+  gonfoterio 92 %; pieza de Onshape 88 %. 3–11 s.
+- Modelos: orgánicos para B (gonfoterio, conejo, oído interno), mecánicos para A (piezas de
+  Onshape «Part Studio …», molde, espéculo, audiómetro).
+- `cargo run --release -p cad-scan --example mesh_boolean -- malla N [--voxeles]`: malla a N
+  triángulos → sólido OCCT → caja − malla, ∩, ∪; revisa corte + intersección = caja.
+- **Hallazgos**:
+  1. El cosido (`BRepBuilderAPI_Sewing`) tardaba 9–32 s con 20–50 k triángulos. Ahora
+     `cad_from_mesh` arma el sólido directo compartiendo vértices y aristas si la malla es
+     cerrada, manifold y orientada (20 k: 0,8 s; 50 k: 2 s) y solo cose si no.
+  2. meshopt deja pares de caras espalda con espalda, aristas de más de dos caras y cruces:
+     con eso OCCT no cierra el sólido o lo da inválido y la resta/unión fallan. Preparar por
+     **vóxeles + isótropo** (cerrada, manifold, sin cruces) anduvo en los 4 modelos.
+  3. Con malla buena las booleanas son exactas (corte + intersección = caja a 1e-6 %) y
+     cuestan ~0,2 ms por cara: 5 k ≈ 1 s, 20 k ≈ 3–4 s, 50 k ≈ 8–11 s.
+- **Decisión para E2**: OCCT (sin manifold). Escaneo → vóxeles (con el desfase de holgura ya
+  incluido) → isótropo a ~20 k triángulos por defecto (hasta 50 k a pedido) → sólido directo.
+  Cerrar los bordes abiertos que deje el isótropo antes de convertir: con 6 aristas abiertas
+  cayó al cosido (89 s).
 
 ### E1 — El escaneo como referencia del diseño
 
@@ -128,6 +161,6 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 
 ## Riesgos
 
-- Booleanas OCCT con miles de caras planas: lentas o fallan (se decide en E0).
+- Booleanas OCCT: ~0,2 ms por cara; más de 50 k triángulos se vuelve lento (E0).
 - Escaneos abiertos: hay que cerrar antes de sólido; huecos grandes no se inventan.
 - Desfase por vóxeles pierde detalle fino según la resolución: tamaño de vóxel ≤ holgura / 2.

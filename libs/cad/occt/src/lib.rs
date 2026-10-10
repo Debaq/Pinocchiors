@@ -588,8 +588,9 @@ impl Shape {
         wrap(unsafe { ffi::cad_split_keep(self.ptr(), origin.as_ptr(), normal.as_ptr()) })
     }
 
-    /// Sólido cosido a partir de triángulos. Lento con mallas grandes
-    /// (una cara B-Rep por triángulo): pensado para piezas chicas o simplificadas.
+    /// Sólido a partir de triángulos, una cara B-Rep por triángulo. Si la malla
+    /// es cerrada, manifold y orientada se arma directo (rápido); si no, se cose
+    /// (lento con mallas grandes). Pensado para mallas simplificadas.
     pub fn from_mesh(vertices: &[P3], triangles: &[[u32; 3]], tolerance: f64) -> Result<Shape> {
         let v: Vec<f64> = vertices.iter().flatten().copied().collect();
         let t: Vec<i32> = triangles.iter().flatten().map(|&i| i as i32).collect();

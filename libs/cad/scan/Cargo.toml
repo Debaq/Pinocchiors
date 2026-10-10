@@ -17,3 +17,6 @@ thiserror = { workspace = true }
 [dev-dependencies]
 approx = { workspace = true }
 stl_io = { workspace = true }
+converter-core = { workspace = true }
+quadriflow-core = { workspace = true, features = ["simplify"] }
+cad-occt = { workspace = true }

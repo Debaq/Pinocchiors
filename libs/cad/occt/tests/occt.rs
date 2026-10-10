@@ -728,3 +728,24 @@ fn bspline_ellipse_arc_and_mid_tangent_faces() {
     let (a0, a1) = (free.mass().unwrap().area, tilted.mass().unwrap().area);
     assert!((a1 - a0).abs() > 0.05 * a0, "{a0} → {a1}");
 }
+
+#[test]
+fn closed_mesh_becomes_solid_without_sewing() {
+    if !require() {
+        return;
+    }
+    // Cubo de 10 mm en 12 triángulos con normales hacia afuera
+    let v: Vec<P3> = (0..8).map(|i| [(i & 1) as f64 * 10.0, (i >> 1 & 1) as f64 * 10.0, (i >> 2) as f64 * 10.0]).collect();
+    let t = [[0, 2, 1], [1, 2, 3], [4, 5, 6], [5, 7, 6], [0, 1, 4], [1, 5, 4], [2, 6, 3], [3, 6, 7], [0, 4, 2], [2, 4, 6], [1, 3, 5], [3, 7, 5]];
+    let solid = Shape::from_mesh(&v, &t, 1e-6).unwrap();
+    assert_eq!(solid.kind(), ShapeKind::Solid);
+    assert!(solid.is_valid());
+    assert_eq!(solid.face_count(), 12);
+    assert_relative_eq!(solid.mass().unwrap().volume, 1000.0, epsilon = 1e-6);
+    // Dado vuelta también queda con volumen positivo
+    let flipped: Vec<[u32; 3]> = t.iter().map(|&[a, b, c]| [a, c, b]).collect();
+    assert_relative_eq!(Shape::from_mesh(&v, &flipped, 1e-6).unwrap().mass().unwrap().volume, 1000.0, epsilon = 1e-6);
+    // Y se puede restar de una caja
+    let cut = cube(20.0).boolean(&solid, BooleanOp::Cut).unwrap();
+    assert_relative_eq!(cut.mass().unwrap().volume, 7000.0, epsilon = 1e-6);
+}
