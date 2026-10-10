@@ -22,7 +22,7 @@ import type { CadUi, Hit3d, Pick3d, PickFilter, SketchTool } from "../../lib/cad
 import type { MeshData } from "../../lib/Viewer3D";
 import { Button, IconButton, Slider, Tooltip } from "../ui";
 import { ContextMenu, type MenuEntry } from "../ui/ContextMenu";
-import { DrawingView } from "./DrawingView";
+import { DrawingSideTools, DrawingView } from "./DrawingView";
 import { FlatPatternView } from "./FlatPatternView";
 import { DesignSideTools, DesignToolbar, SideButton, SideSep } from "../design/DesignToolbar";
 import { Portal } from "solid-js/web";
@@ -3203,7 +3203,14 @@ export const CadView: Component<CadViewProps> = (props) => {
       <Show when={props.toolsMount} keyed>
         {(mount) => (
           <Portal mount={mount} ref={(el) => (el.className = "flex flex-col items-center w-full")}>
-            <Show when={ui.session()} fallback={<DesignSideTools store={store} ui={ui} actions={props.actions} />}>
+            <Show
+              when={ui.session()}
+              fallback={
+                <Show when={ui.drawingOpen()} fallback={<DesignSideTools store={store} ui={ui} actions={props.actions} />}>
+                  <DrawingSideTools ui={ui} />
+                </Show>
+              }
+            >
               <For each={toolSlots()}>
                 {(slot, i) => {
                   const shown = () => TOOLS.find((t) => t.id === (slot.family ? (familyPick()[slot.family] ?? slot.tools[0].id) : slot.tools[0].id))!;

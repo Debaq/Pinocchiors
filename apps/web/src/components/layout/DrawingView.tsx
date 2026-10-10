@@ -3,7 +3,10 @@ import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
 import type { CadStore } from "../../lib/cad";
-import type { CadUi } from "../../lib/cadUi";
+import type { CadUi, DrawingTool } from "../../lib/cadUi";
+import * as D from "../icons/design";
+import * as SketchIcons from "../icons/sketch";
+import { SideButton, SideSep } from "../design/DesignToolbar";
 import {
   SCALES,
   SHEETS,
@@ -61,7 +64,7 @@ import { applySheetLinks, applySheetOwners, sheetSketchDims } from "../../lib/sh
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
 
-type Tool = "" | "dim" | "distance" | "angle" | "detail";
+type Tool = DrawingTool;
 
 /**
  * Plano 2D del diseño: frente, planta, lateral e isométrica con líneas ocultas
@@ -104,7 +107,14 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return s && el && hasElement(s, el) ? el : undefined;
   };
 
-  const [tool, setTool] = createSignal<Tool>("");
+  const tool = ui.drawingTool;
+  const setTool = (t: Tool) => ui.setDrawingTool(t);
+  // Al abrir, sin herramienta; al cerrar se suelta
+  setTool("");
+  onCleanup(() => {
+    setTool("");
+    ui.setDrawingActions(undefined);
+  });
   // Vista que se está arrastrando: dónde va su origen (se guarda al soltar)
   const [dragAt, setDragAt] = createSignal<{ view: string; at: P2 }>();
   let drag: { view: string; x0: number; y0: number; at: P2; k: number; axis: "x" | "y" | "free" } | undefined;
@@ -522,20 +532,24 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     }
   });
 
-  const toolButton = (id: Exclude<Tool, "">, label: string, tip: string) => (
-    <button
-      role="radio"
-      aria-checked={tool() === id}
-      class={clsx("px-1.5 py-0.5 rounded text-[11px]", tool() === id ? "bg-accent text-bg" : "text-text-muted hover:text-text hover:bg-surface")}
-      title={tip}
-      onClick={() => {
-        firstLine = null;
-        setTool(tool() === id ? "" : id);
-      }}
-    >
-      {label}
-    </button>
-  );
+  // Lo que la barra izquierda del plano ofrece (Corte A-A, Dibujar, Vista nueva, Hoja, Acomodar)
+  ui.setDrawingActions({
+    sectionAA: () => {
+      upd((x) => (x.section = { y: null }));
+      ui.setDrawingSel({ kind: "section" });
+    },
+    canSectionAA: () => !!d() && !d()!.section,
+    draw: () => void startDrawing(),
+    newView: () => {
+      let id = 0;
+      void Promise.resolve(upd2((x) => void (id = addCustomView(x)))).then(() => id && ui.setDrawingSel({ kind: "custom", id }));
+    },
+    sheet: () => ui.setDrawingSel({ kind: "sheet" }),
+    arrange: () => upd((x) => (x.viewAt = {})),
+    canArrange: () => !!Object.keys(d()?.viewAt ?? {}).length,
+  });
+  // Cambiar de herramienta suelta la primera recta elegida
+  createEffect(on(tool, () => (firstLine = null), { defer: true }));
 
   // Lugar disponible para la hoja (se sigue con cada cambio de tamaño)
   let areaRef: HTMLDivElement | undefined;
@@ -573,52 +587,6 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           Escala {result() ? scaleLabel(result()!.scale) : "…"}
           {d()?.scale ? "" : " (auto)"}
         </button>
-        <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Herramienta de cotas">
-          {toolButton("dim", "Cota", "Clic en una recta (largo), un círculo (diámetro) o un arco (radio)")}
-          {toolButton("distance", "Distancia", "Clic en dos rectas paralelas")}
-          {toolButton("angle", "Ángulo", "Clic en dos rectas que se cruzan")}
-          {toolButton("detail", "Detalle", "Clic en una vista: amplía esa zona aparte")}
-        </div>
-        <Button
-          size="sm"
-          variant="ghost"
-          title="El frente cortado por un plano paralelo a él, rayado, con la línea de corte en la planta"
-          disabled={!d() || !!d()!.section}
-          onClick={() => {
-            upd((x) => (x.section = { y: null }));
-            ui.setDrawingSel({ kind: "section" });
-          }}
-        >
-          Corte A-A
-        </Button>
-        <Button size="sm" variant="ghost" disabled={!svg()} title="Líneas, arcos, curvas y cotas propias sobre la hoja, con las herramientas del sketch" onClick={() => void startDrawing()}>
-          Dibujar
-        </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          title="Una vista más que se gira a gusto (Ctrl+arrastrar en la hoja, o con los botones de su ventana)"
-          disabled={!d()}
-          onClick={() => {
-            let id = 0;
-            void Promise.resolve(upd2((x) => void (id = addCustomView(x)))).then(() => id && ui.setDrawingSel({ kind: "custom", id }));
-          }}
-        >
-          Vista nueva
-        </Button>
-        <Button size="sm" variant="ghost" title="Tamaño, escala, proyección, líneas y cajetín" onClick={() => ui.setDrawingSel({ kind: "sheet" })}>
-          Hoja
-        </Button>
-        {/* Siempre en la barra (desactivado si no hay nada movido): que la barra no cambie de alto y la hoja no salte */}
-        <Button
-          size="sm"
-          variant="ghost"
-          disabled={!Object.keys(d()?.viewAt ?? {}).length}
-          title="Las vistas movidas a mano vuelven a la disposición automática"
-          onClick={() => upd((x) => (x.viewAt = {}))}
-        >
-          Acomodar
-        </Button>
         <div class="flex-1" />
         <Show when={busy()}>
           <span class="text-[11px] text-text-dim">Proyectando…</span>
@@ -715,6 +683,37 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         </Show>
       </div>
     </div>
+  );
+};
+
+/**
+ * Barra izquierda con el plano abierto: sus herramientas (las de Diseñar no
+ * sirven acá). Las cotas y el detalle quedan activos hasta Esc o hasta
+ * apretarlos otra vez.
+ */
+export const DrawingSideTools: Component<{ ui: CadUi }> = (props) => {
+  const ui = props.ui;
+  const act = () => ui.drawingActions();
+  const tool = (id: Exclude<Tool, "">, label: string, icon: (p: { size?: number }) => JSX.Element, tip: string) => (
+    <SideButton label={label} icon={icon} tip={tip} active={ui.drawingTool() === id} onClick={() => ui.setDrawingTool(ui.drawingTool() === id ? "" : id)} />
+  );
+  return (
+    <>
+      <SideButton label="Elegir" icon={SketchIcons.Select} tip="Clic elige una vista, una cota o un detalle (y abre sus propiedades); arrastrar mueve la vista" active={ui.drawingTool() === ""} onClick={() => ui.setDrawingTool("")} />
+      <SideSep />
+      {tool("dim", "Cota", D.DimLength, "Clic en una recta (largo), un círculo (diámetro) o un arco (radio)")}
+      {tool("distance", "Distancia", D.DimDistance, "Clic en dos rectas paralelas")}
+      {tool("angle", "Ángulo", D.DimAngle, "Clic en dos rectas que se cruzan")}
+      <SideSep />
+      {tool("detail", "Detalle", D.DrawingDetail, "Clic en una vista: amplía esa zona aparte")}
+      <SideButton label="Corte A-A" icon={D.DrawingSection} tip="El frente cortado por un plano paralelo a él, rayado, con la línea de corte en la planta" disabled={!act()?.canSectionAA()} onClick={() => act()?.sectionAA()} />
+      <SideButton label="Vista nueva" icon={D.DrawingNewView} tip="Una vista más que se gira a gusto (Ctrl+arrastrar en la hoja, o con los botones de su ventana)" onClick={() => act()?.newView()} />
+      <SideSep />
+      <SideButton label="Dibujar" icon={SketchIcons.Line} tip="Líneas, arcos, curvas y cotas propias sobre la hoja, con las herramientas del sketch" onClick={() => act()?.draw()} />
+      <SideSep />
+      <SideButton label="Hoja" icon={D.DrawingSheet} tip="Tamaño, escala, proyección, líneas y cajetín" onClick={() => act()?.sheet()} />
+      <SideButton label="Acomodar" icon={D.DrawingArrange} tip="Las vistas movidas a mano vuelven a la disposición automática" disabled={!act()?.canArrange()} onClick={() => act()?.arrange()} />
+    </>
   );
 };
 

@@ -419,3 +419,66 @@ export const Measure = (p: IconProps) => (
     <path d="M7 13 L9 15 M10 10 L12 12 M13 7 L15 9" />
   </DesignIcon>
 );
+
+// ─── Plano 2D ────────────────────────────────────────────────────────────────
+
+/** Cota de largo: línea con flechas y sus líneas de referencia */
+export const DimLength = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 8 V18 M20 8 V18" />
+    <path d="M4 12 H20 M7 10 L4 12 L7 14 M17 10 L20 12 L17 14" />
+  </DesignIcon>
+);
+/** Distancia entre dos rectas paralelas */
+export const DimDistance = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M3 5 H21 M3 19 H21" />
+    <path d="M12 5 V19 M10 8 L12 5 L14 8 M10 16 L12 19 L14 16" />
+  </DesignIcon>
+);
+/** Ángulo entre dos rectas */
+export const DimAngle = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 20 H21 M4 20 L16 5" />
+    <path d="M13 20 A9 9 0 0 0 10 13" />
+  </DesignIcon>
+);
+/** Vista de detalle: un círculo que amplía */
+export const DrawingDetail = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <circle cx="9" cy="9" r="5" {...dashed} />
+    <circle cx="16" cy="16" r="5" />
+    <path d="M12.5 12.5 L13 13" />
+  </DesignIcon>
+);
+/** Corte: la línea de corte con sus flechas sobre una vista rayada */
+export const DrawingSection = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <rect x="5" y="6" width="14" height="12" {...soft} />
+    <path d="M3 12 H21" stroke-dasharray="4 1.5 1 1.5" />
+    <path d="M5 12 V7 M19 12 V7 M3.5 8.5 L5 7 L6.5 8.5 M17.5 8.5 L19 7 L20.5 8.5" />
+  </DesignIcon>
+);
+/** Vista nueva (3D, girable) */
+export const DrawingNewView = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M4 9 L10 6 L16 9 L10 12 Z M4 9 V15 L10 18 V12 M16 9 V15 L10 18" />
+    <path d="M19 3 V9 M16 6 H22" />
+  </DesignIcon>
+);
+/** Hoja y cajetín */
+export const DrawingSheet = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="1" />
+    <path d="M12 14 H21 M12 14 V20 M12 17 H21" />
+  </DesignIcon>
+);
+/** Acomodar las vistas (volver a la disposición automática) */
+export const DrawingArrange = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <rect x="4" y="4" width="6" height="6" />
+    <rect x="14" y="4" width="6" height="6" />
+    <rect x="4" y="14" width="6" height="6" />
+    <path d="M14 17 H20 M17 14 V20" {...dashed} />
+  </DesignIcon>
+);

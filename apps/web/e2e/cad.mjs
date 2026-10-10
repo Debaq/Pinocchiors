@@ -1418,7 +1418,7 @@ const scenarios = {
     await sleep(1500);
     if (!existsSync(path) || !readFileSync(path, "utf8").startsWith("<svg")) throw new Error("no se exportó el SVG");
     // Cotas a mano: el diámetro del agujero en la planta y el largo de una arista del frente
-    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
+    await b.eval(`document.querySelector('button[aria-label="Cota"]').click()`);
     await sleep(300);
     const at = (sel, pick) =>
       b.eval(`(() => {
@@ -1436,9 +1436,9 @@ const scenarios = {
     const texts = await b.eval(`[...document.querySelectorAll("[data-sheet] [data-user-dim] text")].map((t) => t.textContent)`);
     if (!texts.includes("Ø6") || !texts.includes("20")) throw new Error(`cotas a mano: ${texts}`);
     if ((await call("cad_get_document")).drawing?.sheets?.[0]?.dims?.length !== 2) throw new Error("no se guardaron las cotas");
-    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
+    await b.eval(`document.querySelector('button[aria-label="Cota"]').click()`);
     // Corte A-A: el frente rayado y la línea en la planta
-    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`document.querySelector('button[aria-label="Corte A-A"]').click()`);
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-hatch="front"] polygon')`)); t++) await sleep(500);
     const cut = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
@@ -1540,6 +1540,10 @@ const scenarios = {
     };
     await ready();
     const row = (id) => `document.querySelector('[data-outliner-row=${JSON.stringify(id)}]')`;
+    // Con el plano abierto, la barra izquierda es la del plano (no la de Diseñar)
+    const side = () => b.eval(`({ cota: !!document.querySelector('button[aria-label="Cota"]'), extrude: [...document.querySelectorAll("button[aria-label]")].some((x) => x.getAttribute("aria-label").startsWith("Extrusión") && x.offsetParent) })`);
+    const s1 = await side();
+    if (!s1.cota || s1.extrude) throw new Error(`barra izquierda con el plano: ${JSON.stringify(s1)}`);
     if (!(await b.eval(`!!${row("group-drawings")} && !!${row("drawing-1")} && !!${row("drawing-1:view:iso")}`))) throw new Error("no está el grupo Planos 2D con el plano y sus vistas");
     // Otro plano con «+»: se abre con su hoja elegida
     await b.eval(`document.querySelector('[aria-label="Plano nuevo"]').click()`);
@@ -1554,7 +1558,7 @@ const scenarios = {
     for (let t = 0; t < 30 && (await b.eval(`!!document.querySelector('[data-sheet] [data-view="iso"]')`)); t++) await sleep(250);
     if (await b.eval(`!!document.querySelector('[data-sheet] [data-view="iso"]')`)) throw new Error("la isométrica sigue");
     // Una cota en el frente; clic en su texto la elige (ventana y fila del Outliner)
-    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
+    await b.eval(`document.querySelector('button[aria-label="Cota"]').click()`);
     await sleep(200);
     const mid = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
@@ -1577,6 +1581,10 @@ const scenarios = {
     await b.eval(`${row("drawing-1")}.click()`);
     for (let t = 0; t < 20 && (await b.eval(`document.querySelector("[data-drawing-name]")?.textContent.trim()`)) !== "Plano 1"; t++) await sleep(250);
     if ((await b.eval(`document.querySelector("[data-drawing-name]")?.textContent.trim()`)) !== "Plano 1") throw new Error("no se abrió el Plano 1");
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((x) => x.textContent.trim() === "Cerrar").click()`);
+    await sleep(500);
+    const s2 = await side();
+    if (s2.cota || !s2.extrude) throw new Error(`barra izquierda al cerrar el plano: ${JSON.stringify(s2)}`);
     const doc = (await call("cad_get_document")).drawing;
     if (doc?.sheets?.length !== 2 || !doc.sheets[1].hiddenViews.includes("iso") || doc.sheets[1].name !== "Cortes") throw new Error(`guardado: ${JSON.stringify(doc)}`);
     await b.shot("planos_outliner");
@@ -1870,7 +1878,7 @@ const scenarios = {
     await b.clickText("Plano 2D");
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
     await sleep(500);
-    const toolBtn = (name) => b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === ${JSON.stringify(name)}).click()`);
+    const toolBtn = (name) => b.eval(`document.querySelector('button[aria-label=${JSON.stringify(name)}]').click()`);
     // Punto de la hoja (coordenadas del SVG) → pantalla
     const at = (sel, pick) =>
       b.eval(`(() => {
@@ -1911,7 +1919,7 @@ const scenarios = {
         const ps = [...document.querySelectorAll('[data-sheet] [data-hatch="front"] polygon')].flatMap((p) => p.getAttribute("points").split(" ").map((q) => Number(q.split(",")[0])));
         return ps.length ? Math.max(...ps) - Math.min(...ps) : 0;
       })()`);
-    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`document.querySelector('button[aria-label="Corte A-A"]').click()`);
     for (let t = 0; t < 30 && !(await hatchW()); t++) await sleep(500);
     await sleep(800);
     const mid = await hatchW();

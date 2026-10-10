@@ -192,6 +192,20 @@ export interface SheetEdit {
 
 /** `feature` de la sesión que dibuja sobre la hoja del plano 2D */
 export const SHEET_SKETCH = -1;
+
+/** Herramienta del plano 2D: cotas a mano, detalle o la línea de un corte */
+export type DrawingTool = "" | "dim" | "distance" | "angle" | "detail" | "section";
+
+/** Lo que el plano abierto ofrece a la barra izquierda (lo registra DrawingView) */
+export interface DrawingActions {
+  sectionAA: () => void;
+  canSectionAA: () => boolean;
+  draw: () => void;
+  newView: () => void;
+  sheet: () => void;
+  arrange: () => void;
+  canArrange: () => boolean;
+}
 /** El plano del visor donde se dibuja la hoja (mm de hoja, Y hacia arriba) */
 const SHEET_PLANE: Plane = { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0, 0] };
 
@@ -286,6 +300,9 @@ export function createCadUi(store: CadStore) {
   // El visor de Diseñar (su cámara y su escala), para el plano: «tomar la vista del visor» y la vista previa al girar
   let viewerInfo: { cameraPose: () => { position: P3; target: P3; up: P3 }; mmPerUnit: () => number } | undefined;
   const [drawingSel, setDrawingSel] = createSignal<DrawingElement>();
+  // Herramienta del plano (la barra izquierda y la hoja la comparten) y lo que el plano ofrece a la barra
+  const [drawingTool, setDrawingTool] = createSignal<DrawingTool>("");
+  const [drawingActions, setDrawingActions] = createSignal<DrawingActions>();
   // Desarrollo de chapa abierto sobre el visor
   const [flatOpen, setFlatOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
@@ -455,6 +472,10 @@ export function createCadUi(store: CadStore) {
     viewer: () => viewerInfo,
     drawingSel,
     setDrawingSel,
+    drawingTool,
+    setDrawingTool,
+    drawingActions,
+    setDrawingActions,
     /** Abre el plano `id` con `element` elegido (su ventana de propiedades) */
     openDrawing(id: number, element?: DrawingElement) {
       batch(() => {
