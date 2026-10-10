@@ -159,11 +159,6 @@ verdad…").
 
 ### F5 — Lo que le falta al editor (sirve para sketch y hoja)
 
-**Errores a arreglar primero (usuario, 2026-10-10):**
-- Cota de ángulo entre dos líneas del sketch: (a) no se dibuja el arco del ángulo entre las
-  dos líneas (solo el número); (b) se pone de inmediato en 90° en vez del ángulo que tienen
-  ahora (tiene que tomar lo que mide, como las demás cotas, y no mover nada). «Es terrible».
-
 Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo
 que cambia el uso diario (vista previa y campo flotante en las herramientas del panel, clic
 derecho, extender arcos, redondeo y chaflán con esquina virtual y en varias esquinas, patrón

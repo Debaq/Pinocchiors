@@ -260,6 +260,13 @@ abran los proyectos viejos.
 - Revolución (ángulo), redondeo (radio), chaflán (distancia), vaciado y engrosar (espesor),
   patrones (separación y ángulo), mover cara y transformar (F1).
 
+## Errores del sketch a arreglar
+
+- **Cota de ángulo entre dos líneas** (usuario, 2026-10-10: «es terrible»): (a) no se dibuja
+  el arco del ángulo entre las dos líneas, solo el número; (b) la cota se pone de inmediato en
+  90° en vez del ángulo que tienen ahora: tiene que tomar lo que mide (como las demás cotas) y
+  no mover nada.
+
 ## Pendientes heredados de planes borrados
 
 - Escaneo → CAD: unir y separar planos grandes en `detect_all`; alinear el escaneo a ejes y
