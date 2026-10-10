@@ -2827,6 +2827,39 @@ export function constraintMentions(c: SketchConstraint, ids: Set<number> | numbe
 }
 
 /**
+ * Si el dibujo está ligado a algo fijo: el origen, un punto fijo, una entidad
+ * bloqueada, una arista del modelo o una perforación (por restricciones o
+ * puntos compartidos). Basta con que una parte lo esté; sin dibujo, true.
+ */
+export function sketchAnchored(s: Sketch): boolean {
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let r = x;
+    while (parent.has(r) && parent.get(r) !== r) r = parent.get(r)!;
+    parent.set(x, r);
+    return r;
+  };
+  const join = (ids: number[]) => {
+    for (const id of ids.slice(1)) parent.set(find(id), find(ids[0]));
+  };
+  for (const e of s.entities) join([e.id, ...geometryPoints(e.geometry)]);
+  for (const t of s.texts ?? []) join([t.anchor, ...t.entities, ...t.points]);
+  const seeds: number[] = [...(s.origin !== undefined ? [s.origin] : []), ...(s.uses ?? []).map((u) => u.entity)];
+  for (const c of s.constraints) {
+    // Las cotas de referencia no restringen
+    if ("reference" in c && c.reference) continue;
+    if (c.type === "fixed" || c.type === "pierce") seeds.push(c.point);
+    else if (c.type === "lock") seeds.push(c.entity);
+    join(constraintIds(c));
+  }
+  const drawn = s.entities.filter((e) => !e.construction);
+  const check = drawn.length > 0 ? drawn : s.entities;
+  if (check.length === 0) return true;
+  const fixed = new Set(seeds.map(find));
+  return check.some((e) => fixed.has(find(e.id)));
+}
+
+/**
  * Arco tangente que sale de `start` en la dirección `t` (unitaria) y llega a
  * `end`. Devuelve centro, si va antihorario y la dirección de salida en `end`.
  */

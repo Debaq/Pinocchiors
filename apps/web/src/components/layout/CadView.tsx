@@ -3085,7 +3085,13 @@ export const CadView: Component<CadViewProps> = (props) => {
                     >
                       <div class="w-8 h-0.5 rounded bg-border" />
                     </div>
-                    <div class="overflow-y-auto px-2.5 pb-2.5">
+                    <div
+                      class="overflow-y-auto px-2.5 pb-2.5"
+                      onFocusIn={(e) => {
+                        // Escribir un valor termina la elección en el visor: se ve la vista previa
+                        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) ui.cancelPick();
+                      }}
+                    >
                       <FeatureEditor featureId={id} store={store} ui={ui} sketches={props.actions.sketches()} tools={props.actions.toolFeatures()} />
                     </div>
                   </div>

@@ -63,6 +63,12 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
       await api.mouse("mouseReleased", x, y, opts);
       await sleep(opts.wait ?? 300);
     },
+    /** Rueda del mouse en (x, y): deltaY < 0 es hacia arriba */
+    async wheel(x, y, deltaY, opts = {}) {
+      await api.mouse("mouseMoved", x, y, { buttons: 0 });
+      await send("Input.dispatchMouseEvent", { type: "mouseWheel", x, y, deltaX: 0, deltaY, modifiers: opts.modifiers ?? 0 });
+      await sleep(opts.wait ?? 300);
+    },
     async drag(x0, y0, x1, y1, steps = 10) {
       await api.mouse("mouseMoved", x0, y0, { buttons: 0 });
       await api.mouse("mousePressed", x0, y0);

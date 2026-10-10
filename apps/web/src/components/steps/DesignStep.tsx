@@ -21,6 +21,7 @@ import {
   PLANE_LABELS,
   constraintIds,
   editsAsSketch,
+  sketchAnchored,
   constraintValue,
   isReference,
   filletCorner,
@@ -168,6 +169,7 @@ export const Formula: Component<{
         <input
           type="text"
           value={shown()}
+          data-wheel-number={props.expr ? undefined : ""}
           class={clsx(
             "w-full min-w-0 px-2 py-1 rounded bg-surface/40 border text-xs text-text font-mono outline-none focus:border-accent",
             problem() ? "border-error" : props.expr ? "border-accent/60 pr-6" : "border-border",
@@ -756,6 +758,18 @@ const formatMs = (ms: number) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 
 /** Mensaje de error o advertencia de una operación (nada si está bien) */
 const problem = (st: FeatureState | undefined) => (st?.state === "error" || st?.state === "warning" ? st.message : undefined);
 
+/** Cómo se marca una operación en el árbol: con problemas o un sketch suelto en rojo, un sketch vacío en azul */
+function featureTone(f: Feature, st: FeatureState | undefined): { tone: "error" | "empty"; why: string } | undefined {
+  const message = problem(st);
+  if (message) return { tone: "error", why: message };
+  const k = f.kind;
+  if (k.type !== "sketch" && k.type !== "surface_sketch") return undefined;
+  if (k.sketch.entities.length === 0 && !(k.sketch.texts ?? []).length) return { tone: "empty", why: "Sketch vacío" };
+  if (k.type === "sketch" && k.plane.type === "custom") return { tone: "error", why: "El plano del sketch no está ligado a ninguna referencia" };
+  if (!sketchAnchored(k.sketch)) return { tone: "error", why: "El dibujo no está ligado a ninguna referencia (origen, punto fijo o arista del modelo): se puede mover entero" };
+  return undefined;
+}
+
 /**
  * Arrastre vertical dentro del árbol: devuelve el hueco bajo el puntero (0 =
  * antes de la primera fila, n = después de la última). Un movimiento de menos
@@ -884,6 +898,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
             {(id, i) => {
               const f = () => doc()?.features[i()] ?? ({ id, name: "", suppressed: false, kind: { type: "sketch" } } as unknown as Feature);
               const state = () => store.stateOf(f().id);
+              const tone = createMemo(() => featureTone(f(), state()));
               const rolled = () => (rollback() !== null && i() >= rollback()!) || state()?.state === "rolled_back";
               const folder = () => folderAt(i());
               const hidden = () => !!folder()?.f.collapsed && folder()!.range![0] !== undefined;
@@ -926,10 +941,10 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                             fo().f.collapsed &&
                             doc()!
                               .features.slice(fo().range![0], fo().range![1] + 1)
-                              .some((x) => problem(store.stateOf(x.id)))
+                              .some((x) => featureTone(x, store.stateOf(x.id))?.tone === "error")
                           }
                         >
-                          <Icons.Warning size={12} class="text-warning shrink-0" aria-label="Algo de la carpeta tiene problemas" />
+                          <Icons.Warning size={12} class="text-error shrink-0" aria-label="Algo de la carpeta tiene problemas" />
                         </Show>
                         <span class="hidden group-hover:flex" onClick={(e) => e.stopPropagation()}>
                           <IconButton aria-label="Desagrupar" size="sm" variant="ghost" onClick={() => void store.updateFolder(fo().index, null)}>
@@ -960,19 +975,20 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       store.select(store.selected() === f().id ? undefined : f().id);
                     }}
                     onDblClick={() => editsAsSketch(f().kind) && void store.settled().then(() => props.ui.editSketch(f().id))}
-                    title={problem(state())}
+                    title={tone()?.why}
                   >
                     <Show
                       when={problem(state())}
                       fallback={<span class="w-3.5 text-center text-text-dim">{FEATURE_LABELS[f().kind.type][0]}</span>}
                     >
-                      <Icons.Warning
-                        size={14}
-                        aria-label={state()?.state === "warning" ? "Advertencia" : "Error"}
-                        class={clsx("shrink-0", state()?.state === "warning" ? "text-warning" : "text-error")}
-                      />
+                      <Icons.Warning size={14} aria-label={state()?.state === "warning" ? "Advertencia" : "Error"} class="shrink-0 text-error" />
                     </Show>
-                    <span class={clsx("flex-1 truncate", f().suppressed && "line-through")}>{f().name}</span>
+                    <span
+                      data-tone={tone()?.tone}
+                      class={clsx("flex-1 truncate", f().suppressed && "line-through", tone()?.tone === "error" && "text-error", tone()?.tone === "empty" && "text-sketch-free")}
+                    >
+                      {f().name}
+                    </span>
                     {/* Las lentas dicen cuánto tardan (para saber qué frena el diseño) */}
                     <Show when={(state()?.ms ?? 0) >= 100}>
                       <span class="text-[10px] font-mono text-text-dim group-hover:hidden" title="Lo que tardó la última vez que se calculó">
@@ -1603,8 +1619,12 @@ export const FeatureEditor: Component<{
           </Match>
           <Match when={(f().kind.type === "fillet" || f().kind.type === "chamfer") && f().kind}>
             {(k) => {
+              // El tipo no cambia; los valores se leen de `k()` (el campo se rehace al cambiar)
               const kind = k() as Extract<FeatureKind, { type: "fillet" | "chamfer" }>;
-              const value = () => (kind.type === "fillet" ? kind.radius : kind.distance);
+              const value = () => {
+                const x = k() as typeof kind;
+                return x.type === "fillet" ? x.radius : x.distance;
+              };
               return (
                 <>
                   <Show when={kind.type === "chamfer"}>
@@ -1678,9 +1698,9 @@ export const FeatureEditor: Component<{
               return (
                 <>
                   <Show
-                    when={kind.type === "draft" && kind}
+                    when={kind.type === "draft" && (k() as Extract<FeatureKind, { type: "draft" }>)}
                     fallback={
-                      field("Grosor de pared", "kind.thickness", (kind as { thickness: number }).thickness, (x, v) => x.type === "shell" && (x.thickness = v), "mm")
+                      field("Grosor de pared", "kind.thickness", (k() as { thickness: number }).thickness, (x, v) => x.type === "shell" && (x.thickness = v), "mm")
                     }
                   >
                     {(d) => (
@@ -1991,7 +2011,7 @@ export const FeatureEditor: Component<{
                   featureId={f().id}
                   label={kind.type === "split_parts" ? "Piezas a separar" : "Piezas a borrar"}
                   empty={kind.type === "split_parts" ? "Todas" : "Elegir las piezas"}
-                  value={kind.parts}
+                  value={(k() as typeof kind).parts}
                   missing={lost("parts")}
                   onChange={(v) => update((x) => (x.type === "split_parts" || x.type === "delete_parts") && (x.parts = v))}
                 />
@@ -3344,12 +3364,16 @@ const SelectionBox: Component<{
     else ui.setPick({ ...base, kind: "face", done: (r) => props.onChange([r]) });
   };
   // Vacía o con referencias perdidas al abrirse el diálogo: se empieza eligiendo
-  // (al editar, el borrador se abre después de montar la caja)
+  // (al editar, el borrador se abre después de montar la caja). En una operación
+  // nueva con aristas o caras ya elegidas, igual queda activa para sumar más,
+  // salvo que otra caja del diálogo esté pidiendo algo
   createEffect(
     on(
       () => !!props.store.draft(),
-      (open) => {
-        if (open && untrack(() => props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
+      (open, wasOpen) => {
+        if (!open) return;
+        if (untrack(() => props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
+        else if (!wasOpen && props.kind !== "face" && untrack(props.store.draft)?.isNew) queueMicrotask(() => ui.pick().kind === "none" && props.store.draft() && activate());
       },
     ),
   );

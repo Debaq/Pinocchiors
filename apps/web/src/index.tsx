@@ -4,6 +4,7 @@ import { render } from "solid-js/web";
 import { App } from "./App";
 import "./styles/app.css";
 import { applyTheme, storedTheme } from "./lib/theme";
+import { installWheelNumbers } from "./lib/wheelNumber";
 
 // Antes del primer cuadro, para no pasar por el tema oscuro al abrir en claro
 applyTheme(storedTheme());
@@ -20,6 +21,9 @@ document.addEventListener("contextmenu", (e) => {
   const target = e.target as HTMLElement | null;
   if (!target?.closest("input, textarea, [contenteditable='true']")) e.preventDefault();
 });
+
+// Rueda del mouse sobre un campo numérico: sube o baja el valor
+installWheelNumbers();
 
 // Un error de la interfaz no deja la ventana en blanco: se muestra y se puede
 // recargar (el trabajo del backend sigue ahí y la recuperación también)

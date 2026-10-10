@@ -53,6 +53,8 @@ const CommitInput = (props: {
   suffix?: string;
   disabled?: boolean;
   title?: string;
+  /** Paso de la rueda del mouse (sin él la rueda no lo cambia) */
+  wheelStep?: number;
 }) => (
   <label class="flex items-center gap-1 min-w-0" title={props.title}>
     {props.label && <span class="text-[11px] text-text-muted shrink-0">{props.label}</span>}
@@ -61,6 +63,8 @@ const CommitInput = (props: {
       inputmode="decimal"
       value={fmt(props.value)}
       disabled={props.disabled}
+      data-wheel-number={props.wheelStep !== undefined ? "" : undefined}
+      data-wheel-step={props.wheelStep}
       class={clsx(
         "w-full min-w-0 h-7 px-1.5 rounded text-xs font-mono text-right text-text",
         "bg-bg-lighter border border-border focus:border-accent focus:outline-none",
@@ -79,6 +83,12 @@ const CommitInput = (props: {
         const v = parse(e.currentTarget.value);
         if (Number.isFinite(v) && v !== props.value) props.onCommit(v);
         else e.currentTarget.value = fmt(props.value);
+      }}
+      onChange={(e) => {
+        // La rueda avisa con "change" sin pasar por el foco
+        if (props.wheelStep === undefined || document.activeElement === e.currentTarget) return;
+        const v = parse(e.currentTarget.value);
+        if (Number.isFinite(v) && v !== props.value) props.onCommit(v);
       }}
     />
     {props.suffix && <span class="text-[10px] text-text-muted shrink-0">{props.suffix}</span>}
@@ -174,7 +184,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
           </div>
           <div class="flex items-center gap-1.5">
             <AxisPicker value={rotAxis()} onChange={setRotAxis} />
-            <CommitInput value={rotDegrees()} onCommit={setRotDegrees} suffix="°" disabled={props.disabled} />
+            <CommitInput value={rotDegrees()} onCommit={setRotDegrees} wheelStep={1} suffix="°" disabled={props.disabled} />
             <Button size="sm" onClick={() => props.onRotate?.(rotAxis(), rotDegrees())} disabled={props.disabled}>
               Girar
             </Button>
@@ -221,7 +231,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
             </For>
           </div>
           <div class="flex items-center gap-1.5">
-            <CommitInput value={factor()} onCommit={setFactor} label="×" disabled={props.disabled} />
+            <CommitInput value={factor()} onCommit={setFactor} wheelStep={0.1} label="×" disabled={props.disabled} />
             <Button
               size="sm"
               onClick={() => factor() > 0 && props.onScale?.(factor(), `Escalar ×${fmt(factor())}`)}
@@ -252,6 +262,7 @@ export const PlacementPanel: Component<PlacementPanelProps> = (props) => {
                   label={axis.toUpperCase()}
                   value={move()[i()]}
                   onCommit={(v) => setMove((m) => m.map((x, j) => (j === i() ? v : x)) as [number, number, number])}
+                  wheelStep={1}
                   disabled={props.disabled}
                 />
               )}

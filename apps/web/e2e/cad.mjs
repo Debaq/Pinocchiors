@@ -80,6 +80,9 @@ async function tab(b, name) {
     throw new Error("no encontré la pestaña " + name);
   await sleep(400);
 }
+/** Color de una fila del árbol: "error" (rojo), "empty" (azul) o null */
+const tone = (b, name) =>
+  b.eval(`[...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === ${JSON.stringify(name)})?.dataset.tone ?? null`);
 /** Clic en una fila del árbol de operaciones por su nombre */
 async function clickRow(b, name) {
   const r = await b.eval(`(() => {
@@ -246,6 +249,106 @@ const scenarios = {
     if ((await call("cad_get_document")).features[1].kind.edges.length !== 2) throw new Error("no quedaron dos aristas");
   },
 
+  async "redondeo: escribir el radio deja de elegir y se ve"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const radius = `[...document.querySelectorAll("label")].find((l) => l.textContent.startsWith("Radio"))?.querySelector("input")`;
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    await b.click(...(await at([0, -10, 10])), { wait: 1500 });
+    await b.click(...(await at([10, 0, 10])), { wait: 1500 });
+    near((await body()).volume, 8000, 1e-6, "eligiendo: sólido de antes");
+    // Clic en el campo y escribir como el usuario (Enter lo confirma)
+    const r = await b.eval(`(() => { const r = ${radius}.getBoundingClientRect(); return [r.x + 10, r.y + r.height / 2]; })()`);
+    await b.click(...r, { wait: 600 });
+    if ((await b.eval(`__cadUi.pick().kind`)) !== "none") throw new Error("tocar el campo no dejó de elegir");
+    await b.eval(`(() => { const i = document.activeElement; i.select(); document.execCommand("insertText", false, "4"); })()`);
+    await b.key("Enter", "Enter", 13);
+    await sleep(2500);
+    if ((await b.eval(`${radius}.value`)) !== "4") throw new Error(`el campo volvió a ${await b.eval(`${radius}.value`)}`);
+    // El empalme de la esquina suma ~6 mm³ con r=4 (crece con r³)
+    near((await body()).volume, 8000 - 2 * (1 - Math.PI / 4) * 16 * 20, 10, "vista previa r=4");
+    await accept(b, 2000);
+    const k = (await call("cad_get_document")).features[1].kind;
+    if (k.radius !== 4 || k.edges.length !== 2) throw new Error(`guardado: ${JSON.stringify(k)}`);
+  },
+
+  async "rueda del mouse sobre un campo numérico"(b) {
+    const radius = `[...document.querySelectorAll("label")].find((l) => l.textContent.startsWith("Radio"))?.querySelector("input")`;
+    const center = async () => b.eval(`(() => { const r = ${radius}.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    const value = () => b.eval(`${radius}.value`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.eval(`window.__cadViewer.screenOf([0, -10, 10])`).then((p) => b.click(...p, { wait: 800 }));
+    await b.clickText("Redondeo");
+    await sleep(1500);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    // Arriba sube un paso, abajo baja; Shift de a 10, Ctrl de a 0,1
+    await b.wheel(...(await center()), -100, { wait: 1500 });
+    if ((await value()) !== "2") throw new Error(`arriba: ${await value()}`);
+    await b.wheel(...(await center()), -100, { modifiers: 8, wait: 1500 });
+    if ((await value()) !== "12") throw new Error(`Shift: ${await value()}`);
+    await b.wheel(...(await center()), 100, { modifiers: 2, wait: 1500 });
+    if ((await value()) !== "11.9") throw new Error(`Ctrl: ${await value()}`);
+    await b.wheel(...(await center()), 100, { modifiers: 8, wait: 1500 });
+    await b.wheel(...(await center()), 100, { wait: 2500 });
+    if ((await value()) !== "0.9") throw new Error(`abajo: ${await value()}`);
+    const k = await b.eval(`JSON.parse(JSON.stringify(__cadStore.doc().features.at(-1).kind))`);
+    if (k.radius !== 0.9) throw new Error(`el radio no se aplicó: ${k.radius}`);
+    near((await body()).volume, 8000 - (1 - Math.PI / 4) * 0.81 * 20, 0.05, "vista previa r=0,9");
+    // Desplazando el panel, pasar por encima del campo no lo cambia
+    const [x, y] = await center();
+    await b.wheel(x, y - 60, 100, { wait: 50 });
+    await b.wheel(x, y, 100, { wait: 800 });
+    if ((await value()) !== "0.9") throw new Error(`al desplazar cambió: ${await value()}`);
+  },
+
+  async "redondeo con arista ya elegida: clic en otra la suma"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].map((s) => s.textContent)`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.click(...(await at([0, -10, 10])), { wait: 1000 });
+    await b.clickText("Redondeo");
+    await sleep(2000);
+    if ((await items()).length !== 1) throw new Error(`preelegida: ${await items()}`);
+    await b.click(...(await at([10, 0, 10])), { wait: 1500 });
+    if ((await items()).length !== 2) throw new Error(`no se sumó: ${await items()}`);
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
+    await accept(b, 2000);
+    near((await body()).volume, 8000 - 2 * (1 - Math.PI / 4) * 20, 0.2, "dos redondeos");
+  },
+
+  async "árbol: sketch vacío en azul, suelto en rojo"(b) {
+    await begin(b);
+    await sketchOn(b);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    if ((await tone(b, "Sketch 1")) !== "empty") throw new Error(`vacío: ${await tone(b, "Sketch 1")}`);
+    await sketchOn(b);
+    await b.clickText("Rectángulo");
+    await b.click(400, 300);
+    await b.click(700, 500);
+    await sleep(800);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    if ((await tone(b, "Sketch 2")) !== "error") throw new Error(`suelto: ${await tone(b, "Sketch 2")}`);
+    await b.shot("arbol_vacio_y_suelto");
+    // Una esquina en el origen: queda ligado
+    await b.eval(`__cadStore.commit((d) => { const s = d.features.at(-1).kind.sketch; s.constraints.push({ type: "coincident", a: s.entities[0].geometry.start, b: s.origin }); })`);
+    await sleep(1500);
+    if ((await tone(b, "Sketch 2")) !== null) throw new Error(`ligado: ${await tone(b, "Sketch 2")}`);
+  },
+
   async "referencia perdida: advertencia, en rojo y reemplazo"(b) {
     const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
     const items = () => b.eval(`[...document.querySelector('[aria-label="Aristas"]').querySelectorAll("span")].map((s) => s.textContent)`);
@@ -277,6 +380,7 @@ const scenarios = {
     if (st.state !== "warning" || st.missing?.[0]?.field !== "edges" || st.missing[0].index !== 1) throw new Error(`estado: ${JSON.stringify(st)}`);
     near((await body()).volume, 8000 - fillet() / 2, 0.05, "queda un redondeo");
     if (!(await b.eval(`!!document.querySelector('[title*="faltan 1 de 2 aristas"]')`))) throw new Error("el árbol no avisa");
+    if ((await tone(b, "Redondeo 1")) !== "error") throw new Error("la operación con una referencia perdida no quedó en rojo");
     // Al editar, la caja se activa sola y marca la perdida
     await clickRow(b, "Redondeo 1");
     await sleep(2000);
@@ -4053,6 +4157,9 @@ const scenarios = {
     await b.click(...(await at([0, -10, 10])), { wait: 800 });
     await b.clickText("Chaflán");
     await sleep(1500);
+    // La caja de aristas queda activa para sumar más: Esc muestra la vista previa
+    await b.key("Escape", "Escape", 27);
+    await sleep(800);
     await b.clickText("Igual a los dos lados");
     await sleep(400);
     await b.clickText("Dos distancias");
@@ -4064,6 +4171,8 @@ const scenarios = {
     // Redondeo variable en la arista de arriba atrás
     await b.click(...(await at([0, 10, 10])), { wait: 800 });
     await b.clickText("Redondeo");
+    await sleep(1500);
+    await b.key("Escape", "Escape", 27);
     await sleep(1500);
     const before = (await body()).volume;
     await b.clickText("Radio variable");
@@ -4348,6 +4457,9 @@ const scenarios = {
     await b.click(...(await at([0, -10, 10])), { wait: 600 });
     await b.clickText("Redondeo");
     await sleep(2000);
+    // La caja de aristas queda activa para sumar más: Esc muestra la vista previa
+    await b.key("Escape", "Escape", 27);
+    await sleep(1500);
     if ((await body()).faces !== faces + 1) throw new Error("el redondeo no tomó la arista elegida");
   },
 
