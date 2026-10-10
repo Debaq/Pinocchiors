@@ -4660,7 +4660,28 @@ function persisted<T>(key: string, initial: T) {
 const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
   const [cornerRadius, setCornerRadius] = persisted("cornerRadius", 5);
+  /** Entidades del mismo tipo y la misma medida (±0,5 %) que `id` */
+  const similarTo = (id: number): number[] => {
+    const sk = sketch();
+    const pt = (pid: number) => sk.points.find((p) => p.id === pid)!;
+    const size = (e: SketchEntity): number | undefined => {
+      const g = e.geometry;
+      if (g.type === "line") return Math.hypot(pt(g.end).x - pt(g.start).x, pt(g.end).y - pt(g.start).y);
+      if (g.type === "circle") return g.radius;
+      if (g.type === "arc") return Math.hypot(pt(g.start).x - pt(g.center).x, pt(g.start).y - pt(g.center).y);
+      return undefined;
+    };
+    const ref = sk.entities.find((e) => e.id === id)!;
+    const r = size(ref);
+    return sk.entities
+      .filter((e) => e.geometry.type === ref.geometry.type && !!e.construction === !!ref.construction)
+      .filter((e) => r === undefined || Math.abs((size(e) ?? 0) - r) <= Math.max(1e-9, r * 0.005))
+      .map((e) => e.id);
+  };
+  /** Botón con su vista previa a la vista */
+  let previewing: HTMLButtonElement | undefined;
   const [splitParts, setSplitParts] = persisted("splitParts", 3);
+  const [copyTimes, setCopyTimes] = persisted("copyTimes", 1);
   // Equidistante: cuántas copias, el original a construcción y la distancia como cota
   const [offsetCopies, setOffsetCopies] = persisted("offsetCopies", 1);
   const [offsetToConstruction, setOffsetToConstruction] = createSignal(false);
@@ -4794,7 +4815,23 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const suggestions = () => constraintSuggestions(sketch(), sel());
 
   return (
-    <div class="space-y-4">
+    <div
+      class="space-y-4"
+      // Pasar el mouse por un botón que cambia el sketch muestra en el visor lo que va a quedar
+      onPointerOver={(e) => {
+        const b = (e.target as HTMLElement).closest("button[data-preview]") as HTMLButtonElement | null;
+        if (!b || b === previewing || b.disabled) return;
+        previewing = b;
+        ui.previewOf(() => b.click());
+      }}
+      onPointerOut={(e) => {
+        const b = (e.target as HTMLElement).closest("button[data-preview]");
+        if (b && !b.contains(e.relatedTarget as Node)) {
+          previewing = undefined;
+          ui.clearPreview();
+        }
+      }}
+    >
       <Section title="Sketch">
         <p class="text-[11px] text-text-dim leading-relaxed">
           Dibujar en el visor. Con «Elegir» se marcan puntos y líneas (Mayús suma) para restringirlos; los puntos se arrastran y el sketch se
@@ -4949,6 +4986,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
 
       <Section title={`Elegido (${sel().length})`}>
         <Show when={sel().length > 0} fallback={<p class="text-xs text-text-dim">Nada elegido</p>}>
+          <Show when={selEntities().length >= 1}>
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Todas las del mismo tipo y la misma medida (largo de las líneas, radio de círculos y arcos) que la primera elegida"
+              onClick={() => ui.setSelection(similarTo(selEntities()[0]!.id))}
+            >
+              Elegir similares
+            </Button>
+          </Show>
           <div class="flex flex-wrap gap-1.5">
             {/* Index: si el sketch cambia entre apretar y soltar (se confirma una cota abierta) el botón sigue siendo el mismo y el clic no se pierde */}
             <Index each={suggestions()}>
@@ -4987,7 +5034,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               <div class="flex-1">
                 <Num label="Radio" suffix="mm" step={0.5} value={cornerRadius()} onCommit={setCornerRadius} />
               </div>
-              <Button
+              <Button data-preview=""
                 size="sm"
                 title="Con varias esquinas elegidas, todas con el mismo radio (una cota y las demás iguales)"
                 onClick={() => {
@@ -5045,7 +5092,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     />
                   </div>
                 </Show>
-                <Button
+                <Button data-preview=""
                   size="sm"
                   title="La primera distancia va sobre la primera línea de la esquina; el ángulo, entre el chaflán y esa línea"
                   onClick={() => {
@@ -5075,7 +5122,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               ["line", "arc"].includes(selEntities()[0]!.geometry.type)
             }
           >
-            <Button
+            <Button data-preview=""
               size="sm"
               title="Dos líneas alineadas o dos arcos del mismo círculo con un extremo común pasan a ser una sola entidad"
               onClick={() => {
@@ -5094,7 +5141,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               <div class="flex-1">
                 <Num label="Partes" step={1} min={2} value={splitParts()} onCommit={(v) => setSplitParts(Math.max(2, Math.round(v)))} />
               </div>
-              <Button
+              <Button data-preview=""
                 size="sm"
                 title="Parte la línea o el arco en partes iguales (las líneas quedan con el mismo largo atado)"
                 onClick={() => {
@@ -5114,7 +5161,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               <div class="flex-1">
                 <Num label="Distancia" suffix="mm" step={0.5} value={offsetDist()} onCommit={setOffsetDist} />
               </div>
-              <Button
+              <Button data-preview=""
                 size="sm"
                 title="En un lazo cerrado, positivo es hacia afuera; en una cadena abierta, a la izquierda del recorrido"
                 onClick={() => {
@@ -5185,6 +5232,19 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           <Show when={selEntities().length === 1 && selEntities()[0]!.geometry.type === "spline"}>
             <Button
               size="sm"
+              title="Une el último punto con el primero (o la abre entre ellos)"
+              onClick={() => {
+                const id = selEntities()[0]!.id;
+                ui.change((sk) => {
+                  const g = sk.entities.find((e) => e.id === id)?.geometry;
+                  if (g?.type === "spline") g.closed = !g.closed;
+                });
+              }}
+            >
+              {(selEntities()[0]!.geometry as { closed?: boolean }).closed ? "Abrir la spline" : "Cerrar la spline"}
+            </Button>
+            <Button
+              size="sm"
               title="Puntos que dan la dirección de salida y de llegada; se arrastran"
               onClick={() => {
                 const id = selEntities()[0]!.id;
@@ -5200,7 +5260,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
           <Show when={selEntities().length > 0}>
             <div class="space-y-1.5 border-t border-border pt-1.5">
               <Show when={lines().length > 0 && selEntities().length > 1}>
-                <Button
+                <Button data-preview=""
                   size="sm"
                   title="El eje es la primera línea elegida; lo demás se copia reflejado"
                   onClick={() => {
@@ -5224,7 +5284,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 <div class="flex flex-wrap items-center gap-1.5" aria-label="Simetría en los ejes">
                   <For each={[["x", "Simetría en el eje X"], ["y", "Simetría en el eje Y"]] as const}>
                     {([axis, label]) => (
-                      <Button
+                      <Button data-preview=""
                         size="sm"
                         title="El reflejo atado por simetría a una línea de construcción por el origen"
                         onClick={() => {
@@ -5329,7 +5389,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   </p>
                 </Match>
               </Switch>
-              <Button
+              <Button data-preview=""
                 size="sm"
                 onClick={() => {
                   const ids = selEntities().map((e) => e!.id);
@@ -5372,9 +5432,12 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               <Button size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy())))}>
                 Mover
               </Button>
-              <Button size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy()), { copy: true }))}>
-                Copiar corrido
+              <Button data-preview="" size="sm" onClick={() => ui.setMessage(ui.transformSelected(translation(moveBy()), { copy: true, times: copyTimes() }))}>
+                {copyTimes() > 1 ? `Copiar ${copyTimes()} veces` : "Copiar corrido"}
               </Button>
+              <div class="w-20">
+                <Num label="Veces" step={1} min={1} value={copyTimes()} onCommit={(v) => setCopyTimes(Math.max(1, Math.round(v)))} />
+              </div>
             </div>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">

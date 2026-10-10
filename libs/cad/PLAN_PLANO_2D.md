@@ -206,13 +206,18 @@ y los 45 del sketch y el plano):
   (buscaban «Línea», «Círculo», «Elegir»… por texto y agarraban otra cosa): ahora por atajo, y el
   respaldo de `clickText` encuentra los ítems de las listas de familias (llevan el atajo al lado).
 
-Queda de F5 (ver la cobertura abajo): vista previa en las herramientas del panel, campo flotante
-en las de edición, recortar mostrando el tramo que se va, límite elegido a mano, recortar y
-extender splines, patrón asociativo y omitir copias, elegir similares, ciclar encimadas, filtros,
-arrastrar una entidad entera y el radio, arrastre sin restricciones, mantener o romper
-restricciones al transformar, copias múltiples al copiar, polos → puntos de paso, cerrar/abrir
-una spline, construcción en varias (igualar), limpieza (duplicados parciales, fusionar puntos
-sueltos, informe navegable), marcas de cruces.
+Segundo lote (e2e "sketch edición III…"): **vista previa** de los botones del panel al pasar el
+mouse (modo de prueba en `cadUi`: `previewOf` corre la acción sobre una copia y dibuja lo nuevo;
+los botones llevan `data-preview`), **recortar en rojo** lo que se va (`trimRemoved`),
+**arrastrar una curva entera** y el **radio** de un círculo (`dragEntity`), **elegir similares**,
+**Tab** recorre lo encimado (`hitAll`), **copiar N veces**, **cerrar/abrir una spline** y
+construcción igualada en varias (también puntos sueltos).
+
+Queda de F5: campo flotante en las herramientas de edición, límite de recorte elegido a mano,
+recortar y extender splines, patrón asociativo y omitir copias, filtros de selección dentro de la
+herramienta, arrastre sin restricciones, mantener o romper restricciones al transformar,
+polos → puntos de paso, limpieza (duplicados parciales, fusionar puntos sueltos, informe
+navegable), marcas de cruces.
 
 Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo
 que cambia el uso diario (vista previa y campo flotante en las herramientas del panel, clic

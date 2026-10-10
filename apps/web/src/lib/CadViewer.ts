@@ -74,6 +74,8 @@ export interface SketchOverlay {
   linkedEntities?: number[];
   /** Vista previa de lo que se está dibujando (coordenadas del sketch) */
   preview?: P2[][];
+  /** Lo que se quitaría (recortar bajo el mouse): en rojo */
+  removed?: P2[][];
   /** Punto al que se pega el cursor (anclaje activo) */
   snap?: P2;
   /** Líneas guía del anclaje (alineaciones, dirección) */
@@ -1198,6 +1200,7 @@ export class CadViewer {
       if (pts.length && pts.every(Boolean)) lines(pts, color, !!e.construction, width);
     }
     for (const pv of overlay.preview ?? []) lines(pv, sel);
+    for (const pv of overlay.removed ?? []) lines(pv, themeHex("error"), false, 3);
     if (overlay.curvature) {
       const combColor = themeHex("purple");
       for (const [a, b] of overlay.curvature.comb) lines([a, b], combColor);

@@ -268,6 +268,101 @@ const scenarios = {
     if (await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').className.includes("bg-accent")`)) throw new Error("Esc no la soltó");
   },
 
+  async "sketch edición III: arrastrar una línea y el radio, recortar en rojo, similares, Tab, copias y construcción"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const pos = (s, id) => { const q = s.points.find((p) => p.id === id); return [q.x, q.y]; };
+    const drag = async (from, to) => {
+      await b.mouse("mouseMoved", from[0], from[1], { buttons: 0 });
+      await b.mouse("mousePressed", from[0], from[1]);
+      for (let i = 1; i <= 6; i++) await b.mouse("mouseMoved", from[0] + ((to[0] - from[0]) * i) / 6, from[1] + ((to[1] - from[1]) * i) / 6);
+      await b.mouse("mouseReleased", to[0], to[1], { buttons: 0 });
+      await sleep(900);
+    };
+    // Dos líneas horizontales iguales y un círculo
+    await key("l");
+    await b.click(...(await at([11, 31])), { wait: 300 });
+    await b.click(...(await at([31, 31])), { wait: 300 });
+    await key("Escape");
+    await b.click(...(await at([11, 41])), { wait: 300 });
+    await b.click(...(await at([31, 41])), { wait: 300 });
+    await key("Escape");
+    await key("Escape");
+    await key("c");
+    await b.click(...(await at([51, 36])), { wait: 300 });
+    await b.click(...(await at([56, 36])), { wait: 500 });
+    await key("Escape");
+    await key("s");
+    let s = await sk();
+    const [l1, l2] = s.entities.filter((e) => e.geometry.type === "line");
+    const circle = s.entities.find((e) => e.geometry.type === "circle");
+    // Arrastrar la primera línea (del medio): se corre entera
+    const a0 = pos(s, l1.geometry.start);
+    await drag(await at([21, 31]), await at([21, 25]));
+    s = await sk();
+    const a1 = pos(s, s.entities.find((e) => e.id === l1.id).geometry.start);
+    if (!(Math.abs(a1[1] - a0[1]) > 3) || Math.abs(a1[0] - a0[0]) > 1) throw new Error(`la línea no se corrió entera: ${a0} → ${a1}`);
+    // Arrastrar el borde del círculo: cambia el radio (sin la cota que se le puso al dibujarlo: si no, manda la cota)
+    await b.eval(`window.__cadUi.change((s) => { s.constraints = s.constraints.filter((c) => !((c.type === "radius" || c.type === "diameter") && c.entity === ${circle.id})); })`);
+    await sleep(500);
+    const r0 = circle.geometry.radius;
+    await drag(await at([51 + r0, 36]), await at([51 + r0 + 4, 36]));
+    s = await sk();
+    const r1 = s.entities.find((e) => e.id === circle.id).geometry.radius;
+    if (!(r1 > r0 + 2)) throw new Error(`radio: ${r0} → ${r1}`);
+    // Elegir similares: con la segunda línea, la otra del mismo largo
+    // (por código: a este zoom la etiqueta de su cota tapa la línea)
+    await b.eval(`window.__cadUi.setSelection([${l2.id}])`);
+    await sleep(300);
+    await b.clickText("Elegir similares");
+    await sleep(300);
+    const simil = await b.eval(`window.__cadUi.selection().length`);
+    if (simil !== 2) throw new Error(`similares: ${simil}`);
+    // Copiar 3 veces corrido
+    await setInput(b, "Veces", 3);
+    await b.eval(`window.__cadUi.setSelection([${l2.id}])`);
+    await sleep(200);
+    const n0 = (await sk()).entities.length;
+    await b.clickText("Copiar 3 veces");
+    await sleep(900);
+    if ((await sk()).entities.length !== n0 + 3) throw new Error(`copias: ${(await sk()).entities.length - n0}`);
+    // Construcción igualada: una línea en construcción y otra no → las dos a construcción
+    await b.eval(`window.__cadUi.change((s) => { s.entities.find((e) => e.id === ${l1.id}).construction = true; })`);
+    await b.eval(`window.__cadUi.setSelection([${l1.id}, ${l2.id}])`);
+    await b.eval(`window.__cadUi.toggleConstruction()`);
+    await sleep(600);
+    s = await sk();
+    if (![l1.id, l2.id].every((id) => s.entities.find((e) => e.id === id).construction)) throw new Error("construcción no se igualó");
+    // Recortar: el tramo que se iría, en rojo antes del clic (una línea cruzada por otra vertical)
+    await key("l");
+    await b.click(...(await at([71, 21])), { wait: 300 });
+    await b.click(...(await at([71, 51])), { wait: 300 });
+    await key("Escape");
+    await b.click(...(await at([61, 36.5])), { wait: 300 });
+    await b.click(...(await at([81, 36.5])), { wait: 300 });
+    await key("Escape");
+    await key("Escape");
+    await key("t");
+    const over = await at([77, 36.5]);
+    await b.mouse("mouseMoved", over[0], over[1], { buttons: 0 });
+    await sleep(400);
+    if (!(await b.eval(`!!window.__cadViewer`))) throw new Error("sin visor");
+    await b.shot("sketch_recortar_rojo");
+    // Tab: dos encimadas (la línea vertical y una copia encima)
+    await key("s");
+    await b.eval(`window.__cadUi.change((s) => { const v = s.entities.find((e) => e.geometry.type === "line" && Math.abs(s.points.find((p) => p.id === e.geometry.start).x - s.points.find((p) => p.id === e.geometry.end).x) < 1e-6 && s.points.find((p) => p.id === e.geometry.start).x > 60); const a = s.points.find((p) => p.id === v.geometry.start), c = s.points.find((p) => p.id === v.geometry.end); const id = Math.max(...s.points.map((p) => p.id), ...s.entities.map((e) => e.id)) + 1; s.points.push({ id, x: a.x, y: a.y }, { id: id + 1, x: c.x, y: c.y }); s.entities.push({ id: id + 2, geometry: { type: "line", start: id, end: id + 1 }, construction: false }); s.next_id = id + 3; })`);
+    await sleep(600);
+    await b.click(...(await at([71, 28])), { wait: 400 });
+    const first = await b.eval(`window.__cadUi.selection()[0]`);
+    await b.key("Tab", "Tab", 9);
+    await sleep(300);
+    const second = await b.eval(`window.__cadUi.selection()[0]`);
+    if (first === second || second === undefined) throw new Error(`Tab no pasó a la encimada: ${first} → ${second}`);
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");
@@ -2544,6 +2639,17 @@ const scenarios = {
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(700, 300, { wait: 500 });
     await setInput(b, "Radio", 10);
+    // Pasar el mouse por el botón: vista previa del arco, sin cambiar el sketch
+    const before = await b.eval(`window.__cadUi.session().sketch.entities.length`);
+    const btn = await b.eval(`(() => { const e = [...document.querySelectorAll("button")].find((x) => x.textContent.trim() === "Redondear esquina"); e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    await b.mouse("mouseMoved", btn[0], btn[1], { buttons: 0 });
+    await sleep(400);
+    const prev = await b.eval(`window.__cadUi.panelPreview()?.length ?? 0`);
+    if (!(prev > 0)) throw new Error("sin vista previa al pasar por Redondear esquina");
+    if ((await b.eval(`window.__cadUi.session().sketch.entities.length`)) !== before) throw new Error("la vista previa cambió el sketch");
+    await b.mouse("mouseMoved", 600, 650, { buttons: 0 });
+    await sleep(300);
+    if (await b.eval(`window.__cadUi.panelPreview()?.length ?? 0`)) throw new Error("la vista previa no se fue al salir");
     await b.clickText("Redondear esquina");
     await sleep(1200);
     await b.clickText("Terminar sketch");

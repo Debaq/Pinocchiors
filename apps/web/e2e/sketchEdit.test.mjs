@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addEntity, addPoint, addRectangle, extendAt, filletCorner } from "../src/lib/cad.ts";
 import { checkSketch } from "../src/lib/sketchCheck.ts";
-import { splitEqual, chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
+import { trimRemoved, splitEqual, chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
 
 function sketch() {
   return { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
@@ -326,4 +326,20 @@ test("partir en N partes iguales: líneas (con el largo atado) y arcos", () => {
   assert.equal(t.entities.filter((e) => e.geometry.type === "arc").length, 2);
   assert.ok(t.points.some((p) => Math.abs(p.x) < 1e-9 && Math.abs(p.y - 10) < 1e-9), "el medio del arco");
   assert.match(splitEqual(t, arc, 1), /dos partes/);
+});
+
+test("lo que se quitaría al recortar: el tramo entre los cruces más cercanos al clic (sin tocar el sketch)", () => {
+  const s = sketch();
+  const l = line(s, [0, 0], [30, 0]);
+  line(s, [10, -5], [10, 5]);
+  line(s, [20, -5], [20, 5]);
+  const before = JSON.stringify(s);
+  const gone = trimRemoved(s, l, [15, 0]);
+  assert.equal(JSON.stringify(s), before, "el sketch no cambia");
+  assert.equal(gone.length, 1);
+  const xs = gone[0].map((p) => p[0]);
+  assert.ok(Math.min(...xs) > 9.5 && Math.min(...xs) < 10.5 && Math.max(...xs) > 19.5 && Math.max(...xs) < 20.5, `${Math.min(...xs)}..${Math.max(...xs)}`);
+  // En la punta: de 0 al primer cruce
+  const end = trimRemoved(s, l, [3, 0]);
+  assert.ok(Math.max(...end[0].map((p) => p[0])) < 10.5 && Math.min(...end[0].map((p) => p[0])) < 0.5);
 });

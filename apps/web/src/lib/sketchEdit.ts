@@ -737,3 +737,48 @@ export function splitEqual(s: Sketch, id: number, n: number): string | undefined
   if (g.type === "line") for (const x of s.entities) if (!before.has(x.id) && x.geometry.type === "line") s.constraints.push({ type: "equal", a: id, b: x.id });
   return undefined;
 }
+
+/**
+ * Lo que se quitaría al recortar `id` con un clic en `p` (para verlo antes, en
+ * otro color): los tramos de la curva que ya no están después de recortar
+ * una copia. Vacío si no se puede recortar ahí.
+ */
+export function trimRemoved(s: Sketch, id: number, p: P2, limits: TrimLimits = []): P2[][] {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e) return [];
+  const before = polylineOf(s, e.geometry);
+  if (before.length < 2) return [];
+  const c: Sketch = structuredClone(s);
+  if (trimAt(c, id, p, limits)) return [];
+  const old = new Set(s.entities.map((x) => x.id));
+  const kept = c.entities.filter((x) => x.id === id || !old.has(x.id)).map((x) => polylineOf(c, x.geometry));
+  // La curva en pasos finos; cada punto que ya no está sobre lo que quedó, se va
+  const total = before.slice(1).reduce((a, q, i) => a + dist(q, before[i]), 0);
+  const tol = Math.max(1e-9, total * 1e-4);
+  const step = total / 200 || 1;
+  const near = (q: P2) => kept.some((poly) => poly.slice(1).some((b, i) => segDist(q, poly[i], b) <= tol));
+  const out: P2[][] = [];
+  let run: P2[] = [];
+  for (let i = 0; i + 1 < before.length; i++) {
+    const [a, b] = [before[i], before[i + 1]];
+    const n = Math.max(1, Math.ceil(dist(a, b) / step));
+    for (let k = 0; k <= n; k++) {
+      if (k === n && i + 2 < before.length) continue;
+      const q: P2 = [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+      if (!near(q)) run.push(q);
+      else if (run.length) {
+        if (run.length > 1) out.push(run);
+        run = [];
+      }
+    }
+  }
+  if (run.length > 1) out.push(run);
+  return out;
+}
+
+function segDist(p: P2, a: P2, b: P2): number {
+  const d = sub(b, a);
+  const l2 = dot(d, d) || 1;
+  const t = Math.max(0, Math.min(1, dot(sub(p, a), d) / l2));
+  return dist(p, [a[0] + t * d[0], a[1] + t * d[1]]);
+}

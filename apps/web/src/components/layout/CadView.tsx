@@ -9,7 +9,7 @@ import { layoutText, type Contour } from "../../lib/sketchText";
 import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendAt, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
-import { trimByStroke } from "../../lib/sketchEdit";
+import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
 import { CONSTRAINT_TOOLS, pickSuggestion, type ConstraintTool } from "../../lib/sketchSuggest";
 import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
@@ -306,14 +306,19 @@ function textAt(s: Sketch, p: P2) {
 }
 
 function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number } {
+  return hitAll(s, p, tol, withPoints)[0] ?? {};
+}
+
+/** Todo lo que hay bajo `p` (a menos de `tol`): primero los puntos, después las curvas, cada grupo del más cercano al más lejano */
+function hitAll(s: Sketch, p: P2, tol: number, withPoints = true): { point?: number; entity?: number }[] {
   s = withoutLayers(s, true);
   const pt = new Map(s.points.map((q) => [q.id, [q.x, q.y] as P2]));
-  let best: { id: number; d: number } | undefined;
+  const points: { id: number; d: number }[] = [];
   for (const q of withPoints ? s.points : []) {
     const d = dist(p, [q.x, q.y]);
-    if (d <= tol && (!best || d < best.d)) best = { id: q.id, d };
+    if (d <= tol) points.push({ id: q.id, d });
   }
-  if (best) return { point: best.id };
+  const curves: { id: number; d: number }[] = [];
   for (const e of s.entities) {
     const g = e.geometry;
     let d = Infinity;
@@ -333,9 +338,10 @@ function hitTest(s: Sketch, p: P2, tol: number, withPoints = true): { point?: nu
       const pts = (g.type === "spline" ? splineOf(g, (x) => pt.get(x)) : curvePolyline(g, (x) => pt.get(x))) ?? [];
       for (let i = 0; i + 1 < pts.length; i++) d = Math.min(d, segDist(p, pts[i], pts[i + 1]));
     }
-    if (d <= tol && (!best || d < best.d)) best = { id: e.id, d };
+    if (d <= tol) curves.push({ id: e.id, d });
   }
-  return best ? { entity: best.id } : {};
+  const by = (a: { d: number }, b: { d: number }) => a.d - b.d;
+  return [...points.sort(by).map((x) => ({ point: x.id })), ...curves.sort(by).map((x) => ({ entity: x.id }))];
 }
 
 /** Vértices de un polígono regular de centro `c` con un vértice en `v` */
@@ -486,11 +492,18 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [scanVisible, setScanVisible] = createSignal(true);
   const [scanOpacity, setScanOpacity] = createSignal(0.35);
   let dragging: number | undefined;
+  // Arrastre de una curva entera (una línea se corre; un círculo cambia de radio)
+  let entityDrag: { id: number; start: P2; from: Sketch; moved: boolean } | undefined;
   // Lazo libre (Ctrl+arrastrar en vacío con Elegir): sus puntos en pantalla
   const [lasso, setLasso] = createSignal<[number, number][]>();
   let lassoAdditive = false;
   // Entidad o punto bajo el mouse (preselección)
   const [preHover, setPreHover] = createSignal<number>();
+  // Recortar: el tramo que se iría con el clic bajo el mouse (en rojo)
+  const [trimGone, setTrimGone] = createSignal<P2[][]>();
+  // Lo encimado bajo el último clic de Elegir (Tab pasa a lo siguiente)
+  let cycle: { ids: number[]; i: number } | undefined;
+  createEffect(on(() => ui.session()?.sketch, () => setTrimGone(undefined), { defer: true }));
   // Preselección en 3D: plano, cara, arista, vértice o región bajo el mouse,
   // según lo que se puede elegir en ese momento
   let preFrame = 0;
@@ -856,7 +869,8 @@ export const CadView: Component<CadViewProps> = (props) => {
       return;
     }
     const c = cursor();
-    const preview: P2[][] = [];
+    // Lo que haría el botón del panel bajo el mouse
+    const preview: P2[][] = [...(ui.panelPreview() ?? [])];
     const stroke = trimStroke();
     if (stroke && stroke.length > 1) preview.push(stroke);
     const pt = (id: number): P2 | undefined => {
@@ -1096,6 +1110,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         return c ? constraintIds(c).filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
       }),
       preview,
+      removed: ui.tool() === "trim" ? trimGone() : undefined,
       snap: snapView()?.p,
       guides: snapView()?.guides,
     });
@@ -1264,6 +1279,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       const add = e.shiftKey || ((e.ctrlKey || e.metaKey) && !e.altKey) || !!pendingCon();
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const h = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8);
+      // Lo que queda debajo, para recorrerlo con Tab
+      const under = hitAll(s.sketch, raw, viewer.pixelSizeMm() * 8).map((x) => (x.point ?? x.entity)!);
+      cycle = under.length > 1 ? { ids: under, i: 0 } : undefined;
+      if (cycle) ui.setMessage(`Hay ${under.length} encimadas: Tab pasa a la siguiente`);
       if (!add) ui.setSelectedConstraints([]);
       // Un texto se elige entero (por su ancla, que lo arrastra): una letra o
       // dentro de su caja. Doble clic: cambiar lo que dice
@@ -1302,6 +1321,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         }
         lastEntityClick = { id, t: now };
         ui.setSelection((sel) => (add ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
+        // Si se arrastra (sin Mayús ni Ctrl), la curva entera se mueve
+        if (!add && !s.sketch.uses?.some((u) => u.entity === id)) entityDrag = { id, start: raw, from: structuredClone(s.sketch), moved: false };
         return;
       }
       // En vacío con Ctrl: lazo libre
@@ -2297,7 +2318,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       const raw = viewer.planePoint(e.clientX, e.clientY, ss.plane);
       const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
       setPreHover(h.point ?? h.entity);
-    } else if (preHover() !== undefined) setPreHover(undefined);
+      setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits()) : undefined);
+    } else {
+      if (preHover() !== undefined) setPreHover(undefined);
+      if (trimGone()) setTrimGone(undefined);
+    }
     if (handleDrag) {
       const d = handleDrag;
       if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
@@ -2337,6 +2362,13 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else setSnapView(undefined);
     if (dragging !== undefined && hit && (e.buttons & 1) === 1) {
       void ui.drag(dragging, viewer!.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p);
+    }
+    if (entityDrag && (e.buttons & 1) === 1) {
+      const at = viewer!.planePoint(e.clientX, e.clientY, s.plane);
+      if (at && (entityDrag.moved || Math.hypot(at[0] - entityDrag.start[0], at[1] - entityDrag.start[1]) > viewer!.pixelSizeMm() * 4)) {
+        entityDrag.moved = true;
+        void ui.dragEntity(entityDrag.from, entityDrag.id, [at[0] - entityDrag.start[0], at[1] - entityDrag.start[1]], at);
+      }
     }
   };
 
@@ -2480,6 +2512,7 @@ export const CadView: Component<CadViewProps> = (props) => {
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
   const onPointerUp = (e: PointerEvent) => {
     dragging = undefined;
+    entityDrag = undefined;
     ui.endDrag();
     if (trimStroke()) return finishTrim();
     if (lasso()) return finishLasso();
@@ -2655,6 +2688,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
         cancelStep();
+      } else if (e.key === "Tab" && cycle && ui.tool() === "select") {
+        // Lo siguiente de lo encimado bajo el último clic
+        cycle.i = (cycle.i + 1) % cycle.ids.length;
+        ui.setSelection([cycle.ids[cycle.i]]);
+        ui.setMessage(`${cycle.i + 1} de ${cycle.ids.length} encimadas (Tab: la siguiente)`);
       } else if (e.key === "Enter") {
         // Lo que está a medias primero (la spline, la polilínea, la restricción que espera); si no hay nada, el sketch
         if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);

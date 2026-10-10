@@ -7,6 +7,7 @@ import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
 import { updateDrawing, type DrawingElement } from "./drawingDoc";
+import { polylineOf } from "./sketchCheck";
 import type { Placed } from "./drawing";
 import { nearestViewLine, projectViewLine, sheetOwners, type SheetLink } from "./sheetRefs";
 import {
@@ -271,6 +272,20 @@ export type DimLabel = "value" | "name" | "expr";
 /** Pasos que se pueden deshacer dentro de un sketch */
 const SKETCH_HISTORY_LIMIT = 200;
 
+/** Curvas de `next` que no están en `prev` o cambiaron (geometría o lugar de sus puntos), como polilíneas */
+function changedCurves(prev: Sketch, next: Sketch): P2[][] {
+  const pos = new Map(prev.points.map((p) => [p.id, `${p.x.toFixed(6)},${p.y.toFixed(6)}`]));
+  const old = new Map(prev.entities.map((e) => [e.id, JSON.stringify(e.geometry)]));
+  const moved = (id: number) => {
+    const q = next.points.find((p) => p.id === id);
+    return !q || pos.get(id) !== `${q.x.toFixed(6)},${q.y.toFixed(6)}`;
+  };
+  return next.entities
+    .filter((e) => e.geometry.type !== "point" && (old.get(e.id) !== JSON.stringify(e.geometry) || geometryPoints(e.geometry).some(moved)))
+    .map((e) => polylineOf(next, e.geometry))
+    .filter((pts) => pts.length >= 2);
+}
+
 export function createCadUi(store: CadStore) {
   const [pick, setPick] = createSignal<PickMode>({ kind: "none" });
   const [highlight, setHighlight] = createSignal<{ faces: number[]; edges: number[] }>({ faces: [], edges: [] });
@@ -348,9 +363,14 @@ export function createCadUi(store: CadStore) {
   const [combEntity, setCombEntity] = createSignal<number>();
   // Lo copiado con Ctrl+C: sobrevive a cerrar el sketch (para pegar en otro)
   const [clipboard, setClipboard] = createSignal<SketchClip>();
+  // Vista previa de un botón del panel: su acción se prueba sobre una copia (modo de prueba)
+  let dry = false;
+  let dryResult: P2[][] | undefined;
+  const [panelPreview, setPanelPreview] = createSignal<P2[][]>();
   // Resolver de a uno: mientras se arrastra no se encolan pedidos
   let solving = false;
   let pendingDrag: [number, P2] | null = null;
+  let pendingMove: Sketch | null = null;
   // Deshacer dentro del sketch: el sketch antes de cada cambio (un arrastre
   // entero es un solo paso)
   let past: Sketch[] = [];
@@ -424,14 +444,15 @@ export function createCadUi(store: CadStore) {
     scanHighlight,
     setScanHighlight,
     message,
-    setMessage,
+    // En el modo de prueba (vista previa) no se avisa ni se cambia lo elegido
+    setMessage: ((m?: string) => void (dry || setMessage(m))) as typeof setMessage,
 
     // ─── Sketch ───────────────────────────────────────────────────────────
     session,
     tool,
     setTool,
     selection,
-    setSelection,
+    setSelection: ((v: number[] | ((prev: number[]) => number[])) => void (dry || setSelection(v))) as typeof setSelection,
     hoverIds,
     hoverFeature,
     setHoverFeature,
@@ -566,10 +587,38 @@ export function createCadUi(store: CadStore) {
       void solve(clone(sketch));
     },
 
+    /** Lo que mostraría un botón del panel: sus curvas nuevas o cambiadas (se dibujan como vista previa) */
+    panelPreview,
+    /** Corre `run` en modo de prueba: los cambios van a una copia y quedan como vista previa */
+    previewOf(run: () => void) {
+      if (!session()) return;
+      dry = true;
+      dryResult = undefined;
+      try {
+        run();
+      } catch {
+        dryResult = undefined;
+      } finally {
+        dry = false;
+      }
+      // (lo deja `change`, dentro de `run`)
+      const found = dryResult as P2[][] | undefined;
+      setPanelPreview(found?.length ? found : undefined);
+    },
+    clearPreview: () => setPanelPreview(undefined),
+
     /** Cambia el sketch en edición y lo resuelve */
     change(mutate: (s: Sketch) => void) {
       const s = session();
       if (!s) return;
+      if (dry) {
+        // Modo de prueba: en una copia, y lo nuevo o lo que se movió queda para dibujar
+        const next = clone(s.sketch);
+        mutate(next);
+        dryResult = changedCurves(s.sketch, next);
+        return;
+      }
+      setPanelPreview(undefined);
       const next = clone(s.sketch);
       // Junto con lo que la herramienta actualice dentro de `mutate`: la vista
       // previa nunca ve el sketch viejo con el estado nuevo de la herramienta
@@ -638,7 +687,7 @@ export function createCadUi(store: CadStore) {
      * textos); con `copy` deja lo elegido y pone una copia llevada por `f`
      * (solo traslaciones). Devuelve el aviso si no se pudo.
      */
-    transformSelected(f: Xform, opts: { scale?: number; copy?: boolean } = {}): string | undefined {
+    transformSelected(f: Xform, opts: { scale?: number; copy?: boolean; times?: number } = {}): string | undefined {
       const sel = selection();
       let msg: string | undefined;
       let made: number[] | undefined;
@@ -646,10 +695,19 @@ export function createCadUi(store: CadStore) {
         if (opts.copy) {
           const clip = extractClip(sk, sel);
           if (!clip) msg = "Elegir primero lo que se copia";
-          else made = insertClip(sk, clip, f);
+          else {
+            // Varias copias: cada una con la transformación una vez más (f, f∘f, …)
+            made = [];
+            let g: Xform = f;
+            for (let k = 0; k < Math.max(1, opts.times ?? 1); k++) {
+              made.push(...insertClip(sk, clip, g));
+              const prev = g;
+              g = (p) => f(prev(p));
+            }
+          }
         } else msg = transformSelection(sk, sel, f, opts.scale ?? 1);
       });
-      if (made) setSelection(made);
+      if (made && !dry) setSelection(made);
       return msg;
     },
     /** Lleva un punto a `to` respetando las restricciones (un paso de deshacer) */
@@ -664,6 +722,46 @@ export function createCadUi(store: CadStore) {
         const g = sk.entities.find((e) => e.id === entity)?.geometry;
         if (g?.type === "circle") g.radius = r;
       });
+    },
+    /**
+     * Arrastre de una curva entera: una línea (o arco, spline…) se corre `delta`
+     * desde donde estaba al empezar (`from`); un círculo cambia el radio hasta
+     * `at`. El solver acomoda lo que está atado (todo el arrastre es un paso).
+     */
+    async dragEntity(from: Sketch, id: number, delta: P2, at: P2) {
+      const s = session();
+      if (!s) return;
+      if (!dragSaved) {
+        dragSaved = true;
+        remember(s.sketch);
+      }
+      const next = clone(from);
+      const e = next.entities.find((x) => x.id === id);
+      if (!e) return;
+      if (e.geometry.type === "circle") {
+        const c = next.points.find((p) => p.id === (e.geometry as { center: number }).center)!;
+        e.geometry.radius = Math.max(1e-6, Math.hypot(at[0] - c.x, at[1] - c.y));
+      } else
+        for (const pid of geometryPoints(e.geometry)) {
+          const p = next.points.find((q) => q.id === pid);
+          if (p) [p.x, p.y] = [p.x + delta[0], p.y + delta[1]];
+        }
+      pendingMove = next;
+      if (solving) return;
+      solving = true;
+      try {
+        while (pendingMove) {
+          const sk = pendingMove;
+          pendingMove = null;
+          const now = session();
+          if (!now) break;
+          generation++;
+          setSession({ ...now, sketch: sk });
+          await solve(sk);
+        }
+      } finally {
+        solving = false;
+      }
     },
     /** Termina un arrastre: el próximo empieza un paso nuevo */
     endDrag() {
@@ -858,10 +956,13 @@ export function createCadUi(store: CadStore) {
       else setConstructionMode(!constructionMode());
     },
 
+    /** Lo elegido a construcción y de vuelta: si hay de las dos, todas pasan a construcción (los puntos sueltos también) */
     toggleConstruction() {
       const ids = new Set(selection());
       ui.change((s) => {
-        for (const e of s.entities) if (ids.has(e.id)) e.construction = !e.construction;
+        const picked = s.entities.filter((e) => ids.has(e.id) || (e.geometry.type === "point" && ids.has(e.geometry.point)));
+        const to = !picked.every((e) => e.construction);
+        for (const e of picked) e.construction = to;
       });
     },
 
