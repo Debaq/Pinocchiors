@@ -17,7 +17,7 @@ export interface CameraPose {
  * Lo que comparten los dos visores (el principal y el de Diseñar) para mover
  * la cámara: girar y desplazar arrastrando (`NavDrag`), el cubo de vistas
  * (clic y resaltado con cursor de mano), el giro animado hacia una vista y
- * encuadrar. Así se manejan igual (ver libs/cad/PLAN_VISOR.md).
+ * encuadrar. Así se manejan igual (ver libs/cad/ROADMAP.md).
  */
 export class CameraRig {
   readonly nav: NavDrag;

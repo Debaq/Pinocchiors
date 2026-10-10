@@ -4,6 +4,9 @@ Traer a Pinocchiors el CAD de `cad-blender` (addon de Blender) sin Blender: núc
 B-Rep con OpenCASCADE desde el inicio (sin etapa intermedia de mallas) y el flujo
 nuevo **escaneo → CAD** que conecta orizon3d con sólidos editables.
 
+**Plan vigente**: [PLAN_OPERACIONES.md](PLAN_OPERACIONES.md) (desde el 2026-10-09; los planes
+anteriores se borraron y lo hecho queda en esta bitácora).
+
 Decisiones (2026-10-05):
 
 - **Motor**: OpenCASCADE (OCCT 7.9) desde el día uno. Redondeos, chaflanes, STEP real
@@ -309,7 +312,7 @@ cargo test -p cad-model
   a menos de 3° (sin aviso). La barra del sketch pasa a íconos propios (`icons/sketch.tsx`,
   trazo fino, puntos de clic rellenos, auxiliar punteado) en tres grupos (elegir · dibujar ·
   modificar); el nombre va en el tooltip y en un texto solo para lectores de pantalla.
-- **2026-10-05 Diálogo de operación con vista previa** ([PLAN_EDICION.md](PLAN_EDICION.md),
+- **2026-10-05 Diálogo de operación con vista previa** (PLAN_EDICION (plan borrado),
   fase 1): crear o elegir una operación abre su diálogo (✓ / ✗, Enter / Esc). Mientras está
   abierto, `commit` cambia un borrador (`Draft` en `cad.ts`, `store.doc()` lo devuelve) y se
   manda con `cad_preview`, que el backend guarda aparte (`AppState::cad_preview`) y evalúa
@@ -322,7 +325,7 @@ cargo test -p cad-model
   desde la esquina). El botón Exportar del encabezado se habilita con un diseño y, abierto desde
   Diseñar o sin modelo, exporta el sólido (STEP, STL, 3MF, OBJ, PLY, GLB) con el visor del
   diseño a la vista; `cad_export` también en el puente HTTP para el e2e.
-- **2026-10-06 Cajas de selección** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 2): los campos
+- **2026-10-06 Cajas de selección** (PLAN_EDICION (plan borrado), fase 2): los campos
   de referencia del diálogo (aristas del redondeo y el chaflán, caras del vaciado y el
   desmolde, cara de "hasta una cara", regiones) son cajas como en Onshape: con clic se activan
   (borde de acento) y lo que se elige en el visor entra o sale; la lista resalta cada ítem al
@@ -334,14 +337,14 @@ cargo test -p cad-model
   de "Aplicar" se fueron. Redondeo, chaflán y desmolde sin nada elegido dicen qué falta. El
   editor del panel se monta por id y aceptar o cancelar cambian todo en un `batch` (antes,
   cerrar el diálogo podía leer una operación ya desmontada y cortar el guardado).
-- **2026-10-06 Herramienta translúcida** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 3): con el
+- **2026-10-06 Herramienta translúcida** (PLAN_EDICION (plan borrado), fase 3): con el
   diálogo de una extrusión, revolución, primitiva o importación abierto, su herramienta se
   dibuja translúcida encima del resultado, como en Onshape: verde si suma, roja si resta, ámbar
   si interseca, con el contorno visible a través del sólido. `Evaluation::tool` da la forma y
   `cad_tool_mesh` la tesela en el formato de `cad_mesh` (vacía si la operación no tiene); el
   store la pide después de cada vista previa (`store.tool()`). No se dibuja mientras se elige
   en una caja (el sólido es el de antes) ni después de aceptar o cancelar.
-- **2026-10-07 Referencias perdidas** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 4): el
+- **2026-10-07 Referencias perdidas** (PLAN_EDICION (plan borrado), fase 4): el
   recálculo anota qué referencia no encontró (`MissingRef { field, index }`, con el nombre del
   campo de la operación: `edges`, `faces`, `regions`, `plane`, `neutral`, `axis`, `extent`). En
   listas (aristas, caras, regiones) la operación sigue con las que están y queda en el estado
@@ -351,7 +354,7 @@ cargo test -p cad-model
   encontrada" aunque la caja no esté activa, la caja se activa sola al editar y lo que se elige
   ocupa el lugar de la primera perdida. Perfil y regiones se resuelven una sola vez
   (`selected_regions` ya no se repite en `profile_faces`).
-- **2026-10-07 Árbol de operaciones** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 5): barra de
+- **2026-10-07 Árbol de operaciones** (PLAN_EDICION (plan borrado), fase 5): barra de
   retroceso siempre visible y arrastrable entre filas (al soltarla al final se calcula todo);
   filas arrastrables para reordenar (`store.moveFeatureTo(id, hueco)`; subir y bajar usan lo
   mismo); clic derecho sin arrastrar sobre una cara abre "Editar «operación»" con las
@@ -364,98 +367,98 @@ cargo test -p cad-model
   tiene "Origen en: el centro / el centro de la base / una esquina". El e2e se ajustó (la tapa
   de la caja de 20 queda en z = 10) y `sketchOn` pregunta al visor qué hay bajo el punto antes
   de hacer clic en la planta, porque ahora la caja la atraviesa.
-- **2026-10-07 Medir** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 1): con una o dos cosas
+- **2026-10-07 Medir** (PLAN_INSPECCION (plan borrado), fase 1): con una o dos cosas
   elegidas en el sólido (caras, aristas y ahora vértices) aparece abajo a la derecha del visor
   el panel de medidas, como en Onshape: de una, tipo, área, largo, radio y diámetro o
   coordenadas; de dos, distancia mínima (dibujada punteada entre los puntos más cercanos),
   ΔX/ΔY/ΔZ, distancia entre centros y ángulo. El mensaje suelto de "Cara plana · área" se
   reemplazó por el panel. `cad_measure` en Tauri y en el puente HTTP.
-- **2026-10-07 Masa y material** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 2): material
+- **2026-10-07 Masa y material** (PLAN_INSPECCION (plan borrado), fase 2): material
   del documento (PLA, PETG, ABS, nailon, resina, aluminio, acero, inoxidable, latón, pino o
   densidad propia); la sección Sólido muestra masa, centro de masa e inercia principal, y "Ver
   el centro de masa" lo marca en el visor. Cambiar el material es un paso de deshacer y no
   recalcula el árbol (el hash del documento lo ignora). El puente devuelve los momentos
   principales con sus ejes.
-- **2026-10-07 Vistas** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 3): cubo de vistas en
+- **2026-10-07 Vistas** (PLAN_INSPECCION (plan borrado), fase 3): cubo de vistas en
   el visor del diseño, vistas estándar con Mayús+1…7 (Onshape) y 1/3/7 con o sin Ctrl (como el
   visor de mallas), F o «.» para acercar a lo elegido, y en el menú de la cara "Mirar de frente"
   y "Acercar a la cara". Los giros duran 0,3 s con frenado.
-- **2026-10-07 Menú del clic derecho** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 4): el
+- **2026-10-07 Menú del clic derecho** (PLAN_INSPECCION (plan borrado), fase 4): el
   menú cambia según lo que hay bajo el puntero (cara, arista o vacío) y crea operaciones con
   eso: sketch en la cara, vaciar, desmoldar, redondear, chaflán; más editar lo que la originó y
   las vistas. Mayús+S abre un sketch con lo elegido e Inicio encuadra todo.
-- **2026-10-07 Filtros y caja de selección** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 5):
+- **2026-10-07 Filtros y caja de selección** (PLAN_INSPECCION (plan borrado), fase 5):
   filtro de qué se elige en la barra del visor y selección por caja al arrastrar en vacío
   (ventana hacia la derecha, cruce hacia la izquierda, solo lo visible, Mayús suma).
-- **2026-10-07 Vista de corte** ([PLAN_INSPECCION.md](PLAN_INSPECCION.md), fase 6): corte solo de
+- **2026-10-07 Vista de corte** (PLAN_INSPECCION (plan borrado), fase 6): corte solo de
   vista por los planos base, con posición regulable, invertir y la sección rellena (tapa con
   stencil); lo cortado no se elige. Con esto el plan 3 queda hecho salvo el plano de corte por
   una cara y su manipulador.
-- **2026-10-07 Carpetas** ([PLAN_EDICION.md](PLAN_EDICION.md), fase 6, con lo que el plan 2
+- **2026-10-07 Carpetas** (PLAN_EDICION (plan borrado), fase 6, con lo que el plan 2
   queda completo): tramos de operaciones agrupados, plegables y con nombre; solo presentación
   (no recalculan). Mayús+clic elige un tramo en el árbol.
-- **2026-10-07 Recálculo incremental** ([PLAN_RECALCULO.md](PLAN_RECALCULO.md), fases 1 y 2):
+- **2026-10-07 Recálculo incremental** (PLAN_RECALCULO (plan borrado), fases 1 y 2):
   caché por operación con huellas encadenadas; cambiar algo al final de 30 operaciones pasa de
   506 ms a 10 ms. El árbol muestra el tiempo de las operaciones lentas. El driver del e2e ahora
   mata el grupo de procesos de Chromium y borra su perfil al cerrar (los `chrome-*` habían
   llenado `/tmp`).
-- **2026-10-07 Cola de envíos y teselado medido** ([PLAN_RECALCULO.md](PLAN_RECALCULO.md),
+- **2026-10-07 Cola de envíos y teselado medido** (PLAN_RECALCULO (plan borrado),
   fases 3 y 5): escribir varios valores seguidos calcula solo el último pendiente; el banco
   ahora mide el teselado (40–55 ms, 4 ms de extracción).
-- **2026-10-07 Varias piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fases 1 y 2): un diseño puede
+- **2026-10-07 Varias piezas** (PLAN_PIEZAS (plan borrado), fases 1 y 2): un diseño puede
   tener varias piezas ("Nueva pieza" en el selector de operación; unir algo que no toca nada
   también la crea). Cada operación actúa sobre las piezas que corresponden; la sección
   "Piezas" da color, nombre, visibilidad y exportación por pieza.
-- **2026-10-07 Booleanas entre piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fases 3 y 4): "Con las
+- **2026-10-07 Booleanas entre piezas** (PLAN_PIEZAS (plan borrado), fases 3 y 4): "Con las
   piezas" en unir/restar/intersecar, operación Booleana (unir, restar conservando o no,
   intersecar), Separar sólidos sueltos en piezas y Borrar pieza. Las dependencias por pieza
   impiden reordenar una booleana antes de lo que creó sus piezas.
-- **2026-10-07 Material por pieza** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 5): cada pieza puede
+- **2026-10-07 Material por pieza** (PLAN_PIEZAS (plan borrado), fase 5): cada pieza puede
   tener su material; la masa total y el centro de masa salen de las piezas.
-- **2026-10-07 STEP con piezas** ([PLAN_PIEZAS.md](PLAN_PIEZAS.md), fase 6, con lo que el plan 5
+- **2026-10-07 STEP con piezas** (PLAN_PIEZAS (plan borrado), fase 6, con lo que el plan 5
   queda completo): el STEP lleva cada pieza con su nombre y su color; cuesta +6,7 MB en el
   binario estático (XCAF).
-- **2026-10-07 Geometría de referencia** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 1):
+- **2026-10-07 Geometría de referencia** (PLAN_CONSTRUCCION (plan borrado), fase 1):
   planos, ejes y puntos de referencia como operaciones del historial, visibles y elegibles en
   el visor, usables como plano de sketch, eje de revolución o de patrón y plano de simetría.
-- **2026-10-07 Extrusión completa** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 2): dos
+- **2026-10-07 Extrusión completa** (PLAN_CONSTRUCCION (plan borrado), fase 2): dos
   direcciones, hasta la siguiente cara, desmolde de las paredes y extrusión delgada.
-- **2026-10-07 Barrido y transición** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 3):
+- **2026-10-07 Barrido y transición** (PLAN_CONSTRUCCION (plan borrado), fase 3):
   operaciones con diálogo; el barrido usa esquinas a inglete y el camino se encadena solo.
-- **2026-10-07 Agujero** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 4): simple, con
+- **2026-10-07 Agujero** (PLAN_CONSTRUCCION (plan borrado), fase 4): simple, con
   caja o avellanado, pasante o ciego con punta, en los puntos de un sketch; tamaños métricos
   M2–M12 para pasar o roscar.
-- **2026-10-07 Hélice y engrosar** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md), fase 5 sin el
+- **2026-10-07 Hélice y engrosar** (PLAN_CONSTRUCCION (plan borrado), fase 5 sin el
   nervio): hélice de referencia que sirve de camino de barrido (resortes) y engrosar caras.
-- **2026-10-07 Mover cara, escala y patrón en curva** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md),
+- **2026-10-07 Mover cara, escala y patrón en curva** (PLAN_CONSTRUCCION (plan borrado),
   fase 6): se arregló también la transformación no uniforme del puente (perdía la escala).
-- **2026-10-07 Plano 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 1 y parte de la 2):
+- **2026-10-07 Plano 2D** (PLAN_PLANOS_2D (plan borrado), fase 1 y parte de la 2):
   frente, planta, lateral e isométrica con líneas ocultas exactas, primer o tercer diedro,
   escala normalizada automática, cajetín y exportación a SVG.
-- **2026-10-07 Plano a DXF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 5): la hoja o una
+- **2026-10-07 Plano a DXF** (PLAN_PLANOS_2D (plan borrado), fase 5): la hoja o una
   vista sola a 1:1 para corte láser o CNC.
-- **2026-10-07 Cotas generales en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), parte de la
+- **2026-10-07 Cotas generales en el plano** (PLAN_PLANOS_2D (plan borrado), parte de la
   fase 3): ancho y alto de cada vista con flechas y texto, también en el DXF.
-- **2026-10-07 Corte A-A en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 4): el
+- **2026-10-07 Corte A-A en el plano** (PLAN_PLANOS_2D (plan borrado), fase 4): el
   frente en corte por el plano medio, rayado, con la línea de corte en la planta.
-- **2026-10-07 Plano a PDF** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 2): con `svg2pdf` en
+- **2026-10-07 Plano a PDF** (PLAN_PLANOS_2D (plan borrado), fase 2): con `svg2pdf` en
   Rust, a tamaño real de hoja; el SVG pasó a ser XML válido.
-- **2026-10-07 Desviación escaneo ↔ diseño** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 1): el
+- **2026-10-07 Desviación escaneo ↔ diseño** (PLAN_ESCANEO (plan borrado), fase 1): el
   escaneo se pinta según cuánto se aparta del sólido, con resumen (media, P95, máximo, % dentro
   de tolerancia).
-- **2026-10-07 Contornos del escaneo con relaciones** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md), fase 3):
+- **2026-10-07 Contornos del escaneo con relaciones** (PLAN_ESCANEO (plan borrado), fase 3):
   los sketches de corte llegan con paralelas y perpendiculares inferidas y esquinas
   redondeables a una grilla.
-- **2026-10-07 Ensamble** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fases 1, 2 y parte de la 4):
+- **2026-10-07 Ensamble** (PLAN_ENSAMBLES (plan borrado), fases 1, 2 y parte de la 4):
   instancias de las piezas, relaciones fija, bisagra, deslizante, cilíndrica y plana con un
   solver 3D, grados libres y revisión de choques.
-- **2026-10-07 Lista de materiales** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md), fase 4): piezas,
+- **2026-10-07 Lista de materiales** (PLAN_ENSAMBLES (plan borrado), fase 4): piezas,
   cantidades, material y masa del ensamble, exportable a CSV.
-- **2026-10-07 Cotas a mano en el plano** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md), fase 3): largo,
+- **2026-10-07 Cotas a mano en el plano** (PLAN_PLANOS_2D (plan borrado), fase 3): largo,
   diámetro y distancia entre paralelas eligiendo líneas de la hoja; siguen al modelo.
 - **Hecho (2026-10-07):** las piezas del diseño son objetos del Outliner y pasan solas a
   Preparar, Rig y Fabricar; lo hecho sobre su malla se rehace si cambia el diseño. Ver
-  `PLAN_OBJETOS.md`. El Outliner va en tres grupos: Planos, Operaciones y Objetos.
+  PLAN_OBJETOS (plan borrado). El Outliner va en tres grupos: Planos, Operaciones y Objetos.
 - **Rediseño de la interfaz de Diseñar (2026-10-07, hecho 2026-10-08).** Decisiones del usuario: árbol de
   operaciones en el Outliner (no columna aparte) y botones con ícono y texto.
   - Hecho: fase 1, barra de herramientas arriba del visor (`components/design/DesignToolbar.tsx`,
@@ -479,18 +482,18 @@ cargo test -p cad-model
     todo el diseño o una pieza), y la selección por caja arrastrando desde cualquier lado, también
     sobre el sólido (un clic sin arrastrar sigue eligiendo uno).
   - Arreglado también: el ojo de Grid del Outliner apaga la grilla del visor de Diseñar.
-- **2026-10-08 Línea desde el centro, nervio y reemplazar cara** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md),
+- **2026-10-08 Línea desde el centro, nervio y reemplazar cara** (PLAN_CONSTRUCCION (plan borrado),
   fases 5 y 6 completas): la línea del sketch crece igual a los dos lados del primer clic (punto
   medio); el nervio lleva las líneas de un sketch hasta el sólido con espesor centrado; reemplazar
   cara lleva caras planas hasta un plano o una cara (con dos o más caras elegidas, la última es el
   destino). Pruebas en `model/tests/modify.rs` y e2e.
-- **2026-10-08 Exportar el ensamble** ([PLAN_ENSAMBLES.md](PLAN_ENSAMBLES.md)): en Exportar, "Qué
+- **2026-10-08 Exportar el ensamble** (PLAN_ENSAMBLES (plan borrado)): en Exportar, "Qué
   exportar" ofrece el ensamble cuando tiene instancias; STEP con cada instancia en su lugar, su
   nombre y el color de su pieza, y en malla (3MF, STL, OBJ, PLY, GLB) un objeto por instancia
   (`cad_export` con `assembly`).
 - **2026-10-08 Texto del sketch como bloque editable** (plan del sketch anterior, fase 7):
   se mueve entero con su ancla y se puede cambiar lo que dice y el tamaño.
-- **2026-10-08 Roscas modeladas** ([PLAN_CONSTRUCCION.md](PLAN_CONSTRUCCION.md)): el Agujero tiene
+- **2026-10-08 Roscas modeladas** (PLAN_CONSTRUCCION (plan borrado)): el Agujero tiene
   "Roscar (rosca modelada)" (`Hole.modeled: ThreadSpec { nominal, pitch, clearance, left }`; el
   taladro pasa a ser un macho ISO de 60°) y la operación nueva **Rosca** (`Thread`) talla una cara
   cilíndrica: exterior en un eje (el cilindro es el nominal), interior en un agujero (es el menor),
@@ -502,13 +505,13 @@ cargo test -p cad-model
   Pruebas: volumen del macho por Pappus (exacto), agujero pasante, eje y agujero roscados.
 - **2026-10-08 Usar arista en el sketch** (plan de anclajes, ya borrado, fase 4 v2): aristas
   del sólido traídas al sketch y ligadas a él (si cambia la pieza, se mueven con ella).
-- **2026-10-08 Configuraciones** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): variantes de la pieza que
+- **2026-10-08 Configuraciones** (PLAN_FUTURO (plan borrado)): variantes de la pieza que
   cambian parámetros y apagan operaciones; se exportan todas juntas.
 - **2026-10-08 Chaflán asimétrico y redondeo variable**: `Chamfer.second` (otra distancia o un
   ángulo, medidos desde una cara o la otra: `BRepFilletAPI_MakeChamfer::Add(d1, d2, E, F)` /
   `AddDA`) y `Fillet.radius2` (de un radio al otro a lo largo de la arista). En el diálogo:
   "Tipo" del chaflán y "Radio variable".
-- **2026-10-08 Versiones con nombre** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): instantáneas del
+- **2026-10-08 Versiones con nombre** (PLAN_FUTURO (plan borrado)): instantáneas del
   documento con nombre, fecha y nota; ver en solo lectura, comparar (booleanas entre el sólido de
   ahora y el de la versión, verde lo agregado y rojo lo quitado) y restaurar deshacible. Pruebas:
   `cad::tests::compare_with_an_older_version` y e2e "versiones: guardar, ver, comparar y
@@ -528,10 +531,10 @@ cargo test -p cad-model
     (con roscas tardaba ~0,7 s y se recalculaba en cada clic) y las caras de las piezas estándar
     se etiquetan sin medirlas. Tuerca M8 roscada 4,2 → 2,2 s; tornillo M8×25 roscado 7,3 → 4,4 s;
     documento con los dos 16 → 6,5 s. Lo que queda es la unión hélice-núcleo de la rosca.
-- **2026-10-08 Planos 2D** ([PLAN_PLANOS_2D.md](PLAN_PLANOS_2D.md)): cotas de radio (arcos) y de
+- **2026-10-08 Planos 2D** (PLAN_PLANOS_2D (plan borrado)): cotas de radio (arcos) y de
   ángulo, vistas de detalle ampliadas y recortadas, y plano de corte movible. Pruebas: node
   `e2e/drawing.test.mjs` (14) y e2e "plano 2D: radio, ángulo, detalle y corte movido".
-- **2026-10-08 Chapa metálica** ([PLAN_FUTURO.md](PLAN_FUTURO.md)): Chapa, Pestaña y Desarrollo
+- **2026-10-08 Chapa metálica** (PLAN_FUTURO (plan borrado)): Chapa, Pestaña y Desarrollo
   con DXF para corte láser. Pruebas: `tests/sheet.rs` (canal en U, pestaña a 45° hacia abajo con
   un agujero, pestaña sobre pestaña: volúmenes y desarrollo contra la cuenta), node
   `e2e/flatPattern.test.mjs` y e2e "chapa: pestañas y desarrollo en DXF".
@@ -557,41 +560,41 @@ cargo test -p cad-model
   relleno). Solver: jacobiano numérico con puntos repetidos y diagnóstico con un solo SVD.
   Pruebas: node `e2e/sketchPattern.test.mjs` y e2e "patrones del sketch". Los patrones que
   todavía faltan quedan en F10.
-- **2026-10-09 Deshacer dentro del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 1): antes
+- **2026-10-09 Deshacer dentro del sketch** (PLAN_SKETCH (plan borrado), fase 1): antes
   Ctrl+Z con un sketch abierto deshacía el documento por debajo. Ahora cada cambio del sketch
   es un paso (un arrastre entero, uno solo; lo que no cambia nada no cuenta), con botones en la
   barra y Ctrl+Z/Ctrl+Mayús+Z. Las respuestas del solver pedidas antes de un cambio o un
   deshacer se descartan (número de generación). e2e "deshacer y rehacer dentro del sketch".
-- **2026-10-09 Transformar en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 2): partir
+- **2026-10-09 Transformar en el sketch** (PLAN_SKETCH (plan borrado), fase 2): partir
   líneas, arcos y círculos; mover, copiar, girar y escalar lo elegido con clics (vista previa) o
   con números desde el panel; copiar y pegar con Ctrl+C / Ctrl+V, también entre sketches.
   Después de transformar el sketch queda donde se dejó: las cotas toman la medida nueva y lo que
   deja de cumplirse se quita. Pruebas: node `e2e/sketchTransform.test.mjs` (10) y e2e "mover,
   copiar y pegar, girar, escalar y partir en el sketch".
-- **2026-10-09 Cotas nuevas del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 3): distancia
+- **2026-10-09 Cotas nuevas del sketch** (PLAN_SKETCH (plan borrado), fase 3): distancia
   de un punto a una línea, entre paralelas, diámetro respecto de un eje (perfiles de
   revolución) y largo de arco. Restricciones nuevas en el solver (`DistancePointLine`,
   `ArcLength`) y en el modelo (`PointLineDistance`, `AxisDiameter`, `ArcLength`); medidas también
   en `sketchTransform.measureConstraint` para que transformar las actualice.
-- **2026-10-09 Formas y colineal en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 4):
+- **2026-10-09 Formas y colineal en el sketch** (PLAN_SKETCH (plan borrado), fase 4):
   círculo por 2 y 3 puntos, círculo tangente a 3 líneas o curvas, polígono circunscrito,
   ranura por el centro y en arco, rectángulo por 3 puntos (inclinado) y restricción Colineales.
   Pruebas: node `e2e/sketchShapes.test.mjs` (6), Rust `collinear_lines` y e2e "rectángulo por
   3 puntos, círculos…".
-- **2026-10-09 Revisión, lista y modo construcción en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+- **2026-10-09 Revisión, lista y modo construcción en el sketch** (PLAN_SKETCH (plan borrado),
   fases 6 y 7): extremos sueltos, cruces sin unir y entidades encimadas marcados en rojo y
   resumidos en la barra; extruir o girar un sketch sin regiones avisa por qué. Mostrar u ocultar
   cotas, construcción y puntos; lista de entidades con propiedades editables; elegir por tipo,
   por cadena (doble clic) y todo (Ctrl+A); variantes de herramientas en listas; botón
   Construcción con modo (lo dibujado sale de construcción). Pruebas: node
   `e2e/sketchCheck.test.mjs` (9) y dos escenarios e2e.
-- **2026-10-09 Restricciones a la vista** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 9): íconos de
+- **2026-10-09 Restricciones a la vista** (PLAN_SKETCH (plan borrado), fase 9): íconos de
   restricciones junto a la geometría (clic elige, Mayús suma, Supr quita), mostrar u ocultar,
   elegir todas las restricciones o todas las cotas, preselección bajo el mouse, lazo con
   Ctrl+arrastrar. Rendimiento: el visor liberaba materiales antes de dibujar y three.js
   recompilaba los shaders en cada redibujo (~200 ms al elegir); ahora se liberan después del
   cuadro. Pruebas: node `e2e/sketchGlyphs.test.mjs` (3) y e2e "íconos de restricciones…".
-- **2026-10-09 Referencias al modelo en el sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 8):
+- **2026-10-09 Referencias al modelo en el sketch** (PLAN_SKETCH (plan borrado), fase 8):
   Usar (J) con clic en una cara trae todo su contorno (cada arista ligada a la suya); Silueta
   (borde de la sombra del sólido visto desde la normal del plano, con los agujeros pasantes),
   Intersección del plano con el sólido y las curvas de un sketch anterior, todas ligadas;
@@ -605,7 +608,7 @@ cargo test -p cad-model
   lado, bordes afinados por bisección). Al recalcular, las curvas de la silueta y la
   intersección se reparten entre sus entidades por tipo y cercanía; si cambia la cantidad,
   avisa. Pruebas: Rust `model/tests/project.rs` (7) y e2e "usar del modelo…".
-- **2026-10-09 Cotas II y restricciones II** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fases 10 y 12):
+- **2026-10-09 Cotas II y restricciones II** (PLAN_SKETCH (plan borrado), fases 10 y 12):
   ángulo suplementario, largo total de una cadena, distancia mínima y máxima entre un círculo y
   otro, un punto o una línea, cotas de ordenadas y en cadena, unidades en las fórmulas
   (`1 in`, `2 cm`, `45 deg`), cotas bloqueadas, texto de la cota arrastrable con guía, etiquetas
@@ -614,7 +617,7 @@ cargo test -p cad-model
   `PointOnEllipse`, `PointOnCurveSpline`. G2 pasa a la fase 17. Pruebas: Rust
   `model/tests/sketch_constraints2.rs` (10) y unidades en `expr.rs`, node (3 nuevas) y e2e
   "cotas II y restricciones II…".
-- **2026-10-09 Entidades II y splines** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fases 16 y 17):
+- **2026-10-09 Entidades II y splines** (PLAN_SKETCH (plan borrado), fases 16 y 17):
   B-spline por polos en el modelo, el solver y OCCT (racional: cónicas y parábolas; cerrada
   periódica), arco elíptico, línea infinita, paralelogramo, ranura en arco por 3 puntos;
   texto en negrita, cursiva, alineado y sobre una curva; spline de ajuste, manijas en puntos
@@ -622,26 +625,26 @@ cargo test -p cad-model
   polos, peine de curvatura con inflexiones y radio mínimo, y curvatura igual (G2) con
   splines por polos. Puente C++: curvas 6 (B-spline), 7 (arco de elipse) y 8 (spline con
   tangentes por punto).
-- **2026-10-09 Solver II** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 14): flechas de grados libres
+- **2026-10-09 Solver II** (PLAN_SKETCH (plan borrado), fase 14): flechas de grados libres
   (dirección de cada punto que solo desliza, radio libre), grados de lo elegido, sugerir
   restricciones (casi cumplidas y cotas que faltan, solo las independientes), definir todo con
   cotas desde el origen (sin mover nada), cambios grandes de cota en pasos para no dar vuelta
   la geometría y resolución parcial con conflicto (lo demás se cumple). `cad_model::sketch_assist`,
   `Sketch::build` separado del resolver. Pruebas: Rust `model/tests/sketch_solver2.rs` (6) y e2e
   "solver II…".
-- **2026-10-09 Sketch 3D** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 20): operación Sketch 3D
+- **2026-10-09 Sketch 3D** (PLAN_SKETCH (plan borrado), fase 20): operación Sketch 3D
   (líneas, arcos por 3 puntos y splines en el espacio, atadas a vértices, planos y ejes, con su
   propio solver) que sirve de camino de barrido; sketch envuelto sobre una cara (el editor de
   siempre en el desarrollo de la cara); perforación (un punto del perfil donde la curva cruza
   su plano). Puente C++: `cad_face_eval`, `cad_plane_hits`. Pruebas: Rust
   `model/tests/sketch3d.rs` (7) y e2e "sketch 3D…".
-- **2026-10-09 Edición II del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md), fase 11): recortar
+- **2026-10-09 Edición II del sketch** (PLAN_SKETCH (plan borrado), fase 11): recortar
   arrastrando, unir líneas y arcos, chaflán 2D, equidistante de cadena a los dos lados y con
   extremos cerrados, estirar (W), reparar, eliminar duplicados y cerrar contorno
   (`lib/sketchEdit.ts`). Arreglo del solver: el espacio nulo por autovectores daba NaN y el
   programa se caía; ahora SVD + QR. Pruebas: node `sketchEdit.test.mjs` (15), Rust
   `jacobiano_casi_vacio_no_da_nan` y e2e "edición II…".
-- **2026-10-09 Asistencia al dibujo y plano del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+- **2026-10-09 Asistencia al dibujo y plano del sketch** (PLAN_SKETCH (plan borrado),
   fases 13 y 15): inferencias sí/no, rejilla del sketch con anclaje, coordenadas escritas
   (absolutas, relativas y polares), polilínea línea-arco (A), simetría al dibujar, línea
   central (`SketchEntity.axis`: eje de revolución y diámetros sin elegirla); horizontal del
@@ -651,7 +654,7 @@ cargo test -p cad-model
   dibujar.
   Pruebas: node `sketchInput.test.mjs` y `sketchTransform.test.mjs`, Rust
   `sketch_x_axis_and_flipped_normal`, e2e "asistencia al dibujo…" y "plano del sketch…".
-- **2026-10-09 Archivos, fórmulas y organización del sketch** ([PLAN_SKETCH.md](PLAN_SKETCH.md),
+- **2026-10-09 Archivos, fórmulas y organización del sketch** (PLAN_SKETCH (plan borrado),
   fases 18 y 19; con esto el plan del sketch está completo): curvas por ecuación con los
   parámetros del diseño, desde CSV/TXT, importar DXF, exportar DXF y SVG, calcos con escala
   por dos puntos; bloques (copias rígidas que cambian juntas al editar el bloque), capas
