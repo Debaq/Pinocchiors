@@ -287,3 +287,21 @@ test("lo dibujado sobre la hoja: sin construcción ni capas ocultas, Y hacia arr
   // Una vista sola a 1:1 no lleva lo dibujado sobre la hoja
   assert.ok(!sheetDxf(placed, a4, { hidden: true, smooth: false, layer: lines, view: "front" }).includes("\nDIBUJO\n10"));
 });
+
+test("escala propia de una vista: ocupa lo suyo y lleva su rótulo debajo", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20), left: rect(20, 10) };
+  const base = layout(views, SHEETS[1], "first", 1);
+  const own = layout(views, SHEETS[1], "first", 1, undefined, { left: 2 });
+  const L = (r) => r.placed.find((p) => p.name === "left");
+  assert.equal(L(own).scale, 2);
+  assert.equal(L(own).label, "Lateral izquierda (2:1)");
+  assert.equal(L(base).label, undefined);
+  assert.equal(own.placed.find((p) => p.name === "front").scale, 1);
+  const info = { title: "x", date: "2026-10-10", scale: "1:1", projection: "first", sheet: "A3" };
+  const svg = sheetSvg(own.placed, SHEETS[1], info, { hidden: true, smooth: false, dimensions: true });
+  assert.ok(svg.includes('data-view-label="left"') && svg.includes("Lateral izquierda (2:1)"));
+  // La escala automática de la hoja cuenta el tamaño de la vista a su escala
+  const auto = layout({ front: rect(40, 10), left: rect(20, 10) }, SHEETS[0], "first", undefined, undefined, { left: 10 });
+  assert.equal(auto.placed.find((p) => p.name === "left").scale, 10);
+  assert.ok(auto.scale < layout({ front: rect(40, 10), left: rect(20, 10) }, SHEETS[0], "first").scale, "deja lugar a la ampliada");
+});

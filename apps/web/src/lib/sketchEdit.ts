@@ -14,6 +14,7 @@ import {
   mapGeometry,
   removeEntity,
   trimAt,
+  type TrimLimits,
   type Geometry,
   type P2,
   type Sketch,
@@ -142,7 +143,7 @@ function strokeHits(s: Sketch, e: SketchEntity, a: P2, b: P2): { t: number; p: P
  * el trazo los cruza. Devuelve cuántos se quitaron y un mensaje si algo no se
  * pudo (las splines no se recortan).
  */
-export function trimByStroke(s: Sketch, stroke: P2[]): { trimmed: number; message?: string } {
+export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = []): { trimmed: number; message?: string } {
   const failed = new Set<number>();
   let message: string | undefined;
   let trimmed = 0;
@@ -163,7 +164,7 @@ export function trimByStroke(s: Sketch, stroke: P2[]): { trimmed: number; messag
     }
     if (!best) break;
     at = best.u;
-    const msg = trimAt(s, best.id, best.p);
+    const msg = trimAt(s, best.id, best.p, limits);
     if (msg) {
       failed.add(best.id);
       message = msg;

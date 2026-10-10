@@ -10,6 +10,7 @@ import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type S
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke } from "../../lib/sketchEdit";
+import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
 import { gridSegments, parseCoords, snapToGrid } from "../../lib/sketchInput";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
@@ -388,8 +389,9 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
   onMount(() => window.addEventListener("pointerdown", closeFamily, true));
   onCleanup(() => window.removeEventListener("pointerdown", closeFamily, true));
-  /** Las herramientas a mano: sobre la hoja del plano no hay sólido del que usar aristas */
-  const sheetTools = () => (ui.session()?.sheet ? TOOLS.filter((t) => t.id !== "use") : TOOLS);
+  /** Las herramientas a mano: sobre la hoja del plano «Usar» toma líneas de las vistas */
+  const sheetTools = () =>
+    ui.session()?.sheet ? TOOLS.map((t) => (t.id === "use" ? { ...t, label: "Usar una línea de una vista (queda ligada: si el modelo cambia, se mueve con ella)" } : t)) : TOOLS;
   /** Botones de la barra: una entrada por familia (con su lista) o por herramienta suelta */
   const toolSlots = () => {
     const out: { family?: string; group: number; tools: ToolDef[] }[] = [];
@@ -1074,11 +1076,24 @@ export const CadView: Component<CadViewProps> = (props) => {
     });
   });
 
+  // Sobre la hoja del plano: las líneas de las vistas (mm de hoja) son los
+  // límites de recortar y extender y los anclajes (en vez del sólido)
+  const sheetOf = createMemo(() => ui.session()?.sheet);
+  const sheetLines = createMemo(() => {
+    const sh = sheetOf();
+    return sh ? viewPolylines(sh.views, sh.height, sh.hiddenLines) : [];
+  });
+  const sheetLimits = () => sheetLines();
+  const sheetRefs = createMemo(() => {
+    const sh = sheetOf();
+    return sh ? solidRefs(sheetLines().map((poly) => poly.map((p): P3 => [p[0], p[1], 0])), { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0, 0] }) : undefined;
+  });
   // Aristas del sólido proyectadas al plano del sketch en curso (anclajes)
   const solid = createMemo(() => {
     const plane = ui.session()?.plane;
     const m = store.mesh();
-    if (!plane || !viewer || onSheet()) return undefined;
+    if (onSheet()) return sheetRefs();
+    if (!plane || !viewer) return undefined;
     const s = viewer.mmPerUnit;
     const edges: P3[][] = [];
     let start = 0;
@@ -1244,6 +1259,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       sketchBoxBefore = ui.selection();
       if (!e.shiftKey) ui.setSelection([]);
       return;
+    }
+    if (t === "use" && s.sheet) {
+      // Sobre la hoja: la línea de la vista bajo el cursor, ligada a ella
+      return ui.setMessage(ui.useViewLine(viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p, viewer.pixelSizeMm() * 8));
     }
     if (t === "use") {
       // La arista o la cara del sólido bajo el cursor, proyectada al plano y ligada a él
@@ -1764,7 +1783,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
       let msg: string | undefined;
-      ui.change((sk) => (msg = extendLine(sk, target, raw)));
+      ui.change((sk) => (msg = extendLine(sk, target, raw, sheetLimits())));
       ui.setMessage(msg);
       return;
     }
@@ -2348,10 +2367,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!from || from.far < 5 || stroke.length < 2) {
       const target = hitTest(s.sketch, stroke[0], viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
-      ui.change((sk) => (msg = trimAt(sk, target, stroke[0])));
+      ui.change((sk) => (msg = trimAt(sk, target, stroke[0], sheetLimits())));
     } else
       ui.change((sk) => {
-        const r = trimByStroke(sk, stroke);
+        const r = trimByStroke(sk, stroke, sheetLimits());
         msg = r.message ?? (r.trimmed ? undefined : "El trazo no cruzó nada que recortar");
       });
     ui.setMessage(msg);

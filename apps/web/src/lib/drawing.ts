@@ -24,6 +24,18 @@ export interface DrawingLine {
  */
 export type ViewName = "front" | "top" | "bottom" | "left" | "right" | "back" | "iso";
 
+export const VIEW_LABELS: Record<ViewName, string> = {
+  front: "Frente",
+  top: "Superior (planta)",
+  bottom: "Inferior",
+  left: "Lateral izquierda",
+  right: "Lateral derecha",
+  back: "Posterior",
+  iso: "Isométrica",
+};
+/** Nombre corto para el rótulo bajo la vista */
+const VIEW_TITLES: Record<ViewName, string> = { front: "Frente", top: "Superior", bottom: "Inferior", left: "Lateral izquierda", right: "Lateral derecha", back: "Posterior", iso: "Isométrica" };
+
 /**
  * Desde dónde se mira cada vista (hacia quien mira) y la derecha de la hoja;
  * Z arriba. El arriba de la hoja es eye × xdir (como `gp_Ax2` en el backend).
@@ -115,6 +127,8 @@ export interface Placed {
   hatch?: [P2, P2, P2][];
   /** Vista de detalle: de qué vista sale y qué círculo amplía */
   detail?: Detail;
+  /** Rótulo bajo la vista (con escala propia: «Frente (1:2)») */
+  label?: string;
 }
 
 /**
@@ -160,9 +174,19 @@ export function layout(
   projection: Projection,
   fixedScale?: number,
   hatch?: Partial<Record<ViewName, [P2, P2, P2][]>>,
+  viewScales?: Partial<Record<ViewName, number | null>>,
 ): { placed: Placed[]; scale: number } {
   const b = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, bounds(v!)])) as Record<ViewName, Bounds>;
-  const sz = (n: ViewName): P2 => (views[n] ? size(b[n]) : [0, 0]);
+  // Tamaño de cada vista en la hoja dividido por la escala de la hoja: las de
+  // escala propia ocupan lo suyo (y 8 mm más abajo para el rótulo)
+  let sheetScale = 1;
+  const own = (n: ViewName) => viewScales?.[n] ?? undefined;
+  const sz = (n: ViewName): P2 => {
+    if (!views[n]) return [0, 0];
+    const [w, h] = size(b[n]);
+    const k = own(n);
+    return k ? [(w * k) / sheetScale, (h * k + 8) / sheetScale] : [w, h];
+  };
   const { above, below, leftOf, rightOf } = viewSlots(projection);
   const areaW = sheet.width - 2 * MARGIN;
   const areaH = sheet.height - 2 * MARGIN - TITLE_H;
@@ -178,10 +202,12 @@ export function layout(
     return { colW, midH, w, h: Math.max(h, views.iso ? sz("iso")[1] * s : 0) };
   };
   const fits = (s: number) => {
+    sheetScale = s;
     const m = measure(s);
     return m.w + 2 * GAP <= areaW && m.h + 2 * GAP <= areaH;
   };
   const scale = fixedScale ?? SCALES.find(fits) ?? SCALES[SCALES.length - 1];
+  sheetScale = scale;
   const { colW, midH } = measure(scale);
   const top = MARGIN + GAP;
   const midY = top + (views[above] ? sz(above)[1] * scale + GAP : 0);
@@ -189,7 +215,9 @@ export function layout(
   // En la hoja y crece hacia abajo: el punto (u, v) de la vista va a (x + u·s, y − v·s)
   const put = (name: ViewName, x0: number, y0: number, w: number) => {
     const bb = b[name];
-    out.set(name, { name, scale, lines: views[name]!, hatch: hatch?.[name], x: x0 + (w - (bb.max[0] - bb.min[0]) * scale) / 2 - bb.min[0] * scale, y: y0 + bb.max[1] * scale });
+    const k = own(name) ?? scale;
+    const label = k !== scale ? `${VIEW_TITLES[name]} (${scaleLabel(k)})` : undefined;
+    out.set(name, { name, scale: k, lines: views[name]!, hatch: hatch?.[name], x: x0 + (w - (bb.max[0] - bb.min[0]) * k) / 2 - bb.min[0] * k, y: y0 + bb.max[1] * k, label });
   };
   let x = MARGIN + GAP;
   if (views[leftOf]) {
@@ -685,7 +713,7 @@ export function sheetSvg(
   placed: Placed[],
   sheet: SheetSize,
   info: TitleBlock,
-  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][] },
+  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[] },
 ): string {
   const out: string[] = [];
   out.push(
@@ -743,7 +771,9 @@ export function sheetSvg(
     for (const pts of opts.layer) out.push(`<polyline points="${pts.map((p) => `${n(p[0])},${n(sheet.height - p[1])}`).join(" ")}"/>`);
     out.push("</g>");
   }
-  if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
+  // Sus cotas (ya en coordenadas del SVG)
+  if (opts.layerDims?.length) out.push(`<g data-layer="" data-layer-dims="">${opts.layerDims.map((d) => dimensionSvg(d)).join("")}</g>`);
+  if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d).replace('data-dimension=""', 'data-dimension="" data-overall-dim=""'));
   for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", `data-dimension="" data-user-dim="${d.index}"`));
   // Corte: rótulo bajo el frente y la línea de corte con sus letras en la planta
   const front = placed.find((v) => v.name === "front");
@@ -752,7 +782,13 @@ export function sheetSvg(
     const b = bounds(front.lines);
     const cx = front.x + ((b.min[0] + b.max[0]) / 2) * front.scale;
     const below = front.y - b.min[1] * front.scale + (opts.dimensions ? 14 : 6);
-    out.push(`<text data-section-label="" x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}</text>`);
+    // Con escala propia, la escala va en el mismo rótulo
+    const k = front.label ? ` (${scaleLabel(front.scale)})` : "";
+    out.push(`<text data-section-label="" x="${n(cx)}" y="${n(below)}" font-size="4" text-anchor="middle" fill="#000">Corte ${esc(opts.section.label)}-${esc(opts.section.label)}${k}</text>`);
+  }
+  // Rótulo bajo las vistas con escala propia
+  for (const [v, at] of viewLabels(placed, opts.dimensions, !!opts.section)) {
+    out.push(`<text data-view-label="${esc(v.name)}" x="${n(at[0])}" y="${n(at[1])}" font-size="3.5" text-anchor="middle" fill="#000">${esc(v.label!)}</text>`);
   }
   if (opts.section && top) {
     const b = bounds(top.lines);
@@ -787,6 +823,16 @@ export function sheetSvg(
   return out.join("\n");
 }
 
+/** Dónde va el rótulo de cada vista con escala propia (centrado debajo, pasando las cotas generales) */
+function viewLabels(placed: Placed[], dimensions: boolean | undefined, section: boolean): [Placed, P2][] {
+  return placed
+    .filter((v) => v.label && !v.detail && !(section && v.name === "front"))
+    .map((v) => {
+      const b = bounds(v.lines);
+      return [v, [v.x + ((b.min[0] + b.max[0]) / 2) * v.scale, v.y - b.min[1] * v.scale + (dimensions && v.name !== "iso" ? 14 : 6)]];
+    });
+}
+
 // ─── DXF ────────────────────────────────────────────────────────────────────
 
 /**
@@ -798,7 +844,7 @@ export function sheetSvg(
 export function sheetDxf(
   placed: Placed[],
   sheet: SheetSize,
-  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][] },
+  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[] },
 ): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
@@ -876,7 +922,7 @@ export function sheetDxf(
         for (let i = 0; i + 1 < l.points.length; i++) line(layer, at(l.points[i]), at(l.points[i + 1]));
       }
     }
-    if (!opts.view && (opts.dimensions || (opts.userDims ?? []).length)) {
+    if (!opts.view && (opts.dimensions || (opts.userDims ?? []).length || (opts.layerDims ?? []).length)) {
       // Cotas generales como líneas y texto (Y hacia arriba)
       const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
       const text = (at: P2, value: string, rotate = false) => {
@@ -889,7 +935,7 @@ export function sheetDxf(
         pair(1, value);
         if (rotate) pair(50, 90);
       };
-      for (const d of [...(opts.dimensions ? overallDimensions(placed) : []), ...userDimensions(placed, opts.userDims ?? [])]) {
+      for (const d of [...(opts.dimensions ? overallDimensions(placed) : []), ...userDimensions(placed, opts.userDims ?? []), ...(opts.layerDims ?? [])]) {
         if (d.kind === "angle") {
           // El arco en tramos de ~3°
           const [a0, a1] = shortSweep(d.a0, d.a1);
@@ -937,6 +983,17 @@ export function sheetDxf(
         pair(30, 0);
         pair(40, 3.5);
         pair(1, `Detalle ${d.label} (${scaleLabel(v.scale)})`);
+      }
+    // Rótulos de las vistas con escala propia
+    if (!opts.view)
+      for (const [v, at] of viewLabels(placed, opts.dimensions, false)) {
+        pair(0, "TEXT");
+        pair(8, "COTAS");
+        pair(10, at[0] - v.label!.length * 1.2);
+        pair(20, sheet.height - at[1]);
+        pair(30, 0);
+        pair(40, 3.5);
+        pair(1, v.label!);
       }
     // Lo dibujado a mano (ya en mm de hoja con Y hacia arriba); no va en una vista sola
     if (!opts.view) for (const pts of opts.layer ?? []) for (let i = 0; i + 1 < pts.length; i++) line("DIBUJO", pts[i], pts[i + 1]);

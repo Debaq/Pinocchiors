@@ -7,8 +7,9 @@
 // resto en la interfaz: se lee como «Plano 1» y se reescribe al primer cambio.
 
 import type { CadDocument, Sketch } from "./cad.ts";
-import type { Detail, Projection, UserDim, ViewName } from "./drawing.ts";
+import { VIEW_LABELS, scaleLabel, type Detail, type Projection, type UserDim, type ViewName } from "./drawing.ts";
 import type { SceneNode } from "./scene-tree.ts";
+import type { SheetLink } from "./sheetRefs.ts";
 
 export interface DrawingSheet {
   id: number;
@@ -25,6 +26,8 @@ export interface DrawingSheet {
   overall: boolean;
   /** Vistas que no se muestran */
   hiddenViews: ViewName[];
+  /** Escala propia de una vista (sin ella, la de la hoja); se rotula debajo */
+  viewScales?: Partial<Record<ViewName, number | null>>;
   /** Ya con las seis vistas (antes había una sola lateral, "side") */
   sixViews?: boolean;
   /** Corte A-A paralelo al frente: `y` del plano (mm del modelo; sin ella, por el medio) */
@@ -35,6 +38,8 @@ export interface DrawingSheet {
   details: Detail[];
   /** Lo dibujado a mano sobre la hoja (mm de hoja, Y hacia arriba) */
   sketch?: Sketch | null;
+  /** Entidades del dibujo ligadas a líneas de las vistas (siguen al modelo) */
+  links?: SheetLink[];
   sketchHidden?: boolean;
 }
 
@@ -49,15 +54,7 @@ export interface DrawingData {
 }
 
 export const VIEW_NAMES: ViewName[] = ["front", "top", "bottom", "left", "right", "back", "iso"];
-export const VIEW_LABELS: Record<ViewName, string> = {
-  front: "Frente",
-  top: "Superior (planta)",
-  bottom: "Inferior",
-  left: "Lateral izquierda",
-  right: "Lateral derecha",
-  back: "Posterior",
-  iso: "Isométrica",
-};
+export { VIEW_LABELS };
 
 /** Las que no se ven al empezar: frente, superior, una lateral (la que va a la derecha del frente) e isométrica a la vista */
 export const defaultHiddenViews = (projection: Projection): ViewName[] => ["bottom", projection === "first" ? "right" : "left", "back"];
@@ -241,8 +238,10 @@ export function elementLabel(s: DrawingSheet, el: DrawingElement): string {
   switch (el.kind) {
     case "sheet":
       return "Hoja y cajetín";
-    case "view":
-      return VIEW_LABELS[el.view];
+    case "view": {
+      const k = s.viewScales?.[el.view];
+      return k ? `${VIEW_LABELS[el.view]} (${scaleLabel(k)})` : VIEW_LABELS[el.view];
+    }
     case "overall":
       return "Cotas generales";
     case "section":

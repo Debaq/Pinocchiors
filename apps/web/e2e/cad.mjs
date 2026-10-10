@@ -1614,6 +1614,92 @@ const scenarios = {
     await sleep(500);
     check(await boxes(), false);
     await b.shot("plano_seis_vistas_iso_a");
+    // Escala propia de la posterior: rótulo debajo y la fila del Outliner lo dice
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].viewScales = { back: 2 }; })`);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-view-label="back"]')`)); t++) await sleep(250);
+    const label = await b.eval(`document.querySelector('[data-sheet] [data-view-label="back"]')?.textContent`);
+    if (label !== "Posterior (2:1)") throw new Error(`rótulo: ${label}`);
+    if (!(await b.eval(`document.querySelector('[data-outliner-row="drawing-1:view:back"]')?.textContent.includes("(2:1)")`))) throw new Error("el Outliner no muestra la escala");
+    await b.shot("plano_escala_por_vista");
+  },
+
+  async "plano 2D: las vistas como referencia del dibujo (anclar, usar, recortar, cotas que siguen al modelo)"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    // Escala fija 1:1: las medidas en la hoja son las de la pieza
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].scale = 1; })`);
+    await sleep(1500);
+    await b.clickText("Dibujar");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()?.sheet`)); t++) await sleep(250);
+    await sleep(800);
+    // Esquinas del frente en mm de hoja (Y hacia arriba)
+    const front = await b.eval(`(() => {
+      const sh = window.__cadUi.session().sheet;
+      const v = sh.views.find((x) => x.name === "front");
+      const pts = v.lines.flatMap((l) => l.points);
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      const S = (p) => [v.x + p[0] * v.scale, sh.height - v.y + p[1] * v.scale];
+      return { lo: S([Math.min(...xs), Math.min(...ys)]), hi: S([Math.max(...xs), Math.max(...ys)]) };
+    })()`);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const pos = (s, id) => { const q = s.points.find((p) => p.id === id); return [q.x, q.y]; };
+    // 1. Anclar: una línea que empieza cerca de la esquina de arriba a la derecha del frente queda justo en ella
+    await key("l");
+    await b.click(...(await at([front.hi[0] + 0.4, front.hi[1] + 0.4])), { wait: 400 });
+    await b.click(...(await at([front.hi[0] + 30, front.hi[1] + 25])), { wait: 400 });
+    await key("Escape");
+    await key("Escape");
+    let s = await sk();
+    const first = s.entities.find((e) => e.geometry.type === "line");
+    const p0 = pos(s, first.geometry.start);
+    near(p0[0], front.hi[0], 1e-6, "anclado a la esquina (x)");
+    near(p0[1], front.hi[1], 1e-6, "anclado a la esquina (y)");
+    // 2. Usar el borde de abajo del frente: queda ligado
+    await key("j");
+    await b.click(...(await at([(front.lo[0] + front.hi[0]) / 2, front.lo[1]])), { wait: 600 });
+    s = await sk();
+    if ((s.uses ?? []).length !== 1) throw new Error(`usar: ${JSON.stringify(s.uses)}`);
+    const used = s.entities.find((e) => e.id === s.uses[0].entity);
+    near(Math.abs(pos(s, used.geometry.end)[0] - pos(s, used.geometry.start)[0]), 20, 1e-6, "el borde usado mide 20");
+    if ((await b.eval(`window.__cadUi.session().sheet.links.length`)) !== 1) throw new Error("no quedó el vínculo");
+    // 3. Recortar contra la vista: una línea que entra al frente por la izquierda; clic adentro quita ese tramo
+    const y = (front.lo[1] + front.hi[1]) / 2;
+    await key("l");
+    await b.click(...(await at([front.lo[0] - 15, y + 3])), { wait: 400 });
+    await b.click(...(await at([front.lo[0] + 8, y + 3])), { wait: 400 });
+    await key("Escape");
+    await key("Escape");
+    await key("t");
+    await b.click(...(await at([front.lo[0] + 5, y + 3])), { wait: 600 });
+    s = await sk();
+    const cut = s.entities.filter((e) => e.geometry.type === "line" && !(s.uses ?? []).some((u) => u.entity === e.id)).map((e) => [pos(s, e.geometry.start), pos(s, e.geometry.end)]).find((l) => Math.abs(l[0][1] - (y + 3)) < 1 && Math.abs(l[1][1] - (y + 3)) < 1);
+    if (!cut) throw new Error(`recortar: ${JSON.stringify(s.entities.map((e) => e.geometry.type))}`);
+    near(Math.max(cut[0][0], cut[1][0]), front.lo[0], 1e-6, "recortada en el borde de la vista");
+    // 4. Una cota de largo en la línea usada y de vuelta al plano: sale en la hoja
+    await b.eval(`window.__cadUi.change((sk) => sk.constraints.push({ type: "length", line: ${used.id}, value: 20, reference: true }))`);
+    await sleep(800);
+    await b.clickText("Volver al plano");
+    const dimTexts = () => b.eval(`[...document.querySelectorAll("[data-sheet] svg [data-layer-dims] text")].map((t) => t.textContent)`);
+    for (let t = 0; t < 30 && !(await dimTexts()).includes("20"); t++) await sleep(250);
+    if (!(await dimTexts()).includes("20")) throw new Error(`cotas del dibujo: ${await dimTexts()}`);
+    const saved = (await call("cad_get_document")).drawing.sheets[0];
+    if (saved.links?.length !== 1) throw new Error(`vínculos guardados: ${JSON.stringify(saved.links)}`);
+    await b.shot("plano_referencias");
+    // 5. La caja pasa a 30 de ancho: lo ligado (y su cota) la sigue
+    const doc = await call("cad_get_document");
+    const box = doc.features.find((f) => f.kind.type === "primitive");
+    box.kind.shape.dx = 30;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    for (let t = 0; t < 40 && !(await dimTexts()).includes("30"); t++) await sleep(250);
+    if (!(await dimTexts()).includes("30")) throw new Error(`la cota no siguió al modelo: ${await dimTexts()}`);
+    await b.shot("plano_referencias_modelo");
   },
 
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {

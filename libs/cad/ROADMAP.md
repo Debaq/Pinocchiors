@@ -673,3 +673,8 @@ cargo test -p cad-model
   de propiedades y todo guardado en el documento. De paso: lo elegido en el visor se marca en
   el Outliner (región o curva → su sketch; cara o arista → su pieza) y un clic en la curva de un
   sketch abierto lo elige entero.
+- **2026-10-10 Plano 2D: seis vistas, escala por vista y vistas como referencia**
+  ([PLAN_PLANO_2D](PLAN_PLANO_2D.md), fase 2): las seis vistas principales según el diedro;
+  escala propia con rótulo; al dibujar sobre la hoja se ancla a las vistas, «Usar» trae líneas
+  ligadas que siguen al modelo, recortar y extender las toman de límite y las cotas del dibujo
+  salen en la hoja.

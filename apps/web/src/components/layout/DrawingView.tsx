@@ -43,6 +43,7 @@ import {
   type DrawingElement,
   type DrawingSheet,
 } from "../../lib/drawingDoc";
+import { applySheetLinks, sheetSketchDims } from "../../lib/sheetRefs";
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
 
@@ -135,11 +136,20 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const v = views();
     const s = d();
     if (!v || !s) return null;
-    const r = layout(v, sheet(), projection(), s.scale ?? undefined, hatch());
+    const r = layout(v, sheet(), projection(), s.scale ?? undefined, hatch(), s.viewScales);
     return { ...r, placed: [...r.placed, ...placeDetails(r.placed, s.details.filter((x) => !x.hidden), sheet())] };
   });
-  // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja)
-  const layer = createMemo(() => (d()?.sketchHidden ? [] : sheetLayerLines(d()?.sketch)));
+  // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja), con lo ligado
+  // a las vistas donde están hoy sus líneas
+  const linked = createMemo(() => {
+    const s = d();
+    const r = result();
+    if (!s?.sketch) return undefined;
+    if (!r || !s.links?.length) return { sketch: s.sketch, links: s.links ?? [], lost: 0 };
+    return applySheetLinks(s.sketch, s.links, r.placed, sheet().height);
+  });
+  const layer = createMemo(() => (d()?.sketchHidden ? [] : sheetLayerLines(linked()?.sketch)));
+  const layerDims = createMemo(() => (d()?.sketchHidden ? [] : sheetSketchDims(linked()?.sketch, sheet().height)));
   const sheetOf = (withLayer: boolean) => {
     const r = result();
     const s = d();
@@ -164,6 +174,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         section: sectionOn() ? { label: "A", at: sectionAt() } : undefined,
         userDims: s.dims,
         layer: withLayer ? layer() : undefined,
+        layerDims: withLayer ? layerDims() : undefined,
       },
     );
   };
@@ -177,15 +188,18 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
    */
   const startDrawing = async () => {
     const s = d();
-    if (!s) return;
+    const r = result();
+    if (!s || !r) return;
     const sh = sheet();
     try {
       const backdrop = await rasterSheet(sheetOf(false), sh.width, sh.height);
       // La de la vez anterior ya no se usa
       if (lastBackdrop) URL.revokeObjectURL(lastBackdrop);
       lastBackdrop = backdrop;
+      const l = linked();
       ui.setDrawingOpen(false);
-      ui.editSheet(s.sketch, { drawing: s.id, width: sh.width, height: sh.height, backdrop });
+      ui.editSheet(l?.sketch ?? s.sketch, { drawing: s.id, width: sh.width, height: sh.height, backdrop, views: r.placed, hiddenLines: s.hiddenLines, links: [...(l?.links ?? [])] });
+      if (l?.lost) ui.setMessage(`${l.lost === 1 ? "Una curva ligada perdió" : `${l.lost} curvas ligadas perdieron`} su línea de la vista: quedó donde estaba`);
     } catch (e) {
       setMessage(String(e));
     }
@@ -213,7 +227,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return write("dxf", `${fileBase()}${what === "sheet" ? "" : `_${what}_1a1`}.dxf`, (path) =>
       invoke<number>("cad_write_text", {
         path,
-        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), view: what === "sheet" ? undefined : what }),
+        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), layerDims: layerDims(), view: what === "sheet" ? undefined : what }),
       }),
     );
   };
@@ -233,8 +247,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const det = t.closest("[data-detail], [data-detail-mark]") as HTMLElement | null;
     if (det) return { kind: "detail", label: det.dataset.detail ?? det.dataset.detailMark! };
     if (t.closest("[data-hatch], [data-section-line], [data-section-label]")) return { kind: "section" };
-    if (t.closest("[data-dimension]")) return { kind: "overall" };
     if (t.closest("[data-layer]")) return { kind: "sketch" };
+    if (t.closest("[data-overall-dim]")) return { kind: "overall" };
     if (t.closest("[data-title-block]")) return { kind: "sheet" };
     const view = (t.closest("[data-view]") as HTMLElement | null)?.dataset.view;
     if (view?.startsWith("detalle-")) return { kind: "detail", label: view.slice(8) };
@@ -345,11 +359,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       case "dim":
         return lines([`[data-user-dim="${el.index}"] *`]) + texts([`[data-user-dim="${el.index}"]`]) + `${S} [data-user-dim="${el.index}"] polygon { fill: ${c} !important; }`;
       case "overall":
-        return lines([`[data-dimension]:not([data-user-dim]) *`]) + texts([`[data-dimension]:not([data-user-dim])`]);
+        return lines([`[data-overall-dim] *`]) + texts([`[data-overall-dim]`]);
       case "section":
         return lines([`[data-section-line] *`]) + texts([`[data-section-line]`]) + `${S} [data-section-label] { fill: ${c} !important; }`;
       case "sketch":
-        return lines([`[data-layer] polyline`]);
+        return lines([`[data-layer] *`]) + texts([`[data-layer]`]);
       case "sheet":
         return lines([`[data-title-block] rect`]);
     }
@@ -605,8 +619,22 @@ const ElementWindow: Component<{
             {row("Título", <input aria-label="Título del plano" class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
             {row("Autor", <input aria-label="Autor" placeholder="Autor" class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
           </Match>
-          <Match when={el().kind === "view"}>
-            <p class="text-[11px] text-text-dim">Escala {scaleLabel(props.scale)} (la de la hoja).</p>
+          <Match when={el().kind === "view" && (el() as { view: ViewName }).view}>
+            {(view) => (
+              <>
+                {row(
+                  "Escala",
+                  <div class="w-28">
+                    <Select
+                      options={[{ value: "sheet", label: `Hoja (${scaleLabel(props.scale)})` }, ...SCALES.map((s) => ({ value: String(s), label: scaleLabel(s) }))]}
+                      value={props.sheet.viewScales?.[view()] ? String(props.sheet.viewScales[view()]) : "sheet"}
+                      onChange={(v) => props.update((s) => (s.viewScales = { ...(s.viewScales ?? {}), [view()]: v === "sheet" ? null : Number(v) }))}
+                    />
+                  </div>,
+                )}
+                <p class="text-[11px] text-text-dim">Con otra escala que la de la hoja, la vista lleva su rótulo debajo.</p>
+              </>
+            )}
           </Match>
           <Match when={el().kind === "overall"}>
             <p class="text-[11px] text-text-dim">Ancho y alto de cada vista.</p>

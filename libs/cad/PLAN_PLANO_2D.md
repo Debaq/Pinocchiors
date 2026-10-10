@@ -85,15 +85,35 @@ al final de la fila del frente. Al empezar se ven frente, superior, la lateral q
 derecha del frente e isométrica; las otras se prenden con su ojo. Los planos con la vieja
 «side» la pasan a izquierda (primer diedro) o derecha (tercero), también en cotas y detalles.
 
-### F2 — Las vistas como referencia
+### F2 — Las vistas como referencia ✅
 
-- Cada línea de vista entra al sketch de la hoja como entidad fija ligada
-  (`SketchUse` con `source: view { name, ref }`, recordada por un punto como las cotas a mano;
-  se vuelve a buscar al cambiar el modelo y avisa si se perdió).
-- Anclajes a vértices, medios, centros e intersecciones de las vistas.
-- Recortar y extender contra aristas de las vistas (límite proyectado).
-- Las cotas a mano actuales (`UserDim`) pasan a ser cotas del sketch de la hoja ligadas a
-  la vista (de referencia: miden, no mandan). Migración de los documentos que las tienen.
+*Hecha el 2026-10-10* (`lib/sheetRefs.ts`, pruebas node `sheetRefs.test.mjs`, e2e "plano 2D:
+las vistas como referencia del dibujo…"). La sesión de la hoja lleva las vistas acomodadas
+(`SheetEdit.views`) y si se dibujan las ocultas.
+- Anclajes: las líneas de las vistas en mm de hoja (`viewPolylines`) entran a `solidRefs` como
+  si fueran aristas del sólido: extremos, medios, centros, cruces y sobre la línea.
+- Usar (J) sobre la hoja: la línea de vista más cercana entra como recta, círculo, arco o spline
+  (`projectViewLine`) en `uses` (el solver la deja fija, sin backend nuevo) con su vínculo en
+  `DrawingSheet.links` (`{entity, view, at}`). `applySheetLinks` la lleva a donde está hoy su
+  línea (otra escala, otro lugar o el modelo cambió) al dibujar la hoja y al abrir el dibujo;
+  si la línea ya no está, queda donde estaba y se avisa. Romper vínculo la deja suelta.
+- Recortar y extender toman las líneas de las vistas como límites de afuera (`TrimLimits` en
+  `trimLine`, `trimCurve`, `extendLine`, `trimByStroke`); el punto del corte queda fijo.
+- Cotas del dibujo en la hoja, el PDF y el DXF (`sheetSketchDims`: largo, distancia,
+  horizontal y vertical, radio, diámetro y ángulo; el valor es lo que mide la geometría). Las de
+  una curva usada miden el modelo y lo siguen.
+- Decisión: las cotas a mano del plano (`UserDim`) **no** se migran al dibujo: ya miden la
+  vista y siguen al modelo; conviven con las del dibujo.
+- Pendiente para F3: lo anclado a un vértice de una vista queda fijo en la hoja (no sigue a la
+  vista si se corre ni al modelo); lo mismo con todo lo dibujado que no está ligado.
+
+### Escala por vista ✅
+
+*Hecha el 2026-10-10 (pedido del usuario).* `DrawingSheet.viewScales`; en la ventana de una
+vista, «Escala» (la de la hoja o una normalizada). `layout` cuenta cada vista a su escala (la
+automática de la hoja deja lugar a las ampliadas) y las de escala propia llevan su rótulo debajo
+(«Posterior (2:1)», también en el DXF; en el frente cortado va en el rótulo del corte) y en su
+fila del Outliner.
 
 ### F3 — Vistas libres y girar en 3D
 
@@ -112,7 +132,6 @@ derecha del frente e isométrica; las otras se prenden con su ojo. Los planos co
   más botones de 90°, ángulos escritos y «tomar la vista del visor». Se guarda `eye` + `xdir`
   por vista. Cada giro vuelve a pedir HLR (vista previa con la malla mientras se arrastra).
 - Lo dibujado y las cotas sobre una vista se mueven con ella (pertenecen a la vista).
-- Escala por vista (como los detalles).
 
 ### F4 — Cortes e imágenes de secciones
 

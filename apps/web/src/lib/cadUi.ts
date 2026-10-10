@@ -7,6 +7,8 @@ import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
 import { updateDrawing, type DrawingElement } from "./drawingDoc";
+import type { Placed } from "./drawing";
+import { nearestViewLine, projectViewLine, type SheetLink } from "./sheetRefs";
 import {
   geometryPoints,
   mirrorEntities,
@@ -181,6 +183,11 @@ export interface SheetEdit {
   width: number;
   height: number;
   backdrop?: string;
+  /** Las vistas en la hoja (para anclar, recortar, extender y «Usar») y si se dibujan las ocultas */
+  views: Placed[];
+  hiddenLines: boolean;
+  /** Entidades ligadas a líneas de las vistas (se cambia en el lugar al «Usar») */
+  links: SheetLink[];
 }
 
 /** `feature` de la sesión que dibuja sobre la hoja del plano 2D */
@@ -870,6 +877,23 @@ export function createCadUi(store: CadStore) {
       return `${n === 1 ? "1 curva" : `${n} curvas`} ${what}, ligada${n === 1 ? "" : "s"} al modelo (si cambia, se mueve${n === 1 ? "" : "n"} con él)`;
     },
 
+    /**
+     * Dibujando sobre la hoja: la línea de vista más cercana a `q` (a menos de
+     * `tol` mm de hoja) entra al dibujo ligada a su vista (sigue al modelo)
+     */
+    useViewLine(q: P2, tol: number): string {
+      const s = session();
+      const sheet = s?.sheet;
+      if (!sheet) return "No hay hoja abierta";
+      const hit = nearestViewLine(sheet.views, sheet.height, q, tol, sheet.hiddenLines);
+      if (!hit) return "Clic sobre una línea de una vista";
+      let ids: number[] = [];
+      ui.change((sk) => (ids = addProjected(sk, [projectViewLine(hit.view, hit.line, sheet.height)], () => ({}))));
+      for (const entity of ids) sheet.links.push({ entity, view: hit.view.name, at: hit.at });
+      setSelection(ids);
+      return "Línea de la vista ligada: si cambia el modelo, se mueve con él";
+    },
+
     /** Lo elegido deja de seguir al modelo: queda donde está, editable */
     breakLinks(): string {
       const s = session();
@@ -899,7 +923,16 @@ export function createCadUi(store: CadStore) {
       // La hoja: el sketch va al plano del documento (las fórmulas quedan en sus cotas) y el plano se vuelve a abrir
       if (s.sheet) {
         const id = s.sheet.drawing;
-        await store.commit((d) => void updateDrawing(d, id, (x) => (x.sketch = clone(s.sketch))));
+        // Los vínculos de lo que sigue ligado (lo borrado o con el vínculo roto se olvida)
+        const used = new Set((s.sketch.uses ?? []).map((u) => u.entity));
+        const links = s.sheet.links.filter((l) => used.has(l.entity) && s.sketch.entities.some((e) => e.id === l.entity));
+        await store.commit(
+          (d) =>
+            void updateDrawing(d, id, (x) => {
+              x.sketch = clone(s.sketch);
+              x.links = links;
+            }),
+        );
         setDrawingOpen(true);
         return;
       }
