@@ -43,6 +43,7 @@ import {
   type Placed,
   type Projection,
   type ViewName,
+  sheetTextBoxes,
 } from "../../lib/drawing";
 import {
   VIEW_LABELS,
@@ -333,6 +334,8 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   });
   const layer = createMemo(() => (d()?.sketchHidden ? [] : sheetLayerLines(linked()?.sketch)));
   const layerDims = createMemo(() => (d()?.sketchHidden ? [] : sheetSketchDims(linked()?.sketch, sheet().height)));
+  // Los textos dibujados: las cotas no se les ponen encima
+  const textBoxes = createMemo(() => (d()?.sketchHidden ? [] : sheetTextBoxes(linked()?.sketch, sheet().height)));
   const sheetOf = (withLayer: boolean) => {
     const r = result();
     const s = d();
@@ -358,6 +361,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         userDims: s.dims,
         layer: withLayer ? layer() : undefined,
         layerDims: withLayer ? layerDims() : undefined,
+        textBoxes: withLayer ? textBoxes() : undefined,
         marks: marks(),
       },
     );
@@ -411,7 +415,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return write("dxf", `${fileBase()}${what === "sheet" ? "" : `_${what}_1a1`}.dxf`, (path) =>
       invoke<number>("cad_write_text", {
         path,
-        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), layerDims: layerDims(), marks: marks(), view: what === "sheet" ? undefined : what }),
+        content: sheetDxf(r.placed, sheet(), { hidden: s.hiddenLines, smooth: s.smooth, dimensions: s.overall, userDims: s.dims, layer: layer(), layerDims: layerDims(), textBoxes: textBoxes(), marks: marks(), view: what === "sheet" ? undefined : what }),
       }),
     );
   };

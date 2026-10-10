@@ -2000,6 +2000,66 @@ const scenarios = {
     if (!(await b.eval(`!!document.querySelector('div[aria-label="Plano 2D"]') && !window.__cadUi.session()`))) throw new Error("descartar no volvió al plano");
   },
 
+  async "plano 2D: medida al dibujar sobre la hoja (queda solo si se escribe o con Enter) y cotas donde se dejaron"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await b.clickText("Dibujar");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()?.sheet`)); t++) await sleep(250);
+    await sleep(800);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const asked = () => b.eval(`document.activeElement?.tagName === "INPUT"`);
+    const lengths = () => b.eval(`window.__cadUi.session().sketch.constraints.filter((c) => c.type === "length").map((c) => c.value)`);
+    const line = async (p, q) => {
+      await key("l");
+      await b.click(...(await at(p)), { wait: 400 });
+      await b.click(...(await at(q)), { wait: 800 });
+      if (!(await asked())) throw new Error("no se pidió la medida sobre la hoja");
+    };
+    // 1. Se escribe 50 + Enter: queda la cota y la línea mide 50
+    await line([40, 40], [100, 40]);
+    if ((await lengths()).length) throw new Error("la cota se agregó antes de escribirla");
+    await b.send("Input.insertText", { text: "50" });
+    await b.key("Enter", "Enter", 13);
+    await sleep(1200);
+    await key("Escape");
+    if (JSON.stringify(await lengths()) !== "[50]") throw new Error(`con 50: ${JSON.stringify(await lengths())}`);
+    // 2. Esc en el campo: no queda nada
+    await line([40, 100], [100, 100]);
+    await b.key("Escape", "Escape", 27);
+    await sleep(600);
+    await key("Escape");
+    if ((await lengths()).length !== 1) throw new Error(`con Esc: ${JSON.stringify(await lengths())}`);
+    // 3. Enter sin escribir: queda con lo dibujado
+    await line([40, 150], [80, 150]);
+    await b.key("Enter", "Enter", 13);
+    await sleep(1200);
+    await key("Escape");
+    const ls = await lengths();
+    if (ls.length !== 2) throw new Error(`con Enter: ${JSON.stringify(ls)}`);
+    near(ls[1], 40, 1, "cota con lo dibujado");
+    const ends = await b.eval(`(() => { const s = window.__cadUi.session().sketch; const l = s.entities.find((e) => e.geometry.type === "line").geometry; return [l.start, l.end].map((id) => { const p = s.points.find((q) => q.id === id); return [p.x, p.y]; }); })()`);
+    near(Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]), 50, 1e-3, "la línea acotada");
+    // 4. El texto de la cota de 50 arrastrado a mano: en la hoja sale ahí (y la línea de cota se alarga)
+    await b.eval(`window.__cadUi.change((sk) => { const c = sk.constraints.find((c) => c.type === "length" && Math.abs(c.value - 50) < 1e-6); c.opts = { offset: [60, 15] }; })`);
+    await sleep(800);
+    await b.clickText("Volver al plano");
+    const dimTexts = () => b.eval(`[...document.querySelectorAll("[data-sheet] svg [data-layer-dims] text")].map((t) => [t.textContent, +t.getAttribute("x"), +t.getAttribute("y")])`);
+    for (let t = 0; t < 30 && (await dimTexts()).length < 2; t++) await sleep(250);
+    const texts = await dimTexts();
+    const fifty = texts.find((t) => t[0] === "50");
+    if (!fifty || !texts.some((t) => t[0] === "40")) throw new Error(`cotas en la hoja: ${JSON.stringify(texts)}`);
+    // Medio de la línea + (60, 15) en mm de hoja; en el SVG Y va hacia abajo (alto 210) y el renglón 1 mm arriba
+    const mid = [(ends[0][0] + ends[1][0]) / 2, (ends[0][1] + ends[1][1]) / 2];
+    near(fifty[1], mid[0] + 60, 0.5, "texto de la cota (x)");
+    near(fifty[2], 210 - (mid[1] + 15) - 1, 0.5, "texto de la cota (y)");
+    await b.shot("plano_medida_al_dibujar");
+  },
+
   async "planos 2D en el Outliner: varios, elementos, ventana de propiedades"(b) {
     await begin(b);
     await b.clickText("Caja");

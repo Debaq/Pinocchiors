@@ -485,6 +485,8 @@ export interface Dimension {
   value: number;
   /** "Ø" en diámetros */
   prefix?: string;
+  /** Texto corrido a lo largo de la línea de cota (mm desde el medio): la línea se alarga hasta él */
+  along?: number;
 }
 
 /** Cota de ángulo: arco de radio `r` con centro `c` entre los ángulos `a0` y `a1` (radianes, coordenadas de hoja) */
@@ -506,10 +508,15 @@ export interface RadiusDimension {
   c: P2;
   p: P2;
   value: number;
+  /** Largo de la línea afuera del arco hasta el texto (6 mm si no) */
+  tail?: number;
 }
 
-/** `index`: la cota a mano de la que sale (en `dims`); las generales no tienen */
-export type AnyDimension = (Dimension | AngleDimension | RadiusDimension) & { index?: number };
+/**
+ * `index`: la cota a mano de la que sale (en `dims`); las generales no tienen.
+ * `placed`: el usuario eligió dónde va el texto (no se corre para no pisar otras).
+ */
+export type AnyDimension = (Dimension | AngleDimension | RadiusDimension) & { index?: number; placed?: boolean };
 
 /**
  * Cota puesta por el usuario sobre líneas de una vista. Las líneas se
@@ -868,7 +875,7 @@ function radiusSvg(d: RadiusDimension): string {
   const len = Math.hypot(d.p[0] - d.c[0], d.p[1] - d.c[1]) || 1;
   const [ux, uy] = [(d.p[0] - d.c[0]) / len, (d.p[1] - d.c[1]) / len];
   // El texto sale por afuera del arco, en la dirección de la flecha
-  const tip: P2 = [d.p[0] + ux * 6, d.p[1] + uy * 6];
+  const tip: P2 = [d.p[0] + ux * (d.tail ?? 6), d.p[1] + uy * (d.tail ?? 6)];
   const right = ux >= 0;
   return (
     `<g data-dimension="" data-radius="" stroke="#000" stroke-width="0.18">` +
@@ -882,33 +889,154 @@ function radiusSvg(d: RadiusDimension): string {
 export function dimensionSvg(d: AnyDimension): string {
   if (d.kind === "angle") return angleSvg(d);
   if (d.kind === "radius") return radiusSvg(d);
+  const g = linearGeom(d);
   const [ox, oy] = d.offset;
-  const a2: P2 = [d.a[0] + ox, d.a[1] + oy];
-  const b2: P2 = [d.b[0] + ox, d.b[1] + oy];
-  const len = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1;
-  const [ux, uy] = [(b2[0] - a2[0]) / len, (b2[1] - a2[1]) / len];
+  const { a2, b2, ux, uy, at, vertical } = g;
   // Líneas de referencia (con 1 mm de luz y 1,5 de sobrante) y flechas de 2,5 mm
   const ext = (p: P2, q: P2) => {
-    const ol = Math.hypot(ox, oy) || 1;
+    const ol = Math.hypot(ox, oy);
+    if (ol < 1e-9) return "";
     const [ex, ey] = [ox / ol, oy / ol];
     return `<line x1="${n(p[0] + ex)}" y1="${n(p[1] + ey)}" x2="${n(q[0] + ex * 1.5)}" y2="${n(q[1] + ey * 1.5)}"/>`;
   };
   const arrow = (p: P2, dir: number) => arrowSvg(p, dir * ux, dir * uy);
-  const mid: P2 = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
-  const vertical = Math.abs(uy) > Math.abs(ux);
+  const label = esc(dimLabel(d));
   const text = vertical
-    ? `<text x="${n(mid[0] - 1)}" y="${n(mid[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(mid[0] - 1)} ${n(mid[1])})" stroke="none" fill="#000">${esc((d.prefix ?? "") + dimText(d.value))}</text>`
-    : `<text x="${n(mid[0])}" y="${n(mid[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${esc((d.prefix ?? "") + dimText(d.value))}</text>`;
+    ? `<text x="${n(at[0] - 1)}" y="${n(at[1])}" font-size="3" text-anchor="middle" transform="rotate(-90 ${n(at[0] - 1)} ${n(at[1])})" stroke="none" fill="#000">${label}</text>`
+    : `<text x="${n(at[0])}" y="${n(at[1] - 1)}" font-size="3" text-anchor="middle" stroke="none" fill="#000">${label}</text>`;
   return (
     `<g data-dimension="" stroke="#000" stroke-width="0.18">` +
     ext(d.a, a2) +
     ext(d.b, b2) +
-    `<line x1="${n(a2[0])}" y1="${n(a2[1])}" x2="${n(b2[0])}" y2="${n(b2[1])}"/>` +
+    `<line x1="${n(g.line[0][0])}" y1="${n(g.line[0][1])}" x2="${n(g.line[1][0])}" y2="${n(g.line[1][1])}"/>` +
     arrow(a2, 1) +
     arrow(b2, -1) +
     text +
     `</g>`
   );
+}
+
+/** Texto de una cota tal como sale en la hoja */
+function dimLabel(d: AnyDimension): string {
+  if (d.kind === "angle") return dimText(d.value) + "°";
+  if (d.kind === "radius") return "R" + dimText(d.value);
+  return (d.prefix ?? "") + dimText(d.value);
+}
+
+/**
+ * Línea de cota lineal: extremos corridos, dirección, dónde va el texto (en
+ * el medio o corrido `along`) y la línea a dibujar (alargada hasta el texto si
+ * quedó afuera).
+ */
+function linearGeom(d: Dimension) {
+  const [ox, oy] = d.offset;
+  const a2: P2 = [d.a[0] + ox, d.a[1] + oy];
+  const b2: P2 = [d.b[0] + ox, d.b[1] + oy];
+  const len = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]) || 1;
+  const [ux, uy] = [(b2[0] - a2[0]) / len, (b2[1] - a2[1]) / len];
+  const along = d.along ?? 0;
+  const at: P2 = [(a2[0] + b2[0]) / 2 + ux * along, (a2[1] + b2[1]) / 2 + uy * along];
+  // Media palabra más allá del texto si cae afuera de las flechas
+  const half = labelWidth(dimLabel(d)) / 2 + 1;
+  const t0 = Math.min(-len / 2, along - half);
+  const t1 = Math.max(len / 2, along + half);
+  const outside = Math.abs(along) > len / 2 - half;
+  const m: P2 = [(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2];
+  const line: [P2, P2] = outside ? [[m[0] + ux * t0, m[1] + uy * t0], [m[0] + ux * t1, m[1] + uy * t1]] : [a2, b2];
+  return { a2, b2, ux, uy, at, line, vertical: Math.abs(uy) > Math.abs(ux) };
+}
+
+/** Ancho aproximado de un texto de cota (3 mm de alto, sans) */
+const labelWidth = (text: string) => 1.75 * text.length;
+
+/** Caja de un rectángulo [x0, y0, x1, y1] (mm de hoja, Y hacia abajo) */
+export type Box = [number, number, number, number];
+
+/** Dónde queda el texto de una cota en la hoja (mm, Y hacia abajo) */
+export function dimLabelBox(d: AnyDimension): Box {
+  const w = labelWidth(dimLabel(d));
+  if (d.kind === "angle") {
+    const [a0, a1] = shortSweep(d.a0, d.a1);
+    const mid = (a0 + a1) / 2;
+    const [x, y] = [d.c[0] + (d.r + 3) * Math.cos(mid), d.c[1] + (d.r + 3) * Math.sin(mid) + 1];
+    return [x - w / 2, y - 2.4, x + w / 2, y + 0.6];
+  }
+  if (d.kind === "radius") {
+    const len = Math.hypot(d.p[0] - d.c[0], d.p[1] - d.c[1]) || 1;
+    const [ux, uy] = [(d.p[0] - d.c[0]) / len, (d.p[1] - d.c[1]) / len];
+    const tail = d.tail ?? 6;
+    const [x, y] = [d.p[0] + ux * tail + (ux >= 0 ? 1 : -1), d.p[1] + uy * tail + 1];
+    return ux >= 0 ? [x, y - 2.4, x + w, y + 0.6] : [x - w, y - 2.4, x, y + 0.6];
+  }
+  const { at, vertical } = linearGeom(d);
+  return vertical ? [at[0] - 3.4, at[1] - w / 2, at[0] - 0.4, at[1] + w / 2] : [at[0] - w / 2, at[1] - 3.4, at[0] + w / 2, at[1] - 0.4];
+}
+
+const boxesTouch = (a: Box, b: Box, gap = 0.6) => a[0] < b[2] + gap && a[2] > b[0] - gap && a[1] < b[3] + gap && a[3] > b[1] - gap;
+
+/**
+ * Corre las cotas cuyo texto pisaría otro (o algo de `busy`, como los textos
+ * dibujados): las lineales se alejan de a 6 mm o corren el texto a lo largo,
+ * las de radio alargan su línea y las de ángulo agrandan el arco. Las que el
+ * usuario dejó en un lugar (`placed`) no se mueven: las demás las esquivan.
+ */
+export function spreadDimensions<T extends AnyDimension>(dims: T[], busy: Box[] = []): T[] {
+  const taken: Box[] = [...busy, ...dims.filter((d) => d.placed).map(dimLabelBox)];
+  const free = (b: Box) => !taken.some((q) => boxesTouch(b, q));
+  return dims.map((d) => {
+    if (d.placed) return d;
+    const tries: T[] = [d];
+    if (d.kind === "angle") for (let k = 1; k <= 5; k++) tries.push({ ...d, r: d.r + 5 * k });
+    else if (d.kind === "radius") for (let k = 1; k <= 5; k++) tries.push({ ...d, tail: (d.tail ?? 6) + 5 * k });
+    else {
+      const ol = Math.hypot(...d.offset);
+      const shift = (k: number): P2 => (ol < 1e-9 ? d.offset : [d.offset[0] * (1 + (6 * k) / ol), d.offset[1] * (1 + (6 * k) / ol)]);
+      // Primero más afuera; después el texto a un costado, más afuera de a poco
+      const w = labelWidth(dimLabel(d)) + 2;
+      for (let k = 1; k <= 4 && ol >= 1e-9; k++) tries.push({ ...d, offset: shift(k) });
+      for (let k = 0; k <= 4; k++) for (const j of [1, -1, 2, -2]) tries.push({ ...d, offset: shift(k), along: (d.along ?? 0) + j * w });
+    }
+    const pick = tries.find((t) => free(dimLabelBox(t))) ?? d;
+    taken.push(dimLabelBox(pick));
+    return pick;
+  });
+}
+
+/** Cajas de los textos dibujados en la hoja (mm de hoja, Y hacia abajo) */
+export function sheetTextBoxes(s: Sketch | null | undefined, height: number): Box[] {
+  if (!s?.texts?.length) return [];
+  const hidden = new Set((s.layers ?? []).filter((l) => l.hidden).map((l) => l.id));
+  const byId = new Map(s.entities.map((e) => [e.id, e]));
+  const out: Box[] = [];
+  for (const t of s.texts) {
+    const pts = t.entities.flatMap((id) => {
+      const e = byId.get(id);
+      return e && !e.construction && !(e.layer != null && hidden.has(e.layer)) ? polylineOf(s, e.geometry) : [];
+    });
+    if (!pts.length) continue;
+    const xs = pts.map((p) => p[0]);
+    const ys = pts.map((p) => height - p[1]);
+    out.push([Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)]);
+  }
+  return out;
+}
+
+/**
+ * Todas las cotas de la hoja (generales, a mano sobre las vistas y las del
+ * dibujo) ya separadas para que sus textos no se pisen entre sí ni con los
+ * textos dibujados (`busy`).
+ */
+export function sheetDimensions(
+  placed: Placed[],
+  opts: { dimensions?: boolean; userDims?: UserDim[]; layerDims?: AnyDimension[]; busy?: Box[] },
+): { d: AnyDimension; from: "overall" | "user" | "layer" }[] {
+  const all = [
+    ...(opts.dimensions ? overallDimensions(placed) : []).map((d) => ({ d: d as AnyDimension, from: "overall" as const })),
+    ...userDimensions(placed, opts.userDims ?? []).map((d) => ({ d, from: "user" as const })),
+    ...(opts.layerDims ?? []).map((d) => ({ d, from: "layer" as const })),
+  ];
+  const spread = spreadDimensions(all.map((x) => x.d), opts.busy);
+  return all.map((x, i) => ({ d: spread[i], from: x.from }));
 }
 
 /** La hoja completa en SVG (unidades en mm) */
@@ -929,7 +1057,7 @@ export function sheetSvg(
   placed: Placed[],
   sheet: SheetSize,
   info: TitleBlock,
-  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; marks?: CutMarks },
+  opts: { hidden: boolean; smooth: boolean; dimensions?: boolean; section?: SectionInfo; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; textBoxes?: Box[]; marks?: CutMarks },
 ): string {
   const out: string[] = [];
   out.push(
@@ -1076,10 +1204,14 @@ export function sheetSvg(
     for (const pts of opts.layer) out.push(`<polyline points="${pts.map((p) => `${n(p[0])},${n(sheet.height - p[1])}`).join(" ")}"/>`);
     out.push("</g>");
   }
-  // Sus cotas (ya en coordenadas del SVG)
-  if (opts.layerDims?.length) out.push(`<g data-layer="" data-layer-dims="">${opts.layerDims.map((d) => dimensionSvg(d)).join("")}</g>`);
-  if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d).replace('data-dimension=""', 'data-dimension="" data-overall-dim=""'));
-  for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", `data-dimension="" data-user-dim="${d.index}"`));
+  // Las cotas (las del dibujo ya en coordenadas del SVG), separadas para que no se pisen
+  const dims = sheetDimensions(placed, { ...opts, busy: opts.textBoxes });
+  const layerDims = dims.filter((x) => x.from === "layer").map((x) => dimensionSvg(x.d));
+  if (layerDims.length) out.push(`<g data-layer="" data-layer-dims="">${layerDims.join("")}</g>`);
+  for (const { d, from } of dims) {
+    if (from === "overall") out.push(dimensionSvg(d).replace('data-dimension=""', 'data-dimension="" data-overall-dim=""'));
+    else if (from === "user") out.push(dimensionSvg(d).replace('data-dimension=""', `data-dimension="" data-user-dim="${d.index}"`));
+  }
   // Corte: rótulo bajo el frente y la línea de corte con sus letras en la planta
   const front = placed.find((v) => v.name === "front");
   const top = placed.find((v) => v.name === "top");
@@ -1191,7 +1323,7 @@ function viewLabels(placed: Placed[], dimensions: boolean | undefined, section: 
 export function sheetDxf(
   placed: Placed[],
   sheet: SheetSize,
-  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; marks?: CutMarks },
+  opts: { hidden: boolean; smooth: boolean; view?: string; dimensions?: boolean; userDims?: UserDim[]; layer?: P2[][]; layerDims?: AnyDimension[]; textBoxes?: Box[]; marks?: CutMarks },
 ): string {
   const out: string[] = [];
   const pair = (code: number, value: string | number) => out.push(String(code), typeof value === "number" ? n(value) : value);
@@ -1274,40 +1406,44 @@ export function sheetDxf(
     if (!opts.view && (opts.dimensions || (opts.userDims ?? []).length || (opts.layerDims ?? []).length)) {
       // Cotas generales como líneas y texto (Y hacia arriba)
       const up = (p: P2): P2 => [p[0], sheet.height - p[1]];
-      const text = (at: P2, value: string, rotate = false) => {
+      // El texto en el mismo lugar que en el SVG (desde el comienzo de su renglón)
+      const text = (d: AnyDimension, rotate = false) => {
+        const b = dimLabelBox(d);
+        const at = rotate ? up([b[2] - 0.6, b[3]]) : up([b[0], b[3] - 0.6]);
         pair(0, "TEXT");
         pair(8, "COTAS");
         pair(10, at[0]);
         pair(20, at[1]);
         pair(30, 0);
         pair(40, 3);
-        pair(1, value);
+        pair(1, dimLabel(d));
         if (rotate) pair(50, 90);
       };
-      for (const d of [...(opts.dimensions ? overallDimensions(placed) : []), ...userDimensions(placed, opts.userDims ?? []), ...(opts.layerDims ?? [])]) {
+      for (const { d } of sheetDimensions(placed, { ...opts, busy: opts.textBoxes })) {
         if (d.kind === "angle") {
           // El arco en tramos de ~3°
           const [a0, a1] = shortSweep(d.a0, d.a1);
           const k = Math.max(4, Math.ceil(Math.abs(a1 - a0) / 0.05));
           const at = (a: number, r = d.r): P2 => [d.c[0] + r * Math.cos(a), d.c[1] + r * Math.sin(a)];
           for (let i = 0; i < k; i++) line("COTAS", up(at(a0 + ((a1 - a0) * i) / k)), up(at(a0 + ((a1 - a0) * (i + 1)) / k)));
-          text(up(at((a0 + a1) / 2, d.r + 3)), dimText(d.value) + "°");
+          text(d);
           continue;
         }
         if (d.kind === "radius") {
           const len = Math.hypot(d.p[0] - d.c[0], d.p[1] - d.c[1]) || 1;
-          const tip: P2 = [d.p[0] + ((d.p[0] - d.c[0]) / len) * 6, d.p[1] + ((d.p[1] - d.c[1]) / len) * 6];
+          const tail = d.tail ?? 6;
+          const tip: P2 = [d.p[0] + ((d.p[0] - d.c[0]) / len) * tail, d.p[1] + ((d.p[1] - d.c[1]) / len) * tail];
           line("COTAS", up(d.c), up(tip));
-          text(up(tip), "R" + dimText(d.value));
+          text(d);
           continue;
         }
-        const a2: P2 = [d.a[0] + d.offset[0], d.a[1] + d.offset[1]];
-        const b2: P2 = [d.b[0] + d.offset[0], d.b[1] + d.offset[1]];
-        line("COTAS", up(d.a), up(a2));
-        line("COTAS", up(d.b), up(b2));
-        line("COTAS", up(a2), up(b2));
-        const mid = up([(a2[0] + b2[0]) / 2, (a2[1] + b2[1]) / 2]);
-        text([mid[0], mid[1] + 1], (d.prefix ?? "") + dimText(d.value), Math.abs(d.offset[0]) > Math.abs(d.offset[1]));
+        const g = linearGeom(d);
+        if (Math.hypot(...d.offset) > 1e-9) {
+          line("COTAS", up(d.a), up(g.a2));
+          line("COTAS", up(d.b), up(g.b2));
+        }
+        line("COTAS", up(g.line[0]), up(g.line[1]));
+        text(d, g.vertical);
       }
     }
     // Círculos de los detalles (en la vista y en la ampliación) y su rótulo

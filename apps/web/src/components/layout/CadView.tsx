@@ -542,11 +542,27 @@ export const CadView: Component<CadViewProps> = (props) => {
   let dimDragged = false;
   // Cotas que se piden al terminar una forma, en orden (índices de restricciones)
   const [dimQueue, setDimQueue] = createSignal<number[]>([]);
+  /** Sobre la hoja: cotas pedidas que todavía no están en el sketch (índice -2 - k) */
+  const [sheetPending, setSheetPending] = createSignal<SketchConstraint[]>([]);
+  const pendingOf = (index: number) => (index <= -2 ? sheetPending()[-2 - index] : undefined);
+  /** La restricción de una cota mostrada (también las pendientes de la hoja) */
+  const dimConstraint = (index: number) => (index >= 0 ? ui.session()?.sketch.constraints[index] : pendingOf(index));
+  /** Pasa una cota pendiente de la hoja al sketch (con lo escrito, si hay) */
+  const keepPending = async (index: number, text?: string) => {
+    const c = pendingOf(index);
+    if (!c) return;
+    let at = -1;
+    ui.change((sk) => {
+      sk.constraints.push(structuredClone(c));
+      at = sk.constraints.length - 1;
+    });
+    if (text && at >= 0) ui.setMessage(await ui.setConstraintText(at, text));
+  };
   /** Pide las cotas recién creadas: la primera queda en edición */
   // Restricción de la barra esperando que se elija lo que restringe (herramienta primero)
   const [pendingCon, setPendingCon] = createSignal<ConstraintTool>();
   const askDims = (all: number[]) => {
-    const indices = all.filter((i) => i >= 0);
+    const indices = all.filter((i) => i !== -1);
     setDimQueue(indices.slice(1));
     setEditingDim(indices[0]);
   };
@@ -586,6 +602,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         resetTool();
         setDimQueue([]);
         setEditingDim(undefined);
+        setSheetPending([]);
       },
       { defer: true },
     ),
@@ -1262,9 +1279,14 @@ export const CadView: Component<CadViewProps> = (props) => {
 
   /** Agrega una cota y devuelve su índice */
   // Sobre la hoja del plano lo dibujado no lleva cotas solas (anota, no define
-  // la pieza; las cotas se ponen a mano y salen en la hoja)
+  // la pieza): se pide igual la medida y la cota queda solo si se escribe un
+  // valor o se confirma con Enter (índices -2, -3… = pendientes)
   const dim = (sk: Sketch, c: SketchConstraint): number => {
-    if (ui.session()?.sheet) return -1;
+    if (ui.session()?.sheet) {
+      const list = [...untrack(sheetPending), c];
+      setSheetPending(list);
+      return -1 - list.length;
+    }
     sk.constraints.push(c);
     return sk.constraints.length - 1;
   };
@@ -3120,7 +3142,11 @@ export const CadView: Component<CadViewProps> = (props) => {
       return undefined;
     };
     const showDims = ui.sketchShow().dims;
-    s.sketch.constraints.forEach((c, index) => {
+    // Las pendientes de la hoja solo mientras se piden
+    const entries: [SketchConstraint, number][] = s.sketch.constraints.map((c, i) => [c, i]);
+    const asked = new Set([editingDim(), ...dimQueue()]);
+    sheetPending().forEach((c, k) => asked.has(-2 - k) && entries.push([c, -2 - k]));
+    entries.forEach(([c, index]) => {
       const v = constraintValue(c);
       const a = anchor(c);
       // Ocultas: menos la que se está escribiendo
@@ -3512,8 +3538,8 @@ export const CadView: Component<CadViewProps> = (props) => {
               data-wheel-number=""
               // Solo al abrir: si el solver responde mientras se escribe, no pisa el texto
               value={untrack(() => {
-                const c = ui.session()!.sketch.constraints[d().index]!;
-                return (c as { expr?: string }).expr ?? constraintValue(c) ?? 0;
+                const c = dimConstraint(d().index);
+                return c ? ((c as { expr?: string }).expr ?? constraintValue(c) ?? 0) : 0;
               })}
               class="absolute -translate-x-1/2 -translate-y-1/2 w-20 px-1.5 py-0.5 rounded text-[11px] font-mono bg-bg border border-accent text-text outline-none"
               style={{ left: `${d().x}px`, top: `${d().y}px` }}
@@ -3533,8 +3559,16 @@ export const CadView: Component<CadViewProps> = (props) => {
                 const input = e.currentTarget;
                 const text = input.value.trim();
                 const before = String(input.defaultValue);
-                if (text && text !== before) ui.setMessage(await ui.setConstraintText(d().index, text));
                 input.dataset.done = "1";
+                // Hoja: con Enter queda la cota (con lo escrito); Tab sin escribir la salta
+                if (d().index <= -2) {
+                  const index = d().index;
+                  nextDim();
+                  if (text && text !== before) await keepPending(index, text);
+                  else if (e.key === "Enter") await keepPending(index);
+                  return;
+                }
+                if (text && text !== before) ui.setMessage(await ui.setConstraintText(d().index, text));
                 nextDim();
               }}
               onBlur={async (e) => {
@@ -3543,7 +3577,8 @@ export const CadView: Component<CadViewProps> = (props) => {
                 // Clic en otro lado: lo escrito vale; si no se escribió, queda lo dibujado
                 const text = input.value.trim();
                 if (editingDim() === d().index && text && text !== String(input.defaultValue)) {
-                  ui.setMessage(await ui.setConstraintText(d().index, text));
+                  if (d().index <= -2) await keepPending(d().index, text);
+                  else ui.setMessage(await ui.setConstraintText(d().index, text));
                 }
                 setDimQueue([]);
                 if (editingDim() === d().index) setEditingDim(undefined);

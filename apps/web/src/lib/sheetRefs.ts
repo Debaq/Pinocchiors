@@ -249,6 +249,9 @@ export function applySheetOwners(sketch: Sketch, owners: SheetOwner[], placed: P
  * Las cotas del sketch de la hoja como cotas del plano (en coordenadas del
  * SVG: Y hacia abajo): largos, distancias, horizontales y verticales, radios,
  * diámetros y ángulos entre rectas. El valor es lo que mide la geometría.
+ * Si el texto se dejó en un lugar (`opts.offset`, mm de la hoja respecto de
+ * donde le toca, como en el editor) la cota sale ahí y no se corre sola
+ * (`placed`); si no, 7 mm hacia afuera del dibujo.
  */
 export function sheetSketchDims(s: Sketch | null | undefined, height: number): AnyDimension[] {
   if (!s) return [];
@@ -256,14 +259,33 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
   const ent = new Map(s.entities.map((e) => [e.id, e.geometry]));
   const svg = (p: P2): P2 => [p[0], height - p[1]];
   const out: AnyDimension[] = [];
-  const linear = (a: P2, b: P2, value: number, side: P2 = [0, 0], prefix?: string) => {
-    // Corrida 7 mm hacia afuera (a la izquierda del recorrido, o hacia `side`)
+  // Centro de lo dibujado: las cotas sin lugar elegido van hacia afuera de él
+  const centroid: P2 = s.points.length ? [s.points.reduce((a, p) => a + p.x, 0) / s.points.length, s.points.reduce((a, p) => a + p.y, 0) / s.points.length] : [0, 0];
+  const dot = (a: P2, b: P2) => a[0] * b[0] + a[1] * b[1];
+  const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
+  /** Dónde dejó el usuario el texto (mm de la hoja, Y arriba) */
+  const textAt = (k: SketchConstraint, anchor: P2): P2 | undefined => {
+    const o = (k as { opts?: { offset?: [number, number] } }).opts?.offset;
+    return o ? [anchor[0] + o[0], anchor[1] + o[1]] : undefined;
+  };
+  /** Cota lineal de `a` a `b`; `side`: hacia dónde se corre si no hay lugar elegido */
+  const linear = (a: P2, b: P2, value: number, at: P2 | undefined, side?: P2, prefix?: string) => {
     const d: P2 = [b[0] - a[0], b[1] - a[1]];
     const l = Math.hypot(...d) || 1;
-    let nrm: P2 = [-d[1] / l, d[0] / l];
-    if (side[0] || side[1]) nrm = side;
-    const off: P2 = [nrm[0] * 7, -nrm[1] * 7];
-    out.push({ a: svg(a), b: svg(b), offset: prefix ? [0, 0] : off, value, prefix });
+    const u: P2 = [d[0] / l, d[1] / l];
+    let nrm: P2 = [-u[1], u[0]];
+    const mid: P2 = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    if (at) {
+      // La línea de cota pasa por el texto: el corrimiento perpendicular y lo que se corrió a lo largo
+      const r = sub(at, a);
+      const k = dot(r, nrm);
+      out.push({ a: svg(a), b: svg(b), offset: [nrm[0] * k, -nrm[1] * k], along: dot(sub(at, mid), u), value, prefix, placed: true });
+      return;
+    }
+    if (side) nrm = side;
+    else if (dot(sub(mid, centroid), nrm) < 0) nrm = [-nrm[0], -nrm[1]];
+    const off: P2 = prefix ? [0, 0] : [nrm[0] * 7, -nrm[1] * 7];
+    out.push({ a: svg(a), b: svg(b), offset: off, value, prefix });
   };
   const ends = (id: number): [P2, P2] | undefined => {
     const g = ent.get(id);
@@ -282,10 +304,10 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
   for (const k of s.constraints as SketchConstraint[]) {
     if (k.type === "length") {
       const e = ends(k.line);
-      if (e) linear(e[0], e[1], Math.hypot(e[1][0] - e[0][0], e[1][1] - e[0][1]));
+      if (e) linear(e[0], e[1], Math.hypot(e[1][0] - e[0][0], e[1][1] - e[0][1]), textAt(k, [(e[0][0] + e[1][0]) / 2, (e[0][1] + e[1][1]) / 2]));
     } else if (k.type === "distance") {
       const [a, b] = [pt.get(k.a), pt.get(k.b)];
-      if (a && b) linear(a, b, Math.hypot(b[0] - a[0], b[1] - a[1]));
+      if (a && b) linear(a, b, Math.hypot(b[0] - a[0], b[1] - a[1]), textAt(k, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]));
     } else if (k.type === "horizontal_distance" || k.type === "vertical_distance") {
       const [a, b] = [pt.get(k.a), pt.get(k.b)];
       if (!a || !b) continue;
@@ -293,13 +315,24 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
       const h = k.type === "horizontal_distance";
       const b2: P2 = h ? [b[0], a[1]] : [a[0], b[1]];
       const away: P2 = h ? [0, a[1] >= b[1] ? 1 : -1] : [a[0] >= b[0] ? 1 : -1, 0];
-      linear(a, b2, Math.abs(h ? b[0] - a[0] : b[1] - a[1]), away);
+      linear(a, b2, Math.abs(h ? b[0] - a[0] : b[1] - a[1]), textAt(k, [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]), away);
     } else if (k.type === "radius") {
       const c = circle(k.entity);
-      if (c) out.push({ kind: "radius", c: svg(c.c), p: svg([c.c[0] + c.r * Math.SQRT1_2, c.c[1] + c.r * Math.SQRT1_2]), value: c.r });
+      if (!c) continue;
+      const at = textAt(k, [c.c[0] + c.r * Math.SQRT1_2, c.c[1] + c.r * Math.SQRT1_2]);
+      const far = at ? Math.hypot(...sub(at, c.c)) : 0;
+      // Flecha hacia el texto, que queda donde se dejó (afuera del arco)
+      const u: P2 = at && far > 1e-9 ? [(at[0] - c.c[0]) / far, (at[1] - c.c[1]) / far] : [Math.SQRT1_2, Math.SQRT1_2];
+      const p: P2 = [c.c[0] + c.r * u[0], c.c[1] + c.r * u[1]];
+      out.push({ kind: "radius", c: svg(c.c), p: svg(p), value: c.r, ...(at ? { tail: Math.max(2, far - c.r), placed: true } : {}) });
     } else if (k.type === "diameter") {
       const c = circle(k.entity);
-      if (c) linear([c.c[0] - c.r, c.c[1]], [c.c[0] + c.r, c.c[1]], 2 * c.r, [0, 0], "Ø");
+      if (!c) continue;
+      const at = textAt(k, [c.c[0] + c.r * Math.SQRT1_2, c.c[1] + c.r * Math.SQRT1_2]);
+      const far = at ? Math.hypot(...sub(at, c.c)) : 0;
+      // Con lugar elegido: el diámetro en la dirección del texto (la línea llega hasta él)
+      const u: P2 = at && far > 1e-9 ? [(at[0] - c.c[0]) / far, (at[1] - c.c[1]) / far] : [1, 0];
+      linear([c.c[0] - c.r * u[0], c.c[1] - c.r * u[1]], [c.c[0] + c.r * u[0], c.c[1] + c.r * u[1]], 2 * c.r, at, [0, 0], "Ø");
     } else if (k.type === "angle") {
       const [s1, s2] = [ends(k.a), ends(k.b)];
       if (!s1 || !s2) continue;
@@ -308,7 +341,14 @@ export function sheetSketchDims(s: Sketch | null | undefined, height: number): A
       // Suplementario: hacia el otro lado de la segunda recta
       const a = a0 && k.supplementary ? angleBetween(s1, s2, mid(s1), [2 * a0.x[0] - mid(s2)[0], 2 * a0.x[1] - mid(s2)[1]]) : a0;
       if (!a) continue;
-      out.push({ kind: "angle", c: svg(a.x), r: Math.max(8, a.reach * 0.6), a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [svg(a.far0), svg(a.far1)] });
+      let r = Math.max(8, a.reach * 0.6);
+      // El editor pone el texto sobre la bisectriz, un poco afuera del arco
+      const bis: P2 = [Math.cos(a.t0) + Math.cos(a.t1), Math.sin(a.t0) + Math.sin(a.t1)];
+      const bl = Math.hypot(...bis) || 1;
+      const arcR = Math.min(12, 0.8 * a.reach);
+      const at = textAt(k, [a.x[0] + (bis[0] / bl) * arcR * 1.35, a.x[1] + (bis[1] / bl) * arcR * 1.35]);
+      if (at) r = Math.max(3, Math.hypot(...sub(at, a.x)) - 3);
+      out.push({ kind: "angle", c: svg(a.x), r, a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [svg(a.far0), svg(a.far1)], ...(at ? { placed: true } : {}) });
     }
   }
   return out;

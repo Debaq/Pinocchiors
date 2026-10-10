@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { breakOutline, hatchSegments, dragAxis, placementProblems, placeExtraViews, projectPolylines, rotateViewDir, viewDirFromCamera, viewUp, layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { breakOutline, hatchSegments, dragAxis, placementProblems, placeExtraViews, projectPolylines, rotateViewDir, viewDirFromCamera, viewUp, layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, spreadDimensions, dimLabelBox, sheetDimensions, sheetTextBoxes, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -435,4 +435,50 @@ test("la vista de un corte va alineada con la vista de donde sale (si hay lugar)
   const below = placeExtraViews(placed, [{ name: "corte-C", title: "Corte C-C", lines: rect(40, 10), align: { parent: "top", axis: "x", dir: 1 } }], scale, SHEETS[2]).placed[0];
   assert.equal(below.x, top.x, "en la misma columna");
   assert.ok(below.y > top.y);
+});
+
+test("cotas que no se pisan: se corren las automáticas, no las que el usuario dejó en un lugar", () => {
+  const touch = (a, b) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+  // Dos cotas iguales en el mismo lugar y una tercera puesta a mano encima
+  const d = { a: [10, 50], b: [50, 50], offset: [0, 7], value: 40 };
+  const fixed = { a: [10, 50], b: [50, 50], offset: [0, 7], value: 12, placed: true };
+  const [x, y, z] = spreadDimensions([d, { ...d }, fixed]);
+  assert.deepEqual(z, fixed);
+  const boxes = [x, y, z].map(dimLabelBox);
+  assert.ok(!touch(boxes[0], boxes[1]) && !touch(boxes[0], boxes[2]) && !touch(boxes[1], boxes[2]));
+  // Lo libre queda como estaba
+  const alone = { a: [100, 100], b: [140, 100], offset: [0, 7], value: 40 };
+  assert.deepEqual(spreadDimensions([alone]), [alone]);
+  // Un texto dibujado encima: la cota se aleja
+  const busy = [[25, 54, 35, 60]];
+  const [moved] = spreadDimensions([d], busy);
+  assert.ok(!touch(dimLabelBox(moved), busy[0]));
+  // Radio y ángulo: se alargan
+  const r = { kind: "radius", c: [0, 0], p: [10, 0], value: 10 };
+  const [r1, r2] = spreadDimensions([r, { ...r }]);
+  assert.ok(r2.tail > 6 && !touch(dimLabelBox(r1), dimLabelBox(r2)));
+});
+
+test("cotas con el texto corrido: la línea llega hasta él, en SVG y DXF en el mismo lugar", () => {
+  const d = { a: [10, 50], b: [30, 50], offset: [0, 7], along: 25, value: 20, placed: true };
+  const box = dimLabelBox(d);
+  // El texto queda a la derecha de la flecha (x de 20 + 25 = 45)
+  assert.ok(box[0] > 30 && box[2] > 45);
+  const sheet = SHEETS.find((x) => x.name === "A4");
+  const near = (a, b, tol) => assert.ok(Math.abs(a - b) <= tol, `${a} ≠ ${b}`);
+  const svg = sheetSvg([], sheet, { title: "", author: "", material: "", date: "", scale: "1:1", projection: "first", sheet: "A4" }, { hidden: false, smooth: false, layerDims: [d] });
+  // La línea de cota se alarga más allá de la segunda flecha
+  const m = [...svg.matchAll(/<line x1="([\d.]+)" y1="57" x2="([\d.]+)" y2="57"\/>/g)].map((x) => [Number(x[1]), Number(x[2])]);
+  assert.ok(m.some(([x1, x2]) => Math.max(x1, x2) > 45), svg);
+  const dxf = sheetDxf([], sheet, { hidden: false, smooth: false, layerDims: [d] });
+  const lines = dxf.split("\n").map((l) => l.trim());
+  const t = lines.indexOf("TEXT");
+  assert.ok(t > 0);
+  near(Number(lines[lines.indexOf("10", t) + 1]), box[0], 1e-6);
+});
+
+test("textos dibujados en la hoja: su caja (Y hacia abajo)", () => {
+  const s = { points: [{ id: 1, x: 10, y: 20 }, { id: 2, x: 30, y: 25 }], entities: [{ id: 3, geometry: { type: "line", start: 1, end: 2 } }], constraints: [], texts: [{ id: 4, text: "A", size: 5, font: "", anchor: 1, entities: [3], points: [1, 2] }] };
+  assert.deepEqual(sheetTextBoxes(s, 100), [[10, 75, 30, 80]]);
+  assert.equal(sheetDimensions([], { layerDims: [] }).length, 0);
 });

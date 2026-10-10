@@ -132,6 +132,42 @@ test("cotas del dibujo en la hoja: largo, horizontal, radio, diámetro y ángulo
   assert.deepEqual(sheetSketchDims(null, H), []);
 });
 
+test("cotas del dibujo en la hoja: salen donde se dejó el texto (y si no, hacia afuera del dibujo)", () => {
+  const s = emptySketch();
+  // Cuadrado de 20 con su centro en (50, 50): la línea de abajo, sin lugar elegido, acota hacia abajo
+  const p = [[40, 40], [60, 40], [60, 60], [40, 60]].map((q) => addPoint(s, q));
+  const ls = p.map((a, i) => addEntity(s, { type: "line", start: a, end: p[(i + 1) % 4] }));
+  const c = addEntity(s, { type: "circle", center: addPoint(s, [100, 100]), radius: 5 });
+  s.constraints.push(
+    { type: "length", line: ls[0], value: 20 },
+    // El texto arrastrado 12 mm arriba y 30 a la derecha del medio de la línea de arriba
+    { type: "length", line: ls[2], value: 20, opts: { offset: [30, 12] } },
+    { type: "radius", entity: c, value: 5, opts: { offset: [10, 0] } },
+    { type: "diameter", entity: c, value: 10, opts: { offset: [-20, -20] } },
+  );
+  const [low, high, rad, dia] = sheetSketchDims(s, H);
+  // Abajo (Y del SVG hacia abajo: +7)
+  assert.deepEqual(low.offset, [0, 7]);
+  assert.ok(!low.placed);
+  // Arriba: la línea de cota a 12 mm (hacia arriba = −Y en el SVG) y el texto corrido 30 a lo largo
+  assert.ok(high.placed);
+  near(Math.hypot(...high.offset), 12, 1e-9);
+  near(high.offset[1], -12, 1e-9);
+  // La línea va de (60,60) a (40,60): a lo largo es hacia −X, así que +30 en X es −30
+  near(high.along, -30, 1e-9);
+  // Radio: el texto en (100 + 5·√½ + 10, 100 + 5·√½) → flecha hacia allá y cola hasta él
+  const tx = 100 + 5 * Math.SQRT1_2 + 10;
+  const ty = 100 + 5 * Math.SQRT1_2;
+  const far = Math.hypot(tx - 100, ty - 100);
+  near(rad.tail, far - 5, 1e-9);
+  near(rad.p[0], 100 + (5 * (tx - 100)) / far, 1e-9);
+  near(rad.p[1], H - (100 + (5 * (ty - 100)) / far), 1e-9);
+  // Diámetro: en la dirección del texto, que queda afuera (la línea se alarga hasta él)
+  assert.equal(dia.prefix, "Ø");
+  assert.ok(dia.placed);
+  assert.ok(Math.abs(dia.along) > 5);
+});
+
 test("lo dibujado encima de una vista se corre y se escala con ella (con sus fijos y sus cotas)", () => {
   const v1 = view([seg([0, 0], [20, 0]), seg([0, 10], [20, 10])], 2, 50, 150);
   const s = emptySketch();

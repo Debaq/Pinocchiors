@@ -181,7 +181,7 @@ corte **alineada** con la de donde sale, del lado que pide el diedro (si no hay 
 primer lugar libre con su rótulo); letras de cortes que no se pisan y rotura a mano alzada
 (`breakOutline`).
 
-### F5 — Lo que le falta al editor (sirve para sketch y hoja) — 🟡 (sigue en F6)
+### F5 — Lo que le falta al editor (sirve para sketch y hoja) — 🟡 (lo que falta, para más adelante)
 
 Hecho el 2026-10-10 (pruebas node `sketchEdit.test.mjs`; e2e "sketch: barra de restricciones…"
 y los 45 del sketch y el plano):
@@ -247,15 +247,38 @@ del clic).
 
 F5 **no** quedó completa: la nota anterior decía que solo faltaban los manipuladores, pero al
 revisar el código ítem por ítem (2026-10-10) quedan varios 🟡 y ❌. La tabla de abajo ya está al
-día; lo que queda pasa a **F6**.
+día; lo que queda del editor se deja para más adelante (ver F6).
 
-### F6 — Lo que quedó pendiente del editor
+### F6 — La hoja
 
-Todo lo 🟡 y ❌ de la tabla de abajo. Orden propuesto: primero lo de uso diario (elegir primero
-en recortar/extender/partir y mover/copiar/girar/escalar, fórmulas y unidades en el panel y en
-el campo flotante, campo flotante en redondeo/chaflán/patrones, redondeo y chaflán entre dos
-entidades y con arcos, arrastrar varias cosas elegidas, clic que quita de la selección), después
-partir splines/elipses, splines y limpieza, y al final los manipuladores.
+Decisión del usuario (2026-10-10): centrarse en la hoja impresa con las medidas del modelo 3D y
+**no** sumar más cosas del sketch por ahora (lo 🟡/❌ del editor en la tabla de abajo queda para
+el futuro, quizás en el plan de operaciones). Primero:
+
+1. **Cotas exportadas donde se dejaron**: SVG/PDF/DXF respetan el lugar del texto que el usuario
+   arrastró (`opts.offset`) en vez de correrlas siempre 7 mm; sin lugar elegido, hacia afuera del
+   dibujo como en el editor.
+2. **Textos y cotas que no se pisan**: las cotas (generales, a mano y del dibujo) y los textos de
+   la hoja se separan solos cuando se encimarían.
+3. **Medida al dibujar sobre la hoja**: al terminar una forma aparece el campo de la cota como en
+   el sketch; si se escribe un valor queda como cota de la hoja, si no (Esc o seguir dibujando)
+   no se agrega nada.
+
+Hechos los tres (2026-10-10; pruebas `drawing.test.mjs`, `sheetRefs.test.mjs` y e2e "plano 2D:
+medida al dibujar sobre la hoja…"):
+- `sheetSketchDims` toma el lugar del texto (`placed`): las lineales pasan por él (`along` corre
+  el texto y alarga la línea de cota), el radio alarga su línea hasta él (`tail`), el diámetro va
+  en su dirección y el ángulo agranda el arco. Sin lugar elegido, hacia afuera del centro de lo
+  dibujado. SVG y DXF ponen el texto en el mismo lugar (`dimLabelBox`).
+- `sheetDimensions` junta las generales, las de las vistas y las del dibujo y `spreadDimensions`
+  corre las automáticas cuyo texto pisaría otro o un texto dibujado (`sheetTextBoxes`): lineales
+  de a 6 mm o el texto a un costado, radio más largo, arco más grande. Las puestas a mano no se
+  mueven. No esquiva todavía las líneas de las vistas ni las líneas de otras cotas (solo textos).
+- Sobre la hoja `dim()` deja la cota pendiente (índices -2, -3…, `sheetPending` en CadView): el
+  campo aparece como en el sketch; escribir un valor (Enter, Tab o clic afuera) o Enter sin
+  escribir la agrega; Esc, Tab sin escribir o seguir dibujando, no.
+
+Después, más del plano (a revisar con el usuario).
 
 ## Cobertura de la lista (editor del sketch, que es el de la hoja)
 
