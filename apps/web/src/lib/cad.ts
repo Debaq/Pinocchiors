@@ -388,6 +388,8 @@ export interface TextStyle {
   italic?: boolean;
   align?: "left" | "center" | "right";
   path?: number;
+  /** Giro o reflejo que recibió (matriz 2×2 por filas, respecto del ancla): al rehacerlo se aplica igual */
+  frame?: [number, number, number, number];
 }
 
 export type PrimitiveShape =
@@ -1411,6 +1413,22 @@ export function dependencies(kind: FeatureKind): number[] {
     default:
       return [];
   }
+}
+
+/**
+ * Lleva por `f` los puntos con que las operaciones eligen regiones del
+ * sketch `sketch` (extrusión, revolución, transición, relleno...): si el
+ * dibujo se gira o se refleja, siguen en la misma región.
+ */
+export function moveRegionPoints(doc: CadDocument, sketch: number, f: (p: P2) => P2): void {
+  const visit = (v: unknown) => {
+    if (!v || typeof v !== "object") return;
+    if (Array.isArray(v)) return v.forEach(visit);
+    const o = v as { sketch?: unknown; regions?: RegionSelection };
+    if (o.sketch === sketch && o.regions?.type === "points") o.regions.points = o.regions.points.map(f);
+    Object.values(o).forEach(visit);
+  };
+  for (const ft of doc.features) if (ft.kind.type !== "sketch") visit(ft.kind);
 }
 
 /** Dependencias de una operación, incluidas las piezas de su alcance */
@@ -3101,6 +3119,8 @@ export function createCadStore() {
     /** Apoyo para una pieza estándar en el borde circular `edge` */
     edgeSeat: (edge: number) => invoke<Seat>("cad_edge_seat", { edge }),
     resolveRefs: (faces: FaceRef[], edges: EdgeRef[]) => invoke<ResolvedRefs>("cad_resolve_refs", { faces, edges }),
+    /** Eje x que tendría el sketch `feature` con esa horizontal (null: la del plano) */
+    sketchX: (feature: number, xAxis: AxisSpec | null) => invoke<P3>("cad_sketch_x", { feature, x_axis: xAxis }),
     result,
     mesh,
     busy,

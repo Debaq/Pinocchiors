@@ -178,13 +178,18 @@ en Rust (recompilar el puente para el e2e: 8–16 min); «C++» = además el pue
 15. **Plano y vista**: dirección horizontal, invertir la normal, corte y modelo oculto al
     dibujar. *Hecha el 2026-10-09: `Sketch.x_axis` (un `AxisSpec`: ejes, referencia, arista o
     línea de otro sketch, proyectado al plano; `Plane::oriented`) y `Sketch.flip_normal`. En el
-    diálogo de la operación Sketch: «Horizontal» (y «Horizontal según una arista»: el dibujo
-    gira con la dirección) e «Invertir la normal», que refleja el dibujo en 2D
-    (`flipSketchY`: arcos, fijos, cotas verticales y ángulos con signo) para que quede en el
-    mismo lugar visto del otro lado; la extrusión sale para el otro lado. En el panel del
-    sketch: «Corte en el plano» (se ve lo que queda detrás del sketch) y «Ocultar el modelo»
-    (`CadViewer.setBodyHidden`), recordados. Prueba Rust `sketch_x_axis_and_flipped_normal`,
-    e2e "plano del sketch…".*
+    diálogo de la operación Sketch: «Horizontal» (y «Horizontal según una arista») e «Invertir
+    la normal». Ninguno de los dos mueve el dibujo en el espacio: al cambiar la horizontal se
+    pide al backend la x vieja y la nueva (`cad_sketch_x`, con `SketchResult.base` = el plano
+    sin orientar y `Evaluation::axis_dir`) y el dibujo 2D se gira al revés (`rotateSketch`:
+    las horizontales pasan a verticales o se quitan, las cotas toman lo que miden); al
+    invertir la normal se refleja (`flipSketchY`: arcos, fijos, cotas verticales y ángulos con
+    signo). Los puntos con que otras operaciones eligen regiones del sketch se llevan igual
+    (`moveRegionPoints`) y los textos guardan el giro o reflejo (`TextStyle.frame`) para
+    rehacerse en el mismo lugar (también después de Girar). La extrusión sale para el otro
+    lado con la normal invertida. En el panel del sketch: «Corte en el plano» (se ve lo que
+    queda detrás del sketch) y «Ocultar el modelo» (`CadViewer.setBodyHidden`), recordados.
+    Prueba Rust `sketch_x_axis_and_flipped_normal`, e2e "plano del sketch…".*
 
 16. **Entidades II**: línea infinita, paralelogramo, arco elíptico, parábola, cónica, ranura en
     arco por 3 puntos, estilo y alineación del texto, texto sobre una curva. *Hecha el

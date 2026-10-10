@@ -34,6 +34,46 @@ const len = (v: P2) => Math.hypot(v[0], v[1]);
 const cross = (a: P2, b: P2) => a[0] * b[1] - a[1] * b[0];
 const dot = (a: P2, b: P2) => a[0] * b[0] + a[1] * b[1];
 
+/** Matriz 2×2 por filas: x' = a·x + b·y, y' = c·x + d·y */
+export type Frame = [number, number, number, number];
+
+/** Parte lineal de una transformación, sin la escala (la lleva el tamaño del texto) */
+export function linearPart(f: Xform): Frame {
+  const o = f([0, 0]);
+  const [ex, ey] = [sub(f([1, 0]), o), sub(f([0, 1]), o)];
+  const m: Frame = [ex[0], ey[0], ex[1], ey[1]];
+  const k = Math.sqrt(Math.abs(m[0] * m[3] - m[1] * m[2])) || 1;
+  return m.map((v) => v / k) as Frame;
+}
+
+/** `m · n` */
+export function composeFrame(m: Frame, n: Frame = [1, 0, 0, 1]): Frame {
+  return [m[0] * n[0] + m[1] * n[2], m[0] * n[1] + m[1] * n[3], m[2] * n[0] + m[3] * n[2], m[2] * n[1] + m[3] * n[3]];
+}
+
+/** Aplica `m` a `p` alrededor de `at` */
+export function applyFrame(m: Frame, at: P2, p: P2): P2 {
+  const [x, y] = sub(p, at);
+  return [at[0] + m[0] * x + m[1] * y, at[1] + m[2] * x + m[3] * y];
+}
+
+/** Inversa de una matriz de giro o reflejo (determinante ±1) */
+export function invertFrame(m: Frame): Frame {
+  const det = m[0] * m[3] - m[1] * m[2] || 1;
+  return [m[3] / det, -m[1] / det, -m[2] / det, m[0] / det];
+}
+
+/** Le suma al marco del texto un giro o reflejo (sin guardar la identidad) */
+function turnText(t: SketchText, m: Frame) {
+  const f = composeFrame(m, t.style?.frame);
+  const identity = Math.abs(f[0] - 1) < 1e-9 && Math.abs(f[1]) < 1e-9 && Math.abs(f[2]) < 1e-9 && Math.abs(f[3] - 1) < 1e-9;
+  const style = { ...(t.style ?? {}) };
+  if (identity) delete style.frame;
+  else style.frame = f.map((v) => +v.toFixed(12)) as Frame;
+  if (Object.keys(style).length) t.style = style;
+  else delete t.style;
+}
+
 /** Textos que toca la selección (por una de sus curvas o su ancla) */
 function textsOf(s: Sketch, ids: Set<number>): SketchText[] {
   return (s.texts ?? []).filter((t) => [t.anchor, ...t.entities].some((x) => ids.has(x)));
@@ -400,8 +440,9 @@ function sketchTol(s: Sketch): number {
  * fórmula) y las restricciones que dejaron de cumplirse se quitan (una
  * horizontal girada 90° pasa a vertical). Devuelve un mensaje si no hay qué mover.
  */
-export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1): string | undefined {
-  const pts = selectionPoints(s, ids);
+export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1, all = false): string | undefined {
+  // `all`: el sketch entero, también lo ligado y lo bloqueado (girar el dibujo con su plano)
+  const pts = all ? s.points.filter((p) => p.id !== s.origin).map((p) => p.id) : selectionPoints(s, ids);
   if (!pts.length) return "Elegir primero lo que se transforma (lo ligado al sólido y lo bloqueado no se mueven)";
   const moved = new Set(pts);
   for (const p of s.points)
@@ -415,6 +456,10 @@ export function transformSelection(s: Sketch, ids: number[], f: Xform, scale = 1
     for (const e of selectedEntities(s, ids)) if (e.geometry.type === "circle") e.geometry.radius *= k;
     for (const t of textsOf(s, new Set(ids))) t.size *= k;
   }
+  // Los textos recuerdan el giro o reflejo para rehacerse igual
+  const lin = linearPart(f);
+  if (Math.abs(lin[0] - 1) > 1e-12 || Math.abs(lin[1]) > 1e-12 || Math.abs(lin[2]) > 1e-12 || Math.abs(lin[3] - 1) > 1e-12)
+    for (const t of all ? (s.texts ?? []) : textsOf(s, new Set(ids))) turnText(t, lin);
   const tol = sketchTol(s);
   const scaled = new Set(scale !== 1 ? selectedEntities(s, ids).map((e) => e.id) : []);
   const keep: SketchConstraint[] = [];
@@ -587,6 +632,7 @@ export function splitEntityAt(s: Sketch, entity: number, p: P2): number | string
  */
 export function flipSketchY(s: Sketch): void {
   for (const p of s.points) p.y = -p.y || 0;
+  for (const t of s.texts ?? []) turnText(t, [1, 0, 0, -1]);
   for (const e of s.entities) {
     const g = e.geometry;
     if (g.type === "arc" || g.type === "ellipse_arc") [g.start, g.end] = [g.end, g.start];
@@ -598,4 +644,15 @@ export function flipSketchY(s: Sketch): void {
     const o = (c as { opts?: { offset?: [number, number] } }).opts;
     if (o?.offset) o.offset = [o.offset[0], -o.offset[1] || 0];
   }
+}
+
+/**
+ * Gira el sketch entero `degrees` alrededor de su origen: al cambiar la
+ * horizontal del plano el dibujo se gira al revés para quedar en su lugar.
+ * Las horizontales pasan a verticales (o se quitan si ya no lo son) y las
+ * cotas toman lo que miden ahora.
+ */
+export function rotateSketch(s: Sketch, degrees: number): void {
+  if (Math.abs(degrees) < 1e-9) return;
+  transformSelection(s, [], rotation([0, 0], degrees), 1, true);
 }

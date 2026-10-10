@@ -124,6 +124,11 @@ fn sketch_x_axis_and_flipped_normal() {
     let ev = doc.evaluate();
     let plane = ev.sketches[&sk].plane;
     assert_relative_eq!(plane.x_dir[1], 1.0, epsilon = 1e-12);
+    // Lo que daría cada horizontal (para girar el dibujo al cambiarla): la del plano es X
+    assert_relative_eq!(ev.sketch_x(sk, None).unwrap()[0], 1.0, epsilon = 1e-12);
+    assert_relative_eq!(ev.sketch_x(sk, Some(&AxisSpec::Y)).unwrap()[1], 1.0, epsilon = 1e-12);
+    // Z es perpendicular a la planta: queda la del plano
+    assert_relative_eq!(ev.sketch_x(sk, Some(&AxisSpec::Z)).unwrap()[0], 1.0, epsilon = 1e-12);
     let (lo, hi) = bbox(&doc);
     assert_relative_eq!(hi[1] - lo[1], 20.0, epsilon = 1e-9);
     assert_relative_eq!(hi[0] - lo[0], 4.0, epsilon = 1e-9);

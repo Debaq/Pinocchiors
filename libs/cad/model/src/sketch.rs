@@ -482,6 +482,10 @@ pub struct TextStyle {
     /// Entidad que siguen las letras (el ancla se proyecta sobre ella).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<u32>,
+    /// Giro o reflejo que recibió el texto (matriz 2×2 por filas, respecto del
+    /// ancla): al rehacerlo se aplica igual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<[f64; 4]>,
 }
 
 impl TextStyle {

@@ -174,6 +174,7 @@ pub fn run() {
             cad::cad_edge_ref,
             cad::cad_face_info,
             cad::cad_resolve_refs,
+            cad::cad_sketch_x,
             cad::cad_measure,
             cad::cad_parts_at,
             cad::cad_drawing,

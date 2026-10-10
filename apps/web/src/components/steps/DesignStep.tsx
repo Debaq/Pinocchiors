@@ -33,6 +33,7 @@ import {
   toggleSplineHandles,
   linesAt,
   offsetEntities,
+  moveRegionPoints,
   offsetPlane,
   type AxisSpec,
   type BendRelief,
@@ -90,7 +91,7 @@ import {
 import type { CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { flipSketchY, measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { flipSketchY, rotateSketch, measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
 import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
 import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, type OffsetCaps } from "../../lib/sketchEdit";
@@ -1150,6 +1151,34 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "sketch" && (f().kind as Extract<FeatureKind, { type: "sketch" }>)}>
             {(k) => {
               const view = () => props.store.sketchView(f().id);
+              /**
+               * Cambia la horizontal del sketch y gira el dibujo al revés lo mismo
+               * que gira el plano: queda en su lugar del espacio
+               */
+              const setHorizontal = async (axis: AxisSpec | null) => {
+                const id = f().id;
+                const normal = view()?.plane.normal;
+                let turn = 0;
+                try {
+                  const [from, to] = await Promise.all([props.store.sketchX(id, k().sketch.x_axis ?? null), props.store.sketchX(id, axis)]);
+                  if (normal) {
+                    const c = [from[1] * to[2] - from[2] * to[1], from[2] * to[0] - from[0] * to[2], from[0] * to[1] - from[1] * to[0]];
+                    const sin = c[0] * normal[0] + c[1] * normal[1] + c[2] * normal[2];
+                    const cos = from[0] * to[0] + from[1] * to[1] + from[2] * to[2];
+                    turn = (Math.atan2(sin, cos) * 180) / Math.PI;
+                  }
+                } catch (err) {
+                  return props.ui.setMessage(String(err));
+                }
+                void props.store.commit((d) => {
+                  const ft = d.features.find((x) => x.id === id);
+                  if (ft?.kind.type !== "sketch") return;
+                  ft.kind.sketch.x_axis = axis;
+                  rotateSketch(ft.kind.sketch, -turn);
+                  // Las regiones elegidas por otras operaciones giran igual
+                  moveRegionPoints(d, id, rotation([0, 0], -turn));
+                });
+              };
               return (
                 <>
                   <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "sketch" && (x.plane = p)), lost("plane").length > 0)}</Row>
@@ -1172,18 +1201,16 @@ export const FeatureEditor: Component<{
                         if (a.type === "reference") return `ref:${a.feature}`;
                         return ["x", "y", "z"].includes(a.type) ? a.type : "picked";
                       })()}
-                      onChange={(v) =>
-                        update((x) => {
-                          if (x.type !== "sketch" || v === "picked") return;
-                          x.sketch.x_axis = v === "plane" ? null : v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" };
-                        })
-                      }
+                      onChange={(v) => {
+                        if (v === "picked") return;
+                        void setHorizontal(v === "plane" ? null : v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" });
+                      }}
                     />
                   </Row>
                   <Button
                     size="sm"
                     fullWidth
-                    title="El eje x del sketch sigue a esa arista (o línea de otro sketch) proyectada al plano; el dibujo gira con él"
+                    title="El eje x del sketch sigue a esa arista (o línea de otro sketch) proyectada al plano; el dibujo queda en su lugar"
                     variant={(props.ui.pick() as { owner?: string }).owner === `${f().id}:horizontal` ? "primary" : "default"}
                     onClick={() =>
                       props.ui.setPick({
@@ -1191,13 +1218,11 @@ export const FeatureEditor: Component<{
                         owner: `${f().id}:horizontal`,
                         sketch: -1,
                         prompt: "Clic en la arista del sólido que da la dirección horizontal del sketch",
-                        done: (axis) =>
-                          update((x) => {
-                            if (x.type !== "sketch") return;
-                            // Una línea del mismo sketch no puede orientarlo (dependería de sí mismo)
-                            if (axis.type === "sketch_line" && axis.sketch === f().id) return;
-                            x.sketch.x_axis = axis;
-                          }),
+                        done: (axis) => {
+                          // Una línea del mismo sketch no puede orientarlo (dependería de sí mismo)
+                          if (axis.type === "sketch_line" && axis.sketch === f().id) return;
+                          void setHorizontal(axis);
+                        },
                       })
                     }
                   >
@@ -1208,11 +1233,13 @@ export const FeatureEditor: Component<{
                     label="Invertir la normal"
                     checked={!!k().sketch.flip_normal}
                     onChange={(c) =>
-                      update((x) => {
-                        if (x.type !== "sketch" || !!x.sketch.flip_normal === c) return;
-                        // El dibujo se refleja para quedar en el mismo lugar visto del otro lado
-                        flipSketchY(x.sketch);
-                        x.sketch.flip_normal = c || undefined;
+                      void props.store.commit((d) => {
+                        const ft = d.features.find((x) => x.id === f().id);
+                        if (ft?.kind.type !== "sketch" || !!ft.kind.sketch.flip_normal === c) return;
+                        // El dibujo se refleja para quedar en el mismo lugar visto del otro lado (y las regiones elegidas con él)
+                        flipSketchY(ft.kind.sketch);
+                        ft.kind.sketch.flip_normal = c || undefined;
+                        moveRegionPoints(d, ft.id, (p) => [p[0], -p[1] || 0]);
                       })
                     }
                   />

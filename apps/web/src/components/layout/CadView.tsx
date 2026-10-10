@@ -5,10 +5,10 @@ import { CadViewer, arc3Polyline, entityPolyline, planeToWorld } from "../../lib
 import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
-import { layoutText } from "../../lib/sketchText";
+import { layoutText, type Contour } from "../../lib/sketchText";
 import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
-import { clipCenter, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Xform } from "../../lib/sketchTransform";
+import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke } from "../../lib/sketchEdit";
 import { gridSegments, parseCoords, snapToGrid } from "../../lib/sketchInput";
 import { checkSketch, connectedChain, problemsText, selectByKind } from "../../lib/sketchCheck";
@@ -51,6 +51,13 @@ export interface CadViewProps {
 }
 
 // Grupos de la barra: elegir · dibujar · modificar
+/** Contorno de letra llevado por un giro o reflejo alrededor del ancla */
+function frameContour(c: Contour, m: Frame, at: P2): Contour {
+  const f = (p: P2) => applyFrame(m, at, p);
+  if ("closed" in c) return { closed: c.closed.map(f) };
+  return { pieces: c.pieces.map((p) => (p.kind === "line" ? { kind: "line", a: f(p.a), b: f(p.b) } : { kind: "spline", points: p.points.map(f) })) };
+}
+
 type ToolDef = { id: SketchTool; short: string; label: string; key?: string; icon: (p: { size?: number }) => JSX.Element; group: number; family?: string };
 const TOOLS: ToolDef[] = [
   { id: "select", short: "Elegir", label: "Elegir y arrastrar", key: "S", icon: SketchIcons.Select, group: 0 },
@@ -364,7 +371,12 @@ export const CadView: Component<CadViewProps> = (props) => {
       const at: P2 = [a.x, a.y];
       const style = t.style ?? {};
       const styled = await loadStyledFont(!!style.bold, !!style.italic);
-      const contours = layoutText(styled, text, size, at, style.align, textPath(s!.sketch, style.path));
+      // Girado o reflejado: se arma derecho (sobre la curva llevada al revés) y se le aplica el mismo giro
+      const frame = style.frame;
+      const path = textPath(s!.sketch, style.path);
+      const back = frame && invertFrame(frame);
+      const laid = layoutText(styled, text, size, at, style.align, back && path ? path.map((p) => applyFrame(back, at, p)) : path);
+      const contours = frame ? laid.map((c) => frameContour(c, frame, at)) : laid;
       ui.change((sk) => {
         const cur = sk.texts?.find((x) => x.id === id);
         if (!cur) return;

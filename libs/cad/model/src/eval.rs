@@ -89,6 +89,9 @@ pub enum HandleKind {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SketchResult {
     pub plane: Plane,
+    /// El plano antes de orientarlo (`x_axis`, `flip_normal`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<Plane>,
     pub sketch: Sketch,
     pub report: SolveReport,
     pub regions: Vec<Region>,
@@ -300,6 +303,49 @@ fn fingerprint(prev: u64, f: &Feature, rolled_back: bool) -> u64 {
 }
 
 impl Evaluation {
+    /// Dirección de un eje en el diseño ya calculado.
+    pub fn axis_dir(&self, spec: &AxisSpec) -> R<P3> {
+        Ok(match spec {
+            AxisSpec::X => [1.0, 0.0, 0.0],
+            AxisSpec::Y => [0.0, 1.0, 0.0],
+            AxisSpec::Z => [0.0, 0.0, 1.0],
+            AxisSpec::Custom { direction, .. } => normalize(*direction),
+            AxisSpec::Reference { feature } => match self.references.get(feature) {
+                Some(RefGeom::Axis { dir, .. }) => *dir,
+                _ => return Err("el eje de referencia no está calculado".into()),
+            },
+            AxisSpec::SketchLine { sketch, line } => {
+                let s = self.sketches.get(sketch).ok_or("el sketch del eje no está calculado")?;
+                let Geometry::Line { start, end } = s.sketch.entity(*line).map_err(err)?.geometry else {
+                    return Err("el eje debe ser una línea".into());
+                };
+                let a = s.plane.to_world(s.sketch.point(start).map_err(err)?);
+                let b = s.plane.to_world(s.sketch.point(end).map_err(err)?);
+                normalize(sub(b, a))
+            }
+            AxisSpec::Edge { edge } => {
+                let i = self.resolve_edge(edge)?;
+                let info = self.body.as_ref().ok_or("todavía no hay un sólido")?.edge_info(i).map_err(err)?;
+                match info.circle {
+                    Some((_, axis, _)) => axis,
+                    None => normalize(sub(info.end, info.start)),
+                }
+            }
+        })
+    }
+
+    /// Eje x que tendría el sketch `feature` con la horizontal `x_axis` (para
+    /// girar el dibujo y que quede en su lugar al cambiarla).
+    pub fn sketch_x(&self, feature: FeatureId, x_axis: Option<&AxisSpec>) -> R<P3> {
+        let s = self.sketches.get(&feature).ok_or("el sketch no está calculado")?;
+        let base = s.base.unwrap_or(s.plane);
+        let x = match x_axis {
+            Some(a) => Some(self.axis_dir(a)?),
+            None => None,
+        };
+        Ok(base.oriented(x, false).x_dir)
+    }
+
     pub fn state(&self, id: FeatureId) -> Option<&FeatureState> {
         self.status.iter().find(|s| s.id == id).map(|s| &s.state)
     }
@@ -1157,7 +1203,7 @@ impl Ctx<'_> {
         }
         let mut chains = crate::sketch3d::chain_curves(open)?;
         chains.extend(closed.into_iter().map(|c| vec![c]));
-        self.ev.sketches.insert(id, SketchResult { plane, sketch: solved, report, regions });
+        self.ev.sketches.insert(id, SketchResult { plane, base: None, sketch: solved, report, regions });
         self.curves_from(id, chains)
     }
 
@@ -1780,7 +1826,8 @@ impl Ctx<'_> {
                     Some(a) => Some(self.axis("x_axis", a)?.dir),
                     None => None,
                 };
-                let plane = self.plane("plane", plane)?.offset(*offset).oriented(x, sketch.flip_normal);
+                let base = self.plane("plane", plane)?.offset(*offset);
+                let plane = base.oriented(x, sketch.flip_normal);
                 let mut solved = sketch.clone();
                 if !solved.uses.is_empty() {
                     self.project_uses(&plane, &mut solved);
@@ -1788,7 +1835,7 @@ impl Ctx<'_> {
                 self.pierce(&plane, &mut solved);
                 let report = solved.solve().map_err(err)?;
                 let regions = find_regions(&solved).map_err(err)?;
-                self.ev.sketches.insert(f.id, SketchResult { plane, sketch: solved, report, regions });
+                self.ev.sketches.insert(f.id, SketchResult { plane, base: Some(base), sketch: solved, report, regions });
                 Ok(())
             }
             FeatureKind::Sketch3d { sketch } => self.sketch3d(f.id, sketch),

@@ -881,6 +881,20 @@ fn edge_seat_impl(state: &AppState, edge: usize) -> Result<Seat, String> {
     Ok(Seat { origin: center, z, x, diameter: 2.0 * r, size, depth })
 }
 
+/// Eje x que tendría un sketch con la horizontal `x_axis` (el dibujo se gira
+/// al revés para quedar en su lugar).
+#[tauri::command]
+pub async fn cad_sketch_x(app: AppHandle, feature: u32, x_axis: Option<cad_model::AxisSpec>) -> Result<[f64; 3], String> {
+    in_background(app, move |state| sketch_x_impl(state, feature, x_axis.as_ref())).await
+}
+
+fn sketch_x_impl(state: &AppState, feature: u32, x_axis: Option<&cad_model::AxisSpec>) -> Result<[f64; 3], String> {
+    evaluate(state)?;
+    let cache = state.cad_cache.lock().unwrap();
+    let c = cache.as_ref().ok_or("el diseño no está calculado")?;
+    c.eval.sketch_x(cad_model::FeatureId(feature), x_axis)
+}
+
 #[tauri::command]
 pub async fn cad_resolve_refs(app: AppHandle, faces: Vec<FaceRef>, edges: Vec<EdgeRef>) -> Result<ResolvedRefs, String> {
     in_background(app, move |state| resolve_refs_impl(state, &faces, &edges)).await
@@ -1668,6 +1682,7 @@ pub mod bridge {
             }
             "cad_parts_at" => ok(parts_at_impl(state, arg(args, "document")?, arg(args, "index")?)?),
             "cad_measure" => ok(measure_impl(state, &arg::<Vec<cad_model::MeasureItem>>(args, "items")?)?),
+            "cad_sketch_x" => ok(sketch_x_impl(state, arg(args, "feature")?, arg::<Option<cad_model::AxisSpec>>(args, "x_axis")?.as_ref())?),
             "cad_resolve_refs" => {
                 let (faces, edges): (Vec<FaceRef>, Vec<EdgeRef>) = (arg(args, "faces")?, arg(args, "edges")?);
                 ok(resolve_refs_impl(state, &faces, &edges)?)

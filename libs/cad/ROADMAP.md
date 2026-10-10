@@ -645,7 +645,9 @@ cargo test -p cad-model
   fases 13 y 15): inferencias sí/no, rejilla del sketch con anclaje, coordenadas escritas
   (absolutas, relativas y polares), polilínea línea-arco (A), simetría al dibujar, línea
   central (`SketchEntity.axis`: eje de revolución y diámetros sin elegirla); horizontal del
-  sketch según un eje o arista (`Sketch.x_axis`), invertir la normal (`Sketch.flip_normal`, el
-  dibujo se refleja para quedar en su lugar), corte en el plano y modelo oculto al dibujar.
+  sketch según un eje o arista (`Sketch.x_axis`) e invertir la normal (`Sketch.flip_normal`):
+  el dibujo 2D se gira o se refleja para quedar en su lugar, con las regiones elegidas por
+  otras operaciones y los textos (`TextStyle.frame`); corte en el plano y modelo oculto al
+  dibujar.
   Pruebas: node `sketchInput.test.mjs` y `sketchTransform.test.mjs`, Rust
   `sketch_x_axis_and_flipped_normal`, e2e "asistencia al dibujo…" y "plano del sketch…".

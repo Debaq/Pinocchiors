@@ -2643,7 +2643,7 @@ const scenarios = {
     await b.shot("asistencia");
   },
 
-  async "plano del sketch: horizontal según un eje, invertir la normal, corte y modelo oculto al dibujar"(b) {
+  async "plano del sketch: horizontal según un eje y normal invertida sin mover el dibujo (ni las regiones ni los textos), corte y modelo oculto al dibujar"(b) {
     await begin(b);
     const doc = await call("cad_get_document");
     const P = (id, x, y) => ({ id, x, y });
@@ -2651,13 +2651,14 @@ const scenarios = {
     const sketch = {
       points: [P(0, 0, 0), P(1, 20, 0), P(2, 20, 4), P(3, 0, 4)],
       entities: [L(10, 0, 1), L(11, 1, 2), L(12, 2, 3), L(13, 3, 0)],
-      constraints: [],
+      constraints: [{ type: "horizontal", line: 10 }, { type: "vertical", line: 11 }],
       next_id: 20,
       origin: 0,
     };
     const sid = doc.next_id;
     doc.features.push({ id: sid, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
-    doc.features.push({ id: sid + 1, name: "Bloque", suppressed: false, kind: { type: "extrude", sketch: sid, regions: { type: "all" }, extent: { type: "blind", distance: 5 }, reverse: false, op: "join", draft: 0 } });
+    // Solo la región del rectángulo (elegida por un punto): el texto no se extruye
+    doc.features.push({ id: sid + 1, name: "Bloque", suppressed: false, kind: { type: "extrude", sketch: sid, regions: { type: "points", points: [[10, 2]] }, extent: { type: "blind", distance: 5 }, reverse: false, op: "join", draft: 0 } });
     doc.next_id += 2;
     await call("cad_set_document", { document: doc });
     await b.eval(`window.__cadStore.reload()`);
@@ -2667,34 +2668,72 @@ const scenarios = {
       return [...bd.bbox_min, ...bd.bbox_max].map((v) => +v.toFixed(4));
     };
     if (JSON.stringify(await box()) !== "[0,0,0,20,4,5]") throw new Error("bloque al empezar: " + (await box()));
-    // Horizontal según el eje Y: el rectángulo queda a lo largo de Y
+    // Un texto arriba del rectángulo
+    await b.eval(`window.__cadUi.editSketch(${sid})`);
+    await sleep(1200);
+    await b.clickText("Texto");
+    await b.eval(`(() => {
+      const i = document.querySelector('input[aria-label="Texto"]');
+      i.value = "Fa";
+      i.dispatchEvent(new Event("input", { bubbles: true }));
+    })()`);
+    await b.click(...(await b.eval(`window.__cadViewer.screenOf([2, 8, 0])`)), { wait: 2000 });
+    // Caja del texto en el mundo (con el plano del sketch abierto)
+    const textBox = () =>
+      b.eval(`(() => {
+        const s = window.__cadUi.session(); const t = s.sketch.texts[0]; const P = s.plane;
+        const n = P.normal, x = P.x_dir, y = [n[1] * x[2] - n[2] * x[1], n[2] * x[0] - n[0] * x[2], n[0] * x[1] - n[1] * x[0]];
+        const ids = new Set(t.points);
+        const w = s.sketch.points.filter((p) => ids.has(p.id)).map((p) => [0, 1, 2].map((i) => P.origin[i] + x[i] * p.x + y[i] * p.y));
+        const lo = [0, 1, 2].map((i) => Math.min(...w.map((q) => q[i]))), hi = [0, 1, 2].map((i) => Math.max(...w.map((q) => q[i])));
+        return [...lo, ...hi].map((v) => +v.toFixed(4));
+      })()`);
+    const text0 = await textBox();
+    if (!(text0[4] > 8)) throw new Error("texto: " + text0);
+    await b.clickText("Terminar sketch");
+    await sleep(1500);
+    if (JSON.stringify(await box()) !== "[0,0,0,20,4,5]") throw new Error("el texto se extruyó: " + (await box()));
+
+    // Horizontal según el eje Y: el dibujo queda en su lugar (girado al revés en el sketch)
     await clickRow(b, "Perfil");
     await b.clickText("La del plano");
     await sleep(300);
     await b.clickText("Eje Y");
-    await sleep(1200);
+    await sleep(1500);
     await accept(b, 2000);
-    let bb = await box();
-    if (Math.abs(bb[4] - bb[1] - 20) > 1e-6 || Math.abs(bb[3] - bb[0] - 4) > 1e-6) throw new Error("horizontal según Y: " + bb);
+    if (JSON.stringify(await box()) !== "[0,0,0,20,4,5]") throw new Error("con la horizontal en Y se movió: " + (await box()));
+    let saved = (await call("cad_get_document")).features.find((f) => f.id === sid).kind.sketch;
+    if (saved.x_axis?.type !== "y") throw new Error("no se guardó la horizontal");
+    // La de abajo era horizontal: con x a lo largo de Y del mundo pasa a vertical
+    if (!saved.constraints.some((c) => c.type === "vertical" && c.line === 10)) throw new Error("las horizontales no pasaron a verticales: " + JSON.stringify(saved.constraints));
     // Invertir la normal: el dibujo queda en el mismo lugar y la extrusión va hacia −Z
     await clickRow(b, "Perfil");
     // Seguía elegida: el clic la soltó
     if (!(await b.eval(`[...document.querySelectorAll("label")].some((l) => l.textContent === "Invertir la normal" && l.offsetParent !== null)`))) await clickRow(b, "Perfil");
     await b.clickText("Invertir la normal");
-    await sleep(1200);
+    await sleep(1500);
     await accept(b, 2000);
     const bb2 = await box();
-    if (JSON.stringify(bb2.slice(0, 2)) !== JSON.stringify(bb.slice(0, 2)) || JSON.stringify(bb2.slice(3, 5)) !== JSON.stringify(bb.slice(3, 5))) throw new Error(`se movió el dibujo: ${bb} → ${bb2}`);
-    if (bb2[2] !== -5 || bb2[5] !== 0) throw new Error("la extrusión no se dio vuelta: " + bb2);
-    const saved = (await call("cad_get_document")).features.find((f) => f.id === sid).kind.sketch;
-    if (!saved.flip_normal || saved.x_axis?.type !== "y") throw new Error("no se guardó: " + JSON.stringify({ f: saved.flip_normal, x: saved.x_axis }));
-    // Dibujando: corte en el plano y modelo oculto; al salir vuelve todo
+    if (JSON.stringify(bb2) !== "[0,0,-5,20,4,0]") throw new Error("con la normal invertida: " + bb2);
+    saved = (await call("cad_get_document")).features.find((f) => f.id === sid).kind.sketch;
+    if (!saved.flip_normal || !saved.texts?.[0]?.style?.frame) throw new Error("no se guardó: " + JSON.stringify({ f: saved.flip_normal, t: saved.texts?.[0]?.style }));
+
+    // Dibujando: corte en el plano y modelo oculto; el texto rehecho queda igual que al principio
     await b.eval(`window.__cadUi.setAssist({ section: true, hideModel: true })`);
     await b.eval(`window.__cadUi.editSketch(${sid})`);
     await sleep(1200);
     const state = () => b.eval(`({ section: !!window.__cadViewer.section, visible: window.__cadViewer.body?.visible })`);
     let st = await state();
     if (!st.section || st.visible !== false) throw new Error("dibujando: " + JSON.stringify(st));
+    const text1 = await textBox();
+    if (text1.some((v, i) => Math.abs(v - text0[i]) > 1e-3)) throw new Error(`el texto se movió: ${text0} → ${text1}`);
+    const anchor = await b.eval(`window.__cadUi.session().sketch.texts[0].anchor`);
+    await b.eval(`window.__cadUi.setTool("select"); window.__cadUi.setSelection([${anchor}])`);
+    await sleep(400);
+    await b.clickText("Rehacer texto");
+    await sleep(2000);
+    const text2 = await textBox();
+    if (text2.some((v, i) => Math.abs(v - text0[i]) > 1e-3)) throw new Error(`el texto rehecho quedó distinto: ${text0} → ${text2}`);
     await b.shot("plano-sketch");
     await b.eval(`window.__cadUi.cancelSketch()`);
     await sleep(1500);

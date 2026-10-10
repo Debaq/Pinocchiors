@@ -3,10 +3,13 @@
 //   node --test apps/web/e2e/sketchTransform.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addEntity, addPoint, addRectangle } from "../src/lib/cad.ts";
+import { addEntity, addPoint, addRectangle, moveRegionPoints } from "../src/lib/cad.ts";
 import {
   clipCenter,
   flipSketchY,
+  rotateSketch,
+  applyFrame,
+  invertFrame,
   constraintHolds,
   extractClip,
   insertClip,
@@ -252,4 +255,54 @@ test("invertir la normal: el dibujo se refleja en y, los arcos y las cotas con s
   }
   near(s.constraints.find((k) => k.type === "fixed").y, -5, "fijo");
   near(before.radius, 3, "radio");
+});
+
+test("girar el sketch entero: las horizontales pasan a verticales y los textos recuerdan el giro", () => {
+  const { s, l } = box();
+  s.texts = [{ id: 1, text: "A", size: 5, font: "x", anchor: s.entities.find((e) => e.id === l[0]).geometry.start, entities: [], points: [] }];
+  rotateSketch(s, 90);
+  // El rectángulo de 10 × 5 desde el origen queda parado: de (−5, 0) a (0, 10)
+  const xs = s.points.map((p) => +p.x.toFixed(9));
+  const ys = s.points.map((p) => +p.y.toFixed(9));
+  assert.deepEqual([Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)], [-5, 0, 0, 10]);
+  assert.equal(s.constraints.filter((k) => k.type === "horizontal").length, 2);
+  assert.equal(s.constraints.filter((k) => k.type === "vertical").length, 2);
+  // Las que eran horizontales (l[0], l[2]) ahora son verticales
+  assert.ok(s.constraints.some((k) => k.type === "vertical" && k.line === l[0]));
+  const f = s.texts[0].style.frame;
+  near(f[0], 0, "cos");
+  near(f[2], 1, "sen");
+  // Otra vez −90: vuelve al marco de siempre (sin guardarlo)
+  rotateSketch(s, -90);
+  assert.equal(s.texts[0].style, undefined);
+});
+
+test("reflejar: el texto guarda el reflejo y se deshace con otro", () => {
+  const s = sketch();
+  const a = addPoint(s, [2, 3]);
+  s.texts = [{ id: 1, text: "A", size: 5, font: "x", anchor: a, entities: [], points: [], style: { bold: true } }];
+  flipSketchY(s);
+  assert.deepEqual(s.texts[0].style, { bold: true, frame: [1, 0, 0, -1] });
+  flipSketchY(s);
+  assert.deepEqual(s.texts[0].style, { bold: true });
+  // Ida y vuelta de un marco
+  const m = [0, -1, 1, 0];
+  const p = applyFrame(invertFrame(m), [1, 1], applyFrame(m, [1, 1], [4, 2]));
+  near(p[0], 4, "x");
+  near(p[1], 2, "y");
+});
+
+test("las regiones elegidas por puntos siguen al dibujo (extrusión y transición; no las de otro sketch)", () => {
+  const doc = {
+    features: [
+      { id: 1, kind: { type: "sketch", sketch: {} } },
+      { id: 2, kind: { type: "extrude", sketch: 1, regions: { type: "points", points: [[3, 4]] } } },
+      { id: 3, kind: { type: "loft", sections: [{ sketch: 1, regions: { type: "points", points: [[1, 2]] } }, { sketch: 9, regions: { type: "points", points: [[1, 2]] } }] } },
+      { id: 4, kind: { type: "extrude", sketch: 1, regions: { type: "all" } } },
+    ],
+  };
+  moveRegionPoints(doc, 1, (p) => [p[0], -p[1]]);
+  assert.deepEqual(doc.features[1].kind.regions.points, [[3, -4]]);
+  assert.deepEqual(doc.features[2].kind.sections.map((s) => s.regions.points), [[[1, -2]], [[1, 2]]]);
+  assert.deepEqual(doc.features[3].kind.regions, { type: "all" });
 });
