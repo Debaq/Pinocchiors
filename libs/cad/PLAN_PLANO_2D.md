@@ -97,8 +97,16 @@ derecha del frente e isométrica; las otras se prenden con su ojo. Los planos co
 
 ### F3 — Vistas libres y girar en 3D
 
-- Mover las vistas arrastrándolas (alineadas con la vista madre, como se proyectan; Mayús o
-  Alt para soltarlas), agregar y quitar vistas, vista proyectada desde otra.
+- Mover las vistas arrastrándolas (pedido del usuario, 2026-10-10: «automáticamente está bien
+  pero quiero poder moverlas a mi gusto»). La disposición automática por diedro (`viewSlots`)
+  sigue siendo la de partida; cada vista movida guarda su lugar en el plano y deja de seguir a
+  la automática, el resto sigue acomodándose sola. Al arrastrar se mantiene alineada con el
+  frente (las de la fila del frente solo se corren en horizontal, las de la columna en
+  vertical), con Mayús o Alt se suelta del todo. En su ventana de propiedades: posición X/Y
+  escrita y «Volver a su lugar»; en la hoja, «Acomodar todo» devuelve todas a la automática.
+  Si se cambia la escala o el diedro, las movidas se quedan donde están (avisando si alguna
+  se sale de la hoja o pisa otra).
+- Agregar y quitar vistas, vista proyectada desde otra.
 - **Girar en 3D las vistas que se ven en 3D** (isométrica y las que se agreguen): con la vista
   elegida, arrastrar orbita la pieza dentro de su marco (misma lógica que `navDrag`/`cameraRig`),
   más botones de 90°, ángulos escritos y «tomar la vista del visor». Se guarda `eye` + `xdir`
