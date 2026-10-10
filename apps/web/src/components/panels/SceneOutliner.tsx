@@ -4,6 +4,7 @@ import type { SceneNode } from "../../lib/scene-tree";
 import { matchesOutliner, outlinerQuery } from "../../lib/outlinerFilter";
 import * as Icons from "../icons";
 import * as SketchIcons from "../icons/sketch";
+import * as DesignIcons from "../icons/design";
 
 export interface SceneOutlinerProps {
   tree: SceneNode;
@@ -11,6 +12,8 @@ export interface SceneOutlinerProps {
   /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
   onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
+  /** «+» de un grupo (`addHint`) */
+  onAddNode?: (groupId: string) => void;
 }
 
 const nodeIcon = (type: SceneNode["type"]) => {
@@ -32,6 +35,13 @@ const nodeIcon = (type: SceneNode["type"]) => {
     case "feature": return Icons.Wrench;
     case "folder": return Icons.Folder;
     case "part": return Icons.Cube;
+    case "drawing": return DesignIcons.Drawing;
+    case "drawing_sheet": return Icons.FrameCorners;
+    case "drawing_view": return Icons.Square;
+    case "drawing_section": return Icons.Scissors;
+    case "drawing_detail": return Icons.MagnifyingGlass;
+    case "drawing_dim": return Icons.Ruler;
+    case "drawing_sketch": return SketchIcons.Spline;
     default: return Icons.Cube;
   }
 };
@@ -43,6 +53,7 @@ const OutlinerNode: Component<{
   /** `add`: con Ctrl, ⌘ o Mayús (suma o quita de la selección) */
   onSelectNode?: (nodeId: string, add?: boolean) => void;
   onDeleteNode?: (nodeId: string) => void;
+  onAddNode?: (groupId: string) => void;
   isExpanded: (node: SceneNode) => boolean;
   onToggleExpanded: (node: SceneNode) => void;
 }> = (props) => {
@@ -117,6 +128,19 @@ const OutlinerNode: Component<{
         )}>
           {props.node.label}
         </span>
+        <Show when={isGroup && props.node.addHint && props.onAddNode}>
+          <button
+            class="w-4 h-4 flex items-center justify-center rounded-sm text-text-muted hover:text-text hover:bg-surface"
+            title={props.node.addHint}
+            aria-label={props.node.addHint}
+            onClick={(e) => {
+              e.stopPropagation();
+              props.onAddNode?.(props.node.id);
+            }}
+          >
+            <Icons.Plus size={11} />
+          </button>
+        </Show>
         <Show when={isGroup}>
           <span class="text-[10px] text-text-dim pr-1">{props.node.count ?? props.node.children.length}</span>
         </Show>
@@ -171,6 +195,7 @@ const OutlinerNode: Component<{
               onToggleVisibility={props.onToggleVisibility}
               onSelectNode={props.onSelectNode}
               onDeleteNode={props.onDeleteNode}
+              onAddNode={props.onAddNode}
               isExpanded={props.isExpanded}
               onToggleExpanded={props.onToggleExpanded}
             />
@@ -217,6 +242,7 @@ export const SceneOutliner: Component<SceneOutlinerProps> = (props) => {
             onToggleVisibility={props.onToggleVisibility}
             onSelectNode={props.onSelectNode}
             onDeleteNode={props.onDeleteNode}
+            onAddNode={props.onAddNode}
             isExpanded={expandedNow}
             onToggleExpanded={onToggleExpanded}
           />

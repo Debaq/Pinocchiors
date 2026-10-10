@@ -676,8 +676,8 @@ export interface CadDocument {
   parts?: PartProps[];
   /** Ensamble de las piezas */
   assembly?: Assembly | null;
-  /** Cotas del plano 2D (ver lib/drawing.ts) */
-  drawing?: { dims?: import("./drawing").UserDim[]; details?: import("./drawing").Detail[]; sketch?: Sketch } | null;
+  /** Planos 2D (ver lib/drawingDoc.ts; la forma vieja de un solo plano también se lee) */
+  drawing?: import("./drawingDoc").DrawingData | null;
   /** Variantes: parámetro → expresión que lo reemplaza y operaciones suprimidas */
   configurations?: Configuration[];
   /** La que se calcula (ninguna: lo de base) */

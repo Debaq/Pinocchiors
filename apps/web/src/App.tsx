@@ -75,6 +75,7 @@ import type { SceneStructure, MaterialInfo } from "./components/steps/StructureS
 import { createPipelineStore, type PipelineStepId } from "./lib/pipeline";
 import { VIEW_AXES, fromView, toView, viewSize, type Axis } from "./lib/axes";
 import { buildSceneTree, type CadOutline, type CadOutlineItem, type ObjectRow, type SceneNode } from "./lib/scene-tree";
+import { addDrawing, drawingSheets, drawingTree, parseElementNode, removeDrawing, removeElement, toggleElement, updateDrawing } from "./lib/drawingDoc";
 import { isCadObject, isGeometryStep, materialized, nextObjectId, partKey, savedTrail, syncCadObjects, type SceneObject } from "./lib/objects";
 import { TOOLSETS, toolContext, type ToolId } from "./lib/tools";
 import { createHistoryStore, type SavedHistory } from "./lib/history";
@@ -1754,6 +1755,7 @@ export const App: Component = () => {
     selectedNode: selectedFileNode(),
     cad: cadOutline(),
     objects: objectRows(),
+    drawings: cad.doc() ? drawingTree(drawingSheets(cad.doc()), cadUi.drawingOpen() ? cadUi.activeDrawing() : undefined, cadUi.drawingSel()) : undefined,
   });
 
   // ─── Deshacer operaciones del backend ────────────────────────────────────
@@ -6095,6 +6097,12 @@ export const App: Component = () => {
   // ═══════════════════════════════════════════════════════════════════════════
 
   const handleToggleVisibility = (nodeId: string) => {
+    const dn = drawingNode(nodeId);
+    if (dn) {
+      const el = dn.element;
+      if (el) void cad.commit((d) => void updateDrawing(d, dn.drawing, (s) => toggleElement(s, el)));
+      return;
+    }
     if (nodeId.startsWith("plane-")) {
       cadUi.togglePlane(nodeId.slice(6) as "xy" | "xz" | "yz");
       return;
@@ -6168,6 +6176,19 @@ export const App: Component = () => {
    * deshacer: queda como hito en el historial.
    */
   const handleDeleteNode = (nodeId: string) => {
+    const dn = drawingNode(nodeId);
+    if (dn) {
+      const el = dn.element;
+      if (el) void cad.commit((d) => void updateDrawing(d, dn.drawing, (s) => removeElement(s, el)));
+      else {
+        void cad.commit((d) => removeDrawing(d, dn.drawing));
+        if (cadUi.activeDrawing() === dn.drawing) {
+          cadUi.setDrawingOpen(false);
+          cadUi.setActiveDrawing(undefined);
+        }
+      }
+      return;
+    }
     // Lo del diseño se deshace con el historial del propio diseño
     const feature = cadFeatureOfNode(nodeId);
     if (feature !== undefined) {
@@ -6904,7 +6925,23 @@ export const App: Component = () => {
     return items;
   };
 
+  /** Un plano 2D o algo suyo, desde el Outliner (`drawing-<id>[:elemento]`) */
+  const drawingNode = (nodeId: string) => parseElementNode(nodeId);
+  /** «+» del grupo Planos 2D: un plano nuevo, abierto con su hoja */
+  const handleAddNode = (groupId: string) => {
+    if (groupId !== "group-drawings") return;
+    if (!inDesign()) pipeline.openWorkspace("design");
+    let id: number | undefined;
+    void Promise.resolve(cad.commit((d) => void (id = addDrawing(d)))).then(() => id !== undefined && cadUi.openDrawing(id, { kind: "sheet" }));
+  };
+
   const handleSelectNode = (nodeId: string, add = false) => {
+    const dn = drawingNode(nodeId);
+    if (dn) {
+      if (!inDesign()) pipeline.openWorkspace("design");
+      cadUi.openDrawing(dn.drawing, dn.element);
+      return;
+    }
     // Lo del diseño se elige en Diseñar
     const plane = nodeId.startsWith("plane-") ? (nodeId.slice(6) as "xy" | "xz" | "yz") : undefined;
     const feature = cadFeatureOfNode(nodeId);
@@ -7518,6 +7555,7 @@ export const App: Component = () => {
             onToggleVisibility={handleToggleVisibility}
             onSelectNode={handleSelectNode}
             onDeleteNode={handleDeleteNode}
+            onAddNode={handleAddNode}
             history={history}
             stats={{
               fileName: fileName(),

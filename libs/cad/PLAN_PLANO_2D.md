@@ -58,6 +58,22 @@ la barra izquierda (fallaba «no se cerró» aunque se cerraba): ahora `div[aria
 Pendiente de F1 para más adelante: las cotas de lo dibujado no se exportan (son del sketch; con
 F2 las de referencia pasan a la hoja) y la vista se puede girar sobre la hoja (no molesta).
 
+### Varios planos en el Outliner ✅
+
+*Hecho el 2026-10-10 (pedido del usuario: los detalles en la barra de arriba «es feísimo»).*
+`doc.drawing = { sheets: DrawingSheet[], next_id }` (`lib/drawingDoc.ts`; la forma vieja de un
+solo plano se lee como «Plano 1» y se reescribe al primer cambio; el backend no cambió: es JSON
+libre). Cada plano guarda hoja, proyección, escala, ocultas/tangentes, cotas generales, vistas
+ocultas, corte, detalles, cotas a mano, dibujo y cajetín (antes eran señales de la interfaz y
+se perdían). Grupo «Planos 2D» en el Outliner con «+» (`SceneNode.addHint`, `onAddNode`); de
+cada plano cuelgan Hoja y cajetín, las cuatro vistas, Cotas generales, Corte A-A, Detalles,
+Cotas y Dibujo, con ojo (vistas, cotas generales, corte, detalles, cotas, dibujo) y borrar
+(corte, detalles, cotas, dibujo, el plano). Clic en una fila o en la hoja (el elemento del SVG o
+la caja de la vista) lo elige: se resalta en la hoja, se marca en el Outliner y abre una ventana
+flotante arrastrable con sus propiedades; Esc la cierra y Supr borra lo elegido. La barra de
+arriba quedó con las herramientas (Cota, Distancia, Ángulo, Detalle, Corte A-A, Dibujar, Hoja)
+y exportar. Pruebas: node `drawingDoc.test.mjs` y e2e "planos 2D en el Outliner…".
+
 ### F2 — Las vistas como referencia
 
 - Cada línea de vista entra al sketch de la hoja como entidad fija ligada

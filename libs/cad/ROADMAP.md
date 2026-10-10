@@ -668,3 +668,8 @@ cargo test -p cad-model
 - **2026-10-10 Dibujar sobre la hoja del plano** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md), fase 1): el
   editor del sketch sobre la hoja (con la hoja de fondo), guardado en `doc.drawing.sketch` y
   exportado en SVG, PDF y DXF. Tabla de cobertura de la lista de edición 2D en el plan.
+- **2026-10-10 Varios planos 2D en el Outliner** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md)): grupo
+  «Planos 2D» con sus elementos (vistas, corte, detalles, cotas, dibujo, hoja), ventana flotante
+  de propiedades y todo guardado en el documento. De paso: lo elegido en el visor se marca en
+  el Outliner (región o curva → su sketch; cara o arista → su pieza) y un clic en la curva de un
+  sketch abierto lo elige entero.

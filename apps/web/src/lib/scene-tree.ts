@@ -7,7 +7,9 @@ export interface SceneNode {
   type:
     | "scene" | "mesh" | "wireframe" | "skeleton" | "bone" | "quadmesh" | "grid" | "weights" | "node"
     // Grupos del Outliner y lo que viene del CAD
-    | "group" | "plane" | "axis" | "point" | "sketch" | "feature" | "folder" | "part";
+    | "group" | "plane" | "axis" | "point" | "sketch" | "feature" | "folder" | "part"
+    // Planos 2D y lo que cuelga de cada uno
+    | "drawing" | "drawing_sheet" | "drawing_view" | "drawing_section" | "drawing_detail" | "drawing_dim" | "drawing_sketch";
   label: string;
   visible: boolean;
   expanded: boolean;
@@ -32,6 +34,8 @@ export interface SceneNode {
   content?: JSX.Element;
   /** Cuántos elementos tiene (si no, los hijos) */
   count?: number;
+  /** Botón «+» del grupo (crea uno nuevo): su texto al pasar el mouse */
+  addHint?: string;
 }
 
 /** Elemento del CAD ya armado por App (ids `plane-xy`, `cad-<id>`, `part-<op>-<n>`…) */
@@ -80,6 +84,8 @@ export interface SceneTreeState {
   cad?: CadOutline;
   /** Objetos en orden de creación (sin objetos, el modelo va suelto) */
   objects?: ObjectRow[];
+  /** Planos 2D del diseño con sus elementos (con diseño, aunque no haya ninguno: el grupo tiene «+») */
+  drawings?: SceneNode[];
 }
 
 /** Hay geometría en el nodo o debajo de él (se puede ocultar o borrar) */
@@ -235,5 +241,6 @@ export function buildSceneTree(state: SceneTreeState): SceneNode {
   root.children.push(group("group-planes", "Planos", planes));
   if (state.cad) root.children.push({ ...group("group-features", "Operaciones", []), content: state.cad.featureTree, count: state.cad.featureCount });
   if (objects.length) root.children.push(group("group-objects", "Objetos", objects));
+  if (state.drawings) root.children.push({ ...group("group-drawings", "Planos 2D", state.drawings), addHint: "Plano nuevo" });
   return root;
 }

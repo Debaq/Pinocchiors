@@ -1435,10 +1435,10 @@ const scenarios = {
     await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', "(ls) => { const l = ls.find((x) => x.length === 2); return [(l[0][0] + l[1][0]) / 2, (l[0][1] + l[1][1]) / 2]; }")), { wait: 1000 });
     const texts = await b.eval(`[...document.querySelectorAll("[data-sheet] [data-user-dim] text")].map((t) => t.textContent)`);
     if (!texts.includes("Ø6") || !texts.includes("20")) throw new Error(`cotas a mano: ${texts}`);
-    if ((await call("cad_get_document")).drawing?.dims?.length !== 2) throw new Error("no se guardaron las cotas");
+    if ((await call("cad_get_document")).drawing?.sheets?.[0]?.dims?.length !== 2) throw new Error("no se guardaron las cotas");
     await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
     // Corte A-A: el frente rayado y la línea en la planta
-    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-hatch="front"] polygon')`)); t++) await sleep(500);
     const cut = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
@@ -1509,7 +1509,7 @@ const scenarios = {
     for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-layer]")`)); t++) await sleep(250);
     const layer = await b.eval(`document.querySelectorAll("[data-sheet] svg [data-layer] polyline").length`);
     if (layer !== 2) throw new Error(`en la hoja: ${layer}`);
-    const saved = (await call("cad_get_document")).drawing?.sketch;
+    const saved = (await call("cad_get_document")).drawing?.sheets?.[0]?.sketch;
     if (saved?.entities?.length !== 2) throw new Error(`guardado: ${JSON.stringify(saved?.entities)}`);
     await b.shot("plano_con_dibujo");
     const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
@@ -1526,6 +1526,60 @@ const scenarios = {
     await b.clickText("Descartar");
     await sleep(500);
     if (!(await b.eval(`!!document.querySelector('div[aria-label="Plano 2D"]') && !window.__cadUi.session()`))) throw new Error("descartar no volvió al plano");
+  },
+
+  async "planos 2D en el Outliner: varios, elementos, ventana de propiedades"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Plano 2D");
+    const ready = async () => {
+      for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+      await sleep(300);
+    };
+    await ready();
+    const row = (id) => `document.querySelector('[data-outliner-row=${JSON.stringify(id)}]')`;
+    if (!(await b.eval(`!!${row("group-drawings")} && !!${row("drawing-1")} && !!${row("drawing-1:view:iso")}`))) throw new Error("no está el grupo Planos 2D con el plano y sus vistas");
+    // Otro plano con «+»: se abre con su hoja elegida
+    await b.eval(`document.querySelector('[aria-label="Plano nuevo"]').click()`);
+    for (let t = 0; t < 20 && (await b.eval(`document.querySelector("[data-drawing-name]")?.textContent.trim()`)) !== "Plano 2"; t++) await sleep(250);
+    await ready();
+    if (!(await b.eval(`!!document.querySelector('[data-drawing-props="sheet"]')`))) throw new Error("el plano nuevo no abrió su hoja");
+    await b.eval(`(() => { const i = document.querySelector('[aria-label="Nombre del plano"]'); i.value = "Cortes"; i.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    for (let t = 0; t < 20 && !(await b.eval(`${row("drawing-2")}?.textContent.includes("Cortes")`)); t++) await sleep(250);
+    if (!(await b.eval(`${row("drawing-2")}?.textContent.includes("Cortes")`))) throw new Error("el nombre no llegó al Outliner");
+    // El ojo de la isométrica la saca de la hoja
+    await b.eval(`[...${row("drawing-2:view:iso")}.querySelectorAll("button")].pop().click()`);
+    for (let t = 0; t < 30 && (await b.eval(`!!document.querySelector('[data-sheet] [data-view="iso"]')`)); t++) await sleep(250);
+    if (await b.eval(`!!document.querySelector('[data-sheet] [data-view="iso"]')`)) throw new Error("la isométrica sigue");
+    // Una cota en el frente; clic en su texto la elige (ventana y fila del Outliner)
+    await b.eval(`[...document.querySelectorAll('[aria-label="Herramienta de cotas"] button')].find((x) => x.textContent === "Cota").click()`);
+    await sleep(200);
+    const mid = await b.eval(`(() => {
+      const svg = document.querySelector("[data-sheet] svg");
+      const l = [...svg.querySelectorAll('[data-view="front"] polyline[data-kind="visible"]')].map((x) => x.getAttribute("points").split(" ").map((p) => p.split(",").map(Number))).find((x) => x.length === 2);
+      const p = new DOMPoint((l[0][0] + l[1][0]) / 2, (l[0][1] + l[1][1]) / 2).matrixTransform(svg.getScreenCTM());
+      return [p.x, p.y];
+    })()`);
+    await b.click(...mid, { wait: 1000 });
+    await b.key("Escape", "Escape", 27);
+    const txt = await b.eval(`(() => { const t = document.querySelector('[data-sheet] [data-user-dim="0"] text'); if (!t) return null; const r = t.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    if (!txt) throw new Error("no se puso la cota");
+    await b.click(...txt, { wait: 500 });
+    const picked = await b.eval(`({ props: document.querySelector('[data-drawing-props]')?.dataset.drawingProps, value: document.querySelector("[data-dim-value]")?.textContent, row: ${row("drawing-2:dim:0")}?.className.includes("bg-accent/20") })`);
+    if (picked.props !== "dim" || picked.value !== "20" || !picked.row) throw new Error(`cota elegida: ${JSON.stringify(picked)}`);
+    // Supr la quita
+    await b.key("Delete", "Delete", 46);
+    for (let t = 0; t < 20 && (await b.eval(`!!${row("drawing-2:dim:0")}`)); t++) await sleep(250);
+    if (await b.eval(`!!${row("drawing-2:dim:0")}`)) throw new Error("Supr no quitó la cota");
+    // Clic en el otro plano del Outliner: se abre ese
+    await b.eval(`${row("drawing-1")}.click()`);
+    for (let t = 0; t < 20 && (await b.eval(`document.querySelector("[data-drawing-name]")?.textContent.trim()`)) !== "Plano 1"; t++) await sleep(250);
+    if ((await b.eval(`document.querySelector("[data-drawing-name]")?.textContent.trim()`)) !== "Plano 1") throw new Error("no se abrió el Plano 1");
+    const doc = (await call("cad_get_document")).drawing;
+    if (doc?.sheets?.length !== 2 || !doc.sheets[1].hiddenViews.includes("iso") || doc.sheets[1].name !== "Cortes") throw new Error(`guardado: ${JSON.stringify(doc)}`);
+    await b.shot("planos_outliner");
   },
 
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {
@@ -1572,18 +1626,17 @@ const scenarios = {
     await b.click(...(await at('[data-view="front"] polyline[data-kind="visible"]', seg("s"))), { wait: 1000 });
     const det = await b.eval(`(() => {
       const svg = document.querySelector("[data-sheet] svg");
-      return { view: svg.querySelectorAll('[data-view="detalle-B"] polyline').length, mark: !!svg.querySelector('[data-detail-mark="B"]'), label: svg.querySelector('[data-detail="B"] text')?.textContent, chip: !!document.querySelector('[data-detail-chip="B"]') };
+      return { view: svg.querySelectorAll('[data-view="detalle-B"] polyline').length, mark: !!svg.querySelector('[data-detail-mark="B"]'), label: svg.querySelector('[data-detail="B"] text')?.textContent, chip: !!document.querySelector('[data-outliner-row="drawing-1:detail:B"]') && !!document.querySelector('[data-drawing-props="detail"]') };
     })()`);
     if (!(det.view > 0) || !det.mark || !det.chip || !/^Detalle B \(\d+:1\)$/.test(det.label ?? "")) throw new Error(`detalle: ${JSON.stringify(det)}`);
-    if ((await call("cad_get_document")).drawing?.details?.length !== 1) throw new Error("no se guardó el detalle");
-    await toolBtn("Detalle");
+    if ((await call("cad_get_document")).drawing?.sheets?.[0]?.details?.length !== 1) throw new Error("no se guardó el detalle");
     // Corte A-A por el medio (Y = 5) y después en Y = 2: el rayado es el ancho del cono ahí
     const hatchW = () =>
       b.eval(`(() => {
         const ps = [...document.querySelectorAll('[data-sheet] [data-hatch="front"] polygon')].flatMap((p) => p.getAttribute("points").split(" ").map((q) => Number(q.split(",")[0])));
         return ps.length ? Math.max(...ps) - Math.min(...ps) : 0;
       })()`);
-    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] label')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
+    await b.eval(`[...document.querySelectorAll('div[aria-label="Plano 2D"] button')].find((l) => l.textContent.trim() === "Corte A-A").click()`);
     for (let t = 0; t < 30 && !(await hatchW()); t++) await sleep(500);
     await sleep(800);
     const mid = await hatchW();

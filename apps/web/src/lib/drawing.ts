@@ -114,6 +114,8 @@ export interface Detail {
   center: P2;
   radius: number;
   scale?: number;
+  /** Oculto en la hoja (sigue en el plano) */
+  hidden?: boolean;
 }
 
 /** Corte A-A: el frente cortado por un plano paralelo a él; `at` es la Y del plano (mm del modelo) */
@@ -222,7 +224,8 @@ export interface RadiusDimension {
   value: number;
 }
 
-export type AnyDimension = Dimension | AngleDimension | RadiusDimension;
+/** `index`: la cota a mano de la que sale (en `dims`); las generales no tienen */
+export type AnyDimension = (Dimension | AngleDimension | RadiusDimension) & { index?: number };
 
 /**
  * Cota puesta por el usuario sobre líneas de una vista. Las líneas se
@@ -239,6 +242,8 @@ export interface UserDim {
    */
   kind: "length" | "diameter" | "distance" | "radius" | "angle";
   refs: P2[];
+  /** Oculta en la hoja (sigue en el plano) */
+  hidden?: boolean;
 }
 
 const SOLID_KINDS: LineKind[] = ["visible", "outline"];
@@ -311,7 +316,10 @@ export function asSegment(l: DrawingLine): [P2, P2] | null {
 /** Cotas del usuario resueltas contra las vistas actuales (las que ya no encuentran su línea se omiten) */
 export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[] {
   const out: AnyDimension[] = [];
-  for (const d of dims) {
+  for (const [index, d] of dims.entries()) {
+    if (d.hidden) continue;
+    // Cada cota sabe cuál es (para elegirla con un clic en la hoja)
+    const push = (x: AnyDimension) => out.push({ ...x, index });
     const v = placed.find((x) => x.name === d.view);
     if (!v) continue;
     const tol = 3 / v.scale;
@@ -341,7 +349,7 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[
         return best.diff < 0.2 ? best.p : undefined;
       };
       const at = toward(45) ?? toward(135) ?? toward(-45) ?? toward(-135) ?? arc.mid;
-      out.push({ kind: "radius", c: sheet(arc.c), p: sheet([arc.c[0] + ((at[0] - arc.c[0]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1]), arc.c[1] + ((at[1] - arc.c[1]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1])]), value: arc.r });
+      push({ kind: "radius", c: sheet(arc.c), p: sheet([arc.c[0] + ((at[0] - arc.c[0]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1]), arc.c[1] + ((at[1] - arc.c[1]) * arc.r) / Math.hypot(at[0] - arc.c[0], at[1] - arc.c[1])]), value: arc.r });
     } else if (d.kind === "angle") {
       const [s1, s2] = [asSegment(lines[0]!), asSegment(lines[1]!)];
       if (!s1 || !s2) continue;
@@ -350,11 +358,11 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[
       // En la hoja Y va hacia abajo: los ángulos cambian de signo
       const c = sheet(a.x);
       const r = Math.max(8, a.reach * v.scale);
-      out.push({ kind: "angle", c, r, a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [sheet(a.far0), sheet(a.far1)] });
+      push({ kind: "angle", c, r, a0: -a.t0, a1: -a.t1, value: a.degrees, ends: [sheet(a.far0), sheet(a.far1)] });
     } else if (d.kind === "diameter") {
       const circ = asCircle(lines[0]!);
       if (!circ) continue;
-      out.push({ a: sheet([circ.c[0] - circ.r, circ.c[1]]), b: sheet([circ.c[0] + circ.r, circ.c[1]]), offset: [0, 0], value: 2 * circ.r, prefix: "Ø" });
+      push({ a: sheet([circ.c[0] - circ.r, circ.c[1]]), b: sheet([circ.c[0] + circ.r, circ.c[1]]), offset: [0, 0], value: 2 * circ.r, prefix: "Ø" });
     } else if (d.kind === "length") {
       const seg = asSegment(lines[0]!);
       if (!seg) continue;
@@ -365,7 +373,7 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[
       const mid: P2 = [(p[0] + q[0]) / 2, (p[1] + q[1]) / 2];
       if ((mid[0] - center[0]) * n[0] + (mid[1] - center[1]) * n[1] < 0) n = [-n[0], -n[1]];
       // En la hoja Y va hacia abajo
-      out.push({ a: sheet(p), b: sheet(q), offset: [n[0] * 7, -n[1] * 7], value: len });
+      push({ a: sheet(p), b: sheet(q), offset: [n[0] * 7, -n[1] * 7], value: len });
     } else {
       const [s1, s2] = [asSegment(lines[0]!), asSegment(lines[1]!)];
       if (!s1 || !s2) continue;
@@ -383,7 +391,7 @@ export function userDimensions(placed: Placed[], dims: UserDim[]): AnyDimension[
       if (cross > 0.02) continue;
       // La línea de cota corrida hacia afuera a lo largo de las rectas
       const sideSign = (foot[0] - center[0]) * u[0] + (foot[1] - center[1]) * u[1] >= 0 ? 1 : -1;
-      out.push({ a: sheet(foot), b: sheet(m2), offset: [u[0] * 7 * sideSign, -u[1] * 7 * sideSign], value: Math.abs(off) });
+      push({ a: sheet(foot), b: sheet(m2), offset: [u[0] * 7 * sideSign, -u[1] * 7 * sideSign], value: Math.abs(off) });
     }
   }
   return out;
@@ -695,7 +703,7 @@ export function sheetSvg(
     out.push("</g>");
   }
   if (opts.dimensions) for (const d of overallDimensions(placed)) out.push(dimensionSvg(d));
-  for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", 'data-dimension="" data-user-dim=""'));
+  for (const d of userDimensions(placed, opts.userDims ?? [])) out.push(dimensionSvg(d).replace("data-dimension=\"\"", `data-dimension="" data-user-dim="${d.index}"`));
   // Corte: rótulo bajo el frente y la línea de corte con sus letras en la planta
   const front = placed.find((v) => v.name === "front");
   const top = placed.find((v) => v.name === "top");

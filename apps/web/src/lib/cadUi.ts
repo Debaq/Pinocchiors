@@ -6,6 +6,7 @@ import { batch, createEffect, createSignal, on } from "solid-js";
 import { blockSketch, layerState, saveBlock } from "./sketchBlocks";
 import { clipCenter, extractClip, insertClip, transformSelection, translation, type SketchClip, type Xform } from "./sketchTransform";
 import type { BasePlane } from "./CadViewer";
+import { updateDrawing, type DrawingElement } from "./drawingDoc";
 import {
   geometryPoints,
   mirrorEntities,
@@ -174,8 +175,9 @@ export interface SketchSession {
   sheet?: SheetEdit;
 }
 
-/** La hoja en la que se dibuja: tamaño (mm) y la hoja de fondo como imagen (URL) */
+/** La hoja en la que se dibuja: de qué plano, tamaño (mm) y la hoja de fondo como imagen (URL) */
 export interface SheetEdit {
+  drawing: number;
   width: number;
   height: number;
   backdrop?: string;
@@ -271,8 +273,10 @@ export function createCadUi(store: CadStore) {
   const [deviation, setDeviation] = createSignal<ScanDeviation | null>(null);
   // Ensamble: el visor muestra las instancias en vez del diseño
   const [assemblyMode, setAssemblyMode] = createSignal(false);
-  // Plano 2D abierto sobre el visor
+  // Plano 2D abierto sobre el visor: cuál y lo elegido en él (con su ventana de propiedades)
   const [drawingOpen, setDrawingOpen] = createSignal(false);
+  const [activeDrawing, setActiveDrawing] = createSignal<number>();
+  const [drawingSel, setDrawingSel] = createSignal<DrawingElement>();
   // Desarrollo de chapa abierto sobre el visor
   const [flatOpen, setFlatOpen] = createSignal(false);
   // Centro de masa dibujado en el visor
@@ -433,6 +437,18 @@ export function createCadUi(store: CadStore) {
     setSection,
     drawingOpen,
     setDrawingOpen,
+    activeDrawing,
+    setActiveDrawing,
+    drawingSel,
+    setDrawingSel,
+    /** Abre el plano `id` con `element` elegido (su ventana de propiedades) */
+    openDrawing(id: number, element?: DrawingElement) {
+      batch(() => {
+        setActiveDrawing(id);
+        setDrawingSel(element);
+        setDrawingOpen(true);
+      });
+    },
     flatOpen,
     setFlatOpen,
     assemblyMode,
@@ -882,7 +898,8 @@ export function createCadUi(store: CadStore) {
       });
       // La hoja: el sketch va al plano del documento (las fórmulas quedan en sus cotas) y el plano se vuelve a abrir
       if (s.sheet) {
-        await store.commit((d) => void (d.drawing = { ...(d.drawing ?? {}), sketch: clone(s.sketch) }));
+        const id = s.sheet.drawing;
+        await store.commit((d) => void updateDrawing(d, id, (x) => (x.sketch = clone(s.sketch))));
         setDrawingOpen(true);
         return;
       }
