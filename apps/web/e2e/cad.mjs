@@ -202,6 +202,72 @@ const scenarios = {
     near(r.body.bbox_max[0] - r.body.bbox_min[0], 47, 1e-6, "ancho del sólido");
   },
 
+  async "sketch: barra de restricciones arriba; la cota de ángulo mide lo que hay y dibuja su arco"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    // Dos líneas desde el mismo punto: una horizontal y otra a 45°
+    await key("l");
+    await b.click(...(await at([12, 12])), { wait: 300 });
+    await b.click(...(await at([42, 12])), { wait: 300 });
+    await key("Escape");
+    await b.click(...(await at([12, 12])), { wait: 300 });
+    await b.click(...(await at([33, 33])), { wait: 300 });
+    await key("Escape");
+    await key("Escape");
+    let s = await sk();
+    const lines = s.entities.filter((e) => e.geometry.type === "line");
+    if (lines.length !== 2) throw new Error(`líneas: ${lines.length}`);
+    const before = JSON.stringify(s.points);
+    // Las dos elegidas (Mayús suma) y «Cota»: el ángulo de ahora
+    await key("s");
+    await b.click(...(await at([27, 12])), { wait: 300 });
+    await b.mouse("mouseMoved", ...(await at([22.5, 22.5])), { buttons: 0 });
+    const p2 = await at([22.5, 22.5]);
+    await b.mouse("mousePressed", p2[0], p2[1], { modifiers: 8 });
+    await b.mouse("mouseReleased", p2[0], p2[1], { modifiers: 8, buttons: 0 });
+    await sleep(300);
+    if ((await b.eval(`window.__cadUi.selection().length`)) !== 2) throw new Error(`elegidas: ${await b.eval(`JSON.stringify(window.__cadUi.selection())`)}`);
+    if (!(await b.eval(`document.querySelector('[data-constraint-tool="dim"]').className.includes("ring")`))) throw new Error("la Cota no se ofrece con dos líneas elegidas");
+    await b.eval(`document.querySelector('[data-constraint-tool="dim"]').click()`);
+    await sleep(1200);
+    s = await sk();
+    const angle = s.constraints.find((c) => c.type === "angle");
+    if (!angle) throw new Error("no se puso la cota de ángulo");
+    near(angle.degrees, 45, 0.05, "el ángulo que tienen ahora");
+    const moved = JSON.parse(before).some((p) => { const q = s.points.find((x) => x.id === p.id); return !q || Math.hypot(q.x - p.x, q.y - p.y) > 1e-6; });
+    if (moved) throw new Error("la cota movió las líneas");
+    if (!(await b.eval(`!!document.querySelector("[data-angle-arc]")`))) throw new Error("sin el arco de la cota de ángulo");
+    await b.shot("sketch_cota_angulo");
+    // El botón ∠ (Ángulo) con la herramienta primero: clic en las dos líneas
+    s = await sk();
+    const angles = (sk) => sk.constraints.filter((c) => c.type === "angle").length;
+    const a0 = angles(s);
+    await b.eval(`document.querySelector('[data-constraint-tool="angle"]').click()`);
+    await sleep(200);
+    await b.click(...(await at([27, 12])), { wait: 500 });
+    await b.click(...(await at([22.5, 22.5])), { wait: 900 });
+    s = await sk();
+    if (angles(s) !== a0 + 1) throw new Error(`ángulo con la herramienta primero: ${JSON.stringify(s.constraints.map((c) => c.type))}`);
+    await key("Escape");
+    await sleep(200);
+    // Herramienta primero: «Horizontal» sin nada elegido espera; cada línea que se elige queda horizontal
+    const horizontals = (sk) => sk.constraints.filter((c) => c.type === "horizontal").length;
+    const h0 = horizontals(s);
+    await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').click()`);
+    await sleep(200);
+    if (!(await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').className.includes("bg-accent")`))) throw new Error("Horizontal no quedó esperando");
+    await b.click(...(await at([27, 12])), { wait: 900 });
+    s = await sk();
+    if (horizontals(s) !== h0 + 1) throw new Error(`horizontales: ${JSON.stringify(s.constraints.map((c) => c.type))}`);
+    if (!(await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').className.includes("bg-accent")`))) throw new Error("debía seguir esperando la próxima");
+    await key("Escape");
+    await sleep(200);
+    if (await b.eval(`document.querySelector('[data-constraint-tool="horizontal"]').className.includes("bg-accent")`)) throw new Error("Esc no la soltó");
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");
@@ -2012,6 +2078,56 @@ const scenarios = {
     await b.shot("plano_cortes_hoja");
   },
 
+  async "plano 2D: rayado por pieza según su material, DXF de los cortes y vista del corte alineada"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Dos piezas: la caja de acero y otra al lado de PLA
+    const doc = await call("cad_get_document");
+    const box = doc.features.find((f) => f.kind.type === "primitive");
+    Object.assign(box.kind.shape, { dx: 20, dy: 20, dz: 10 });
+    doc.features.push({ id: doc.next_id++, name: "Caja 2", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 20, dy: 20, dz: 10, centered: true, centered_z: true }, origin: [20, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const parts = (await evaluate()).parts;
+    if (parts.length !== 2) throw new Error(`piezas: ${parts.length}`);
+    await b.eval(`window.__cadStore.commit((d) => { d.parts = ${JSON.stringify(parts.map((p, i) => ({ part: p.id, material: i === 0 ? { name: "Acero", density: 7850 } : { name: "PLA", density: 1240 } })))}; })`);
+    await sleep(1500);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await b.eval(`document.querySelector('button[aria-label="Corte A-A"]').click()`);
+    for (let t = 0; t < 40 && (await b.eval(`document.querySelectorAll('[data-sheet] [data-hatch="front"]').length`)) < 2; t++) await sleep(300);
+    const groups = await b.eval(`[...document.querySelectorAll('[data-sheet] [data-hatch="front"]')].map((g) => { const id = g.getAttribute("fill").slice(5, -1); const p = document.querySelector('[data-sheet] pattern[id="' + id + '"]'); return { lines: p.querySelectorAll("line").length, rot: p.getAttribute("patternTransform") }; })`);
+    // Acero de a pares (dos líneas); PLA cruzado (dos líneas, una horizontal) y con el ángulo al revés por ser la vecina
+    if (groups.length !== 2 || groups[0].rot === groups[1].rot) throw new Error(`rayados por pieza: ${JSON.stringify(groups)}`);
+    if (!groups.every((g) => g.lines === 2)) throw new Error(`dibujo de los rayados: ${JSON.stringify(groups)}`);
+    // Corte por una línea vertical en el frente: su vista va a un costado, alineada (sin la lateral ni la isométrica, hay lugar)
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].hiddenViews = ["bottom", "right", "back", "left", "iso"]; })`);
+    await sleep(1500);
+    await b.eval(`document.querySelector('button[aria-label="Corte"]').click()`);
+    const at = (p) => b.eval(`(() => { const svg = document.querySelector("[data-sheet] svg"); const g = svg.querySelector('[data-view="front"]').getBBox(); const q = new DOMPoint(g.x + g.width * ${p[0]}, g.y + g.height * ${p[1]}).matrixTransform(svg.getScreenCTM()); return [q.x, q.y]; })()`);
+    await b.click(...(await at([0.25, -0.15])), { wait: 300 });
+    await b.click(...(await at([0.25, 1.15])), { wait: 300 });
+    await b.key("Enter", "Enter", 13);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('[data-sheet] [data-view="corte-B"]')`)); t++) await sleep(300);
+    const al = await b.eval(`(() => { const f = document.querySelector('[data-sheet] [data-view="front"]').getBBox(); const c = document.querySelector('[data-sheet] [data-view="corte-B"]').getBBox(); return { fy: f.y + f.height / 2, cy: c.y + c.height / 2, fx: f.x, cx: c.x }; })()`);
+    near(al.cy, al.fy, 0.05, "la vista del corte a la altura del frente");
+    // DXF con las líneas de corte, las letras y el rayado
+    const out = process.env.E2E_OUT ?? "/tmp/pinocchio-e2e";
+    const dxf = `${out}/plano_cortes.dxf`;
+    rmSync(dxf, { force: true });
+    await b.eval(`window.__nextPath = ${JSON.stringify(dxf)}`);
+    await b.clickText("Exportar DXF");
+    await sleep(1500);
+    const text = existsSync(dxf) ? readFileSync(dxf, "utf8") : "";
+    if (!text.includes("\nRAYADO\n") || !text.includes("\nCORTES\n")) throw new Error("el DXF no trae el rayado o los cortes");
+    await b.key("Escape", "Escape", 27);
+    await sleep(300);
+    await b.shot("plano_material");
+  },
+
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {
     await begin(b);
     // Medio cono (r 10 → 5, alto 10) cortado en y < 0: arcos en la planta, trapecio en el frente
@@ -2405,10 +2521,11 @@ const scenarios = {
   async "polígono y ranura"(b) {
     await begin(b);
     await sketchOn(b);
-    await b.clickText("Polígono");
+    // Por sus atajos (P y U): «Polígono» y «Ranura» también salen en otras listas
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "p" }))`);
     await b.click(350, 400);
     await b.click(450, 400);
-    await b.clickText("Ranura");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "u" }))`);
     await b.click(600, 400);
     await b.click(800, 400);
     await b.click(800, 440);
@@ -2423,7 +2540,8 @@ const scenarios = {
     await b.click(400, 300);
     await b.click(700, 500);
     await sleep(800);
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(700, 300, { wait: 500 });
     await setInput(b, "Radio", 10);
     await b.clickText("Redondear esquina");
@@ -2509,11 +2627,12 @@ const scenarios = {
     await b.clickText("Rectángulo");
     await b.click(380, 320);
     await b.click(520, 460);
-    await b.clickText("Círculo");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }))`);
     await b.click(680, 390);
     await b.click(730, 390);
     await b.key("Escape", "Escape", 27);
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     const kinds = () => b.eval(`(() => {
       const s = window.__cadUi.session().sketch;
       return window.__cadUi.selection().map((id) => s.entities.find((e) => e.id === id)?.geometry.type ?? "punto").filter((k) => k !== "punto").sort().join(",");
@@ -2570,7 +2689,8 @@ const scenarios = {
     await sleep(800);
     if ((await lines()) !== 4) throw new Error(`con el botón: ${await lines()}`);
     // Un arrastre entero es un solo paso
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     const still = await points();
     await b.drag(380, 320, 330, 280, 12);
     await sleep(800);
@@ -2627,7 +2747,8 @@ const scenarios = {
     await b.click(380, 320);
     await b.click(520, 460);
     await b.key("Escape", "Escape", 27);
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.drag(350, 290, 560, 490);
     const first = (await lines()).map((e) => e.id);
     const box0 = bbox(await sk(), await lines());
@@ -3992,7 +4113,8 @@ const scenarios = {
     await sleep(600);
     if ((await b.eval(`window.__cadUi.session().regions.length`)) !== 1) throw new Error("la región no se formó");
     // Doble clic sobre un lado: la cadena entera (sin la construcción)
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(480, 300, { wait: 80 });
     await b.click(480, 300, { wait: 400 });
     const sel = (await b.eval(`window.__cadUi.selection()`)).sort();
@@ -4051,7 +4173,8 @@ const scenarios = {
     await b.click(760, 370);
     await b.click(800, 370, { wait: 800 });
     await b.key("Escape", "Escape", 27);
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await sleep(500);
     // Rectángulo: dos H y dos V
     if ((await glyphs()) !== "HHVV") throw new Error(`íconos: "${await glyphs()}"`);
@@ -4784,7 +4907,8 @@ const scenarios = {
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
-    await b.clickText("Línea");
+    // Con el atajo: «Línea» también es una fila de la lista de entidades
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }))`);
     await b.click(550, 250);
     await b.click(550, 550);
     await b.key("Escape", "Escape", 27);
@@ -4799,7 +4923,8 @@ const scenarios = {
     await b.clickText("Rectángulo");
     await b.click(400, 300);
     await b.click(700, 500);
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(550, 500, { wait: 500 });
     await setInput(b, "Distancia", 5);
     await b.clickText("Equidistante");
@@ -4877,7 +5002,7 @@ const scenarios = {
     await begin(b);
     // Línea y dos arcos tangentes encadenados
     await sketchOn(b);
-    await b.clickText("Línea");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }))`);
     await b.click(400, 400);
     await b.click(600, 400);
     await b.key("Escape", "Escape", 27);
@@ -4894,7 +5019,7 @@ const scenarios = {
 
     // Extender una línea hasta otra vertical
     await sketchOn(b);
-    await b.clickText("Línea");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "l" }))`);
     await b.click(600, 300);
     await b.click(600, 500);
     await b.key("Escape", "Escape", 27);
@@ -4916,10 +5041,10 @@ const scenarios = {
     await b.click(400, 300);
     await b.click(700, 500);
     await b.key("Escape", "Escape", 27); // las cotas pedidas quedan como se dibujó
-    await b.clickText("Círculo");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "c" }))`);
     await b.click(700, 400);
     await b.click(750, 400);
-    await b.clickText("Recortar");
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "t" }))`);
     await b.click(650, 400, { wait: 800 });
     const regions = await b.eval(`(document.body.innerText.match(/\\d+ regiones cerradas/) ?? [""])[0]`);
     // Gestor: elegir lo que nombra la primera restricción
@@ -5196,7 +5321,8 @@ const scenarios = {
     await circle([0.2, 0.2], 0.08);
     await circle([0.5, 0.25], 0.05);
     // Elegir los dos (Mayús suma) y "Tangentes" en el panel
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(...(await at(0.2, 0.28)), { wait: 300 });
     await b.click(...(await at(0.5, 0.3)), { wait: 300, modifiers: 8 });
     await b.clickText("Tangentes");
@@ -5227,7 +5353,8 @@ const scenarios = {
     await b.key("Escape", "Escape", 27);
     await sleep(800);
     // Una cota de más: elegir la línea de abajo y pedir "Largo"
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(...(await at(0.2, 0)), { wait: 300 });
     await b.clickText("Largo");
     await sleep(1200);
@@ -5270,7 +5397,8 @@ const scenarios = {
     await b.clickText("Punto");
     await b.click(...(await at(0.3, -0.3)), { wait: 600 });
     // Q: el lado de arriba pasa a construcción
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(...(await at(0.1, 0.15)), { wait: 300 });
     await b.key("q", "KeyQ", 81);
     await sleep(800);
@@ -5315,7 +5443,8 @@ const scenarios = {
     await b.click(...(await at(0.19, 0.1)), { wait: 800 });
     await b.key("Escape", "Escape", 27);
     // Simetría: primero el eje, después el círculo
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(...(await at(0, 0.2)), { wait: 300 });
     await b.click(...(await at(0.15, 0.14)), { wait: 300, modifiers: 8 });
     await b.clickText("Simetría (eje: primera línea elegida)");
@@ -5502,7 +5631,8 @@ const scenarios = {
     await b.key("Escape", "Escape", 27);
     if (!(await sketchText(b, "/\\d+ regiones cerradas/")).startsWith("1")) throw new Error("la spline y la línea no cierran");
     // Elegir la spline (sobre la curva, entre el primer y el segundo punto) y ponerle manijas
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.click(...(await at(0.0969, 0.1125)), { wait: 300 });
     await b.clickText("Manijas en los extremos sí/no");
     await sleep(800);
@@ -5559,7 +5689,8 @@ const scenarios = {
     near(P(s1, t0.points[5]).x - q0.x, 3, 1e-6, "el texto se movió en x");
     near(P(s1, t0.points[5]).y - q0.y, 2, 1e-6, "el texto se movió en y");
     // Elegir el texto y cambiar lo que dice
-    await b.clickText("Elegir");
+    // La herramienta Elegir del sketch por su atajo (hay otros «Elegir» en la página)
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "s" }))`);
     await b.eval(`window.__cadUi.setSelection([${t0.anchor}])`);
     await sleep(400);
     await b.eval(`(() => {
@@ -6426,6 +6557,10 @@ for (const [name, run] of Object.entries(scenarios)) {
       const menu = await b.eval(`[...document.querySelectorAll("[data-toolbar-menu]")].find((m) => JSON.parse(m.dataset.items).includes(${JSON.stringify(text)}))?.dataset.toolbarMenu`);
       if (menu) {
         await clickText(menu);
+        await sleep(200);
+        // En la lista de la familia cada ítem lleva su atajo al lado (el texto no es exacto)
+        const r = await b.eval(`(() => { const e = [...document.querySelectorAll("[data-family-list] button")].find((x) => [...x.childNodes].some((n) => n.textContent.trim() === ${JSON.stringify(text)})); if (!e) return null; const q = e.getBoundingClientRect(); return [q.x + q.width / 2, q.y + q.height / 2]; })()`);
+        if (r) return b.click(r[0], r[1]);
         return clickText(text, nth);
       }
       // Lo del panel de Diseñar está repartido en pestañas: probar en cada una

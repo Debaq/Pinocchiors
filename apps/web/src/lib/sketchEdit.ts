@@ -19,6 +19,7 @@ import {
   type P2,
   type Sketch,
   type SketchEntity,
+  type SketchConstraint,
 } from "./cad.ts";
 import { checkSketch, polylineOf } from "./sketchCheck.ts";
 import { splitEntityAt } from "./sketchTransform.ts";
@@ -274,7 +275,7 @@ export type CornerChamferSecond = { distance: number } | { angle: number };
  * a `d1` (sobre la primera) y a la segunda distancia o al ángulo dado (en
  * grados, entre el chaflán y la primera línea), y las une con una línea.
  */
-export function chamferCorner(s: Sketch, point: number, d1: number, second: CornerChamferSecond = { distance: d1 }): string | undefined {
+export function chamferCorner(s: Sketch, point: number, d1: number, second: CornerChamferSecond = { distance: d1 }, keepCorner = true): string | undefined {
   const lines = linesAt(s, point);
   if (lines.length !== 2) return "La esquina debe unir exactamente dos líneas";
   if (!(d1 > 0)) return "La distancia tiene que ser positiva";
@@ -307,6 +308,21 @@ export function chamferCorner(s: Sketch, point: number, d1: number, second: Corn
     else g.end = tp;
   }
   addEntity(s, { type: "line", start: t1, end: t2 });
+  if (keepCorner) {
+    // La esquina queda virtual (sobre las dos rectas) y el chaflán con sus dos distancias desde ella, editables
+    const far = [other(lines[0]), other(lines[1])];
+    s.constraints = s.constraints.map((k) => {
+      const i = k.type === "length" ? lines.findIndex((l) => l.id === k.line) : -1;
+      return i >= 0 && k.type === "length" ? ({ type: "distance", a: point, b: far[i], value: k.value } as SketchConstraint) : k;
+    });
+    s.constraints.push(
+      { type: "point_on_line", point, line: lines[0].id },
+      { type: "point_on_line", point, line: lines[1].id },
+      { type: "distance", a: point, b: t1, value: +d1.toFixed(6) },
+      { type: "distance", a: point, b: t2, value: +d2.toFixed(6) },
+    );
+    return undefined;
+  }
   s.constraints = s.constraints.filter((k) => !constraintMentions(k, [point]));
   if (!usedElsewhere(s, point)) s.points = s.points.filter((q) => q.id !== point);
   s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
@@ -688,4 +704,36 @@ export function closeContour(s: Sketch): number[] {
     made.push(addEntity(s, { type: "line", start: a, end: b }));
   }
   return made;
+}
+
+/**
+ * Parte una línea o un arco en `n` partes iguales (las líneas quedan con el
+ * mismo largo atado: si se edita, siguen iguales). Devuelve un mensaje si no
+ * se pudo.
+ */
+export function splitEqual(s: Sketch, id: number, n: number): string | undefined {
+  const e = s.entities.find((x) => x.id === id);
+  if (!e) return "No hay nada elegido para partir";
+  if (!(n >= 2) || !Number.isInteger(n)) return "Partir en dos partes o más";
+  const g = e.geometry;
+  let at: (k: number) => P2;
+  if (g.type === "line") {
+    const [a, b] = [pos(s, g.start), pos(s, g.end)];
+    at = (k) => [a[0] + ((b[0] - a[0]) * k) / n, a[1] + ((b[1] - a[1]) * k) / n];
+  } else if (g.type === "arc") {
+    const [c, a, b] = [pos(s, g.center), pos(s, g.start), pos(s, g.end)];
+    const r = dist(a, c);
+    const a0 = Math.atan2(a[1] - c[1], a[0] - c[0]);
+    let sweep = Math.atan2(b[1] - c[1], b[0] - c[0]) - a0;
+    while (sweep <= 1e-12) sweep += 2 * Math.PI;
+    at = (k) => [c[0] + r * Math.cos(a0 + (sweep * k) / n), c[1] + r * Math.sin(a0 + (sweep * k) / n)];
+  } else return "Se parten en partes iguales líneas y arcos";
+  const before = new Set(s.entities.map((x) => x.id));
+  // Desde la punta hacia atrás: la original se queda con la primera parte
+  for (let k = n - 1; k >= 1; k--) {
+    const r = splitEntityAt(s, id, at(k));
+    if (typeof r === "string") return r;
+  }
+  if (g.type === "line") for (const x of s.entities) if (!before.has(x.id) && x.geometry.type === "line") s.constraints.push({ type: "equal", a: id, b: x.id });
+  return undefined;
 }

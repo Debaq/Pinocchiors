@@ -171,14 +171,48 @@ Front: `lib/drawingCuts.ts`, `lib/drawingShade.ts`; pruebas node `drawingCuts.te
 - De paso (pedido del usuario): la **barra izquierda** con el plano abierto muestra las
   herramientas del plano, no las de Diseñar.
 
-Queda de F4:
-- Rayado según el material (patrón por material y por pieza en un ensamble).
-- DXF: las líneas de corte, el rayado y el contorno de las vistas sombreadas no salen.
-- La vista del corte va donde haya lugar, no alineada con la vista de donde sale (proyectada).
-- Las letras de dos cortes que terminan en el mismo lugar se pisan; el contorno de la rotura
-  es de tramos rectos (no la línea a mano alzada de la norma).
+Pendientes de F4 cerrados el mismo día: rayado según el material (`materialHatch`: acero de a
+pares, latón alternado, aluminio apretado, plásticos cruzado, madera vertical) y **pieza por
+pieza** en un conjunto (el backend corta cada pieza aparte: `hatch_part`; las vecinas con el
+ángulo al revés; «Rayado según el material» en Hoja); DXF con las líneas de corte, letras,
+central, roturas y el rayado como líneas (capas CORTES y RAYADO; `hatchSegments`); la vista del
+corte **alineada** con la de donde sale, del lado que pide el diedro (si no hay lugar, en el
+primer lugar libre con su rótulo); letras de cortes que no se pisan y rotura a mano alzada
+(`breakOutline`).
 
-### F5 — Lo que le falta al editor (sirve para sketch y hoja)
+### F5 — Lo que le falta al editor (sirve para sketch y hoja) — en curso
+
+Hecho el 2026-10-10 (pruebas node `sketchEdit.test.mjs`; e2e "sketch: barra de restricciones…"
+y los 45 del sketch y el plano):
+- **Barra de restricciones arriba** (pedido del usuario: estaban escondidas en el panel):
+  Cota (inteligente: largo, diámetro, radio, distancia…), **Ángulo ∠** (Mayús: suplementario),
+  Coincidente, Horizontal, Vertical, Paralelas, Perpendiculares, Tangente, Igual, Punto medio,
+  Concéntricos, Simetría y Fijo (`lib/sketchSuggest.ts`: `constraintSuggestions`, salido del
+  panel, y `CONSTRAINT_TOOLS`). Con lo elegido se ponen al apretar; sin nada, el botón espera y
+  cada clic suma hasta completarla (sigue activo hasta Esc).
+- Cota de ángulo (error del sketch): toma lo que mide y dibuja su arco entre las líneas.
+- Redondeo y chaflán en **varias esquinas** (radios iguales vinculados), con **esquina
+  virtual** (punto sobre las dos rectas; el largo de las líneas pasa a medir desde ella),
+  redondeo **sin recortar** y chaflán con sus **dos distancias como cotas**.
+- **Extender arcos** (siguen su círculo), **partir en N** partes iguales (líneas con el largo
+  atado), **equidistante** con varias copias, original a construcción, distancia como cota y la
+  **cadena entera con un clic**; simetría en los **ejes X/Y** y «quitar el original»; patrón
+  lineal por **distancia total**.
+- Clic derecho cancela como Esc; Enter termina lo que está a medias antes que el sketch;
+  Ctrl+clic suma; Mayús alterna recortar/extender; aviso de conflicto con «quitar» por
+  restricción; cursor por herramienta y rótulo de la herramienta activa; rueda en el campo de
+  cota; el panel recuerda los últimos valores.
+- De paso: seis e2e del sketch fallaban desde que las herramientas pasaron a la barra izquierda
+  (buscaban «Línea», «Círculo», «Elegir»… por texto y agarraban otra cosa): ahora por atajo, y el
+  respaldo de `clickText` encuentra los ítems de las listas de familias (llevan el atajo al lado).
+
+Queda de F5 (ver la cobertura abajo): vista previa en las herramientas del panel, campo flotante
+en las de edición, recortar mostrando el tramo que se va, límite elegido a mano, recortar y
+extender splines, patrón asociativo y omitir copias, elegir similares, ciclar encimadas, filtros,
+arrastrar una entidad entera y el radio, arrastre sin restricciones, mantener o romper
+restricciones al transformar, copias múltiples al copiar, polos → puntos de paso, cerrar/abrir
+una spline, construcción en varias (igualar), limpieza (duplicados parciales, fusionar puntos
+sueltos, informe navegable), marcas de cruces.
 
 Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo
 que cambia el uso diario (vista previa y campo flotante en las herramientas del panel, clic

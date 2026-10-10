@@ -262,10 +262,8 @@ abran los proyectos viejos.
 
 ## Errores del sketch a arreglar
 
-- **Cota de ángulo entre dos líneas** (usuario, 2026-10-10: «es terrible»): (a) no se dibuja
-  el arco del ángulo entre las dos líneas, solo el número; (b) la cota se pone de inmediato en
-  90° en vez del ángulo que tienen ahora: tiene que tomar lo que mide (como las demás cotas) y
-  no mover nada.
+- ~~Cota de ángulo entre dos líneas~~ (usuario, 2026-10-10: «es terrible»): arreglado el
+  2026-10-10, toma lo que mide y dibuja su arco; además hay botón ∠ en la barra de arriba.
 
 ## Pendientes heredados de planes borrados
 

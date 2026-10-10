@@ -2,9 +2,9 @@
 //   node --test apps/web/e2e/sketchEdit.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { addEntity, addPoint, addRectangle } from "../src/lib/cad.ts";
+import { addEntity, addPoint, addRectangle, extendAt, filletCorner } from "../src/lib/cad.ts";
 import { checkSketch } from "../src/lib/sketchCheck.ts";
-import { chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
+import { splitEqual, chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
 
 function sketch() {
   return { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
@@ -120,8 +120,17 @@ test("chaflán por distancia y por distancia y ángulo", () => {
   assert.equal(s.entities.length, 5);
   const ch = s.entities[s.entities.length - 1];
   assert.deepEqual(ends(s, ch.id), [[8, 0], [10, 2]]);
-  assert.ok(!s.points.some((p) => p.id === corner));
+  // La esquina queda virtual: sobre las dos rectas y con las dos distancias del chaflán como cotas
+  assert.ok(s.points.some((p) => p.id === corner));
+  assert.equal(s.constraints.filter((k) => k.type === "point_on_line" && k.point === corner).length, 2);
+  assert.deepEqual(s.constraints.filter((k) => k.type === "distance" && k.a === corner).map((k) => k.value), [2, 2]);
   assert.equal(clean(s), 0, "sigue cerrado");
+  // Sin esquina virtual: se va
+  const s0 = sketch();
+  const l0 = addRectangle(s0, [0, 0], [10, 10]);
+  const c0 = s0.entities.find((e) => e.id === l0[0]).geometry.end;
+  assert.equal(chamferCorner(s0, c0, 2, { distance: 2 }, false), undefined);
+  assert.ok(!s0.points.some((p) => p.id === c0));
   // Otra esquina con 2 mm y 30°: la segunda distancia es 2·sen30/sen60
   const s2 = sketch();
   const l2 = addRectangle(s2, [0, 0], [10, 10]);
@@ -262,4 +271,59 @@ test("juntar puntos: el origen se queda", () => {
   assert.ok(s.points.some((q) => q.id === 0));
   assert.equal(s.entities.find((e) => e.id === l).geometry.start, 0);
   assert.deepEqual(types(s), ["line"]);
+});
+
+test("redondeo de esquina: la esquina queda virtual (y el largo pasa a medir desde ella); sin recortar, las líneas enteras", () => {
+  const s = sketch();
+  const l = addRectangle(s, [0, 0], [10, 10]);
+  const corner = s.entities.find((e) => e.id === l[0]).geometry.end;
+  const far = s.entities.find((e) => e.id === l[0]).geometry.start;
+  s.constraints.push({ type: "length", line: l[0], value: 10 });
+  assert.equal(filletCorner(s, corner, 2), undefined);
+  assert.ok(s.points.some((p) => p.id === corner), "la esquina sigue");
+  assert.equal(s.constraints.filter((k) => k.type === "point_on_line" && k.point === corner).length, 2);
+  assert.ok(s.constraints.some((k) => k.type === "distance" && k.a === corner && k.b === far && k.value === 10), "el largo, desde la esquina virtual");
+  assert.ok(!s.constraints.some((k) => k.type === "length" && k.line === l[0]));
+  assert.deepEqual(ends(s, l[0]), [[0, 0], [8, 0]], "recortada hasta la tangencia");
+  // Sin recortar
+  const t = sketch();
+  const m = addRectangle(t, [0, 0], [10, 10]);
+  const c2 = t.entities.find((e) => e.id === m[0]).geometry.end;
+  assert.equal(filletCorner(t, c2, 2, { trim: false }), undefined);
+  assert.deepEqual(ends(t, m[0]), [[0, 0], [10, 0]], "la línea sigue entera");
+  assert.equal(t.constraints.filter((k) => k.type === "point_on_line" && k.point !== c2).length, 2, "el arco apoyado en las dos líneas");
+});
+
+test("extender un arco: sigue su círculo (mismo centro y radio) hasta lo primero que cruce, por la punta más cercana", () => {
+  const s = sketch();
+  // Arco de radio 10 con centro en el origen, de 0° a 90°; una línea vertical en x = −6 corta el círculo
+  const c = addPoint(s, [0, 0]);
+  const arc = addEntity(s, { type: "arc", center: c, start: addPoint(s, [10, 0]), end: addPoint(s, [0, 10]) });
+  line(s, [-6, -20], [-6, 20]);
+  assert.equal(extendAt(s, arc, [0.5, 9.9]), undefined);
+  const g = s.entities.find((e) => e.id === arc).geometry;
+  const [ex, ey] = at(s, g.end);
+  assert.ok(Math.abs(ex + 6) < 1e-9 && Math.abs(ey - 8) < 1e-9, `el fin llega a (−6, 8): ${ex}, ${ey}`);
+  assert.deepEqual(at(s, g.center), [0, 0]);
+  assert.ok(s.constraints.some((k) => k.type === "point_on_line" && k.point === g.end) || s.entities.length > 2, "pegado a la línea");
+  // Por el comienzo (horario): hasta (−6, −8)
+  assert.equal(extendAt(s, arc, [9.9, -0.5]), undefined);
+  const [sx, sy] = at(s, s.entities.find((e) => e.id === arc).geometry.start);
+  assert.ok(Math.abs(sx + 6) < 1e-9 && Math.abs(sy + 8) < 1e-9, `el comienzo llega a (−6, −8): ${sx}, ${sy}`);
+});
+
+test("partir en N partes iguales: líneas (con el largo atado) y arcos", () => {
+  const s = sketch();
+  const l = line(s, [0, 0], [12, 0]);
+  assert.equal(splitEqual(s, l, 3), undefined);
+  const lines = s.entities.filter((e) => e.geometry.type === "line").map((e) => ends(s, e.id)).sort((a, b) => a[0][0] - b[0][0]);
+  assert.deepEqual(lines, [[[0, 0], [4, 0]], [[4, 0], [8, 0]], [[8, 0], [12, 0]]]);
+  assert.equal(s.constraints.filter((k) => k.type === "equal").length, 2);
+  const t = sketch();
+  const c = addPoint(t, [0, 0]);
+  const arc = addEntity(t, { type: "arc", center: c, start: addPoint(t, [10, 0]), end: addPoint(t, [-10, 0]) });
+  assert.equal(splitEqual(t, arc, 2), undefined);
+  assert.equal(t.entities.filter((e) => e.geometry.type === "arc").length, 2);
+  assert.ok(t.points.some((p) => Math.abs(p.x) < 1e-9 && Math.abs(p.y - 10) < 1e-9), "el medio del arco");
+  assert.match(splitEqual(t, arc, 1), /dos partes/);
 });

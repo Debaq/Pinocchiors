@@ -2262,7 +2262,29 @@ export function linesAt(s: Sketch, point: number): SketchEntity[] {
  * hasta los puntos de tangencia y pone un arco de radio `r` con su cota.
  * Devuelve un mensaje si no se puede.
  */
-export function filletCorner(s: Sketch, point: number, r: number): string | undefined {
+/**
+ * Opciones de redondeo y chaflán de esquina: `keepCorner` deja la esquina como
+ * punto virtual (sobre las dos rectas, para acotar desde ahí; las cotas de
+ * largo de las líneas pasan a medir desde ella) y `trim` false deja las
+ * líneas enteras (el arco tangente queda apoyado sobre ellas).
+ */
+export interface CornerOptions {
+  keepCorner?: boolean;
+  trim?: boolean;
+}
+
+/** La esquina pasa a ser un punto virtual sobre las dos rectas; el largo de cada línea, la distancia desde ella */
+function keepVirtualCorner(s: Sketch, point: number, lines: SketchEntity[], far: number[]) {
+  s.constraints = s.constraints.map((k) => {
+    const i = k.type === "length" ? lines.findIndex((l) => l.id === k.line) : -1;
+    return i >= 0 && k.type === "length" ? ({ type: "distance", a: point, b: far[i], value: k.value, ...(k.opts ? { opts: k.opts } : {}) } as SketchConstraint) : k;
+  });
+  for (const l of lines) s.constraints.push({ type: "point_on_line", point, line: l.id });
+}
+
+export function filletCorner(s: Sketch, point: number, r: number, opts: CornerOptions = {}): string | undefined {
+  const keep = opts.keepCorner !== false;
+  const trim = opts.trim !== false;
   const lines = linesAt(s, point);
   if (lines.length !== 2) return "La esquina debe unir exactamente dos líneas";
   const pos = (id: number): P2 => {
@@ -2294,19 +2316,29 @@ export function filletCorner(s: Sketch, point: number, r: number): string | unde
   const t1 = addPoint(s, T1);
   const t2 = addPoint(s, T2);
   const c = addPoint(s, C);
-  for (const [line, tp] of [[lines[0], t1], [lines[1], t2]] as const) {
-    const g = line.geometry as { start: number; end: number };
-    if (g.start === point) g.start = tp;
-    else g.end = tp;
-  }
+  const far = [other(lines[0]), other(lines[1])];
+  if (trim)
+    for (const [line, tp] of [[lines[0], t1], [lines[1], t2]] as const) {
+      const g = line.geometry as { start: number; end: number };
+      if (g.start === point) g.start = tp;
+      else g.end = tp;
+    }
   // Arco antihorario por el lado corto
   const cross = (T1[0] - C[0]) * (T2[1] - C[1]) - (T1[1] - C[1]) * (T2[0] - C[0]);
   const arc = addEntity(s, cross > 0 ? { type: "arc", center: c, start: t1, end: t2 } : { type: "arc", center: c, start: t2, end: t1 });
-  // La esquina vieja desaparece con sus restricciones
-  s.constraints = s.constraints.filter((k) => !constraintMentions(k, [point]));
-  if (!s.entities.some((e) => geometryPoints(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
-  // Las líneas quedaron más cortas: sus cotas de largo ya no valen
-  s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
+  if (!trim) {
+    // Sin recortar: el arco apoyado sobre las líneas enteras
+    s.constraints.push({ type: "point_on_line", point: t1, line: lines[0].id }, { type: "point_on_line", point: t2, line: lines[1].id });
+  } else if (keep) {
+    // La esquina queda como punto virtual (con lo que la acotaba)
+    keepVirtualCorner(s, point, lines, far);
+  } else {
+    // La esquina vieja desaparece con sus restricciones
+    s.constraints = s.constraints.filter((k) => !constraintMentions(k, [point]));
+    if (!s.entities.some((e) => geometryPoints(e.geometry).includes(point))) s.points = s.points.filter((q) => q.id !== point);
+    // Las líneas quedaron más cortas: sus cotas de largo ya no valen
+    s.constraints = s.constraints.filter((k) => !(k.type === "length" && (k.line === lines[0].id || k.line === lines[1].id)));
+  }
   s.constraints.push({ type: "tangent", a: lines[0].id, b: arc }, { type: "tangent", a: lines[1].id, b: arc }, { type: "radius", entity: arc, value: r });
   return undefined;
 }
@@ -2854,6 +2886,42 @@ export function extendLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits 
   stickOrFix(s, np, best.hit);
   dropLoosePoints(s);
   return undefined;
+}
+
+/**
+ * Alarga un arco por la punta más cercana a `p`, siguiendo su círculo (mismo
+ * centro y radio), hasta lo primero que cruce (o un límite de afuera). La
+ * punta nueva queda sobre eso.
+ */
+export function extendArc(s: Sketch, arcId: number, p: P2, limits: TrimLimits = []): string | undefined {
+  const e = s.entities.find((x) => x.id === arcId);
+  if (!e || e.geometry.type !== "arc") return "Solo se extienden líneas y arcos";
+  const g = e.geometry;
+  const o = circleOf(s, g)!;
+  const [A, B] = [pointOf(s, g.start), pointOf(s, g.end)];
+  const atEnd = Math.hypot(p[0] - B[0], p[1] - B[1]) <= Math.hypot(p[0] - A[0], p[1] - A[1]);
+  // Cuánto se avanza (en ángulo) desde la punta hasta cada cruce: el fin crece antihorario, el comienzo horario
+  const free = 2 * Math.PI - o.sweep!;
+  const travel = (q: P2) => (atEnd ? relAngle(q, o.c, Math.atan2(B[1] - o.c[1], B[0] - o.c[0])) : relAngle(A, o.c, Math.atan2(q[1] - o.c[1], q[0] - o.c[0])));
+  let best: { t: number; p: P2; hit: Hit } | undefined;
+  for (const x of [...crossingsOnCircle(s, arcId, o.c, o.r), ...limitsOnCircle(o.c, o.r, limits).map((q) => ({ p: q, hit: OUTSIDE }))]) {
+    const t = travel(x.p);
+    if (t > 1e-9 && t < free - 1e-9 && (!best || t < best.t)) best = { t, ...x };
+  }
+  if (!best) return "No hay nada por ese lado del círculo hasta donde extender";
+  const np = addPoint(s, best.p);
+  if (atEnd) g.end = np;
+  else g.start = np;
+  s.constraints = s.constraints.filter((k) => !(k.type === "arc_length" && k.arc === arcId));
+  stickOrFix(s, np, best.hit);
+  dropLoosePoints(s);
+  return undefined;
+}
+
+/** Extiende lo que haya bajo el clic: una línea o un arco */
+export function extendAt(s: Sketch, id: number, p: P2, limits: TrimLimits = []): string | undefined {
+  const g = s.entities.find((x) => x.id === id)?.geometry;
+  return g?.type === "arc" ? extendArc(s, id, p, limits) : extendLine(s, id, p, limits);
 }
 
 /** Recorta lo que haya bajo el clic: líneas, círculos o arcos */

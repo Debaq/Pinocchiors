@@ -6,10 +6,11 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendLine, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendAt, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke } from "../../lib/sketchEdit";
+import { CONSTRAINT_TOOLS, pickSuggestion, type ConstraintTool } from "../../lib/sketchSuggest";
 import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
 import { gridSegments, parseCoords, snapToGrid } from "../../lib/sketchInput";
@@ -106,6 +107,21 @@ const TOOLS: ToolDef[] = [
   { id: "scale", short: "Escalar", label: "Escalar lo elegido (punto base, desde, hasta)", key: "Y", icon: SketchIcons.Scale, group: 3 },
 ];
 
+/** Cursor de cada herramienta del sketch (las de dibujo, cruz) */
+const TOOL_CURSOR: Partial<Record<SketchTool, string>> = {
+  select: "cursor-default",
+  move: "cursor-move",
+  copy: "cursor-copy",
+  stretch: "cursor-move",
+  rotate: "cursor-alias",
+  scale: "cursor-nwse-resize",
+  text: "cursor-text",
+  trim: "cursor-cell",
+  extend: "cursor-cell",
+  split: "cursor-cell",
+  use: "cursor-pointer",
+};
+
 /** Nombre de cada familia de variantes (para el botón que abre la lista) */
 const FAMILY_MENU: Record<string, string> = {
   line: "Más líneas",
@@ -158,6 +174,8 @@ interface DimView {
   /** Punto acotado (coordenadas del sketch) y corrimiento del texto, si se movió */
   anchor: P2;
   offset?: [number, number];
+  /** Cota de ángulo: el arco entre las dos líneas (puntos en px del visor) */
+  arc?: string;
 }
 
 /** Lo que va antes del valor de cada tipo de cota */
@@ -495,6 +513,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Cotas que se piden al terminar una forma, en orden (índices de restricciones)
   const [dimQueue, setDimQueue] = createSignal<number[]>([]);
   /** Pide las cotas recién creadas: la primera queda en edición */
+  // Restricción de la barra esperando que se elija lo que restringe (herramienta primero)
+  const [pendingCon, setPendingCon] = createSignal<ConstraintTool>();
   const askDims = (all: number[]) => {
     const indices = all.filter((i) => i >= 0);
     setDimQueue(indices.slice(1));
@@ -1200,6 +1220,30 @@ export const CadView: Component<CadViewProps> = (props) => {
     sk.constraints.push(c);
     return sk.constraints.length - 1;
   };
+  /** Pone la restricción de la barra con lo elegido (si vale) y suelta la selección */
+  const applyConstraintTool = (t: ConstraintTool): boolean => {
+    const s = ui.session();
+    if (!s || !ui.selection().length) return false;
+    const sug = pickSuggestion(s.sketch, ui.selection(), t);
+    if (!sug) return false;
+    const made = sug.make();
+    ui.change((sk) => sk.constraints.push(...[made].flat()));
+    ui.setSelection([]);
+    return true;
+  };
+  // Restricción esperando: al completar lo que hace falta se pone (y sigue esperando la próxima)
+  createEffect(
+    on(
+      () => ui.selection(),
+      (sel) => {
+        const t = pendingCon();
+        if (t && sel.length) applyConstraintTool(t);
+      },
+      { defer: true },
+    ),
+  );
+  // Otra herramienta o salir del sketch la sueltan
+  createEffect(on([() => ui.tool(), () => ui.session()?.feature], () => ui.tool() !== "select" && setPendingCon(undefined), { defer: true }));
   /** Medida dibujada, redondeada a algo legible según el zoom */
   const round = (v: number) => {
     const px = viewer?.pixelSizeMm() ?? 0.1;
@@ -1211,12 +1255,16 @@ export const CadView: Component<CadViewProps> = (props) => {
     const s = ui.session();
     const hit = forced ?? snapped(e);
     if (!s || !hit || !viewer) return;
-    const t = ui.tool();
+    // Mayús alterna recortar y extender (para un clic)
+    const t0 = ui.tool();
+    const t: SketchTool = e.shiftKey && t0 === "trim" ? "extend" : e.shiftKey && t0 === "extend" ? "trim" : t0;
     if (!["select", "trim", "extend", "split", "use", "stretch"].includes(t)) lastPlaced = hit.p;
     if (t === "select") {
+      // Con una restricción esperando, cada clic suma a lo elegido (como con Mayús)
+      const add = e.shiftKey || ((e.ctrlKey || e.metaKey) && !e.altKey) || !!pendingCon();
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const h = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8);
-      if (!e.shiftKey) ui.setSelectedConstraints([]);
+      if (!add) ui.setSelectedConstraints([]);
       // Un texto se elige entero (por su ancla, que lo arrastra): una letra o
       // dentro de su caja. Doble clic: cambiar lo que dice
       const hitId = h.point ?? h.entity;
@@ -1231,13 +1279,13 @@ export const CadView: Component<CadViewProps> = (props) => {
         }
         lastTextClick = { id: text.id, t: now };
         dragging = text.anchor;
-        if (e.shiftKey) ui.setSelection((sel) => (sel.includes(text.anchor) ? sel.filter((x) => x !== text.anchor) : [...sel, text.anchor]));
+        if (add) ui.setSelection((sel) => (sel.includes(text.anchor) ? sel.filter((x) => x !== text.anchor) : [...sel, text.anchor]));
         else ui.setSelection([text.anchor]);
         return;
       }
       if (h.point !== undefined) {
         dragging = h.point;
-        if (e.shiftKey) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
+        if (add) ui.setSelection((sel) => (sel.includes(h.point!) ? sel.filter((x) => x !== h.point) : [...sel, h.point!]));
         else if (!ui.selection().includes(h.point)) ui.setSelection([h.point]);
         return;
       }
@@ -1249,16 +1297,16 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (lastEntityClick && lastEntityClick.id === id && now - lastEntityClick.t < 500) {
           lastEntityClick = undefined;
           const chain = connectedChain(s.sketch, id);
-          ui.setSelection((sel) => (e.shiftKey ? [...new Set([...sel, ...chain])] : chain));
+          ui.setSelection((sel) => (add ? [...new Set([...sel, ...chain])] : chain));
           return;
         }
         lastEntityClick = { id, t: now };
-        ui.setSelection((sel) => (e.shiftKey ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
+        ui.setSelection((sel) => (add ? (sel.includes(id) ? sel.filter((x) => x !== id) : [...sel, id]) : [id]));
         return;
       }
       // En vacío con Ctrl: lazo libre
       if (e.ctrlKey || e.metaKey) {
-        lassoAdditive = e.shiftKey;
+        lassoAdditive = add;
         setLasso([[e.clientX, e.clientY]]);
         return;
       }
@@ -1791,7 +1839,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
       let msg: string | undefined;
-      ui.change((sk) => (msg = extendLine(sk, target, raw, sheetLimits())));
+      ui.change((sk) => (msg = extendAt(sk, target, raw, sheetLimits())));
       ui.setMessage(msg);
       return;
     }
@@ -2416,6 +2464,17 @@ export const CadView: Component<CadViewProps> = (props) => {
     for (const q of pick.points) if (q.id !== s.sketch.origin && inside(scr([q.x, q.y]))) found.push(q.id);
     ui.setSelection(additive ? [...new Set([...sketchBoxBefore, ...found])] : found);
   };
+  /** Esc o clic derecho en el sketch: suelta la restricción que espera, corta lo que está a medias o vuelve a Elegir */
+  const cancelStep = () => {
+    // La spline se termina (abierta)
+    if (pendingCon()) {
+      setPendingCon(undefined);
+      ui.setMessage(undefined);
+    } else if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
+    else if (ui.tool() === "bspline" && anchor().length >= 2) finishBSpline(false);
+    else if (chain() || anchor().length) resetTool();
+    else ui.setTool("select");
+  };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number; items: MenuEntry[] }>();
@@ -2435,7 +2494,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     const down = rightDown;
     rightDown = undefined;
     if (e.button !== 2 || !down || Math.hypot(e.clientX - down.x, e.clientY - down.y) > 4) return;
-    if (ui.session() || ui.pick().kind !== "none" || !viewer) return;
+    // En el sketch, el clic derecho (sin arrastrar) cancela como Esc
+    if (ui.session()) return cancelStep();
+    if (ui.pick().kind !== "none" || !viewer) return;
     void openMenu(e.clientX, e.clientY);
   };
 
@@ -2593,12 +2654,14 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (ui.session()) {
       const key = e.key.toLowerCase();
       if (e.key === "Escape") {
-        // La spline se termina con Esc (abierta)
+        cancelStep();
+      } else if (e.key === "Enter") {
+        // Lo que está a medias primero (la spline, la polilínea, la restricción que espera); si no hay nada, el sketch
         if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
         else if (ui.tool() === "bspline" && anchor().length >= 2) finishBSpline(false);
-        else if (chain() || anchor().length) resetTool();
-        else ui.setTool("select");
-      } else if (e.key === "Enter") void ui.finishSketch();
+        else if (chain() || anchor().length || pendingCon()) cancelStep();
+        else void ui.finishSketch();
+      }
       else if (e.key === "Delete" || e.key === "Backspace") ui.deleteSelection();
       else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "c") ui.setMessage(ui.copySelection());
       else if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === "a") {
@@ -2754,12 +2817,50 @@ export const CadView: Component<CadViewProps> = (props) => {
       if (g.type === "point") return pt.get(g.point);
       return "center" in g ? pt.get(g.center) : undefined;
     };
+    /**
+     * Ángulo entre dos líneas: dónde se cruzan, hacia dónde va cada una (hacia
+     * su medio; la segunda al revés si es el suplementario) y el radio del arco
+     * (unos 45 px, menos si las líneas son cortas)
+     */
+    const angleGeom = (c: Extract<SketchConstraint, { type: "angle" }>) => {
+      const [ga, gb] = [ent.get(c.a), ent.get(c.b)];
+      if (ga?.type !== "line" || gb?.type !== "line") return undefined;
+      const [a0, a1, b0, b1] = [pt.get(ga.start), pt.get(ga.end), pt.get(gb.start), pt.get(gb.end)];
+      if (!a0 || !a1 || !b0 || !b1) return undefined;
+      const d1: P2 = [a1[0] - a0[0], a1[1] - a0[1]];
+      const d2: P2 = [b1[0] - b0[0], b1[1] - b0[1]];
+      const den = d1[0] * d2[1] - d1[1] * d2[0];
+      if (Math.abs(den) < 1e-12 * (Math.hypot(...d1) * Math.hypot(...d2) || 1)) return undefined;
+      const t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den;
+      const x: P2 = [a0[0] + t * d1[0], a0[1] + t * d1[1]];
+      const ray = (p: P2, q: P2): P2 => {
+        const m: P2 = [(p[0] + q[0]) / 2 - x[0], (p[1] + q[1]) / 2 - x[1]];
+        const far = dist(p, x) > dist(q, x) ? p : q;
+        const v: P2 = Math.hypot(...m) > 1e-9 ? m : [far[0] - x[0], far[1] - x[1]];
+        const l = Math.hypot(...v) || 1;
+        return [v[0] / l, v[1] / l];
+      };
+      const u1 = ray(a0, a1);
+      let u2 = ray(b0, b1);
+      if (c.supplementary) u2 = [-u2[0], -u2[1]];
+      const reach = Math.min(Math.max(dist(a0, x), dist(a1, x)), Math.max(dist(b0, x), dist(b1, x)));
+      const r = Math.min(45 * viewer!.pixelSizeMm(), 0.8 * reach) || 45 * viewer!.pixelSizeMm();
+      return { x, u1, u2, r };
+    };
     const anchor = (c: SketchConstraint): P2 | undefined => {
       switch (c.type) {
         case "length":
           return lineMid(c.line);
-        case "angle":
-          return lineMid(c.a);
+        case "angle": {
+          // Sobre la bisectriz, un poco más afuera que el arco
+          const g = angleGeom(c);
+          if (!g) return lineMid(c.a);
+          let [bx, by] = [g.u1[0] + g.u2[0], g.u1[1] + g.u2[1]];
+          const l = Math.hypot(bx, by);
+          if (l < 1e-9) [bx, by] = [-g.u1[1], g.u1[0]];
+          else [bx, by] = [bx / l, by / l];
+          return [g.x[0] + bx * g.r * 1.35, g.x[1] + by * g.r * 1.35];
+        }
         case "horizontal_distance":
         case "vertical_distance":
           // Ordenadas: junto al punto medido
@@ -2826,9 +2927,27 @@ export const CadView: Component<CadViewProps> = (props) => {
       const offset = drag?.index === index ? drag.offset : opts?.offset;
       let leader: [number, number] | undefined;
       const e2 = ends(c);
+      // Ángulo: el arco entre las dos líneas (la etiqueta ya va sobre la bisectriz)
+      let arc: string | undefined;
+      if (c.type === "angle") {
+        const g = angleGeom(c);
+        if (g) {
+          const t0 = Math.atan2(g.u1[1], g.u1[0]);
+          let sweep = Math.atan2(g.u2[1], g.u2[0]) - t0;
+          while (sweep > Math.PI) sweep -= 2 * Math.PI;
+          while (sweep < -Math.PI) sweep += 2 * Math.PI;
+          arc = Array.from({ length: 25 }, (_, i) => {
+            const t = t0 + (sweep * i) / 24;
+            const [sx, sy] = viewer!.screenOf(planeToWorld(s.plane, [g.x[0] + g.r * Math.cos(t), g.x[1] + g.r * Math.sin(t)]));
+            return `${(sx - rect.left).toFixed(1)},${(sy - rect.top).toFixed(1)}`;
+          }).join(" ");
+        }
+      }
       if (offset) {
         leader = [x - rect.left, y - rect.top];
         [x, y] = viewer!.screenOf(planeToWorld(s.plane, [a[0] + offset[0], a[1] + offset[1]]));
+      } else if (c.type === "angle") {
+        // Ya está afuera del arco
       } else if (e2) {
         // Correr 22 px perpendicular a lo acotado, hacia afuera del sketch, para
         // no tapar la línea (y poder elegirla con un clic)
@@ -2862,6 +2981,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const shown = mode === "name" ? `${prefix}${name}` : mode === "expr" && expr && !reference ? `${prefix}${expr} = ${+v.toFixed(3)}${suffix}` : value;
       out.push({
         index,
+        arc,
         x: x - rect.left,
         y: y - rect.top,
         // Las de referencia entre paréntesis, como Onshape
@@ -2997,7 +3117,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         ref={container}
         class={clsx(
           "absolute inset-0",
-          overCube() || handleHot() ? "cursor-pointer" : (ui.session() && ui.tool() !== "select") || ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
+          overCube() || handleHot() ? "cursor-pointer" : ui.session() ? TOOL_CURSOR[ui.tool()] ?? "cursor-crosshair" : ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
@@ -3076,6 +3196,10 @@ export const CadView: Component<CadViewProps> = (props) => {
       <svg class="absolute inset-0 w-full h-full pointer-events-none" data-dim-leaders>
         <For each={dimensions().filter((d) => d.leader)}>
           {(d) => <line x1={d.leader![0]} y1={d.leader![1]} x2={d.x} y2={d.y} class="stroke-text-muted" stroke-width="1" stroke-dasharray="3 2" />}
+        </For>
+        {/* El arco de las cotas de ángulo */}
+        <For each={dimensions().filter((d) => d.arc)}>
+          {(d) => <polyline data-angle-arc={d.index} points={d.arc} fill="none" class={d.conflict ? "stroke-red" : "stroke-text-muted"} stroke-width="1.2" />}
         </For>
       </svg>
 
@@ -3156,6 +3280,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 })
               }
               type="text"
+              data-wheel-number=""
               // Solo al abrir: si el solver responde mientras se escribe, no pisa el texto
               value={untrack(() => {
                 const c = ui.session()!.sketch.constraints[d().index]!;
@@ -3602,6 +3727,39 @@ export const CadView: Component<CadViewProps> = (props) => {
                 )}
               </Show>
               <div class="w-px h-5 bg-border mx-1" />
+              {/* Restricciones y cota: con lo elegido se ponen al apretar; sin nada elegido el botón queda activo y se ponen al elegir (hasta Esc) */}
+              <div class="flex items-center gap-0.5" role="toolbar" aria-label="Restricciones">
+                <For each={CONSTRAINT_TOOLS}>
+                  {(t) => {
+                    const fits = () => !!ui.session() && ui.selection().length > 0 && !!pickSuggestion(ui.session()!.sketch, ui.selection(), t);
+                    return (
+                      <Tooltip content={`${t.label}: ${t.tip}`}>
+                        <button
+                          aria-label={t.label}
+                          data-constraint-tool={t.key}
+                          class={clsx(
+                            "min-w-6 h-6 px-1 rounded text-[12px] font-semibold leading-none",
+                            pendingCon()?.key === t.key ? "bg-accent text-bg" : fits() ? "text-accent hover:bg-surface ring-1 ring-accent/40" : "text-text-muted hover:text-text hover:bg-surface",
+                          )}
+                          onClick={(e) => {
+                            // Mayús en el ángulo: el suplementario
+                            const tool = t.key === "angle" && e.shiftKey ? { ...t, label: "Ángulo suplementario", options: ["Ángulo suplementario"] } : t;
+                            if (applyConstraintTool(tool)) return setPendingCon(undefined);
+                            // Sin lo que hace falta elegido: queda esperando
+                            setPendingCon(pendingCon()?.key === t.key ? undefined : tool);
+                            ui.setSelection([]);
+                            ui.setTool("select");
+                            ui.setMessage(pendingCon() ? `${tool.label}: elegir ${t.tip.charAt(0).toLowerCase()}${t.tip.slice(1)} (Esc termina)` : undefined);
+                          }}
+                        >
+                          {t.glyph}
+                        </button>
+                      </Tooltip>
+                    );
+                  }}
+                </For>
+              </div>
+              <div class="w-px h-5 bg-border mx-1" />
               <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"], ["freedom", "Libres"]] as const}>
                 {([k, label]) => (
                   <button
@@ -3706,6 +3864,41 @@ export const CadView: Component<CadViewProps> = (props) => {
             </Button>
             <Button size="sm" variant="ghost" onClick={() => ui.removeConstraint(i())}>
               Quitarla
+            </Button>
+          </div>
+        )}
+      </Show>
+
+      {/* Herramienta activa (y la restricción que espera), abajo a la izquierda */}
+      <Show when={ui.session()}>
+        <div data-active-tool class="pointer-events-none absolute bottom-3 left-3 rounded bg-bg-lighter/90 border border-border px-2 py-0.5 text-[11px] text-text-muted shadow">
+          {pendingCon() ? `${pendingCon()!.label}: elegir lo que restringe` : (TOOLS.find((t) => t.id === ui.tool())?.short ?? "Elegir")}
+        </div>
+      </Show>
+
+      {/* Restricciones en conflicto (sin una cota recién puesta): cuáles son y quitarlas desde acá */}
+      <Show when={!ui.extraDimension() && ui.session() && (ui.session()!.report?.conflicting.length ?? 0) > 0 && ui.session()!.report!.conflicting}>
+        {(list) => (
+          <div data-conflicts class="absolute top-24 left-1/2 -translate-x-1/2 max-w-[60%] flex flex-wrap items-center gap-1.5 rounded-md border border-error/60 bg-bg-lighter/95 px-3 py-1.5 text-xs text-text">
+            <Icons.Warning size={14} class="text-error" />
+            {list().length === 1 ? "Una restricción en conflicto:" : `${list().length} restricciones en conflicto:`}
+            <For each={list()}>
+              {(i) => {
+                const c = () => ui.session()?.sketch.constraints[i];
+                return (
+                  <Show when={c()}>
+                    <span class="flex items-center gap-1 rounded border border-error/40 px-1.5 py-0.5" onPointerEnter={() => ui.setHoverIds(constraintIds(c()!))} onPointerLeave={() => ui.setHoverIds([])}>
+                      {CONSTRAINT_LABELS[c()!.type] ?? c()!.type}
+                      <button class="text-text-muted hover:text-error" aria-label="Quitar esta restricción" title="Quitarla" onClick={() => ui.removeConstraint(i)}>
+                        ×
+                      </button>
+                    </span>
+                  </Show>
+                );
+              }}
+            </For>
+            <Button size="sm" variant="ghost" onClick={() => ui.change((sk) => (sk.constraints = sk.constraints.filter((_, k) => !list().includes(k))))}>
+              Quitar todas
             </Button>
           </div>
         )}

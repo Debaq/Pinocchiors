@@ -26,6 +26,10 @@ import {
   constraintValue,
   isReference,
   filletCorner,
+  removeEntity,
+  ensureOrigin,
+  addPoint,
+  addEntity,
   circularPattern,
   curvePattern,
   fillPattern,
@@ -96,10 +100,12 @@ import {
 import type { CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { flipSketchY, rotateSketch, measureConstraint, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { flipSketchY, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { constraintSuggestions } from "../../lib/sketchSuggest";
+import { connectedChain } from "../../lib/sketchCheck";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
 import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
-import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, type OffsetCaps } from "../../lib/sketchEdit";
+import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
 import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
@@ -4629,25 +4635,61 @@ const Sketch3dEditor: Component<{ store: CadStore; ui: CadUi; feature: Feature }
   );
 };
 
+/** Señal del panel del sketch que se recuerda entre sesiones (lo último usado en cada herramienta) */
+function persisted<T>(key: string, initial: T) {
+  const k = `pinocchio.sketchPanel.${key}`;
+  let start = initial;
+  try {
+    const v = localStorage.getItem(k);
+    if (v != null) start = JSON.parse(v) as T;
+  } catch {
+    // Sin almacenamiento: el de siempre
+  }
+  const [get, set] = createSignal<T>(start);
+  const save = (v: T) => {
+    set(() => v);
+    try {
+      localStorage.setItem(k, JSON.stringify(v));
+    } catch {
+      // Sin almacenamiento: vale para esta sesión
+    }
+  };
+  return [get, save] as const;
+}
+
 const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
-  const [cornerRadius, setCornerRadius] = createSignal(5);
-  const [offsetDist, setOffsetDist] = createSignal(2);
+  const [cornerRadius, setCornerRadius] = persisted("cornerRadius", 5);
+  const [splitParts, setSplitParts] = persisted("splitParts", 3);
+  // Equidistante: cuántas copias, el original a construcción y la distancia como cota
+  const [offsetCopies, setOffsetCopies] = persisted("offsetCopies", 1);
+  const [offsetToConstruction, setOffsetToConstruction] = createSignal(false);
+  const [offsetDim, setOffsetDim] = createSignal(true);
+  // Redondeo y chaflán: dejar la esquina como punto virtual y recortar las líneas
+  const [keepCorner, setKeepCorner] = createSignal(true);
+  const [trimCorner, setTrimCorner] = createSignal(true);
+  /** Esquinas elegidas: puntos donde se juntan exactamente dos líneas */
+  const corners = () => selPoints().filter((p) => linesAt(sketch(), p).length === 2);
+  const [offsetDist, setOffsetDist] = persisted("offsetDist", 2);
   const [offsetBoth, setOffsetBoth] = createSignal(false);
   const [offsetCaps, setOffsetCaps] = createSignal<OffsetCaps>("open");
-  const [chamferDist, setChamferDist] = createSignal(2);
+  const [chamferDist, setChamferDist] = persisted("chamferDist", 2);
   const [chamferMode, setChamferMode] = createSignal<"equal" | "distance" | "angle">("equal");
   const [chamferSecond, setChamferSecond] = createSignal(45);
   const [repairTol, setRepairTol] = createSignal(0.05);
   const [moveBy, setMoveBy] = createSignal<P2>([10, 0]);
   const [turnBy, setTurnBy] = createSignal(90);
   const [scaleBy, setScaleBy] = createSignal(2);
-  const [patternCount, setPatternCount] = createSignal(3);
+  const [patternCount, setPatternCount] = persisted("patternCount", 3);
   const [patternKind, setPatternKind] = createSignal<SketchPatternKind>("linear");
-  const [patternStep, setPatternStep] = createSignal<P2>([20, 0]);
+  const [patternStep, setPatternStep] = persisted<P2>("patternStep", [20, 0]);
+  // Lineal: el paso es entre copias o la distancia total (de la primera a la última)
+  const [patternTotal, setPatternTotal] = persisted("patternTotal", false);
+  // Simetría: quitar el original (mover en vez de copiar)
+  const [mirrorMove, setMirrorMove] = createSignal(false);
   const [patternRows, setPatternRows] = createSignal(1);
   const [patternStep2, setPatternStep2] = createSignal<P2>([0, 20]);
-  const [patternAngle, setPatternAngle] = createSignal(360);
+  const [patternAngle, setPatternAngle] = persisted("patternAngle", 360);
   const [patternRotate, setPatternRotate] = createSignal(true);
   const [curveRotate, setCurveRotate] = createSignal(false);
   const [tableRows, setTableRows] = createSignal<P2[]>([
@@ -4670,22 +4712,9 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const selEntities = () => sel().map(entity).filter((e) => e !== undefined);
   const selPoints = () => sel().filter((id) => point(id));
   const lines = () => selEntities().filter((e) => e!.geometry.type === "line");
-  const curves = () => selEntities().filter((e) => e!.geometry.type === "circle" || e!.geometry.type === "arc");
 
-  const lineLength = (id: number) => {
-    const g = entity(id)!.geometry as { start: number; end: number };
-    const [a, b] = [point(g.start)!, point(g.end)!];
-    return Math.hypot(b.x - a.x, b.y - a.y);
-  };
-  const radius = (id: number) => {
-    const g = entity(id)!.geometry;
-    if (g.type === "circle") return g.radius;
-    if (g.type === "arc") {
-      const [c, a] = [point(g.center)!, point(g.start)!];
-      return Math.hypot(a.x - c.x, a.y - c.y);
-    }
-    return 0;
-  };
+
+
   const add = (c: SketchConstraint | SketchConstraint[]) => ui.change((s) => s.constraints.push(...[c].flat()));
   const askMissing = async () => {
     setAssistBusy(true);
@@ -4761,171 +4790,8 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   };
   /** Grados libres de una entidad (undefined: ya definida) */
   const entityDof = (id: number) => s().report?.entity_dof?.find((d) => d[0] === id)?.[1];
-  const measure = (c: SketchConstraint) => +(measureConstraint(sketch(), c) ?? 0).toFixed(3);
-  const isArc = (id: number) => entity(id)?.geometry.type === "arc";
 
-  const suggestions = (): { label: string; make: () => SketchConstraint | SketchConstraint[] }[] => {
-    const out: { label: string; make: () => SketchConstraint | SketchConstraint[] }[] = [];
-    const L = lines().map((e) => e!.id);
-    const C = curves().map((e) => e!.id);
-    const P = selPoints();
-    if (L.length === 1 && C.length === 0 && P.length === 0) {
-      out.push({ label: "Horizontal", make: () => ({ type: "horizontal", line: L[0] }) });
-      out.push({ label: "Vertical", make: () => ({ type: "vertical", line: L[0] }) });
-      out.push({ label: "Largo", make: () => ({ type: "length", line: L[0], value: +lineLength(L[0]).toFixed(3) }) });
-    }
-    if (L.length === 2) {
-      out.push({ label: "Paralelas", make: () => ({ type: "parallel", a: L[0], b: L[1] }) });
-      out.push({ label: "Perpendiculares", make: () => ({ type: "perpendicular", a: L[0], b: L[1] }) });
-      out.push({ label: "Colineales", make: () => ({ type: "collinear", a: L[0], b: L[1] }) });
-      out.push({ label: "Mismo largo", make: () => ({ type: "equal", a: L[0], b: L[1] }) });
-      out.push({ label: "Ángulo", make: () => ({ type: "angle", a: L[0], b: L[1], degrees: 90 }) });
-      // Entre paralelas: un extremo de la segunda hasta la recta de la primera (y paralelas si no lo eran)
-      out.push({
-        label: "Distancia entre paralelas",
-        make: () => {
-          const g = entity(L[1])!.geometry as { start: number };
-          const c: SketchConstraint = { type: "point_line_distance", point: g.start, line: L[0], value: 0 };
-          c.value = measure(c);
-          const already = sketch().constraints.some((k) => k.type === "parallel" && [k.a, k.b].includes(L[0]) && [k.a, k.b].includes(L[1]));
-          return already ? c : [{ type: "parallel", a: L[0], b: L[1] }, c];
-        },
-      });
-    }
-    if (C.length === 1 && L.length === 0) {
-      out.push({ label: "Radio", make: () => ({ type: "radius", entity: C[0], value: +radius(C[0]).toFixed(3) }) });
-      out.push({ label: "Diámetro", make: () => ({ type: "diameter", entity: C[0], value: +(2 * radius(C[0])).toFixed(3) }) });
-      if (isArc(C[0])) {
-        const c: SketchConstraint = { type: "arc_length", arc: C[0], value: 0 };
-        out.push({ label: "Largo del arco", make: () => ({ ...c, value: measure(c) }) });
-      }
-    }
-    if (C.length === 2) {
-      out.push({ label: "Mismo radio", make: () => ({ type: "equal", a: C[0], b: C[1] }) });
-      out.push({ label: "Tangentes", make: () => ({ type: "tangent", a: C[0], b: C[1] }) });
-      out.push({ label: "Concéntricos", make: () => ({ type: "concentric", a: C[0], b: C[1] }) });
-    }
-    if (L.length === 1 && C.length === 1) out.push({ label: "Tangente", make: () => ({ type: "tangent", a: L[0], b: C[0] }) });
-    if (P.length === 1 && L.length === 1) {
-      out.push({ label: "Punto en la línea", make: () => ({ type: "point_on_line", point: P[0], line: L[0] }) });
-      out.push({ label: "Punto medio", make: () => ({ type: "midpoint", point: P[0], line: L[0] }) });
-      const d: SketchConstraint = { type: "point_line_distance", point: P[0], line: L[0], value: 0 };
-      out.push({ label: "Distancia a la línea", make: () => ({ ...d, value: measure(d) }) });
-      // Perfiles de revolución: el diámetro que da el punto al girar alrededor de la línea
-      const ax: SketchConstraint = { type: "axis_diameter", point: P[0], line: L[0], value: 0 };
-      out.push({ label: "Diámetro respecto del eje", make: () => ({ ...ax, value: measure(ax) }) });
-    }
-    // Con una línea central en el sketch: el diámetro de cada punto elegido sin elegir el eje
-    const centerline = sketch().entities.find((e) => e.axis && e.geometry.type === "line");
-    if (centerline && P.length >= 1 && L.length === 0 && C.length === 0) {
-      const dims = P.map((p): SketchConstraint => {
-        const c: SketchConstraint = { type: "axis_diameter", point: p, line: centerline.id, value: 0 };
-        return { ...c, value: measure(c) } as SketchConstraint;
-      });
-      out.push({ label: P.length > 1 ? "Diámetros respecto de la línea central" : "Diámetro respecto de la línea central", make: () => dims });
-    }
-    if (P.length === 1 && C.length === 1) out.push({ label: "Punto en el círculo", make: () => ({ type: "point_on_circle", point: P[0], circle: C[0] }) });
-    if (P.length === 2 && L.length === 0) {
-      const [a, b] = [point(P[0])!, point(P[1])!];
-      out.push({ label: "Coincidentes", make: () => ({ type: "coincident", a: P[0], b: P[1] }) });
-      out.push({ label: "Alineados horizontal", make: () => ({ type: "horizontal_points", a: P[0], b: P[1] }) });
-      out.push({ label: "Alineados vertical", make: () => ({ type: "vertical_points", a: P[0], b: P[1] }) });
-      out.push({ label: "Distancia", make: () => ({ type: "distance", a: P[0], b: P[1], value: +Math.hypot(b.x - a.x, b.y - a.y).toFixed(3) }) });
-      out.push({ label: "Distancia horizontal", make: () => ({ type: "horizontal_distance", a: P[0], b: P[1], value: +(b.x - a.x).toFixed(3) }) });
-      out.push({ label: "Distancia vertical", make: () => ({ type: "vertical_distance", a: P[0], b: P[1], value: +(b.y - a.y).toFixed(3) }) });
-    }
-    if (P.length === 2 && L.length === 1) out.push({ label: "Simétricos", make: () => ({ type: "symmetric", a: P[0], b: P[1], line: L[0] }) });
-    if (P.length === 1 && L.length === 0 && C.length === 0) {
-      const p = point(P[0])!;
-      out.push({ label: "Fijar", make: () => ({ type: "fixed", point: P[0], x: p.x, y: p.y }) });
-    }
-    if (L.length === 2) {
-      const c: SketchConstraint = { type: "angle", a: L[0], b: L[1], degrees: 0, supplementary: true };
-      out.push({ label: "Ángulo suplementario", make: () => ({ ...c, degrees: measure(c) }) });
-    }
-    // Cadena de líneas, arcos y círculos: su largo total
-    const E = selEntities().map((e) => e!);
-    const chain = E.filter((e) => ["line", "arc", "circle"].includes(e.geometry.type));
-    if (chain.length >= 2 && chain.length === E.length && P.length === 0) {
-      const c: SketchConstraint = { type: "curve_length", entities: chain.map((e) => e.id), value: 0 };
-      out.push({ label: "Largo total", make: () => ({ ...c, value: measure(c) }) });
-    }
-    // Distancia mínima y máxima: un círculo o arco con otro, un punto o una línea
-    const pair: [number, number] | undefined =
-      C.length === 2 && L.length === 0 && P.length === 0 ? [C[0], C[1]] : C.length === 1 && L.length + P.length === 1 && E.length === L.length + 1 ? [C[0], L[0] ?? P[0]] : undefined;
-    if (pair) {
-      for (const max of [false, true]) {
-        const c: SketchConstraint = { type: "circle_distance", a: pair[0], b: pair[1], ...(max ? { max } : {}), value: 0 };
-        out.push({ label: max ? "Distancia máxima" : "Distancia mínima", make: () => ({ ...c, value: measure(c) }) });
-      }
-    }
-    if (C.length === 2 && L.length === 0) out.push({ label: "Coradiales", make: () => ({ type: "coradial", a: C[0], b: C[1] }) });
-    // Dos entidades del mismo tipo y una línea (la última elegida) como eje
-    if (E.length === 3 && P.length === 0) {
-      const axis = [...sel()].reverse().find((id) => entity(id)?.geometry.type === "line");
-      const pairE = E.filter((e) => e.id !== axis);
-      if (axis !== undefined && pairE.length === 2 && pairE[0].geometry.type === pairE[1].geometry.type)
-        out.push({ label: "Simétricas (eje: la última línea)", make: () => ({ type: "symmetric_entities", a: pairE[0].id, b: pairE[1].id, line: axis }) });
-    }
-    // Con una spline por polos: tangencia y curvatura igual (G2) en el extremo común
-    if (E.length === 2 && P.length === 0 && E.some((e) => e.geometry.type === "bspline") && E.every((e) => ["line", "arc", "bspline"].includes(e.geometry.type))) {
-      out.push({ label: "Tangentes en la unión", make: () => ({ type: "tangent", a: E[0].id, b: E[1].id }) });
-      out.push({ label: "Curvatura igual (G2)", make: () => ({ type: "curvature", a: E[0].id, b: E[1].id }) });
-    }
-    const curvesAny = E.filter((e) => e.geometry.type !== "point");
-    if (P.length === 1 && curvesAny.length === 1 && E.length === 1 && ["ellipse", "spline", "bspline", "ellipse_arc"].includes(curvesAny[0].geometry.type))
-      out.push({ label: "Punto en la curva", make: () => ({ type: "point_on_curve", point: P[0], curve: curvesAny[0].id }) });
-    if (P.length === 1 && curvesAny.length === 2 && E.length === 2)
-      out.push({ label: "Punto en la intersección", make: () => ({ type: "intersection", point: P[0], a: curvesAny[0].id, b: curvesAny[1].id }) });
-    if (E.length > 0) {
-      const locked = new Set(sketch().constraints.flatMap((c) => (c.type === "lock" ? [c.entity] : [])));
-      const fresh = E.filter((e) => !locked.has(e.id));
-      if (fresh.length) out.push({ label: fresh.length > 1 ? "Bloquear las entidades" : "Bloquear la entidad", make: () => fresh.map((e) => ({ type: "lock", entity: e.id })) });
-    }
-    // Varios puntos: cotas de ordenadas desde el primero o en cadena
-    if (P.length >= 3 && E.length === 0) {
-      for (const [axis, name] of [
-        [0, "horizontales"],
-        [1, "verticales"],
-      ] as const) {
-        out.push({ label: `Ordenadas ${name}`, make: () => ordinateDims(P, axis) });
-        out.push({ label: `Cadena ${name}`, make: () => chainDims(P, axis) });
-      }
-    }
-    return out;
-  };
-
-  /** Fila donde van los textos: un poco más allá de los puntos, del lado de afuera */
-  const dimRow = (ids: number[], axis: 0 | 1) => {
-    const other = ids.map((id) => (axis === 0 ? point(id)!.y : point(id)!.x));
-    const span = Math.max(...ids.map((id) => (axis === 0 ? point(id)!.x : point(id)!.y))) - Math.min(...ids.map((id) => (axis === 0 ? point(id)!.x : point(id)!.y)));
-    return Math.max(...other) + Math.max(2, span * 0.08);
-  };
-  /** Distancias desde el primer punto elegido a cada uno de los otros, con los textos en fila junto a cada punto */
-  const ordinateDims = (ids: number[], axis: 0 | 1): SketchConstraint[] => {
-    const row = dimRow(ids, axis);
-    const type = axis === 0 ? "horizontal_distance" : "vertical_distance";
-    return ids.slice(1).map((b) => {
-      const p = point(b)!;
-      const offset: [number, number] = axis === 0 ? [0, +(row - p.y).toFixed(4)] : [+(row - p.x).toFixed(4), 0];
-      const c: SketchConstraint = { type, a: ids[0], b, value: 0, opts: { ordinate: true, offset } };
-      return { ...c, value: measure(c) } as SketchConstraint;
-    });
-  };
-  /** Cada punto desde el anterior (ordenados a lo largo del eje), con los textos en fila */
-  const chainDims = (ids: number[], axis: 0 | 1): SketchConstraint[] => {
-    const coord = (id: number) => (axis === 0 ? point(id)!.x : point(id)!.y);
-    const sorted = [...ids].sort((a, b) => coord(a) - coord(b));
-    const row = dimRow(ids, axis);
-    const type = axis === 0 ? "horizontal_distance" : "vertical_distance";
-    return sorted.slice(1).map((b, i) => {
-      const a = sorted[i];
-      const [pa, pb] = [point(a)!, point(b)!];
-      const offset: [number, number] = axis === 0 ? [0, +(row - (pa.y + pb.y) / 2).toFixed(4)] : [+(row - (pa.x + pb.x) / 2).toFixed(4), 0];
-      const c: SketchConstraint = { type, a, b, value: 0, opts: { offset } };
-      return { ...c, value: measure(c) } as SketchConstraint;
-    });
-  };
+  const suggestions = () => constraintSuggestions(sketch(), sel());
 
   return (
     <div class="space-y-4">
@@ -5112,21 +4978,38 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               </For>
             </div>
           </Show>
-          <Show when={selPoints().length === 1 && linesAt(sketch(), selPoints()[0]).length === 2}>
+          <Show when={corners().length > 0}>
+            <div class="flex flex-wrap gap-x-3">
+              <Checkbox small label="Esquina virtual" checked={keepCorner()} onChange={setKeepCorner} />
+              <Checkbox small label="Recortar" checked={trimCorner()} onChange={setTrimCorner} />
+            </div>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
                 <Num label="Radio" suffix="mm" step={0.5} value={cornerRadius()} onCommit={setCornerRadius} />
               </div>
               <Button
                 size="sm"
+                title="Con varias esquinas elegidas, todas con el mismo radio (una cota y las demás iguales)"
                 onClick={() => {
                   let msg: string | undefined;
-                  ui.change((s) => (msg = filletCorner(s, selPoints()[0], cornerRadius())));
+                  const points = corners();
+                  ui.change((s) => {
+                    const arcs: number[] = [];
+                    for (const p of points) {
+                      msg = filletCorner(s, p, cornerRadius(), { keepCorner: keepCorner(), trim: trimCorner() });
+                      if (msg) return;
+                      arcs.push(s.entities[s.entities.length - 1].id);
+                    }
+                    // Varias: una sola cota de radio y las demás iguales (cambian juntas)
+                    const first = arcs[0];
+                    s.constraints = s.constraints.filter((k) => !(k.type === "radius" && arcs.slice(1).includes(k.entity)));
+                    for (const a of arcs.slice(1)) s.constraints.push({ type: "equal", a: first, b: a });
+                  });
                   if (msg) ui.setMessage(msg);
                   else ui.setSelection([]);
                 }}
               >
-                Redondear esquina
+                {corners().length > 1 ? `Redondear ${corners().length} esquinas` : "Redondear esquina"}
               </Button>
             </div>
             <div class="space-y-1" aria-label="Chaflán de la esquina">
@@ -5168,7 +5051,13 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   onClick={() => {
                     let msg: string | undefined;
                     const second = chamferMode() === "angle" ? { angle: chamferSecond() } : { distance: chamferMode() === "equal" ? chamferDist() : chamferSecond() };
-                    ui.change((sk) => (msg = chamferCorner(sk, selPoints()[0], chamferDist(), second)));
+                    const points = corners();
+                    ui.change((sk) => {
+                      for (const p of points) {
+                        msg = chamferCorner(sk, p, chamferDist(), second, keepCorner());
+                        if (msg) return;
+                      }
+                    });
                     if (msg) ui.setMessage(msg);
                     else ui.setSelection([]);
                   }}
@@ -5200,6 +5089,26 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               Unir
             </Button>
           </Show>
+          <Show when={selEntities().length === 1 && selPoints().length === 0 && ["line", "arc"].includes(selEntities()[0]!.geometry.type)}>
+            <div class="flex items-end gap-1.5">
+              <div class="flex-1">
+                <Num label="Partes" step={1} min={2} value={splitParts()} onCommit={(v) => setSplitParts(Math.max(2, Math.round(v)))} />
+              </div>
+              <Button
+                size="sm"
+                title="Parte la línea o el arco en partes iguales (las líneas quedan con el mismo largo atado)"
+                onClick={() => {
+                  const id = selEntities()[0]!.id;
+                  let msg: string | undefined;
+                  ui.change((sk) => (msg = splitEqual(sk, id, splitParts())));
+                  ui.setMessage(msg);
+                  if (!msg) ui.setSelection([]);
+                }}
+              >
+                Partir en {splitParts()}
+              </Button>
+            </div>
+          </Show>
           <Show when={selEntities().length > 0}>
             <div class="flex items-end gap-1.5">
               <div class="flex-1">
@@ -5211,14 +5120,39 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 onClick={() => {
                   let msg: string | undefined;
                   const regions = s().regions;
-                  const ids = selEntities().map((e) => e!.id);
+                  // Una sola entidad elegida: toda su cadena conectada (un clic basta para el contorno entero)
+                  const picked = selEntities().map((e) => e!.id);
+                  const ids = picked.length === 1 ? connectedChain(sketch(), picked[0]) : picked;
                   const chain = orderChain(sketch(), ids);
                   // Lazos de líneas y círculos: como siempre (positivo hacia afuera); cadenas abiertas, con arcos o a los dos lados: por la cadena
                   const byChain = typeof chain !== "string" && (offsetBoth() || !chain.closed || selEntities().some((e) => e!.geometry.type === "arc"));
                   ui.change((sk) => {
-                    if (!byChain) return void (msg = offsetEntities(sk, regions, ids, offsetDist()));
-                    const r = offsetChain(sk, ids, offsetDist(), { both: offsetBoth(), caps: offsetCaps() });
-                    if (typeof r === "string") msg = r;
+                    // Una copia por vez, cada una más lejos (d, 2d, 3d…)
+                    for (let k = 1; k <= offsetCopies(); k++) {
+                      const d = offsetDist() * k;
+                      const before = new Set(sk.entities.map((e) => e.id));
+                      if (!byChain) msg = offsetEntities(sk, regions, ids, d);
+                      else {
+                        const r = offsetChain(sk, ids, d, { both: offsetBoth(), caps: offsetCaps() });
+                        if (typeof r === "string") msg = r;
+                      }
+                      if (msg) return;
+                      // La distancia como cota editable: de una línea original a su paralela nueva
+                      if (offsetDim()) {
+                        const pt = (id: number) => sk.points.find((q) => q.id === id)!;
+                        const dir = (e: SketchEntity) => {
+                          const g = e.geometry as { start: number; end: number };
+                          const [a, b] = [pt(g.start), pt(g.end)];
+                          const l = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+                          return [(b.x - a.x) / l, (b.y - a.y) / l];
+                        };
+                        const orig = sk.entities.find((e) => ids.includes(e.id) && e.geometry.type === "line");
+                        const twin = orig && sk.entities.find((e) => !before.has(e.id) && e.geometry.type === "line" && Math.abs(dir(e)[0] * dir(orig)[1] - dir(e)[1] * dir(orig)[0]) < 1e-6);
+                        if (orig && twin) sk.constraints.push({ type: "point_line_distance", point: (twin.geometry as { start: number }).start, line: orig.id, value: +Math.abs(d).toFixed(6) });
+                      }
+                    }
+                    // El original pasa a construcción
+                    if (offsetToConstruction()) for (const e of sk.entities) if (ids.includes(e.id)) e.construction = true;
                   });
                   ui.setMessage(msg);
                 }}
@@ -5226,8 +5160,15 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 Equidistante
               </Button>
             </div>
+            <div class="flex flex-wrap gap-x-3" aria-label="Más opciones del equidistante">
+              <Checkbox small label="Original a construcción" checked={offsetToConstruction()} onChange={setOffsetToConstruction} />
+              <Checkbox small label="Distancia como cota" checked={offsetDim()} onChange={setOffsetDim} />
+            </div>
             <div class="flex items-center gap-2" aria-label="Opciones del equidistante">
               <Checkbox small label="A los dos lados" checked={offsetBoth()} onChange={setOffsetBoth} />
+              <div class="w-20">
+                <Num label="Copias" step={1} min={1} value={offsetCopies()} onCommit={(v) => setOffsetCopies(Math.max(1, Math.round(v)))} />
+              </div>
               <div class="flex-1 min-w-0">
                 <Select
                   options={[
@@ -5264,8 +5205,13 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   title="El eje es la primera línea elegida; lo demás se copia reflejado"
                   onClick={() => {
                     const ids = selEntities().map((e) => e!.id);
+                    const axis = lines()[0]!.id;
                     let msg: string | undefined;
-                    ui.change((sk) => (msg = mirrorEntities(sk, ids, lines()[0]!.id)));
+                    ui.change((sk) => {
+                      msg = mirrorEntities(sk, ids, axis);
+                      // Mover: el original se va (queda solo el reflejo)
+                      if (!msg && mirrorMove()) for (const id of ids) if (id !== axis) removeEntity(sk, id);
+                    });
                     ui.setMessage(msg);
                     if (!msg) ui.setSelection([]);
                   }}
@@ -5273,6 +5219,40 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   Simetría (eje: primera línea elegida)
                 </Button>
               </Show>
+              {/* Sin una línea elegida: en los ejes del sketch (una línea de construcción por el origen) */}
+              <Show when={lines().length === 0}>
+                <div class="flex flex-wrap items-center gap-1.5" aria-label="Simetría en los ejes">
+                  <For each={[["x", "Simetría en el eje X"], ["y", "Simetría en el eje Y"]] as const}>
+                    {([axis, label]) => (
+                      <Button
+                        size="sm"
+                        title="El reflejo atado por simetría a una línea de construcción por el origen"
+                        onClick={() => {
+                          const ids = selEntities().map((e) => e!.id);
+                          let msg: string | undefined;
+                          ui.change((sk) => {
+                            const o = ensureOrigin(sk);
+                            const span = Math.max(10, ...sk.points.map((q) => Math.max(Math.abs(q.x), Math.abs(q.y)))) * 1.2;
+                            const a = addPoint(sk, axis === "x" ? [-span, 0] : [0, -span]);
+                            const b = addPoint(sk, axis === "x" ? [span, 0] : [0, span]);
+                            const line = addEntity(sk, { type: "line", start: a, end: b });
+                            const e = sk.entities.find((x) => x.id === line)!;
+                            e.construction = true;
+                            sk.constraints.push({ type: axis === "x" ? "horizontal" : "vertical", line }, { type: "point_on_line", point: o, line });
+                            msg = mirrorEntities(sk, ids, line);
+                            if (!msg && mirrorMove()) for (const id of ids) removeEntity(sk, id);
+                          });
+                          ui.setMessage(msg);
+                          if (!msg) ui.setSelection([]);
+                        }}
+                      >
+                        {label}
+                      </Button>
+                    )}
+                  </For>
+                </div>
+              </Show>
+              <Checkbox small label="Quitar el original (mover)" checked={mirrorMove()} onChange={setMirrorMove} />
               <div class="flex items-end gap-1.5">
                 <Show when={patternKind() !== "table" && patternKind() !== "fill"}>
                   <div class="flex-1">
@@ -5289,6 +5269,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                     <Num label="X" suffix="mm" step={1} value={patternStep()[0]} onCommit={(v) => setPatternStep([v, patternStep()[1]])} />
                     <Num label="Y" suffix="mm" step={1} value={patternStep()[1]} onCommit={(v) => setPatternStep([patternStep()[0], v])} />
                   </div>
+                  <Checkbox small label="Distancia total (de la primera a la última)" checked={patternTotal()} onChange={setPatternTotal} />
                   <Num label="Filas" min={1} value={patternRows()} onCommit={(v) => setPatternRows(Math.max(1, Math.round(v)))} />
                   <Show when={patternRows() > 1}>
                     <div class="flex gap-1.5" aria-label="Paso entre filas">
@@ -5355,7 +5336,9 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   const n = patternCount();
                   let msg: string | undefined;
                   const kind = patternKind();
-                  if (kind === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, patternStep(), patternRows(), patternStep2())));
+                  // Con distancia total: el paso es esa distancia repartida entre las copias
+                  const step: P2 = patternTotal() ? [patternStep()[0] / (n - 1), patternStep()[1] / (n - 1)] : patternStep();
+                  if (kind === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, step, patternRows(), patternStep2())));
                   else if (kind === "circular") {
                     const center = selPoints().length === 1 ? selPoints()[0] : sketch().origin;
                     if (center === undefined) msg = "Elegir el punto alrededor del cual repetir";
