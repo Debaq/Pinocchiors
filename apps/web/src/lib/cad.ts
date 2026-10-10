@@ -2406,7 +2406,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = 
   const len2 = d[0] * d[0] + d[1] * d[1];
   const eps = 1e-9;
   // Cruces: parámetro sobre la línea y con qué entidad
-  const cuts: { t: number; entity: number; kind: "line" | "circle" }[] = [];
+  const cuts: { t: number; entity: number; kind: Hit["kind"] }[] = [];
   for (const e of s.entities) {
     if (e.id === lineId || e.construction) continue;
     const o = e.geometry;
@@ -2440,6 +2440,9 @@ export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = 
         }
         cuts.push({ t, entity: e.id, kind: "circle" });
       }
+    } else {
+      const pl = freeCurveLine(s, o);
+      if (pl) for (const t of limitsOnLine(A, d, [pl])) if (t > eps && t < 1 - eps) cuts.push({ t, entity: e.id, kind: "curve" });
     }
   }
   for (const t of limitsOnLine(A, d, limits)) if (t > eps && t < 1 - eps) cuts.push({ t, entity: -1, kind: "line" });
@@ -2454,7 +2457,7 @@ export function trimLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits = 
   const after = cuts.find((c) => c.t > tc);
   const at = (c: { t: number }): P2 => [A[0] + c.t * d[0], A[1] + c.t * d[1]];
   // Las líneas cruzadas se parten en el punto (cierra regiones); en curvas, pegado
-  const stick = (point: number, c: { entity: number; kind: "line" | "circle" }) => stickOrFix(s, point, c);
+  const stick = (point: number, c: Hit) => stickOrFix(s, point, c);
   if (before && after) {
     // Tramo del medio: la línea queda partida en dos
     const p1 = addPoint(s, at(before));
@@ -2556,7 +2559,8 @@ export function offsetEntities(s: Sketch, regions: Region[], ids: number[], d: n
 
 // ─── Geometría de sketch: cruces, recortes, extensiones ───────────────────
 
-type Hit = { entity: number; kind: "line" | "circle" };
+/** Con qué se cortó: línea (se parte en el punto), círculo o arco, u otra curva (spline, elipse) */
+export type Hit = { entity: number; kind: "line" | "circle" | "curve" };
 
 function pointOf(s: Sketch, id: number): P2 {
   const q = s.points.find((x) => x.id === id)!;
@@ -2603,6 +2607,11 @@ function crossingsOnCircle(s: Sketch, id: number, c: P2, r: number): { p: P2; hi
         if (u >= -1e-9 && u <= 1 + 1e-9) out.push({ p: [A[0] + u * d[0], A[1] + u * d[1]], hit: { entity: e.id, kind: "line" } });
       }
     } else {
+      const pl = freeCurveLine(s, g);
+      if (pl) {
+        for (const p of limitsOnCircle(c, r, [pl])) out.push({ p, hit: { entity: e.id, kind: "curve" } });
+        continue;
+      }
       const o = circleOf(s, g);
       if (!o) continue;
       const dx = o.c[0] - c[0];
@@ -2683,6 +2692,21 @@ export function placeSnap(s: Sketch, snap: Snap): number {
  * Si la línea ya se partió antes (dos cruces sobre el mismo lado), se parte el
  * tramo que de verdad contiene el punto.
  */
+/** Polilínea de una spline (por puntos o por polos) o una elipse (entera o arco); nada para lo demás */
+function freeCurveLine(s: Sketch, g: Geometry): P2[] | undefined {
+  const at = (id: number): P2 | undefined => {
+    const q = s.points.find((x) => x.id === id);
+    return q && [q.x, q.y];
+  };
+  if (g.type === "spline") return splineOf(g, at);
+  if (g.type === "ellipse") {
+    const [c, a, b] = [at(g.center), at(g.major), at(g.minor)];
+    return c && a && b ? ellipsePolyline(c, a, b) : undefined;
+  }
+  if (g.type === "bspline" || g.type === "ellipse_arc") return curvePolyline(g, at);
+  return undefined;
+}
+
 /**
  * Límites de afuera para recortar y extender (las líneas de las vistas del
  * plano, en coordenadas del sketch): polilíneas que cortan pero no son del
@@ -2726,13 +2750,17 @@ function limitsOnCircle(c: P2, r: number, limits: TrimLimits): P2[] {
 }
 
 /** Pega el punto a lo que cortó; si fue un límite de afuera, queda fijo donde está */
-function stickOrFix(s: Sketch, point: number, hit: Hit) {
+export function stickOrFix(s: Sketch, point: number, hit: Hit) {
   if (hit.entity >= 0) return stickTo(s, point, hit);
   const q = s.points.find((x) => x.id === point);
   if (q) s.constraints.push({ type: "fixed", point, x: q.x, y: q.y });
 }
 
 function stickTo(s: Sketch, point: number, hit: Hit) {
+  if (hit.kind === "curve") {
+    s.constraints.push({ type: "point_on_curve", point, curve: hit.entity });
+    return;
+  }
   if (hit.kind !== "line") {
     s.constraints.push({ type: "point_on_circle", point, circle: hit.entity });
     return;
@@ -2821,10 +2849,9 @@ export function trimCurve(s: Sketch, id: number, p: P2, limits: TrimLimits = [])
   return undefined;
 }
 
-function dropLoosePoints(s: Sketch) {
-  const used = new Set(
-    s.entities.flatMap((e) => geometryPoints(e.geometry)),
-  );
+export function dropLoosePoints(s: Sketch) {
+  // El origen y las anclas de los textos no son de ninguna entidad, pero se quedan
+  const used = new Set([...s.entities.flatMap((e) => geometryPoints(e.geometry)), ...(s.origin !== undefined ? [s.origin] : []), ...(s.texts ?? []).map((t) => t.anchor)]);
   const loose = new Set(s.points.filter((q) => !used.has(q.id)).map((q) => q.id));
   if (loose.size === 0) return;
   s.points = s.points.filter((q) => !loose.has(q.id));
@@ -2861,6 +2888,8 @@ export function extendLine(s: Sketch, lineId: number, p: P2, limits: TrimLimits 
       const u = ((C[0] - from[0]) * d[1] - (C[1] - from[1]) * d[0]) / den;
       if (u >= -1e-9 && u <= 1 + 1e-9) consider(t, { entity: e.id, kind: "line" });
     } else {
+      const pl = freeCurveLine(s, og);
+      if (pl) for (const t of limitsOnLine(from, d, [pl])) consider(t, { entity: e.id, kind: "curve" });
       const o = circleOf(s, og);
       if (!o) continue;
       const m: P2 = [from[0] - o.c[0], from[1] - o.c[1]];

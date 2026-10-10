@@ -104,6 +104,7 @@ import { flipSketchY, rotateSketch, rotation, scaling, selectionCenter, translat
 import { constraintSuggestions } from "../../lib/sketchSuggest";
 import { connectedChain } from "../../lib/sketchCheck";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
+import { bsplineToThrough } from "../../lib/sketchTrim";
 import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
 import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
@@ -6343,6 +6344,15 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
               }
             >
               Convertir a spline por polos
+            </Button>
+          </Show>
+          <Show when={splines().length === 1 && splines()[0].geometry.type === "bspline"}>
+            <Button
+              size="sm"
+              title="Pasa la spline por polos a una por puntos de paso sobre la curva (se aparta a lo sumo 0,5 % de su tamaño)"
+              onClick={() => run((sk) => bsplineToThrough(sk, splines()[0].id))}
+            >
+              A puntos de paso
             </Button>
           </Show>
         </div>

@@ -6,10 +6,11 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, extendAt, isSolidPoint, leavingDirection, placeSnap, tangentArc, trimAt, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
+import { extendAny, trimAny } from "../../lib/sketchTrim";
 import { CONSTRAINT_TOOLS, pickSuggestion, type ConstraintTool } from "../../lib/sketchSuggest";
 import { viewPolylines } from "../../lib/sheetRefs";
 import { insertBlock, layerState } from "../../lib/sketchBlocks";
@@ -96,8 +97,8 @@ const TOOLS: ToolDef[] = [
   { id: "spline_point", short: "Punto en spline", label: "Agregar un punto a una spline (o un polo a una spline por polos, sin cambiar su forma): clic sobre la curva", icon: SketchIcons.SplinePoint, group: 1, family: "spline" },
   { id: "point", short: "Punto", label: "Punto suelto (para agujeros y referencias)", key: "O", icon: SketchIcons.Point, group: 1 },
   { id: "text", short: "Texto", label: "Texto (clic donde empieza la línea base)", key: "X", icon: SketchIcons.Text, group: 1 },
-  { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar, o arrastrar: quita todo lo que toca el trazo)", key: "T", icon: SketchIcons.Trim, group: 2 },
-  { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo)", key: "E", icon: SketchIcons.Extend, group: 2 },
+  { id: "trim", short: "Recortar", label: "Recortar (clic en el tramo a quitar, o arrastrar: quita todo lo que toca el trazo; Ctrl+clic elige con qué se corta)", key: "T", icon: SketchIcons.Trim, group: 2 },
+  { id: "extend", short: "Extender", label: "Extender (clic cerca del extremo; Ctrl+clic elige hasta dónde)", key: "E", icon: SketchIcons.Extend, group: 2 },
   { id: "use", short: "Usar", label: "Usar arista o cara del sólido (una cara trae todo su contorno; queda ligado: si el sólido cambia, se mueve con él)", key: "J", icon: SketchIcons.Use, group: 2 },
   { id: "split", short: "Partir", label: "Partir una línea, arco o círculo (clic donde se parte)", key: "D", icon: SketchIcons.Split, group: 2 },
   { id: "stretch", short: "Estirar", label: "Estirar (caja sobre los puntos que se corren, después punto base y destino: lo demás se estira)", key: "W", icon: SketchIcons.Stretch, group: 3 },
@@ -1124,6 +1125,11 @@ export const CadView: Component<CadViewProps> = (props) => {
     return sh ? viewPolylines(sh.views, sh.height, sh.hiddenLines) : [];
   });
   const sheetLimits = () => sheetLines();
+  /** Recortar y extender: lo elegido (con Ctrl+clic) es lo único que corta; nada elegido, todo */
+  const trimBounds = () => {
+    const s = ui.session();
+    return s ? ui.selection().filter((id) => s.sketch.entities.some((e) => e.id === id)) : [];
+  };
   const sheetRefs = createMemo(() => {
     const sh = sheetOf();
     return sh ? solidRefs(sheetLines().map((poly) => poly.map((p): P3 => [p[0], p[1], 0])), { origin: [0, 0, 0], normal: [0, 0, 1], x_dir: [1, 0, 0] }) : undefined;
@@ -1259,6 +1265,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   );
   // Otra herramienta o salir del sketch la sueltan
   createEffect(on([() => ui.tool(), () => ui.session()?.feature], () => ui.tool() !== "select" && setPendingCon(undefined), { defer: true }));
+  // Al entrar a recortar o extender no hay límites elegidos (se eligen con Ctrl+clic)
+  createEffect(on(() => ui.tool(), (t, prev) => (t === "trim" || t === "extend") && prev !== "trim" && prev !== "extend" && ui.setSelection([]), { defer: true }));
   /** Medida dibujada, redondeada a algo legible según el zoom */
   const round = (v: number) => {
     const px = viewer?.pixelSizeMm() ?? 0.1;
@@ -1855,12 +1863,24 @@ export const CadView: Component<CadViewProps> = (props) => {
       setAnchor([]);
       return;
     }
+    if ((t === "trim" || t === "extend") && (e.ctrlKey || e.metaKey)) {
+      // Ctrl+clic: elegir (o soltar) con qué se recorta o hasta dónde se extiende
+      const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
+      const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
+      if (target === undefined) return;
+      const now = ui.selection();
+      const next = now.includes(target) ? now.filter((x) => x !== target) : [...now, target];
+      ui.setSelection(next);
+      const n = trimBounds().length;
+      ui.setMessage(n ? `${n === 1 ? "Solo lo elegido corta" : `Solo las ${n} elegidas cortan`}: clic en lo que se ${t === "trim" ? "recorta" : "extiende"} (Esc suelta los límites)` : "Corta todo lo que cruza");
+      return;
+    }
     if (t === "extend") {
       const raw = viewer.planePoint(e.clientX, e.clientY, s.plane) ?? hit.p;
       const target = hitTest(s.sketch, raw, viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
       let msg: string | undefined;
-      ui.change((sk) => (msg = extendAt(sk, target, raw, sheetLimits())));
+      ui.change((sk) => (msg = extendAny(sk, target, raw, sheetLimits(), trimBounds())));
       ui.setMessage(msg);
       return;
     }
@@ -2318,7 +2338,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       const raw = viewer.planePoint(e.clientX, e.clientY, ss.plane);
       const h = raw ? hitTest(ss.sketch, raw, viewer.pixelSizeMm() * 8, ui.tool() === "select") : {};
       setPreHover(h.point ?? h.entity);
-      setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits()) : undefined);
+      setTrimGone(ui.tool() === "trim" && raw && h.entity !== undefined ? trimRemoved(ss.sketch, h.entity, raw, sheetLimits(), trimBounds()) : undefined);
     } else {
       if (preHover() !== undefined) setPreHover(undefined);
       if (trimGone()) setTrimGone(undefined);
@@ -2455,10 +2475,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!from || from.far < 5 || stroke.length < 2) {
       const target = hitTest(s.sketch, stroke[0], viewer.pixelSizeMm() * 8, false).entity;
       if (target === undefined) return;
-      ui.change((sk) => (msg = trimAt(sk, target, stroke[0], sheetLimits())));
+      ui.change((sk) => (msg = trimAny(sk, target, stroke[0], sheetLimits(), trimBounds())));
     } else
       ui.change((sk) => {
-        const r = trimByStroke(sk, stroke, sheetLimits());
+        const r = trimByStroke(sk, stroke, sheetLimits(), trimBounds());
         msg = r.message ?? (r.trimmed ? undefined : "El trazo no cruzó nada que recortar");
       });
     ui.setMessage(msg);
@@ -2505,7 +2525,10 @@ export const CadView: Component<CadViewProps> = (props) => {
     } else if (ui.tool() === "spline" && anchor().length >= 2) finishSpline(false);
     else if (ui.tool() === "bspline" && anchor().length >= 2) finishBSpline(false);
     else if (chain() || anchor().length) resetTool();
-    else ui.setTool("select");
+    else if ((ui.tool() === "trim" || ui.tool() === "extend") && trimBounds().length) {
+      ui.setSelection([]);
+      ui.setMessage("Corta todo lo que cruza");
+    } else ui.setTool("select");
   };
   // Clic derecho sin arrastrar (el derecho también desplaza la vista): menú de la cara
   let rightDown: { x: number; y: number } | undefined;

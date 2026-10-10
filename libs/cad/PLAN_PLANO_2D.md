@@ -213,10 +213,17 @@ los botones llevan `data-preview`), **recortar en rojo** lo que se va (`trimRemo
 **Tab** recorre lo encimado (`hitAll`), **copiar N veces**, **cerrar/abrir una spline** y
 construcción igualada en varias (también puntos sueltos).
 
-Queda de F5: campo flotante en las herramientas de edición, límite de recorte elegido a mano,
-recortar y extender splines, patrón asociativo y omitir copias, filtros de selección dentro de la
-herramienta, arrastre sin restricciones, mantener o romper restricciones al transformar,
-polos → puntos de paso, limpieza (duplicados parciales, fusionar puntos sueltos, informe
+Tercer lote (e2e "sketch edición IV…", pruebas `sketchTrim.test.mjs`): **recortar splines y
+elipses** sin cambiar la forma (`lib/sketchTrim.ts`: la elipse pasa a arco de elipse; la spline
+queda por polos, partida insertando nudos; la por puntos conserva sus puntos como uniones), las
+líneas, círculos y arcos **cortan contra splines y elipses** (punto en la curva), **extender una
+spline** por puntos (sigue la tangente) y un **arco de elipse**, **límite elegido a mano**
+(Ctrl+clic en recortar o extender: solo eso corta; Esc lo suelta) y **polos → puntos de paso**
+(adaptativo, se aparta a lo sumo 0,5 %).
+
+Queda de F5: campo flotante en las herramientas de edición, patrón asociativo y omitir copias,
+filtros de selección dentro de la herramienta, arrastre sin restricciones, mantener o romper
+restricciones al transformar, limpieza (duplicados parciales, fusionar puntos sueltos, informe
 navegable), marcas de cruces.
 
 Sale de la tabla de cobertura de abajo: todo lo que está 🟡 o ❌. Orden propuesto: primero lo

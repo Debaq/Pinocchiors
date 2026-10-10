@@ -363,6 +363,88 @@ const scenarios = {
     if (first === second || second === undefined) throw new Error(`Tab no pasó a la encimada: ${first} → ${second}`);
   },
 
+  async "sketch edición IV: recortar splines y elipses, límite elegido con Ctrl+clic, extender una spline y a puntos de paso"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const pos = (s, id) => { const q = s.points.find((p) => p.id === id); return [q.x, q.y]; };
+    // Lo de la prueba, armado por código (puntos y entidades con ids nuevos)
+    const add = (shapes) =>
+      b.eval(`window.__cadUi.change((s) => {
+        let id = Math.max(0, ...s.points.map((p) => p.id), ...s.entities.map((e) => e.id)) + 1;
+        const pt = (p) => (s.points.push({ id, x: p[0], y: p[1] }), id++);
+        for (const g of ${JSON.stringify(shapes)}) {
+          const geometry = g.type === "line" ? { type: "line", start: pt(g.a), end: pt(g.b) }
+            : g.type === "spline" ? { type: "spline", points: g.pts.map(pt), closed: false }
+            : { type: "ellipse", center: pt(g.c), major: pt(g.major), minor: pt(g.minor) };
+          s.entities.push({ id: id++, geometry, construction: false });
+        }
+        s.next_id = id;
+      })`);
+    await add([
+      { type: "spline", pts: [[10, 45], [18, 52], [26, 45], [34, 52], [42, 45]] },
+      { type: "line", a: [21, 38], b: [21, 56] },
+      { type: "line", a: [31, 38], b: [31, 56] },
+      { type: "ellipse", c: [62, 46], major: [72, 46], minor: [62, 51] },
+      { type: "line", a: [50, 46], b: [76, 46] },
+      { type: "line", a: [10, 25], b: [50, 25] },
+      { type: "line", a: [20, 21], b: [20, 29] },
+      { type: "line", a: [30, 21], b: [30, 29] },
+      { type: "line", a: [40, 21], b: [40, 29] },
+    ]);
+    await sleep(800);
+    // Recortar la spline entre las dos verticales: quedan dos tramos por polos (misma curva)
+    await key("t");
+    await b.click(...(await at([26, 45])), { wait: 900 });
+    let s = await sk();
+    const pieces = s.entities.filter((e) => e.geometry.type === "bspline");
+    if (pieces.length !== 2) throw new Error(`spline recortada: ${s.entities.map((e) => e.geometry.type)}`);
+    const ends = pieces.map((e) => [pos(s, e.geometry.poles[0])[0], pos(s, e.geometry.poles.at(-1))[0]].map((x) => Math.round(x)));
+    if (JSON.stringify(ends.sort((a, b) => a[0] - b[0])) !== "[[10,21],[31,42]]") throw new Error(`tramos: ${JSON.stringify(ends)}`);
+    // La elipse: lo de arriba se va, queda un arco de elipse
+    await b.click(...(await at([62, 51])), { wait: 900 });
+    s = await sk();
+    const arc = s.entities.find((e) => e.geometry.type === "ellipse_arc");
+    if (!arc || s.entities.some((e) => e.geometry.type === "ellipse")) throw new Error(`elipse: ${s.entities.map((e) => e.geometry.type)}`);
+    if (!(pos(s, arc.geometry.start)[1] < 46.5 && pos(s, arc.geometry.end)[1] < 46.5)) throw new Error("las puntas del arco no quedaron en la línea");
+    // Límite elegido: Ctrl+clic en la vertical de x=20; el clic en x=35 quita de 20 al final (las otras no cortan)
+    await b.click(...(await at([20, 27.5])), { wait: 400, modifiers: 2 });
+    const msg = await b.eval(`document.body.innerText.includes("Solo lo elegido corta")`);
+    if (!msg) throw new Error("no avisó que solo lo elegido corta");
+    await b.click(...(await at([35, 25])), { wait: 900 });
+    s = await sk();
+    const horiz = s.entities.filter((e) => e.geometry.type === "line" && Math.abs(pos(s, e.geometry.start)[1] - 25) < 1e-3 && Math.abs(pos(s, e.geometry.end)[1] - 25) < 1e-3);
+    const xs = horiz.map((e) => [pos(s, e.geometry.start)[0], pos(s, e.geometry.end)[0]].sort((a, b) => a - b).map(Math.round));
+    if (JSON.stringify(xs) !== "[[10,20]]") throw new Error(`con el límite elegido quedó ${JSON.stringify(xs)}`);
+    await b.shot("sketch_recortar_curvas");
+    // Esc suelta los límites (sigue en recortar)
+    await key("Escape");
+    await sleep(300);
+    if ((await b.eval(`window.__cadUi.selection().length`)) !== 0 || (await b.eval(`window.__cadUi.tool()`)) !== "trim") throw new Error("Esc no soltó los límites");
+    // Extender una spline por puntos hasta una línea: suma un punto de paso sobre ella
+    await add([
+      { type: "spline", pts: [[55, 25], [62, 30], [69, 25]] },
+      { type: "line", a: [78, 0], b: [78, 40] },
+    ]);
+    await sleep(800);
+    await key("e");
+    await b.click(...(await at([68.6, 25.4])), { wait: 900 });
+    s = await sk();
+    const ext = s.entities.find((e) => e.geometry.type === "spline");
+    if (ext?.geometry.points.length !== 4 || Math.abs(pos(s, ext.geometry.points[3])[0] - 78) > 0.01) throw new Error(`extender spline: ${JSON.stringify(ext?.geometry)}`);
+    // A puntos de paso: un tramo por polos vuelve a ser spline por puntos
+    await key("s");
+    await b.eval(`window.__cadUi.setSelection([${pieces[0].id}])`);
+    await sleep(300);
+    await b.clickText("A puntos de paso");
+    await sleep(900);
+    s = await sk();
+    if (s.entities.find((e) => e.id === pieces[0].id)?.geometry.type !== "spline") throw new Error("no pasó a puntos de paso");
+    if (await b.eval(`!!document.querySelector("[data-conflicts]")`)) throw new Error("quedó un conflicto");
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");

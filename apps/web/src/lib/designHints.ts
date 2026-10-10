@@ -43,8 +43,17 @@ export function designHints(store: CadStore, ui: CadUi): KeyHint[] {
             { keys: "Ctrl+arrastrar", label: "lazo" },
           ]
         : ui.tool() === "trim"
-          ? [{ keys: "Arrastrar", label: "recortar todo lo que cruza" }]
-          : []),
+          ? [
+              { keys: "Arrastrar", label: "recortar todo lo que cruza" },
+              { keys: "Ctrl+clic", label: "con qué se corta" },
+              { keys: "Mayús+clic", label: "extender" },
+            ]
+          : ui.tool() === "extend"
+            ? [
+                { keys: "Ctrl+clic", label: "hasta dónde" },
+                { keys: "Mayús+clic", label: "recortar" },
+              ]
+            : []),
       { keys: "Mayús", label: "sin anclajes" },
       { keys: "Q", label: "construcción" },
       { keys: "Ctrl+C / Ctrl+V", label: "copiar y pegar" },

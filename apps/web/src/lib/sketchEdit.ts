@@ -13,7 +13,6 @@ import {
   mapConstraintIds,
   mapGeometry,
   removeEntity,
-  trimAt,
   type TrimLimits,
   type Geometry,
   type P2,
@@ -23,6 +22,7 @@ import {
 } from "./cad.ts";
 import { checkSketch, polylineOf } from "./sketchCheck.ts";
 import { splitEntityAt } from "./sketchTransform.ts";
+import { trimAny } from "./sketchTrim.ts";
 
 const sub = (a: P2, b: P2): P2 => [a[0] - b[0], a[1] - b[1]];
 const add = (a: P2, b: P2): P2 => [a[0] + b[0], a[1] + b[1]];
@@ -119,7 +119,20 @@ function strokeHits(s: Sketch, e: SketchEntity, a: P2, b: P2): { t: number; p: P
     const u = cross(sub(c, a), d) / den;
     return t >= 0 && t <= 1 && u > 0 && u < 1 ? [{ t, p: add(a, mul(d, t)) }] : [];
   }
-  if (g.type !== "circle" && g.type !== "arc") return [];
+  if (g.type !== "circle" && g.type !== "arc") {
+    // Splines y elipses: contra su polilínea
+    const pl = polylineOf(s, g);
+    const out: { t: number; p: P2 }[] = [];
+    for (let i = 0; i + 1 < pl.length; i++) {
+      const f = sub(pl[i + 1], pl[i]);
+      const den = cross(d, f);
+      if (Math.abs(den) < 1e-15) continue;
+      const t = cross(sub(pl[i], a), f) / den;
+      const u = cross(sub(pl[i], a), d) / den;
+      if (t >= 0 && t <= 1 && u >= 0 && u < 1) out.push({ t, p: add(a, mul(d, t)) });
+    }
+    return out;
+  }
   const c = pos(s, g.center);
   const r = g.type === "circle" ? g.radius : dist(pos(s, g.start), c);
   const m = sub(a, c);
@@ -142,9 +155,9 @@ function strokeHits(s: Sketch, e: SketchEntity, a: P2, b: P2): { t: number; p: P
  * Recorta todo lo que cruza el trazo `stroke` (puntos del plano, en orden):
  * cada tramo tocado se quita como con un clic de Recortar, en el orden en que
  * el trazo los cruza. Devuelve cuántos se quitaron y un mensaje si algo no se
- * pudo (las splines no se recortan).
+ * pudo. Con `bounds`, solo esas entidades cortan.
  */
-export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = []): { trimmed: number; message?: string } {
+export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = [], bounds: number[] = []): { trimmed: number; message?: string } {
   const failed = new Set<number>();
   let message: string | undefined;
   let trimmed = 0;
@@ -155,7 +168,7 @@ export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = []): 
     for (let k = 0; k + 1 < stroke.length; k++) {
       if (k + 1 <= at) continue;
       for (const e of s.entities) {
-        if (failed.has(e.id)) continue;
+        if (failed.has(e.id) || bounds.includes(e.id)) continue;
         for (const h of strokeHits(s, e, stroke[k], stroke[k + 1])) {
           const u = k + h.t;
           if (u > at + 1e-9 && (!best || u < best.u)) best = { u, id: e.id, p: h.p };
@@ -165,30 +178,13 @@ export function trimByStroke(s: Sketch, stroke: P2[], limits: TrimLimits = []): 
     }
     if (!best) break;
     at = best.u;
-    const msg = trimAt(s, best.id, best.p, limits);
+    const msg = trimAny(s, best.id, best.p, limits, bounds);
     if (msg) {
       failed.add(best.id);
       message = msg;
     } else trimmed++;
   }
-  // Las splines tocadas por el trazo también se avisan
-  for (const e of s.entities)
-    if ((e.geometry.type === "spline" || e.geometry.type === "bspline") && crossesPolyline(polylineOf(s, e.geometry), stroke)) message = "Las splines no se recortan";
   return { trimmed, message };
-}
-
-function crossesPolyline(a: P2[], b: P2[]): boolean {
-  for (let i = 0; i + 1 < a.length; i++)
-    for (let j = 0; j + 1 < b.length; j++) {
-      const d = sub(a[i + 1], a[i]);
-      const f = sub(b[j + 1], b[j]);
-      const den = cross(d, f);
-      if (Math.abs(den) < 1e-15) continue;
-      const t = cross(sub(b[j], a[i]), f) / den;
-      const u = cross(sub(b[j], a[i]), d) / den;
-      if (t >= 0 && t <= 1 && u >= 0 && u <= 1) return true;
-    }
-  return false;
 }
 
 // ─── Unir ─────────────────────────────────────────────────────────────────
@@ -743,13 +739,13 @@ export function splitEqual(s: Sketch, id: number, n: number): string | undefined
  * otro color): los tramos de la curva que ya no están después de recortar
  * una copia. Vacío si no se puede recortar ahí.
  */
-export function trimRemoved(s: Sketch, id: number, p: P2, limits: TrimLimits = []): P2[][] {
+export function trimRemoved(s: Sketch, id: number, p: P2, limits: TrimLimits = [], bounds: number[] = []): P2[][] {
   const e = s.entities.find((x) => x.id === id);
   if (!e) return [];
   const before = polylineOf(s, e.geometry);
   if (before.length < 2) return [];
   const c: Sketch = structuredClone(s);
-  if (trimAt(c, id, p, limits)) return [];
+  if (trimAny(c, id, p, limits, bounds)) return [];
   const old = new Set(s.entities.map((x) => x.id));
   const kept = c.entities.filter((x) => x.id === id || !old.has(x.id)).map((x) => polylineOf(c, x.geometry));
   // La curva en pasos finos; cada punto que ya no está sobre lo que quedó, se va
