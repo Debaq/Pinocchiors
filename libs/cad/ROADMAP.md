@@ -678,3 +678,7 @@ cargo test -p cad-model
   escala propia con rótulo; al dibujar sobre la hoja se ancla a las vistas, «Usar» trae líneas
   ligadas que siguen al modelo, recortar y extender las toman de límite y las cotas del dibujo
   salen en la hoja.
+- **2026-10-10 Plano 2D: vistas libres y girar en 3D** ([PLAN_PLANO_2D](PLAN_PLANO_2D.md),
+  fase 3): vistas que se arrastran alineadas (y lo dibujado encima va con ellas), vistas nuevas
+  que se giran a gusto (botones, cámara del visor, Ctrl+arrastrar con vista previa), escala
+  siempre a la vista y la hoja ya no cambia de tamaño en pantalla con los avisos.

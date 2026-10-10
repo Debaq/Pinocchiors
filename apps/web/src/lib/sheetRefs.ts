@@ -4,8 +4,8 @@
 // cotas del dibujo puestas en la hoja.
 // Funciones puras: se prueban con node (e2e/sheetRefs.test.mjs).
 
-import type { Geometry, Projected, Sketch, SketchConstraint } from "./cad.ts";
-import { angleBetween, asArc, asCircle, asSegment, bounds, lineNear, type AnyDimension, type DrawingLine, type P2, type Placed } from "./drawing.ts";
+import { constraintIds, geometryPoints, type Geometry, type Projected, type Sketch, type SketchConstraint } from "./cad.ts";
+import { angleBetween, isPictorial, asArc, asCircle, asSegment, bounds, lineNear, sheetBox, type AnyDimension, type DrawingLine, type P2, type Placed } from "./drawing.ts";
 
 /** Una entidad del dibujo ligada a una línea de una vista (`at`: un punto de la línea, en mm de la pieza) */
 export interface SheetLink {
@@ -22,7 +22,7 @@ export const sheetToView = (v: Placed, q: P2, height: number): P2 => [(q[0] - v.
 /** Qué líneas de una vista cuentan (las ocultas solo si se dibujan; la isométrica sin ocultas) */
 function counts(v: Placed, l: DrawingLine, hidden: boolean) {
   if (l.kind === "smooth") return false;
-  if (l.kind === "hidden" || l.kind === "hidden_outline") return hidden && v.name !== "iso";
+  if (l.kind === "hidden" || l.kind === "hidden_outline") return hidden && !isPictorial(v.name);
   return true;
 }
 
@@ -143,6 +143,104 @@ export function applySheetLinks(sketch: Sketch, links: SheetLink[], placed: Plac
     out.push({ ...link, at: closestOn(link.at, line.points) });
   }
   return { sketch: s, links: out, lost };
+}
+
+// ─── Lo dibujado sobre una vista se mueve con ella ──────────────────────────
+
+/**
+ * Una entidad dibujada encima de una vista: se mueve (y se escala) con ella.
+ * `frame` es dónde estaba el origen de la vista (mm de hoja, Y hacia arriba)
+ * y su escala cuando se dibujó.
+ */
+export interface SheetOwner {
+  entity: number;
+  view: string;
+  frame: [number, number, number];
+}
+
+const frameOf = (v: Placed, height: number): [number, number, number] => [...viewToSheet(v, [0, 0], height), v.scale];
+
+/**
+ * A qué vista pertenece cada entidad que no está ligada: la que la contiene
+ * entera (con 3 mm de margen; los detalles primero). Las que no caen en
+ * ninguna quedan de la hoja.
+ */
+export function sheetOwners(s: Sketch, placed: Placed[], height: number): SheetOwner[] {
+  const used = new Set((s.uses ?? []).map((u) => u.entity));
+  const pt = new Map(s.points.map((p) => [p.id, [p.x, p.y] as P2]));
+  const boxes = [...placed]
+    .filter((v) => v.lines.length)
+    .sort((a, b) => Number(!!b.detail) - Number(!!a.detail))
+    .map((v) => {
+      const b = sheetBox(v);
+      // A mm de hoja con Y hacia arriba, con margen
+      return { v, b: [b[0] - 3, height - b[3] - 3, b[2] + 3, height - b[1] + 3] };
+    });
+  const out: SheetOwner[] = [];
+  for (const e of s.entities) {
+    if (used.has(e.id)) continue;
+    const pts = geometryPoints(e.geometry).flatMap((id) => (pt.has(id) ? [pt.get(id)!] : []));
+    if (e.geometry.type === "circle") {
+      const c = pts[0];
+      const r = e.geometry.radius;
+      if (c) pts.push([c[0] - r, c[1] - r], [c[0] + r, c[1] + r]);
+    }
+    if (!pts.length) continue;
+    const box = boxes.find(({ b }) => pts.every((p) => p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3]));
+    if (box) out.push({ entity: e.id, view: box.v.name, frame: frameOf(box.v, height) });
+  }
+  return out;
+}
+
+/**
+ * Lleva lo dibujado sobre cada vista a donde está hoy (corrida o con otra
+ * escala): mueve sus puntos, los fijos y escala sus cotas. Devuelve el
+ * sketch nuevo y los dueños con el lugar al día.
+ */
+export function applySheetOwners(sketch: Sketch, owners: SheetOwner[], placed: Placed[], height: number): { sketch: Sketch; owners: SheetOwner[] } {
+  const s: Sketch = structuredClone(sketch);
+  const moved = new Set<number>();
+  const ratios = new Map<number, number>();
+  const out: SheetOwner[] = [];
+  for (const o of owners) {
+    const e = s.entities.find((x) => x.id === o.entity);
+    const v = placed.find((x) => x.name === o.view);
+    if (!e) continue;
+    if (!v) {
+      out.push(o);
+      continue;
+    }
+    const f = frameOf(v, height);
+    out.push({ ...o, frame: f });
+    const k = f[2] / o.frame[2];
+    if (Math.abs(f[0] - o.frame[0]) < 1e-9 && Math.abs(f[1] - o.frame[1]) < 1e-9 && Math.abs(k - 1) < 1e-12) continue;
+    const map = (p: P2): P2 => [f[0] + (p[0] - o.frame[0]) * k, f[1] + (p[1] - o.frame[1]) * k];
+    for (const id of geometryPoints(e.geometry)) {
+      if (moved.has(id)) continue;
+      const q = s.points.find((x) => x.id === id);
+      if (!q) continue;
+      [q.x, q.y] = map([q.x, q.y]);
+      moved.add(id);
+      ratios.set(id, k);
+    }
+    if (e.geometry.type === "circle") e.geometry.radius *= k;
+    moved.add(e.id);
+    ratios.set(e.id, k);
+  }
+  if (moved.size) {
+    for (const c of s.constraints) {
+      if (c.type === "fixed" && moved.has(c.point)) {
+        const q = s.points.find((x) => x.id === c.point);
+        if (q) [c.x, c.y] = [q.x, q.y];
+        continue;
+      }
+      // Cotas de lo que se escaló entero: el valor nuevo (los ángulos no cambian)
+      const ids = constraintIds(c);
+      const v = c as { value?: number };
+      if (typeof v.value === "number" && ids.length && ids.every((id) => moved.has(id))) v.value *= ratios.get(ids[0]) ?? 1;
+    }
+  }
+  return { sketch: s, owners: out };
 }
 
 // ─── Cotas del dibujo en la hoja ────────────────────────────────────────────

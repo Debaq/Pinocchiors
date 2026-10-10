@@ -1702,6 +1702,161 @@ const scenarios = {
     await b.shot("plano_referencias_modelo");
   },
 
+  async "plano 2D: las escalas dicen la verdad (lo dibujado mide la pieza por la escala)"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const doc = await call("cad_get_document");
+    const box = doc.features.find((f) => f.kind.type === "primitive");
+    Object.assign(box.kind.shape, { dx: 100, dy: 60, dz: 40 });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await sleep(500);
+    // Tamaño de cada vista en la pieza (ancho × alto en la hoja)
+    const size = { front: [100, 40], back: [100, 40], top: [100, 60], bottom: [100, 60], left: [60, 40], right: [60, 40] };
+    const measure = () =>
+      b.eval(`(() => {
+        const svg = document.querySelector("[data-sheet] svg");
+        const scale = [...svg.querySelectorAll("[data-title-block] text")].map((t) => t.textContent).find((t) => /^\\d+:\\d+$/.test(t));
+        const views = Object.fromEntries([...svg.querySelectorAll("[data-view]")].map((g) => { const r = g.getBBox(); return [g.dataset.view, [r.width, r.height]]; }));
+        return { scale, views };
+      })()`);
+    const check = (m, what) => {
+      const [a, c] = m.scale.split(":").map(Number);
+      const k = a / c;
+      for (const [name, [w, h]] of Object.entries(m.views)) {
+        if (!size[name]) continue;
+        near(w, size[name][0] * k, 0.05, `${what}: ancho de ${name} a ${m.scale}`);
+        near(h, size[name][1] * k, 0.05, `${what}: alto de ${name} a ${m.scale}`);
+      }
+    };
+    const four = await measure();
+    check(four, "4 vistas");
+    // Lo que dicen las ventanas (Hoja y la de una vista) también es la escala de verdad
+    const said = () => b.eval(`[...document.querySelectorAll('[data-drawing-props] button, [data-drawing-props] [data-scale-now]')].map((x) => x.textContent.trim()).join(" | ")`);
+    await b.clickText("Hoja");
+    await sleep(400);
+    const sheetBefore = await said();
+    for (const v of ["bottom", "right", "back"]) await b.eval(`[...document.querySelector('[data-outliner-row="drawing-1:view:${v}"]').querySelectorAll("button")].pop().click()`);
+    for (let t = 0; t < 40 && Object.keys((await measure()).views).length < 7; t++) await sleep(250);
+    await sleep(500);
+    const seven = await measure();
+    if (Object.keys(seven.views).length !== 7) throw new Error(`vistas: ${Object.keys(seven.views)}`);
+    check(seven, "7 vistas");
+    const sheetAfter = await said();
+    if (four.scale === seven.scale) throw new Error("con más vistas la automática debía bajar");
+    if (!sheetBefore.includes(four.scale) || !sheetAfter.includes(seven.scale) || sheetAfter.includes(four.scale)) throw new Error(`la ventana Hoja no dice la escala: ${sheetBefore} → ${sheetAfter}`);
+    const bar = await b.eval(`document.querySelector("[data-sheet-scale]")?.textContent`);
+    if (bar !== `Escala ${seven.scale} (auto)`) throw new Error(`barra: ${bar}`);
+  },
+
+  async "plano 2D: mover vistas (y lo dibujado con ellas), vista nueva y girar en 3D"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const doc = await call("cad_get_document");
+    Object.assign(doc.features.find((f) => f.kind.type === "primitive").kind.shape, { dx: 40, dy: 20, dz: 10 });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Plano 2D");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-view]")`)); t++) await sleep(500);
+    await b.eval(`window.__cadStore.commit((d) => { d.drawing.sheets[0].scale = 1; })`);
+    await sleep(1500);
+    // En pantalla (para arrastrar) y en mm de la hoja (para medir: la hoja en pantalla puede cambiar de tamaño)
+    const box = (name) => b.eval(`(() => { const g = document.querySelector('[data-sheet] [data-view="${name}"]'); if (!g) return null; const r = g.getBoundingClientRect(); return [r.x, r.y, r.width, r.height]; })()`);
+    const mm = (name) => b.eval(`(() => { const g = document.querySelector('[data-sheet] [data-view="${name}"]'); if (!g) return null; const r = g.getBBox(); return [r.x, r.y, r.width, r.height]; })()`);
+    const screenSize = () => b.eval(`(() => { const r = document.querySelector("[data-sheet]").getBoundingClientRect(); return [r.width, r.height]; })()`);
+    const drag = async (from, to, modifiers = 0) => {
+      await b.mouse("mouseMoved", from[0], from[1], { buttons: 0 });
+      await b.mouse("mousePressed", from[0], from[1], { modifiers });
+      for (let i = 1; i <= 6; i++) await b.mouse("mouseMoved", from[0] + ((to[0] - from[0]) * i) / 6, from[1] + ((to[1] - from[1]) * i) / 6, { modifiers });
+      await sleep(200);
+      await b.mouse("mouseReleased", to[0], to[1], { modifiers, buttons: 0 });
+      await sleep(1200);
+    };
+    const sheets = async () => (await call("cad_get_document")).drawing.sheets[0];
+    // La lateral se arrastra en diagonal: solo se corre en horizontal (sigue alineada con el frente)
+    const l0 = await box("left");
+    const m0 = await mm("left");
+    const s0 = await screenSize();
+    const c0 = [l0[0] + l0[2] / 2, l0[1] + l0[3] / 2];
+    await drag(c0, [c0[0] + 60, c0[1] + 40]);
+    const m1 = await mm("left");
+    if (!(m1[0] > m0[0] + 10) || Math.abs(m1[1] - m0[1]) > 1e-6) throw new Error(`arrastre alineado (mm): ${m0} → ${m1}`);
+    if (!(await sheets()).viewAt?.left) throw new Error("no se guardó dónde quedó");
+    const s1 = await screenSize();
+    if (Math.abs(s1[0] - s0[0]) > 0.5 || Math.abs(s1[1] - s0[1]) > 0.5) throw new Error(`la hoja cambió de tamaño en pantalla: ${s0} → ${s1}`);
+    // Acomodar la devuelve
+    await b.clickText("Acomodar");
+    for (let t = 0; t < 20 && Math.abs((await mm("left"))[0] - m0[0]) > 1e-6; t++) await sleep(250);
+    if (Math.abs((await mm("left"))[0] - m0[0]) > 1e-6) throw new Error("Acomodar no la devolvió");
+    // Una línea dibujada encima del frente se mueve con él
+    await b.clickText("Dibujar");
+    for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()?.sheet`)); t++) await sleep(250);
+    await sleep(600);
+    // Caja del frente en mm de hoja (Y hacia arriba)
+    const fr = await b.eval(`(() => {
+      const sh = window.__cadUi.session().sheet;
+      const v = sh.views.find((x) => x.name === "front");
+      const pts = v.lines.flatMap((l) => l.points);
+      const S = (p) => [v.x + p[0] * v.scale, sh.height - v.y + p[1] * v.scale];
+      return { lo: S([Math.min(...pts.map((p) => p[0])), Math.min(...pts.map((p) => p[1]))]), hi: S([Math.max(...pts.map((p) => p[0])), Math.max(...pts.map((p) => p[1]))]) };
+    })()`);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const lerp = (u, v) => [fr.lo[0] + (fr.hi[0] - fr.lo[0]) * u, fr.lo[1] + (fr.hi[1] - fr.lo[1]) * v];
+    await key("l");
+    // Adentro del frente, lejos de sus bordes y de sus medios
+    await b.click(...(await at(lerp(0.17, 0.31))), { wait: 400 });
+    await b.click(...(await at(lerp(0.71, 0.77))), { wait: 400 });
+    await key("Escape");
+    await key("Escape");
+    await b.clickText("Volver al plano");
+    for (let t = 0; t < 30 && !(await b.eval(`!!document.querySelector("[data-sheet] svg [data-layer] polyline")`)); t++) await sleep(250);
+    if ((await sheets()).owners?.length !== 1) throw new Error(`dueños: ${JSON.stringify((await sheets()).owners)}`);
+    const linePts = () => b.eval(`document.querySelector("[data-sheet] svg [data-layer] polyline").getAttribute("points")`);
+    const before = (await linePts()).split(" ").map((p) => p.split(",").map(Number));
+    const f0 = await box("front");
+    await drag([f0[0] + f0[2] * 0.8, f0[1] + f0[3] * 0.8], [f0[0] + f0[2] * 0.8 + 50, f0[1] + f0[3] * 0.8 + 30]);
+    for (let t = 0; t < 20 && (await linePts()) === before.map((p) => p.join(",")).join(" "); t++) await sleep(250);
+    const after = (await linePts()).split(" ").map((p) => p.split(",").map(Number));
+    const sv = (await sheets()).viewAt.front;
+    const dx = after[0][0] - before[0][0];
+    const dy = after[0][1] - before[0][1];
+    if (!(Math.abs(dx) > 10 && Math.abs(dy) > 5)) throw new Error(`lo dibujado no siguió al frente: ${before} → ${after} (frente en ${sv})`);
+    near(after[1][0] - after[0][0], before[1][0] - before[0][0], 1e-6, "misma línea, corrida");
+    // Vista nueva (mira como la isométrica) y un giro de 90° con su botón
+    await b.clickText("Vista nueva");
+    for (let t = 0; t < 30 && !(await box("vista-1")); t++) await sleep(250);
+    if (!(await box("vista-1"))) throw new Error("no apareció la vista nueva");
+    if ((await b.eval(`document.querySelector('[data-sheet] [data-view-label="vista-1"]')?.textContent`)) !== "Vista 1") throw new Error("la vista nueva no lleva su nombre");
+    const dir0 = (await sheets()).viewDirs["vista-1"];
+    await b.eval(`[...document.querySelectorAll('[aria-label="Girar la vista"] button')].find((x) => x.textContent === "→").click()`);
+    for (let t = 0; t < 20 && JSON.stringify((await sheets()).viewDirs["vista-1"]) === JSON.stringify(dir0); t++) await sleep(250);
+    const dir1 = (await sheets()).viewDirs["vista-1"];
+    if (JSON.stringify(dir1) === JSON.stringify(dir0)) throw new Error("el botón no giró la vista");
+    // Ctrl+arrastrar la isométrica la gira: durante el arrastre se ve la vista previa
+    const iso = await box("iso");
+    const ci = [iso[0] + iso[2] / 2, iso[1] + iso[3] / 2];
+    await b.mouse("mouseMoved", ci[0], ci[1], { buttons: 0 });
+    await b.mouse("mousePressed", ci[0], ci[1], { modifiers: 2 });
+    for (let i = 1; i <= 5; i++) await b.mouse("mouseMoved", ci[0] + i * 12, ci[1], { modifiers: 2 });
+    await sleep(300);
+    const preview = await b.eval(`document.querySelectorAll("[data-orbit-preview] polyline").length`);
+    await b.mouse("mouseReleased", ci[0] + 60, ci[1], { modifiers: 2, buttons: 0 });
+    await sleep(1500);
+    if (!(preview > 0)) throw new Error("sin vista previa al girar");
+    const isoDir = (await sheets()).viewDirs?.iso;
+    if (!isoDir) throw new Error("no se guardó el giro de la isométrica");
+    await b.shot("plano_girar_mover");
+  },
+
   async "plano 2D: radio, ángulo, detalle y corte movido"(b) {
     await begin(b);
     // Medio cono (r 10 → 5, alto 10) cortado en y < 0: arcos en la planta, trapecio en el frente

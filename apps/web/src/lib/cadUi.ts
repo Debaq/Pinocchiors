@@ -8,7 +8,7 @@ import { clipCenter, extractClip, insertClip, transformSelection, translation, t
 import type { BasePlane } from "./CadViewer";
 import { updateDrawing, type DrawingElement } from "./drawingDoc";
 import type { Placed } from "./drawing";
-import { nearestViewLine, projectViewLine, type SheetLink } from "./sheetRefs";
+import { nearestViewLine, projectViewLine, sheetOwners, type SheetLink } from "./sheetRefs";
 import {
   geometryPoints,
   mirrorEntities,
@@ -283,6 +283,8 @@ export function createCadUi(store: CadStore) {
   // Plano 2D abierto sobre el visor: cuál y lo elegido en él (con su ventana de propiedades)
   const [drawingOpen, setDrawingOpen] = createSignal(false);
   const [activeDrawing, setActiveDrawing] = createSignal<number>();
+  // El visor de Diseñar (su cámara y su escala), para el plano: «tomar la vista del visor» y la vista previa al girar
+  let viewerInfo: { cameraPose: () => { position: P3; target: P3; up: P3 }; mmPerUnit: () => number } | undefined;
   const [drawingSel, setDrawingSel] = createSignal<DrawingElement>();
   // Desarrollo de chapa abierto sobre el visor
   const [flatOpen, setFlatOpen] = createSignal(false);
@@ -446,6 +448,11 @@ export function createCadUi(store: CadStore) {
     setDrawingOpen,
     activeDrawing,
     setActiveDrawing,
+    /** Lo registra CadView al crear el visor */
+    registerViewer(info: typeof viewerInfo) {
+      viewerInfo = info;
+    },
+    viewer: () => viewerInfo,
     drawingSel,
     setDrawingSel,
     /** Abre el plano `id` con `element` elegido (su ventana de propiedades) */
@@ -926,11 +933,14 @@ export function createCadUi(store: CadStore) {
         // Los vínculos de lo que sigue ligado (lo borrado o con el vínculo roto se olvida)
         const used = new Set((s.sketch.uses ?? []).map((u) => u.entity));
         const links = s.sheet.links.filter((l) => used.has(l.entity) && s.sketch.entities.some((e) => e.id === l.entity));
+        // Lo que quedó encima de una vista se mueve con ella
+        const owners = sheetOwners(s.sketch, s.sheet.views, s.sheet.height);
         await store.commit(
           (d) =>
             void updateDrawing(d, id, (x) => {
               x.sketch = clone(s.sketch);
               x.links = links;
+              x.owners = owners;
             }),
         );
         setDrawingOpen(true);

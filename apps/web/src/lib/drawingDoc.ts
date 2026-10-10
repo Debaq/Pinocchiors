@@ -7,9 +7,9 @@
 // resto en la interfaz: se lee como «Plano 1» y se reescribe al primer cambio.
 
 import type { CadDocument, Sketch } from "./cad.ts";
-import { VIEW_LABELS, scaleLabel, type Detail, type Projection, type UserDim, type ViewName } from "./drawing.ts";
+import { VIEW_LABELS, scaleLabel, viewSpec, type ViewDir, type Detail, type Projection, type UserDim, type ViewName } from "./drawing.ts";
 import type { SceneNode } from "./scene-tree.ts";
-import type { SheetLink } from "./sheetRefs.ts";
+import type { SheetLink, SheetOwner } from "./sheetRefs.ts";
 
 export interface DrawingSheet {
   id: number;
@@ -26,8 +26,14 @@ export interface DrawingSheet {
   overall: boolean;
   /** Vistas que no se muestran */
   hiddenViews: ViewName[];
+  /** Vistas puestas a mano: dónde va su origen en la hoja (mm, Y hacia abajo como el SVG) */
+  viewAt?: Partial<Record<string, [number, number]>>;
   /** Escala propia de una vista (sin ella, la de la hoja); se rotula debajo */
-  viewScales?: Partial<Record<ViewName, number | null>>;
+  viewScales?: Partial<Record<string, number | null>>;
+  /** Dirección de la isométrica girada y de las vistas nuevas (por nombre de vista) */
+  viewDirs?: Partial<Record<string, ViewDir>>;
+  /** Vistas nuevas (`vista-<id>`): miran desde donde se las gire, con su nombre debajo */
+  customViews?: { id: number; name: string; hidden?: boolean }[];
   /** Ya con las seis vistas (antes había una sola lateral, "side") */
   sixViews?: boolean;
   /** Corte A-A paralelo al frente: `y` del plano (mm del modelo; sin ella, por el medio) */
@@ -40,6 +46,8 @@ export interface DrawingSheet {
   sketch?: Sketch | null;
   /** Entidades del dibujo ligadas a líneas de las vistas (siguen al modelo) */
   links?: SheetLink[];
+  /** Lo dibujado encima de una vista (se mueve y se escala con ella) */
+  owners?: SheetOwner[];
   sketchHidden?: boolean;
 }
 
@@ -132,6 +140,7 @@ export function removeDrawing(doc: Pick<CadDocument, "drawing">, id: number) {
 export type DrawingElement =
   | { kind: "sheet" }
   | { kind: "view"; view: ViewName }
+  | { kind: "custom"; id: number }
   | { kind: "overall" }
   | { kind: "section" }
   | { kind: "detail"; label: string }
@@ -143,7 +152,8 @@ export const sameElement = (a: DrawingElement | undefined, b: DrawingElement | u
 /** Id en el Outliner: `drawing-<id>` el plano, `drawing-<id>:<elemento>` lo suyo */
 export function elementNodeId(drawing: number, el?: DrawingElement): string {
   if (!el) return `drawing-${drawing}`;
-  const key = el.kind === "view" ? `view:${el.view}` : el.kind === "detail" ? `detail:${el.label}` : el.kind === "dim" ? `dim:${el.index}` : el.kind;
+  const key =
+    el.kind === "view" ? `view:${el.view}` : el.kind === "detail" ? `detail:${el.label}` : el.kind === "dim" ? `dim:${el.index}` : el.kind === "custom" ? `custom:${el.id}` : el.kind;
   return `drawing-${drawing}:${key}`;
 }
 
@@ -156,6 +166,7 @@ export function parseElementNode(id: string): { drawing: number; element?: Drawi
   if (kind === "view" && VIEW_NAMES.includes(arg as ViewName)) return { drawing, element: { kind, view: arg as ViewName } };
   if (kind === "detail" && arg) return { drawing, element: { kind, label: arg } };
   if (kind === "dim" && arg !== undefined && /^\d+$/.test(arg)) return { drawing, element: { kind, index: Number(arg) } };
+  if (kind === "custom" && arg !== undefined && /^\d+$/.test(arg)) return { drawing, element: { kind, id: Number(arg) } };
   if (kind === "sheet" || kind === "overall" || kind === "section" || kind === "sketch") return { drawing, element: { kind } };
   return undefined;
 }
@@ -171,9 +182,29 @@ export function hasElement(s: DrawingSheet, el: DrawingElement): boolean {
       return el.index >= 0 && el.index < s.dims.length;
     case "sketch":
       return !!s.sketch;
+    case "custom":
+      return !!s.customViews?.some((v) => v.id === el.id);
     default:
       return true;
   }
+}
+
+/** Nombre de vista (en la hoja, `Placed.name`) de una vista nueva */
+export const customViewName = (id: number) => `vista-${id}`;
+
+/** Agrega una vista nueva mirando como la isométrica; devuelve su id */
+export function addCustomView(s: DrawingSheet): number {
+  const id = Math.max(0, ...(s.customViews ?? []).map((v) => v.id)) + 1;
+  s.customViews = [...(s.customViews ?? []), { id, name: `Vista ${id}` }];
+  s.viewDirs = { ...(s.viewDirs ?? {}), [customViewName(id)]: viewSpec("iso") };
+  return id;
+}
+
+/** Desde dónde mira una vista del plano (la guardada, o la de siempre) */
+export function viewDirOf(s: DrawingSheet, name: string): ViewDir | undefined {
+  const saved = s.viewDirs?.[name];
+  if (saved) return saved;
+  return (VIEW_NAMES as string[]).includes(name) ? viewSpec(name as ViewName) : undefined;
 }
 
 /** Se ve en la hoja (la hoja misma, siempre) */
@@ -191,6 +222,8 @@ export function elementVisible(s: DrawingSheet, el: DrawingElement): boolean {
       return !s.dims[el.index]?.hidden;
     case "sketch":
       return !!s.sketch && !s.sketchHidden;
+    case "custom":
+      return !s.customViews?.find((v) => v.id === el.id)?.hidden;
     default:
       return true;
   }
@@ -218,11 +251,14 @@ export function toggleElement(s: DrawingSheet, el: DrawingElement) {
     case "sketch":
       s.sketchHidden = !on;
       break;
+    case "custom":
+      s.customViews = (s.customViews ?? []).map((v) => (v.id === el.id ? { ...v, hidden: !on } : v));
+      break;
   }
 }
 
 /** Se puede borrar (las vistas, las cotas generales y la hoja solo se ocultan) */
-export const elementDeletable = (el: DrawingElement) => el.kind === "section" || el.kind === "detail" || el.kind === "dim" || el.kind === "sketch";
+export const elementDeletable = (el: DrawingElement) => el.kind === "section" || el.kind === "detail" || el.kind === "dim" || el.kind === "sketch" || el.kind === "custom";
 
 export function removeElement(s: DrawingSheet, el: DrawingElement) {
   if (el.kind === "section") s.section = null;
@@ -231,6 +267,14 @@ export function removeElement(s: DrawingSheet, el: DrawingElement) {
   else if (el.kind === "sketch") {
     s.sketch = null;
     s.sketchHidden = false;
+  } else if (el.kind === "custom") {
+    const name = customViewName(el.id);
+    s.customViews = (s.customViews ?? []).filter((v) => v.id !== el.id);
+    const dirs = { ...(s.viewDirs ?? {}) };
+    delete dirs[name];
+    s.viewDirs = dirs;
+    s.dims = s.dims.filter((d) => d.view !== name);
+    s.details = s.details.filter((d) => d.view !== name);
   }
 }
 
@@ -258,6 +302,11 @@ export function elementLabel(s: DrawingSheet, el: DrawingElement): string {
       const n = s.sketch?.entities.length ?? 0;
       return `Dibujo (${n} ${n === 1 ? "curva" : "curvas"})`;
     }
+    case "custom": {
+      const v = s.customViews?.find((x) => x.id === el.id);
+      const k = s.viewScales?.[customViewName(el.id)];
+      return `${v?.name ?? "Vista"}${k ? ` (${scaleLabel(k)})` : ""}`;
+    }
   }
 }
 
@@ -266,6 +315,7 @@ export function sheetElements(s: DrawingSheet): DrawingElement[] {
   return [
     { kind: "sheet" },
     ...VIEW_NAMES.map((view): DrawingElement => ({ kind: "view", view })),
+    ...(s.customViews ?? []).map((v): DrawingElement => ({ kind: "custom", id: v.id })),
     { kind: "overall" },
     ...(s.section ? [{ kind: "section" } as const] : []),
     ...s.details.map((d): DrawingElement => ({ kind: "detail", label: d.label })),
@@ -277,6 +327,7 @@ export function sheetElements(s: DrawingSheet): DrawingElement[] {
 const ELEMENT_TYPE: Record<DrawingElement["kind"], SceneNode["type"]> = {
   sheet: "drawing_sheet",
   view: "drawing_view",
+  custom: "drawing_view",
   overall: "drawing_dim",
   section: "drawing_section",
   detail: "drawing_detail",

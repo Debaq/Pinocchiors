@@ -115,23 +115,36 @@ automática de la hoja deja lugar a las ampliadas) y las de escala propia llevan
 («Posterior (2:1)», también en el DXF; en el frente cortado va en el rótulo del corte) y en su
 fila del Outliner.
 
-### F3 — Vistas libres y girar en 3D
+### F3 — Vistas libres y girar en 3D ✅
 
-- Mover las vistas arrastrándolas (pedido del usuario, 2026-10-10: «automáticamente está bien
-  pero quiero poder moverlas a mi gusto»). La disposición automática por diedro (`viewSlots`)
-  sigue siendo la de partida; cada vista movida guarda su lugar en el plano y deja de seguir a
-  la automática, el resto sigue acomodándose sola. Al arrastrar se mantiene alineada con el
-  frente (las de la fila del frente solo se corren en horizontal, las de la columna en
-  vertical), con Mayús o Alt se suelta del todo. En su ventana de propiedades: posición X/Y
-  escrita y «Volver a su lugar»; en la hoja, «Acomodar todo» devuelve todas a la automática.
-  Si se cambia la escala o el diedro, las movidas se quedan donde están (avisando si alguna
-  se sale de la hoja o pisa otra).
-- Agregar y quitar vistas, vista proyectada desde otra.
-- **Girar en 3D las vistas que se ven en 3D** (isométrica y las que se agreguen): con la vista
-  elegida, arrastrar orbita la pieza dentro de su marco (misma lógica que `navDrag`/`cameraRig`),
-  más botones de 90°, ángulos escritos y «tomar la vista del visor». Se guarda `eye` + `xdir`
-  por vista. Cada giro vuelve a pedir HLR (vista previa con la malla mientras se arrastra).
-- Lo dibujado y las cotas sobre una vista se mueven con ella (pertenecen a la vista).
+*Hecha el 2026-10-10* (pruebas node `drawing.test.mjs`, `drawingDoc.test.mjs`,
+`sheetRefs.test.mjs`; e2e "plano 2D: mover vistas…" y "plano 2D: las escalas dicen la
+verdad…").
+- **Mover vistas** (pedido del usuario: «automáticamente está bien pero quiero poder moverlas a
+  mi gusto»): arrastrar una vista la corre alineada con el frente (`dragAxis`: las de su fila en
+  horizontal, las de su columna en vertical; frente e isométrica libres; Mayús o Alt, libre) y
+  queda en `DrawingSheet.viewAt` (las demás siguen acomodándose solas). En su ventana: centro
+  X/Y escrito y «Volver a su lugar»; en la barra, «Acomodar» (siempre presente, desactivado si no
+  hay nada movido). Avisos si una movida se sale de la hoja, pisa el cajetín u otra vista
+  (`placementProblems`).
+- **Lo dibujado se mueve con su vista**: al volver al plano, cada curva que cae entera en una
+  vista queda de ella (`DrawingSheet.owners`, `sheetOwners`) con el lugar y la escala de ese
+  momento; si la vista se corre o cambia de escala, `applySheetOwners` la lleva (con sus fijos y
+  sus cotas escaladas). Lo que no cae en ninguna queda de la hoja.
+- **Girar en 3D** la isométrica y las **vistas nuevas** («Vista nueva»: `customViews`,
+  `vista-<id>`, en una columna a la derecha con su nombre debajo; `viewDirs` guarda desde dónde
+  mira cada una): en su ventana, giros de 90° (izquierda, derecha, atrás, adelante y en el plano),
+  «Tomar la del visor» (la cámara de Diseñar, `viewDirFromCamera`) e «Isométrica»; en la hoja,
+  Ctrl+arrastrar orbita con vista previa de las aristas del sólido (`projectPolylines`) y al
+  soltar se pide la vista exacta. Las vistas 3D (`isPictorial`) no llevan ocultas, ni cotas
+  generales ni a mano (lo que se ve está acortado).
+- **Escala a la vista**: botón «Escala 1:5 (auto)» en la barra (el usuario no confiaba en las
+  escalas: la automática baja con más vistas). Mensajes y avisos flotan sobre la hoja: antes
+  empujaban la hoja y la achicaban en pantalla, parecía que las vistas cambiaban de tamaño.
+  Al dibujar sobre la hoja no se ponen cotas solas (decisión: el dibujo anota; el usuario lo va a
+  probar).
+- Queda: vista auxiliar proyectada desde otra (perpendicular a una arista inclinada) y mover
+  los detalles a mano.
 
 ### F4 — Cortes e imágenes de secciones
 

@@ -3,6 +3,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  addCustomView,
+  customViewName,
+  viewDirOf,
   addDrawing,
   drawingSheets,
   drawingTree,
@@ -51,6 +54,7 @@ test("ids del Outliner de ida y vuelta", () => {
     { kind: "detail", label: "B" },
     { kind: "dim", index: 12 },
     { kind: "sketch" },
+    { kind: "custom", id: 3 },
   ];
   for (const el of els) assert.deepEqual(parseElementNode(elementNodeId(4, el)), el ? { drawing: 4, element: el } : { drawing: 4 });
   assert.equal(parseElementNode("drawing-1:view:nada"), undefined);
@@ -108,4 +112,24 @@ test("seis vistas: al empezar se ven frente, superior, la lateral de la derecha 
   const [one] = drawingSheets({ drawing: { dims: [{ view: "side", kind: "length", refs: [[0, 0]] }] } });
   assert.equal(one.dims[0].view, "left");
   assert.ok(!one.hiddenViews.includes("left"));
+});
+
+test("vistas nuevas: miran como la isométrica, se nombran, se ocultan y al quitarlas se van sus cotas y detalles", () => {
+  const doc = {};
+  const id = addDrawing(doc);
+  let v;
+  updateDrawing(doc, id, (s) => (v = addCustomView(s)));
+  let s = drawingSheets(doc)[0];
+  assert.equal(v, 1);
+  assert.deepEqual(viewDirOf(s, customViewName(1)), viewDirOf(s, "iso"));
+  assert.ok(sheetElements(s).some((e) => e.kind === "custom" && e.id === 1));
+  const el = { kind: "custom", id: 1 };
+  toggleElement(s, el);
+  assert.ok(!elementVisible(s, el));
+  s.dims = [{ view: "vista-1", kind: "length", refs: [[0, 0]] }, { view: "front", kind: "length", refs: [[0, 0]] }];
+  removeElement(s, el);
+  assert.equal(s.customViews.length, 0);
+  assert.deepEqual(s.dims.map((d) => d.view), ["front"]);
+  assert.equal(viewDirOf(s, "vista-1"), undefined);
+  assert.deepEqual(viewDirOf(s, "front").eye, [0, -1, 0]);
 });

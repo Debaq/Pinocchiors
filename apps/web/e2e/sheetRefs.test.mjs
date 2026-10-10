@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addEntity, addPoint, addProjected, emptySketch, extendLine, trimAt } from "../src/lib/cad.ts";
-import { applySheetLinks, nearestViewLine, projectViewLine, sheetSketchDims, sheetToView, viewPolylines, viewToSheet } from "../src/lib/sheetRefs.ts";
+import { applySheetLinks, applySheetOwners, sheetOwners, nearestViewLine, projectViewLine, sheetSketchDims, sheetToView, viewPolylines, viewToSheet } from "../src/lib/sheetRefs.ts";
 
 const H = 210;
 /** Vista con el origen de la pieza en (x, y) de la hoja (SVG) a escala k */
@@ -130,4 +130,32 @@ test("cotas del dibujo en la hoja: largo, horizontal, radio, diámetro y ángulo
   assert.equal(dims[4].kind, "angle");
   near(dims[4].value, (Math.atan2(40, 30) * 180) / Math.PI, 1e-9);
   assert.deepEqual(sheetSketchDims(null, H), []);
+});
+
+test("lo dibujado encima de una vista se corre y se escala con ella (con sus fijos y sus cotas)", () => {
+  const v1 = view([seg([0, 0], [20, 0]), seg([0, 10], [20, 10])], 2, 50, 150);
+  const s = emptySketch();
+  // Una línea dentro de la vista y otra lejos (de la hoja)
+  const a = addPoint(s, viewToSheet(v1, [5, 5], H));
+  const b = addPoint(s, viewToSheet(v1, [15, 5], H));
+  const inside = addEntity(s, { type: "line", start: a, end: b });
+  const far = addEntity(s, { type: "line", start: addPoint(s, [250, 10]), end: addPoint(s, [260, 10]) });
+  s.constraints.push({ type: "length", line: inside, value: 20 }, { type: "fixed", point: a, x: s.points.find((p) => p.id === a).x, y: s.points.find((p) => p.id === a).y });
+  const owners = sheetOwners(s, [v1], H);
+  assert.deepEqual(owners.map((o) => [o.entity, o.view]), [[inside, "front"]]);
+  // La vista se corre y pasa a 1:1
+  const v2 = { ...v1, x: 80, y: 120, scale: 1 };
+  const r = applySheetOwners(s, owners, [v2], H);
+  const P = (id) => { const q = r.sketch.points.find((p) => p.id === id); return [q.x, q.y]; };
+  const g = r.sketch.entities.find((e) => e.id === inside).geometry;
+  assert.deepEqual(P(g.start), viewToSheet(v2, [5, 5], H));
+  assert.deepEqual(P(g.end), viewToSheet(v2, [15, 5], H));
+  assert.equal(r.sketch.constraints[0].value, 10, "la cota se escala");
+  assert.deepEqual([r.sketch.constraints[1].x, r.sketch.constraints[1].y], viewToSheet(v2, [5, 5], H), "el fijo va con el punto");
+  const fg = r.sketch.entities.find((e) => e.id === far).geometry;
+  assert.deepEqual(at(r.sketch, fg.start), [250, 10], "lo de la hoja no se mueve");
+  assert.deepEqual(r.owners[0].frame, [...viewToSheet(v2, [0, 0], H), 1]);
+  // Ya en su lugar: aplicar otra vez no cambia nada
+  const again = applySheetOwners(r.sketch, r.owners, [v2], H);
+  assert.deepEqual(again.sketch.points, r.sketch.points);
 });

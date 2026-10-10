@@ -1,4 +1,4 @@
-import { Component, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from "solid-js";
+import { Component, For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack, type JSX } from "solid-js";
 import { clsx } from "clsx";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -12,6 +12,15 @@ import {
   asSegment,
   bounds,
   detailScale,
+  dragAxis,
+  isPictorial,
+  placementProblems,
+  sheetBox,
+  placeExtraViews,
+  projectPolylines,
+  rotateViewDir,
+  viewDirFromCamera,
+  type ViewDir,
   dimText,
   layout,
   lineNear,
@@ -25,13 +34,18 @@ import {
   type Detail,
   type DrawingLine,
   type P2,
+  type P3,
+  type Placed,
   type Projection,
   type ViewName,
 } from "../../lib/drawing";
 import {
   VIEW_LABELS,
   VIEW_NAMES,
+  addCustomView,
   addDrawing,
+  customViewName,
+  viewDirOf,
   drawingSheets,
   elementDeletable,
   elementLabel,
@@ -43,7 +57,7 @@ import {
   type DrawingElement,
   type DrawingSheet,
 } from "../../lib/drawingDoc";
-import { applySheetLinks, sheetSketchDims } from "../../lib/sheetRefs";
+import { applySheetLinks, applySheetOwners, sheetSketchDims } from "../../lib/sheetRefs";
 import { themeColor } from "../../lib/theme";
 import { Button, Select } from "../ui";
 
@@ -78,9 +92,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   });
   const d = createMemo(() => sheets().find((s) => s.id === ui.activeDrawing()));
   /** Cambia el plano abierto (un paso del historial del diseño) */
-  const upd = (change: (s: DrawingSheet) => void) => {
+  const upd = (change: (s: DrawingSheet) => void) => void upd2(change);
+  /** Igual, devolviendo la promesa del envío */
+  const upd2 = (change: (s: DrawingSheet) => void) => {
     const id = ui.activeDrawing();
-    if (id !== undefined) void store.commit((doc) => void updateDrawing(doc, id, change));
+    return id !== undefined ? store.commit((doc) => void updateDrawing(doc, id, change)) : undefined;
   };
   const sel = () => {
     const s = d();
@@ -89,22 +105,36 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
   };
 
   const [tool, setTool] = createSignal<Tool>("");
+  // Vista que se está arrastrando: dónde va su origen (se guarda al soltar)
+  const [dragAt, setDragAt] = createSignal<{ view: string; at: P2 }>();
+  let drag: { view: string; x0: number; y0: number; at: P2; k: number; axis: "x" | "y" | "free" } | undefined;
+  // Girando una vista 3D con Ctrl+arrastrar: se ve una vista previa con las aristas del sólido; al soltar se pide la vista exacta
+  let orbit: { name: string; x0: number; y0: number; dir: ViewDir } | undefined;
+  const [orbitDir, setOrbitDir] = createSignal<{ name: string; dir: ViewDir }>();
+  let dragged = false;
   let firstLine: { view: string; ref: P2 } | null = null;
-  const [views, setViews] = createSignal<Partial<Record<ViewName, DrawingLine[]>>>();
-  const [hatch, setHatch] = createSignal<Partial<Record<ViewName, [P2, P2, P2][]>>>({});
+  const [views, setViews] = createSignal<Partial<Record<string, DrawingLine[]>>>();
+  const [hatch, setHatch] = createSignal<Partial<Record<string, [P2, P2, P2][]>>>({});
   const [sectionAt, setSectionAt] = createSignal(0);
   const [busy, setBusy] = createSignal(false);
   const [message, setMessage] = createSignal<string>();
   let seq = 0;
 
   const projection = (): Projection => d()?.projection ?? "first";
-  // Como texto: el efecto corre solo si cambia lo que se pide
-  const shownViews = createMemo(() => VIEW_NAMES.filter((v) => d() && !d()!.hiddenViews.includes(v)).join(","));
+  // Lo que se pide al backend (nombre y desde dónde se mira), como texto: el
+  // efecto corre solo si cambia. La que se está girando va con su giro del momento
+  const requests = createMemo(() => {
+    const s = d();
+    if (!s) return "[]";
+    const names = [...VIEW_NAMES.filter((v) => !s.hiddenViews.includes(v)), ...(s.customViews ?? []).filter((v) => !v.hidden).map((v) => customViewName(v.id))];
+    return JSON.stringify(names.map((name) => ({ name, ...viewDirOf(s, name)! })));
+  });
   const sectionOn = createMemo(() => !!d()?.section && !d()!.section!.hidden);
   const sectionY = createMemo(() => d()?.section?.y ?? undefined);
   createEffect(
-    on([() => store.result()?.version, projection, shownViews, sectionOn, sectionY], async () => {
-      const names = (shownViews() ? shownViews().split(",") : []) as ViewName[];
+    on([() => store.result()?.version, requests, sectionOn, sectionY], async () => {
+      const asked = JSON.parse(requests()) as { name: string; eye: P3; xdir: P3 }[];
+      const names = asked.map((x) => x.name);
       const n = ++seq;
       if (!names.length) return setViews({});
       setBusy(true);
@@ -112,10 +142,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         // El corte va por el medio del sólido, paralelo al frente: se queda la mitad de atrás
         const body = store.result()?.body;
         const at = sectionY() ?? (body ? (body.bbox_min[1] + body.bbox_max[1]) / 2 : 0);
-        const specs = names.map((v) => {
-          const spec = viewSpec(v, projection());
-          return v === "front" && sectionOn() ? { ...spec, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : spec;
-        });
+        const specs = asked.map(({ name, eye, xdir }) => (name === "front" && sectionOn() ? { eye, xdir, section: { origin: [0, at, 0], normal: [0, 1, 0] } } : { eye, xdir }));
         const res = await invoke<{ lines: DrawingLine[]; hatch: [P2, P2, P2][] }[]>("cad_drawing", { views: specs });
         if (n === seq) {
           setViews(Object.fromEntries(names.map((v, i) => [v, res[i].lines])));
@@ -136,8 +163,21 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const v = views();
     const s = d();
     if (!v || !s) return null;
-    const r = layout(v, sheet(), projection(), s.scale ?? undefined, hatch(), s.viewScales);
-    return { ...r, placed: [...r.placed, ...placeDetails(r.placed, s.details.filter((x) => !x.hidden), sheet())] };
+    // Las puestas a mano (y la que se está arrastrando, donde va el puntero)
+    const at: Partial<Record<string, P2>> = { ...(s.viewAt ?? {}) };
+    const g = dragAt();
+    if (g) at[g.view] = g.at;
+    const std = Object.fromEntries(VIEW_NAMES.filter((n) => v[n]).map((n) => [n, v[n]!])) as Partial<Record<ViewName, DrawingLine[]>>;
+    const r = layout(std, sheet(), projection(), s.scale ?? undefined, hatch() as Partial<Record<ViewName, [P2, P2, P2][]>>, s.viewScales, at);
+    // Las vistas nuevas, en una columna a la derecha (o donde se dejaron)
+    const extras = placeExtraViews(
+      r.placed,
+      (s.customViews ?? []).filter((c) => !c.hidden && v[customViewName(c.id)]).map((c) => ({ name: customViewName(c.id), title: c.name, lines: v[customViewName(c.id)]!, scale: s.viewScales?.[customViewName(c.id)] })),
+      r.scale,
+      at,
+    );
+    const all = [...r.placed, ...extras];
+    return { ...r, placed: [...all, ...placeDetails(all, s.details.filter((x) => !x.hidden), sheet())] };
   });
   // Lo dibujado a mano sobre la hoja (un sketch en mm de hoja), con lo ligado
   // a las vistas donde están hoy sus líneas
@@ -145,8 +185,11 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const s = d();
     const r = result();
     if (!s?.sketch) return undefined;
-    if (!r || !s.links?.length) return { sketch: s.sketch, links: s.links ?? [], lost: 0 };
-    return applySheetLinks(s.sketch, s.links, r.placed, sheet().height);
+    if (!r) return { sketch: s.sketch, links: s.links ?? [], lost: 0 };
+    // Primero lo dibujado encima de cada vista (se corre y se escala con ella), después lo ligado
+    const owned = s.owners?.length ? applySheetOwners(s.sketch, s.owners, r.placed, sheet().height).sketch : s.sketch;
+    if (!s.links?.length) return { sketch: owned, links: [], lost: 0 };
+    return applySheetLinks(owned, s.links, r.placed, sheet().height);
   });
   const layer = createMemo(() => (d()?.sketchHidden ? [] : sheetLayerLines(linked()?.sketch)));
   const layerDims = createMemo(() => (d()?.sketchHidden ? [] : sheetSketchDims(linked()?.sketch, sheet().height)));
@@ -239,6 +282,12 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     return m ? new DOMPoint(e.clientX, e.clientY).matrixTransform(m.inverse()) : undefined;
   };
 
+  /** Una vista de la hoja como elemento: de las seis (o la isométrica) o una nueva */
+  const asElement = (name: string): DrawingElement =>
+    name.startsWith("vista-") ? { kind: "custom", id: Number(name.slice(6)) } : { kind: "view", view: name as ViewName };
+  /** El nombre en la hoja de una vista elegida */
+  const viewNameOf = (el: DrawingElement | undefined) => (el?.kind === "view" ? el.view : el?.kind === "custom" ? customViewName(el.id) : undefined);
+
   /** Sin herramienta: lo que está bajo el clic (el elemento del SVG o la vista que lo contiene) */
   const elementAt = (e: MouseEvent): DrawingElement | undefined => {
     const t = e.target as Element;
@@ -252,7 +301,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     if (t.closest("[data-title-block]")) return { kind: "sheet" };
     const view = (t.closest("[data-view]") as HTMLElement | null)?.dataset.view;
     if (view?.startsWith("detalle-")) return { kind: "detail", label: view.slice(8) };
-    if (view) return { kind: "view", view: view as ViewName };
+    if (view) return asElement(view);
     // Las líneas son finas: un clic dentro de la caja de una vista la elige
     const r = result();
     const pt = sheetPoint(e);
@@ -265,7 +314,7 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       }
       const b = bounds(v.lines);
       const pad = 2 / v.scale;
-      if (p[0] >= b.min[0] - pad && p[0] <= b.max[0] + pad && p[1] >= b.min[1] - pad && p[1] <= b.max[1] + pad) return { kind: "view", view: v.name as ViewName };
+      if (p[0] >= b.min[0] - pad && p[0] <= b.max[0] + pad && p[1] >= b.min[1] - pad && p[1] <= b.max[1] + pad) return asElement(v.name);
     }
     return undefined;
   };
@@ -280,13 +329,18 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const t = tool();
     const s = d();
     if (!r || !s) return;
+    // Fue el final de un arrastre
+    if (dragged) {
+      dragged = false;
+      return;
+    }
     if (!t) return ui.setDrawingSel(elementAt(e));
     const pt = sheetPoint(e);
     if (!pt) return;
     // Primero los detalles (están encima, ampliados)
     const order = [...r.placed].sort((a, b) => Number(!!b.detail) - Number(!!a.detail));
     for (const v of order) {
-      if (v.name === "iso") continue;
+      if (isPictorial(v.name)) continue;
       const p: P2 = [(pt.x - v.x) / v.scale, (v.y - pt.y) / v.scale];
       if (v.detail && Math.hypot(p[0] - v.detail.center[0], p[1] - v.detail.center[1]) > v.detail.radius) continue;
       if (t === "detail") {
@@ -323,6 +377,105 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
       return;
     }
   };
+
+  /**
+   * Arrastrar una vista la corre (alineada con el frente: las de su fila en
+   * horizontal, las de su columna en vertical; con Mayús o Alt, libre). Queda
+   * puesta a mano: deja de seguir a la disposición automática.
+   */
+  const onSheetDown = (e: PointerEvent) => {
+    if (tool() || e.button !== 0) return;
+    const el = elementAt(e);
+    const name = viewNameOf(el);
+    if (!name) return;
+    const v = result()?.placed.find((p) => p.name === name && !p.detail);
+    const m = (e.currentTarget as HTMLElement).querySelector("svg")?.getScreenCTM();
+    if (!v || !m) return;
+    // Ctrl+arrastrar una vista 3D (la isométrica o una nueva) la gira
+    if ((e.ctrlKey || e.metaKey) && (name === "iso" || el!.kind === "custom")) {
+      const dir = viewDirOf(d()!, name);
+      if (!dir) return;
+      orbit = { name, x0: e.clientX, y0: e.clientY, dir };
+      dragged = false;
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      return;
+    }
+    drag = { view: name, x0: e.clientX, y0: e.clientY, at: [v.x, v.y], k: 1 / m.a, axis: dragAxis(name, projection()) };
+    dragged = false;
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onSheetMove = (e: PointerEvent) => {
+    if (orbit) {
+      if (!dragged && Math.hypot(e.clientX - orbit.x0, e.clientY - orbit.y0) < 4) return;
+      dragged = true;
+      // Medio grado por píxel: a la derecha gira la pieza a la derecha, hacia abajo la inclina hacia quien mira
+      setOrbitDir({ name: orbit.name, dir: rotateViewDir(orbit.dir, (e.clientX - orbit.x0) * 0.5, (e.clientY - orbit.y0) * 0.5) });
+      return;
+    }
+    if (!drag) return;
+    const [dx, dy] = [(e.clientX - drag.x0) * drag.k, (e.clientY - drag.y0) * drag.k];
+    if (!dragged && Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) < 4) return;
+    dragged = true;
+    const free = e.shiftKey || e.altKey || drag.axis === "free";
+    setDragAt({ view: drag.view, at: [drag.at[0] + (free || drag.axis === "x" ? dx : 0), drag.at[1] + (free || drag.axis === "y" ? dy : 0)] });
+  };
+  const onSheetUp = () => {
+    if (orbit) {
+      const o = orbitDir();
+      const name = orbit.name;
+      orbit = undefined;
+      if (!dragged || !o) return setOrbitDir(undefined);
+      ui.setDrawingSel(asElement(name));
+      void Promise.resolve(upd2((x) => (x.viewDirs = { ...(x.viewDirs ?? {}), [name]: o.dir }))).finally(() => setOrbitDir(undefined));
+      return;
+    }
+    const g = dragAt();
+    const was = drag;
+    drag = undefined;
+    if (!was || !dragged || !g) return;
+    const id = ui.activeDrawing();
+    ui.setDrawingSel({ kind: "view", view: g.view as ViewName });
+    if (id === undefined) return setDragAt(undefined);
+    // La vista queda donde se soltó hasta que llega el documento nuevo
+    void Promise.resolve(store.commit((doc) => void updateDrawing(doc, id, (x) => (x.viewAt = { ...(x.viewAt ?? {}), [g.view]: g.at })))).finally(() => setDragAt(undefined));
+  };
+  /** Avisos de las vistas puestas a mano (se salen de la hoja, pisan otra) */
+  const problems = createMemo(() => {
+    const r = result();
+    const names: Record<string, string> = { ...VIEW_LABELS, ...Object.fromEntries((d()?.customViews ?? []).map((c) => [customViewName(c.id), c.name])) };
+    return r ? placementProblems(r.placed, sheet(), names) : [];
+  });
+
+  /**
+   * Vista previa del giro: las aristas del sólido (del visor, sin ocultar)
+   * vistas desde la dirección del momento, donde está la vista en la hoja
+   */
+  const orbitPreview = createMemo(() => {
+    const o = orbitDir();
+    const v = o && result()?.placed.find((p) => p.name === o.name && !p.detail);
+    const m = store.mesh();
+    const info = ui.viewer();
+    if (!o || !v || !m || !info) return "";
+    const k = info.mmPerUnit();
+    const lines: P3[][] = [];
+    let start = 0;
+    for (const end of m.edgeEnds ?? []) {
+      const poly: P3[] = [];
+      for (let i = start; i < end; i++) {
+        const [x, y, z] = m.edgePoints.subarray(i * 3, i * 3 + 3);
+        poly.push([x * k, -z * k, y * k]);
+      }
+      lines.push(poly);
+      start = end;
+    }
+    // Centrada donde estaba la vista (su caja de antes)
+    const pre = projectPolylines(lines, o.dir);
+    const b0 = bounds(v.lines);
+    const b1 = bounds(pre.map((points) => ({ kind: "visible" as const, points })));
+    const [cx0, cy0] = [(b0.min[0] + b0.max[0]) / 2, (b0.min[1] + b0.max[1]) / 2];
+    const [cx1, cy1] = [(b1.min[0] + b1.max[0]) / 2, (b1.min[1] + b1.max[1]) / 2];
+    return pre.map((l) => l.map((p) => `${(v.x + (p[0] - cx1 + cx0) * v.scale).toFixed(2)},${(v.y - (p[1] - cy1 + cy0) * v.scale).toFixed(2)}`).join(" ")).join("|");
+  });
 
   // Esc suelta la herramienta o lo elegido; Supr borra lo elegido (si se puede)
   const onKey = (e: KeyboardEvent) => {
@@ -411,6 +564,15 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         <span class="text-xs font-semibold text-text" data-drawing-name>
           {d()?.name ?? "Plano"}
         </span>
+        <button
+          class="px-1.5 py-0.5 rounded text-[11px] text-text hover:bg-surface border border-border"
+          data-sheet-scale
+          title={d()?.scale ? "Escala fija de la hoja (se cambia en Hoja)" : "Automática: la mayor normalizada con la que todo entra; con más vistas baja. Para que no cambie, fijarla en Hoja"}
+          onClick={() => ui.setDrawingSel({ kind: "sheet" })}
+        >
+          Escala {result() ? scaleLabel(result()!.scale) : "…"}
+          {d()?.scale ? "" : " (auto)"}
+        </button>
         <div class="flex items-center gap-0.5" role="radiogroup" aria-label="Herramienta de cotas">
           {toolButton("dim", "Cota", "Clic en una recta (largo), un círculo (diámetro) o un arco (radio)")}
           {toolButton("distance", "Distancia", "Clic en dos rectas paralelas")}
@@ -432,8 +594,30 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
         <Button size="sm" variant="ghost" disabled={!svg()} title="Líneas, arcos, curvas y cotas propias sobre la hoja, con las herramientas del sketch" onClick={() => void startDrawing()}>
           Dibujar
         </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          title="Una vista más que se gira a gusto (Ctrl+arrastrar en la hoja, o con los botones de su ventana)"
+          disabled={!d()}
+          onClick={() => {
+            let id = 0;
+            void Promise.resolve(upd2((x) => void (id = addCustomView(x)))).then(() => id && ui.setDrawingSel({ kind: "custom", id }));
+          }}
+        >
+          Vista nueva
+        </Button>
         <Button size="sm" variant="ghost" title="Tamaño, escala, proyección, líneas y cajetín" onClick={() => ui.setDrawingSel({ kind: "sheet" })}>
           Hoja
+        </Button>
+        {/* Siempre en la barra (desactivado si no hay nada movido): que la barra no cambie de alto y la hoja no salte */}
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!Object.keys(d()?.viewAt ?? {}).length}
+          title="Las vistas movidas a mano vuelven a la disposición automática"
+          onClick={() => upd((x) => (x.viewAt = {}))}
+        >
+          Acomodar
         </Button>
         <div class="flex-1" />
         <Show when={busy()}>
@@ -462,10 +646,18 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           Cerrar
         </Button>
       </div>
-      <Show when={message()}>
-        <p class="px-2 py-1 text-xs text-text-muted">{message()}</p>
-      </Show>
       <div ref={areaRef} class="relative flex-1 min-h-0 overflow-auto p-4 flex items-center justify-center">
+        {/* Mensajes y avisos flotando arriba: no empujan la hoja (si no, cambia de tamaño en pantalla) */}
+        <div class="pointer-events-none absolute left-2 top-1 z-10 space-y-0.5">
+          <Show when={message()}>
+            <p class="w-fit rounded bg-bg-lighter/90 px-2 py-0.5 text-xs text-text-muted shadow">{message()}</p>
+          </Show>
+          <Show when={problems().length}>
+            <p class="w-fit rounded bg-bg-lighter/90 px-2 py-0.5 text-xs text-warning shadow" data-placement-problems>
+              {problems().join(" · ")}
+            </p>
+          </Show>
+        </div>
         <style>{highlight()}</style>
         {/* La hoja entra entera en lo que hay (ancho o alto, lo que limite), con su proporción */}
         <div
@@ -474,12 +666,40 @@ export const DrawingView: Component<{ store: CadStore; ui: CadUi }> = (props) =>
           style={sheetSize() ? { width: `${sheetSize()![0]}px`, height: `${sheetSize()![1]}px` } : { width: "100%" }}
           innerHTML={svg()}
           onClick={onSheetClick}
+          onPointerDown={onSheetDown}
+          onPointerMove={onSheetMove}
+          onPointerUp={onSheetUp}
+          onPointerCancel={() => {
+            drag = undefined;
+            orbit = undefined;
+            setDragAt(undefined);
+            setOrbitDir(undefined);
+          }}
         />
+        <Show when={orbitPreview() && sheetSize()}>
+          <svg
+            data-orbit-preview
+            class="pointer-events-none absolute"
+            style={{ width: `${sheetSize()![0]}px`, height: `${sheetSize()![1]}px` }}
+            viewBox={`0 0 ${sheet().width} ${sheet().height}`}
+          >
+            <For each={orbitPreview().split("|")}>{(pts) => <polyline points={pts} fill="none" stroke={themeColor("accent")} stroke-width="0.35" />}</For>
+          </svg>
+        </Show>
         <Show when={d() && sel()}>
           <ElementWindow
             sheet={d()!}
             element={sel()!}
             scale={result()?.scale ?? 1}
+            placed={(() => {
+              const name = viewNameOf(sel());
+              return name ? result()?.placed.find((p) => p.name === name && !p.detail) : undefined;
+            })()}
+            cameraDir={() => {
+              const pose = ui.viewer()?.cameraPose();
+              return pose ? viewDirFromCamera(pose) : undefined;
+            }}
+            height={sheet().height}
             dimValue={(i) => {
               const r = result();
               const x = r && userDimensions(r.placed, d()!.dims).find((y) => y.index === i);
@@ -506,6 +726,11 @@ const ElementWindow: Component<{
   sheet: DrawingSheet;
   element: DrawingElement;
   scale: number;
+  /** La vista elegida como está en la hoja (para su posición) */
+  placed?: Placed;
+  height: number;
+  /** Desde dónde mira la cámara del visor de Diseñar */
+  cameraDir: () => ViewDir | undefined;
   dimValue: (index: number) => string | undefined;
   update: (change: (s: DrawingSheet) => void) => void;
   close: () => void;
@@ -619,9 +844,59 @@ const ElementWindow: Component<{
             {row("Título", <input aria-label="Título del plano" class={input} value={props.sheet.title} onChange={(e) => props.update((s) => (s.title = e.currentTarget.value))} />)}
             {row("Autor", <input aria-label="Autor" placeholder="Autor" class={input} value={props.sheet.author} onChange={(e) => props.update((s) => (s.author = e.currentTarget.value))} />)}
           </Match>
-          <Match when={el().kind === "view" && (el() as { view: ViewName }).view}>
+          <Match when={(() => { const x = el(); return x.kind === "view" ? x.view : x.kind === "custom" ? customViewName(x.id) : undefined; })()}>
             {(view) => (
               <>
+                <Show when={el().kind === "custom" && (el() as { id: number }).id}>
+                  {(id) =>
+                    row(
+                      "Nombre",
+                      <input
+                        aria-label="Nombre de la vista"
+                        class={input}
+                        value={props.sheet.customViews?.find((c) => c.id === id())?.name ?? ""}
+                        onChange={(e) => {
+                          const v = e.currentTarget.value.trim();
+                          if (v) props.update((s) => (s.customViews = (s.customViews ?? []).map((c) => (c.id === id() ? { ...c, name: v } : c))));
+                        }}
+                      />,
+                    )
+                  }
+                </Show>
+                <Show when={view() === "iso" || el().kind === "custom"}>
+                  {(() => {
+                    const dir = () => viewDirOf(props.sheet, view())!;
+                    const setDir = (d: ViewDir) => props.update((s) => (s.viewDirs = { ...(s.viewDirs ?? {}), [view()]: d }));
+                    const turn = (label: string, tip: string, h: number, v: number, r: number) => (
+                      <button class="px-1.5 py-0.5 rounded text-[11px] text-text-muted hover:text-text hover:bg-surface border border-border" title={tip} onClick={() => setDir(rotateViewDir(dir(), h, v, r))}>
+                        {label}
+                      </button>
+                    );
+                    return (
+                      <div class="space-y-1" aria-label="Girar la vista">
+                        <div class="flex items-center justify-between text-[11px] text-text-muted">
+                          <span>Girar</span>
+                          <span class="flex gap-0.5">
+                            {turn("←", "La pieza gira 90° a la izquierda", -90, 0, 0)}
+                            {turn("→", "La pieza gira 90° a la derecha", 90, 0, 0)}
+                            {turn("↑", "Se inclina 90° hacia atrás", 0, -90, 0)}
+                            {turn("↓", "Se inclina 90° hacia quien mira", 0, 90, 0)}
+                            {turn("⟲", "Gira 90° en el plano de la hoja", 0, 0, 90)}
+                          </span>
+                        </div>
+                        <div class="flex gap-1">
+                          <Button size="sm" variant="ghost" title="Como la mira ahora la cámara del visor de Diseñar" onClick={() => { const c = props.cameraDir(); if (c) setDir(c); }}>
+                            Tomar la del visor
+                          </Button>
+                          <Button size="sm" variant="ghost" title="Isométrica de siempre" onClick={() => setDir(viewSpec("iso"))}>
+                            Isométrica
+                          </Button>
+                        </div>
+                        <p class="text-[11px] text-text-dim">En la hoja: Ctrl+arrastrar la gira.</p>
+                      </div>
+                    );
+                  })()}
+                </Show>
                 {row(
                   "Escala",
                   <div class="w-28">
@@ -633,6 +908,61 @@ const ElementWindow: Component<{
                   </div>,
                 )}
                 <p class="text-[11px] text-text-dim">Con otra escala que la de la hoja, la vista lleva su rótulo debajo.</p>
+                <Show when={props.placed}>
+                  {(v) => {
+                    // Centro de la vista en mm de hoja desde la esquina de abajo a la izquierda
+                    const center = () => {
+                      const b = sheetBox(v());
+                      return [(b[0] + b[2]) / 2, props.height - (b[1] + b[3]) / 2] as P2;
+                    };
+                    const moveTo = (axis: 0 | 1, value: number) => {
+                      const c = center();
+                      const at: [number, number] = axis === 0 ? [v().x + value - c[0], v().y] : [v().x, v().y - (value - c[1])];
+                      props.update((s) => (s.viewAt = { ...(s.viewAt ?? {}), [view()]: at }));
+                    };
+                    const coord = (axis: 0 | 1) => (
+                      <input
+                        aria-label={`Posición ${axis === 0 ? "X" : "Y"} de la vista`}
+                        type="number"
+                        step="1"
+                        class="w-16 px-1 py-0.5 rounded bg-surface/40 border border-border text-xs text-text outline-none focus:border-accent"
+                        value={Math.round(center()[axis] * 10) / 10}
+                        onChange={(e) => {
+                          const n = num(e.currentTarget.value);
+                          if (isFinite(n)) moveTo(axis, n);
+                        }}
+                      />
+                    );
+                    return (
+                      <>
+                        <label class="flex items-center justify-between gap-2 text-[11px] text-text-muted">
+                          <span>Centro (mm)</span>
+                          <span class="flex gap-1">
+                            {coord(0)}
+                            {coord(1)}
+                          </span>
+                        </label>
+                        <p class="text-[11px] text-text-dim">Se arrastra en la hoja (alineada con el frente; Mayús o Alt, libre).</p>
+                        <Show when={props.sheet.viewAt?.[view()]}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            fullWidth
+                            onClick={() =>
+                              props.update((s) => {
+                                const next = { ...(s.viewAt ?? {}) };
+                                delete next[view()];
+                                s.viewAt = next;
+                              })
+                            }
+                          >
+                            Volver a su lugar
+                          </Button>
+                        </Show>
+                      </>
+                    );
+                  }}
+                </Show>
               </>
             )}
           </Match>

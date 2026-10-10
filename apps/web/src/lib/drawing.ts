@@ -63,6 +63,75 @@ export function viewSpec(name: ViewName, _projection?: Projection): { eye: P3; x
   }
 }
 
+/**
+ * Vista en 3D (la isométrica y las nuevas, giradas a gusto): sin ocultas, sin
+ * cotas generales ni a mano (lo que se ve está acortado, no mide la pieza)
+ */
+export const isPictorial = (name: string) => name === "iso" || name.startsWith("vista-");
+
+/** Desde dónde se mira una vista (hacia quien mira) y la derecha de la hoja (CAD, Z arriba) */
+export interface ViewDir {
+  eye: P3;
+  xdir: P3;
+}
+
+const cross3 = (a: P3, b: P3): P3 => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const dot3 = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const unit3 = (a: P3): P3 => {
+  const l = Math.hypot(...a) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
+/** Gira `v` alrededor del eje unitario `k` (Rodrigues) */
+function rotate3(v: P3, k: P3, rad: number): P3 {
+  const [c, s] = [Math.cos(rad), Math.sin(rad)];
+  const kv = cross3(k, v);
+  const d = dot3(k, v) * (1 - c);
+  return [v[0] * c + kv[0] * s + k[0] * d, v[1] * c + kv[1] * s + k[1] * d, v[2] * c + kv[2] * s + k[2] * d];
+}
+
+/** Arriba de la hoja en esa vista (eye × xdir, como `gp_Ax2`) */
+export const viewUp = (d: ViewDir): P3 => unit3(cross3(d.eye, d.xdir));
+
+/**
+ * Gira la pieza en la vista: `horizontal` grados alrededor del arriba de la
+ * hoja (la pieza gira a la derecha con positivo), `vertical` alrededor de la
+ * derecha (se inclina hacia quien mira) y `roll` en el plano de la hoja
+ * (antihorario). Devuelve ejes ortonormales.
+ */
+export function rotateViewDir(d: ViewDir, horizontal: number, vertical = 0, roll = 0): ViewDir {
+  const r = Math.PI / 180;
+  let { eye, xdir } = d;
+  // Girar la pieza a la derecha = mover el ojo al revés
+  const up = viewUp(d);
+  eye = rotate3(eye, up, -horizontal * r);
+  xdir = rotate3(xdir, up, -horizontal * r);
+  const right = unit3(xdir);
+  eye = rotate3(eye, right, vertical * r);
+  eye = unit3(eye);
+  xdir = rotate3(xdir, eye, roll * r);
+  // Reortogonalizar: la derecha perpendicular al ojo
+  xdir = unit3([xdir[0] - eye[0] * dot3(xdir, eye), xdir[1] - eye[1] * dot3(xdir, eye), xdir[2] - eye[2] * dot3(xdir, eye)]);
+  const round = (v: P3): P3 => v.map((x) => (Math.abs(x) < 1e-12 ? 0 : Math.round(x * 1e12) / 1e12)) as P3;
+  return { eye: round(eye), xdir: round(xdir) };
+}
+
+/**
+ * La vista de una cámara del visor (posición, objetivo y arriba en el visor:
+ * Y arriba, (x, y, z) del CAD = (x, −z, y) del visor)
+ */
+export function viewDirFromCamera(pose: { position: P3; target: P3; up: P3 }): ViewDir {
+  const toCad = (v: P3): P3 => [v[0], -v[2], v[1]];
+  const eye = unit3(toCad([pose.position[0] - pose.target[0], pose.position[1] - pose.target[1], pose.position[2] - pose.target[2]]));
+  const up = unit3(toCad(pose.up));
+  return { eye, xdir: unit3(cross3(up, eye)) };
+}
+
+/** Polilíneas del CAD (mm) vistas desde `d`, en coordenadas de la vista (sin ocultar: para la vista previa al girar) */
+export function projectPolylines(lines: P3[][], d: ViewDir): P2[][] {
+  const up = viewUp(d);
+  return lines.map((l) => l.map((p): P2 => [dot3(p, d.xdir), dot3(p, up)]));
+}
+
 /** Primer diedro (ISO, Europa y Latinoamérica) o tercer diedro (ANSI) */
 export type Projection = "first" | "third";
 
@@ -129,6 +198,8 @@ export interface Placed {
   detail?: Detail;
   /** Rótulo bajo la vista (con escala propia: «Frente (1:2)») */
   label?: string;
+  /** Puesta a mano (no sigue a la disposición automática) */
+  moved?: boolean;
 }
 
 /**
@@ -175,6 +246,8 @@ export function layout(
   fixedScale?: number,
   hatch?: Partial<Record<ViewName, [P2, P2, P2][]>>,
   viewScales?: Partial<Record<ViewName, number | null>>,
+  /** Vistas puestas a mano: dónde va su origen en la hoja (como `Placed.x`, `Placed.y`) */
+  viewAt?: Partial<Record<string, P2>>,
 ): { placed: Placed[]; scale: number } {
   const b = Object.fromEntries(Object.entries(views).map(([k, v]) => [k, bounds(v!)])) as Record<ViewName, Bounds>;
   // Tamaño de cada vista en la hoja dividido por la escala de la hoja: las de
@@ -234,9 +307,74 @@ export function layout(
     x += sz(n)[0] * scale + GAP;
   }
   if (views.iso) put("iso", x, top, sz("iso")[0] * scale);
+  // Las puestas a mano, donde las dejaron
+  for (const [name, p] of out) {
+    const at = viewAt?.[name];
+    if (at) out.set(name, { ...p, x: at[0], y: at[1], moved: true });
+  }
   // En el orden de siempre (frente, superior, inferior, laterales, posterior, isométrica)
   const order: ViewName[] = ["front", "top", "bottom", "left", "right", "back", "iso"];
   return { placed: order.flatMap((n) => (out.has(n) ? [out.get(n)!] : [])), scale };
+}
+
+/**
+ * Vistas de más (las nuevas, giradas a gusto): en una columna a la derecha de
+ * todo, con su nombre debajo (y la escala si es propia). Las puestas a mano,
+ * donde se dejaron.
+ */
+export function placeExtraViews(
+  placed: Placed[],
+  extras: { name: string; title: string; lines: DrawingLine[]; scale?: number | null }[],
+  sheetScale: number,
+  viewAt?: Partial<Record<string, P2>>,
+): Placed[] {
+  const right = Math.max(MARGIN + GAP, ...placed.filter((v) => v.lines.length).map((v) => sheetBox(v)[2] + GAP));
+  let y = MARGIN + GAP;
+  return extras.flatMap((e) => {
+    if (!e.lines.length) return [];
+    const k = e.scale ?? sheetScale;
+    const b = bounds(e.lines);
+    const label = `${e.title}${e.scale && e.scale !== sheetScale ? ` (${scaleLabel(k)})` : ""}`;
+    const v: Placed = { name: e.name, scale: k, lines: e.lines, x: right - b.min[0] * k, y: y + b.max[1] * k, label };
+    y += (b.max[1] - b.min[1]) * k + GAP + 6;
+    const at = viewAt?.[e.name];
+    return [at ? { ...v, x: at[0], y: at[1], moved: true } : v];
+  });
+}
+
+/**
+ * Hacia dónde se corre una vista arrastrada sin perder la alineación con el
+ * frente: las de la fila del frente en horizontal, las de su columna en
+ * vertical; el frente y la isométrica, libres.
+ */
+export function dragAxis(name: string, projection: Projection): "x" | "y" | "free" {
+  const { above, below, leftOf, rightOf } = viewSlots(projection);
+  if (name === above || name === below) return "y";
+  if (name === leftOf || name === rightOf || name === "back") return "x";
+  return "free";
+}
+
+/** Caja de una vista en la hoja (mm, Y hacia abajo): [x0, y0, x1, y1] */
+export function sheetBox(v: Placed): [number, number, number, number] {
+  const b = bounds(v.lines);
+  return [v.x + b.min[0] * v.scale, v.y - b.max[1] * v.scale, v.x + b.max[0] * v.scale, v.y - b.min[1] * v.scale];
+}
+
+/** Avisos de las vistas puestas a mano: fuera del recuadro, sobre el cajetín o encima de otra */
+export function placementProblems(placed: Placed[], sheet: SheetSize, labels: Record<string, string> = {}): string[] {
+  const out: string[] = [];
+  const name = (v: Placed) => labels[v.name] ?? v.name;
+  const boxes = placed.filter((v) => !v.detail && v.lines.length).map((v) => ({ v, b: sheetBox(v) }));
+  const hit = (a: number[], b: number[]) => a[0] < b[2] && a[2] > b[0] && a[1] < b[3] && a[3] > b[1];
+  const title = [sheet.width - MARGIN - TITLE_W, sheet.height - MARGIN - TITLE_H, sheet.width - MARGIN, sheet.height - MARGIN];
+  for (const { v, b } of boxes) {
+    if (!v.moved) continue;
+    if (b[0] < MARGIN || b[1] < MARGIN || b[2] > sheet.width - MARGIN || b[3] > sheet.height - MARGIN) out.push(`${name(v)} se sale de la hoja`);
+    else if (hit(b, title)) out.push(`${name(v)} pisa el cajetín`);
+    const other = boxes.find((o) => o.v !== v && hit(b, o.b));
+    if (other) out.push(`${name(v)} pisa ${name(other.v)}`);
+  }
+  return out;
 }
 
 export interface TitleBlock {
@@ -595,7 +733,8 @@ export function placeDetails(placed: Placed[], details: Detail[], sheet: SheetSi
 export function overallDimensions(placed: Placed[]): Dimension[] {
   const dims: Dimension[] = [];
   for (const v of placed) {
-    if (v.name === "iso" || v.detail) continue;
+    // Las vistas 3D (isométrica y las nuevas, giradas) no llevan ancho y alto: no son medidas de la pieza
+    if (isPictorial(v.name) || v.detail) continue;
     const b = bounds(v.lines);
     const [x0, x1] = [v.x + b.min[0] * v.scale, v.x + b.max[0] * v.scale];
     const [yTop, yBot] = [v.y - b.max[1] * v.scale, v.y - b.min[1] * v.scale];
@@ -740,7 +879,7 @@ export function sheetSvg(
     out.push(`<g data-view="${v.name}" fill="none" stroke-linecap="round" stroke-linejoin="round">`);
     for (const l of v.lines) {
       // La isométrica va sin ocultas (como se acostumbra)
-      if ((!opts.hidden || v.name === "iso") && (l.kind === "hidden" || l.kind === "hidden_outline")) continue;
+      if ((!opts.hidden || isPictorial(v.name)) && (l.kind === "hidden" || l.kind === "hidden_outline")) continue;
       if (!opts.smooth && l.kind === "smooth") continue;
       const pts = l.points.map((p) => `${n(v.x + p[0] * v.scale)},${n(v.y - p[1] * v.scale)}`).join(" ");
       out.push(`<polyline data-kind="${l.kind}" points="${pts}" ${STYLE[l.kind]}/>`);
@@ -916,7 +1055,7 @@ export function sheetDxf(
       const at = (p: P2): P2 => (opts.view ? p : [v.x + p[0] * v.scale, sheet.height - (v.y - p[1] * v.scale)]);
       for (const l of v.lines) {
         const hidden = l.kind === "hidden" || l.kind === "hidden_outline";
-        if (hidden && (!opts.hidden || v.name === "iso")) continue;
+        if (hidden && (!opts.hidden || isPictorial(v.name))) continue;
         if (l.kind === "smooth" && !opts.smooth) continue;
         const layer = hidden ? "OCULTA" : l.kind === "smooth" ? "TANGENTE" : "VISIBLE";
         for (let i = 0; i + 1 < l.points.length; i++) line(layer, at(l.points[i]), at(l.points[i + 1]));

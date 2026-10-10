@@ -2,7 +2,7 @@
 //   node --test apps/web/e2e/drawing.test.mjs
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
+import { dragAxis, placementProblems, placeExtraViews, projectPolylines, rotateViewDir, viewDirFromCamera, viewUp, layout, sheetSvg, sheetDxf, sheetLayerLines, overallDimensions, userDimensions, SHEETS, viewSpec, scaleLabel, bounds } from "../src/lib/drawing.ts";
 
 /** Rectángulo de w × h (como lo devuelve la proyección) */
 const rect = (w, h) => [
@@ -304,4 +304,65 @@ test("escala propia de una vista: ocupa lo suyo y lleva su rótulo debajo", () =
   const auto = layout({ front: rect(40, 10), left: rect(20, 10) }, SHEETS[0], "first", undefined, undefined, { left: 10 });
   assert.equal(auto.placed.find((p) => p.name === "left").scale, 10);
   assert.ok(auto.scale < layout({ front: rect(40, 10), left: rect(20, 10) }, SHEETS[0], "first").scale, "deja lugar a la ampliada");
+});
+
+test("vistas puestas a mano: van donde se dejaron, se arrastran alineadas y avisan si se salen o pisan", () => {
+  const views = { front: rect(40, 10), top: rect(40, 20), left: rect(20, 10) };
+  const auto = layout(views, SHEETS[1], "first", 1).placed;
+  const moved = layout(views, SHEETS[1], "first", 1, undefined, undefined, { left: [300, 100] }).placed;
+  const L = (pl) => pl.find((p) => p.name === "left");
+  assert.deepEqual([L(moved).x, L(moved).y, L(moved).moved], [300, 100, true]);
+  assert.equal(L(auto).moved, undefined);
+  assert.deepEqual(moved.find((p) => p.name === "front"), auto.find((p) => p.name === "front"), "las otras siguen en su lugar");
+  // Primer diedro: la superior va en la columna (vertical), la izquierda en la fila (horizontal)
+  assert.equal(dragAxis("top", "first"), "y");
+  assert.equal(dragAxis("left", "first"), "x");
+  assert.equal(dragAxis("back", "third"), "x");
+  assert.equal(dragAxis("front", "first"), "free");
+  assert.deepEqual(placementProblems(auto, SHEETS[1]), [], "lo automático no avisa");
+  const out = layout(views, SHEETS[1], "first", 1, undefined, undefined, { left: [500, 100] }).placed;
+  assert.match(placementProblems(out, SHEETS[1], { left: "Lateral izquierda" })[0], /Lateral izquierda se sale de la hoja/);
+  const front = auto.find((p) => p.name === "front");
+  const onTop = layout(views, SHEETS[1], "first", 1, undefined, undefined, { left: [front.x + 5, front.y] }).placed;
+  assert.ok(placementProblems(onTop, SHEETS[1]).some((m) => m.includes("pisa front")));
+});
+
+test("girar una vista: a la derecha se ve el costado izquierdo, hacia abajo se ve desde arriba, en el plano gira la hoja", () => {
+  const front = viewSpec("front");
+  const r = rotateViewDir(front, 90);
+  assert.deepEqual(r.eye, viewSpec("left").eye, "la pieza gira a la derecha: queda adelante su costado izquierdo");
+  assert.deepEqual(viewUp(r), [0, 0, 1]);
+  const down = rotateViewDir(front, 0, -90);
+  assert.deepEqual(down.eye, [0, 0, 1], "inclinada hacia atrás: se la ve desde arriba");
+  assert.deepEqual(rotateViewDir(front, 0, 90).eye, [0, 0, -1]);
+  const roll = rotateViewDir(front, 0, 0, 90);
+  assert.deepEqual(roll.eye, front.eye);
+  assert.deepEqual(viewUp(roll), [-1, 0, 0]);
+  // Cuatro giros de 90° vuelven al comienzo; siempre ortonormal
+  let q = viewSpec("iso");
+  for (let i = 0; i < 4; i++) q = rotateViewDir(q, 90);
+  for (let i = 0; i < 3; i++) assert.ok(Math.abs(q.eye[i] - viewSpec("iso").eye[i]) < 1e-9);
+  const odd = rotateViewDir(viewSpec("iso"), 17, 33, 5);
+  const dot = odd.eye[0] * odd.xdir[0] + odd.eye[1] * odd.xdir[1] + odd.eye[2] * odd.xdir[2];
+  assert.ok(Math.abs(dot) < 1e-9 && Math.abs(Math.hypot(...odd.eye) - 1) < 1e-9);
+});
+
+test("la vista de la cámara del visor (Y arriba) pasada al CAD (Z arriba)", () => {
+  // Cámara delante de la pieza (−Y del CAD = +Z del visor), mirando al origen, arriba +Y del visor
+  const d = viewDirFromCamera({ position: [0, 0, 5], target: [0, 0, 0], up: [0, 1, 0] });
+  assert.deepEqual(d.eye.map((x) => x + 0), [0, -1, 0]);
+  assert.deepEqual(d.xdir.map((x) => x + 0), [1, 0, 0]);
+  // Lo proyectado con esa dirección: x a la derecha, z arriba
+  assert.deepEqual(projectPolylines([[[3, 7, 2]]], d)[0][0], [3, 2]);
+});
+
+test("vistas nuevas: en una columna a la derecha de todo, con su nombre (y la escala si es propia)", () => {
+  const { placed, scale } = layout({ front: rect(40, 10), top: rect(40, 20) }, SHEETS[1], "first", 1);
+  const extra = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }, { name: "vista-2", title: "Detrás", lines: rect(10, 10), scale: 2 }], scale);
+  const right = Math.max(...placed.map((v) => v.x + 40 * v.scale));
+  assert.ok(extra[0].x > right && extra[1].x === extra[0].x, "a la derecha, en columna");
+  assert.ok(extra[1].y > extra[0].y);
+  assert.deepEqual(extra.map((v) => v.label), ["Vista 1", "Detrás (2:1)"]);
+  const moved = placeExtraViews(placed, [{ name: "vista-1", title: "Vista 1", lines: rect(30, 30) }], scale, { "vista-1": [10, 20] });
+  assert.deepEqual([moved[0].x, moved[0].y, moved[0].moved], [10, 20, true]);
 });

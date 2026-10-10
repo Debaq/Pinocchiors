@@ -495,7 +495,8 @@ export const CadView: Component<CadViewProps> = (props) => {
   // Cotas que se piden al terminar una forma, en orden (índices de restricciones)
   const [dimQueue, setDimQueue] = createSignal<number[]>([]);
   /** Pide las cotas recién creadas: la primera queda en edición */
-  const askDims = (indices: number[]) => {
+  const askDims = (all: number[]) => {
+    const indices = all.filter((i) => i >= 0);
     setDimQueue(indices.slice(1));
     setEditingDim(indices[0]);
   };
@@ -542,6 +543,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   onMount(async () => {
     viewer = new CadViewer(container);
     viewer.onRender = () => setViewTick((t) => t + 1);
+    // El plano 2D usa la cámara («tomar la vista del visor») y la escala del visor
+    const v = viewer;
+    ui.registerViewer({ cameraPose: () => v.cameraPose(), mmPerUnit: () => v.mmPerUnit });
+    onCleanup(() => ui.registerViewer(undefined));
     // Para las pruebas en navegador (scratch de desarrollo)
     if (import.meta.env.DEV) Object.assign(window, { __cadViewer: viewer, __cadStore: store, __cadUi: ui });
     try {
@@ -1188,7 +1193,10 @@ export const CadView: Component<CadViewProps> = (props) => {
   };
 
   /** Agrega una cota y devuelve su índice */
+  // Sobre la hoja del plano lo dibujado no lleva cotas solas (anota, no define
+  // la pieza; las cotas se ponen a mano y salen en la hoja)
   const dim = (sk: Sketch, c: SketchConstraint): number => {
+    if (ui.session()?.sheet) return -1;
     sk.constraints.push(c);
     return sk.constraints.length - 1;
   };
