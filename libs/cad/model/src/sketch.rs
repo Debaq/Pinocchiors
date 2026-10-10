@@ -439,6 +439,10 @@ pub struct Sketch {
     /// Imágenes de calco (solo se ven al dibujar).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<SketchImage>,
+    /// Patrones que se pueden volver a editar (cantidad, separación, copias
+    /// omitidas): los arma y rehace la interfaz; acá solo se guardan.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<serde_json::Value>,
 }
 
 /// Capa del sketch.

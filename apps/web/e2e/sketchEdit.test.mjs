@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { addEntity, addPoint, addRectangle, extendAt, filletCorner } from "../src/lib/cad.ts";
 import { checkSketch } from "../src/lib/sketchCheck.ts";
-import { trimRemoved, splitEqual, chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
+import { mergeOverlaps, trimRemoved, splitEqual, chamferCorner, closeContour, joinEntities, mergePoint, offsetChain, orderChain, removeDuplicates, repairSketch, trimByStroke } from "../src/lib/sketchEdit.ts";
 
 function sketch() {
   return { origin: 0, points: [{ id: 0, x: 0, y: 0 }], entities: [], constraints: [] };
@@ -342,4 +342,71 @@ test("lo que se quitaría al recortar: el tramo entre los cruces más cercanos a
   // En la punta: de 0 al primer cruce
   const end = trimRemoved(s, l, [3, 0]);
   assert.ok(Math.max(...end[0].map((p) => p[0])) < 10.5 && Math.min(...end[0].map((p) => p[0])) < 0.5);
+});
+
+test("duplicados parciales: dos líneas que se pisan pasan a ser una de punta a punta", () => {
+  const s = sketch();
+  const a = line(s, [0, 0], [10, 0]);
+  const b = line(s, [6, 0], [16, 0]);
+  s.constraints.push({ type: "horizontal", line: a }, { type: "horizontal", line: b }, { type: "length", line: b, value: 10 });
+  // Una vertical que nace en el medio de la segunda (en x=6): su punto queda sobre la línea
+  const v = addEntity(s, { type: "line", start: s.entities.find((e) => e.id === b).geometry.start, end: addPoint(s, [6, 5]) });
+  assert.equal(mergeOverlaps(s), 1);
+  const lines = s.entities.filter((e) => e.geometry.type === "line");
+  assert.equal(lines.length, 2);
+  assert.deepEqual(ends(s, a).map((p) => p[0]).sort((x, y) => x - y), [0, 16]);
+  assert.equal(s.constraints.filter((k) => k.type === "horizontal").length, 1);
+  assert.ok(!s.constraints.some((k) => k.type === "length"));
+  const foot = s.entities.find((e) => e.id === v).geometry.start;
+  assert.ok(s.constraints.some((k) => k.type === "point_on_line" && k.point === foot && k.line === a));
+});
+
+test("duplicados parciales: arcos del mismo círculo se juntan (y si dan la vuelta, círculo)", () => {
+  const s = sketch();
+  const c = addPoint(s, [0, 0]);
+  const arc = (p, q) => addEntity(s, { type: "arc", center: c, start: addPoint(s, p), end: addPoint(s, q) });
+  const a = arc([10, 0], [0, 10]);
+  arc([7.0710678118654755, 7.0710678118654755], [-10, 0]);
+  assert.equal(mergeOverlaps(s), 1);
+  const g = s.entities.find((e) => e.id === a).geometry;
+  assert.deepEqual([at(s, g.start), at(s, g.end)].map((p) => p.map(Math.round)), [[10, 0], [-10, 0]]);
+  // Otro de 170° a 10° por abajo: se pisa con las dos puntas del de arriba, la vuelta entera
+  const deg = (d) => [10 * Math.cos((d * Math.PI) / 180), 10 * Math.sin((d * Math.PI) / 180)];
+  arc(deg(170), deg(10));
+  assert.equal(mergeOverlaps(s), 1);
+  assert.deepEqual(s.entities.filter((e) => e.geometry.type !== "point").map((e) => e.geometry.type), ["circle"]);
+});
+
+test("reparar junta un punto suelto con el extremo que tiene encima", () => {
+  const s = sketch();
+  const l = line(s, [0, 0], [10, 0]);
+  const q = addPoint(s, [10.01, 0]);
+  addEntity(s, { type: "point", point: q });
+  s.constraints.push({ type: "fixed", point: q, x: 10.01, y: 0 });
+  const r = repairSketch(s, 0.05);
+  assert.equal(r.points, 1);
+  assert.ok(!s.entities.some((e) => e.geometry.type === "point"));
+  // Lo que nombraba al punto suelto pasa al extremo
+  const end = s.entities.find((e) => e.id === l).geometry.end;
+  assert.ok(s.constraints.some((k) => k.type === "fixed" && k.point === end));
+});
+
+test("equidistante: una muesca angosta no deja la equidistante cruzada consigo misma", () => {
+  // Rectángulo con una muesca de 1 mm arriba; a 2 mm, por afuera la muesca desaparece
+  const ring = [[0, 0], [20, 0], [20, 10], [10.5, 10], [10.5, 9], [9.5, 9], [9.5, 10], [0, 10]];
+  for (const d of [2, -2]) {
+    const s = sketch();
+    const ids = ring.map((p) => addPoint(s, p));
+    const lines = ids.map((id, i) => addEntity(s, { type: "line", start: id, end: ids[(i + 1) % ids.length] }));
+    const r = offsetChain(s, lines, d);
+    assert.equal(typeof r, "object", String(r));
+    // Solo lo nuevo, para revisarlo
+    const only = { ...s, entities: s.entities.filter((e) => r.entities.includes(e.id)) };
+    const p = checkSketch(only);
+    assert.equal(p.crossings.length + p.looseEnds.length + p.overlaps.length, 0, `d=${d}: ${JSON.stringify(p)}`);
+    for (const e of only.entities) if (e.geometry.type === "line") assert.ok(Math.hypot(...[0, 1].map((k) => at(s, e.geometry.end)[k] - at(s, e.geometry.start)[k])) > 1e-6, "una línea sin largo");
+    // Todo lo nuevo queda a la distancia o más lejos del original
+    const ys = only.entities.flatMap((e) => [at(s, e.geometry.start)[1], at(s, e.geometry.end)[1]]);
+    if (Math.max(...ys) > 10) assert.equal(Math.max(...ys), 12);
+  }
 });

@@ -302,6 +302,29 @@ export interface Sketch {
   blocks?: SketchBlock[];
   /** Imágenes de calco (solo se ven al dibujar) */
   images?: SketchImage[];
+  /** Patrones que se pueden volver a editar (lib/sketchPatterns.ts) */
+  patterns?: SketchPatternRecord[];
+}
+
+/** Cómo se armó un patrón del sketch (para rehacerlo) */
+export type PatternSpec =
+  | { kind: "linear"; count: number; offset: P2; rows: number; offset2: P2 }
+  | { kind: "circular"; count: number; center: number; span: number; rotate: boolean }
+  | { kind: "curve"; count: number; path: number; rotate: boolean }
+  | { kind: "table"; offsets: P2[] };
+
+/**
+ * Un patrón anotado: `source` lo repetido, `owned` todo lo que armó (copias y
+ * guías), `copies` las entidades de cada copia (en el orden del original) y
+ * `skip` las copias omitidas (quedan de construcción)
+ */
+export interface SketchPatternRecord {
+  id: number;
+  spec: PatternSpec;
+  source: number[];
+  owned: number[];
+  copies: number[][];
+  skip: number[];
 }
 
 export interface SketchLayer {
@@ -1790,8 +1813,24 @@ export function mapGeometry(g: Geometry, map: (p: number) => number, flip = fals
  * igual se comparten). Los círculos copiados quedan con el mismo radio;
  * `flip` invierte los arcos (la simetría cambia el sentido).
  */
+/** Mientras corre `collectCopies`: las entidades de cada copia que se hace */
+let copyLog: number[][] | undefined;
+
+/** Corre `run` anotando las entidades de cada copia que haga (patrones, simetría…) */
+export function collectCopies<T>(run: () => T): { result: T; copies: number[][] } {
+  const outer = copyLog;
+  copyLog = [];
+  try {
+    const result = run();
+    return { result, copies: copyLog };
+  } finally {
+    copyLog = outer;
+  }
+}
+
 function copyEntities(s: Sketch, ids: number[], map: (p: number) => number, flip = false): number[] {
   const out: number[] = [];
+  copyLog?.push(out);
   for (const id of ids) {
     const e = s.entities.find((x) => x.id === id);
     if (!e) continue;

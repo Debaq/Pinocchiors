@@ -28,14 +28,11 @@ import {
   filletCorner,
   removeEntity,
   ensureOrigin,
+  geometryPoints,
   addPoint,
   addEntity,
-  circularPattern,
-  curvePattern,
   fillPattern,
-  linearPattern,
   mirrorEntities,
-  tablePattern,
   toggleSplineHandles,
   linesAt,
   offsetEntities,
@@ -105,8 +102,9 @@ import { constraintSuggestions } from "../../lib/sketchSuggest";
 import { connectedChain } from "../../lib/sketchCheck";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
 import { bsplineToThrough } from "../../lib/sketchTrim";
+import { dropPattern, editPattern, makePattern, patternAt, patternLabel, toggleSkip, type PatternSpec, type SketchPatternRecord } from "../../lib/sketchPatterns";
 import { checkSketch, problemsText, selectByKind, type SelectKind } from "../../lib/sketchCheck";
-import { chamferCorner, closeContour, joinEntities, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
+import { chamferCorner, closeContour, joinEntities, mergeOverlaps, offsetChain, orderChain, removeDuplicates, repairSketch, splitEqual, type OffsetCaps } from "../../lib/sketchEdit";
 import { GLYPHS, isDimension } from "../../lib/sketchGlyphs";
 import { sampleCurve } from "../../lib/sketchFormula";
 import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
@@ -4721,6 +4719,28 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const [fillSpacing, setFillSpacing] = createSignal(10);
   const [fillMargin, setFillMargin] = createSignal(1);
   const [fillHex, setFillHex] = createSignal(false);
+  // Patrón que se está editando (sus datos se cargaron en los campos de arriba)
+  const [editingPattern, setEditingPattern] = createSignal<number>();
+  const editing = () => sketch().patterns?.find((p) => p.id === editingPattern());
+  const selPattern = () => patternAt(sketch(), selEntities()[0]?.id);
+  /** Carga los datos del patrón en los campos para cambiarlos y rehacerlo */
+  const loadPattern = (p: SketchPatternRecord) => {
+    const sp = p.spec;
+    setPatternKind(sp.kind);
+    if (sp.kind === "table") setTableRows(sp.offsets.map((o) => [...o] as P2));
+    else setPatternCount(sp.count);
+    if (sp.kind === "linear") {
+      setPatternTotal(false);
+      setPatternStep(sp.offset);
+      setPatternRows(sp.rows);
+      setPatternStep2(sp.offset2);
+    } else if (sp.kind === "circular") {
+      setPatternAngle(sp.span);
+      setPatternRotate(sp.rotate);
+    } else if (sp.kind === "curve") setCurveRotate(sp.rotate);
+    setEditingPattern(p.id);
+    ui.setMessage("Cambiar los datos y «Rehacer el patrón»");
+  };
   // Restricciones que faltan: se piden con el botón; cambiar el sketch deja la lista vieja
   const [missing, setMissing] = createSignal<SketchSuggestion[]>();
   const [defineRelations, setDefineRelations] = createSignal(true);
@@ -4887,18 +4907,19 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
         </div>
         <div class="space-y-1.5" aria-label="Revisar el contorno">
           <Show when={problemsText(checkSketch(sketch()))}>{(t) => <p class="text-xs text-error">{t()}</p>}</Show>
+          <ProblemList ui={ui} sketch={sketch()} />
           <Num label="Tolerancia" suffix="mm" step={0.01} min={0} value={repairTol()} onCommit={setRepairTol} />
           <div class="flex flex-wrap gap-1.5">
             <Button
               size="sm"
-              title="Junta los extremos a menos de la tolerancia, quita lo más corto que ella y parte las curvas en los cruces y las T"
+              title="Junta los extremos a menos de la tolerancia, quita lo más corto que ella, parte las curvas en los cruces y las T y junta los puntos sueltos con el que tengan encima"
               onClick={() => {
                 let r: ReturnType<typeof repairSketch> | undefined;
                 ui.change((sk) => (r = repairSketch(sk, repairTol())));
-                const n = r!.joined + r!.removed + r!.split;
+                const n = r!.joined + r!.removed + r!.split + r!.points;
                 ui.setMessage(
                   n
-                    ? `Reparado: ${r!.joined} extremos juntados, ${r!.removed} entidades cortísimas quitadas, ${r!.split} cruces partidos`
+                    ? `Reparado: ${r!.joined} extremos juntados, ${r!.removed} entidades cortísimas quitadas, ${r!.split} cruces partidos, ${r!.points} puntos sueltos juntados`
                     : "No había nada que reparar con esa tolerancia",
                 );
               }}
@@ -4907,11 +4928,16 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
             </Button>
             <Button
               size="sm"
-              title="Quita las líneas, círculos y arcos repetidos (lo que las nombraba pasa a la que queda)"
+              title="Quita las líneas, círculos y arcos repetidos y junta los que se pisan en parte (lo que las nombraba pasa a la que queda)"
               onClick={() => {
                 let n = 0;
-                ui.change((sk) => (n = removeDuplicates(sk)));
-                ui.setMessage(n ? `${n} ${n === 1 ? "entidad repetida quitada" : "entidades repetidas quitadas"}` : "No hay entidades repetidas");
+                let m = 0;
+                ui.change((sk) => {
+                  n = removeDuplicates(sk);
+                  m = mergeOverlaps(sk);
+                });
+                const parts = [n && `${n} ${n === 1 ? "repetida quitada" : "repetidas quitadas"}`, m && `${m} ${m === 1 ? "encimada juntada" : "encimadas juntadas"}`].filter(Boolean);
+                ui.setMessage(parts.length ? parts.join(", ") : "No hay entidades repetidas ni encimadas");
               }}
             >
               Eliminar duplicados
@@ -5314,6 +5340,66 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                 </div>
               </Show>
               <Checkbox small label="Quitar el original (mover)" checked={mirrorMove()} onChange={setMirrorMove} />
+              <Show when={selPattern()}>
+                {(sp) => (
+                  <div class="space-y-1 rounded border border-border p-1.5" data-pattern-box>
+                    <div class="text-xs text-text-muted">
+                      {patternLabel(sp().pattern)}
+                      {sp().copy >= 0 ? ` · copia ${sp().copy + 2}` : " · el original"}
+                    </div>
+                    <div class="flex flex-wrap gap-1.5">
+                      <Button size="sm" title="Carga sus datos en los campos de abajo para cambiarlos" onClick={() => loadPattern(sp().pattern)}>
+                        Editar el patrón
+                      </Button>
+                      <Show when={sp().copy >= 0}>
+                        <Button
+                          data-preview=""
+                          size="sm"
+                          title="La copia queda de construcción (no forma regiones) y sigue así al rehacer el patrón"
+                          onClick={() => {
+                            const { pattern, copy } = sp();
+                            ui.change((sk) => void toggleSkip(sk, pattern.id, copy));
+                          }}
+                        >
+                          {sp().pattern.skip.includes(sp().copy) ? "Volver a poner la copia" : "Omitir esta copia"}
+                        </Button>
+                      </Show>
+                      <Button
+                        size="sm"
+                        title="Rehace el patrón con el original como está ahora (si se le agregó algo, las copias también lo tienen)"
+                        onClick={() => {
+                          const id = sp().pattern.id;
+                          let msg: string | undefined;
+                          ui.change((sk) => (msg = editPattern(sk, id)));
+                          ui.setMessage(msg);
+                        }}
+                      >
+                        Rehacer con el original
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Las copias quedan sueltas, con sus restricciones; el patrón ya no se puede editar"
+                        onClick={() => {
+                          const id = sp().pattern.id;
+                          ui.change((sk) => dropPattern(sk, id));
+                          if (editingPattern() === id) setEditingPattern(undefined);
+                        }}
+                      >
+                        Soltar el patrón
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </Show>
+              <Show when={editing()}>
+                <div class="flex items-center justify-between text-[11px] text-accent">
+                  Editando: {patternLabel(editing()!)}
+                  <button class="underline text-text-muted" onClick={() => setEditingPattern(undefined)}>
+                    Cancelar
+                  </button>
+                </div>
+              </Show>
               <div class="flex items-end gap-1.5">
                 <Show when={patternKind() !== "table" && patternKind() !== "fill"}>
                   <div class="flex-1">
@@ -5397,16 +5483,23 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   const n = patternCount();
                   let msg: string | undefined;
                   const kind = patternKind();
+                  const edit = editing();
                   // Con distancia total: el paso es esa distancia repartida entre las copias
                   const step: P2 = patternTotal() ? [patternStep()[0] / (n - 1), patternStep()[1] / (n - 1)] : patternStep();
-                  if (kind === "linear") ui.change((sk) => (msg = linearPattern(sk, ids, n, step, patternRows(), patternStep2())));
+                  // Lo que se arma (el relleno no queda anotado: depende de la región)
+                  let spec: PatternSpec | undefined;
+                  if (kind === "linear") spec = { kind, count: n, offset: step, rows: patternRows(), offset2: patternStep2() };
                   else if (kind === "circular") {
-                    const center = selPoints().length === 1 ? selPoints()[0] : sketch().origin;
+                    const center = edit?.spec.kind === "circular" ? edit.spec.center : selPoints().length === 1 ? selPoints()[0] : sketch().origin;
                     if (center === undefined) msg = "Elegir el punto alrededor del cual repetir";
-                    else ui.change((sk) => (msg = circularPattern(sk, ids, n, center, patternAngle(), patternRotate())));
-                  } else if (kind === "curve") ui.change((sk) => (msg = curvePattern(sk, ids, n, ids[0], curveRotate())));
-                  else if (kind === "table") ui.change((sk) => (msg = tablePattern(sk, ids, tableRows())));
-                  else {
+                    else spec = { kind, count: n, center, span: patternAngle(), rotate: patternRotate() };
+                  } else if (kind === "curve") spec = { kind, count: n, path: edit?.spec.kind === "curve" ? edit.spec.path : ids[0], rotate: curveRotate() };
+                  else if (kind === "table") spec = { kind, offsets: tableRows() };
+                  if (edit && spec) {
+                    ui.change((sk) => (msg = editPattern(sk, edit.id, spec)));
+                    if (!msg && !ui.previewing()) setEditingPattern(undefined);
+                  } else if (spec) ui.change((sk) => (msg = makePattern(sk, ids, spec!)));
+                  else if (kind === "fill") {
                     const first = ids[0];
                     const region = s().regions.find((r) => r.outer.pieces.some((p) => p.entity === first));
                     const border = new Set(region?.outer.pieces.map((p) => p.entity));
@@ -5418,7 +5511,7 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
                   if (!msg) ui.setSelection([]);
                 }}
               >
-                Repetir en patrón
+                {editing() ? "Rehacer el patrón" : "Repetir en patrón"}
               </Button>
             </div>
           </Show>
@@ -6383,3 +6476,50 @@ const SplineTools: Component<{ ui: CadUi }> = (props) => {
     </Show>
   );
 };
+
+/**
+ * Informe de la revisión del contorno, navegable: cada problema es un
+ * renglón; el clic elige lo que lo causa y centra la vista ahí.
+ */
+function ProblemList(props: { ui: CadUi; sketch: Sketch }) {
+  const ui = props.ui;
+  const items = createMemo(() => {
+    const p = checkSketch(props.sketch);
+    const name = (id: number) => {
+      const e = props.sketch.entities.find((x) => x.id === id);
+      return e ? `${ENTITY_NAMES[e.geometry.type]} ${id}` : `${id}`;
+    };
+    const center = (ids: number[]): P2 => {
+      const pts = props.sketch.points.filter((q) => ids.some((id) => geometryPoints(props.sketch.entities.find((e) => e.id === id)?.geometry ?? { type: "point", point: -1 }).includes(q.id)));
+      return pts.length ? [pts.reduce((a, q) => a + q.x, 0) / pts.length, pts.reduce((a, q) => a + q.y, 0) / pts.length] : [0, 0];
+    };
+    return [
+      ...p.looseEnds.map((x) => ({ kind: "error" as const, text: `Extremo suelto de ${name(x.entity)}`, ids: [x.entity], at: x.p })),
+      ...p.overlaps.map(([a, b]) => ({ kind: "error" as const, text: `${name(a)} y ${name(b)} encimadas`, ids: [a, b], at: center([a, b]) })),
+      ...p.crossings.map((x) => ({ kind: "info" as const, text: `${name(x.a)} cruza ${name(x.b)} sin un punto común`, ids: [x.a, x.b], at: x.p })),
+    ];
+  });
+  return (
+    <Show when={items().length}>
+      <details class="text-xs" data-problem-list>
+        <summary class="cursor-pointer text-text-muted">Ver la lista ({items().length})</summary>
+        <div class="max-h-40 overflow-auto mt-1 space-y-0.5">
+          <For each={items()}>
+            {(it) => (
+              <button
+                class={clsx("block w-full text-left px-1 py-0.5 rounded hover:bg-surface/60", it.kind === "error" ? "text-error" : "text-text-muted")}
+                data-problem={it.kind}
+                onClick={() => {
+                  ui.setSelection(it.ids);
+                  ui.viewer()?.focusSketch?.(it.at, 20);
+                }}
+              >
+                {it.text}
+              </button>
+            )}
+          </For>
+        </div>
+      </details>
+    </Show>
+  );
+}

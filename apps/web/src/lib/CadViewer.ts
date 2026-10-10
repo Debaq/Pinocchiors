@@ -87,6 +87,8 @@ export interface SketchOverlay {
   hidePoints?: boolean;
   /** Lo que impide cerrar regiones: extremos sueltos y cruces (marcas rojas) */
   problems?: P2[];
+  /** Cruces sin punto común (una × chica) */
+  crossings?: P2[];
   /** Entidades con problemas (encimadas): en rojo */
   warnEntities?: number[];
   /** Peine de curvatura de lo elegido: dientes, envolvente e inflexiones */
@@ -1252,6 +1254,13 @@ export class CadViewer {
     if (overlay.freedom) this.drawFreedom(overlay.freedom, sketch, lines);
     if (overlay.snap) marker(overlay.snap, themeHex("cyan"), 12);
     for (const p of overlay.problems ?? []) marker(p, themeHex("error"), 11);
+    if (overlay.crossings?.length) {
+      const k = this.pixelSizeMm() * 4;
+      for (const [x, y] of overlay.crossings) {
+        lines([[x - k, y - k], [x + k, y + k]], themeHex("yellow"));
+        lines([[x - k, y + k], [x + k, y - k]], themeHex("yellow"));
+      }
+    }
     for (const p of overlay.curvature?.inflections ?? []) marker(p, themeHex("purple"), 11);
 
     // Ejes del plano

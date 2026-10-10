@@ -445,6 +445,186 @@ const scenarios = {
     if (await b.eval(`!!document.querySelector("[data-conflicts]")`)) throw new Error("quedó un conflicto");
   },
 
+  async "sketch edición V: patrón que se edita y omite copias, encimadas que se juntan, lista de problemas y cruces"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const pos = (s, id) => { const q = s.points.find((p) => p.id === id); return [q.x, q.y]; };
+    const add = (shapes) =>
+      b.eval(`(() => { const made = []; window.__cadUi.change((s) => {
+        let id = Math.max(0, ...s.points.map((p) => p.id), ...s.entities.map((e) => e.id)) + 1;
+        const pt = (p) => (s.points.push({ id, x: p[0], y: p[1] }), id++);
+        for (const g of ${JSON.stringify(shapes)}) {
+          const geometry = g.type === "line" ? { type: "line", start: pt(g.a), end: pt(g.b) } : { type: "circle", center: pt(g.c), radius: g.r };
+          made.push(id);
+          s.entities.push({ id: id++, geometry, construction: false });
+        }
+        s.next_id = id;
+      }); return made; })()`);
+    const circles = (s) => s.entities.filter((e) => e.geometry.type === "circle");
+    // Patrón lineal de un círculo: 3 en total, queda anotado
+    const [c] = await add([{ type: "circle", c: [10, 30], r: 2 }]);
+    await sleep(600);
+    await b.eval(`window.__cadUi.setSelection([${c}])`);
+    await sleep(300);
+    await setInput(b, "Cantidad", 3);
+    await b.clickText("Repetir en patrón");
+    await sleep(900);
+    let s = await sk();
+    if (circles(s).length !== 3 || s.patterns?.length !== 1) throw new Error(`patrón: ${circles(s).length} círculos, ${s.patterns?.length} anotados`);
+    // Elegir una copia: aparece el patrón; editarlo a 5
+    await b.eval(`window.__cadUi.setSelection([${s.patterns[0].copies[0][0]}])`);
+    await sleep(400);
+    if (!(await b.eval(`!!document.querySelector("[data-pattern-box]")`))) throw new Error("no aparece el patrón al elegir una copia");
+    await b.clickText("Editar el patrón");
+    await sleep(300);
+    await setInput(b, "Cantidad", 5);
+    await sleep(200);
+    await b.clickText("Rehacer el patrón");
+    await sleep(900);
+    s = await sk();
+    if (circles(s).length !== 5 || s.patterns[0].copies.length !== 4) throw new Error(`rehacer: ${circles(s).length} círculos`);
+    const xs = circles(s).map((e) => pos(s, e.geometry.center)[0]).sort((a, b) => a - b);
+    const step = xs[1] - xs[0];
+    if (!(step > 1) || xs.some((x, i) => Math.abs(x - xs[0] - i * step) > 1e-3)) throw new Error(`separación: ${xs}`);
+    // Omitir la segunda copia: queda de construcción
+    const skipId = s.patterns[0].copies[1][0];
+    await b.eval(`window.__cadUi.setSelection([${skipId}])`);
+    await sleep(400);
+    await b.clickText("Omitir esta copia");
+    await sleep(800);
+    s = await sk();
+    if (!s.entities.find((e) => e.id === skipId)?.construction || JSON.stringify(s.patterns[0].skip) !== "[1]") throw new Error("no se omitió la copia");
+    // Dos líneas que se pisan en parte: «Eliminar duplicados» las junta en una
+    await add([
+      { type: "line", a: [10, 10], b: [30, 10] },
+      { type: "line", a: [20, 10], b: [40, 10] },
+    ]);
+    await sleep(600);
+    await b.clickText("Eliminar duplicados");
+    await sleep(800);
+    s = await sk();
+    const flat = s.entities.filter((e) => e.geometry.type === "line" && pos(s, e.geometry.start)[1] === 10 && pos(s, e.geometry.end)[1] === 10);
+    if (flat.length !== 1 || JSON.stringify([pos(s, flat[0].geometry.start)[0], pos(s, flat[0].geometry.end)[0]].sort((a, b) => a - b)) !== "[10,40]") throw new Error(`encimadas: ${JSON.stringify(flat.map((e) => e.geometry))}`);
+    // Una cruz sin punto común: la lista la muestra y el clic elige las dos
+    await add([
+      { type: "line", a: [50, 0], b: [70, 20] },
+      { type: "line", a: [50, 20], b: [70, 0] },
+    ]);
+    await sleep(700);
+    await b.eval(`document.querySelector("[data-problem-list] summary").click()`);
+    await sleep(300);
+    const n = await b.eval(`document.querySelectorAll("[data-problem]").length`);
+    if (!(n >= 1)) throw new Error("la lista de problemas está vacía");
+    await b.eval(`document.querySelector('[data-problem="info"]').click()`);
+    await sleep(500);
+    if ((await b.eval(`window.__cadUi.selection().length`)) !== 2) throw new Error("el renglón del cruce no eligió las dos líneas");
+    await b.shot("sketch_limpieza_cruces");
+    // Al terminar, el patrón queda guardado con su copia omitida
+    await b.clickText("Terminar sketch");
+    await sleep(1200);
+    const doc = await call("cad_get_document");
+    const saved = doc.features[0].kind.sketch.patterns;
+    if (saved?.length !== 1 || JSON.stringify(saved[0].skip) !== "[1]") throw new Error(`patrón guardado: ${JSON.stringify(saved)}`);
+  },
+
+  async "sketch edición VI: equidistante con el cursor y escrito, campo flotante al mover, soltar, arrastre libre y filtro de selección"(b) {
+    await begin(b);
+    await sketchOn(b);
+    const at = (p) => b.eval(`window.__cadViewer.screenOf([${p[0]}, ${p[1]}, 0])`);
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)} }))`);
+    const sk = () => b.eval(`JSON.parse(JSON.stringify(window.__cadUi.session().sketch))`);
+    const pos = (s, id) => { const q = s.points.find((p) => p.id === id); return [q.x, q.y]; };
+    const hover = async (p) => {
+      const [x, y] = await at(p);
+      await b.mouse("mouseMoved", x, y, { button: "none", buttons: 0 });
+      await sleep(300);
+    };
+    const type = async (text) => {
+      for (const ch of text) await key(ch);
+      await sleep(150);
+      await b.eval(`document.querySelector("[data-typed-field]").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }))`);
+      await sleep(900);
+    };
+    const horizAt = (s, y) => s.entities.filter((e) => e.geometry.type === "line" && Math.abs(pos(s, e.geometry.start)[1] - y) < 0.3 && Math.abs(pos(s, e.geometry.end)[1] - y) < 0.3);
+    // Una L abierta (dos líneas con la esquina compartida) y una línea suelta
+    await b.eval(`window.__cadUi.change((s) => {
+      let id = Math.max(0, ...s.points.map((p) => p.id), ...s.entities.map((e) => e.id)) + 1;
+      const pt = (x, y) => (s.points.push({ id, x, y }), id++);
+      const a = pt(10, 30), c = pt(30, 30), d = pt(30, 50), e = pt(45, 20), f = pt(60, 20);
+      s.entities.push({ id: id++, geometry: { type: "line", start: a, end: c } }, { id: id++, geometry: { type: "line", start: c, end: d } }, { id: id++, geometry: { type: "line", start: e, end: f } });
+      s.next_id = id;
+    })`);
+    await sleep(700);
+    let s = await sk();
+    const [top, side, loose] = s.entities.map((e) => e.id);
+    // Equidistante con el cursor: clic en la L, después arriba de ella a ~3 mm
+    await key("f");
+    await b.click(...(await at([20, 30])), { wait: 400 });
+    await hover([20, 33]);
+    if (!(await b.eval(`document.body.innerText.includes("Equidistante a")`))) throw new Error("sin vista previa del equidistante");
+    await b.click(...(await at([20, 33])), { wait: 900 });
+    s = await sk();
+    if (!horizAt(s, 33).length) throw new Error(`el equidistante no quedó del lado del cursor: ${JSON.stringify(s.entities.map((e) => e.geometry))}`);
+    // Escrito: 5 mm del otro lado (abajo)
+    await b.click(...(await at([20, 30])), { wait: 400 });
+    await hover([20, 28]);
+    await type("5");
+    s = await sk();
+    if (!horizAt(s, 25).some((e) => Math.abs(pos(s, e.geometry.start)[1] - 25) < 1e-6)) throw new Error("el equidistante escrito no quedó a 5 mm abajo");
+    await key("Escape");
+    // Mover escribiendo: la línea suelta 10 mm hacia donde está el cursor (a la derecha)
+    await key("s");
+    await b.eval(`window.__cadUi.setSelection([${loose}])`);
+    await key("v");
+    await b.click(...(await at([45, 20])), { wait: 400 });
+    await hover([52, 20]);
+    if (!(await b.eval(`!!document.querySelector('[data-typed-field="move"]')`))) throw new Error("no apareció el campo flotante al mover");
+    await type("10");
+    s = await sk();
+    const lg = s.entities.find((e) => e.id === loose).geometry;
+    if (Math.abs(pos(s, lg.start)[0] - 55) > 1e-6 || Math.abs(pos(s, lg.start)[1] - 20) > 1e-6) throw new Error(`mover escrito: ${pos(s, lg.start)}`);
+    // Soltar de lo que no se mueve: la línea de arriba de la L se mueve sin estirar la otra
+    await b.eval(`window.__cadUi.setDetachOnMove(true)`);
+    await key("s");
+    await b.eval(`window.__cadUi.setSelection([${top}])`);
+    await key("v");
+    await b.click(...(await at([10, 30])), { wait: 400 });
+    await hover([10, 36]);
+    await type("4");
+    s = await sk();
+    const corner = s.entities.find((e) => e.id === side).geometry.start;
+    if (JSON.stringify(pos(s, corner)) !== "[30,30]") throw new Error(`soltar: la otra se estiró a ${pos(s, corner)}`);
+    if (Math.abs(pos(s, s.entities.find((e) => e.id === top).geometry.end)[1] - 34) > 1e-6) throw new Error("soltar: la de arriba no se movió");
+    await b.eval(`window.__cadUi.setDetachOnMove(false)`);
+    // Arrastre libre: la línea suelta horizontal y con largo; Ctrl+Mayús+arrastrar su punta la suelta
+    await key("Escape");
+    await key("s");
+    await b.eval(`window.__cadUi.change((s) => s.constraints.push({ type: "horizontal", line: ${loose} }, { type: "length", line: ${loose}, value: 15 }))`);
+    await sleep(700);
+    s = await sk();
+    const tip = s.entities.find((e) => e.id === loose).geometry.end;
+    const from = await at(pos(s, tip));
+    const to = await at([pos(s, tip)[0] + 2, pos(s, tip)[1] + 6]);
+    await b.mouse("mouseMoved", from[0], from[1], { buttons: 0 });
+    await b.mouse("mousePressed", from[0], from[1], { modifiers: 10 });
+    for (let i = 1; i <= 6; i++) await b.mouse("mouseMoved", from[0] + ((to[0] - from[0]) * i) / 6, from[1] + ((to[1] - from[1]) * i) / 6, { modifiers: 10 });
+    await b.mouse("mouseReleased", to[0], to[1], { buttons: 0, modifiers: 10 });
+    await sleep(900);
+    s = await sk();
+    if (s.constraints.some((k) => k.line === loose)) throw new Error("el arrastre libre no soltó las restricciones");
+    if (!(pos(s, tip)[1] > 22)) throw new Error(`el arrastre libre no movió la punta: ${pos(s, tip)}`);
+    // Filtro «solo líneas»: un clic sobre una punta elige la línea, no el punto
+    await b.eval(`(() => { const sel = document.querySelector('select[aria-label="Filtro de selección"]'); sel.value = "lines"; sel.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    await sleep(300);
+    s = await sk();
+    const sideStart = pos(s, s.entities.find((e) => e.id === side).geometry.end);
+    await b.click(...(await at(sideStart)), { wait: 500 });
+    const picked = await b.eval(`window.__cadUi.selection()`);
+    if (picked.length !== 1 || !s.entities.some((e) => e.id === picked[0] && e.geometry.type === "line")) throw new Error(`filtro: eligió ${picked}`);
+    await b.shot("sketch_equidistante_cursor");
+  },
+
   async "preselección: lo que está bajo el mouse se resalta"(b) {
     await begin(b);
     await b.clickText("Caja");

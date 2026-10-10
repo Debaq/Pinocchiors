@@ -579,7 +579,15 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer.onRender = () => setViewTick((t) => t + 1);
     // El plano 2D usa la cámara («tomar la vista del visor») y la escala del visor
     const v = viewer;
-    ui.registerViewer({ cameraPose: () => v.cameraPose(), mmPerUnit: () => v.mmPerUnit });
+    ui.registerViewer({
+      cameraPose: () => v.cameraPose(),
+      mmPerUnit: () => v.mmPerUnit,
+      // Centrar la vista del sketch en un punto (el informe de problemas)
+      focusSketch: (p, size) => {
+        const s = ui.session();
+        if (s) v.lookAtPlane(s.plane, { center: p, size });
+      },
+    });
     onCleanup(() => ui.registerViewer(undefined));
     // Para las pruebas en navegador (scratch de desarrollo)
     if (import.meta.env.DEV) Object.assign(window, { __cadViewer: viewer, __cadStore: store, __cadUi: ui });
@@ -1105,6 +1113,7 @@ export const CadView: Component<CadViewProps> = (props) => {
       hideConstruction: !ui.sketchShow().construction,
       hidePoints: !ui.sketchShow().points,
       problems: problems()?.looseEnds.map((x) => x.p) ?? [],
+      crossings: ui.sketchShow().crossings !== false ? problems()?.crossings.map((x) => x.p) : undefined,
       warnEntities: problems()?.overlaps.flat(),
       conflictEntities: (s.report?.conflicting ?? []).flatMap((i) => {
         const c = s.sketch.constraints[i];
@@ -3821,7 +3830,7 @@ export const CadView: Component<CadViewProps> = (props) => {
                 </For>
               </div>
               <div class="w-px h-5 bg-border mx-1" />
-              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"], ["freedom", "Libres"]] as const}>
+              <For each={[["dims", "Cotas"], ["constraints", "Restric."], ["construction", "Constr."], ["points", "Puntos"], ["freedom", "Libres"], ["crossings", "Cruces"]] as const}>
                 {([k, label]) => (
                   <button
                     aria-label={`Mostrar ${label.toLowerCase()}`}

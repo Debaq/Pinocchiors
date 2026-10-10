@@ -90,7 +90,7 @@ function bbox(pts: P2[]): [number, number, number, number] {
 }
 
 /** Si dos entidades están encimadas: misma recta con tramos que se pisan, o mismo círculo con arcos que se pisan */
-function overlapping(s: Sketch, a: Geometry, b: Geometry, tol: number): boolean {
+export function overlapping(s: Sketch, a: Geometry, b: Geometry, tol: number): boolean {
   const at = (id: number): P2 => {
     const p = s.points.find((q) => q.id === id)!;
     return [p.x, p.y];
@@ -126,7 +126,9 @@ function overlapping(s: Sketch, a: Geometry, b: Geometry, tol: number): boolean 
     return t > 1e-9 && t < sp.sw - 1e-9;
   };
   const [sa, sb] = [span(a as Extract<Geometry, { type: "arc" }>), span(b as Extract<Geometry, { type: "arc" }>)];
-  return inside(sb.a0 + sb.sw / 2, sa) || inside(sa.a0 + sa.sw / 2, sb);
+  // En el círculo, dos tramos se pisan si uno empieza dentro del otro (o empiezan juntos)
+  const same = Math.abs(Math.atan2(Math.sin(sa.a0 - sb.a0), Math.cos(sa.a0 - sb.a0))) < 1e-9;
+  return same || inside(sb.a0, sa) || inside(sa.a0, sb);
 }
 
 /** Lo que impide que el sketch forme regiones */

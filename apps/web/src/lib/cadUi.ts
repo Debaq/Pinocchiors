@@ -222,6 +222,8 @@ export interface SketchShow {
   points: boolean;
   /** Flechas de lo que todavía se puede mover */
   freedom: boolean;
+  /** Marcas donde dos curvas se cruzan sin un punto común */
+  crossings?: boolean;
 }
 /** Ayudas al dibujar: inferencias y rejilla del sketch (se recuerdan entre sesiones) */
 export interface SketchAssist {
@@ -313,7 +315,7 @@ export function createCadUi(store: CadStore) {
   const [drawingOpen, setDrawingOpen] = createSignal(false);
   const [activeDrawing, setActiveDrawing] = createSignal<number>();
   // El visor de Diseñar (su cámara y su escala), para el plano: «tomar la vista del visor» y la vista previa al girar
-  let viewerInfo: { cameraPose: () => { position: P3; target: P3; up: P3 }; mmPerUnit: () => number } | undefined;
+  let viewerInfo: { cameraPose: () => { position: P3; target: P3; up: P3 }; mmPerUnit: () => number; focusSketch?: (p: P2, size: number) => void } | undefined;
   const [drawingSel, setDrawingSel] = createSignal<DrawingElement>();
   // Herramienta del plano (la barra izquierda y la hoja la comparten) y lo que el plano ofrece a la barra
   const [drawingTool, setDrawingTool] = createSignal<DrawingTool>("");
@@ -332,7 +334,7 @@ export function createCadUi(store: CadStore) {
   const [message, setMessage] = createSignal<string>();
   // Modo construcción (como Onshape): lo que se dibuja sale de construcción
   const [constructionMode, setConstructionMode] = createSignal(false);
-  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true });
+  const [sketchShow, setSketchShow] = createSignal<SketchShow>({ dims: true, constraints: true, construction: true, points: true, freedom: true, crossings: true });
   const [dimLabel, setDimLabel] = createSignal<DimLabel>("expr");
   const [assist, setAssistRaw] = createSignal<SketchAssist>(loadAssist());
   const setAssist = (patch: Partial<SketchAssist>) => {
@@ -446,6 +448,8 @@ export function createCadUi(store: CadStore) {
     message,
     // En el modo de prueba (vista previa) no se avisa ni se cambia lo elegido
     setMessage: ((m?: string) => void (dry || setMessage(m))) as typeof setMessage,
+    /** ¿Corre una vista previa (modo de prueba)? Lo que no pasa por `change` no debe cambiar */
+    previewing: () => dry,
 
     // ─── Sketch ───────────────────────────────────────────────────────────
     session,

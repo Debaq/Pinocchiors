@@ -20,7 +20,7 @@ import {
   type SketchEntity,
   type SketchConstraint,
 } from "./cad.ts";
-import { checkSketch, polylineOf } from "./sketchCheck.ts";
+import { checkSketch, overlapping, polylineOf } from "./sketchCheck.ts";
 import { splitEntityAt } from "./sketchTransform.ts";
 import { trimAny } from "./sketchTrim.ts";
 
@@ -582,6 +582,85 @@ export function removeDuplicates(s: Sketch): number {
   return removed;
 }
 
+/**
+ * Junta lo que se pisa en parte (duplicados parciales): dos líneas sobre la
+ * misma recta que se solapan pasan a ser una de punta a punta; dos arcos del
+ * mismo círculo, uno que cubre a los dos (o el círculo si dan la vuelta). Lo
+ * que nombraba a la segunda pasa a la primera; los largos se quitan (cambian).
+ * Un punto del medio que usa otra entidad queda sobre la curva.
+ */
+export function mergeOverlaps(s: Sketch): number {
+  const tol = span(s) * 1e-7;
+  let merged = 0;
+  for (let guard = 0; guard < 500; guard++) {
+    let pair: [SketchEntity, SketchEntity] | undefined;
+    for (let i = 0; i < s.entities.length && !pair; i++)
+      for (let j = i + 1; j < s.entities.length && !pair; j++) {
+        const [a, b] = [s.entities[i], s.entities[j]];
+        const kind = a.geometry.type;
+        if (kind !== b.geometry.type || (kind !== "line" && kind !== "arc") || !!a.construction !== !!b.construction) continue;
+        if (overlapping(s, a.geometry, b.geometry, tol)) pair = [a, b];
+      }
+    if (!pair) break;
+    const [a, b] = pair;
+    const pts = [...geometryPoints(a.geometry), ...geometryPoints(b.geometry)];
+    s.constraints = s.constraints.filter((k) => !((k.type === "length" && (k.line === a.id || k.line === b.id)) || (k.type === "arc_length" && (k.arc === a.id || k.arc === b.id))));
+    if (a.geometry.type === "line" && b.geometry.type === "line") mergeLines(s, a.geometry, b.geometry);
+    else mergeArcs(s, a, b.geometry as Extract<Geometry, { type: "arc" }>, tol);
+    replaceEntity(s, b.id, a.id);
+    // Restricciones repetidas (las dos tenían «horizontal», por ejemplo)
+    const seen = new Set<string>();
+    s.constraints = s.constraints.filter((k) => {
+      const key = JSON.stringify(k);
+      return !seen.has(key) && !!seen.add(key);
+    });
+    // Los puntos que quedaron afuera: juntos con uno de la curva si están en el mismo lugar; sobre ella si otra entidad los usa
+    const keep = geometryPoints(a.geometry);
+    for (const p of new Set(pts)) {
+      if (keep.includes(p) || !s.points.some((q) => q.id === p)) continue;
+      const twin = keep.find((q) => dist(pos(s, q), pos(s, p)) <= tol);
+      if (twin !== undefined) mergePoint(s, p, twin);
+      else if (s.entities.some((e) => geometryPoints(e.geometry).includes(p)))
+        s.constraints.push(a.geometry.type === "line" ? { type: "point_on_line", point: p, line: a.id } : { type: "point_on_circle", point: p, circle: a.id });
+    }
+    merged++;
+  }
+  dropLoose(s);
+  return merged;
+}
+
+/** La línea `a` pasa a ir de punta a punta de las dos */
+function mergeLines(s: Sketch, a: Extract<Geometry, { type: "line" }>, b: Extract<Geometry, { type: "line" }>) {
+  const A = pos(s, a.start);
+  const d = sub(pos(s, a.end), A);
+  const ids = [a.start, a.end, b.start, b.end];
+  const t = ids.map((id) => dot(sub(pos(s, id), A), d));
+  a.start = ids[t.indexOf(Math.min(...t))];
+  a.end = ids[t.indexOf(Math.max(...t))];
+}
+
+/** El arco de `a` pasa a cubrir también el de `b` (o a ser el círculo) */
+function mergeArcs(s: Sketch, a: SketchEntity, b: Extract<Geometry, { type: "arc" }>, tol: number) {
+  const g = a.geometry as Extract<Geometry, { type: "arc" }>;
+  const c = pos(s, g.center);
+  if (b.center !== g.center && dist(pos(s, b.center), c) <= tol) mergePoint(s, b.center, g.center);
+  const sweep = (x: Extract<Geometry, { type: "arc" }>) => ccwSweep(c, pos(s, x.start), pos(s, x.end));
+  const inside = (p: number, x: Extract<Geometry, { type: "arc" }>) => {
+    if (dist(pos(s, p), pos(s, x.start)) <= tol) return true;
+    return ccwSweep(c, pos(s, x.start), pos(s, p)) <= sweep(x) + 1e-9;
+  };
+  // El que empieza antes (su comienzo no cae dentro del otro)
+  const [first, second] = inside(b.start, g) ? [{ ...g }, b] : [b, { ...g }];
+  if (inside(first.start, second) && !(dist(pos(s, first.start), pos(s, second.start)) <= tol)) {
+    // Se pisan por los dos lados: dan la vuelta entera
+    a.geometry = { type: "circle", center: g.center, radius: dist(pos(s, g.start), c) };
+    return;
+  }
+  const rel = (p: number) => ccwSweep(c, pos(s, first.start), pos(s, p));
+  const end = rel(second.end) > rel(first.end) ? second.end : first.end;
+  a.geometry = { type: "arc", center: g.center, start: first.start, end };
+}
+
 /** Extremos de las curvas abiertas (sus puntos) */
 function endPoints(s: Sketch): number[] {
   const out = new Set<number>();
@@ -611,15 +690,18 @@ export interface RepairReport {
   removed: number;
   /** Cruces y T partidos */
   split: number;
+  /** Puntos sueltos juntados con el punto de una curva que estaba encima */
+  points: number;
 }
 
 /**
  * Repara el contorno: junta los extremos a menos de `tol`, quita las líneas y
- * arcos más cortos que `tol` y parte las curvas en los cruces y las T que no
- * tienen un punto común (lo que marca la revisión).
+ * arcos más cortos que `tol`, parte las curvas en los cruces y las T que no
+ * tienen un punto común (lo que marca la revisión) y junta los puntos sueltos
+ * con el punto de una curva que tengan encima.
  */
 export function repairSketch(s: Sketch, tol: number): RepairReport {
-  const report: RepairReport = { joined: 0, removed: 0, split: 0 };
+  const report: RepairReport = { joined: 0, removed: 0, split: 0, points: 0 };
   // Cortísimas: sus dos extremos pasan a ser uno
   for (const e of [...s.entities]) {
     if (!s.entities.includes(e)) continue;
@@ -666,6 +748,19 @@ export function repairSketch(s: Sketch, tol: number): RepairReport {
     [pp.x, pp.y] = x.p;
     mergePoint(s, pb, pa);
     report.split++;
+  }
+  // Puntos sueltos encima de otro punto (de una curva o el origen): el suelto sobra
+  for (const e of [...s.entities]) {
+    if (e.geometry.type !== "point" || !s.entities.includes(e)) continue;
+    const p = e.geometry.point;
+    const at = pos(s, p);
+    const other = s.points.find(
+      (q) => q.id !== p && dist([q.x, q.y], at) <= tol && (q.id === s.origin || s.entities.some((x) => x !== e && x.geometry.type !== "point" && geometryPoints(x.geometry).includes(q.id))),
+    );
+    if (!other) continue;
+    mergePoint(s, p, other.id);
+    removeEntity(s, e.id);
+    report.points++;
   }
   dropLoose(s);
   return report;
