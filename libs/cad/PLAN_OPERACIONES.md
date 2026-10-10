@@ -1,6 +1,7 @@
 # Operaciones: igualar la lista completa de un CAD
 
-Plan único del CAD paramétrico desde el 2026-10-09. Reemplaza a todos los planes anteriores
+Plan del CAD paramétrico desde el 2026-10-09 (el plano 2D va aparte, en
+[PLAN_PLANO_2D.md](PLAN_PLANO_2D.md), desde el 2026-10-10). Reemplaza a todos los planes anteriores
 (construcción, edición, ensambles, escaneo, futuro, inspección, objetos, piezas, planos 2D,
 recálculo, sketch, visor y el índice PLANES.md), que estaban hechos o casi. Lo hecho queda en la
 bitácora de [ROADMAP.md](ROADMAP.md). Sale de comparar el modelo (`model/src/feature.rs`) y la

@@ -4,8 +4,10 @@ Traer a Pinocchiors el CAD de `cad-blender` (addon de Blender) sin Blender: núc
 B-Rep con OpenCASCADE desde el inicio (sin etapa intermedia de mallas) y el flujo
 nuevo **escaneo → CAD** que conecta orizon3d con sólidos editables.
 
-**Plan vigente**: [PLAN_OPERACIONES.md](PLAN_OPERACIONES.md) (desde el 2026-10-09; los planes
-anteriores se borraron y lo hecho queda en esta bitácora).
+**Planes vigentes**: [PLAN_OPERACIONES.md](PLAN_OPERACIONES.md) (desde el 2026-10-09) y
+[PLAN_PLANO_2D.md](PLAN_PLANO_2D.md) (desde el 2026-10-10: dibujo y edición sobre la hoja,
+vistas que se giran en 3D, cortes e imágenes de secciones). Los planes anteriores se borraron y
+lo hecho queda en esta bitácora.
 
 Decisiones (2026-10-05):
 
@@ -73,7 +75,8 @@ Decisiones (2026-10-05):
       elegidas con clic, puntos libres marcados, recortar (líneas, círculos y arcos), extender,
       equidistante, redondear esquinas, arcos tangentes encadenados, gestor de restricciones
       que resalta y elige lo que restringe.
-- [~] **F9 — Más adelante**: planos 2D, ensambles y chapa hechos en una primera versión (ver abajo).
+- [~] **F9 — Más adelante**: ensambles y chapa hechos en una primera versión (ver abajo). El
+      plano 2D sigue en [PLAN_PLANO_2D.md](PLAN_PLANO_2D.md).
 - [ ] **F10 — Patrones que faltan** (anotado el 2026-10-09). Hay lineal, circular, en curva, por
       tabla y de relleno, en el sketch y como operación, más la simetría. Orden propuesto (los más
       usados y baratos primero):
