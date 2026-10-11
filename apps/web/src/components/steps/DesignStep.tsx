@@ -68,6 +68,7 @@ import {
   type PartId,
   type PlaneDef,
   type PointSpec,
+  type RefPick,
   type Plane,
   type Sketch3d,
   type Constraint3d,
@@ -3710,11 +3711,13 @@ export const FeatureEditor: Component<{
                         { value: "angle", label: "En ángulo" },
                         { value: "midplane", label: "Plano medio" },
                         { value: "three_points", label: "Por tres puntos" },
+                        { value: "picked", label: "Por clics (se deduce)" },
                       ]}
                       value={def().type}
                       onChange={(v) => {
                         if (v === def().type) return;
-                        if (v === "offset") setDef({ type: "offset", base: base(), distance: 10 });
+                        if (v === "picked") setDef({ type: "picked", refs: [] });
+                        else if (v === "offset") setDef({ type: "offset", base: base(), distance: 10 });
                         else if (v === "angle") setDef({ type: "angle", base: base(), axis: { type: "x" }, angle: 45 });
                         else if (v === "midplane") setDef({ type: "midplane", a: base(), b: { type: "xy" } });
                         else
@@ -3730,6 +3733,25 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Switch>
+                    <Match when={def().type === "picked" && (def() as Extract<PlaneDef, { type: "picked" }>)}>
+                      {(d) => (
+                        <>
+                          <RefPicksBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:refs`}
+                            feature={f().id}
+                            what="plane"
+                            refs={d().refs}
+                            lost={lost("refs" as MissingRef["field"])}
+                            onChange={(refs) => setDef({ ...d(), refs })}
+                          />
+                          {field("Distancia", "kind.def.offset", d().offset ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.offset = v || undefined), "mm")}
+                          {field("Ángulo", "kind.def.angle", d().angle ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.angle = v || undefined), "°")}
+                          <Checkbox small label="Dar vuelta la normal" checked={!!d().flip} onChange={(c) => setDef({ ...d(), flip: c || undefined })} />
+                        </>
+                      )}
+                    </Match>
                     <Match when={def().type === "offset" && (def() as Extract<PlaneDef, { type: "offset" }>)}>
                       {(d) => (
                         <>
@@ -3790,11 +3812,13 @@ export const FeatureEditor: Component<{
                         { value: "edge", label: "Arista" },
                         { value: "face", label: "Eje de un cilindro" },
                         { value: "planes", label: "Cruce de dos planos" },
+                        { value: "picked", label: "Por clics (se deduce)" },
                       ]}
                       value={def().type}
                       onChange={(v) => {
                         if (v === def().type) return;
-                        if (v === "two_points") setDef({ type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } });
+                        if (v === "picked") setDef({ type: "picked", refs: [] });
+                        else if (v === "two_points") setDef({ type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } });
                         else if (v === "planes") setDef({ type: "planes", a: { type: "xz" }, b: { type: "yz" } });
                         else if (v === "edge") setDef({ type: "edge", edge: undefined as unknown as EdgeRef });
                         else setDef({ type: "face", face: undefined as unknown as FaceRef });
@@ -3802,6 +3826,20 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Switch>
+                    <Match when={def().type === "picked" && (def() as Extract<AxisDef, { type: "picked" }>)}>
+                      {(d) => (
+                        <RefPicksBox
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:refs`}
+                          feature={f().id}
+                          what="axis"
+                          refs={d().refs}
+                          lost={lost("refs" as MissingRef["field"])}
+                          onChange={(refs) => setDef({ type: "picked", refs })}
+                        />
+                      )}
+                    </Match>
                     <Match when={def().type === "two_points" && (def() as Extract<AxisDef, { type: "two_points" }>)}>
                       {(d) => (
                         <>
@@ -3853,15 +3891,50 @@ export const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "point" && (f().kind as Extract<FeatureKind, { type: "point" }>)}>
             {(k) => (
-              <PointField
-                store={props.store}
-                ui={props.ui}
-                owner={`${f().id}:punto`}
-                label="Punto"
-                value={k().def}
-                except={f().id}
-                onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
-              />
+              <>
+                <Row label="Tipo">
+                  <Select
+                    options={[
+                      { value: "picked", label: "Por clics (se deduce)" },
+                      { value: "other", label: "Coordenadas, arista o referencia" },
+                    ]}
+                    value={k().def.type === "picked" ? "picked" : "other"}
+                    onChange={(v) =>
+                      update((x) => {
+                        if (x.type !== "point" || (v === "picked") === (x.def.type === "picked")) return;
+                        x.def = v === "picked" ? { type: "picked", refs: [] } : { type: "at", point: [0, 0, 0] };
+                      })
+                    }
+                  />
+                </Row>
+                <Show
+                  when={k().def.type === "picked" && (k().def as Extract<PointSpec, { type: "picked" }>)}
+                  fallback={
+                    <PointField
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:punto`}
+                      label="Punto"
+                      value={k().def}
+                      except={f().id}
+                      onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
+                    />
+                  }
+                >
+                  {(d) => (
+                    <RefPicksBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:refs`}
+                      feature={f().id}
+                      what="point"
+                      refs={d().refs}
+                      lost={lost("refs" as MissingRef["field"])}
+                      onChange={(refs) => update((x) => x.type === "point" && (x.def = { type: "picked", refs }))}
+                    />
+                  )}
+                </Show>
+              </>
             )}
           </Match>
         </Switch>
@@ -4190,6 +4263,131 @@ const PartChecklist: Component<{
 // ─── Cajas de selección ───────────────────────────────────────────────────
 
 const NOUNS = { edges: "Arista", faces: "Cara", face: "Cara" } as const;
+const REF_PROMPTS = {
+  plane: "Clic en lo que define el plano: una cara o un plano; dos planos; un plano y una arista; una arista y un punto; tres vértices…",
+  axis: "Clic en lo que define el eje: una arista, una cara cilíndrica, dos vértices, dos planos…",
+  point: "Clic en lo que define el punto: un vértice, una arista (su medio o su centro), una arista y una cara…",
+};
+const REF_HINTS = {
+  plane: "Una cara o un plano (desfasado) · dos planos (medio o bisector) · un plano y una línea (en ángulo) · una línea y un punto · una curva y un punto (normal) · una cara curva y un punto (tangente) · tres puntos",
+  axis: "Una arista o línea · una circunferencia · una cara cilíndrica o cónica · dos puntos · dos planos (su cruce) · un plano y un punto (normal)",
+  point: "Un vértice · una arista (su medio, o el centro si es circular) · una esfera · dos puntos (el medio) · una arista y una cara (el cruce) · un punto y un plano (la proyección) · dos líneas (su cruce)",
+};
+
+/**
+ * Lo que arma una referencia por clics: cada clic en el visor suma algo
+ * (cara, arista, vértice o plano) y el tipo se deduce de lo elegido; abajo
+ * dice qué se armó. También se suman referencias del árbol.
+ */
+const RefPicksBox: Component<{
+  store: CadStore;
+  ui: CadUi;
+  owner: string;
+  feature: number;
+  what: "plane" | "axis" | "point";
+  refs: RefPick[];
+  lost?: number[];
+  onChange: (refs: RefPick[]) => void;
+}> = (props) => {
+  const ui = props.ui;
+  const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
+  const names = () => new Map((props.store.doc()?.features ?? []).map((f) => [f.id, f.name]));
+  const label = (r: RefPick): string => {
+    if (r.type === "face") return "Cara";
+    if (r.type === "edge") return "Arista";
+    if (r.type === "plane") {
+      const p = r.plane;
+      return p.type === "reference" ? (names().get(p.feature) ?? "Plano") : p.type === "face" ? "Cara plana" : p.type === "custom" ? "Plano propio" : PLANE_LABELS[p.type];
+    }
+    if (r.type === "axis") {
+      const a = r.axis;
+      return a.type === "reference" ? (names().get(a.feature) ?? "Eje") : a.type === "sketch_line" ? `Línea ${a.line}` : a.type === "x" || a.type === "y" || a.type === "z" ? `Eje ${a.type.toUpperCase()}` : "Eje";
+    }
+    const p = r.point;
+    if (p.type === "edge_end") return "Vértice";
+    if (p.type === "reference") return names().get(p.feature) ?? "Punto";
+    if (p.type === "at") return `Punto (${p.point.map((v) => +v.toFixed(2)).join("; ")})`;
+    return "Punto";
+  };
+  const activate = () => {
+    void props.store.setSelecting(true);
+    ui.setPick({ kind: "refs", owner: props.owner, prompt: REF_PROMPTS[props.what], add: (p) => props.onChange([...props.refs, p]) });
+  };
+  // Vacía al abrir el diálogo: se empieza eligiendo
+  createEffect(
+    on(
+      () => !!props.store.draft(),
+      (open) => {
+        if (open && untrack(() => props.refs.length === 0)) queueMicrotask(() => props.store.draft() && activate());
+      },
+    ),
+  );
+  createEffect(
+    on(active, (now, before) => {
+      if (!now && before && ui.pick().kind === "none") void props.store.setSelecting(false);
+    }),
+  );
+  onCleanup(() => {
+    if (active()) ui.cancelPick();
+  });
+  const how = () => props.store.result()?.references.find((r) => r.id === props.feature)?.how;
+  const problem = () => {
+    const st = props.store.stateOf(props.feature);
+    return st?.state === "error" ? st.message : undefined;
+  };
+  // Del árbol: planos, ejes y puntos de referencia (y los ejes base)
+  const treeOptions = () => [
+    { value: "", label: "Sumar del árbol…" },
+    ...(["x", "y", "z"] as const).map((a) => ({ value: `axis:${a}`, label: `Eje ${a.toUpperCase()}` })),
+    ...refOptions(props.store, "plane", props.feature).map((o) => ({ value: `plane:${o.value.slice(4)}`, label: o.label })),
+    ...refOptions(props.store, "axis", props.feature).map((o) => ({ value: `axisref:${o.value.slice(4)}`, label: o.label })),
+    ...refOptions(props.store, "point", props.feature).map((o) => ({ value: `point:${o.value.slice(4)}`, label: o.label })),
+  ];
+  const addFromTree = (v: string) => {
+    const [kind, id] = v.split(":");
+    const r: RefPick | undefined =
+      kind === "axis"
+        ? { type: "axis", axis: { type: id as "x" | "y" | "z" } }
+        : kind === "plane"
+          ? { type: "plane", plane: { type: "reference", feature: +id } }
+          : kind === "axisref"
+            ? { type: "axis", axis: { type: "reference", feature: +id } }
+            : kind === "point"
+              ? { type: "point", point: { type: "reference", feature: +id } }
+              : undefined;
+    if (r) props.onChange([...props.refs, r]);
+  };
+  return (
+    <div class="space-y-1" aria-label="Lo elegido" data-ref-picks>
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs text-text-muted">Elegido</span>
+        <Button size="sm" variant={active() ? "primary" : "default"} onClick={() => (active() ? ui.cancelPick() : activate())}>
+          {active() ? "Listo" : "Elegir en el visor"}
+        </Button>
+      </div>
+      <For each={props.refs} fallback={<p class="text-[11px] text-text-dim">Nada todavía: clic en el visor</p>}>
+        {(r, i) => (
+          <div class="flex items-center gap-1 text-xs" data-ref-pick={i()}>
+            <span class={clsx("flex-1 truncate", (props.lost ?? []).includes(i()) ? "text-error" : "text-text")}>
+              {label(r)}
+              {(props.lost ?? []).includes(i()) ? " · no encontrada" : ""}
+            </span>
+            <IconButton aria-label={`Quitar ${label(r)}`} size="sm" variant="ghost" onClick={() => props.onChange(props.refs.filter((_, k) => k !== i()))}>
+              <Icons.Trash size={11} />
+            </IconButton>
+          </div>
+        )}
+      </For>
+      <Select options={treeOptions()} value="" onChange={(v) => v && addFromTree(v)} />
+      <Show when={how()} fallback={<p class="text-[11px] text-text-dim leading-relaxed">{problem() ?? REF_HINTS[props.what]}</p>}>
+        <p class="text-[11px] text-accent" data-ref-how>
+          Se armó: {how()}
+        </p>
+      </Show>
+    </div>
+  );
+};
+
 const PROMPTS = {
   edges: "Clic en las aristas (otra vez para quitarla)",
   faces: "Clic en las caras (otra vez para quitarla)",

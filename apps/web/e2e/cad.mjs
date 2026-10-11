@@ -8129,6 +8129,85 @@ const scenarios = {
     if (dup.kind.sketch !== sk) throw new Error(`duplicada usa ${dup.kind.sketch} (esperado ${sk})`);
     await b.shot("operaciones_copiar_pegar");
   },
+
+  // ─── Los difíciles ───
+
+  async "operaciones: planos, ejes y puntos por clics"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    // Caja de 20 centrada (de −10 a 10)
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const ref = async () => {
+      const id = await b.eval(`window.__cadStore.doc().features.at(-1).id`);
+      return (await evaluate()).references.find((r) => r.id === id);
+    };
+    const top = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    const bottom = await faceWhere((f) => f.surface === "plane" && f.normal[2] < -0.99);
+    const side = await faceWhere((f) => f.surface === "plane" && f.normal[0] > 0.99);
+    // Arriba y abajo elegidas antes: plano medio (z = 0)
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }, { kind: "face", face: ${bottom} }])`);
+    await b.clickText("Plano");
+    await lastIs(b, "plane");
+    await sleep(2000);
+    let r = await ref();
+    if (r?.how !== "Plano medio") throw new Error(`deducido: ${r?.how}`);
+    near(r.plane.origin[2], 0, 1e-6, "plano medio a z = 0");
+    if (!(await b.eval(`document.querySelector("[data-ref-how]")?.textContent.includes("Plano medio")`))) throw new Error("el diálogo no dice qué se armó");
+    await accept(b);
+
+    // Sin nada elegido: desfasado de la planta; se cambia por clics en el visor
+    await b.clickText("Plano");
+    await lastIs(b, "plane");
+    await sleep(1500);
+    if ((await ref())?.how !== "Desfasado de un plano o una cara") throw new Error("el plano nuevo no sale de la planta");
+    await setInput(b, "Distancia", 0);
+    await b.eval(`document.querySelector('[aria-label="Quitar Planta (XY)"]').click()`);
+    await sleep(800);
+    await b.clickText("Elegir en el visor");
+    await sleep(500);
+    // La cara de arriba y la arista de arriba al frente: por la arista, en ángulo con la cara
+    await b.click(...(await at([3, 3, 10])), { wait: 1500 });
+    await b.click(...(await at([0, -10, 10])), { wait: 1500 });
+    await sleep(1500);
+    const kinds = await b.eval(`JSON.stringify(window.__cadStore.doc().features.at(-1).kind.def.refs.map((x) => x.type))`);
+    if (kinds !== '["face","edge"]') throw new Error(`elegido: ${kinds}`);
+    r = await ref();
+    if (r?.how !== "Por una línea, en ángulo con el plano") throw new Error(`deducido: ${r?.how}`);
+    near(Math.abs(r.plane.normal[2]), 1, 1e-6, "a 0°, paralelo a la cara");
+    await setInput(b, "Ángulo", 90);
+    await sleep(2000);
+    r = await ref();
+    near(Math.abs(r.plane.normal[1]), 1, 1e-6, "a 90°, vertical");
+    near(r.plane.origin[1], -10, 1e-6, "por la arista del frente");
+    await accept(b);
+
+    // Eje: el cruce de la cara de arriba con la del costado
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }, { kind: "face", face: ${side} }])`);
+    await b.clickText("Eje");
+    await lastIs(b, "axis");
+    await sleep(2000);
+    r = await ref();
+    if (r?.how !== "Cruce de dos planos") throw new Error(`eje: ${r?.how}`);
+    near(Math.abs(r.dir[1]), 1, 1e-6, "a lo largo de Y");
+    near(r.origin[0], 10, 1e-6, "en x = 10");
+    near(r.origin[2], 10, 1e-6, "en z = 10");
+    await accept(b);
+
+    // Punto: el medio entre dos vértices opuestos (el centro de la caja)
+    await b.eval(`window.__cadUi.setPicks([{ kind: "vertex", at: [10, 10, 10] }, { kind: "vertex", at: [-10, -10, -10] }])`);
+    await b.clickText("Punto");
+    await lastIs(b, "point");
+    await sleep(2000);
+    r = await ref();
+    if (r?.how !== "Punto medio") throw new Error(`punto: ${r?.how}`);
+    for (const k of [0, 1, 2]) near(r.point[k], 0, 1e-6, "centro");
+    const def = await b.eval(`JSON.stringify(window.__cadStore.doc().features.at(-1).kind.def.refs[0].point.type)`);
+    if (def !== '"edge_end"') throw new Error(`el vértice no quedó ligado: ${def}`);
+    await accept(b);
+    await b.shot("operaciones_referencias_por_clics");
+  },
 };
 
 const filter = process.argv[2];

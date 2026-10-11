@@ -4,6 +4,7 @@
 
 use approx::assert_relative_eq;
 use cad_model::*;
+use cad_model::geom::{cross, dot, norm, normalize, sub};
 use std::f64::consts::PI;
 
 fn occt() -> bool {
@@ -582,4 +583,182 @@ fn extend_a_planar_surface() {
     let edge = edge_at(&doc, [10.0, 5.0, 10.0]);
     doc.add(FeatureKind::SurfaceExtend { edges: vec![edge], distance: 5.0 });
     assert!(!doc.evaluate().errors().is_empty());
+}
+
+// ─── Referencias por clics ───
+
+fn plane_of(ev: &Evaluation, id: FeatureId) -> Plane {
+    match ev.references.get(&id) {
+        Some(RefGeom::Plane { plane }) => *plane,
+        other => panic!("sin plano: {other:?}"),
+    }
+}
+
+fn picked_plane(doc: &mut Document, refs: Vec<RefPick>, offset: f64, angle: f64) -> (Plane, String) {
+    let id = doc.add(FeatureKind::Plane { def: PlaneDef::Picked { refs, offset, angle, flip: false } });
+    let ev = eval_ok(doc);
+    let out = (plane_of(&ev, id), ev.ref_kinds.get(&id).cloned().unwrap_or_default());
+    doc.features.pop();
+    out
+}
+
+fn assert_plane(p: &Plane, normal: P3, through: P3) {
+    let n = normalize(p.normal);
+    assert!((dot(n, normalize(normal)).abs() - 1.0).abs() < 1e-6, "normal {n:?} (esperada ±{normal:?})");
+    assert!(dot(sub(through, p.origin), n).abs() < 1e-6, "el plano no pasa por {through:?}");
+}
+
+fn vertex(p: P3) -> RefPick {
+    RefPick::Point { point: PointSpec::At { point: p } }
+}
+
+#[test]
+fn planes_by_clicks() {
+    if !occt() {
+        return;
+    }
+    // Caja de 10 en la esquina del origen
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let top = || RefPick::Face { face: face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]) };
+    let bottom = RefPick::Face { face: face_at(&doc, [5.0, 5.0, 0.0], [0.0, 0.0, -1.0]) };
+    let side = RefPick::Face { face: face_at(&doc, [10.0, 5.0, 5.0], [1.0, 0.0, 0.0]) };
+    let front_top = RefPick::Edge { edge: edge_at(&doc, [5.0, 0.0, 10.0]) };
+    let upright = RefPick::Edge { edge: edge_at(&doc, [10.0, 0.0, 5.0]) };
+    let t = top();
+
+    let (p, how) = picked_plane(&mut doc, vec![t.clone()], 5.0, 0.0);
+    assert_plane(&p, [0.0, 0.0, 1.0], [0.0, 0.0, 15.0]);
+    assert_eq!(how, "Desfasado de un plano o una cara");
+
+    let (p, how) = picked_plane(&mut doc, vec![t.clone(), bottom], 0.0, 0.0);
+    assert_plane(&p, [0.0, 0.0, 1.0], [0.0, 0.0, 5.0]);
+    assert_eq!(how, "Plano medio");
+
+    let (p, how) = picked_plane(&mut doc, vec![t.clone(), side], 0.0, 0.0);
+    assert_plane(&p, [-1.0, 0.0, 1.0], [10.0, 0.0, 10.0]);
+    assert_eq!(how, "Bisector de dos planos");
+
+    // La planta y la arista de arriba al frente: paralelo por la arista, y a 90° vertical
+    let (p, _) = picked_plane(&mut doc, vec![RefPick::Plane { plane: PlaneSpec::Xy }, front_top.clone()], 0.0, 0.0);
+    assert_plane(&p, [0.0, 0.0, 1.0], [0.0, 0.0, 10.0]);
+    let (p, how) = picked_plane(&mut doc, vec![RefPick::Plane { plane: PlaneSpec::Xy }, front_top], 0.0, 90.0);
+    assert_plane(&p, [0.0, 1.0, 0.0], [3.0, 0.0, 10.0]);
+    assert_eq!(how, "Por una línea, en ángulo con el plano");
+
+    // La arista vertical del frente y el origen: el plano del frente
+    let (p, how) = picked_plane(&mut doc, vec![upright.clone(), vertex([0.0, 0.0, 0.0])], 0.0, 0.0);
+    assert_plane(&p, [0.0, 1.0, 0.0], [0.0, 0.0, 0.0]);
+    assert_eq!(how, "Por una línea y un punto");
+    // La misma arista y un punto sobre ella: normal a la arista ahí
+    let (p, how) = picked_plane(&mut doc, vec![upright, vertex([10.0, 0.0, 4.0])], 0.0, 0.0);
+    assert_plane(&p, [0.0, 0.0, 1.0], [0.0, 0.0, 4.0]);
+    assert_eq!(how, "Normal a la línea por el punto");
+
+    let (p, how) = picked_plane(&mut doc, vec![vertex([0.0, 0.0, 0.0]), vertex([10.0, 0.0, 0.0]), vertex([0.0, 0.0, 10.0])], 0.0, 0.0);
+    assert_plane(&p, [0.0, 1.0, 0.0], [5.0, 0.0, 5.0]);
+    assert_eq!(how, "Por tres puntos");
+
+    // Lo que no forma un plano: error que dice qué se puede
+    doc.add(FeatureKind::Plane { def: PlaneDef::Picked { refs: vec![vertex([0.0; 3]), vertex([1.0, 0.0, 0.0])], offset: 0.0, angle: 0.0, flip: false } });
+    let ev = doc.evaluate();
+    assert!(ev.errors().iter().any(|(_, m)| m.contains("no sé armar un plano")), "{:?}", ev.errors());
+}
+
+#[test]
+fn planes_on_curved_geometry_by_clicks() {
+    if !occt() {
+        return;
+    }
+    // Cilindro de radio 5 y alto 10 sobre el origen
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 5.0, height: 10.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let wall = RefPick::Face { face: face_at(&doc, [5.0, 0.0, 5.0], [1.0, 0.0, 0.0]) };
+    let rim = RefPick::Edge { edge: edge_at(&doc, [0.0, 5.0, 10.0]) };
+    // Tangente a la pared por un punto de ella: el plano x = 5
+    let (p, how) = picked_plane(&mut doc, vec![wall.clone(), vertex([5.0, 0.0, 3.0])], 0.0, 0.0);
+    assert_plane(&p, [1.0, 0.0, 0.0], [5.0, 0.0, 3.0]);
+    assert_eq!(how, "Tangente a la cara por el punto");
+    // El borde de arriba: el plano de la circunferencia
+    let (p, how) = picked_plane(&mut doc, vec![rim.clone()], 0.0, 0.0);
+    assert_plane(&p, [0.0, 0.0, 1.0], [0.0, 0.0, 10.0]);
+    assert_eq!(how, "Plano de la circunferencia");
+    // Normal al borde en un punto de él (tangente en y)
+    let (p, how) = picked_plane(&mut doc, vec![rim.clone(), vertex([5.0, 0.0, 10.0])], 0.0, 0.0);
+    assert_plane(&p, [0.0, 1.0, 0.0], [5.0, 0.0, 10.0]);
+    assert_eq!(how, "Normal a la curva en el punto");
+
+    // Eje de la pared y centro del borde
+    let ax = doc.add(FeatureKind::Axis { def: AxisDef::Picked { refs: vec![wall] } });
+    let pt = doc.add(FeatureKind::Point { def: PointSpec::Picked { refs: vec![rim] } });
+    let ev = eval_ok(&doc);
+    match ev.references.get(&ax) {
+        Some(RefGeom::Axis { origin, dir }) => {
+            assert!(norm(cross(normalize(*dir), [0.0, 0.0, 1.0])) < 1e-6);
+            assert!(origin[0].abs() < 1e-6 && origin[1].abs() < 1e-6);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(ev.ref_kinds.get(&ax).map(String::as_str), Some("Eje de la cara"));
+    match ev.references.get(&pt) {
+        Some(RefGeom::Point { point }) => {
+            for (k, v) in [0.0, 0.0, 10.0].iter().enumerate() {
+                assert_relative_eq!(point[k], *v, epsilon = 1e-6);
+            }
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(ev.ref_kinds.get(&pt).map(String::as_str), Some("Centro de la circunferencia"));
+}
+
+#[test]
+fn axes_and_points_by_clicks() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let upright = RefPick::Edge { edge: edge_at(&doc, [10.0, 0.0, 5.0]) };
+    let top = RefPick::Face { face: face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]) };
+    let side = RefPick::Face { face: face_at(&doc, [10.0, 5.0, 5.0], [1.0, 0.0, 0.0]) };
+    let point = |doc: &mut Document, refs: Vec<RefPick>| {
+        let id = doc.add(FeatureKind::Point { def: PointSpec::Picked { refs } });
+        let ev = eval_ok(doc);
+        let p = match ev.references.get(&id) {
+            Some(RefGeom::Point { point }) => *point,
+            other => panic!("{other:?}"),
+        };
+        let how = ev.ref_kinds.get(&id).cloned().unwrap_or_default();
+        doc.features.pop();
+        (p, how)
+    };
+    let near = |a: P3, b: P3| (0..3).all(|k| (a[k] - b[k]).abs() < 1e-6);
+    let (p, how) = point(&mut doc, vec![upright.clone()]);
+    assert!(near(p, [10.0, 0.0, 5.0]) && how == "Medio de la arista", "{p:?} {how}");
+    let (p, how) = point(&mut doc, vec![vertex([0.0; 3]), vertex([10.0, 10.0, 0.0])]);
+    assert!(near(p, [5.0, 5.0, 0.0]) && how == "Punto medio");
+    let (p, how) = point(&mut doc, vec![upright.clone(), RefPick::Plane { plane: PlaneSpec::Custom { plane: Plane { origin: [0.0, 0.0, 4.0], ..Plane::XY } } }]);
+    assert!(near(p, [10.0, 0.0, 4.0]) && how == "Cruce de la arista con la cara", "{p:?} {how}");
+    let (p, how) = point(&mut doc, vec![vertex([3.0, 3.0, 20.0]), top.clone()]);
+    assert!(near(p, [3.0, 3.0, 10.0]) && how == "Proyección sobre el plano");
+
+    // Ejes: cruce de dos caras y normal a una cara por un punto
+    let ax = doc.add(FeatureKind::Axis { def: AxisDef::Picked { refs: vec![top.clone(), side] } });
+    let ax2 = doc.add(FeatureKind::Axis { def: AxisDef::Picked { refs: vec![top, vertex([2.0, 2.0, 10.0])] } });
+    let ev = eval_ok(&doc);
+    match ev.references.get(&ax) {
+        Some(RefGeom::Axis { origin, dir }) => {
+            assert!(norm(cross(normalize(*dir), [0.0, 1.0, 0.0])) < 1e-6);
+            assert!((origin[0] - 10.0).abs() < 1e-6 && (origin[2] - 10.0).abs() < 1e-6);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(ev.ref_kinds.get(&ax2).map(String::as_str), Some("Normal al plano por el punto"));
 }

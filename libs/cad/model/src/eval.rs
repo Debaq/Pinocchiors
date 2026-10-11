@@ -159,6 +159,8 @@ pub struct Evaluation {
     pub sketches3d: HashMap<FeatureId, Sketch3dResult>,
     /// Planos, ejes y puntos de referencia.
     pub references: HashMap<FeatureId, RefGeom>,
+    /// Qué se dedujo de lo elegido en las referencias por clics («Plano medio», «Por dos puntos»...).
+    pub ref_kinds: HashMap<FeatureId, String>,
     /// Curvas de referencia (alambres), para barridos.
     pub curves: HashMap<FeatureId, Shape>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
@@ -236,6 +238,7 @@ struct CacheEntry {
     sketch: Option<SketchResult>,
     sketch3d: Option<Sketch3dResult>,
     reference: Option<RefGeom>,
+    ref_kind: Option<String>,
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
@@ -657,6 +660,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(r) = &e.reference {
                 ctx.ev.references.insert(f.id, r.clone());
             }
+            if let Some(k) = &e.ref_kind {
+                ctx.ev.ref_kinds.insert(f.id, k.clone());
+            }
             if let Some(c) = &e.curve {
                 ctx.ev.curves.insert(f.id, c.clone());
             }
@@ -701,6 +707,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
                 sketch3d: ctx.ev.sketches3d.get(&f.id).cloned(),
                 reference: ctx.ev.references.get(&f.id).cloned(),
+                ref_kind: ctx.ev.ref_kinds.get(&f.id).cloned(),
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
@@ -1419,6 +1426,7 @@ impl Ctx<'_> {
                 let info = self.body()?.edge_info(i).map_err(err)?;
                 if *end { info.end } else { info.start }
             }
+            PointSpec::Picked { refs } => self.picked_point(refs)?.0,
             PointSpec::Reference { feature } => match self.ev.references.get(feature) {
                 Some(RefGeom::Point { point }) => *point,
                 _ => {
@@ -2069,6 +2077,7 @@ impl Ctx<'_> {
                 Plane { origin: a, normal: normalize(n), x_dir: normalize(sub(b, a)) }
             }
             PlaneDef::Scan { plane, .. } => *plane,
+            PlaneDef::Picked { refs, offset, angle, flip } => self.picked_plane(refs, *offset, *angle, *flip)?.0,
         })
     }
 
@@ -2106,6 +2115,7 @@ impl Ctx<'_> {
                 }
                 Axis { origin: *origin, dir: normalize(*direction) }
             }
+            AxisDef::Picked { refs } => self.picked_axis(refs)?.0,
         })
     }
 
@@ -3139,16 +3149,28 @@ impl Ctx<'_> {
                 self.apply(f.id, tool, l.op)
             }
             FeatureKind::Plane { def } => {
+                if let PlaneDef::Picked { refs, offset, angle, flip } = def {
+                    let how = self.picked_plane(refs, *offset, *angle, *flip)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let plane = self.reference_plane(def)?;
                 self.ev.references.insert(f.id, RefGeom::Plane { plane });
                 Ok(())
             }
             FeatureKind::Axis { def } => {
+                if let AxisDef::Picked { refs } = def {
+                    let how = self.picked_axis(refs)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let a = self.reference_axis(def)?;
                 self.ev.references.insert(f.id, RefGeom::Axis { origin: a.origin, dir: a.dir });
                 Ok(())
             }
             FeatureKind::Point { def } => {
+                if let PointSpec::Picked { refs } = def {
+                    let how = self.picked_point(refs)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let point = self.point("def", def)?;
                 self.ev.references.insert(f.id, RefGeom::Point { point });
                 Ok(())
@@ -4147,4 +4169,307 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
         out.push(c);
     }
     Ok(out)
+}
+
+// ─── Referencias por clics ─────────────────────────────────────────────────
+
+/// Lo que es geométricamente cada cosa elegida para armar una referencia.
+#[derive(Debug, Clone, Copy)]
+enum Geo {
+    Plane(Plane),
+    /// Recta (arista recta, eje, línea de un sketch); con `edge`, la arista.
+    Line { axis: Axis, edge: Option<usize> },
+    Circle { center: P3, axis: P3, edge: usize },
+    /// Arista curva que no es circunferencia.
+    Curve { edge: usize },
+    Point(P3),
+    /// Cara cilíndrica o cónica: su eje.
+    Round { axis: Axis, face: usize },
+    Sphere { center: P3, face: usize },
+    /// Otra cara curva.
+    Surface { face: usize },
+}
+
+fn plane_at(origin: P3, normal: P3) -> Plane {
+    let n = normalize(normal);
+    Plane { origin, normal: n, x_dir: default_x(n) }
+}
+
+/// Distancia de `p` a la recta del eje.
+fn line_distance(a: &Axis, p: P3) -> f64 {
+    let d = normalize(a.dir);
+    let v = sub(p, a.origin);
+    norm(sub(v, scale(d, dot(v, d))))
+}
+
+impl Ctx<'_> {
+    fn geo(&self, k: usize, pick: &RefPick) -> R<Geo> {
+        let miss = |e: String| {
+            self.miss("refs", k);
+            e
+        };
+        Ok(match pick {
+            RefPick::Plane { plane } => Geo::Plane(self.plane("refs", plane)?),
+            RefPick::Point { point } => Geo::Point(self.point("refs", point)?),
+            RefPick::Axis { axis } => Geo::Line { axis: self.axis("refs", axis)?, edge: None },
+            RefPick::Face { face } => {
+                self.body()?;
+                let i = self.ev.resolve_face(face).map_err(miss)?;
+                let info = self.body()?.face_info(i).map_err(err)?;
+                match (info.surface, info.axis) {
+                    (SurfaceKind::Plane, _) => Geo::Plane(plane_at(info.point, info.normal)),
+                    (SurfaceKind::Cylinder | SurfaceKind::Cone, Some(axis)) => Geo::Round { axis, face: i },
+                    (SurfaceKind::Sphere, Some(axis)) => Geo::Sphere { center: axis.origin, face: i },
+                    _ => Geo::Surface { face: i },
+                }
+            }
+            RefPick::Edge { edge } => {
+                self.body()?;
+                let i = self.ev.resolve_edge(edge).map_err(miss)?;
+                let info = self.body()?.edge_info(i).map_err(err)?;
+                match info.circle {
+                    Some((center, axis, _)) => Geo::Circle { center, axis, edge: i },
+                    None if info.curve == cad_occt::CurveKind::Line => {
+                        Geo::Line { axis: Axis { origin: info.start, dir: normalize(sub(info.end, info.start)) }, edge: Some(i) }
+                    }
+                    None => Geo::Curve { edge: i },
+                }
+            }
+        })
+    }
+
+    fn geos(&self, refs: &[RefPick]) -> R<Vec<Geo>> {
+        if refs.is_empty() {
+            return Err("elegir en el visor lo que la define (caras, aristas, vértices o planos)".into());
+        }
+        refs.iter().enumerate().map(|(k, r)| self.geo(k, r)).collect()
+    }
+
+    /// Punto de la arista más cercano a `p`, la tangente ahí y la distancia
+    /// (muestras de la arista y después búsqueda fina en el tramo más cercano).
+    fn edge_point_tangent(&self, edge: usize, p: P3) -> R<(P3, P3, f64)> {
+        let body = self.body()?;
+        let n = 256;
+        let fr: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        let pts = body.edge_points(edge, &fr).map_err(err)?;
+        let dist = |q: P3| norm(sub(q, p));
+        let k = (0..pts.len()).min_by(|&a, &b| dist(pts[a]).total_cmp(&dist(pts[b]))).ok_or("arista vacía")?;
+        let at = |f: f64| -> R<P3> { Ok(body.edge_points(edge, &[f.clamp(0.0, 1.0)]).map_err(err)?[0]) };
+        // Sección áurea entre las muestras vecinas
+        let (mut lo, mut hi) = (fr[k.saturating_sub(1)], fr[(k + 1).min(n)]);
+        for _ in 0..40 {
+            let (m1, m2) = (lo + (hi - lo) * 0.382, lo + (hi - lo) * 0.618);
+            if dist(at(m1)?) < dist(at(m2)?) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let f = (lo + hi) / 2.0;
+        let h = 1e-6;
+        let (a, b) = (at(f - h)?, at(f + h)?);
+        let q = at(f)?;
+        let t = if norm(sub(b, a)) > 0.0 { normalize(sub(b, a)) } else { normalize(sub(pts[(k + 1).min(n)], pts[k.saturating_sub(1)])) };
+        Ok((q, t, dist(q)))
+    }
+
+    /// Punto de la cara más cercano a `p` y la normal ahí (Newton sobre la superficie).
+    fn face_point_normal(&self, face: usize, p: P3) -> R<(P3, P3)> {
+        let body = self.body()?;
+        let (bounds, _) = body.face_eval(face, &[]).map_err(err)?;
+        let [u0, u1, v0, v1] = bounds;
+        let g = 16;
+        let grid: Vec<[f64; 2]> = (0..=g).flat_map(|i| (0..=g).map(move |j| [u0 + (u1 - u0) * i as f64 / g as f64, v0 + (v1 - v0) * j as f64 / g as f64])).collect();
+        let (_, pts) = body.face_eval(face, &grid).map_err(err)?;
+        let k = (0..pts.len()).min_by(|&a, &b| norm(sub(pts[a].point, p)).total_cmp(&norm(sub(pts[b].point, p)))).ok_or("cara vacía")?;
+        let mut uv = grid[k];
+        let mut sp = pts[k];
+        for _ in 0..8 {
+            let r = sub(p, sp.point);
+            let (a11, a12, a22) = (dot(sp.du, sp.du), dot(sp.du, sp.dv), dot(sp.dv, sp.dv));
+            let (b1, b2) = (dot(sp.du, r), dot(sp.dv, r));
+            let det = a11 * a22 - a12 * a12;
+            if det.abs() < 1e-18 {
+                break;
+            }
+            uv = [(uv[0] + (b1 * a22 - b2 * a12) / det).clamp(u0, u1), (uv[1] + (a11 * b2 - a12 * b1) / det).clamp(v0, v1)];
+            sp = body.face_eval(face, &[uv]).map_err(err)?.1[0];
+        }
+        Ok((sp.point, normalize(sp.normal)))
+    }
+
+    /// Plano por clics: el tipo según lo elegido y el nombre de lo deducido.
+    fn picked_plane(&self, refs: &[RefPick], offset: f64, angle: f64, flip: bool) -> R<(Plane, &'static str)> {
+        let g = self.geos(refs)?;
+        let tol = self.diag().max(1.0) * 1e-6;
+        let rotate = |n: P3, d: P3, a: f64| {
+            let m = cad_occt::rotation_matrix(Axis { origin: [0.0; 3], dir: d }, a.to_radians());
+            [0, 1, 2].map(|i| m[i][0] * n[0] + m[i][1] * n[1] + m[i][2] * n[2])
+        };
+        let (plane, how) = match g.as_slice() {
+            [Geo::Plane(p)] => (*p, "Desfasado de un plano o una cara"),
+            [Geo::Circle { center, axis, .. }] => (plane_at(*center, *axis), "Plano de la circunferencia"),
+            [Geo::Line { axis, edge: Some(e) }] => (plane_at(self.body()?.edge_info(*e).map_err(err)?.mid, axis.dir), "Normal a la arista en su medio"),
+            [Geo::Curve { edge }] => {
+                let mid = self.body()?.edge_info(*edge).map_err(err)?.mid;
+                let (q, t, _) = self.edge_point_tangent(*edge, mid)?;
+                (plane_at(q, t), "Normal a la arista en su medio")
+            }
+            [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }] => {
+                let p = self.body()?.face_info(*face).map_err(err)?.point;
+                let (q, n) = self.face_point_normal(*face, p)?;
+                (plane_at(q, n), "Tangente a la cara")
+            }
+            [Geo::Plane(a), Geo::Plane(b)] => {
+                let (na, nb) = (normalize(a.normal), normalize(b.normal));
+                if norm(cross(na, nb)) < 1e-6 {
+                    let d = dot(sub(b.origin, a.origin), na);
+                    (Plane { origin: add(a.origin, scale(na, d / 2.0)), ..*a }, "Plano medio")
+                } else {
+                    // Bisector: por el cruce de los dos, a mitad del ángulo
+                    let ax = self.reference_axis(&AxisDef::Planes { a: PlaneSpec::Custom { plane: *a }, b: PlaneSpec::Custom { plane: *b } })?;
+                    let nb = if dot(na, nb) < 0.0 { scale(nb, -1.0) } else { nb };
+                    (plane_at(ax.origin, normalize(sub(na, nb))), "Bisector de dos planos")
+                }
+            }
+            [Geo::Plane(p), Geo::Line { axis, .. }] | [Geo::Line { axis, .. }, Geo::Plane(p)] => {
+                let d = normalize(axis.dir);
+                let n = normalize(p.normal);
+                // Por la línea: paralelo al plano si la línea lo es; si no, perpendicular a él
+                let start = if dot(d, n).abs() < 1e-6 { n } else { normalize(cross(d, cross(n, d))) };
+                let start = if norm(start) < 1e-9 { normalize(cross(d, n)) } else { start };
+                (plane_at(axis.origin, rotate(start, d, angle)), "Por una línea, en ángulo con el plano")
+            }
+            [Geo::Plane(p), Geo::Point(q)] | [Geo::Point(q), Geo::Plane(p)] => (Plane { origin: *q, ..*p }, "Paralelo por un punto"),
+            [Geo::Line { axis, edge }, Geo::Point(q)] | [Geo::Point(q), Geo::Line { axis, edge }] => {
+                let _ = edge;
+                if line_distance(axis, *q) < tol {
+                    (plane_at(*q, axis.dir), "Normal a la línea por el punto")
+                } else {
+                    let n = cross(axis.dir, sub(*q, axis.origin));
+                    (plane_at(axis.origin, n), "Por una línea y un punto")
+                }
+            }
+            [Geo::Curve { edge } | Geo::Circle { edge, .. }, Geo::Point(q)] | [Geo::Point(q), Geo::Curve { edge } | Geo::Circle { edge, .. }] => {
+                let (at, t, d) = self.edge_point_tangent(*edge, *q)?;
+                if d > tol.max(1e-4) {
+                    // Fuera de la curva: en el punto más cercano de la curva
+                    (plane_at(at, t), "Normal a la curva en el punto más cercano")
+                } else {
+                    (plane_at(*q, t), "Normal a la curva en el punto")
+                }
+            }
+            [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }, Geo::Point(q)]
+            | [Geo::Point(q), Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }] => {
+                let (at, n) = self.face_point_normal(*face, *q)?;
+                (plane_at(at, n), "Tangente a la cara por el punto")
+            }
+            [Geo::Point(a), Geo::Point(b), Geo::Point(c)] => {
+                let n = cross(sub(*b, *a), sub(*c, *a));
+                if norm(n) < tol * norm(sub(*b, *a)).max(1.0) {
+                    return Err("los tres puntos están alineados".into());
+                }
+                (Plane { origin: *a, normal: normalize(n), x_dir: normalize(sub(*b, *a)) }, "Por tres puntos")
+            }
+            _ => return Err(format!("no sé armar un plano con eso ({} elegidos): una cara o un plano; dos planos; un plano y una línea; una línea y un punto; una curva y un punto; una cara curva (y un punto); o tres puntos", g.len())),
+        };
+        let plane = if flip { Plane { normal: scale(plane.normal, -1.0), ..plane } } else { plane };
+        Ok((if offset != 0.0 { plane.offset(offset) } else { plane }, how))
+    }
+
+    /// Eje por clics.
+    fn picked_axis(&self, refs: &[RefPick]) -> R<(Axis, &'static str)> {
+        let g = self.geos(refs)?;
+        Ok(match g.as_slice() {
+            [Geo::Line { axis, .. }] => (*axis, "Por la arista o la línea"),
+            [Geo::Circle { center, axis, .. }] => (Axis { origin: *center, dir: normalize(*axis) }, "Eje de la circunferencia"),
+            [Geo::Round { axis, .. }] => (Axis { origin: axis.origin, dir: normalize(axis.dir) }, "Eje de la cara"),
+            [Geo::Point(a), Geo::Point(b)] => {
+                if norm(sub(*b, *a)) < 1e-9 {
+                    return Err("los dos puntos coinciden".into());
+                }
+                (Axis { origin: *a, dir: normalize(sub(*b, *a)) }, "Por dos puntos")
+            }
+            [Geo::Plane(a), Geo::Plane(b)] => {
+                let ax = self.reference_axis(&AxisDef::Planes { a: PlaneSpec::Custom { plane: *a }, b: PlaneSpec::Custom { plane: *b } })?;
+                (ax, "Cruce de dos planos")
+            }
+            [Geo::Plane(p), Geo::Point(q)] | [Geo::Point(q), Geo::Plane(p)] => (Axis { origin: *q, dir: normalize(p.normal) }, "Normal al plano por el punto"),
+            [Geo::Line { axis, .. }, Geo::Point(q)] | [Geo::Point(q), Geo::Line { axis, .. }] => (Axis { origin: *q, dir: normalize(axis.dir) }, "Paralelo por un punto"),
+            _ => return Err(format!("no sé armar un eje con eso ({} elegidos): una arista o línea; una circunferencia; una cara cilíndrica; dos puntos; dos planos; un plano y un punto", g.len())),
+        })
+    }
+
+    /// Punto por clics.
+    fn picked_point(&self, refs: &[RefPick]) -> R<(P3, &'static str)> {
+        let g = self.geos(refs)?;
+        let tol = self.diag().max(1.0) * 1e-6;
+        // Cruce de una arista con un plano: por muestras de la arista (cambio de lado)
+        let edge_plane = |edge: usize, p: &Plane| -> R<P3> {
+            let n = 512;
+            let fr: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+            let pts = self.body()?.edge_points(edge, &fr).map_err(err)?;
+            let side = |q: P3| dot(sub(q, p.origin), normalize(p.normal));
+            for w in pts.windows(2) {
+                let (a, b) = (side(w[0]), side(w[1]));
+                if a.abs() < tol {
+                    return Ok(w[0]);
+                }
+                if a * b < 0.0 {
+                    return Ok(add(w[0], scale(sub(w[1], w[0]), a / (a - b))));
+                }
+            }
+            Err("la arista no cruza ese plano".into())
+        };
+        Ok(match g.as_slice() {
+            [Geo::Point(p)] => (*p, "Vértice o punto"),
+            [Geo::Line { edge: Some(e), .. }] => (self.body()?.edge_info(*e).map_err(err)?.mid, "Medio de la arista"),
+            [Geo::Curve { edge }] => (self.body()?.edge_info(*edge).map_err(err)?.mid, "Medio de la arista"),
+            [Geo::Circle { center, .. }] => (*center, "Centro de la circunferencia"),
+            [Geo::Sphere { center, .. }] => (*center, "Centro de la esfera"),
+            [Geo::Point(a), Geo::Point(b)] => (scale(add(*a, *b), 0.5), "Punto medio"),
+            [Geo::Point(q), Geo::Plane(p)] | [Geo::Plane(p), Geo::Point(q)] => {
+                let n = normalize(p.normal);
+                (sub(*q, scale(n, dot(sub(*q, p.origin), n))), "Proyección sobre el plano")
+            }
+            [Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }, Geo::Plane(p)]
+            | [Geo::Plane(p), Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }] => (edge_plane(*e, p)?, "Cruce de la arista con la cara"),
+            [Geo::Line { axis, edge: None }, Geo::Plane(p)] | [Geo::Plane(p), Geo::Line { axis, edge: None }] => {
+                let n = normalize(p.normal);
+                let den = dot(axis.dir, n);
+                if den.abs() < 1e-9 {
+                    return Err("la línea es paralela al plano".into());
+                }
+                let t = dot(sub(p.origin, axis.origin), n) / den;
+                (add(axis.origin, scale(axis.dir, t)), "Cruce de la línea con el plano")
+            }
+            [Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }, Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }]
+            | [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }, Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }] => {
+                let body = self.body()?;
+                let (es, fs) = (body.edge_shape(*e).map_err(err)?, body.face_shape(*face).map_err(err)?);
+                match es.min_distance(&fs) {
+                    Some((d, p, _)) if d < tol.max(1e-6) * 10.0 => (p, "Cruce de la arista con la cara"),
+                    _ => return Err("la arista no toca esa cara".into()),
+                }
+            }
+            [Geo::Line { axis: a, .. }, Geo::Line { axis: b, .. }] => {
+                // Lo más cerca entre las dos rectas; si no se cortan, error
+                let (da, db) = (normalize(a.dir), normalize(b.dir));
+                let w = sub(a.origin, b.origin);
+                let (bb, d, e) = (dot(da, db), dot(da, w), dot(db, w));
+                let den = 1.0 - bb * bb;
+                if den.abs() < 1e-12 {
+                    return Err("las dos líneas son paralelas".into());
+                }
+                let s = (bb * e - d) / den;
+                let t = (e - bb * d) / den;
+                let (p, q) = (add(a.origin, scale(da, s)), add(b.origin, scale(db, t)));
+                if norm(sub(p, q)) > tol.max(1e-6) * 10.0 {
+                    return Err("las dos líneas no se cruzan".into());
+                }
+                (p, "Cruce de dos líneas")
+            }
+            _ => return Err(format!("no sé armar un punto con eso ({} elegidos): un vértice; una arista (su medio o su centro); una esfera; dos puntos; una arista y una cara; dos líneas", g.len())),
+        })
+    }
 }

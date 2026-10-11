@@ -193,6 +193,9 @@ pub struct RefView {
     pub id: cad_model::FeatureId,
     #[serde(flatten)]
     pub geom: cad_model::RefGeom,
+    /// En las referencias por clics, qué se dedujo de lo elegido
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub how: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -437,7 +440,7 @@ fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
         serde_json::to_string(a).unwrap_or_default().hash(&mut h);
         AssemblyView { solution: cad_model::assembly::solve(a), version: h.finish() }
     });
-    let mut references: Vec<RefView> = eval.references.iter().map(|(id, g)| RefView { id: *id, geom: g.clone() }).collect();
+    let mut references: Vec<RefView> = eval.references.iter().map(|(id, g)| RefView { id: *id, geom: g.clone(), how: eval.ref_kinds.get(id).cloned() }).collect();
     references.sort_by_key(|r| doc.index_of(r.id));
     Ok(CadResult {
         parts,

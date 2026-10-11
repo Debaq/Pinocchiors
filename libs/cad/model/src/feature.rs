@@ -93,6 +93,9 @@ pub enum PointSpec {
     },
     /// Tomado del escaneo; `point` es lo último ajustado (ver [`ScanFit`]).
     Scan { fit: ScanFit, point: P3 },
+    /// Por clics: el tipo sale de lo elegido (vértice, medio o centro de una
+    /// arista, centro de una esfera, cruce de arista y cara, punto medio...).
+    Picked { refs: Vec<RefPick> },
 }
 
 /// Dónde se hizo clic sobre el escaneo: el triángulo y el punto dentro de él
@@ -137,6 +140,42 @@ pub enum PlaneDef {
     ThreePoints { points: [PointSpec; 3] },
     /// Tomado del escaneo; `plane` es lo último ajustado.
     Scan { fit: ScanFit, plane: Plane },
+    /// Por clics: el tipo sale de lo elegido (ver [`RefPick`]). `offset`
+    /// corre el plano sobre su normal, `angle` lo gira alrededor de la línea
+    /// elegida y `flip` da vuelta la normal.
+    Picked {
+        refs: Vec<RefPick>,
+        #[serde(default)]
+        offset: f64,
+        #[serde(default)]
+        angle: f64,
+        #[serde(default)]
+        flip: bool,
+    },
+}
+
+/// Algo del modelo elegido con un clic para armar un plano, un eje o un
+/// punto de referencia; sigue al modelo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RefPick {
+    /// Un plano base o de referencia.
+    Plane { plane: PlaneSpec },
+    Face { face: FaceRef },
+    Edge { edge: EdgeRef },
+    /// Un vértice, un punto de referencia o uno fijo.
+    Point { point: PointSpec },
+    /// Un eje de referencia o una línea de un sketch.
+    Axis { axis: AxisSpec },
+}
+
+fn pick_deps(p: &RefPick) -> Vec<FeatureId> {
+    match p {
+        RefPick::Plane { plane } => plane_deps(plane),
+        RefPick::Point { point } => point_deps(point),
+        RefPick::Axis { axis } => axis_deps(axis),
+        RefPick::Face { .. } | RefPick::Edge { .. } => vec![],
+    }
 }
 
 /// Cómo se define un eje de referencia.
@@ -152,6 +191,8 @@ pub enum AxisDef {
     Planes { a: PlaneSpec, b: PlaneSpec },
     /// Tomado del escaneo; `origin` y `direction` son lo último ajustado.
     Scan { fit: ScanFit, origin: P3, direction: P3 },
+    /// Por clics: el tipo sale de lo elegido.
+    Picked { refs: Vec<RefPick> },
 }
 
 fn origin_point() -> PointSpec {
@@ -176,6 +217,7 @@ fn axis_deps(a: &AxisSpec) -> Vec<FeatureId> {
 fn point_deps(p: &PointSpec) -> Vec<FeatureId> {
     match p {
         PointSpec::Reference { feature } => vec![*feature],
+        PointSpec::Picked { refs } => refs.iter().flat_map(pick_deps).collect(),
         _ => vec![],
     }
 }
@@ -1154,10 +1196,12 @@ impl FeatureKind {
                 PlaneDef::Midplane { a, b } => [plane_deps(a), plane_deps(b)].concat(),
                 PlaneDef::ThreePoints { points } => points.iter().flat_map(point_deps).collect(),
                 PlaneDef::Scan { .. } => vec![],
+                PlaneDef::Picked { refs, .. } => refs.iter().flat_map(pick_deps).collect(),
             },
             FeatureKind::Axis { def } => match def {
                 AxisDef::TwoPoints { a, b } => [point_deps(a), point_deps(b)].concat(),
                 AxisDef::Planes { a, b } => [plane_deps(a), plane_deps(b)].concat(),
+                AxisDef::Picked { refs } => refs.iter().flat_map(pick_deps).collect(),
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),

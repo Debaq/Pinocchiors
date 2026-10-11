@@ -72,7 +72,17 @@ export type PointSpec =
   /** Un extremo de una arista (vértice del sólido): el final con `end` */
   | { type: "edge_end"; edge: EdgeRef; end?: boolean }
   /** Tomado del escaneo; `point` es lo último ajustado */
-  | { type: "scan"; fit: ScanFit; point: P3 };
+  | { type: "scan"; fit: ScanFit; point: P3 }
+  /** Por clics: el tipo sale de lo elegido (vértice, medio o centro de una arista, cruce...) */
+  | { type: "picked"; refs: RefPick[] };
+
+/** Algo del modelo elegido con un clic para armar un plano, un eje o un punto de referencia */
+export type RefPick =
+  | { type: "plane"; plane: PlaneSpec }
+  | { type: "face"; face: FaceRef }
+  | { type: "edge"; edge: EdgeRef }
+  | { type: "point"; point: PointSpec }
+  | { type: "axis"; axis: AxisSpec };
 
 /** Dónde se hizo clic sobre el escaneo (sigue al escaneo si se mueve o se rehace) */
 export interface ScanSeed {
@@ -94,17 +104,20 @@ export type PlaneDef =
   | { type: "angle"; base: PlaneSpec; axis: AxisSpec; angle: number }
   | { type: "midplane"; a: PlaneSpec; b: PlaneSpec }
   | { type: "three_points"; points: [PointSpec, PointSpec, PointSpec] }
-  | { type: "scan"; fit: ScanFit; plane: Plane };
+  | { type: "scan"; fit: ScanFit; plane: Plane }
+  /** Por clics: el tipo sale de lo elegido; `offset` lo corre, `angle` lo gira alrededor de la línea elegida */
+  | { type: "picked"; refs: RefPick[]; offset?: number; angle?: number; flip?: boolean };
 
 export type AxisDef =
   | { type: "two_points"; a: PointSpec; b: PointSpec }
   | { type: "edge"; edge: EdgeRef }
   | { type: "face"; face: FaceRef }
   | { type: "planes"; a: PlaneSpec; b: PlaneSpec }
-  | { type: "scan"; fit: ScanFit; origin: P3; direction: P3 };
+  | { type: "scan"; fit: ScanFit; origin: P3; direction: P3 }
+  | { type: "picked"; refs: RefPick[] };
 
-/** Geometría de referencia calculada */
-export type RefView = { id: number } & (
+/** Geometría de referencia calculada; `how`: en las de clics, qué se dedujo de lo elegido */
+export type RefView = { id: number; how?: string } & (
   | { kind: "plane"; plane: Plane }
   | { kind: "axis"; origin: P3; dir: P3 }
   | { kind: "point"; point: P3 }
@@ -1630,7 +1643,9 @@ export const usesScan = (kind: FeatureKind) =>
 export function dependencies(kind: FeatureKind): number[] {
   const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" ? [a.feature] : []);
   const plane = (p: PlaneSpec) => (p.type === "reference" ? [p.feature] : []);
-  const point = (p: PointSpec) => (p.type === "reference" ? [p.feature] : []);
+  const pick = (r: RefPick): number[] =>
+    r.type === "plane" ? plane(r.plane) : r.type === "point" ? point(r.point) : r.type === "axis" ? axis(r.axis) : [];
+  const point = (p: PointSpec): number[] => (p.type === "reference" ? [p.feature] : p.type === "picked" ? p.refs.flatMap(pick) : []);
   switch (kind.type) {
     case "sketch":
       return [
@@ -1648,12 +1663,14 @@ export function dependencies(kind: FeatureKind): number[] {
       if (d.type === "angle") return [...plane(d.base), ...axis(d.axis)];
       if (d.type === "midplane") return [...plane(d.a), ...plane(d.b)];
       if (d.type === "scan") return [];
+      if (d.type === "picked") return d.refs.flatMap(pick);
       return d.points.flatMap(point);
     }
     case "axis": {
       const d = kind.def;
       if (d.type === "two_points") return [...point(d.a), ...point(d.b)];
       if (d.type === "planes") return [...plane(d.a), ...plane(d.b)];
+      if (d.type === "picked") return d.refs.flatMap(pick);
       return [];
     }
     case "point":

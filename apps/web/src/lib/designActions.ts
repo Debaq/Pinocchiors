@@ -22,6 +22,8 @@ import {
   type P2,
   type PartId,
   type PlaneSpec,
+  type PointSpec,
+  type RefPick,
   type Sketch,
   type PrimitiveShape,
   type RegionSelection,
@@ -566,26 +568,28 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    */
   const addReference = async (kind: "plane" | "axis" | "point") => {
     const picks = ui.picks();
-    const face = picks.find((p) => p.kind === "face");
-    const edge = picks.find((p) => p.kind === "edge");
-    const vertex = picks.find((p) => p.kind === "vertex");
-    const plane = picks.find((p) => p.kind === "plane" || p.kind === "refplane");
-    ui.clearPicks();
-    if (kind === "plane") {
-      let base: PlaneSpec = { type: "xy" };
-      if (plane?.kind === "plane") base = { type: plane.plane };
-      else if (plane?.kind === "refplane") base = { type: "reference", feature: plane.feature };
-      else if (face?.kind === "face") base = { type: "face", face: await store.faceRef(face.face) };
-      return void store.addFeature({ type: "plane", def: { type: "offset", base, distance: 10 } });
+    // Por clics: lo que ya está elegido arma la referencia (el tipo se deduce)
+    const refs: RefPick[] = [];
+    for (const p of picks) {
+      if (p.kind === "face") refs.push({ type: "face", face: await store.faceRef(p.face) });
+      else if (p.kind === "edge") refs.push({ type: "edge", edge: await store.edgeRef(p.edge) });
+      else if (p.kind === "plane") refs.push({ type: "plane", plane: { type: p.plane } });
+      else if (p.kind === "refplane") refs.push({ type: "plane", plane: { type: "reference", feature: p.feature } });
+      else if (p.kind === "vertex") {
+        const point = await invoke<PointSpec>("cad_vertex_spec", { point: p.at }).catch((): PointSpec => ({ type: "at", point: p.at }));
+        refs.push({ type: "point", point });
+      }
     }
-    if (kind === "axis") {
-      if (edge?.kind === "edge") return void store.addFeature({ type: "axis", def: { type: "edge", edge: await store.edgeRef(edge.edge) } });
-      if (face?.kind === "face") return void store.addFeature({ type: "axis", def: { type: "face", face: await store.faceRef(face.face) } });
-      return void store.addFeature({ type: "axis", def: { type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } } });
+    if (refs.length) {
+      ui.clearPicks();
+      if (kind === "plane") return void store.addFeature({ type: "plane", def: { type: "picked", refs } });
+      if (kind === "axis") return void store.addFeature({ type: "axis", def: { type: "picked", refs } });
+      return void store.addFeature({ type: "point", def: { type: "picked", refs } });
     }
-    if (vertex?.kind === "vertex") return void store.addFeature({ type: "point", def: { type: "at", point: vertex.at } });
-    if (edge?.kind === "edge") return void store.addFeature({ type: "point", def: { type: "center", edge: await store.edgeRef(edge.edge) } });
-    void store.addFeature({ type: "point", def: { type: "at", point: [0, 0, 0] } });
+    // Sin nada elegido: el plano, desfasado de la planta; el eje y el punto, eligiendo en el visor
+    if (kind === "plane") return void store.addFeature({ type: "plane", def: { type: "picked", refs: [{ type: "plane", plane: { type: "xy" } }], offset: 10 } });
+    if (kind === "axis") return void store.addFeature({ type: "axis", def: { type: "picked", refs: [] } });
+    void store.addFeature({ type: "point", def: { type: "picked", refs: [] } });
   };
 
   /** Booleana: con piezas elegidas, la primera es la que queda y las demás, las que restan */
