@@ -4009,6 +4009,24 @@ export const FeatureEditor: Component<{
                   {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label="Punta final" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
                 </Show>
                 <Checkbox small label="Cerrada (vuelve a la primera)" checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
+                <Checkbox
+                  small
+                  label="Sale perpendicular a la primera sección"
+                  checked={k().start_tangent != null}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                />
+                <Show when={k().start_tangent != null}>
+                  {field("Peso al comienzo", "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
+                </Show>
+                <Checkbox
+                  small
+                  label="Llega perpendicular a la última sección"
+                  checked={k().end_tangent != null}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                />
+                <Show when={k().end_tangent != null}>
+                  {field("Peso al final", "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
+                </Show>
                 <Checkbox small label="Delgada (solo una pared)" checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
                 <Show when={k().thin != null}>
                   {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "loft" && (x.thin = v), "mm")}

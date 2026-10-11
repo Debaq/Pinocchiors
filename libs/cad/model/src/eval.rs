@@ -3456,6 +3456,18 @@ impl Ctx<'_> {
                 if (l.path.is_some() || l.guide.is_some()) && (ends > 0 || l.closed) {
                     return Err("con línea central o curva guía no va a un punto ni cerrada".into());
                 }
+                let weight = |w: Option<f64>| -> R<f64> {
+                    match w {
+                        Some(w) if w <= 0.0 => Err("el peso de la tangencia tiene que ser mayor que cero".into()),
+                        Some(w) => Ok(w),
+                        None => Ok(0.0),
+                    }
+                };
+                let (tan0, tan1) = (weight(l.start_tangent)?, weight(l.end_tangent)?);
+                let tangent = tan0 > 0.0 || tan1 > 0.0;
+                if tangent && (ends > 0 || l.closed || l.ruled || l.path.is_some() || l.guide.is_some()) {
+                    return Err("la tangencia en las puntas no va con punta, cerrada, reglada, línea central ni guía".into());
+                }
                 let mut faces = Vec::new();
                 let mut samples = Vec::new();
                 for (i, s) in l.sections.iter().enumerate() {
@@ -3474,6 +3486,7 @@ impl Ctx<'_> {
                 let build = |faces: &[Shape]| -> R<Shape> {
                     match &spine {
                         Some(sp) => Shape::loft_along(faces, sp, guide.as_ref(), true).map_err(err),
+                        None if tangent => Shape::loft_tangent(faces, tan0, tan1, true).map_err(err),
                         None if ends == 0 && !l.closed => Shape::loft(faces, true, l.ruled).map_err(err),
                         None => Shape::loft_ex(faces, true, l.ruled, start, end, l.closed).map_err(err),
                     }

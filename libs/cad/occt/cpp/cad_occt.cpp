@@ -84,6 +84,12 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepTools.hxx>
+#include <Geom_BSplineSurface.hxx>
+#include <TColStd_HArray1OfReal.hxx>
+#include <TColgp_Array2OfPnt.hxx>
+#include <GeomAdaptor_Curve.hxx>
+#include <Geom_Plane.hxx>
+#include <BRepLib_FindSurface.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BOPAlgo_MakerVolume.hxx>
 #include <BRepGProp_Face.hxx>
@@ -824,6 +830,210 @@ CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape*
         if (!mk.IsDone()) throw Standard_Failure("no se pudo pasar por las secciones a lo largo del camino");
         if (solid && !mk.MakeSolid()) throw Standard_Failure("la transición no cierra un sólido");
         return wrap_checked(mk.Shape(), "transición por un camino");
+    });
+}
+
+namespace hermite {
+
+// Las aristas de un alambre en el orden y el sentido en que se recorre, como curvas
+struct Side {
+    Handle(Geom_Curve) c;
+    double f, l;
+    bool reversed;
+    gp_Pnt at(double s) const { return c->Value(reversed ? l - (l - f) * s : f + (l - f) * s); }
+};
+
+static std::vector<Side> sides_of(const TopoDS_Wire& w) {
+    std::vector<Side> out;
+    for (BRepTools_WireExplorer x(w); x.More(); x.Next()) {
+        double f, l;
+        Handle(Geom_Curve) c = BRep_Tool::Curve(x.Current(), f, l);
+        if (c.IsNull()) throw Standard_Failure("una arista de la sección no tiene curva");
+        out.push_back({c, f, l, x.Current().Orientation() == TopAbs_REVERSED});
+    }
+    return out;
+}
+
+// La sección `b` empezando en la arista `shift` y recorrida al derecho o al revés
+static std::vector<Side> rotated(const std::vector<Side>& b, size_t shift, bool backwards) {
+    std::vector<Side> out;
+    size_t n = b.size();
+    for (size_t k = 0; k < n; k++) {
+        if (!backwards) out.push_back(b[(shift + k) % n]);
+        else {
+            Side s = b[(shift + n - k) % n];
+            s.reversed = !s.reversed;
+            out.push_back(s);
+        }
+    }
+    return out;
+}
+
+}  // namespace hermite
+
+// Transición con tangencia en las puntas: la superficie se arma a mano (no hay en OCCT un loft
+// con condiciones de borde). Cada lado es un parche B-spline: a lo largo de la arista, la arista
+// interpolada en M puntos por fracción de largo (las mismas fracciones en todas las secciones, así
+// las curvas son compatibles); entre secciones, Hermite cúbica (Catmull-Rom adentro). En una punta
+// con peso > 0 la tangente es la normal de la sección × peso × distancia a la vecina: la
+// superficie sale perpendicular a la sección; con peso ≤ 0, la diferencia con la vecina (libre).
+// Las secciones tienen que tener la misma cantidad de aristas.
+CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start_w, double end_w, int32_t solid) {
+    return guard("transición con tangencia", (CadShape*)nullptr, [&] {
+        if (n < 2) throw Standard_Failure("se necesitan al menos 2 secciones");
+        std::vector<std::vector<hermite::Side>> secs;
+        std::vector<TopoDS_Wire> ws;
+        std::vector<gp_Pnt> centers;
+        std::vector<gp_Vec> normals;
+        for (int32_t i = 0; i < n; i++) {
+            TopoDS_Wire w = wire_of(wires[i]->s);
+            ws.push_back(w);
+            secs.push_back(hermite::sides_of(w));
+            GProp_GProps g;
+            BRepGProp::LinearProperties(w, g);
+            centers.push_back(g.CentreOfMass());
+            gp_Vec nrm(0, 0, 0);
+            BRepLib_FindSurface fs(w, 1e-6, Standard_True);
+            if (fs.Found()) {
+                Handle(Geom_Plane) pl = Handle(Geom_Plane)::DownCast(fs.Surface());
+                if (!pl.IsNull()) nrm = gp_Vec(pl->Axis().Direction());
+            }
+            normals.push_back(nrm);
+        }
+        // Secciones de una sola arista cerrada (un círculo): en dos mitades, si no el lado sería
+        // una sola cara pegada a sí misma
+        bool all_single = true;
+        for (auto& sc : secs) all_single = all_single && sc.size() == 1;
+        if (all_single)
+            for (auto& sc : secs) {
+                hermite::Side sd = sc[0];
+                double mid = (sd.f + sd.l) / 2;
+                hermite::Side lo{sd.c, sd.f, mid, sd.reversed}, hi{sd.c, mid, sd.l, sd.reversed};
+                sc = sd.reversed ? std::vector<hermite::Side>{hi, lo} : std::vector<hermite::Side>{lo, hi};
+            }
+        const size_t K = secs[0].size();
+        for (auto& sc : secs)
+            if (sc.size() != K) throw Standard_Failure("para la tangencia las secciones tienen que tener la misma cantidad de lados");
+        // Cada sección alineada con la anterior: la arista de arranque y el sentido que dejan sus
+        // vértices más cerca (medidos desde el centro de cada una)
+        for (int32_t i = 1; i < n; i++) {
+            double best = 1e300;
+            std::vector<hermite::Side> pick;
+            for (int dir = 0; dir < 2; dir++)
+                for (size_t sh = 0; sh < K; sh++) {
+                    auto cand = hermite::rotated(secs[i], sh, dir == 1);
+                    double sum = 0;
+                    for (size_t k = 0; k < K; k++) {
+                        gp_Vec pa(centers[i - 1], secs[i - 1][k].at(0)), pb(centers[i], cand[k].at(0));
+                        sum += (pa - pb).SquareMagnitude();
+                        gp_Vec ma(centers[i - 1], secs[i - 1][k].at(0.5)), mb(centers[i], cand[k].at(0.5));
+                        sum += (ma - mb).SquareMagnitude();
+                    }
+                    if (sum < best) {
+                        best = sum;
+                        pick = cand;
+                    }
+                }
+            secs[i] = pick;
+        }
+        // Tangentes de las puntas
+        auto end_dir = [&](int i, int toward, double w) {
+            if (normals[i].Magnitude() < 0.5) throw Standard_Failure("para la tangencia la sección de la punta tiene que ser plana");
+            gp_Vec d(centers[i], centers[toward]);
+            gp_Vec fwd = toward > i ? d : d.Reversed();
+            gp_Vec t = normals[i];
+            if (t.Dot(fwd) < 0) t.Reverse();
+            return t * (w * d.Magnitude());
+        };
+        const bool fixed0 = start_w > 0, fixed1 = end_w > 0;
+        const gp_Vec T0 = fixed0 ? end_dir(0, 1, start_w) : gp_Vec(), T1 = fixed1 ? end_dir(n - 1, n - 2, end_w) : gp_Vec();
+
+        // Puntos de cada arista por fracción de su largo
+        const int M = 25;
+        TColStd_Array1OfReal params(1, M);
+        for (int m = 0; m < M; m++) params(m + 1) = double(m) / (M - 1);
+        auto samples = [&](const hermite::Side& sd) {
+            GeomAdaptor_Curve ac(sd.c, sd.f, sd.l);
+            double len = GCPnts_AbscissaPoint::Length(ac, sd.f, sd.l);
+            std::vector<gp_Pnt> pts(M);
+            for (int m = 0; m < M; m++) {
+                double s = double(m) / (M - 1);
+                double u;
+                if (m == 0) u = sd.reversed ? sd.l : sd.f;
+                else if (m == M - 1) u = sd.reversed ? sd.f : sd.l;
+                else {
+                    GCPnts_AbscissaPoint ap(ac, (sd.reversed ? -1 : 1) * len * s, sd.reversed ? sd.l : sd.f);
+                    u = ap.IsDone() ? ap.Parameter() : (sd.reversed ? sd.l - (sd.l - sd.f) * s : sd.f + (sd.l - sd.f) * s);
+                }
+                pts[m] = sd.c->Value(u);
+            }
+            return pts;
+        };
+        // Curva por esos puntos con los parámetros fijos: mismos nudos en todas → compatibles
+        auto interp = [&](const std::vector<gp_Pnt>& pts) {
+            Handle(TColgp_HArray1OfPnt) h = new TColgp_HArray1OfPnt(1, M);
+            for (int m = 0; m < M; m++) h->SetValue(m + 1, pts[m]);
+            Handle(TColStd_HArray1OfReal) pr = new TColStd_HArray1OfReal(1, M);
+            for (int m = 1; m <= M; m++) pr->SetValue(m, params(m));
+            GeomAPI_Interpolate in(h, pr, Standard_False, 1e-9);
+            in.Perform();
+            if (!in.IsDone()) throw Standard_Failure("no se pudo interpolar una arista de la sección");
+            return in.Curve();
+        };
+
+        BRepBuilderAPI_Sewing sew(1e-6 * std::max(1.0, centers[0].Distance(centers[n - 1])));
+        for (size_t k = 0; k < K; k++) {
+            std::vector<Handle(Geom_BSplineCurve)> cs;
+            for (int32_t i = 0; i < n; i++) cs.push_back(interp(samples(secs[i][k])));
+            const int NP = cs[0]->NbPoles();
+            auto pole = [&](int i, int p) { return gp_Vec(cs[i]->Pole(p).XYZ()); };
+            // Tangente (por polo) en cada sección
+            auto tangent = [&](int i, int p) {
+                if (i == 0) return fixed0 ? T0 : pole(1, p) - pole(0, p);
+                if (i == n - 1) return fixed1 ? T1 : pole(n - 1, p) - pole(n - 2, p);
+                return (pole(i + 1, p) - pole(i - 1, p)) * 0.5;
+            };
+            const int NV = 3 * (n - 1) + 1;
+            TColgp_Array2OfPnt poles(1, NP, 1, NV);
+            for (int p = 1; p <= NP; p++)
+                for (int i = 0; i < n; i++) {
+                    poles(p, 3 * i + 1) = gp_Pnt(pole(i, p).XYZ());
+                    if (i + 1 < n) {
+                        poles(p, 3 * i + 2) = gp_Pnt((pole(i, p) + tangent(i, p) / 3).XYZ());
+                        poles(p, 3 * i + 3) = gp_Pnt((pole(i + 1, p) - tangent(i + 1, p) / 3).XYZ());
+                    }
+                }
+            TColStd_Array1OfReal uk(1, cs[0]->NbKnots()), vk(1, n);
+            TColStd_Array1OfInteger um(1, cs[0]->NbKnots()), vm(1, n);
+            cs[0]->Knots(uk);
+            cs[0]->Multiplicities(um);
+            for (int i = 1; i <= n; i++) {
+                vk(i) = i - 1;
+                vm(i) = (i == 1 || i == n) ? 4 : 3;
+            }
+            Handle(Geom_BSplineSurface) srf = new Geom_BSplineSurface(poles, uk, vk, um, vm, cs[0]->Degree(), 3);
+            BRepBuilderAPI_MakeFace mf(srf, 1e-7);
+            if (!mf.IsDone()) throw Standard_Failure("no se pudo armar un lado de la transición");
+            sew.Add(mf.Face());
+        }
+        // Tapas: las secciones planas
+        if (solid) {
+            for (int i : {0, n - 1}) {
+                BRepBuilderAPI_MakeFace cap(ws[i], Standard_True);
+                if (!cap.IsDone()) throw Standard_Failure("las secciones de las puntas tienen que ser planas para cerrar el sólido");
+                sew.Add(cap.Face());
+            }
+        }
+        sew.Perform();
+        TopoDS_Shape sewn = sew.SewedShape();
+        if (!solid) return wrap(sewn);
+        TopExp_Explorer sx(sewn, TopAbs_SHELL);
+        if (!sx.More()) throw Standard_Failure("la transición no cierra");
+        BRepBuilderAPI_MakeSolid ms(TopoDS::Shell(sx.Current()));
+        if (!ms.IsDone()) throw Standard_Failure("la transición no cierra un sólido");
+        TopoDS_Solid so = ms.Solid();
+        BRepLib::OrientClosedSolid(so);
+        return wrap_checked(so, "transición con tangencia");
     });
 }
 

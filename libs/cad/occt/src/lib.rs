@@ -502,6 +502,15 @@ impl Shape {
         wrap(unsafe { ffi::cad_loft_pipe(p.as_ptr(), p.len() as i32, spine.ptr(), g, solid as i32) })
     }
 
+    /// Loft que sale perpendicular a la primera sección y/o llega perpendicular a
+    /// la última; el peso (> 0) es el largo de la tangente en veces la distancia a
+    /// la sección vecina, y 0 deja la punta libre. Las secciones tienen que tener
+    /// la misma cantidad de lados.
+    pub fn loft_tangent(sections: &[Shape], start_weight: f64, end_weight: f64, solid: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        wrap(unsafe { ffi::cad_loft_tangent(p.as_ptr(), p.len() as i32, start_weight, end_weight, solid as i32) })
+    }
+
     /// Loft entre perfiles (alambres o caras).
     pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
         let p = ptrs(sections);

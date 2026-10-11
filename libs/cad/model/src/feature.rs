@@ -1259,6 +1259,13 @@ pub struct Loft {
     /// Curva guía (va con la línea central): el perfil gira y se escala para tocarla.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guide: Option<SweepPath>,
+    /// Tangencia al comienzo: sale perpendicular a la primera sección, con este
+    /// peso (cuánto dura la tangente, en veces la distancia a la siguiente).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_tangent: Option<f64>,
+    /// Tangencia al final: llega perpendicular a la última sección.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_tangent: Option<f64>,
 }
 
 /// Una sección de una superficie por recubrimiento: curvas de un sketch (vacío = todas).

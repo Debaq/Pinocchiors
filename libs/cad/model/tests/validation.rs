@@ -75,7 +75,7 @@ fn loft_section_with_two_regions() {
     let lf = doc.add(FeatureKind::Loft(Loft {
         sections: vec![LoftSection { sketch: a, regions: RegionSelection::All }, LoftSection { sketch: b, regions: RegionSelection::All }],
         ruled: false,
-        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None,
+        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None, start_tangent: None, end_tangent: None,
     }));
     let e = error_of(&doc, lf).expect("tiene que avisar");
     assert!(e.contains("sección 1") && e.contains("2 regiones"), "{e}");

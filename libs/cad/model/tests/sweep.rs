@@ -76,7 +76,7 @@ fn loft_between_squares() {
     let l = doc.add(FeatureKind::Loft(Loft {
         sections: vec![LoftSection { sketch: a, regions: RegionSelection::All }, LoftSection { sketch: b, regions: RegionSelection::All }],
         ruled: true,
-        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None,
+        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None, start_tangent: None, end_tangent: None,
     }));
     assert_relative_eq!(vol(&doc), 1000.0, max_relative = 1e-6);
     // De 10 a 6 reglada: tronco de pirámide
@@ -258,6 +258,8 @@ fn loft(sections: Vec<FeatureId>) -> Loft {
         thin: None,
         path: None,
         guide: None,
+        start_tangent: None,
+        end_tangent: None,
     }
 }
 
@@ -296,6 +298,36 @@ fn loft_to_a_point_thin_and_along_a_path() {
 
     // Cerrada con dos secciones: error
     doc.get_mut(l).unwrap().kind = FeatureKind::Loft(Loft { closed: true, ..loft(vec![a, b]) });
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn loft_leaves_and_arrives_perpendicular() {
+    if !occt() {
+        return;
+    }
+    // Cuadrado de 4 abajo y otro arriba (z = 20) corrido 10 en x
+    let mut doc = Document::new();
+    let a = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(4.0) });
+    let mut top = Sketch::default();
+    let p = [[8.0, -2.0], [12.0, -2.0], [12.0, 2.0], [8.0, 2.0]].map(|q: [f64; 2]| top.add_point(q[0], q[1]));
+    for k in 0..4 {
+        top.add_line(p[k], p[(k + 1) % 4]);
+    }
+    let b = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 20.0, sketch: top });
+    let l = doc.add(FeatureKind::Loft(Loft { ruled: false, start_tangent: Some(1.0), end_tangent: Some(1.0), ..loft(vec![a, b]) }));
+    // Las secciones se trasladan: cada corte horizontal es el cuadrado (Cavalieri)
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let body = ev.body.unwrap();
+    assert_relative_eq!(body.mass().unwrap().volume, 320.0, max_relative = 1e-6);
+    // Sale vertical: apenas arriba del piso el corte sigue centrado en x ≈ 0 (un loft recto ya
+    // corrió 0,5)
+    let slab = Shape::make_box(occt::Frame { origin: [-50.0, -50.0, 0.9], z: [0.0, 0.0, 1.0], x: [1.0, 0.0, 0.0] }, 100.0, 100.0, 0.2).unwrap();
+    let cut = body.intersect(&slab).unwrap().mass().unwrap();
+    assert!(cut.center[0].abs() < 0.1, "a z = 1 corre {}", cut.center[0]);
+    // Reglada con tangencia: error
+    doc.get_mut(l).unwrap().kind = FeatureKind::Loft(Loft { ruled: true, start_tangent: Some(1.0), ..loft(vec![a, b]) });
     assert!(!doc.evaluate().errors().is_empty());
 }
 

@@ -718,6 +718,10 @@ export type FeatureKind =
       thin?: number | null;
       path?: SweepPathSpec | null;
       guide?: SweepPathSpec | null;
+      /** Sale perpendicular a la primera sección; el peso es el largo de la tangente (en veces la distancia a la siguiente) */
+      start_tangent?: number | null;
+      /** Llega perpendicular a la última sección */
+      end_tangent?: number | null;
     }
   /** Superficie que pasa por curvas de varios sketches */
   | { type: "surface_loft"; sections: { sketch: number; entities: number[] }[]; ruled: boolean }

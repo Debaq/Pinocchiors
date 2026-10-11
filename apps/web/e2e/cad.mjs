@@ -8332,6 +8332,37 @@ const scenarios = {
     await b.shot("operaciones_revolucion_hasta_cara");
   },
 
+  async "operaciones: transición perpendicular en las puntas"(b) {
+    await begin(b);
+    // Cuadrado de 4 abajo y otro arriba (z = 20) corrido 10 en x
+    const doc = await call("cad_get_document");
+    const sq = (cx, z) => {
+      const P = [[cx - 2, -2], [cx + 2, -2], [cx + 2, 2], [cx - 2, 2]];
+      return { id: doc.next_id++, name: `Cuadrado ${z}`, suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: z, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } } };
+    };
+    doc.features.push(sq(0, 0), sq(10, 20));
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Transición");
+    await lastIs(b, "loft");
+    await sleep(2000);
+    // Cada corte horizontal es el cuadrado: 16 × 20 (Cavalieri), recta o en S
+    near((await body()).volume, 320, 0.05, "transición recta");
+    const straight = (await body()).area;
+    await b.clickText("Sale perpendicular a la primera sección");
+    await sleep(2500);
+    await b.clickText("Llega perpendicular a la última sección");
+    await sleep(2500);
+    const k = await lastKind(b);
+    if (k.start_tangent !== 1 || k.end_tangent !== 1) throw new Error(`tangencias: ${JSON.stringify(k)}`);
+    near((await body()).volume, 320, 0.05, "en S, mismo volumen");
+    // En S los costados son más largos que en la recta
+    if (!((await body()).area > straight + 1)) throw new Error(`área ${(await body()).area} contra ${straight}`);
+    await accept(b);
+    await b.shot("operaciones_transicion_perpendicular");
+  },
+
   async "operaciones: transición delgada, a un punto y cerrada"(b) {
     await begin(b);
     // Dos cuadrados de 10 (z = 0 y z = 10)

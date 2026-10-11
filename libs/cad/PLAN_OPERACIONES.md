@@ -55,7 +55,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 |---|---|
 | Entre varios perfiles | ✅ |
 | Curva guía, línea central, a punto, cerrado, pared delgada | ✅ (`Loft.guide`, `path`, `start_point`/`end_point`, `closed`, `thin`, 2026-10-11) |
-| Tangencia en extremos | ❌ `ThruSections` no la da (F5, riesgo) |
+| Tangencia en extremos | ✅ perpendicular a la sección de la punta, con peso (`Loft.start_tangent`/`end_tangent`, superficie Hermite propia, 2026-10-11); falta tangente a una cara vecina |
 
 ### Opciones de agujero
 | Función | Estado |
@@ -416,6 +416,21 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
     reflexión) girado en proporción al largo; con caminos muy cerrados (radio de curvatura menor
     que ese 1 %) podría cruzarse.
   - Con curva guía no se permite torsión (la guía ya decide el giro).
+- **Tangencia en las puntas de la transición (2026-10-11)**: `cargo test -p cad-model --test sweep`
+  (`loft_leaves_and_arrives_perpendicular`) y el e2e «operaciones: transición perpendicular en
+  las puntas». OCCT no tiene loft con condiciones de borde (y `MakePipeShell` con varias
+  secciones por una línea central armada a mano fallaba o se colgaba en 7.6), así que la
+  superficie se arma a mano (`cad_loft_tangent`, banco `t_loft`). Hipótesis:
+  - Cada lado es un parche B-spline: a lo largo de la arista, 25 puntos por fracción de largo
+    interpolados con los mismos parámetros en todas las secciones (curvas compatibles, error
+    ~1e-5 en arcos); entre secciones, Hermite cúbica (Catmull-Rom adentro).
+  - Las secciones tienen que tener la misma cantidad de aristas (cuadrado con cuadrado, círculo
+    con círculo); con distinta cantidad da error. Un círculo se parte en dos mitades.
+  - La alineación entre secciones (arista de arranque y sentido) es la que deja los vértices y
+    los puntos medios más cerca, medidos desde el centro de cada sección.
+  - Las secciones se trasladan (no giran para quedar perpendiculares a una línea central): los
+    cortes paralelos a las secciones conservan el área (la prueba usa Cavalieri: 16 × 20).
+  - Solo se usa el contorno de afuera de cada sección (los agujeros no pasan).
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 
