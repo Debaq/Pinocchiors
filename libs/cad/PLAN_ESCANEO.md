@@ -36,7 +36,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Asistente de reconstrucción | ❌ (E9) |
 | Superficies libres ajustadas a la malla | ❌ (E10) |
 
-## Problema anotado: las mallas que vienen del CAD se ven y se trabajan mal (2026-10-10)
+## Problema anotado: las mallas que vienen del CAD se ven y se trabajan mal (2026-10-10) ✅
 
 El usuario: «nuestro gran problema». Un cubo hecho en Diseñar y pasado a Fabricar muestra
 abollones en las caras donde se juntan los vértices de los triángulos; con retopología queda
@@ -45,13 +45,23 @@ malla queda terrible. El STL exportado directo desde el diseño se ve perfecto e
 pero **el mismo STL importado en Pinocchiors se ve y se trabaja mal**: el archivo está bien y el
 problema es cómo lo toma la app.
 
-Hipótesis a verificar (no revisadas todavía):
-- Sombreado suave: vértices soldados con normales promediadas sobre aristas vivas y
-  triángulos largos y finos de teselado CAD → degradés en caras planas. `lib/autoSmooth.ts`
-  ya anota que el arreglo real es duplicar vértices en aristas vivas solo para dibujar.
-- Reparar / remallar / retopología no conservan aristas vivas ni caras planas de piezas
-  mecánicas (la retopología redondea por diseño; Instant Meshes suaviza).
-- Fabricar toca la malla (soldar, recalcular normales, subdividir) antes de mostrarla.
+Revisado el mismo día:
+- ✅ **Abollones = solo sombreado.** La geometría no cambia (al soldar se juntan vértices de
+  posición idéntica; Reparar en el STL del diseño solo quitó 2 caras inválidas, mismo
+  volumen). Una sola normal por vértice en las aristas vivas, interpolada, hacía manchas en
+  las caras planas. Ahora el backend marca por vértice si toca una arista viva (> 40° o de más
+  de dos caras, `MeshData.creases`) y el shader de `lib/autoSmooth.ts` dibuja planos los
+  triángulos que tocan una: caja plana, esfera y costados de cilindros suaves, escaneos con
+  ruido sin facetas falsas. Sin duplicar vértices: pesos, pintura y skinning siguen por índice.
+- ✅ **Retopología redondeada**: «Conservar aristas vivas» venía apagado. Con el STL del diseño
+  (caja, cilindro, esfera, cono) a 2000 quads: apagado redondea caja y cilindro (máx. 1,13 %
+  de la diagonal); encendido quedan vivas (0,49 %). Ahora viene encendido.
+- ✅ Puente de pruebas: no tenía `get_scene_structure`, la grilla quedaba en metros y la
+  cámara entraba en la pieza al pasar a Fabricar (solo en el arnés, no en la app).
+- e2e `node e2e/cad.mjs "mallas:"`.
+
+Si después de esto algo se sigue viendo o trabajando mal, conseguir el caso concreto (archivo
+y pasos) antes de tocar Reparar.
 
 Meta: un STL de CAD tiene que verse y medirse igual que en un laminador, y pasar de Diseñar a
 Fabricar sin perder caras planas ni aristas vivas. Va antes de E1: B también parte de piezas

@@ -28,6 +28,7 @@ export function decodeMesh(buffer: ArrayBuffer): MeshData {
   let groups: Uint32Array | undefined;
   let groupNodes: Uint32Array | undefined;
   let computedNormals: Uint32Array | undefined;
+  let creases: Float32Array | undefined;
   if (offset + 4 <= buffer.byteLength) {
     const [count] = new Uint32Array(buffer, offset, 1);
     offset += 4;
@@ -36,8 +37,10 @@ export function decodeMesh(buffer: ArrayBuffer): MeshData {
     if (offset + count * 4 <= buffer.byteLength) groupNodes = uints(count);
     // Y después: 1 si las normales del grupo las calculó el programa
     if (groupNodes && offset + count * 4 <= buffer.byteLength) computedNormals = uints(count);
+    // Y por último: 1 por vértice si toca una arista viva
+    if (computedNormals && offset + vertices * 4 <= buffer.byteLength) creases = floats(vertices);
   }
-  return { positions, normals, indices, uvs, quadIndices, groups, groupNodes, computedNormals };
+  return { positions, normals, indices, uvs, quadIndices, groups, groupNodes, computedNormals, creases };
 }
 
 /** Pesos: cabecera u32 × 4 (vértices, huesos, influencias, bytes de nombres) */

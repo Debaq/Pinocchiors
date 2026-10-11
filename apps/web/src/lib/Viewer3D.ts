@@ -39,6 +39,13 @@ export interface MeshData {
   groupNodes?: Uint32Array;
   /** Por grupo, 1 si las normales las calculó el programa (malla soldada) */
   computedNormals?: Uint32Array;
+  /** Por vértice, 1 si toca una arista viva: esos triángulos se dibujan planos */
+  creases?: Float32Array;
+}
+
+/** Marca de aristas vivas por vértice para el suavizado automático (`autoSmooth.ts`) */
+function setCreases(geometry: THREE.BufferGeometry, data: MeshData): void {
+  if (data.creases) geometry.setAttribute("crease", new THREE.BufferAttribute(data.creases, 1));
 }
 
 /** Material del archivo de origen, con sus texturas ya decodificadas */
@@ -1764,6 +1771,7 @@ export class Viewer3D {
     if (data.uvs) {
       geometry.setAttribute("uv", new THREE.BufferAttribute(data.uvs, 2));
     }
+    setCreases(geometry, data);
     geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
 
     const material = this.buildMaterial(geometry);
@@ -1873,6 +1881,7 @@ export class Viewer3D {
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.BufferAttribute(data.positions, 3));
       geometry.setAttribute("normal", new THREE.BufferAttribute(data.normals, 3));
+      setCreases(geometry, data);
       geometry.setIndex(new THREE.BufferAttribute(data.indices, 1));
       // Los elegidos junto con el activo (Ctrl + clic en el Outliner), con el acento
       const material = new THREE.MeshStandardMaterial({
@@ -1882,6 +1891,7 @@ export class Viewer3D {
         depthWrite: false,
         roughness: 0.9,
       });
+      setAutoSmooth(material, !!data.creases);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.renderOrder = -1;
       this.ghostGroup.add(mesh);
@@ -3621,6 +3631,7 @@ export class Viewer3D {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.BufferAttribute(this.meshData.positions, 3));
     geometry.setAttribute("normal", new THREE.BufferAttribute(this.meshData.normals, 3));
+    setCreases(geometry, this.meshData);
     geometry.setIndex(new THREE.BufferAttribute(this.visibleIndex(), 1));
 
     // Colores por vértice: un hueso (mapa de calor) o todos (color de cada hueso)
@@ -3762,7 +3773,7 @@ export class Viewer3D {
 
     // Comparte los atributos de la malla de reposo; solo el skin es nuevo
     const geometry = new THREE.BufferGeometry();
-    for (const name of ["position", "normal", "uv"]) {
+    for (const name of ["position", "normal", "uv", "crease"]) {
       const attribute = mesh.geometry.getAttribute(name);
       if (attribute) geometry.setAttribute(name, attribute);
     }

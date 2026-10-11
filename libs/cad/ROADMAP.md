@@ -694,3 +694,6 @@ cargo test -p cad-model
   `cad_from_mesh` arma el sólido directo si la malla es cerrada, manifold y orientada (20 k
   triángulos: 9 s cosiendo → 0,8 s). OCCT alcanza para E2 si la malla se prepara por vóxeles +
   isótropo (meshopt deja caras espalda con espalda y cruces).
+- **2026-10-10 Mallas de CAD y STL sin manchas** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md)): marca de
+  aristas vivas por vértice (`MeshData.creases`) y triángulos planos en el shader; retopología
+  con aristas vivas por defecto; `get_scene_structure` en el puente.

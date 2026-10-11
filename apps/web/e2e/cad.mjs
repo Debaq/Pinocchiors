@@ -6569,6 +6569,51 @@ const scenarios = {
     await b.shot("objetos");
   },
 
+  async "mallas: caja del diseño en Fabricar"(b) {
+    // La malla soldada de una pieza trae una sola normal por vértice en las
+    // aristas vivas: la marca por vértice hace que las caras se dibujen planas
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Fabricar");
+    for (let t = 0; t < 40 && !(await b.eval(`document.body.innerText.includes("Malla generada")`)); t++) await sleep(250);
+    await sleep(2000);
+    const info = JSON.parse(await b.eval(`JSON.stringify((() => { let out = null; window.__viewer().scene.traverse((o) => { const g = o.geometry; if (!out && o.isMesh && g?.attributes?.position?.count === 8) out = { crease: g.attributes.crease ? [...g.attributes.crease.array] : null, smooth: "AUTO_SMOOTH" in (o.material.defines ?? {}) }; }); return out; })())`));
+    if (!info) throw new Error("no está la malla de la caja");
+    if (JSON.stringify(info.crease) !== JSON.stringify(Array(8).fill(1))) throw new Error(`marcas de aristas vivas: ${JSON.stringify(info.crease)}`);
+    if (!info.smooth) throw new Error("el material no tiene el suavizado automático");
+    // Las unidades llegan: la grilla en mm y la cámara afuera de la caja
+    if (!(await b.eval(`document.body.innerText.includes("Grilla: 1 mm")`))) throw new Error("la grilla no está en mm");
+    if ((await b.eval(`window.__viewer().camera.position.length()`)) < 20) throw new Error("la cámara quedó dentro de la caja");
+    await b.shot("mallas-caja-fabricar");
+  },
+
+  async "mallas: STL del diseño importado"(b) {
+    await begin(b);
+    await b.eval(`window.__cadStore.commit((d) => {
+      d.features.push({ id: 61, name: "Caja", kind: { type: "primitive", shape: { type: "box", dx: 20, dy: 20, dz: 20 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.features.push({ id: 62, name: "Cilindro", kind: { type: "primitive", shape: { type: "cylinder", radius: 8, height: 20 }, origin: [35, 0, -10], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.features.push({ id: 63, name: "Esfera", kind: { type: "primitive", shape: { type: "sphere", radius: 10 }, origin: [-35, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.features.push({ id: 64, name: "Cono", kind: { type: "primitive", shape: { type: "cone", r1: 9, r2: 3, height: 20 }, origin: [0, 35, -10], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+      d.next_id = 65;
+    })`);
+    await sleep(3000);
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/mallas-diseno.stl`;
+    const r = await call("cad_export", { path, format: "stl" });
+    if (r?.error) throw new Error(JSON.stringify(r));
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("mallas-diseno")`)); t++) await sleep(250);
+    await sleep(2500);
+    // Caja y tapas planas; la esfera y los costados curvos quedan suaves
+    const share = await b.eval(`(() => { let out = null; window.__viewer().scene.traverse((o) => { const c = o.geometry?.attributes?.crease; if (!out && o.isMesh && c && o.geometry.attributes.position.count > 1000) out = c.array.reduce((s, x) => s + x, 0) / c.count; }); return out; })()`);
+    if (share === null || !(share > 0.05 && share < 0.6)) throw new Error(`vértices en aristas vivas: ${share}`);
+    await b.click(31, 276);
+    await sleep(1500);
+    await b.shot("mallas-stl-importado");
+  },
+
   async "objetos: varios elegidos se exportan juntos"(b) {
     await begin(b);
     await b.eval(`window.__cadStore.commit((d) => {

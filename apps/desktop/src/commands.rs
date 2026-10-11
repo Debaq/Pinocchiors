@@ -84,6 +84,10 @@ pub struct MeshData {
     /// pieza del CAD, STL...) y no vienen del archivo: el visor suaviza
     /// solo hasta un ángulo, así las aristas vivas se ven vivas
     pub group_computed_normals: Vec<u32>,
+    /// Por vértice, 1 si toca una arista viva (o de más de dos caras) de un
+    /// grupo con normales calculadas: los triángulos que lo tocan se dibujan
+    /// planos. Vacío si ningún grupo tiene normales calculadas
+    pub creases: Vec<f32>,
 }
 
 /// Empaqueta una malla para el visor en binario (little-endian, todo en
@@ -121,10 +125,16 @@ impl MeshData {
             for node in &self.group_nodes {
                 out.extend_from_slice(&node.to_le_bytes());
             }
-            // Y después, si están, las normales calculadas de cada grupo
+            // Y después, si están, las normales calculadas de cada grupo y
+            // las aristas vivas por vértice (`f32` por vértice)
             if self.group_computed_normals.len() == self.groups.len() {
                 for flag in &self.group_computed_normals {
                     out.extend_from_slice(&flag.to_le_bytes());
+                }
+                if self.creases.len() * 3 == self.positions.len() {
+                    for c in &self.creases {
+                        out.extend_from_slice(&c.to_le_bytes());
+                    }
                 }
             }
         }
@@ -684,6 +694,7 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
     let mut group_nodes: Vec<u32> = Vec::new();
     let mut quad_indices: Vec<u32> = Vec::new();
     let mut computed: Vec<u32> = Vec::new();
+    let mut creases: Vec<f32> = Vec::new();
     let has_quads = scene.has_quads();
 
     for prim in &prims {
@@ -694,7 +705,13 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
 
         // Normales calculadas, o aristas vivas con los vértices compartidos (un
         // STL arma así sus normales): el visor les marca las aristas vivas
-        computed.push((prim.normals.is_none() || welded_creases(&prim.positions, &prim.triangles)) as u32);
+        let sharp = sharp_edges(&prim.positions, &prim.triangles);
+        let flag = prim.normals.is_none() || sharp.welded;
+        computed.push(flag as u32);
+        if flag {
+            creases.resize(offset as usize, 0.0);
+            creases.extend(sharp.vertices);
+        }
         match &prim.normals {
             Some(n) => normals.extend(n.iter().flatten()),
             None => normals.extend(compute_vertex_normals(&prim.positions, &prim.triangles).iter().flatten()),
@@ -717,6 +734,9 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         }
     }
 
+    if !creases.is_empty() {
+        creases.resize(positions.len() / 3, 0.0);
+    }
     MeshData {
         positions,
         normals,
@@ -726,12 +746,24 @@ pub(crate) fn scene_mesh_data(scene: &Scene) -> MeshData {
         group_nodes,
         quad_indices,
         group_computed_normals: computed,
+        creases,
     }
 }
 
-/// ¿Al menos el 1 % de las aristas compartidas une caras a más de 60°? En
-/// esos vértices compartidos la normal es por fuerza un promedio
-fn welded_creases(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> bool {
+/// Aristas vivas de una primitiva
+struct SharpEdges {
+    /// Por vértice, 1 si toca una arista a más de [`CREASE_DEGREES`] o con más
+    /// de dos caras
+    vertices: Vec<f32>,
+    /// ¿Al menos el 1 % de las aristas compartidas une caras a más de 60°? En
+    /// esos vértices compartidos la normal es por fuerza un promedio
+    welded: bool,
+}
+
+/// Ángulo entre caras desde el que una arista se dibuja viva
+const CREASE_DEGREES: f32 = 40.0;
+
+fn sharp_edges(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> SharpEdges {
     let normal = |t: &[u32; 3]| {
         let [a, b, c] = t.map(|i| positions[i as usize]);
         let (e1, e2) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
@@ -739,18 +771,32 @@ fn welded_creases(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> bool {
         let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt().max(1e-20);
         [n[0] / l, n[1] / l, n[2] / l]
     };
+    let crease_cos = CREASE_DEGREES.to_radians().cos();
+    let mut vertices = vec![0.0f32; positions.len()];
+    // Arista → primera cara que la usa (`usize::MAX`: ya la usaron dos)
     let mut first: std::collections::HashMap<(u32, u32), usize> = std::collections::HashMap::with_capacity(triangles.len() * 2);
     let (mut shared, mut sharp) = (0usize, 0usize);
     for (k, t) in triangles.iter().enumerate() {
         for e in 0..3 {
             let (a, b) = (t[e], t[(e + 1) % 3]);
             let key = (a.min(b), a.max(b));
-            match first.remove(&key) {
+            match first.get(&key).copied() {
+                Some(usize::MAX) => {
+                    // Tercera cara o más: no manifold, se dibuja viva
+                    vertices[a as usize] = 1.0;
+                    vertices[b as usize] = 1.0;
+                }
                 Some(j) => {
+                    first.insert(key, usize::MAX);
                     shared += 1;
                     let (n, m) = (normal(t), normal(&triangles[j]));
-                    if n[0] * m[0] + n[1] * m[1] + n[2] * m[2] < 0.5 {
+                    let cos = n[0] * m[0] + n[1] * m[1] + n[2] * m[2];
+                    if cos < 0.5 {
                         sharp += 1;
+                    }
+                    if cos < crease_cos {
+                        vertices[a as usize] = 1.0;
+                        vertices[b as usize] = 1.0;
                     }
                 }
                 None => {
@@ -759,7 +805,7 @@ fn welded_creases(positions: &[[f32; 3]], triangles: &[[u32; 3]]) -> bool {
             }
         }
     }
-    shared > 0 && sharp * 100 >= shared
+    SharpEdges { vertices, welded: shared > 0 && sharp * 100 >= shared }
 }
 
 /// Normales por vértice ponderadas por área
@@ -4909,6 +4955,7 @@ mod tests {
             group_nodes: vec![],
             quad_indices: vec![],
             group_computed_normals: vec![],
+            creases: vec![],
         };
         let bytes = data.to_bytes();
         let w = words(&bytes);
@@ -4932,13 +4979,22 @@ mod tests {
         // Un cubo soldado tiene aristas vivas; una tira plana no
         let cube_p = [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 1.0], [0.0, 1.0, 1.0]];
         let cube_t = [[0, 2, 1], [0, 3, 2], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [3, 7, 6], [3, 6, 2], [0, 4, 7], [0, 7, 3], [1, 2, 6], [1, 6, 5]];
-        assert!(welded_creases(&cube_p, &cube_t));
-        assert!(!welded_creases(&cube_p[..4], &cube_t[..2]));
+        let sharp = sharp_edges(&cube_p, &cube_t);
+        assert!(sharp.welded);
+        assert_eq!(sharp.vertices, vec![1.0; 8]);
+        let flat = sharp_edges(&cube_p[..4], &cube_t[..2]);
+        assert!(!flat.welded);
+        assert_eq!(flat.vertices, vec![0.0; 4]);
 
         // Y las normales calculadas de cada grupo
         let flagged = MeshData { group_computed_normals: vec![1, 0], ..with_nodes.clone() };
         let w = words(&flagged.to_bytes());
         assert_eq!(&w[4 + 27..], &[2, 0, 3, 2, 3, 0, u32::MAX, 5, u32::MAX, 1, 0]);
+
+        // Y las aristas vivas por vértice
+        let creased = MeshData { creases: vec![1.0, 0.0, 1.0], ..flagged.clone() };
+        let w = words(&creased.to_bytes());
+        assert_eq!(&w[w.len() - 3..], &[1f32.to_bits(), 0, 1f32.to_bits()]);
 
         let quads = pack_mesh(&data.positions, &data.normals, None, &data.indices, &[0, 1, 2, 0]);
         let w = words(&quads);

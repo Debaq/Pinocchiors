@@ -1949,6 +1949,16 @@ pub mod bridge {
                 ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
             }
             "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
+            // Unidades del modelo (grilla y cámara) y materiales, como en la app
+            "get_scene_structure" => {
+                let scene = state.scene.lock().unwrap();
+                ok(crate::structure::scene_structure(scene.as_ref().ok_or("No hay escena cargada")?))
+            }
+            "get_scene_materials" => {
+                let scene = state.scene.lock().unwrap();
+                let scene = scene.as_ref().ok_or("No hay escena cargada")?;
+                ok(scene.materials.iter().map(crate::structure::material_info).collect::<Vec<_>>())
+            }
             "cad_part_to_model" => {
                 let channel = Channel::new(|_| Ok(()));
                 ok(part_to_model_impl(state, arg(args, "part")?, arg(args, "known")?, &channel)?)

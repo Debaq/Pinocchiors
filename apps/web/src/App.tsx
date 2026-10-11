@@ -771,7 +771,7 @@ export const App: Component = () => {
   // Retopology state
   const [retopologyConfig, setRetopologyConfig] = createSignal<RetopologyConfig>({
     targetQuads: 5000,
-    preserveSharp: false,
+    preserveSharp: true,
     sharpAngle: 45,
     smoothIterations: 10,
     rebuild: "auto",
