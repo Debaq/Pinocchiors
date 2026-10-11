@@ -6624,6 +6624,65 @@ const scenarios = {
     await b.shot("escaneo-elegido");
   },
 
+  async "escaneo: alinear por cara al piso y punto al origen"(b) {
+    // Un cubo de 20 mm girado 30° en X y 20° en Z y corrido: el "escaneo"
+    const rot = (p) => {
+      const [ax, az] = [Math.PI / 6, Math.PI / 9];
+      const [x, y, z] = p;
+      const [y1, z1] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
+      const [x2, y2] = [x * Math.cos(az) - y1 * Math.sin(az), x * Math.sin(az) + y1 * Math.cos(az)];
+      return [x2 + 15, y2 - 5, z1 + 12];
+    };
+    const stl = twoCubesStl().split("endfacet\n").slice(0, 12).join("endfacet\n") + "endfacet\nendsolid uno\n";
+    const tilted = stl.replace(/vertex (\S+) (\S+) (\S+)/g, (_, x, y, z) => "vertex " + rot([+x, +y, +z]).join(" "));
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-inclinado.stl`;
+    writeFileSync(path, tilted);
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Modelo cargado")`)); t++) await sleep(250);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await sleep(800);
+    const planes = () => b.eval(`window.__cadStore.scanDetect().then((d) => JSON.stringify(d.filter((x) => x.shape.type === "plane").map((x) => x.shape.plane)))`).then(JSON.parse);
+    // Cara de abajo del cubo original (z = 0): su centro girado
+    const bottom = rot([10, 10, 0]);
+    const clickAt = async (p) => {
+      const [x, y] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+      await b.click(x, y);
+    };
+    // Que se vea la cara de abajo: vista desde abajo
+    await b.eval(`window.__cadViewer.lookFrom([0.3, -0.4, -1])`);
+    await sleep(1200);
+    await b.clickText("Cara al piso");
+    await sleep(300);
+    await clickAt(bottom);
+    let floor;
+    for (let t = 0; t < 40; t++) {
+      floor = (await planes()).find((p) => p.normal[2] < -0.999);
+      if (floor && Math.abs(floor.origin[2]) < 0.05) break;
+      await sleep(250);
+    }
+    if (!floor || Math.abs(floor.origin[2]) > 0.05) throw new Error(`la cara no quedó en el piso: ${JSON.stringify(floor)} ${JSON.stringify(await planes())}`);
+    // Punto al origen: el centro de la cara de arriba (ahora z = 20)
+    const top = (await planes()).find((p) => p.normal[2] > 0.999);
+    if (!top || Math.abs(top.origin[2] - 20) > 0.05) throw new Error(`cara de arriba: ${JSON.stringify(top)}`);
+    await b.eval(`window.__cadViewer.lookFrom([0.2, -0.3, 1])`);
+    await sleep(1200);
+    await b.clickText("Punto al origen");
+    await sleep(300);
+    await clickAt(top.origin);
+    let after;
+    for (let t = 0; t < 40; t++) {
+      after = (await planes()).find((p) => p.normal[2] > 0.999);
+      if (after && Math.abs(after.origin[2]) < 0.05) break;
+      await sleep(250);
+    }
+    if (!after || Math.abs(after.origin[2]) > 0.05) throw new Error(`la cara de arriba no pasó por el origen: ${JSON.stringify(after)}`);
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
+    await sleep(500);
+    await b.shot("escaneo-alineado");
+  },
+
   async "mallas: caja del diseño en Fabricar"(b) {
     // La malla soldada de una pieza trae una sola normal por vértice en las
     // aristas vivas: la marca por vértice hace que las caras se dibujen planas

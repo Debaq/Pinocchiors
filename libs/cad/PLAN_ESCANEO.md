@@ -24,7 +24,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Limpiar la malla (reparar, remallar, simplificar, suavizar) | ✅ (Preparar) |
 | Escaneo como cuerpo para booleanas | ❌ motor decidido en E0: OCCT + vóxeles/isótropo + sólido directo (E2) |
 | Elegir qué objeto es el escaneo | ✅ (E1.1) |
-| Alinear el escaneo por rasgos | ❌ Objeto solo da piso/frente (E1) |
+| Alinear el escaneo por rasgos | ✅ (E1.2) |
 | Referencias (punto, plano, eje) tomadas de la malla | 🟡 solo plano de zona plana (E1) |
 | Sketch anclado a la malla | ❌ `solidRefs` solo mira el sólido (E1) |
 | Extruir hasta el escaneo | ❌ `UpToFace` solo caras del sólido (E3) |
@@ -97,7 +97,7 @@ de CAD y de STL.
 
 ### E1 — El escaneo como referencia del diseño
 
-Partes: E1.1 escaneo elegido ✅, E1.2 alinear por rasgos, E1.3 referencias ligadas al
+Partes: E1.1 escaneo elegido ✅, E1.2 alinear por rasgos ✅, E1.3 referencias ligadas al
 escaneo, E1.4 sketch anclado al corte.
 
 - ✅ E1.1 (2026-10-10): el escaneo es un objeto importado elegido, no «el activo».
@@ -108,8 +108,13 @@ escaneo, E1.4 sketch anclado al corte.
   De paso: el STL importado calculaba las normales con la del archivo (`facet normal 0 0 0`
   dejaba la malla negra); ahora por el orden de los vértices, como los laminadores.
   e2e «escaneo: sigue de referencia con una pieza activa».
-- Alinear el escaneo por rasgos: plano detectado → piso (XY), eje de cilindro → Z o X, punto →
-  origen; también por 3 puntos. Mueve el objeto con `apply_placement` (deshacer = inversa).
+- ✅ E1.2 (2026-10-10): «Alinear el escaneo» en la pestaña: cara al piso (normal hacia −Z y
+  en z = 0), cara al frente (gira en torno a Z hasta mirar a −Y), eje vertical (cilindro → Z,
+  por el origen en planta) y punto al origen. `lib/scanAlign.ts` arma la matriz en el CAD y
+  la pasa al modelo (`toSceneMatrix`); App activa el escaneo y la aplica como una orientación
+  más (historial y deshacer, mueve quads/esqueleto/rig; queda como modificación del objeto en
+  el Outliner). Pruebas node `e2e/scanAlign.test.mjs` y e2e «escaneo: alinear…». Pendiente:
+  alinear por 3 puntos y eje → X.
 - Referencias tomadas de la malla, como operaciones del árbol ligadas al escaneo: punto (clic
   sobre la malla), plano por 3 puntos, plano ajustado a una zona, eje de un cilindro, centro de
   una esfera.

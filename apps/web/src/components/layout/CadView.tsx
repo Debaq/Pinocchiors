@@ -2295,6 +2295,11 @@ export const CadView: Component<CadViewProps> = (props) => {
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
         mode.done(result, hit.triangle);
+      } else if (mode.kind === "scan_point") {
+        const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
+        if (hit?.kind !== "scan") return;
+        ui.setPick({ kind: "none" });
+        mode.done(viewer.fromView(hit.point));
       } else if (mode.kind === "parts") {
         // La pieza de la cara bajo el clic (en el sólido mostrado)
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });

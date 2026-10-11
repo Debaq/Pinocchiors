@@ -280,6 +280,7 @@ import { BodyBuilder } from "./components/layout/BodyBuilder";
 import { recordTemplateUse } from "./lib/templateUsage";
 import { TemplateGallery } from "./components/layout/TemplateGallery";
 import type { TemplateShape } from "./lib/skeletonThumb";
+import { toSceneMatrix, type Mat4 } from "./lib/scanAlign";
 import { SkeletonEditor, type SkeletonEditorTab } from "./components/layout/SkeletonEditor";
 import { SkeletonFitTab, SkeletonWeightsTab, type SkeletonStepProps } from "./components/steps/SkeletonStep";
 import { JointTunePanel, type TuneDirection, type TuneRotation } from "./components/panels/JointTunePanel";
@@ -5008,6 +5009,20 @@ export const App: Component = () => {
     await refreshAfterPlacement(result.skeleton_reset);
   };
 
+  /**
+   * Alinear el escaneo desde Diseñar: la matriz viene en coordenadas del CAD.
+   * El escaneo pasa a ser el objeto activo (la orientación se aplica al
+   * activo, con su deshacer, y mueve también quads, esqueleto y rig)
+   */
+  const alignScan = async (matrix: Mat4, description: string) => {
+    const id = scanObjectId();
+    if (id === undefined) throw new Error("No hay escaneo");
+    if (id !== activeObjectId()) await activateObject(id);
+    if (id !== activeObjectId()) throw new Error("No se pudo elegir el escaneo");
+    const mm = await invoke<number>("cad_mm_per_unit");
+    await applyPlacement(new THREE.Matrix4().fromArray(toSceneMatrix(matrix, mm)), description);
+  };
+
   const applyPlacement = async (matrix: THREE.Matrix4 | null, description: string) => {
     if (!matrix) return false;
     try {
@@ -7356,7 +7371,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} scans={scanCandidates()} scanId={scanObjectId()} />}
+            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} scans={scanCandidates()} scanId={scanObjectId()} onAlignScan={alignScan} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

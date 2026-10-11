@@ -110,6 +110,7 @@ import { sampleCurve } from "../../lib/sketchFormula";
 import { addShapes, parseCoordinates, parseDxf, sketchToDxf, sketchToSvg } from "../../lib/sketchFiles";
 import { addLayer, createBlock, explodeBlock, removeLayer, setLayer } from "../../lib/sketchBlocks";
 import { partKey } from "../../lib/objects";
+import { axisToVertical, faceToFloor, faceToFront, pointToOrigin, type Mat4 } from "../../lib/scanAlign";
 import { Button, Checkbox, IconButton, NumberInput, Select, Slider, Tooltip } from "../ui";
 import * as Icons from "../icons";
 
@@ -125,6 +126,8 @@ export interface DesignStepProps {
   scans: { id: number; name: string }[];
   /** El que se usa (el elegido o, si no hay, el que decide la app) */
   scanId?: number;
+  /** Mueve el escaneo (matriz del CAD por columnas, ver lib/scanAlign.ts) */
+  onAlignScan: (matrix: Mat4, description: string) => Promise<void>;
 }
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
@@ -294,6 +297,36 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     }
   };
 
+  // Alinear el escaneo: una cara, un eje o un punto y se mueve el escaneo
+  const align = (how: "floor" | "front" | "axis" | "origin") => {
+    setScanResult(undefined);
+    const run = (m: Mat4 | null, description: string, otherwise: string) => {
+      ui.setScanHighlight([]);
+      if (!m) return say(otherwise);
+      void props.onAlignScan(m, description).catch((e) => say(String(e)));
+    };
+    if (how === "origin") {
+      return ui.setPick({ kind: "scan_point", prompt: "Clic en el punto del escaneo que va al origen", done: (p) => run(pointToOrigin(p), "Escaneo: punto al origen", "") });
+    }
+    const shape = how === "axis" ? "cylinder" : "plane";
+    ui.setPick({
+      kind: "scan",
+      shape,
+      prompt:
+        how === "floor"
+          ? "Clic en la cara del escaneo que va apoyada en el piso"
+          : how === "front"
+            ? "Clic en la cara del escaneo que mira al frente"
+            : "Clic en un cilindro o agujero del escaneo: su eje queda vertical",
+      done: (pick) => {
+        ui.setPick({ kind: "none" });
+        if (pick.kind === "cylinder") return run(axisToVertical(pick.origin, pick.direction), "Escaneo: eje vertical", "");
+        if (how === "floor") return run(faceToFloor(pick.plane), "Escaneo: cara al piso", "");
+        run(faceToFront(pick.plane), "Escaneo: cara al frente", "Esa cara es horizontal: elegir una cara de costado");
+      },
+    });
+  };
+
   const detect = async () => {
     try {
       setDetections(await store.scanDetect());
@@ -356,6 +389,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       />
                     </label>
                   </Show>
+                  <div class="space-y-1.5" aria-label="Alinear el escaneo">
+                    <span class="text-xs text-text-muted">Alinear el escaneo (antes de diseñar sobre él)</span>
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <Button size="sm" variant="ghost" title="La cara elegida queda apoyada en el piso" onClick={() => align("floor")}>
+                        Cara al piso
+                      </Button>
+                      <Button size="sm" variant="ghost" title="Gira en torno al eje vertical hasta que la cara mire al frente" onClick={() => align("front")}>
+                        Cara al frente
+                      </Button>
+                      <Button size="sm" variant="ghost" title="El eje del cilindro queda vertical y pasa por el origen" onClick={() => align("axis")}>
+                        Eje vertical
+                      </Button>
+                      <Button size="sm" variant="ghost" title="Corre el escaneo para que el punto quede en el origen" onClick={() => align("origin")}>
+                        Punto al origen
+                      </Button>
+                    </div>
+                  </div>
+                  <span class="block text-xs text-text-muted">Tomar del escaneo</span>
                   <div class="grid grid-cols-2 gap-1.5">
                     <Button size="sm" onClick={() => pickScan("plane")}>
                       Cara plana
