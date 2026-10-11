@@ -27,12 +27,12 @@ fn volume(doc: &Document) -> f64 {
 fn plate_with_hole() -> (Document, FeatureId) {
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: rect_sketch(0.0, 0.0, 100.0, 60.0) });
-    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::Blind { distance: 2.0 }, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None }));
+    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::Blind { distance: 2.0 }, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None, direction: None, start: 0.0 }));
     let mut c = Sketch::default();
     let o = c.add_point(10.0, 10.0);
     c.add_entity(Geometry::Circle { center: o, radius: 2.0 });
     let hs = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: c });
-    let hole = doc.add(FeatureKind::Extrude(Extrude { sketch: hs, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None }));
+    let hole = doc.add(FeatureKind::Extrude(Extrude { sketch: hs, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None, direction: None, start: 0.0 }));
     (doc, hole)
 }
 

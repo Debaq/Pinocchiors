@@ -2817,7 +2817,7 @@ impl Ctx<'_> {
                     reverse: *flip,
                     op: *op,
                     draft: 0.0,
-                    thin: None,
+                    thin: None, direction: None, start: 0.0,
                 };
                 let tool = self.extrude_dir(f.id, &e, *flip)?;
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
@@ -3561,8 +3561,23 @@ impl Ctx<'_> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
         let (faces, entities, samples) = self.profile(e.sketch, &e.regions)?;
         let faces = thin_faces(faces, e.thin)?;
-        let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
+        // La dirección: la normal del plano o la propia (que no puede ir a lo largo del plano)
+        let dir = match &e.direction {
+            None => plane.normal,
+            Some(a) => {
+                let d = normalize(self.axis("direction", a)?.dir);
+                if dot(d, plane.normal).abs() < 1e-3 {
+                    return Err("la dirección no puede ir a lo largo del plano del sketch".into());
+                }
+                // Hacia el lado de la normal (el sentido lo da «hacia el otro lado»)
+                if dot(d, plane.normal) < 0.0 { scale(d, -1.0) } else { d }
+            }
+        };
+        let mut n = if reverse { scale(dir, -1.0) } else { dir };
         let drafted = e.draft.abs() > 1e-9;
+        if drafted && e.direction.is_some() {
+            return Err("el desmolde va con la dirección normal al plano".into());
+        }
         // Hasta el escaneo: su sólido y la distancia al primer choque
         let mut up_to_scan: Option<(Shape, f64)> = None;
         // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
@@ -3579,7 +3594,7 @@ impl Ctx<'_> {
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
                 vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
             }
-            Extent::UpToFace { face } => {
+            Extent::UpToFace { face, offset } => {
                 let i = self.face("extent", face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
                 let d = dot(sub(info.point, plane.origin), n);
@@ -3589,7 +3604,10 @@ impl Ctx<'_> {
                 if d < 0.0 {
                     n = scale(n, -1.0);
                 }
-                vec![(0.0, d.abs())]
+                if d.abs() - offset <= 1e-9 {
+                    return Err("con esa separación la extrusión no llega a empezar".into());
+                }
+                vec![(0.0, d.abs() - offset)]
             }
             Extent::UpToVertex { point } => {
                 let p = self.point("extent", point)?;
@@ -3631,6 +3649,15 @@ impl Ctx<'_> {
                 }
                 vec![(0.0, t)]
             }
+        };
+        // Desde un plano corrido: lo ciego se corre entero; lo que va «hasta» algo se acorta
+        let segments: Vec<(f64, f64)> = if e.start.abs() < 1e-12 {
+            segments
+        } else {
+            // El corrimiento es sobre la normal del plano: medido a lo largo de `n`
+            let s = e.start / dot(n, plane.normal);
+            let up_to = matches!(e.extent, Extent::UpToFace { .. } | Extent::UpToVertex { .. } | Extent::UpToNext);
+            segments.into_iter().map(|(a, l)| if up_to { (a + s, l - s) } else { (a + s, l) }).collect()
         };
         if segments.iter().all(|(_, l)| l.abs() < 1e-9) {
             return Err("distancia cero".into());
@@ -3679,10 +3706,12 @@ impl Ctx<'_> {
         // entidad del sketch que barren (su punto medio, a media altura)
         let mut tags = vec![Vec::new(); shape.face_count()];
         let scale_tol = self.diag().max(hi - lo) * 1e-6;
+        // Las tapas son paralelas al plano; su posición, medida a lo largo de `n`
+        let along = dot(n, plane.normal);
         for (i, slot) in tags.iter_mut().enumerate() {
             let info = shape.face_info(i).map_err(err)?;
-            if info.surface == SurfaceKind::Plane && dot(info.normal, n).abs() > 0.999 {
-                let d = dot(sub(info.point, plane.origin), n);
+            if info.surface == SurfaceKind::Plane && dot(info.normal, plane.normal).abs() > 0.999 {
+                let d = dot(sub(info.point, plane.origin), plane.normal) / along;
                 if (d - lo).abs() <= scale_tol {
                     slot.push(tag(id, "inicio"));
                 } else if (d - hi).abs() <= scale_tol {

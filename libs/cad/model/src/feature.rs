@@ -255,8 +255,13 @@ pub enum Extent {
     Symmetric { distance: f64 },
     /// Atraviesa todo el cuerpo.
     ThroughAll,
-    /// Hasta el plano de una cara.
-    UpToFace { face: FaceRef },
+    /// Hasta el plano de una cara; con `offset`, se queda a esa distancia antes
+    /// (negativo: la pasa).
+    UpToFace {
+        face: FaceRef,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        offset: f64,
+    },
     /// Hacia los dos lados del plano: `distance` hacia la normal y `second` hacia atrás.
     TwoSides { distance: f64, second: f64 },
     /// Hasta la primera cara del sólido que encuentra.
@@ -296,6 +301,13 @@ pub struct Extrude {
     /// Extrusión delgada: una pared de este espesor siguiendo el contorno.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thin: Option<f64>,
+    /// Dirección propia (la de un eje, una arista o una línea) en vez de la
+    /// normal del plano; las medidas se toman a lo largo de ella.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<AxisSpec>,
+    /// Arranca a esta distancia del plano del sketch (a lo largo de su normal).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub start: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1113,10 +1125,16 @@ impl FeatureKind {
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
-            FeatureKind::Extrude(e) => match &e.extent {
-                Extent::UpToVertex { point } => [vec![e.sketch], point_deps(point)].concat(),
-                _ => vec![e.sketch],
-            },
+            FeatureKind::Extrude(e) => {
+                let mut d = vec![e.sketch];
+                if let Extent::UpToVertex { point } = &e.extent {
+                    d.extend(point_deps(point));
+                }
+                if let Some(a) = &e.direction {
+                    d.extend(axis_deps(a));
+                }
+                d
+            }
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
                 d.extend(axis_dep(&r.axis));

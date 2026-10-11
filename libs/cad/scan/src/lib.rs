@@ -80,7 +80,7 @@ pub fn extrude_into(sketch: FeatureId, depth: f64, op: BodyOp) -> FeatureKind {
         reverse: true,
         op,
     draft: 0.0,
-    thin: None,
+    thin: None, direction: None, start: 0.0,
     })
 }
 

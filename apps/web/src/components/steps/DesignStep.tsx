@@ -1506,10 +1506,19 @@ export const FeatureEditor: Component<{
                       lost={lost("extent")}
                       refs={k().extent.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
                       onChange={(refs) => {
-                        if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef });
+                        if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef, offset: (k().extent as { offset?: number }).offset });
                         setUpTo(false);
                       }}
                     />
+                    <Show when={k().extent.type === "up_to_face"}>
+                      {field(
+                        "Antes de la cara",
+                        "kind.extent.offset",
+                        (k().extent as { offset?: number }).offset ?? 0,
+                        (x, v) => x.type === "extrude" && x.extent.type === "up_to_face" && (x.extent.offset = v || undefined),
+                        "mm",
+                      )}
+                    </Show>
                   </Show>
                   <Show when={k().extent.type === "up_to_vertex" && (k().extent as Extract<Extent, { type: "up_to_vertex" }>)}>
                     {(e) => (
@@ -1557,6 +1566,26 @@ export const FeatureEditor: Component<{
                       (k().extent as { second: number }).second,
                       (x, v) => x.type === "extrude" && x.extent.type === "two_sides" && (x.extent.second = v),
                       "mm",
+                    )}
+                  </Show>
+                  {field("Desde el plano a", "kind.start", k().start ?? 0, (x, v) => x.type === "extrude" && (x.start = v || undefined), "mm")}
+                  <Checkbox
+                    small
+                    label="Dirección propia"
+                    checked={!!k().direction}
+                    onChange={(c) => update((x) => x.type === "extrude" && (x.direction = c ? { type: "z" } : null))}
+                  />
+                  <Show when={k().direction}>
+                    {(d) => (
+                      <AxisField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:direccion`}
+                        label="A lo largo de"
+                        value={d()}
+                        except={f().id}
+                        onChange={(a) => update((x) => x.type === "extrude" && (x.direction = a))}
+                      />
                     )}
                   </Show>
                   {field("Desmolde", "kind.draft", k().draft ?? 0, (x, v) => x.type === "extrude" && (x.draft = v), "°")}

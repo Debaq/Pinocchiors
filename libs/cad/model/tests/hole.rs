@@ -257,7 +257,7 @@ fn hole_from_a_base_plane_goes_into_the_block_above() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     assert_relative_eq!(vol(&doc), 40.0 * 40.0 * 10.0, max_relative = 1e-6);
     let h = doc.add(hole(sk, 6.0, HoleDepth::ThroughAll, HoleStyle::Simple));

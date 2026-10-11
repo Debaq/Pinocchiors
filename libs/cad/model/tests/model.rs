@@ -145,7 +145,7 @@ fn plate_doc() -> (Document, FeatureId, [usize; 2]) {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     (doc, sk, cons)
 }
@@ -201,7 +201,7 @@ fn pocket_on_face_through_all_and_up_to_face() {
         reverse: true,
         op: BodyOp::Cut,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -216,11 +216,11 @@ fn pocket_on_face_through_all_and_up_to_face() {
     doc.add(FeatureKind::Extrude(Extrude {
         sketch: sk2,
         regions: RegionSelection::All,
-        extent: Extent::UpToFace { face: top_ref },
+        extent: Extent::UpToFace { face: top_ref, offset: 0.0 },
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -456,7 +456,7 @@ fn cut_on_face_points_into_material() {
         reverse: false, // hacia afuera de la cara: se da vuelta sola
         op: BodyOp::Cut,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -815,7 +815,7 @@ fn ellipse_is_dimensioned_and_extruded_exactly() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -855,7 +855,7 @@ fn spline_handles_set_end_tangents() {
             reverse: false,
             op: BodyOp::Join,
             draft: 0.0,
-            thin: None,
+            thin: None, direction: None, start: 0.0,
         }));
         let ev = doc.evaluate();
         assert_all_ok(&ev);
@@ -1113,7 +1113,7 @@ fn extrude_part_of_crossing_shapes() {
             reverse: false,
             op: BodyOp::Join,
             draft: 0.0,
-            thin: None,
+            thin: None, direction: None, start: 0.0,
         }));
         let ev = doc.evaluate();
         assert_all_ok(&ev);
@@ -1132,7 +1132,7 @@ fn extrude_part_of_crossing_shapes() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);

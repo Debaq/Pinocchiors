@@ -33,7 +33,7 @@ fn bbox(ev: &Evaluation) -> ([f64; 3], [f64; 3], f64) {
 }
 
 fn extrude(sketch: FeatureId, extent: Extent, op: BodyOp) -> FeatureKind {
-    FeatureKind::Extrude(Extrude { sketch, regions: RegionSelection::All, extent, reverse: false, op, draft: 0.0, thin: None })
+    FeatureKind::Extrude(Extrude { sketch, regions: RegionSelection::All, extent, reverse: false, op, draft: 0.0, thin: None, direction: None, start: 0.0 })
 }
 
 /// Placa de 100 × 60 × 2 con un agujero de Ø4 en (10, 10)
@@ -483,4 +483,77 @@ fn fillet_through_radius_points() {
         points[0].at = 1.5;
     }
     assert!(!doc.evaluate().errors().is_empty());
+}
+
+fn square_at(doc: &mut Document, z: f64) -> FeatureId {
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [10.0, 10.0]);
+    doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: z, sketch: s })
+}
+
+#[test]
+fn extrude_from_an_offset_start() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let sk = square_at(&mut doc, 0.0);
+    let e = doc.add(extrude(sk, Extent::Blind { distance: 5.0 }, BodyOp::Join));
+    if let FeatureKind::Extrude(x) = &mut doc.get_mut(e).unwrap().kind {
+        x.start = 3.0;
+    }
+    let (lo, hi, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 500.0, max_relative = 1e-9);
+    assert_relative_eq!(lo[2], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(hi[2], 8.0, epsilon = 1e-6);
+    // Hasta un punto a z = 10 desde z = 3: 7 de alto
+    if let FeatureKind::Extrude(x) = &mut doc.get_mut(e).unwrap().kind {
+        x.extent = Extent::UpToVertex { point: PointSpec::At { point: [0.0, 0.0, 10.0] } };
+    }
+    let (lo, hi, _) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(lo[2], 3.0, epsilon = 1e-6);
+    assert_relative_eq!(hi[2], 10.0, epsilon = 1e-6);
+}
+
+#[test]
+fn extrude_along_its_own_direction() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let sk = square_at(&mut doc, 0.0);
+    let e = doc.add(extrude(sk, Extent::Blind { distance: 10.0 }, BodyOp::Join));
+    if let FeatureKind::Extrude(x) = &mut doc.get_mut(e).unwrap().kind {
+        x.direction = Some(AxisSpec::Custom { origin: [0.0; 3], direction: [1.0, 0.0, 1.0] });
+    }
+    // Prisma oblicuo a 45°: 10 a lo largo de la dirección
+    let h = 10.0 / 2f64.sqrt();
+    let (lo, hi, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 100.0 * h, max_relative = 1e-9);
+    assert_relative_eq!(hi[2], h, epsilon = 1e-6);
+    assert_relative_eq!(hi[0], 10.0 + h, epsilon = 1e-6);
+    assert_relative_eq!(lo[0], 0.0, epsilon = 1e-6);
+    // A lo largo del plano: error
+    if let FeatureKind::Extrude(x) = &mut doc.get_mut(e).unwrap().kind {
+        x.direction = Some(AxisSpec::X);
+    }
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn extrude_up_to_a_face_with_offset() {
+    if !occt() {
+        return;
+    }
+    // Caja de 20 (z de 0 a 20) y un cuadrado a z = 40 que baja hasta 2 antes de la cara de arriba
+    let mut doc = Document::new();
+    doc.add(cube(30.0, 20.0, BodyOp::Join));
+    let top = face_at(&doc, [40.0, 10.0, 20.0], [0.0, 0.0, 1.0]);
+    let sk = square_at(&mut doc, 40.0);
+    doc.add(extrude(sk, Extent::UpToFace { face: top, offset: 2.0 }, BodyOp::Join));
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2);
+    let m = ev.parts[1].shape.mass().unwrap();
+    assert_relative_eq!(m.bbox_min[2], 22.0, epsilon = 1e-6);
+    assert_relative_eq!(m.volume, 1800.0, max_relative = 1e-9);
 }

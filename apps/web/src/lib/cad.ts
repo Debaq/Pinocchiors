@@ -186,7 +186,8 @@ export type Extent =
   | { type: "blind"; distance: number }
   | { type: "symmetric"; distance: number }
   | { type: "through_all" }
-  | { type: "up_to_face"; face: FaceRef }
+  /** `offset`: se queda a esa distancia antes de la cara (negativo, la pasa) */
+  | { type: "up_to_face"; face: FaceRef; offset?: number }
   /** `distance` hacia la normal y `second` hacia atrás */
   | { type: "two_sides"; distance: number; second: number }
   /** Hasta la primera cara del sólido que encuentra */
@@ -559,6 +560,10 @@ export type FeatureKind =
       draft?: number;
       /** Extrusión delgada: espesor de la pared */
       thin?: number | null;
+      /** Dirección propia (un eje, una arista o una línea) en vez de la normal del plano */
+      direction?: AxisSpec | null;
+      /** Arranca a esta distancia del plano del sketch */
+      start?: number;
     }
   /** `thin`: revolución delgada, una pared de ese espesor siguiendo el contorno */
   | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent; thin?: number | null }
@@ -1621,7 +1626,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "hole":
       return [kind.sketch];
     case "extrude":
-      return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : [])];
+      return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : []), ...(kind.direction ? axis(kind.direction) : [])];
     case "surface_planar":
       return [kind.sketch];
     case "surface_offset":

@@ -88,7 +88,7 @@ fn sketch_on_reference_plane_and_revolve_on_reference_axis() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
