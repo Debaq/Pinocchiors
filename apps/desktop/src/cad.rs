@@ -306,6 +306,11 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                 }
                 // Solo lo que no está suprimido ni vuelto atrás (prepararlo tarda)
                 FeatureKind::ScanBody(b) if !f.suppressed => b.mesh = Some(scan_body_mesh(scan, b.offset, b.faces)),
+                FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { offset, mesh }, .. }) if !f.suppressed => {
+                    *mesh = Some(scan_body_mesh(scan, *offset, SCAN_FACES));
+                }
+                FeatureKind::FaceToScan { offset, mesh, .. } if !f.suppressed => *mesh = Some(scan_body_mesh(scan, *offset, SCAN_FACES)),
+                FeatureKind::Rib { scan: Some(r), .. } if !f.suppressed => r.mesh = Some(scan_body_mesh(scan, r.offset, SCAN_FACES)),
                 _ => {}
             }
         }
@@ -321,8 +326,14 @@ fn uses_scan(kind: &FeatureKind) -> bool {
             | FeatureKind::Axis { def: AxisDef::Scan { .. } }
             | FeatureKind::Point { def: PointSpec::Scan { .. } }
             | FeatureKind::ScanBody(_)
+            | FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { .. }, .. })
+            | FeatureKind::FaceToScan { .. }
+            | FeatureKind::Rib { scan: Some(_), .. }
     )
 }
+
+/// Triángulos del escaneo cuando lo usa otra operación (extruir hasta él)
+const SCAN_FACES: usize = 20_000;
 
 /// El escaneo cerrado con la holgura, listo para sólido (en caché por escaneo,
 /// holgura y triángulos). Si no se puede, la malla queda vacía con el motivo.

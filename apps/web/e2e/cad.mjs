@@ -6807,6 +6807,90 @@ const scenarios = {
     await b.shot("escaneo-cuna");
   },
 
+  async "escaneo: extruir y llevar una cara hasta el escaneo"(b) {
+    // Esfera de radio 20 con centro a 40 mm de altura (la panza en z = 20)
+    const [R, cz, rings, segs] = [20, 40, 48, 96];
+    const at = (i, j) => {
+      const th = (Math.PI * i) / rings;
+      const ph = (2 * Math.PI * j) / segs;
+      return [R * Math.sin(th) * Math.cos(ph), R * Math.sin(th) * Math.sin(ph), cz + R * Math.cos(th)];
+    };
+    let stl = "solid esfera\n";
+    const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+    for (let i = 0; i < rings; i++)
+      for (let j = 0; j < segs; j++) {
+        const [a, c, d, e] = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+        if (i > 0) facet(a, c, e);
+        if (i < rings - 1) facet(e, c, d);
+      }
+    stl += "endsolid esfera\n";
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-esfera.stl`;
+    writeFileSync(path, stl);
+    await importModel(b, path);
+    await begin(b);
+    // Círculo de radio 5 en la planta, extruido hasta el escaneo con 0,5 mm de separación
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }],
+      entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 5 } }],
+      constraints: [],
+      next_id: 3,
+      origin: 0,
+    };
+    const doc = await call("cad_get_document");
+    doc.features = [
+      { id: 1, name: "Sketch 1", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } },
+      { id: 2, name: "Columna", suppressed: false, kind: { type: "extrude", sketch: 1, regions: { type: "all" }, extent: { type: "up_to_scan", offset: 0.5 }, reverse: false, op: "new" } },
+    ];
+    doc.next_id = 3;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    let r;
+    for (let t = 0; t < 120; t++) {
+      r = await evaluate();
+      if (r.status?.[1]?.state === "ok" || r.status?.[1]?.state === "error") break;
+      await sleep(250);
+    }
+    if (r.status[1].state !== "ok") throw new Error(`hasta el escaneo: ${JSON.stringify(r.status[1])}`);
+    // π r² · 40 − ∫ 2πρ √(R² − ρ²) dρ con R = 20,5
+    const big = R + 0.5;
+    const column = Math.PI * 25 * cz - ((2 * Math.PI) / 3) * (big ** 3 - (big * big - 25) ** 1.5);
+    near(r.parts[0].volume, column, column * 0.01, "columna hasta la panza");
+    // El diálogo muestra el modo y la separación
+    await b.eval(`window.__cadStore.select(2)`);
+    await sleep(1500);
+    const text = await b.eval(`document.body.innerText`);
+    if (!text.includes("Hasta el escaneo") || !text.includes("Separación")) throw new Error("el diálogo no muestra «Hasta el escaneo» con su separación");
+    await b.key("Escape", "Escape", 27);
+    await sleep(500);
+
+    // Cara al escaneo: la tapa de un bloque de 10 sube hasta la panza (sin separación)
+    const d2 = await call("cad_get_document");
+    d2.features = [
+      { id: 1, name: "Bloque", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 10, dy: 10, dz: 10, centered: true }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "new" } },
+      { id: 2, name: "Cara al escaneo 1", suppressed: false, kind: { type: "face_to_scan", faces: [{ point: [0, 0, 10], normal: [0, 0, 1] }], offset: 0 } },
+    ];
+    d2.next_id = 3;
+    await call("cad_set_document", { document: d2 });
+    await b.eval(`window.__cadStore.reload()`);
+    for (let t = 0; t < 120; t++) {
+      r = await evaluate();
+      if (r.status?.[1]?.state === "ok" || r.status?.[1]?.state === "error") break;
+      await sleep(250);
+    }
+    if (r.status[1].state !== "ok") throw new Error(`cara al escaneo: ${JSON.stringify(r.status[1])}`);
+    // Bloque + entre z = 10 y la panza (grilla)
+    let added = 0;
+    for (let i = 0; i < 100; i++)
+      for (let j = 0; j < 100; j++) {
+        const [x, y] = [-5 + (i + 0.5) * 0.1, -5 + (j + 0.5) * 0.1];
+        added += (cz - Math.sqrt(R * R - x * x - y * y) - 10) * 0.01;
+      }
+    near(r.parts[0].volume, 1000 + added, (1000 + added) * 0.01, "bloque hasta la panza");
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.4])`);
+    await sleep(800);
+    await b.shot("escaneo-cara");
+  },
+
   async "mallas: caja del diseño en Fabricar"(b) {
     // La malla soldada de una pieza trae una sola normal por vértice en las
     // aristas vivas: la marca por vértice hace que las caras se dibujen planas

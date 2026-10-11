@@ -471,6 +471,9 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     >
                       Escaneo como cuerpo
                     </Button>
+                    <p class="text-[11px] text-text-dim leading-relaxed">
+                      Hasta la piel: extrusión «Hasta el escaneo», «Cara al escaneo» (Modificar) y nervio «Hasta el escaneo».
+                    </p>
                   </div>
                   <span class="block text-xs text-text-muted">Tomar del escaneo</span>
                   <div class="grid grid-cols-2 gap-1.5">
@@ -1457,6 +1460,7 @@ export const FeatureEditor: Component<{
                         { value: "through_all", label: "Atravesar todo" },
                         { value: "up_to_next", label: "Hasta la siguiente" },
                         { value: "up_to_face", label: "Hasta una cara" },
+                        { value: "up_to_scan", label: "Hasta el escaneo" },
                       ]}
                       value={extentType()}
                       onChange={(v) => {
@@ -1465,6 +1469,7 @@ export const FeatureEditor: Component<{
                         if (v === "blind" || v === "symmetric") setExtent({ type: v, distance: d });
                         else if (v === "two_sides") setExtent({ type: "two_sides", distance: d, second: d / 2 });
                         else if (v === "through_all" || v === "up_to_next") setExtent({ type: v });
+                        else if (v === "up_to_scan") setExtent({ type: "up_to_scan", offset: 0 });
                         else setUpTo(true);
                       }}
                     />
@@ -1492,6 +1497,18 @@ export const FeatureEditor: Component<{
                       (x, v) => x.type === "extrude" && "distance" in x.extent && (x.extent.distance = v),
                       "mm",
                     )}
+                  </Show>
+                  <Show when={k().extent.type === "up_to_scan"}>
+                    {field(
+                      "Separación",
+                      "kind.extent.offset",
+                      (k().extent as { offset: number }).offset,
+                      (x, v) => x.type === "extrude" && x.extent.type === "up_to_scan" && (x.extent.offset = v),
+                      "mm",
+                    )}
+                    <p class="text-[11px] text-text-dim leading-relaxed">
+                      Llega hasta la piel del escaneo, aunque sea curva, y queda a esa distancia. Va hacia el lado donde está el escaneo.
+                    </p>
                   </Show>
                   <Show when={k().extent.type === "two_sides"}>
                     {field(
@@ -2608,9 +2625,19 @@ export const FeatureEditor: Component<{
                 </Row>
                 {field("Espesor", "kind.thickness", k().thickness, (x, v) => x.type === "rib" && (x.thickness = v), "mm")}
                 <Checkbox small label="Hacia el otro lado" checked={k().flip} onChange={(c) => update((x) => x.type === "rib" && (x.flip = c))} />
+                <Checkbox
+                  small
+                  label="Hasta el escaneo"
+                  checked={!!k().scan}
+                  onChange={(c) => update((x) => x.type === "rib" && (x.scan = c ? { offset: 0 } : null))}
+                />
+                <Show when={k().scan}>
+                  {field("Separación", "kind.scan.offset", k().scan?.offset ?? 0, (x, v) => x.type === "rib" && !!x.scan && (x.scan.offset = v), "mm")}
+                </Show>
                 <p class="text-[11px] text-text-dim">
-                  Cada línea del sketch se lleva hasta el sólido, en su plano, con el espesor repartido a los dos lados. El sketch tiene que estar en un
-                  plano que corte el sólido.
+                  {k().scan
+                    ? "Cada línea del sketch se lleva hasta la piel del escaneo, en su plano, con el espesor repartido a los dos lados."
+                    : "Cada línea del sketch se lleva hasta el sólido, en su plano, con el espesor repartido a los dos lados. El sketch tiene que estar en un plano que corte el sólido."}
                 </p>
               </>
             )}
@@ -2639,6 +2666,27 @@ export const FeatureEditor: Component<{
                   onChange={(p) => update((x) => x.type === "replace_face" && (x.target = p))}
                 />
                 <p class="text-[11px] text-text-dim">Las caras llegan hasta el plano: suma material si queda afuera, resta si queda adentro.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "face_to_scan" && (f().kind as Extract<FeatureKind, { type: "face_to_scan" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras planas"
+                  refs={k().faces}
+                  lost={lost("faces")}
+                  onChange={(refs) => update((x) => x.type === "face_to_scan" && (x.faces = refs as FaceRef[]))}
+                />
+                {field("Separación", "kind.offset", k().offset, (x, v) => x.type === "face_to_scan" && (x.offset = v), "mm")}
+                <p class="text-[11px] text-text-dim">
+                  Las caras llegan hasta la piel del escaneo, aunque sea curva, y quedan a esa distancia: suma material si el escaneo está afuera, resta si
+                  está adentro.
+                </p>
               </>
             )}
           </Match>

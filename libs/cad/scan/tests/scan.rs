@@ -335,3 +335,123 @@ fn scan_body_leaves_a_cradle_with_clearance() {
     assert!(json.contains("\"mesh\":\"0000000000000001\""), "{json}");
     assert!(json.len() < 200);
 }
+
+/// Extruir hasta el escaneo: un cilindro que baja desde un sketch hasta una
+/// esfera escaneada se detiene en su piel curva, a la separación pedida.
+#[test]
+fn extrude_up_to_the_scan_follows_the_curved_skin() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let gap = 0.5;
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap }).unwrap();
+    let mesh = ScanBodyMesh { hash: 7, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
+
+    let r = 5.0;
+    let mut sketch = Sketch::default();
+    sketch.circle([0.0, 0.0], r);
+    let mut doc = Document::new();
+    // Sketch a 30 mm: el escaneo queda abajo, del otro lado de la normal
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 30.0, sketch });
+    doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        regions: RegionSelection::All,
+        extent: Extent::UpToScan { offset: gap, mesh: Some(mesh) },
+        reverse: false,
+        op: BodyOp::New,
+        draft: 0.0,
+        thin: None,
+    }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let m = ev.body.unwrap().mass().unwrap();
+    // Cilindro hasta la esfera de radio 20 + 0,5: π r² · 30 − ∫ 2πρ √(R² − ρ²)
+    let big = 20.0 + gap;
+    let expected = PI * r * r * 30.0 - 2.0 * PI / 3.0 * (big.powi(3) - (big * big - r * r).powf(1.5));
+    assert_relative_eq!(m.volume, expected, max_relative = 0.01);
+    assert_relative_eq!(m.bbox_max[2], 30.0, epsilon = 1e-6);
+    // Abajo, en el borde del círculo: a la altura de la esfera agrandada
+    assert_relative_eq!(m.bbox_min[2], (big * big - r * r).sqrt(), epsilon = 0.1);
+}
+
+/// Esfera escaneada de radio 20 con centro a 40 mm de altura (abajo en z = 20)
+/// y su malla corrida `gap`.
+fn floating_ball(gap: f64) -> ScanBodyMesh {
+    let t = Shape::sphere([0.0, 0.0, 40.0], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap }).unwrap();
+    ScanBodyMesh { hash: 11 + gap.to_bits(), data: std::sync::Arc::new((body.vertices, body.triangles)), error: None }
+}
+
+/// Altura de la panza de la esfera agrandada sobre (x, y).
+fn belly(x: f64, y: f64, gap: f64) -> f64 {
+    40.0 - ((20.0 + gap).powi(2) - x * x - y * y).sqrt()
+}
+
+fn block(dx: f64, dy: f64, dz: f64) -> FeatureKind {
+    FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx, dy, dz, centered: true, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+    })
+}
+
+/// La cara de arriba de un bloque llevada hasta la panza de la esfera; y un
+/// nervio desde el bloque hasta la esfera.
+#[test]
+fn face_and_rib_up_to_the_scan() {
+    if !occt::available() {
+        return;
+    }
+    let gap = 0.5;
+    let ball = floating_ball(gap);
+    let mut doc = Document::new();
+    doc.add(block(10.0, 10.0, 10.0));
+    let face = FaceRef { point: [0.0, 0.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
+    doc.add(FeatureKind::FaceToScan { faces: vec![face], offset: gap, mesh: Some(ball.clone()) });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // Bloque + lo que hay entre z = 10 y la panza (integral en una grilla)
+    let n = 200;
+    let h = 10.0 / n as f64;
+    let mut added = 0.0;
+    for i in 0..n {
+        for j in 0..n {
+            let (x, y) = (-5.0 + (i as f64 + 0.5) * h, -5.0 + (j as f64 + 0.5) * h);
+            added += (belly(x, y, gap) - 10.0) * h * h;
+        }
+    }
+    let m = ev.body.unwrap().mass().unwrap();
+    assert_relative_eq!(m.volume, 1000.0 + added, max_relative = 0.01);
+    assert_relative_eq!(m.bbox_max[2], belly(5.0, 5.0, gap), epsilon = 0.1);
+
+    // Una cara más ancha que la esfera no tiene hasta dónde llegar
+    let mut wide = Document::new();
+    wide.add(block(60.0, 60.0, 10.0));
+    let face = FaceRef { point: [0.0, 0.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
+    wide.add(FeatureKind::FaceToScan { faces: vec![face], offset: gap, mesh: Some(ball.clone()) });
+    let ev = wide.evaluate();
+    assert!(matches!(&ev.status[1].state, FeatureState::Error { message, .. } if message.contains("frente al escaneo")), "{:?}", ev.status[1].state);
+
+    // Nervio: línea sobre el bloque (plano XZ, z = 10) hasta la esfera, 2 mm de espesor
+    let mut doc = Document::new();
+    doc.add(block(10.0, 10.0, 10.0));
+    let mut sketch = Sketch::default();
+    let a = sketch.add_point(-4.0, 10.0);
+    let b = sketch.add_point(4.0, 10.0);
+    sketch.add_line(a, b);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch });
+    doc.add(FeatureKind::Rib { sketch: sk, thickness: 2.0, flip: false, scan: Some(ScanReach { offset: gap, mesh: Some(ball) }) });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let rib: f64 = (0..n).map(|i| -4.0 + (i as f64 + 0.5) * 8.0 / n as f64).map(|x| (belly(x, 0.0, gap) - 10.0) * 2.0 * 8.0 / n as f64).sum();
+    let m = ev.body.unwrap().mass().unwrap();
+    // El nervio sigue la piel por tramos (32 por línea)
+    assert_relative_eq!(m.volume, 1000.0 + rib, max_relative = 0.01);
+    assert_eq!(ev.parts.len(), 1, "el nervio se une al bloque");
+}

@@ -208,6 +208,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "replace_face", faces: refs, target });
   };
 
+  /** Cara al escaneo: las caras elegidas hasta la piel del escaneo */
+  const startFaceToScan = async () => {
+    if (!store.result()?.body) return say("Primero hace falta un sólido");
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const refs = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "face_to_scan", faces: refs, offset: 0 });
+  };
+
   /** Patrón a lo largo del último sketch (o de la operación elegida, si tiene herramienta) */
   const addCurvePattern = () => {
     const sel = selectedFeature();
@@ -635,6 +644,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startRib,
     startThread,
     startReplaceFace,
+    startFaceToScan,
     importStep,
     addSplitBy,
     trimWithPlane,

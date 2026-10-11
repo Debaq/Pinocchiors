@@ -113,7 +113,7 @@ fn rib_reaches_the_solid() {
     }
     let mut doc = cube();
     let sk = rib_sketch(&mut doc, 2.0, 8.0, 15.0);
-    let rib = doc.add(FeatureKind::Rib { sketch: sk, thickness: 2.0, flip: false });
+    let rib = doc.add(FeatureKind::Rib { sketch: sk, thickness: 2.0, flip: false, scan: None });
     // Pared de 6 × 5 × 2 encima del cubo, centrada en y = 5
     let m = eval_ok(&doc).body.unwrap().mass().unwrap();
     assert_relative_eq!(m.volume, 1060.0, max_relative = 1e-9);
@@ -133,7 +133,7 @@ fn rib_that_misses_is_an_error() {
     let mut doc = cube();
     // La línea sobresale del cubo: parte de los rayos no lo tocan
     let sk = rib_sketch(&mut doc, 5.0, 20.0, 15.0);
-    doc.add(FeatureKind::Rib { sketch: sk, thickness: 2.0, flip: false });
+    doc.add(FeatureKind::Rib { sketch: sk, thickness: 2.0, flip: false, scan: None });
     assert!(!doc.evaluate().errors().is_empty());
 }
 

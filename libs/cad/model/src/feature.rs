@@ -226,6 +226,16 @@ pub enum Extent {
     TwoSides { distance: f64, second: f64 },
     /// Hasta la primera cara del sólido que encuentra.
     UpToNext,
+    /// Hasta la piel del escaneo (aunque sea curva), dejando `offset` de
+    /// separación; va hacia el lado donde está el escaneo.
+    UpToScan {
+        #[serde(default)]
+        offset: f64,
+        /// El escaneo cerrado y corrido `offset`, que pone la app antes de
+        /// recalcular (como en [`ScanBody`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesh: Option<ScanBodyMesh>,
+    },
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -413,6 +423,16 @@ impl Default for ScanBody {
     }
 }
 
+/// Llegar hasta la piel del escaneo, a `offset` de ella.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct ScanReach {
+    #[serde(default)]
+    pub offset: f64,
+    /// El escaneo corrido `offset`, que pone la app (como en [`ScanBody`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<ScanBodyMesh>,
+}
+
 /// Malla cerrada del escaneo con la holgura (Z arriba, mm).
 #[derive(Debug, Clone)]
 pub struct ScanBodyMesh {
@@ -566,10 +586,23 @@ pub enum FeatureKind {
         thickness: f64,
         #[serde(default)]
         flip: bool,
+        /// Hasta la piel del escaneo en vez del sólido.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scan: Option<ScanReach>,
     },
     /// Lleva caras planas hasta un plano (una cara plana del sólido o uno de
     /// referencia): suma o resta lo que hay entre la cara y el plano.
     ReplaceFace { faces: Vec<FaceRef>, target: PlaneSpec },
+    /// Lleva caras planas hasta la piel del escaneo (a `offset` de ella):
+    /// suma si el escaneo está afuera, resta si está adentro de la pieza.
+    FaceToScan {
+        faces: Vec<FaceRef>,
+        #[serde(default)]
+        offset: f64,
+        /// El escaneo corrido `offset`, que pone la app (como en [`ScanBody`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mesh: Option<ScanBodyMesh>,
+    },
     /// Rosca sobre una cara cilíndrica: exterior en un eje (el cilindro es el
     /// diámetro nominal), interior en un agujero (el agujero es el diámetro
     /// menor). `length` 0 = toda la cara; arranca en un extremo (`flip`: el otro).
@@ -1005,6 +1038,7 @@ impl FeatureKind {
             FeatureKind::Thicken { .. } => "Engrosar",
             FeatureKind::Rib { .. } => "Nervio",
             FeatureKind::ReplaceFace { .. } => "Reemplazar cara",
+            FeatureKind::FaceToScan { .. } => "Cara al escaneo",
             FeatureKind::Thread { .. } => "Rosca",
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",

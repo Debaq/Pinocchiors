@@ -27,7 +27,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Alinear el escaneo por rasgos | ✅ (E1.2) |
 | Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
 | Sketch anclado a la malla | ✅ corte como guía, anclajes y «Usar el corte» (E1.4) |
-| Extruir hasta el escaneo | ❌ `UpToFace` solo caras del sólido (E3) |
+| Extruir hasta el escaneo | ✅ extrusión, cara y nervio (E3) |
 | Formas que siguen la piel (engrosar parche, carcasa, molde) | ❌ (E4) |
 | Curvas sobre la malla | ❌ (E5) |
 | Verificar calce (choque/holgura firmada) | 🟡 desviación sin signo de calce (E6) |
@@ -169,11 +169,27 @@ escaneo ✅, E1.4 sketch anclado al corte ✅. **E1 cerrada (2026-10-10).**
   anda): avisar o correr la herramienta una centésima; avisar el tiempo antes de recalcular
   con muchos triángulos.
 
-### E3 — Extruir hasta el escaneo
+### E3 — Extruir hasta el escaneo ✅ (2026-10-10)
 
-- `Extent::UpToScan { offset }`: la extrusión llega a la piel del escaneo (con separación),
-  aunque la piel sea curva. Pasante ∩ lado del cuerpo de E2.
-- Lo mismo para mover cara y nervio.
+- ✅ `Extent::UpToScan { offset }` («Hasta el escaneo» en la extrusión, con «Separación»):
+  prisma que pasa el escaneo entero − el escaneo corrido la separación, y quedan los sólidos
+  que arrancan en el plano del perfil (`until_scan`). Va hacia el lado donde los rayos desde
+  el perfil encuentran el escaneo. Si parte del perfil no queda frente al escaneo (el prisma
+  llegaría hasta el final) da error en vez de una columna infinita.
+- ✅ `FeatureKind::FaceToScan { faces, offset }` («Cara al escaneo», en Modificar): caras
+  planas hasta la piel; suma si el escaneo está afuera de la pieza, resta si está adentro.
+- ✅ Nervio con `scan: Some(ScanReach { offset })` («Hasta el escaneo» en el diálogo): las
+  paredes llegan a la piel (32 tramos por línea) sin meterse.
+- La app pone la malla igual que en E2 (`SCAN_FACES` = 20 000; comparte caché con los
+  cuerpos de igual holgura) y el sólido del escaneo queda en caché en el modelo
+  (`scan_solid`, los últimos 4 por huella).
+- Pruebas: `extrude_up_to_the_scan_follows_the_curved_skin` (cilindro hasta una esfera,
+  volumen analítico al 1 %), `face_and_rib_up_to_the_scan` (cara y nervio, y el error de la
+  cara más ancha que el escaneo); e2e «escaneo: extruir y llevar una cara hasta el escaneo».
+- Mallas de más de un millón de triángulos (los escaneos reales): preparar 5,7 s con
+  1 M, 3,7 s con 500 k; el sólido y las booleanas no cambian (se trabaja a 20 000).
+- Pendiente: desmolde con «hasta el escaneo»; caras no planas en «Cara al escaneo»; elegir
+  los triángulos del escaneo en estas operaciones (fijo en 20 000).
 
 ### E4 — Formas que siguen la piel
 

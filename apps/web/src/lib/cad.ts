@@ -190,7 +190,9 @@ export type Extent =
   /** `distance` hacia la normal y `second` hacia atrás */
   | { type: "two_sides"; distance: number; second: number }
   /** Hasta la primera cara del sólido que encuentra */
-  | { type: "up_to_next" };
+  | { type: "up_to_next" }
+  /** Hasta la piel del escaneo (aunque sea curva), dejando `offset` mm de separación */
+  | { type: "up_to_scan"; offset: number };
 
 export interface SketchPoint {
   id: number;
@@ -577,9 +579,12 @@ export type FeatureKind =
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
   | { type: "move_face"; faces: FaceRef[]; distance: number }
   /** Pared desde las líneas de un sketch hasta el sólido, centrada en su plano */
-  | { type: "rib"; sketch: number; thickness: number; flip: boolean }
+  /** `scan`: hasta la piel del escaneo (a `offset` mm) en vez del sólido */
+  | { type: "rib"; sketch: number; thickness: number; flip: boolean; scan?: { offset: number } | null }
   /** Caras planas llevadas hasta un plano (cara plana o plano de referencia) */
   | { type: "replace_face"; faces: FaceRef[]; target: PlaneSpec }
+  /** Caras planas hasta la piel del escaneo (a `offset` mm): suma si está afuera, resta si está adentro */
+  | { type: "face_to_scan"; faces: FaceRef[]; offset: number }
   /** Escala por eje alrededor de un punto */
   | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
@@ -1325,6 +1330,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   sew: "Coser",
   split_by: "Partir",
   replace_face: "Reemplazar cara",
+  face_to_scan: "Cara al escaneo",
   scale: "Escala",
 };
 
@@ -1474,7 +1480,12 @@ export const isScanReference = (kind: FeatureKind) =>
   (kind.type === "plane" || kind.type === "axis" || kind.type === "point") && kind.def.type === "scan";
 
 /** La operación sale del escaneo: se rehace cuando el escaneo cambia */
-export const usesScan = (kind: FeatureKind) => isScanReference(kind) || kind.type === "scan_body";
+export const usesScan = (kind: FeatureKind) =>
+  isScanReference(kind) ||
+  kind.type === "scan_body" ||
+  kind.type === "face_to_scan" ||
+  (kind.type === "extrude" && kind.extent.type === "up_to_scan") ||
+  (kind.type === "rib" && !!kind.scan);
 
 /** Operaciones de las que depende `kind` (mismo criterio que el backend) */
 export function dependencies(kind: FeatureKind): number[] {

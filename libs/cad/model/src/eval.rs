@@ -527,6 +527,60 @@ fn occt_err(e: String) -> cad_occt::Error {
 }
 
 /// Aviso de un corte que no se lleva nada.
+/// El prisma menos el escaneo, solo los sólidos que arrancan en el plano del
+/// perfil (lo que queda del otro lado del escaneo se descarta).
+fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3) -> R<Shape> {
+    let reach = prism.mass().map_err(err)?;
+    let far = (0..8)
+        .map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { reach.bbox_min[a] } else { reach.bbox_max[a] }))
+        .map(|c| dot(sub(c, origin), n))
+        .fold(0.0, f64::max);
+    let rest = prism.cut(scan).map_err(err)?;
+    let size = rest.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let starts = |s: &Shape| {
+        (0..s.face_count()).any(|i| {
+            s.face_info(i).is_ok_and(|f| {
+                f.surface == SurfaceKind::Plane && dot(f.normal, n).abs() > 0.999 && dot(sub(f.point, origin), n).abs() < size * 1e-6
+            })
+        })
+    };
+    let kept: Vec<Shape> = rest.solids().map_err(err)?.into_iter().filter(starts).collect();
+    // Lo que no encuentra el escaneo sigue hasta el final del prisma
+    let tip = |s: &Shape| s.mass().map(|m| (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] })).map(|c| dot(sub(c, origin), n)).fold(0.0, f64::max));
+    if kept.iter().any(|s| tip(s).is_ok_and(|t| t > far - far.abs() * 1e-6 - 1e-6)) {
+        return Err("parte del perfil no queda frente al escaneo: no tiene hasta dónde llegar".into());
+    }
+    match kept.len() {
+        0 => Err("el perfil empieza dentro del escaneo".into()),
+        1 => Ok(kept.into_iter().next().unwrap()),
+        _ => fuse(kept),
+    }
+}
+
+/// El escaneo cerrado como sólido (los últimos, por la huella de la malla:
+/// armarlo tarda ~1 s cada 20 000 triángulos y lo usan varias operaciones).
+fn scan_solid(mesh: Option<&ScanBodyMesh>) -> R<Shape> {
+    static SOLIDS: std::sync::Mutex<Vec<(u64, Shape)>> = std::sync::Mutex::new(Vec::new());
+    let mesh = mesh.ok_or("no hay un escaneo elegido")?;
+    if let Some(e) = &mesh.error {
+        return Err(format!("no se pudo preparar el escaneo: {e}"));
+    }
+    if mesh.data.1.is_empty() {
+        return Err("no hay un escaneo elegido".into());
+    }
+    if let Some((_, s)) = SOLIDS.lock().unwrap().iter().find(|(h, _)| *h == mesh.hash) {
+        return Ok(s.clone());
+    }
+    let solid = Shape::from_mesh(&mesh.data.0, &mesh.data.1, 1e-4).map_err(err)?;
+    if solid.kind() != cad_occt::ShapeKind::Solid {
+        return Err("el escaneo no cerró como sólido".into());
+    }
+    let mut cache = SOLIDS.lock().unwrap();
+    cache.insert(0, (mesh.hash, solid.clone()));
+    cache.truncate(4);
+    Ok(solid)
+}
+
 const NOTHING_CUT: &str = "no toca ninguna pieza: prueba invertir el sentido";
 
 struct Ctx<'a> {
@@ -1691,15 +1745,20 @@ impl Ctx<'_> {
 
     /// Pared del nervio: por cada línea del sketch, rayos en el plano hasta el
     /// sólido; el polígono entre la línea y lo que tocan, con espesor centrado.
-    fn rib_tool(&self, id: FeatureId, sketch: FeatureId, thickness: f64, flip: bool) -> R<Tagged> {
+    /// Con `scan`, las paredes van hasta su piel (sin meterse) en vez del sólido.
+    fn rib_tool(&self, id: FeatureId, sketch: FeatureId, thickness: f64, flip: bool, scan: Option<&Shape>) -> R<Tagged> {
         if thickness <= 0.0 {
             return Err("el espesor tiene que ser mayor que cero".into());
         }
         let s = self.ev.sketches.get(&sketch).ok_or("el sketch del nervio no está calculado")?;
-        let body = self.body()?.clone();
+        let body = match scan {
+            Some(scan) => scan.clone(),
+            None => self.body()?.clone(),
+        };
         let n = normalize(s.plane.normal);
-        // Un poco adentro del sólido, para que la unión no quede apenas tocando
-        let overlap = (self.diag() * 1e-4).max(1e-3);
+        // Un poco adentro del sólido, para que la unión no quede apenas
+        // tocando; en el escaneo, justo hasta la piel (ya corrida la separación)
+        let overlap = if scan.is_some() { 0.0 } else { (self.diag() * 1e-4).max(1e-3) };
         let mut walls = Vec::new();
         for e in &s.sketch.entities {
             let Geometry::Line { start, end } = e.geometry else { continue };
@@ -1728,7 +1787,7 @@ impl Ctx<'_> {
                 ts.map(|ts| (dir, ts))
             });
             let Some((dir, ts)) = hits else {
-                return Err("el nervio no llega al sólido en todo el largo de la línea".into());
+                return Err(if scan.is_some() { "el nervio no llega al escaneo en todo el largo de la línea" } else { "el nervio no llega al sólido en todo el largo de la línea" }.into());
             };
             // El polígono va de punta a punta (los rayos salen apenas adentro)
             let at = |k: usize| add(a, scale(sub(b, a), k as f64 / N as f64));
@@ -2036,17 +2095,7 @@ impl Ctx<'_> {
                 self.apply(f.id, tool, *op)
             }
             FeatureKind::ScanBody(b) => {
-                let mesh = b.mesh.as_ref().ok_or("no hay un escaneo elegido")?;
-                if let Some(e) = &mesh.error {
-                    return Err(format!("no se pudo preparar el escaneo: {e}"));
-                }
-                if mesh.data.1.is_empty() {
-                    return Err("no hay un escaneo elegido".into());
-                }
-                let tool = Shape::from_mesh(&mesh.data.0, &mesh.data.1, 1e-4).map_err(err)?;
-                if tool.kind() != cad_occt::ShapeKind::Solid {
-                    return Err("el escaneo no cerró como sólido".into());
-                }
+                let tool = scan_solid(b.mesh.as_ref())?;
                 // Todas sus caras son piel: entre ellas se elige por cercanía
                 let tags = vec![vec![tag(f.id, "piel")]; tool.face_count()];
                 let tool = Tagged { shape: tool, tags };
@@ -2281,8 +2330,9 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
-            FeatureKind::Rib { sketch, thickness, flip } => {
-                let tool = self.rib_tool(f.id, *sketch, *thickness, *flip)?;
+            FeatureKind::Rib { sketch, thickness, flip, scan } => {
+                let target = scan.as_ref().map(|r| scan_solid(r.mesh.as_ref())).transpose()?;
+                let tool = self.rib_tool(f.id, *sketch, *thickness, *flip, target.as_ref())?;
                 self.ev.tools.insert(f.id, (tool.clone(), BodyOp::Join));
                 self.apply(f.id, tool, BodyOp::Join)
             }
@@ -2326,6 +2376,48 @@ impl Ctx<'_> {
                     let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; prism.face_count()];
                     self.scope = vec![part];
                     let r = self.apply(f.id, Tagged { shape: prism, tags }, if out { BodyOp::Join } else { BodyOp::Cut });
+                    if r.is_err() {
+                        self.scope = saved;
+                        return r;
+                    }
+                }
+                self.scope = saved;
+                Ok(())
+            }
+            FeatureKind::FaceToScan { faces, mesh, .. } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let scan = scan_solid(mesh.as_ref())?;
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                let far = self.diag() * 4.0 + scan.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(0.0) * 2.0;
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("por ahora solo se llevan caras planas".into());
+                    }
+                    let n = normalize(info.normal);
+                    // Hacia el lado donde está el escaneo: afuera suma, adentro resta
+                    let (ahead, behind) = (scan.ray_hit(info.point, n), scan.ray_hit(info.point, scale(n, -1.0)));
+                    let out = match (ahead, behind) {
+                        (Some(a), Some(b)) => a <= b,
+                        (Some(_), None) => true,
+                        (None, Some(_)) => false,
+                        (None, None) => return Err("la cara no mira al escaneo".into()),
+                    };
+                    let dir = if out { n } else { scale(n, -1.0) };
+                    let prism = body.face_shape(i).and_then(|fc| fc.prism(scale(dir, far))).map_err(err)?;
+                    let piece = until_scan(&prism, &scan, info.point, dir)?;
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    jobs.push((part, piece, out));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                for (k, (part, piece, out)) in jobs.into_iter().enumerate() {
+                    let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; piece.face_count()];
+                    self.scope = vec![part];
+                    let r = self.apply(f.id, Tagged { shape: piece, tags }, if out { BodyOp::Join } else { BodyOp::Cut });
                     if r.is_err() {
                         self.scope = saved;
                         return r;
@@ -3154,6 +3246,8 @@ impl Ctx<'_> {
         };
         let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
         let drafted = e.draft.abs() > 1e-9;
+        // Hasta el escaneo: su sólido y la distancia al primer choque
+        let mut up_to_scan: Option<(Shape, f64)> = None;
         // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
         // (las paredes se angostan a partir del plano del sketch)
         let segments: Vec<(f64, f64)> = match &e.extent {
@@ -3179,6 +3273,25 @@ impl Ctx<'_> {
                     n = scale(n, -1.0);
                 }
                 vec![(0.0, d.abs())]
+            }
+            Extent::UpToScan { mesh, .. } => {
+                // Hacia donde los rayos desde el perfil encuentran el escaneo;
+                // un prisma que lo pasa entero, menos el escaneo (ya corrido
+                // la separación), y queda lo que arranca en el perfil
+                let solid = scan_solid(mesh.as_ref())?;
+                let from: Vec<P3> = samples.iter().chain(entities.iter().map(|(_, p)| p)).copied().collect();
+                let first = |dir: P3| from.iter().filter_map(|p| solid.ray_hit(*p, dir)).fold(f64::INFINITY, f64::min);
+                let (ahead, behind) = (first(n), first(scale(n, -1.0)));
+                if !ahead.is_finite() && behind.is_finite() {
+                    n = scale(n, -1.0);
+                } else if !ahead.is_finite() {
+                    return Err("el perfil no apunta al escaneo".into());
+                }
+                let m = solid.mass().map_err(err)?;
+                let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
+                let reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
+                up_to_scan = Some((solid, ahead.min(behind)));
+                vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
             }
             Extent::UpToNext => {
                 // La primera cara que cruzan los rayos desde el perfil
@@ -3226,9 +3339,14 @@ impl Ctx<'_> {
                 }
             }
         }
-        let shape = fuse(solids)?;
+        let mut shape = fuse(solids)?;
         let lo = segments.iter().map(|(s, l)| s.min(s + l)).fold(f64::INFINITY, f64::min);
-        let hi = segments.iter().map(|(s, l)| s.max(s + l)).fold(f64::NEG_INFINITY, f64::max);
+        let mut hi = segments.iter().map(|(s, l)| s.max(s + l)).fold(f64::NEG_INFINITY, f64::max);
+        if let Some((scan, hit)) = &up_to_scan {
+            shape = until_scan(&shape, scan, plane.origin, n)?;
+            // Los laterales se marcan antes del escaneo
+            hi = hit.max(1e-6);
+        }
         // Tapas por su posición a lo largo de la dirección; laterales por la
         // entidad del sketch que barren (su punto medio, a media altura)
         let mut tags = vec![Vec::new(); shape.face_count()];
@@ -3247,6 +3365,12 @@ impl Ctx<'_> {
         for (eid, p) in &entities {
             let probe = add(*p, scale(n, (lo + hi) / 2.0));
             mark(&shape, &mut tags, probe, tag(id, format!("lado:{eid}")));
+        }
+        if up_to_scan.is_some() {
+            // Lo que copia la piel del escaneo
+            for slot in tags.iter_mut().filter(|t| t.is_empty()) {
+                slot.push(tag(id, "escaneo"));
+            }
         }
         Ok(Tagged { shape, tags })
     }
