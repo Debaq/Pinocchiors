@@ -115,7 +115,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Espiral | ✅ plana y hélice cónica (`Helix.radius2`, `flat`; spline por puntos, 2026-10-11) |
 | Curva por puntos | ✅ (`CurveDef::Points`, 2026-10-11) |
 | Curva proyectada, curva de intersección | ✅ sobre caras y entre caras (`CurveDef::Projected`, `Intersection`, 2026-10-11) |
-| Línea de partición | ✅ por plano o curva (`SplitFaces`, 2026-10-11); falta por silueta (F8) |
+| Línea de partición | ✅ por plano, curva o silueta vista desde un eje (`SplitFaces`, `PartingTool::Silhouette`, 2026-10-11) |
 | Curva compuesta | ✅ (`CurveDef::Composite`, 2026-10-11) |
 
 ### Superficies
@@ -431,6 +431,16 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
   - Las secciones se trasladan (no giran para quedar perpendiculares a una línea central): los
     cortes paralelos a las secciones conservan el área (la prueba usa Cavalieri: 16 × 20).
   - Solo se usa el contorno de afuera de cada sección (los agujeros no pasan).
+- **Partición por silueta (2026-10-11)**: `cargo test -p cad-model --test operations`
+  (`parting_line_along_the_silhouette`) y el e2e «operaciones: línea de partición por silueta».
+  Banco `t_silhouette` (cilindro de costado, esfera desde arriba y en diagonal). Hipótesis:
+  - La curva sale de una grilla de 64 × 64 en (u, v) de la cara (un 2 % más allá del borde si
+    la superficie no es periódica), con cada cruce de n·d = 0 afinado por bisección; en las
+    celdas en silla se decide por el signo del centro.
+  - Cada curva se lleva a una «cortina» reglada que la cruza a lo largo de la normal (± 5 % del
+    tamaño de la cara) y la cara se parte por su cruce con la cortina (`BRepFeat_SplitShape`,
+    como la partición por curva). Detalles más finos que una celda de la grilla se pierden.
+  - Caras planas o todas de canto (n·d constante) no tienen silueta: si ninguna la tiene, error.
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 

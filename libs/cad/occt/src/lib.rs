@@ -633,6 +633,13 @@ impl Shape {
         wrap(unsafe { ffi::cad_split_faces(self.ptr(), f.as_ptr(), f.len() as i32, tool.ptr()) })
     }
 
+    /// Parte las caras `faces` por su silueta vista a lo largo de `dir` (donde la
+    /// normal es perpendicular a la mirada), sin separar el sólido (con historia).
+    pub fn split_silhouette(&self, faces: &[usize], dir: P3) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_split_silhouette(self.ptr(), f.as_ptr(), f.len() as i32, dir.as_ptr()) })
+    }
+
     /// Esta cara extendida `distance` por todos sus lados, siguiendo su superficie.
     pub fn extend_face(&self, distance: f64) -> Result<Shape> {
         wrap(unsafe { ffi::cad_extend_face(self.ptr(), distance) })

@@ -146,6 +146,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <set>
 #include <memory>
 #include <map>
 #include <mutex>
@@ -1681,6 +1682,202 @@ CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, co
         if (!split.IsDone()) throw Standard_Failure("no se pudieron partir las caras");
         record(split, {s->s}, split.Shape());
         return wrap_checked(split.Shape(), "línea de partición");
+    });
+}
+
+namespace silhouette {
+
+// Las curvas de la cara donde la normal es perpendicular a `d`, en (u, v): marching squares sobre
+// una grilla, con cada cruce afinado por bisección sobre el lado de la celda
+static std::vector<std::vector<gp_Pnt2d>> curves(const TopoDS_Face& f, const gp_Vec& d) {
+    BRepAdaptor_Surface sf(f, Standard_False);
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(f, u0, u1, v0, v1);
+    // Un poco más allá del borde (si la superficie no es periódica en esa dirección): la curva
+    // tiene que cruzar el borde de la cara para partirla
+    double du = (u1 - u0) * 0.02, dv = (v1 - v0) * 0.02;
+    if (!sf.IsUPeriodic()) {
+        u0 = std::max(u0 - du, sf.FirstUParameter());
+        u1 = std::min(u1 + du, sf.LastUParameter());
+    }
+    if (!sf.IsVPeriodic()) {
+        v0 = std::max(v0 - dv, sf.FirstVParameter());
+        v1 = std::min(v1 + dv, sf.LastVParameter());
+    }
+    auto g = [&](double u, double v) {
+        gp_Pnt p;
+        gp_Vec su, sv;
+        sf.D1(u, v, p, su, sv);
+        gp_Vec n = su.Crossed(sv);
+        double m = n.Magnitude();
+        return m < 1e-14 ? 0.0 : n.Dot(d) / m;
+    };
+    const int N = 64;
+    std::vector<double> val((N + 1) * (N + 1));
+    auto U = [&](int i) { return u0 + (u1 - u0) * i / N; };
+    auto V = [&](int j) { return v0 + (v1 - v0) * j / N; };
+    for (int i = 0; i <= N; i++)
+        for (int j = 0; j <= N; j++) val[i * (N + 1) + j] = g(U(i), V(j));
+    auto at = [&](int i, int j) { return val[i * (N + 1) + j]; };
+    // Cruce sobre un lado de la grilla: clave (lado horizontal o vertical, i, j)
+    std::map<long, gp_Pnt2d> cross;
+    auto key = [&](int dir, int i, int j) { return (long)dir * 1000000 + (long)i * 1000 + j; };
+    auto crossing = [&](int dir, int i, int j) -> bool {
+        long k = key(dir, i, j);
+        if (cross.count(k)) return true;
+        double a = at(i, j), b = dir == 0 ? at(i + 1, j) : at(i, j + 1);
+        if ((a > 0) == (b > 0)) return false;
+        // Bisección sobre el lado
+        double lo = 0, hi = 1, ga = a;
+        for (int it = 0; it < 50; it++) {
+            double mid = (lo + hi) / 2;
+            double gm = dir == 0 ? g(U(i) + (U(i + 1) - U(i)) * mid, V(j)) : g(U(i), V(j) + (V(j + 1) - V(j)) * mid);
+            if ((gm > 0) == (ga > 0)) lo = mid;
+            else hi = mid;
+        }
+        double t = (lo + hi) / 2;
+        cross[k] = dir == 0 ? gp_Pnt2d(U(i) + (U(i + 1) - U(i)) * t, V(j)) : gp_Pnt2d(U(i), V(j) + (V(j + 1) - V(j)) * t);
+        return true;
+    };
+    // Segmentos por celda (entre claves de cruces)
+    std::multimap<long, long> links;
+    for (int i = 0; i < N; i++)
+        for (int j = 0; j < N; j++) {
+            std::vector<long> ks;
+            if (crossing(0, i, j)) ks.push_back(key(0, i, j));
+            if (crossing(1, i + 1, j)) ks.push_back(key(1, i + 1, j));
+            if (crossing(0, i, j + 1)) ks.push_back(key(0, i, j + 1));
+            if (crossing(1, i, j)) ks.push_back(key(1, i, j));
+            if (ks.size() == 2) {
+                links.insert({ks[0], ks[1]});
+                links.insert({ks[1], ks[0]});
+            } else if (ks.size() == 4) {
+                // Silla: se emparejan según el signo del centro
+                double c = g((U(i) + U(i + 1)) / 2, (V(j) + V(j + 1)) / 2);
+                bool same = (c > 0) == (at(i, j) > 0);
+                int a0 = same ? 0 : 0, a1 = same ? 1 : 3, b0 = same ? 2 : 1, b1 = same ? 3 : 2;
+                links.insert({ks[a0], ks[a1]});
+                links.insert({ks[a1], ks[a0]});
+                links.insert({ks[b0], ks[b1]});
+                links.insert({ks[b1], ks[b0]});
+            }
+        }
+    // Encadenar: arrancar por las puntas (un solo vecino) y después los lazos
+    std::vector<std::vector<gp_Pnt2d>> out;
+    std::set<std::pair<long, long>> used;
+    auto walk = [&](long start) {
+        std::vector<gp_Pnt2d> poly{cross[start]};
+        long cur = start, prev = -1;
+        while (true) {
+            long next = -1;
+            auto range = links.equal_range(cur);
+            for (auto it = range.first; it != range.second; ++it)
+                if (it->second != prev && !used.count({cur, it->second})) {
+                    next = it->second;
+                    break;
+                }
+            if (next < 0) break;
+            used.insert({cur, next});
+            used.insert({next, cur});
+            poly.push_back(cross[next]);
+            prev = cur;
+            cur = next;
+            if (cur == start) break;
+        }
+        if (poly.size() >= 3) out.push_back(poly);
+    };
+    for (auto& [k, _] : cross)
+        if (links.count(k) == 1) {
+            auto r = links.equal_range(k);
+            if (!used.count({k, r.first->second})) walk(k);
+        }
+    for (auto& [k, _] : cross) {
+        auto r = links.equal_range(k);
+        for (auto it = r.first; it != r.second; ++it)
+            if (!used.count({k, it->second})) walk(k);
+    }
+    return out;
+}
+
+}  // namespace silhouette
+
+// Línea de partición por silueta: parte las caras donde, vistas desde `dir`, la normal pasa a
+// ser perpendicular a la mirada (el contorno aparente; en un molde, donde se separan las dos
+// mitades). Cada curva se lleva a una cortina reglada que la cruza a lo largo de la normal y la
+// cara se parte por su cruce con la cortina.
+CadShape* cad_split_silhouette(const CadShape* s, const int32_t* faces, int32_t n, const double* dir) {
+    return guard("línea de partición por silueta", (CadShape*)nullptr, [&] {
+        gp_Vec d(dir[0], dir[1], dir[2]);
+        if (d.Magnitude() < 1e-12) throw Standard_Failure("falta la dirección");
+        d.Normalize();
+        auto m = map_of(s->s, TopAbs_FACE);
+        BRepFeat_SplitShape split(s->s);
+        int added = 0;
+        for (int32_t i = 0; i < n; i++) {
+            if (faces[i] < 0 || faces[i] >= m.Extent()) throw Standard_Failure("cara inexistente");
+            TopoDS_Face f = TopoDS::Face(m(faces[i] + 1));
+            Bnd_Box fb;
+            BRepBndLib::Add(f, fb);
+            const double h = 0.05 * std::sqrt(fb.SquareExtent()) + 1e-3;
+            BRepAdaptor_Surface sf(f, Standard_False);
+            for (auto& poly : silhouette::curves(f, d)) {
+                // Los dos bordes de la cortina: la curva corrida ± h a lo largo de la normal
+                bool closed = poly.front().Distance(poly.back()) < 1e-12;
+                // Puntos en 3D con su normal (en un polo la derivada se anula: se toma la de al lado)
+                std::vector<gp_Pnt> lo_p, hi_p;
+                const double vmid = (sf.FirstVParameter() + sf.LastVParameter()) / 2;
+                for (size_t k = 0; k + (closed ? 1 : 0) < poly.size(); k++) {
+                    gp_Pnt p, q;
+                    gp_Vec su, sv;
+                    sf.D1(poly[k].X(), poly[k].Y(), p, su, sv);
+                    gp_Vec nn = su.Crossed(sv);
+                    for (double e = 1e-7; nn.Magnitude() < 1e-12 && e < 1e-2; e *= 10) {
+                        double v = poly[k].Y() + (poly[k].Y() < vmid ? e : -e);
+                        sf.D1(poly[k].X(), v, q, su, sv);
+                        nn = su.Crossed(sv);
+                    }
+                    if (nn.Magnitude() < 1e-12) continue;
+                    nn.Normalize();
+                    gp_Pnt a = p.Translated(nn * -h);
+                    if (!lo_p.empty() && a.Distance(lo_p.back()) < 1e-7 * h) continue;
+                    lo_p.push_back(a);
+                    hi_p.push_back(p.Translated(nn * h));
+                }
+                if (closed && lo_p.size() > 2 && lo_p.front().Distance(lo_p.back()) < 1e-7 * h) {
+                    lo_p.pop_back();
+                    hi_p.pop_back();
+                }
+                const int count = (int)lo_p.size();
+                if (count < 2) continue;
+                Handle(TColgp_HArray1OfPnt) lo = new TColgp_HArray1OfPnt(1, count), hi = new TColgp_HArray1OfPnt(1, count);
+                for (int k = 0; k < count; k++) {
+                    lo->SetValue(k + 1, lo_p[k]);
+                    hi->SetValue(k + 1, hi_p[k]);
+                }
+                auto curve = [&](const Handle(TColgp_HArray1OfPnt)& pts) {
+                    GeomAPI_Interpolate in(pts, closed ? Standard_True : Standard_False, 1e-9);
+                    in.Perform();
+                    if (!in.IsDone()) throw Standard_Failure("no se pudo seguir la silueta");
+                    return BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(in.Curve()).Edge()).Wire();
+                };
+                BRepOffsetAPI_ThruSections curtain(Standard_False, Standard_True);
+                curtain.AddWire(curve(lo));
+                curtain.AddWire(curve(hi));
+                curtain.Build();
+                if (!curtain.IsDone()) continue;
+                BRepAlgoAPI_Section sec(f, curtain.Shape(), Standard_False);
+                sec.ComputePCurveOn1(Standard_True);
+                sec.Approximation(Standard_True);
+                sec.Build();
+                if (!sec.IsDone()) continue;
+                for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next(), added++) split.Add(TopoDS::Edge(ex.Current()), f);
+            }
+        }
+        if (added == 0) throw Standard_Failure("ninguna de las caras elegidas tiene silueta en esa dirección");
+        split.Build();
+        if (!split.IsDone()) throw Standard_Failure("no se pudieron partir las caras por la silueta");
+        record(split, {s->s}, split.Shape());
+        return wrap_checked(split.Shape(), "línea de partición por silueta");
     });
 }
 

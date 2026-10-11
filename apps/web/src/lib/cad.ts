@@ -662,7 +662,7 @@ export type FeatureKind =
   /** Grabado (o relieve con `emboss`): las regiones de un sketch envuelto, `depth` mm siguiendo la cara */
   | { type: "wrap"; sketch: number; depth: number; emboss: boolean }
   /** Línea de partición: parte caras donde las cruza un plano o una curva, sin separar la pieza */
-  | { type: "split_faces"; faces: FaceRef[]; tool: { type: "plane"; plane: PlaneSpec } | { type: "curve"; feature: number } }
+  | { type: "split_faces"; faces: FaceRef[]; tool: { type: "plane"; plane: PlaneSpec } | { type: "curve"; feature: number } | { type: "silhouette"; direction: AxisSpec } }
   /** Curva de referencia hecha de otras */
   | { type: "curve"; def: CurveDef }
   /** Superficies extendidas `distance` más allá de bordes libres */
@@ -1760,7 +1760,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "wrap":
       return [kind.sketch];
     case "split_faces":
-      return kind.tool.type === "plane" ? plane(kind.tool.plane) : [kind.tool.feature];
+      return kind.tool.type === "plane" ? plane(kind.tool.plane) : kind.tool.type === "silhouette" ? axis(kind.tool.direction) : [kind.tool.feature];
     case "helix":
     case "rotate_face":
       return axis(kind.axis);

@@ -729,3 +729,8 @@ cargo test -p cad-model
   entre dos grupos de caras (vecinas o no, planas o curvas, cadenas tangentes), que redondea el
   canto o rellena el rincón (`FaceBlend`, `cad_face_blend`: cruce de las caras desfasadas, cuña
   menos tubo). Probado contra OCCT real en un banco de 9 casos con volúmenes exactos.
+- **2026-10-11 Torsión, tangencias y silueta** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)):
+  barrido con torsión (espina auxiliar con marco de rotación mínima), transición que sale y
+  llega perpendicular a las secciones de las puntas (superficie Hermite armada a mano: OCCT no
+  tiene loft con condiciones de borde) y línea de partición por silueta (marching squares sobre
+  n·d en el parámetro de la cara). Cada una probada contra OCCT real en `libs/cad/occt/bench`.

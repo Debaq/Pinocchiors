@@ -1133,6 +1133,32 @@ fn parting_line_splits_faces_not_the_part() {
 }
 
 #[test]
+fn parting_line_along_the_silhouette() {
+    if !occt() {
+        return;
+    }
+    // Esfera de radio 10 mirada desde arriba: la silueta es el ecuador, queda en dos hemisferios
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Sphere { radius: 10.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let ball = face_at(&doc, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+    let split = doc.add(FeatureKind::SplitFaces { faces: vec![ball.clone()], tool: PartingTool::Silhouette { direction: AxisSpec::Z } });
+    let ev = eval_ok(&doc);
+    let body = ev.body.as_ref().unwrap();
+    assert_eq!(body.face_count(), 2);
+    assert_relative_eq!(body.mass().unwrap().volume, 4.0 / 3.0 * PI * 1000.0, max_relative = 1e-6);
+    // Mirada en diagonal: un círculo máximo inclinado, también dos mitades
+    doc.get_mut(split).unwrap().kind = FeatureKind::SplitFaces { faces: vec![ball], tool: PartingTool::Silhouette { direction: AxisSpec::Custom { origin: [0.0; 3], direction: [1.0, 1.0, 1.0] } } };
+    assert_eq!(eval_ok(&doc).body.unwrap().face_count(), 2);
+}
+
+#[test]
 fn sweep_with_a_guide_curve() {
     if !occt() {
         return;

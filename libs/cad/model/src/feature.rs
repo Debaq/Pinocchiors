@@ -161,6 +161,9 @@ pub enum PartingTool {
     Plane { plane: PlaneSpec },
     /// Una curva del historial que pasa por las caras (proyectada, de cruce...).
     Curve { feature: FeatureId },
+    /// La silueta vista a lo largo del eje: donde la normal de la cara es
+    /// perpendicular a la mirada (la línea de partición de un molde).
+    Silhouette { direction: AxisSpec },
 }
 
 /// Cómo se arma una curva de referencia.
@@ -1347,6 +1350,7 @@ impl FeatureKind {
             FeatureKind::SplitFaces { tool, .. } => match tool {
                 PartingTool::Plane { plane } => plane_deps(plane),
                 PartingTool::Curve { feature } => vec![*feature],
+                PartingTool::Silhouette { direction } => axis_deps(direction),
             },
             FeatureKind::SurfaceSweep { sketch, path, .. } => match path {
                 SweepPath::Sketch { sketch: p, .. } => vec![*sketch, *p],

@@ -8517,6 +8517,28 @@ const scenarios = {
     await b.shot("operaciones_grabado_relieve");
   },
 
+  async "operaciones: línea de partición por silueta"(b) {
+    await begin(b);
+    await b.clickText("Esfera");
+    await sleep(1500);
+    await accept(b);
+    const ball = await faceWhere((f) => f.surface === "sphere");
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${ball} }])`);
+    await b.clickText("Línea de partición");
+    await lastIs(b, "split_faces");
+    await sleep(2000);
+    // Mirada desde arriba (eje Z, el de entrada): la silueta es el ecuador → dos hemisferios
+    await chooseOption(b, "Con", "La silueta (vista desde un eje)");
+    await sleep(3000);
+    const k = await lastKind(b);
+    if (k.tool.type !== "silhouette" || k.tool.direction.type !== "z") throw new Error(`herramienta: ${JSON.stringify(k.tool)}`);
+    const r = await body();
+    if (r.faces !== 2) throw new Error(`caras: ${r.faces}`);
+    near(r.volume, (4 / 3) * Math.PI * 1000, 0.5, "la esfera sigue entera");
+    await accept(b);
+    await b.shot("operaciones_particion_por_silueta");
+  },
+
   async "operaciones: línea de partición y flechas en más operaciones"(b) {
     await begin(b);
     await b.clickText("Caja");

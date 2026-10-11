@@ -2538,11 +2538,35 @@ export const FeatureEditor: Component<{
                 />
                 <Row label="Con">
                   <Select
-                    options={[{ value: "plane", label: "Un plano" }, ...refOptions(props.store, "curve", f().id).map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
-                    value={k().tool.type === "plane" ? "plane" : `curve:${(k().tool as { feature: number }).feature}`}
-                    onChange={(v) => update((x) => x.type === "split_faces" && (x.tool = v === "plane" ? { type: "plane", plane: { type: "xy" } } : { type: "curve", feature: +v.slice(6) }))}
+                    options={[
+                      { value: "plane", label: "Un plano" },
+                      { value: "silhouette", label: "La silueta (vista desde un eje)" },
+                      ...refOptions(props.store, "curve", f().id).map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label })),
+                    ]}
+                    value={k().tool.type === "plane" ? "plane" : k().tool.type === "silhouette" ? "silhouette" : `curve:${(k().tool as { feature: number }).feature}`}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "split_faces" &&
+                          (x.tool =
+                            v === "plane" ? { type: "plane", plane: { type: "xy" } } : v === "silhouette" ? { type: "silhouette", direction: { type: "z" } } : { type: "curve", feature: +v.slice(6) }),
+                      )
+                    }
                   />
                 </Row>
+                <Show when={k().tool.type === "silhouette" && (k().tool as { direction: AxisSpec })}>
+                  {(t) => (
+                    <AxisField
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:mirada`}
+                      label="Mirando a lo largo de"
+                      value={t().direction}
+                      except={f().id}
+                      onChange={(a) => update((x) => x.type === "split_faces" && (x.tool = { type: "silhouette", direction: a }))}
+                    />
+                  )}
+                </Show>
                 <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
                   {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_faces" && (x.tool = { type: "plane", plane: p })))}</Row>}
                 </Show>

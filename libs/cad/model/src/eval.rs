@@ -3241,6 +3241,11 @@ impl Ctx<'_> {
                     return Err("elegir las caras a partir".into());
                 }
                 let idx = self.faces("faces", faces)?;
+                if let PartingTool::Silhouette { direction } = tool {
+                    let d = self.axis("tool", direction)?.dir;
+                    let groups = self.by_part(&idx, false);
+                    return self.per_part(groups, |s, fs| s.split_silhouette(fs, d), |_| None);
+                }
                 let cutter = match tool {
                     PartingTool::Plane { plane } => {
                         // Un cuadrado grande del plano
@@ -3253,6 +3258,7 @@ impl Ctx<'_> {
                         self.miss("tool", 0);
                         "la curva no está calculada".to_string()
                     })?,
+                    PartingTool::Silhouette { .. } => unreachable!(),
                 };
                 let groups = self.by_part(&idx, false);
                 self.per_part(groups, |s, fs| s.split_faces(fs, &cutter), |_| None)

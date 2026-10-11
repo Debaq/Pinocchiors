@@ -105,6 +105,8 @@ CadShape* cad_face_blend(const CadShape* s, const int32_t* fa, int32_t na, const
 CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* sizes, int32_t n);
 // Parte las caras `faces` donde las cruza `tool` (un plano grande o curvas sobre ellas), sin separar el sólido.
 CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, const CadShape* tool);
+// Parte las caras por su silueta vista desde `dir` (donde la normal es perpendicular a la mirada).
+CadShape* cad_split_silhouette(const CadShape* s, const int32_t* faces, int32_t n, const double* dir);
 // La cara extendida `distance` por todos sus lados (siguiendo su superficie).
 CadShape* cad_extend_face(const CadShape* face, double distance);
 // Transición con punta (vértice al comienzo o al final, nulos si no) y cerrada (vuelve a la primera).
