@@ -36,6 +36,8 @@ CadShape* cad_chain(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAI
 CadShape* cad_project_curves(const CadShape* c, const CadShape* t, const double* d) { (void)c; (void)t; (void)d; FAIL_PTR; }
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) { (void)a; (void)b; FAIL_PTR; }
 CadShape* cad_extend_face(const CadShape* f, double d) { (void)f; (void)d; FAIL_PTR; }
+CadShape* cad_loft_ex(const CadShape* const* w, int32_t n, int32_t s, int32_t r, const double* a, const double* b, int32_t c) { (void)w; (void)n; (void)s; (void)r; (void)a; (void)b; (void)c; FAIL_PTR; }
+CadShape* cad_loft_pipe(const CadShape* const* w, int32_t n, const CadShape* sp, const CadShape* g, int32_t s) { (void)w; (void)n; (void)sp; (void)g; (void)s; FAIL_PTR; }
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* e, int32_t n, double d) { (void)s; (void)e; (void)n; (void)d; FAIL_PTR; }
 CadShape* cad_remove_faces(const CadShape* s, const int32_t* f, int32_t n) { (void)s; (void)f; (void)n; FAIL_PTR; }
 CadShape* cad_fillet_points(const CadShape* s, const int32_t* e, int32_t n, const double* l, int32_t np) { (void)s; (void)e; (void)n; (void)l; (void)np; FAIL_PTR; }

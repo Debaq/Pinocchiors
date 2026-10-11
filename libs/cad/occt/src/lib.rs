@@ -482,6 +482,20 @@ impl Shape {
         wrap(unsafe { ffi::cad_pipe_ex(self.ptr(), spine.ptr(), mode, solid as i32) })
     }
 
+    /// Loft que puede empezar o terminar en un punto y cerrarse sobre la primera sección.
+    pub fn loft_ex(sections: &[Shape], solid: bool, ruled: bool, start: Option<P3>, end: Option<P3>, closed: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        let ptr = |o: &Option<P3>| o.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+        wrap(unsafe { ffi::cad_loft_ex(p.as_ptr(), p.len() as i32, solid as i32, ruled as i32, ptr(&start), ptr(&end), closed as i32) })
+    }
+
+    /// Loft por las secciones a lo largo de `spine` (línea central), con una curva guía opcional.
+    pub fn loft_along(sections: &[Shape], spine: &Shape, guide: Option<&Shape>, solid: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        let g = guide.map_or(std::ptr::null(), |g| g.ptr());
+        wrap(unsafe { ffi::cad_loft_pipe(p.as_ptr(), p.len() as i32, spine.ptr(), g, solid as i32) })
+    }
+
     /// Loft entre perfiles (alambres o caras).
     pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
         let p = ptrs(sections);

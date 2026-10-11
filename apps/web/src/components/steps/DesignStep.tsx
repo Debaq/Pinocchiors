@@ -3777,6 +3777,39 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "surface_loft" && (f().kind as Extract<FeatureKind, { type: "surface_loft" }>)}>
+            {(k) => (
+              <>
+                <For each={k().sections}>
+                  {(sec, i) => (
+                    <Row label={`Sección ${i() + 1}`}>
+                      <Select
+                        options={sketchOptions()}
+                        value={String(sec.sketch)}
+                        onChange={(v) => update((x) => x.type === "surface_loft" && (x.sections[i()] = { sketch: +v, entities: [] }))}
+                      />
+                    </Row>
+                  )}
+                </For>
+                <Button
+                  size="sm"
+                  fullWidth
+                  onClick={() =>
+                    update((x) => {
+                      if (x.type !== "surface_loft") return;
+                      const used = new Set(x.sections.map((s) => s.sketch));
+                      const next = props.sketches.find((s) => !used.has(s.id));
+                      if (next) x.sections.push({ sketch: next.id, entities: [] });
+                    })
+                  }
+                >
+                  Agregar sección
+                </Button>
+                <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "surface_loft" && (x.ruled = c))} />
+                <p class="text-[11px] text-text-dim">Cada sección es una cadena de curvas (abierta o cerrada) de un sketch.</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "loft" && (f().kind as Extract<FeatureKind, { type: "loft" }>)}>
             {(k) => (
               <>
@@ -3819,6 +3852,63 @@ export const FeatureEditor: Component<{
                   Agregar sección
                 </Button>
                 <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
+                <Checkbox
+                  small
+                  label="Empieza en un punto"
+                  checked={!!k().start_point}
+                  onChange={(c) => update((x) => x.type === "loft" && (x.start_point = c ? { type: "at", point: [0, 0, -10] } : null))}
+                />
+                <Show when={k().start_point}>
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:desde`} label="Punta inicial" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.start_point = q))} />}
+                </Show>
+                <Checkbox
+                  small
+                  label="Termina en un punto"
+                  checked={!!k().end_point}
+                  onChange={(c) => update((x) => x.type === "loft" && (x.end_point = c ? { type: "at", point: [0, 0, 20] } : null))}
+                />
+                <Show when={k().end_point}>
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label="Punta final" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
+                </Show>
+                <Checkbox small label="Cerrada (vuelve a la primera)" checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
+                <Checkbox small label="Delgada (solo una pared)" checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
+                <Show when={k().thin != null}>
+                  {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "loft" && (x.thin = v), "mm")}
+                </Show>
+                <Row label="Línea central">
+                  <Select
+                    options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    value={(() => {
+                      const p = k().path;
+                      return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                    })()}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "loft" &&
+                          (x.path = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                      )
+                    }
+                  />
+                </Row>
+                <Show when={k().path}>
+                  <Row label="Curva guía">
+                    <Select
+                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      value={(() => {
+                        const p = k().guide;
+                        return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                      })()}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "loft" &&
+                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                        )
+                      }
+                    />
+                  </Row>
+                </Show>
                 <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
               </>
             )}

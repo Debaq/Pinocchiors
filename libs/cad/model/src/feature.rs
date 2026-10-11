@@ -928,6 +928,12 @@ pub enum FeatureKind {
     /// Extiende superficies `distance` más allá de bordes libres (cada cara
     /// por el lado de su parámetro donde está el borde, siguiendo su forma).
     SurfaceExtend { edges: Vec<EdgeRef>, distance: f64 },
+    /// Superficie que pasa por curvas de varios sketches (una cadena por sección).
+    SurfaceLoft {
+        sections: Vec<CurveSection>,
+        #[serde(default)]
+        ruled: bool,
+    },
     /// Superficie que deja una curva de un sketch llevada a lo largo de un camino.
     SurfaceSweep {
         sketch: FeatureId,
@@ -1178,6 +1184,31 @@ pub struct Loft {
     pub ruled: bool,
     #[serde(default)]
     pub op: BodyOp,
+    /// Arranca o termina en un punto (una punta).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_point: Option<PointSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_point: Option<PointSpec>,
+    /// Vuelve a la primera sección (un anillo).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    /// Delgada: una pared de este espesor siguiendo los contornos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
+    /// Línea central: las secciones se llevan a lo largo de ella.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<SweepPath>,
+    /// Curva guía (va con la línea central): el perfil gira y se escala para tocarla.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide: Option<SweepPath>,
+}
+
+/// Una sección de una superficie por recubrimiento: curvas de un sketch (vacío = todas).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveSection {
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub entities: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1254,7 +1285,17 @@ impl FeatureKind {
                 CurveDef::Points { points, .. } => points.iter().flat_map(point_deps).collect(),
             },
             FeatureKind::Scale { center, .. } => point_deps(center),
-            FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            FeatureKind::Loft(l) => {
+                let path_dep = |p: &SweepPath| match p {
+                    SweepPath::Sketch { sketch, .. } => *sketch,
+                    SweepPath::Curve { feature } => *feature,
+                };
+                let mut d: Vec<FeatureId> = l.sections.iter().map(|s| s.sketch).collect();
+                d.extend(l.start_point.iter().chain(&l.end_point).flat_map(point_deps));
+                d.extend(l.path.iter().chain(&l.guide).map(path_dep));
+                d
+            }
+            FeatureKind::SurfaceLoft { sections, .. } => sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
             FeatureKind::Primitive(p) => p.link.iter().map(|l| l.feature).collect(),
             FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
@@ -1373,6 +1414,7 @@ impl FeatureKind {
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
+            FeatureKind::SurfaceLoft { .. } => "Superficie por transición",
             FeatureKind::SurfaceExtend { .. } => "Extender superficie",
             FeatureKind::Curve { def: CurveDef::Composite { .. } } => "Curva compuesta",
             FeatureKind::Curve { def: CurveDef::Projected { .. } } => "Curva proyectada",

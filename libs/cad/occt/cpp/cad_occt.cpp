@@ -702,6 +702,50 @@ CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mo
     });
 }
 
+// El alambre de una sección o un camino: el alambre mismo, una arista, el contorno de una cara
+// o el primer alambre de un compuesto
+static TopoDS_Wire wire_of(const TopoDS_Shape& s) {
+    if (s.ShapeType() == TopAbs_WIRE) return TopoDS::Wire(s);
+    if (s.ShapeType() == TopAbs_EDGE) return BRepBuilderAPI_MakeWire(TopoDS::Edge(s)).Wire();
+    if (s.ShapeType() == TopAbs_FACE) return BRepTools::OuterWire(TopoDS::Face(s));
+    TopExp_Explorer fx(s, TopAbs_FACE);
+    if (fx.More()) return BRepTools::OuterWire(TopoDS::Face(fx.Current()));
+    TopExp_Explorer wx(s, TopAbs_WIRE);
+    if (wx.More()) return TopoDS::Wire(wx.Current());
+    throw Standard_Failure("se esperaba una curva o un perfil");
+}
+
+CadShape* cad_loft_ex(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled, const double* start, const double* end,
+                      int32_t closed) {
+    return guard("transición", (CadShape*)nullptr, [&] {
+        if (n + (start ? 1 : 0) + (end ? 1 : 0) < 2) throw Standard_Failure("se necesitan al menos 2 secciones");
+        BRepOffsetAPI_ThruSections mk(solid != 0, ruled != 0);
+        if (start) mk.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(start[0], start[1], start[2])).Vertex());
+        for (int32_t i = 0; i < n; i++) mk.AddWire(wire_of(wires[i]->s));
+        // Cerrada: vuelve a la primera (unión sin tangencia en la costura)
+        if (closed && n > 0) mk.AddWire(wire_of(wires[0]->s));
+        if (end) mk.AddVertex(BRepBuilderAPI_MakeVertex(gp_Pnt(end[0], end[1], end[2])).Vertex());
+        mk.Build();
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo hacer la transición");
+        return wrap_checked(mk.Shape(), "transición");
+    });
+}
+
+CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape* spine, const CadShape* guide, int32_t solid) {
+    return guard("transición por un camino", (CadShape*)nullptr, [&] {
+        if (n < 1) throw Standard_Failure("se necesita al menos una sección");
+        BRepOffsetAPI_MakePipeShell mk(wire_of(spine->s));
+        // Con curva guía, el perfil la sigue (gira y se escala para tocarla)
+        if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_NoContact);
+        else mk.SetMode(Standard_False);
+        for (int32_t i = 0; i < n; i++) mk.Add(wire_of(wires[i]->s), Standard_False, Standard_False);
+        mk.Build();
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo pasar por las secciones a lo largo del camino");
+        if (solid && !mk.MakeSolid()) throw Standard_Failure("la transición no cierra un sólido");
+        return wrap_checked(mk.Shape(), "transición por un camino");
+    });
+}
+
 CadShape* cad_loft(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled) {
     return guard("loft", (CadShape*)nullptr, [&] {
         if (n < 2) throw Standard_Failure("se necesitan al menos 2 perfiles");

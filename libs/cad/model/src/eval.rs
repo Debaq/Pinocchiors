@@ -2967,6 +2967,22 @@ impl Ctx<'_> {
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }
+            FeatureKind::SurfaceLoft { sections, ruled } => {
+                if sections.len() < 2 {
+                    return Err("hacen falta al menos dos secciones".into());
+                }
+                let mut wires = Vec::new();
+                for (i, sec) in sections.iter().enumerate() {
+                    let mut w = self.curve_wires(sec.sketch, &sec.entities)?;
+                    if w.len() != 1 {
+                        return Err(format!("la sección {} tiene {} cadenas de curvas: cada sección tiene que ser una", i + 1, w.len()));
+                    }
+                    wires.push(w.pop().unwrap());
+                }
+                let shape = Shape::loft(&wires, false, *ruled).map_err(err)?;
+                let tool = self.surface_tool(f.id, vec![shape])?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
             FeatureKind::SurfaceSweep { sketch, entities, path, orient } => {
                 let spine = self.path_wire(path, None)?;
                 let shapes = self
@@ -3165,8 +3181,17 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Loft(l) => {
-                if l.sections.len() < 2 {
-                    return Err("hacen falta al menos dos secciones".into());
+                let start = l.start_point.as_ref().map(|p| self.point("start_point", p)).transpose()?;
+                let end = l.end_point.as_ref().map(|p| self.point("end_point", p)).transpose()?;
+                let ends = start.is_some() as usize + end.is_some() as usize;
+                if l.sections.len() + ends < 2 || l.sections.is_empty() {
+                    return Err("hacen falta al menos dos secciones (o una y un punto)".into());
+                }
+                if l.closed && (ends > 0 || l.sections.len() < 3) {
+                    return Err("una transición cerrada necesita al menos tres secciones y no termina en un punto".into());
+                }
+                if (l.path.is_some() || l.guide.is_some()) && (ends > 0 || l.closed) {
+                    return Err("con línea central o curva guía no va a un punto ni cerrada".into());
                 }
                 let mut faces = Vec::new();
                 let mut samples = Vec::new();
@@ -3178,7 +3203,28 @@ impl Ctx<'_> {
                     faces.extend(fs);
                     samples.push(sm);
                 }
-                let shape = Shape::loft(&faces, true, l.ruled).map_err(err)?;
+                let spine = l.path.as_ref().map(|p| self.path_wire(p, samples[0].first().copied())).transpose()?;
+                let guide = l.guide.as_ref().map(|p| self.path_wire(p, None)).transpose()?;
+                if guide.is_some() && spine.is_none() {
+                    return Err("la curva guía va con una línea central".into());
+                }
+                let build = |faces: &[Shape]| -> R<Shape> {
+                    match &spine {
+                        Some(sp) => Shape::loft_along(faces, sp, guide.as_ref(), true).map_err(err),
+                        None if ends == 0 && !l.closed => Shape::loft(faces, true, l.ruled).map_err(err),
+                        None => Shape::loft_ex(faces, true, l.ruled, start, end, l.closed).map_err(err),
+                    }
+                };
+                let shape = match l.thin {
+                    // Delgada: la transición del contorno corrido afuera menos la del corrido adentro
+                    Some(t) if t > 0.0 => {
+                        let off = |d: f64| faces.iter().map(|f| f.offset_face(d)).collect::<Result<Vec<_>, _>>().map_err(err);
+                        let (outer, inner) = (off(t / 2.0)?, off(-t / 2.0)?);
+                        build(&outer)?.cut(&build(&inner)?).map_err(err)?
+                    }
+                    Some(_) => return Err("el espesor tiene que ser mayor que cero".into()),
+                    None => build(&faces)?,
+                };
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 for p in &samples[0] {
                     mark(&shape, &mut tags, *p, tag(f.id, "inicio"));

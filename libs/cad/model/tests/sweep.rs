@@ -76,7 +76,7 @@ fn loft_between_squares() {
     let l = doc.add(FeatureKind::Loft(Loft {
         sections: vec![LoftSection { sketch: a, regions: RegionSelection::All }, LoftSection { sketch: b, regions: RegionSelection::All }],
         ruled: true,
-        op: BodyOp::Join,
+        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None,
     }));
     assert_relative_eq!(vol(&doc), 1000.0, max_relative = 1e-6);
     // De 10 a 6 reglada: tronco de pirámide
@@ -214,4 +214,78 @@ fn surface_sweep_of_an_open_curve() {
     assert_eq!(ev.parts.len(), 1);
     assert!(ev.parts[0].is_surface());
     assert_relative_eq!(ev.parts[0].shape.mass().unwrap().area, 120.0, max_relative = 1e-6);
+}
+
+fn loft(sections: Vec<FeatureId>) -> Loft {
+    Loft {
+        sections: sections.into_iter().map(|sketch| LoftSection { sketch, regions: RegionSelection::All }).collect(),
+        ruled: true,
+        op: BodyOp::Join,
+        start_point: None,
+        end_point: None,
+        closed: false,
+        thin: None,
+        path: None,
+        guide: None,
+    }
+}
+
+#[test]
+fn loft_to_a_point_thin_and_along_a_path() {
+    if !occt() {
+        return;
+    }
+    // Cuadrado de 10 a z = 0 hasta el punto (0, 0, 10): pirámide
+    let mut doc = Document::new();
+    let a = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(10.0) });
+    let l = doc.add(FeatureKind::Loft(Loft { end_point: Some(PointSpec::At { point: [0.0, 0.0, 10.0] }), ..loft(vec![a]) }));
+    assert_relative_eq!(vol(&doc), 1000.0 / 3.0, max_relative = 1e-6);
+
+    // Delgada entre dos cuadrados iguales (z = 0 y 10): un caño cuadrado de pared 1
+    let b = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 10.0, sketch: square(10.0) });
+    doc.get_mut(l).unwrap().kind = FeatureKind::Loft(Loft { thin: Some(1.0), ..loft(vec![a, b]) });
+    // Mover la transición después del segundo sketch
+    let f = doc.features.iter().position(|x| x.id == l).unwrap();
+    let moved = doc.features.remove(f);
+    doc.features.push(moved);
+    let outer = 100.0 + 0.5 * 40.0 + PI * 0.25;
+    assert_relative_eq!(vol(&doc), (outer - 81.0) * 10.0, max_relative = 1e-4);
+
+    // Por una línea central recta de 10: como la transición de siempre
+    let mut path = Sketch::default();
+    let p0 = path.add_point(0.0, 0.0);
+    let p1 = path.add_point(0.0, 10.0);
+    path.add_line(p0, p1);
+    let c = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
+    doc.get_mut(l).unwrap().kind = FeatureKind::Loft(Loft { path: Some(SweepPath::Sketch { sketch: c, entities: vec![] }), ..loft(vec![a, b]) });
+    let f = doc.features.iter().position(|x| x.id == l).unwrap();
+    let moved = doc.features.remove(f);
+    doc.features.push(moved);
+    assert_relative_eq!(vol(&doc), 1000.0, max_relative = 1e-4);
+
+    // Cerrada con dos secciones: error
+    doc.get_mut(l).unwrap().kind = FeatureKind::Loft(Loft { closed: true, ..loft(vec![a, b]) });
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn surface_loft_between_two_lines() {
+    if !occt() {
+        return;
+    }
+    let line = |doc: &mut Document, z: f64| {
+        let mut s = Sketch::default();
+        let a = s.add_point(-5.0, 0.0);
+        let b = s.add_point(5.0, 0.0);
+        s.add_line(a, b);
+        doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: z, sketch: s })
+    };
+    let mut doc = Document::new();
+    let a = line(&mut doc, 0.0);
+    let b = line(&mut doc, 10.0);
+    doc.add(FeatureKind::SurfaceLoft { sections: vec![CurveSection { sketch: a, entities: vec![] }, CurveSection { sketch: b, entities: vec![] }], ruled: true });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert!(ev.parts[0].is_surface());
+    assert_relative_eq!(ev.parts[0].shape.mass().unwrap().area, 100.0, max_relative = 1e-6);
 }

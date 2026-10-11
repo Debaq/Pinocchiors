@@ -166,6 +166,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
   };
 
+  /** Superficie por transición: por las curvas de los dos últimos sketches */
+  const addSurfaceLoft = () => {
+    const list = sketches();
+    if (list.length < 2) return say("Hacen falta dos sketches con curvas");
+    ui.clearPicks();
+    void store.addFeature({ type: "surface_loft", sections: list.slice(-2).map((s) => ({ sketch: s.id, entities: [] })), ruled: false });
+  };
+
   /** Superficie por barrido: las curvas del anteúltimo sketch por el último */
   const addSurfaceSweep = () => {
     const list = sketches();
@@ -672,6 +680,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addHole,
     addTube,
     addSurfaceSweep,
+    addSurfaceLoft,
     addPrimitive,
     addSheetMetal,
     startFlange,

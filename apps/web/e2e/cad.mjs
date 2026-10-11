@@ -8304,6 +8304,47 @@ const scenarios = {
     await accept(b);
     await b.shot("operaciones_revolucion_hasta_cara");
   },
+
+  async "operaciones: transición delgada, a un punto y cerrada"(b) {
+    await begin(b);
+    // Dos cuadrados de 10 (z = 0 y z = 10)
+    const doc = await call("cad_get_document");
+    const P = [[-5, -5], [5, -5], [5, 5], [-5, 5]];
+    const square = (z) => ({
+      id: doc.next_id++, name: `Cuadrado ${z}`, suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: z, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push(square(0), square(10));
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Transición");
+    await lastIs(b, "loft");
+    await sleep(2000);
+    near((await body()).volume, 1000, 0.5, "prisma");
+    await b.clickText("Caras planas entre secciones");
+    await sleep(1500);
+    // Delgada de 1: caño cuadrado
+    await b.clickText("Delgada (solo una pared)");
+    await sleep(2500);
+    near((await body()).volume, (100 + 20 + Math.PI * 0.25 - 81) * 10, 0.5, "caño de pared 1");
+    await b.clickText("Delgada (solo una pared)");
+    await sleep(1500);
+    // Termina en (0, 0, 20): prisma más pirámide
+    await b.clickText("Termina en un punto");
+    await sleep(2500);
+    near((await body()).volume, 1000 + 1000 / 3, 0.5, "con punta");
+    // Cerrada con dos secciones y punta: error
+    await b.clickText("Cerrada (vuelve a la primera)");
+    await sleep(1500);
+    if ((await evaluate()).status.at(-1).state !== "error") throw new Error("cerrada con punta no dio error");
+    await b.clickText("Cerrada (vuelve a la primera)");
+    await sleep(1500);
+    await accept(b);
+    const k = await lastKind(b);
+    if (!k.end_point || !k.ruled) throw new Error(`guardado: ${JSON.stringify(k)}`);
+    await b.shot("operaciones_transicion");
+  },
 };
 
 const filter = process.argv[2];

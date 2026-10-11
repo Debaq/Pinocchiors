@@ -97,6 +97,11 @@ CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, con
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
 // La cara extendida `distance` por todos sus lados (siguiendo su superficie).
 CadShape* cad_extend_face(const CadShape* face, double distance);
+// Transición con punta (vértice al comienzo o al final, nulos si no) y cerrada (vuelve a la primera).
+CadShape* cad_loft_ex(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled, const double* start, const double* end,
+                      int32_t closed);
+// Transición por las secciones a lo largo de una línea central, con una curva guía opcional (nula si no).
+CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape* spine, const CadShape* guide, int32_t solid);
 // Extiende las superficies por los bordes libres `edges`, `distance` más allá (cada cara por sus lados).
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance);
 // Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).

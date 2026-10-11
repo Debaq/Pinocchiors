@@ -110,6 +110,8 @@ unsafe extern "C" {
     pub fn cad_project_curves(curves: *const CadShape, target: *const CadShape, direction: *const f64) -> *mut CadShape;
     pub fn cad_intersect_curves(a: *const CadShape, b: *const CadShape) -> *mut CadShape;
     pub fn cad_extend_face(face: *const CadShape, distance: f64) -> *mut CadShape;
+    pub fn cad_loft_ex(wires: *const *const CadShape, n: i32, solid: i32, ruled: i32, start: *const f64, end: *const f64, closed: i32) -> *mut CadShape;
+    pub fn cad_loft_pipe(wires: *const *const CadShape, n: i32, spine: *const CadShape, guide: *const CadShape, solid: i32) -> *mut CadShape;
     pub fn cad_extend_surface(s: *const CadShape, edges: *const i32, n: i32, distance: f64) -> *mut CadShape;
     pub fn cad_remove_faces(s: *const CadShape, faces: *const i32, n: i32) -> *mut CadShape;
     pub fn cad_fillet_points(s: *const CadShape, edges: *const i32, n: i32, law: *const f64, np: i32) -> *mut CadShape;

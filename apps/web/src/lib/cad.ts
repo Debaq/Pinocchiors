@@ -223,6 +223,9 @@ export type Extent =
 
 export type SweepOrient = "follow" | "frenet" | "fixed";
 
+/** Camino: entidades de un sketch (vacío = todas) o una curva del historial */
+export type SweepPathSpec = { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
+
 /** Cómo se reparte el giro de una revolución: todo a un lado, mitad a cada lado o `second` grados hacia atrás */
 export type RevolveExtent =
   | { type: "one" }
@@ -683,7 +686,24 @@ export type FeatureKind =
   /** Escala por eje alrededor de un punto */
   | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
-  | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
+  /**
+   * `start_point`/`end_point`: termina en una punta; `closed`: vuelve a la primera; `thin`: pared;
+   * `path`: línea central (con `guide`, curva guía)
+   */
+  | {
+      type: "loft";
+      sections: { sketch: number; regions: RegionSelection }[];
+      ruled: boolean;
+      op: BodyOp;
+      start_point?: PointSpec | null;
+      end_point?: PointSpec | null;
+      closed?: boolean;
+      thin?: number | null;
+      path?: SweepPathSpec | null;
+      guide?: SweepPathSpec | null;
+    }
+  /** Superficie que pasa por curvas de varios sketches */
+  | { type: "surface_loft"; sections: { sketch: number; entities: number[] }[]; ruled: boolean }
   /** Agujeros en los puntos de un sketch (o sus círculos); `reverse`: a favor de la normal del plano (sin elegir, hacia el material) */
   | {
       type: "hole";
@@ -1436,6 +1456,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   surface_planar: "Superficie plana",
   delete_face: "Eliminar cara",
   surface_sweep: "Superficie por barrido",
+  surface_loft: "Superficie por transición",
   surface_extend: "Extender superficie",
   curve: "Curva",
   surface_offset: "Superficie desfasada",
@@ -1703,7 +1724,11 @@ export function dependencies(kind: FeatureKind): number[] {
       const d = kind.def;
       return d.type === "composite" ? d.curves : d.type === "projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
     }
-    case "loft":
+    case "loft": {
+      const p = (s?: SweepPathSpec | null) => (s ? [s.type === "sketch" ? s.sketch : s.feature] : []);
+      return [...kind.sections.map((x) => x.sketch), ...(kind.start_point ? point(kind.start_point) : []), ...(kind.end_point ? point(kind.end_point) : []), ...p(kind.path), ...p(kind.guide)];
+    }
+    case "surface_loft":
       return kind.sections.map((x) => x.sketch);
     case "hole":
       return [kind.sketch];
