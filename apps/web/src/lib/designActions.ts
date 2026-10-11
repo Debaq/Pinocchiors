@@ -154,6 +154,25 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     });
   };
 
+  /** Barrido circular (tubo, cable) por el último sketch o la última curva del historial */
+  const addTube = () => {
+    const doc = store.doc();
+    const last = [...(doc?.features ?? [])].reverse().find((f) => f.kind.type === "sketch" || f.kind.type === "helix" || f.kind.type === "sketch3d");
+    if (!last) return say("Primero hace falta un camino: un sketch o una hélice");
+    const path = last.kind.type === "sketch" ? { type: "sketch" as const, sketch: last.id, entities: [] } : { type: "curve" as const, feature: last.id };
+    ui.clearPicks();
+    void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
+  };
+
+  /** Superficie por barrido: las curvas del anteúltimo sketch por el último */
+  const addSurfaceSweep = () => {
+    const list = sketches();
+    if (list.length < 2) return say("Hacen falta dos sketches: las curvas del perfil y el camino");
+    const [profile, path] = list.slice(-2);
+    ui.clearPicks();
+    void store.addFeature({ type: "surface_sweep", sketch: profile.id, entities: [], path: { type: "sketch", sketch: path.id, entities: [] } });
+  };
+
   /** Engrosar las caras elegidas (si no hay, se eligen en la caja del diálogo) */
   const startThicken = async () => {
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
@@ -646,6 +665,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSweep,
     addLoft,
     addHole,
+    addTube,
+    addSurfaceSweep,
     addPrimitive,
     addSheetMetal,
     startFlange,

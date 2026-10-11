@@ -475,6 +475,13 @@ impl Shape {
         wrap(unsafe { ffi::cad_pipe(self.ptr(), spine.ptr()) })
     }
 
+    /// Barrido con la orientación del perfil: 0 sigue el camino, 1 Frenet, 2
+    /// fija (se traslada sin girar). Sin `solid`, los alambres del perfil dan
+    /// superficies.
+    pub fn sweep_with(&self, spine: &Shape, mode: i32, solid: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_pipe_ex(self.ptr(), spine.ptr(), mode, solid as i32) })
+    }
+
     /// Loft entre perfiles (alambres o caras).
     pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
         let p = ptrs(sections);

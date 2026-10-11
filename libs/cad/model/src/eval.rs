@@ -2398,9 +2398,30 @@ impl Ctx<'_> {
             }
             FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(f.id, *op, targets, tools, *keep_tools),
             FeatureKind::Sweep(sw) => {
-                let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
-                let spine = self.path_wire(&sw.path, samples.first().copied())?;
-                let solids = faces.iter().map(|fc| fc.sweep(&spine)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                let (faces, samples, spine) = match sw.circle {
+                    // Circular: el círculo al comienzo del camino, perpendicular a él
+                    Some(r) => {
+                        if r <= 0.0 {
+                            return Err("el radio tiene que ser mayor que cero".into());
+                        }
+                        let spine = self.path_wire(&sw.path, None)?;
+                        let (p0, t0) = spine.sample_curve(2).map_err(err)?[0];
+                        let face = Shape::face(&[vec![Curve::Circle { center: p0, normal: normalize(t0), radius: r }]]).map_err(err)?;
+                        (vec![face], vec![p0], spine)
+                    }
+                    None => {
+                        let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
+                        let spine = self.path_wire(&sw.path, samples.first().copied())?;
+                        (faces, samples, spine)
+                    }
+                };
+                let faces = thin_faces(faces, sw.thin)?;
+                let mode = sw.orient.code();
+                let solids = faces
+                    .iter()
+                    .map(|fc| if mode == 0 { fc.sweep(&spine) } else { fc.sweep_with(&spine, mode, true) })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
                 let shape = fuse(solids)?;
                 // La tapa del perfil; el resto por su número (no hay más origen estable)
                 let mut tags = vec![Vec::new(); shape.face_count()];
@@ -2896,6 +2917,17 @@ impl Ctx<'_> {
                     let w = if from.abs() > 0.0 { w.translate(scale(n, from)).map_err(err)? } else { w };
                     shapes.push(w.prism(scale(n, len)).map_err(err)?);
                 }
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceSweep { sketch, entities, path, orient } => {
+                let spine = self.path_wire(path, None)?;
+                let shapes = self
+                    .curve_wires(*sketch, entities)?
+                    .iter()
+                    .map(|w| w.sweep_with(&spine, orient.code(), false))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }

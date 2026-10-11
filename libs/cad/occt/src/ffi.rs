@@ -105,6 +105,7 @@ unsafe extern "C" {
     pub fn cad_chamfer(s: *const CadShape, edges: *const i32, n: i32, distance: f64, second: f64, mode: i32, flip: i32) -> *mut CadShape;
     pub fn cad_shell(s: *const CadShape, faces: *const i32, n: i32, thickness: f64) -> *mut CadShape;
     pub fn cad_shell_faces(s: *const CadShape, faces: *const i32, n: i32, thickness: f64, ov: *const i32, ov_thickness: *const f64, n_ov: i32) -> *mut CadShape;
+    pub fn cad_pipe_ex(profile: *const CadShape, spine: *const CadShape, mode: i32, solid: i32) -> *mut CadShape;
     pub fn cad_remove_faces(s: *const CadShape, faces: *const i32, n: i32) -> *mut CadShape;
     pub fn cad_fillet_points(s: *const CadShape, edges: *const i32, n: i32, law: *const f64, np: i32) -> *mut CadShape;
     pub fn cad_draft(

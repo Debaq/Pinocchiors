@@ -850,6 +850,15 @@ pub enum FeatureKind {
     /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
     /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
     SurfaceOffset { parts: Vec<PartId>, distance: f64 },
+    /// Superficie que deja una curva de un sketch llevada a lo largo de un camino.
+    SurfaceSweep {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        path: SweepPath,
+        #[serde(default)]
+        orient: SweepOrient,
+    },
     /// Superficie que deja una curva de un sketch girada alrededor de un eje.
     SurfaceRevolve {
         sketch: FeatureId,
@@ -1028,6 +1037,44 @@ pub struct Sweep {
     pub path: SweepPath,
     #[serde(default)]
     pub op: BodyOp,
+    /// Cómo gira el perfil a lo largo del camino.
+    #[serde(default, skip_serializing_if = "SweepOrient::is_follow")]
+    pub orient: SweepOrient,
+    /// Barrido circular simple: un círculo de este radio al comienzo del
+    /// camino, perpendicular a él, en vez del sketch (tubos, cables).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<f64>,
+    /// Barrido delgado: una pared de este espesor siguiendo el contorno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
+}
+
+/// Orientación del perfil en un barrido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SweepOrient {
+    /// Sigue el camino sin retorcerse (Frenet corregido).
+    #[default]
+    Follow,
+    /// Triedro de Frenet: gira con la curvatura (hélices exactas).
+    Frenet,
+    /// Fijo: el perfil se traslada sin girar.
+    Fixed,
+}
+
+impl SweepOrient {
+    fn is_follow(&self) -> bool {
+        *self == SweepOrient::Follow
+    }
+
+    /// Código del puente (`cad_pipe_ex`).
+    pub fn code(self) -> i32 {
+        match self {
+            SweepOrient::Follow => 0,
+            SweepOrient::Frenet => 1,
+            SweepOrient::Fixed => 2,
+        }
+    }
 }
 
 /// Camino de un barrido.
@@ -1114,6 +1161,10 @@ impl FeatureKind {
             FeatureKind::Sweep(s) => match &s.path {
                 SweepPath::Sketch { sketch, .. } => vec![s.sketch, *sketch],
                 SweepPath::Curve { feature } => vec![s.sketch, *feature],
+            },
+            FeatureKind::SurfaceSweep { sketch, path, .. } => match path {
+                SweepPath::Sketch { sketch: p, .. } => vec![*sketch, *p],
+                SweepPath::Curve { feature } => vec![*sketch, *feature],
             },
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
             FeatureKind::Scale { center, .. } => point_deps(center),
@@ -1235,6 +1286,7 @@ impl FeatureKind {
             FeatureKind::Flange { .. } => "Pestaña",
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
+            FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
             FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",

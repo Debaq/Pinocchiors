@@ -197,6 +197,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
 
   const solids: (Tool | "-")[] = [
     { label: "Barrido", icon: D.Sweep, run: a.addSweep, tip: "Un perfil a lo largo de un camino dibujado en otro sketch" },
+    { label: "Tubo", icon: D.Sweep, run: a.addTube, tip: "Barrido circular: un círculo a lo largo del último sketch o hélice, sin dibujar el perfil" },
     { label: "Transición", icon: D.Loft, run: a.addLoft, tip: "Un sólido que pasa por regiones de varios sketches" },
     "-",
     { label: "Caja", icon: D.BoxShape, run: () => a.addPrimitive({ type: "box", dx: 20, dy: 20, dz: 20, centered: true, centered_z: true }) },
@@ -252,6 +253,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
   const surfaces: (Tool | "-")[] = [
     { label: "Superficie extruida", icon: D.SurfaceExtrude, run: a.addSurfaceExtrude, tip: "Las curvas de un sketch (abiertas o cerradas) empujadas: una superficie sin espesor" },
     { label: "Superficie de revolución", icon: D.SurfaceRevolve, run: a.addSurfaceRevolve, tip: "Las curvas de un sketch giradas alrededor de un eje" },
+    { label: "Superficie por barrido", icon: D.Sweep, run: a.addSurfaceSweep, tip: "Las curvas de un sketch llevadas a lo largo de otro (el último)" },
     { label: "Superficie plana", icon: D.Fill, run: a.addSurfacePlanar, tip: "Las regiones cerradas de un sketch como superficie" },
     { label: "Superficie desfasada", icon: D.Thicken, run: a.addSurfaceOffset, needsBody: true, tip: "Copia de superficies (o de la piel de una pieza) a una distancia" },
     { label: "Relleno", icon: D.Fill, run: () => void a.startFill(), needsBody: true, tip: "Superficie que cierra un borde (elegir las aristas); puede seguir tangente a las caras vecinas" },

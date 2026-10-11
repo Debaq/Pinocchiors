@@ -197,6 +197,8 @@ export type Extent =
   /** Hasta un punto (un vértice): lo que avanza el punto sobre la dirección */
   | { type: "up_to_vertex"; point: PointSpec };
 
+export type SweepOrient = "follow" | "frenet" | "fixed";
+
 /** Cómo se reparte el giro de una revolución: todo a un lado, mitad a cada lado o `second` grados hacia atrás */
 export type RevolveExtent = { type: "one" } | { type: "symmetric" } | { type: "two_angles"; second: number };
 
@@ -612,6 +614,20 @@ export type FeatureKind =
       regions: RegionSelection;
       path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
       op: BodyOp;
+      /** Cómo gira el perfil: sigue el camino, Frenet o fijo (no gira) */
+      orient?: SweepOrient;
+      /** Barrido circular: un círculo de este radio al comienzo del camino (sin sketch de perfil) */
+      circle?: number | null;
+      /** Barrido delgado: espesor de la pared */
+      thin?: number | null;
+    }
+  /** Curvas de un sketch llevadas a lo largo de un camino: superficie */
+  | {
+      type: "surface_sweep";
+      sketch: number;
+      entities: number[];
+      path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
+      orient?: SweepOrient;
     }
   /** Hélice de referencia (camino de resortes y roscas) */
   /** `radius2`: cónica (el radio pasa de `radius` a `radius2`); `flat`: espiral plana (sin avance) */
@@ -1386,6 +1402,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   transform: "Mover cuerpo",
   surface_planar: "Superficie plana",
   delete_face: "Eliminar cara",
+  surface_sweep: "Superficie por barrido",
   surface_offset: "Superficie desfasada",
 };
 
@@ -1618,6 +1635,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "point":
       return point(kind.def);
     case "sweep":
+    case "surface_sweep":
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
     case "helix":
       return axis(kind.axis);

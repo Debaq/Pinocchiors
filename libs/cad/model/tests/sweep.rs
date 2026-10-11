@@ -44,7 +44,7 @@ fn straight_sweep_is_an_extrusion_and_l_path_adds_up() {
         sketch: p,
         regions: RegionSelection::All,
         path: SweepPath::Sketch { sketch: c, entities: vec![] },
-        op: BodyOp::Join,
+        op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None,
     }));
     assert_relative_eq!(vol(&doc), PI * 4.0 * 20.0, max_relative = 1e-6);
     // Camino en L (arriba 20, luego 10 de costado), con las entidades al revés: se encadenan solas
@@ -110,7 +110,7 @@ fn spring_along_a_helix_and_thicken() {
     let mut prof = Sketch::default();
     prof.circle([0.0, 0.0], 1.0);
     let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Custom { plane }, offset: 0.0, sketch: prof });
-    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join }));
+    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let len = 2.0 * ((2.0 * PI * 10.0f64).powi(2) + 25.0).sqrt();
@@ -132,4 +132,86 @@ fn spring_along_a_helix_and_thicken() {
     doc.add(FeatureKind::Thicken { faces: vec![ev.face_ref(top).unwrap()], thickness: 2.0, op: BodyOp::Join });
     assert_relative_eq!(vol(&doc), 1200.0, max_relative = 1e-6);
     assert_relative_eq!(doc.evaluate().body.unwrap().mass().unwrap().bbox_max[2], 12.0, epsilon = 1e-6);
+}
+
+/// Camino: cuarto de círculo de radio 10 en el frente, que sale del origen
+/// hacia arriba (Z) y termina horizontal en (10, 10)
+fn arc_path(doc: &mut Document) -> FeatureId {
+    let mut path = Sketch::default();
+    let c = path.add_point(10.0, 0.0);
+    let a = path.add_point(10.0, 10.0);
+    let b = path.add_point(0.0, 0.0);
+    path.add_entity(Geometry::Arc { center: c, start: a, end: b });
+    doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path })
+}
+
+fn tube(sketch: FeatureId, path: FeatureId, circle: Option<f64>, thin: Option<f64>, orient: SweepOrient) -> FeatureKind {
+    FeatureKind::Sweep(Sweep { sketch, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: path, entities: vec![] }, op: BodyOp::Join, orient, circle, thin })
+}
+
+#[test]
+fn circular_and_thin_sweeps() {
+    if !occt() {
+        return;
+    }
+    // Recta de 20: tubo macizo de radio 2 sin sketch de perfil
+    let mut doc = Document::new();
+    let mut path = Sketch::default();
+    let a = path.add_point(0.0, 0.0);
+    let b = path.add_point(0.0, 20.0);
+    path.add_line(a, b);
+    let c = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
+    let sw = doc.add(tube(c, c, Some(2.0), None, SweepOrient::Follow));
+    assert_relative_eq!(vol(&doc), PI * 4.0 * 20.0, max_relative = 1e-6);
+    // Delgado: caño de radio medio 3 y pared de 1
+    doc.get_mut(sw).unwrap().kind = tube(c, c, Some(3.0), Some(1.0), SweepOrient::Follow);
+    assert_relative_eq!(vol(&doc), PI * (3.5 * 3.5 - 2.5 * 2.5) * 20.0, max_relative = 1e-6);
+    // Radio cero: error
+    doc.get_mut(sw).unwrap().kind = tube(c, c, Some(0.0), None, SweepOrient::Follow);
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn fixed_orientation_keeps_the_profile_still() {
+    if !occt() {
+        return;
+    }
+    // Cuadrado de 4 en la planta por el cuarto de círculo. Siguiendo, al final
+    // queda parado (llega a z = 12); fijo, sigue horizontal (no pasa de z = 10)
+    let top = |orient| {
+        let mut doc = Document::new();
+        let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(4.0) });
+        let path = arc_path(&mut doc);
+        doc.add(tube(p, path, None, None, orient));
+        let ev = doc.evaluate();
+        assert!(ev.errors().is_empty(), "{orient:?}: {:?}", ev.errors());
+        ev.body.unwrap().mass().unwrap().bbox_max[2]
+    };
+    assert_relative_eq!(top(SweepOrient::Follow), 12.0, epsilon = 1e-3);
+    assert!(top(SweepOrient::Fixed) < 10.0 + 1e-3);
+}
+
+#[test]
+fn surface_sweep_of_an_open_curve() {
+    if !occt() {
+        return;
+    }
+    // Una recta de 6 en la planta barrida 20 hacia arriba: superficie de 120
+    let mut doc = Document::new();
+    let mut prof = Sketch::default();
+    let a = prof.add_point(-3.0, 0.0);
+    let b = prof.add_point(3.0, 0.0);
+    prof.add_line(a, b);
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: prof });
+    let mut path = Sketch::default();
+    let c0 = path.add_point(0.0, 0.0);
+    let c1 = path.add_point(0.0, 20.0);
+    path.add_line(c0, c1);
+    let c = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
+    doc.add(FeatureKind::SurfaceSweep { sketch: p, entities: vec![], path: SweepPath::Sketch { sketch: c, entities: vec![] }, orient: SweepOrient::Follow });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.parts.len(), 1);
+    assert!(ev.parts[0].is_surface());
+    assert_relative_eq!(ev.parts[0].shape.mass().unwrap().area, 120.0, max_relative = 1e-6);
 }

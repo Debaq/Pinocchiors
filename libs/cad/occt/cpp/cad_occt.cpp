@@ -628,6 +628,74 @@ CadShape* cad_pipe(const CadShape* profile, const CadShape* spine) {
     });
 }
 
+CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mode, int32_t solid) {
+    return guard("barrer", (CadShape*)nullptr, [&] {
+        TopoDS_Wire w;
+        if (spine->s.ShapeType() == TopAbs_WIRE) {
+            w = TopoDS::Wire(spine->s);
+        } else if (spine->s.ShapeType() == TopAbs_EDGE) {
+            w = BRepBuilderAPI_MakeWire(TopoDS::Edge(spine->s)).Wire();
+        } else {
+            throw Standard_Failure("la trayectoria debe ser un alambre");
+        }
+        // Orientación del perfil: 0 sigue el camino (Frenet corregido), 1 Frenet, 2 fija (no gira)
+        auto setup = [&](BRepOffsetAPI_MakePipeShell& mk) {
+            if (mode == 1) {
+                mk.SetMode(Standard_True);
+            } else if (mode == 2) {
+                BRepAdaptor_CompCurve c(w);
+                gp_Pnt p;
+                gp_Vec t;
+                c.D1(c.FirstParameter(), p, t);
+                mk.SetMode(gp_Ax2(p, gp_Dir(t)));
+            } else {
+                mk.SetMode(Standard_False);
+            }
+            mk.SetTransitionMode(BRepBuilderAPI_RightCorner);
+        };
+        auto sweep_wire = [&](const TopoDS_Wire& section, bool make_solid) {
+            BRepOffsetAPI_MakePipeShell mk(w);
+            setup(mk);
+            mk.Add(section, Standard_False, Standard_False);
+            mk.Build();
+            if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el perfil por ese camino");
+            if (make_solid && !mk.MakeSolid()) throw Standard_Failure("el barrido no cierra un sólido");
+            return mk.Shape();
+        };
+        TopExp_Explorer fx(profile->s, TopAbs_FACE);
+        if (fx.More() && solid != 0) {
+            // Caras: el contorno de afuera menos los agujeros, cada cara
+            TopoDS_Shape result;
+            bool first = true;
+            for (; fx.More(); fx.Next()) {
+                TopoDS_Face face = TopoDS::Face(fx.Current());
+                TopoDS_Wire outer = BRepTools::OuterWire(face);
+                TopoDS_Shape r = sweep_wire(outer, true);
+                for (TopExp_Explorer wx(face, TopAbs_WIRE); wx.More(); wx.Next()) {
+                    TopoDS_Wire inner = TopoDS::Wire(wx.Current());
+                    if (inner.IsSame(outer)) continue;
+                    r = BRepAlgoAPI_Cut(r, sweep_wire(inner, true)).Shape();
+                }
+                result = first ? r : BRepAlgoAPI_Fuse(result, r).Shape();
+                first = false;
+            }
+            return wrap_checked(result, "barrido");
+        }
+        // Alambres (superficie por barrido): cada uno da una superficie
+        TopoDS_Compound c;
+        BRep_Builder b;
+        b.MakeCompound(c);
+        int count = 0;
+        for (TopExp_Explorer wx(profile->s, TopAbs_WIRE); wx.More(); wx.Next(), count++) b.Add(c, sweep_wire(TopoDS::Wire(wx.Current()), false));
+        if (count == 0) {
+            for (TopExp_Explorer ex(profile->s, TopAbs_EDGE); ex.More(); ex.Next(), count++)
+                b.Add(c, sweep_wire(BRepBuilderAPI_MakeWire(TopoDS::Edge(ex.Current())).Wire(), false));
+        }
+        if (count == 0) throw Standard_Failure("el perfil no tiene curvas");
+        return wrap_checked(c, "barrido");
+    });
+}
+
 CadShape* cad_loft(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled) {
     return guard("loft", (CadShape*)nullptr, [&] {
         if (n < 2) throw Standard_Failure("se necesitan al menos 2 perfiles");

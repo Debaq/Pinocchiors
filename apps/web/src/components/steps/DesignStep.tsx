@@ -58,6 +58,7 @@ import {
   type Material,
   type MissingRef,
   type Motion,
+  type SweepOrient,
   type P2,
   type P3,
   type AxisDef,
@@ -239,6 +240,12 @@ const CORNER_OPTIONS = [
   { value: "square", label: "Cuadrada" },
 ];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+const ORIENT_OPTIONS = [
+  { value: "follow", label: "Sigue el camino" },
+  { value: "frenet", label: "Frenet (gira con la curva)" },
+  { value: "fixed", label: "Fija (no gira)" },
+];
 
 /** Número con `d` decimales; lo que redondea a cero se muestra sin signo (no "-0,00") */
 const fmt = (v: number, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
@@ -3467,18 +3474,33 @@ export const FeatureEditor: Component<{
               const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline" };
               return (
                 <>
-                  <Row label="Perfil">
-                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
+                  <Row label="Tipo de perfil">
+                    <Select
+                      options={[
+                        { value: "sketch", label: "Regiones de un sketch" },
+                        { value: "circle", label: "Círculo (tubo)" },
+                      ]}
+                      value={k().circle != null ? "circle" : "sketch"}
+                      onChange={(v) => update((x) => x.type === "sweep" && (x.circle = v === "circle" ? 2 : null))}
+                    />
                   </Row>
-                  <RegionBox
-                    ui={props.ui}
-                    store={props.store}
-                    owner={`${f().id}:regiones`}
-                    lost={lost("regions")}
-                    sketch={k().sketch}
-                    value={k().regions}
-                    onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
-                  />
+                  <Show
+                    when={k().circle == null}
+                    fallback={field("Radio del tubo", "kind.circle", k().circle ?? 2, (x, v) => x.type === "sweep" && (x.circle = v), "mm")}
+                  >
+                    <Row label="Perfil">
+                      <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
+                    </Row>
+                    <RegionBox
+                      ui={props.ui}
+                      store={props.store}
+                      owner={`${f().id}:regiones`}
+                      lost={lost("regions")}
+                      sketch={k().sketch}
+                      value={k().regions}
+                      onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
+                    />
+                  </Show>
                   <Row label="Camino">
                     <Select
                       options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
@@ -3515,10 +3537,55 @@ export const FeatureEditor: Component<{
                     </For>
                   </div>
                   </Show>
+                  <Row label="Orientación">
+                    <Select options={ORIENT_OPTIONS} value={k().orient ?? "follow"} onChange={(v) => update((x) => x.type === "sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))} />
+                  </Row>
+                  <Checkbox
+                    small
+                    label="Delgado (solo una pared)"
+                    checked={k().thin != null}
+                    onChange={(c) => update((x) => x.type === "sweep" && (x.thin = c ? 1 : null))}
+                  />
+                  <Show when={k().thin != null}>
+                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "sweep" && (x.thin = v), "mm")}
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
                 </>
               );
             }}
+          </Match>
+          <Match when={f().kind.type === "surface_sweep" && (f().kind as Extract<FeatureKind, { type: "surface_sweep" }>)}>
+            {(k) => (
+              <>
+                <Row label="Curvas de">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_sweep" && ((x.sketch = +v), (x.entities = [])))} />
+                </Row>
+                <Row label="Camino">
+                  <Select
+                    options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    value={(() => {
+                      const p = k().path;
+                      return p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                    })()}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "surface_sweep" &&
+                          (x.path = v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                      )
+                    }
+                  />
+                </Row>
+                <Row label="Orientación">
+                  <Select
+                    options={ORIENT_OPTIONS}
+                    value={k().orient ?? "follow"}
+                    onChange={(v) => update((x) => x.type === "surface_sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))}
+                  />
+                </Row>
+                <p class="text-[11px] text-text-dim">Cada curva del sketch (abierta o cerrada) da una superficie sin espesor.</p>
+              </>
+            )}
           </Match>
           <Match when={f().kind.type === "loft" && (f().kind as Extract<FeatureKind, { type: "loft" }>)}>
             {(k) => (
