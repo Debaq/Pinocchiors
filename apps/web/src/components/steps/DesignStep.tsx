@@ -2120,6 +2120,7 @@ export const FeatureEditor: Component<{
                       ui={props.ui}
                       owner={`${f().id}:otras`}
                       kind="faces"
+                      optional
                       label="Caras con otro espesor"
                       refs={((k() as { overrides?: { face: FaceRef }[] }).overrides ?? []).map((o) => o.face)}
                       onChange={(refs) =>
@@ -4806,10 +4807,12 @@ const RefPicksBox: Component<{
     void props.store.setSelecting(true);
     ui.setPick({ kind: "refs", owner: props.owner, prompt: REF_PROMPTS[props.what], add: (p) => props.onChange([...props.refs, p]) });
   };
-  // Vacía al abrir el diálogo: se empieza eligiendo
+  // Vacía al abrir el diálogo: se empieza eligiendo (memo: `on` sobre
+  // `!!draft()` correría con cada cambio del borrador, no solo al abrirlo)
+  const isOpen = createMemo(() => !!props.store.draft());
   createEffect(
     on(
-      () => !!props.store.draft(),
+      isOpen,
       (open) => {
         if (open && untrack(() => props.refs.length === 0)) queueMicrotask(() => props.store.draft() && activate());
       },
@@ -5019,6 +5022,8 @@ const SelectionBox: Component<{
    * no deja de elegir)
    */
   live?: number;
+  /** Se puede dejar vacía: al abrir el diálogo no pide nada */
+  optional?: boolean;
   onChange: (refs: (EdgeRef | FaceRef)[]) => void;
 }> = (props) => {
   const ui = props.ui;
@@ -5120,13 +5125,15 @@ const SelectionBox: Component<{
   // Vacía o con referencias perdidas al abrirse el diálogo: se empieza eligiendo
   // (al editar, el borrador se abre después de montar la caja). En una operación
   // nueva con aristas o caras ya elegidas, igual queda activa para sumar más,
-  // salvo que otra caja del diálogo esté pidiendo algo
+  // salvo que otra caja del diálogo esté pidiendo algo. Una caja opcional
+  // vacía no se activa sola (se quedaría con los clics de la principal)
+  const isOpen = createMemo(() => !!props.store.draft());
   createEffect(
     on(
-      () => !!props.store.draft(),
+      isOpen,
       (open, wasOpen) => {
         if (!open) return;
-        if (untrack(() => props.live !== undefined || props.refs.length === 0 || (props.lost ?? []).length > 0)) activate();
+        if (untrack(() => props.live !== undefined || (props.refs.length === 0 && !props.optional) || (props.lost ?? []).length > 0)) activate();
         else if (!wasOpen && props.kind !== "face" && untrack(props.store.draft)?.isNew) queueMicrotask(() => ui.pick().kind === "none" && props.store.draft() && activate());
       },
     ),

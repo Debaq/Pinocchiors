@@ -264,7 +264,7 @@ export const escenarios = {
     await chooseOption(b, "Para", "Roscar (rosca cosmética)");
     k = await lastKind(b);
     if (k.thread !== "1/4-20 UNC") throw new Error(`rosca: ${k.thread}`);
-    const r = (0.201 * 25.4) / 2;
+    const r = +(0.201 * 25.4).toFixed(3) / 2; // la tabla guarda mm con tres decimales
     near((await body()).volume, 8000 - frustum(20, r, r - 20 * tan(3)), 0.05, "broca de 1/4-20 cónica");
     if (!(await b.eval(`document.body.innerText.includes("Rosca 1/4-20 UNC")`))) throw new Error("no se muestra la rosca");
     await accept(b);
@@ -483,7 +483,8 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${wall} }])`);
     await b.clickText("Eliminar cara");
     await lastIs(b, "delete_face");
-    await sleep(2500);
+    await releaseBox(b);
+    await sleep(1500);
     near((await body()).volume, 8000, 1e-3, "agujero tapado");
     await accept(b);
     // Vaciado abierto arriba, paredes de 1; el fondo con 3 y después 5
@@ -492,7 +493,8 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${topFace} }])`);
     await b.clickText("Vaciado");
     await lastIs(b, "shell");
-    await sleep(2500);
+    await releaseBox(b);
+    await sleep(1500);
     near((await body()).volume, 8000 - 18 * 18 * 19, 1e-3, "vaciado de 1");
     await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.overrides = [{ face: ${JSON.stringify(bottom)}, thickness: 3 }]; })`);
     await sleep(2500);
@@ -667,7 +669,8 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "edge", edge: ${edge} }])`);
     await b.clickText("Extender superficie");
     await lastIs(b, "surface_extend");
-    await sleep(2500);
+    await releaseBox(b);
+    await sleep(1500);
     const area = async () => (await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts))`))[0].area;
     near(await area(), 300, 1e-3, "extendida 5");
     near((await body()).bbox_max[0], 15, 1e-6, "hasta x = 15");
@@ -762,7 +765,7 @@ export const escenarios = {
     // La cara de arriba y la arista de arriba al frente: por la arista, en ángulo con la cara
     await b.click(...(await at([3, 3, 10])), { wait: 1500 });
     await b.click(...(await at([0, -10, 10])), { wait: 1500 });
-    await sleep(1500);
+    await releaseBox(b);
     const kinds = await b.eval(`JSON.stringify(window.__cadStore.doc().features.at(-1).kind.def.refs.map((x) => x.type))`);
     if (kinds !== '["face","edge"]') throw new Error(`elegido: ${kinds}`);
     r = await ref();
@@ -818,7 +821,8 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "edge", edge: ${a} }, { kind: "edge", edge: ${c} }])`);
     await b.clickText("Curva compuesta");
     await lastIs(b, "curve");
-    await sleep(2000);
+    await releaseBox(b);
+    await sleep(1000);
     let pts = await lines();
     if (!pts.every((p) => Math.abs(p[2] - 10) < 1e-6)) throw new Error("la compuesta no está arriba");
     if (!pts.some((p) => Math.abs(p[0] - 10) < 1e-6 && Math.abs(p[1] - 10) < 1e-6)) throw new Error("no llega a la esquina de atrás");
@@ -890,7 +894,8 @@ export const escenarios = {
     await chooseOption(b, "Hacia", "Hasta una cara");
     if (!(await b.eval(`document.body.innerText.includes("Hasta la cara")`))) throw new Error("no apareció la caja de la cara");
     await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.angle = 90; d.features.at(-1).kind.extent = { type: "up_to_face", face: ${JSON.stringify(wall)} }; })`);
-    await sleep(3000);
+    await releaseBox(b);
+    await sleep(2000);
     near((await body()).volume, 64000 + (Math.PI * (225 - 100) * 20) / 4, 0.5, "un cuarto de vuelta hasta la caja");
     await accept(b);
     await b.shot("operaciones_revolucion_hasta_cara");
@@ -1040,7 +1045,8 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }, { kind: "face", face: ${side} }])`);
     await b.clickText("Redondeo de cara");
     await lastIs(b, "face_blend");
-    await sleep(3000);
+    await releaseBox(b);
+    await sleep(2000);
     const lost = (1 - Math.PI / 4) * 4 * 20;
     near((await body()).volume, 8000 - lost, 0.05, "canto redondeado");
     // Rincón donde hay un canto: la bola no toca las dos caras desde afuera, da error

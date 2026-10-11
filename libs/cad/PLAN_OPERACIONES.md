@@ -477,28 +477,29 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 
-## Fallas e2e para reparar más adelante (2026-10-11)
+## Fallas e2e del grupo operaciones (2026-10-11, reparadas)
 
-Al correr por primera vez en la PC el grupo «operaciones» (`node apps/web/e2e/cad.mjs --grupo
-operaciones -j 3`), 7 escenarios hechos en la nube fallan. Fallan igual en e283ba8 (antes del
-sistema de coordenadas y los manipuladores): no los causó 18341fb.
+Los 7 escenarios hechos en la nube que fallaban en la PC ya pasan:
 
-Causa común probable: una operación nueva creada con caras o aristas ya elegidas deja su caja
-de selección activa para sumar más (`SelectionBox`, 772b2d6) y mientras tanto el visor muestra
-el sólido de antes (la operación queda `rolled_back`). Los escenarios miden enseguida y ven el
-sólido sin cambios. En los que se arreglaron alcanzó con soltar la caja (`releaseBox` en
-`e2e/cad/_comun.mjs`, que aprieta Esc). Vale preguntarse también si es lo que conviene al
-usuario: la vista previa no se ve hasta soltar la caja.
+- **Caja de selección que se reactivaba sola** (bug de la interfaz): `SelectionBox` y
+  `RefPicksBox` vigilaban `on(() => !!draft(), …)`, que en Solid corre con cada cambio del
+  borrador y no solo al abrirlo. Una caja vacía (la opcional «Caras con otro espesor» del vaciado,
+  o «Elegido» del plano al quitar la planta) o con la operación nueva volvía a pedir clics con
+  cualquier edición, y la vista previa mostraba el sólido de antes. Ahora es un `createMemo`.
+  Las cajas `optional` (sin elegir, valen) no se activan solas al abrir.
+- **Operación nueva con caras o aristas ya elegidas**: la caja sigue activa para sumar más (como
+  pidió 772b2d6), así que las pruebas la sueltan con `releaseBox` (Esc) antes de medir: eliminar
+  cara, vaciado, extender superficie, curva compuesta, redondeo de cara, revolución hasta una
+  cara y el plano elegido por clics (la caja «Elegido» queda en «Listo» hasta soltarla).
+- **Agujero cónico en pulgadas**: la tabla guarda la broca en mm con tres decimales (5,105, no
+  5,1054); la prueba usaba el valor sin redondear.
+
+Fallan también en la base (70b8a89), en el grupo «interfaz»; quedan para más adelante:
 
 | Escenario | Mensaje | Probable |
 |---|---|---|
-| eliminar cara y vaciado con espesor por cara | agujero tapado: 6994,69 (esperado 8000) | caja activa |
-| extender superficie | extendida 5: 200 (esperado 300) | caja activa |
-| curvas compuesta y por puntos como caminos | sin curva: undefined | caja activa (la referencia no se calcula) |
-| extrusión hasta una cara curva y revolución hasta una cara | un cuarto de vuelta hasta la caja: 64000 (esperado 65963,5) | caja activa al elegir la cara límite |
-| planos, ejes y puntos por clics | no encontré: «Elegir en el visor» | la caja de referencias se activa sola o el botón cambió de nombre |
-| redondeo de cara (bola que rueda) | se esperaba un error al pedir rincón en un canto | revisar en `cad_face_blend` qué hace con el lado pedido que no toca (¿cae al otro lado?) |
-| agujero cónico y rosca en pulgadas | broca de 1/4-20 cónica: 7735,73 (esperado 7735,68 ± 0,05) | la cuenta del volumen esperado; antes fallaba por el pasante (tolerancia arreglada en 18341fb: la tabla guarda mm con tres decimales) |
+| cajas de selección: sumar, quitar y volver a elegir | tras quitar con clic: Arista 1,Arista 2 | la flecha del radio (manipuladores, 18341fb) queda sobre la primera arista: el clic la arrastra en vez de quitar el redondeo |
+| preselección: lo que está bajo el mouse se resalta | el plano bajo el mouse no se preselecciona: null | sin revisar |
 
 ## Riesgos
 
