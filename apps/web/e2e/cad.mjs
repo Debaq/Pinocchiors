@@ -166,6 +166,25 @@ async function lastIs(b, type) {
   throw new Error("no se creó la operación " + type);
 }
 const lastKind = (b) => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);
+/** Índice de la primera cara del cuerpo que cumple `test` (con lo que da `cad_face_info`: surface, point, normal) */
+async function faceWhere(test) {
+  const n = (await call("cad_evaluate")).body?.faces ?? 0;
+  for (let i = 0; i < n; i++) if (test(await call("cad_face_info", { face: i }))) return i;
+  throw new Error("no encontré la cara");
+}
+/** Índice de la arista del cuerpo cuyo punto de referencia está más cerca de `p` */
+async function edgeNear(p) {
+  const n = (await call("cad_evaluate")).body?.edges ?? 0;
+  let best = -1;
+  let dist = Infinity;
+  for (let i = 0; i < n; i++) {
+    const r = await call("cad_edge_ref", { edge: i });
+    const d = Math.hypot(...r.point.map((c, k) => c - p[k]));
+    if (d < dist) [best, dist] = [i, d];
+  }
+  if (best < 0) throw new Error("no hay aristas");
+  return best;
+}
 
 const scenarios = {
   async "caja, sketch dibujado y extrusión"(b) {
@@ -7850,6 +7869,265 @@ const scenarios = {
     near(await reach(), 3, 1e-6, "a 3 del plano");
     await accept(b);
     await b.shot("operaciones_superficie_plana_desfasada");
+  },
+
+  // ─── Tanda media ───
+
+  async "operaciones: alinear un cuerpo a un plano"(b) {
+    await begin(b);
+    // Caja de 20 centrada (de −10 a 10 en cada eje)
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const top = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    const ref = await b.eval(`window.__cadStore.faceRef(${top})`);
+    await b.clickText("Mover cuerpo");
+    await lastIs(b, "transform");
+    await sleep(1500);
+    // La cara de arriba apoyada en la planta: la caja queda de z = 0 a 20
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.motion = { type: "align", face: ${JSON.stringify(ref)}, to: { type: "xy" }, flip: false }; })`);
+    await sleep(2000);
+    let r = await body();
+    near(r.bbox_min[2], 0, 1e-6, "apoyada en la planta");
+    near(r.bbox_max[2], 20, 1e-6, "arriba");
+    // En el frente (normal −Y): la caja queda del lado −Y, de y = −20 a 0
+    await chooseOption(b, "Sobre el plano", "Frente (XZ)");
+    r = await body();
+    near(r.bbox_max[1], 0, 1e-6, "contra el frente");
+    near(r.bbox_min[1], -20, 1e-6, "del lado −Y");
+    // Del otro lado: de y = 0 a 20
+    await b.clickText("Del otro lado del plano");
+    await sleep(2000);
+    r = await body();
+    near(r.bbox_min[1], 0, 1e-6, "del otro lado");
+    near(r.volume, 8000, 1e-3, "mismo volumen");
+    await accept(b);
+    await b.shot("operaciones_alinear_cuerpo");
+  },
+
+  async "operaciones: eliminar cara y vaciado con espesor por cara"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Un agujero de Ø8 que la atraviesa
+    await b.eval(`__cadStore.commit((d) => {
+      d.features.push({ id: d.next_id, name: "Agujero", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 4, height: 40 }, origin: [0, 0, -20], z: [0, 0, 1], x: [1, 0, 0], op: "cut" } });
+      d.next_id += 1;
+    })`);
+    await sleep(2000);
+    near((await body()).volume, 8000 - Math.PI * 16 * 20, 1e-3, "con agujero");
+    // Eliminar la pared del agujero: se tapa
+    const wall = await faceWhere((f) => f.surface === "cylinder");
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${wall} }])`);
+    await b.clickText("Eliminar cara");
+    await lastIs(b, "delete_face");
+    await sleep(2500);
+    near((await body()).volume, 8000, 1e-3, "agujero tapado");
+    await accept(b);
+    // Vaciado abierto arriba, paredes de 1; el fondo con 3 y después 5
+    const topFace = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    const bottom = await b.eval(`window.__cadStore.faceRef(${await faceWhere((f) => f.surface === "plane" && f.normal[2] < -0.99)})`);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${topFace} }])`);
+    await b.clickText("Vaciado");
+    await lastIs(b, "shell");
+    await sleep(2500);
+    near((await body()).volume, 8000 - 18 * 18 * 19, 1e-3, "vaciado de 1");
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.overrides = [{ face: ${JSON.stringify(bottom)}, thickness: 3 }]; })`);
+    await sleep(2500);
+    near((await body()).volume, 8000 - 18 * 18 * 17, 1e-3, "fondo de 3");
+    if (!(await setInput(b, "Espesor cara 1", 5))) throw new Error("no está el espesor de la cara");
+    await sleep(2500);
+    near((await body()).volume, 8000 - 18 * 18 * 15, 1e-3, "fondo de 5");
+    await accept(b);
+    await b.shot("operaciones_vaciado_por_cara");
+  },
+
+  async "operaciones: redondeo con radios en el medio"(b) {
+    const at = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // La arista de arriba al frente, radio 2
+    await b.click(...(await at([0, -10, 10])), { wait: 800 });
+    await b.clickText("Redondeo");
+    await lastIs(b, "fillet");
+    await sleep(1500);
+    await setInput(b, "Radio", 2);
+    await sleep(1500);
+    const cut = (r) => (1 - Math.PI / 4) * r * r * 20;
+    near((await body()).volume, 8000 - cut(2), 0.05, "radio 2");
+    // Un radio de 4 en el medio: saca más que el de 2 y menos que el de 4 entero
+    await b.clickText("Agregar radio en el medio");
+    await sleep(2000);
+    let k = await lastKind(b);
+    if (k.points?.length !== 1 || k.points[0].at !== 0.5) throw new Error(`puntos: ${JSON.stringify(k.points)}`);
+    const v4 = (await body()).volume;
+    if (!(v4 < 8000 - cut(2) && v4 > 8000 - cut(4))) throw new Error(`con 4 en el medio: ${v4}`);
+    // 5 en el medio: saca más todavía
+    await setInputIn(b, '[data-fillet-point="0"] input', 1, 5);
+    await sleep(2000);
+    const v5 = (await body()).volume;
+    if (!(v5 < v4 && v5 > 8000 - cut(5))) throw new Error(`con 5 en el medio: ${v5}`);
+    await accept(b);
+    k = await lastKind(b);
+    if (k.points[0].radius !== 5) throw new Error(`guardado: ${JSON.stringify(k.points)}`);
+    await b.shot("operaciones_redondeo_por_puntos");
+  },
+
+  async "operaciones: extrusión con dirección propia y desde un plano corrido"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))],
+      entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })),
+      constraints: [], next_id: 20, origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Cuadrado", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await lastIs(b, "extrude");
+    await sleep(1500);
+    await setInput(b, "Distancia", 10);
+    await sleep(1500);
+    // Desde 3 sobre el plano: de z = 3 a 13
+    await setInput(b, "Desde el plano a", 3);
+    await sleep(2000);
+    let r = await body();
+    near(r.bbox_min[2], 3, 1e-6, "arranca en 3");
+    near(r.bbox_max[2], 13, 1e-6, "llega a 13");
+    // Dirección propia: Z (la misma) y después a 45° en X
+    await b.clickText("Dirección propia");
+    await sleep(1500);
+    near((await body()).volume, 1000, 1e-3, "a lo largo de Z");
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.direction = { type: "custom", origin: [0, 0, 0], direction: [1, 0, 1] }; })`);
+    await sleep(2000);
+    const h = 10 / Math.SQRT2;
+    r = await body();
+    near(r.volume, 100 * h, 1e-3, "prisma oblicuo");
+    near(r.bbox_max[0], 10 + h + 3, 1e-6, "corrido en X");
+    await accept(b);
+    await b.shot("operaciones_extrusion_direccion");
+  },
+
+  async "operaciones: tubo, barrido delgado y superficie por barrido"(b) {
+    await begin(b);
+    // Perfil: una recta de 6 en la planta; camino: recta de 20 hacia arriba en el frente
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    doc.features.push({ id: id(), name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: -3, y: 0 }, { id: 2, x: 3, y: 0 }], entities: [{ id: 3, geometry: { type: "line", start: 1, end: 2 } }], constraints: [], next_id: 4, origin: 0 } } });
+    doc.features.push({ id: id(), name: "Camino", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 20 }], entities: [{ id: 2, geometry: { type: "line", start: 0, end: 1 } }], constraints: [], next_id: 3, origin: 0 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    // Tubo por el último sketch (el camino), radio 2 por defecto
+    await b.clickText("Tubo");
+    await lastIs(b, "sweep");
+    await sleep(2500);
+    near((await body()).volume, Math.PI * 4 * 20, 1e-3, "tubo de radio 2");
+    await setInput(b, "Radio del tubo", 3);
+    await sleep(2000);
+    near((await body()).volume, Math.PI * 9 * 20, 1e-3, "tubo de radio 3");
+    await b.clickText("Delgado (solo una pared)");
+    await sleep(2000);
+    near((await body()).volume, Math.PI * (3.5 ** 2 - 2.5 ** 2) * 20, 1e-3, "caño de pared 1");
+    await chooseOption(b, "Orientación", "Fija (no gira)");
+    near((await body()).volume, Math.PI * (3.5 ** 2 - 2.5 ** 2) * 20, 1e-3, "fijo en una recta: lo mismo");
+    await accept(b);
+    if ((await lastKind(b)).orient !== "fixed") throw new Error("no quedó fija");
+    // Superficie por barrido: la recta del perfil por el camino (los dos últimos sketches)
+    await b.clickText("Superficie por barrido");
+    await lastIs(b, "surface_sweep");
+    await sleep(2500);
+    await accept(b);
+    const ps = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts))`);
+    const sheet = ps.find((p) => p.surface);
+    if (!sheet) throw new Error(`sin superficie: ${JSON.stringify(ps.map((p) => p.surface))}`);
+    near(sheet.area, 120, 1e-3, "superficie de 6 × 20");
+    await b.shot("operaciones_tubo_y_superficie_por_barrido");
+  },
+
+  async "operaciones: extender superficie"(b) {
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [10, 0], [10, 20], [0, 20]];
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))],
+      entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })),
+      constraints: [], next_id: 20, origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Rectángulo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Superficie plana");
+    await lastIs(b, "surface_planar");
+    await sleep(2000);
+    await accept(b);
+    // El borde de x = 10, 5 más allá (por defecto): de 10 × 20 a 15 × 20
+    const edge = await edgeNear([10, 10, 0]);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "edge", edge: ${edge} }])`);
+    await b.clickText("Extender superficie");
+    await lastIs(b, "surface_extend");
+    await sleep(2500);
+    const area = async () => (await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts))`))[0].area;
+    near(await area(), 300, 1e-3, "extendida 5");
+    near((await body()).bbox_max[0], 15, 1e-6, "hasta x = 15");
+    await setInput(b, "Distancia", 10);
+    await sleep(2000);
+    near(await area(), 400, 1e-3, "extendida 10");
+    await accept(b);
+    await b.shot("operaciones_extender_superficie");
+  },
+
+  async "operaciones: copiar, pegar y duplicar operaciones"(b) {
+    await begin(b);
+    // Cuadrado de 10 y su extrusión de 5
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    const sk = doc.next_id++;
+    doc.features.push({
+      id: sk, name: "Cuadrado", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    const ex = doc.next_id++;
+    doc.features.push({ id: ex, name: "Bloque", suppressed: false, kind: { type: "extrude", sketch: sk, regions: { type: "all" }, extent: { type: "blind", distance: 5 }, reverse: false, op: "join", draft: 0, thin: null } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    near((await body()).volume, 500, 1e-3, "un bloque");
+    const rowAt = (name) =>
+      b.eval(`(() => { const e = [...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === ${JSON.stringify(name)}); if (!e) return null; e.scrollIntoView({ block: "center" }); const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; })()`);
+    // Elegir el sketch y, con Mayús, la extrusión: el tramo de los dos
+    await clickRow(b, "Cuadrado");
+    await b.click(...(await rowAt("Bloque")), { wait: 800, modifiers: 8 });
+    const key = (k) => b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: ${JSON.stringify(k)}, ctrlKey: true, bubbles: true }))`);
+    await key("c");
+    await sleep(500);
+    await key("v");
+    await sleep(2500);
+    const feats = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.map((f) => ({ id: f.id, name: f.name, kind: f.kind }))))`);
+    const sCopy = feats.find((f) => f.name === "Cuadrado (copia)");
+    const eCopy = feats.find((f) => f.name === "Bloque (copia)");
+    if (!sCopy || !eCopy) throw new Error(`pegado: ${feats.map((f) => f.name)}`);
+    if (eCopy.kind.sketch !== sCopy.id) throw new Error(`la extrusión copiada usa ${eCopy.kind.sketch}, no la copia del sketch ${sCopy.id}`);
+    // La copia del sketch 10 más arriba: dos bloques
+    await b.eval(`__cadStore.commit((d) => { d.features.find((f) => f.id === ${sCopy.id}).kind.offset = 10; })`);
+    await sleep(2000);
+    near((await body()).volume, 1000, 1e-3, "dos bloques");
+    // Duplicar solo la extrusión original (un clic normal deja de lado el tramo): la copia sigue usando el sketch de afuera
+    await clickRow(b, "Bloque");
+    await b.eval(`(() => { const s = [...document.querySelectorAll("[data-feature-row] span")].find((x) => x.textContent === "Bloque"); s.closest("[data-feature-row]").querySelector('[aria-label="Duplicar"]').click(); })()`);
+    await sleep(2500);
+    const dup = (await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features))`)).filter((f) => f.name === "Bloque (copia)").pop();
+    if (dup.kind.sketch !== sk) throw new Error(`duplicada usa ${dup.kind.sketch} (esperado ${sk})`);
+    await b.shot("operaciones_copiar_pegar");
   },
 };
 

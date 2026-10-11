@@ -557,3 +557,29 @@ fn extrude_up_to_a_face_with_offset() {
     assert_relative_eq!(m.bbox_min[2], 22.0, epsilon = 1e-6);
     assert_relative_eq!(m.volume, 1800.0, max_relative = 1e-9);
 }
+
+#[test]
+fn extend_a_planar_surface() {
+    if !occt() {
+        return;
+    }
+    // Superficie plana de 10 × 20; el borde de x = 10 se extiende 5: queda de 15 × 20
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [10.0, 20.0]);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::SurfacePlanar { sketch: sk, regions: RegionSelection::All });
+    let edge = edge_at(&doc, [10.0, 10.0, 0.0]);
+    doc.add(FeatureKind::SurfaceExtend { edges: vec![edge], distance: 5.0 });
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 1);
+    let m = ev.parts[0].shape.mass().unwrap();
+    assert_relative_eq!(m.area, 300.0, max_relative = 1e-6);
+    assert_relative_eq!(m.bbox_max[0], 15.0, epsilon = 1e-6);
+    // De un sólido: error
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let edge = edge_at(&doc, [10.0, 5.0, 10.0]);
+    doc.add(FeatureKind::SurfaceExtend { edges: vec![edge], distance: 5.0 });
+    assert!(!doc.evaluate().errors().is_empty());
+}

@@ -621,6 +621,8 @@ export type FeatureKind =
       /** Barrido delgado: espesor de la pared */
       thin?: number | null;
     }
+  /** Superficies extendidas `distance` más allá de bordes libres */
+  | { type: "surface_extend"; edges: EdgeRef[]; distance: number }
   /** Curvas de un sketch llevadas a lo largo de un camino: superficie */
   | {
       type: "surface_sweep";
@@ -1403,6 +1405,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   surface_planar: "Superficie plana",
   delete_face: "Eliminar cara",
   surface_sweep: "Superficie por barrido",
+  surface_extend: "Extender superficie",
   surface_offset: "Superficie desfasada",
 };
 

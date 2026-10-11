@@ -451,12 +451,13 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   });
 
   /** Redondeo o chaflán con las aristas ya elegidas; si no hay, se eligen en la caja del diálogo */
-  const startEdges = async (kind: "fillet" | "chamfer") => {
+  const startEdges = async (kind: "fillet" | "chamfer" | "surface_extend") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
     const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
     const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
     ui.clearPicks();
     if (kind === "fillet") void store.addFeature({ type: "fillet", edges, radius: 1 });
+    else if (kind === "surface_extend") void store.addFeature({ type: "surface_extend", edges, distance: 5 });
     else void store.addFeature({ type: "chamfer", edges, distance: 1 });
   };
 

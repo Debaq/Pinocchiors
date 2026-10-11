@@ -2931,6 +2931,20 @@ impl Ctx<'_> {
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }
+            FeatureKind::SurfaceExtend { edges, distance } => {
+                if edges.is_empty() {
+                    return Err("elegir al menos un borde de una superficie".into());
+                }
+                if *distance <= 0.0 {
+                    return Err("la distancia tiene que ser mayor que cero".into());
+                }
+                let idx = self.edges("edges", edges)?;
+                let groups = self.by_part(&idx, true);
+                if groups.iter().any(|(p, _)| !self.ev.parts[*p].is_surface()) {
+                    return Err("solo se extienden superficies (no bordes de sólidos)".into());
+                }
+                self.per_part(groups, |s, e| s.extend_surface(e, *distance), |_| None)
+            }
             FeatureKind::SurfacePlanar { sketch, regions } => {
                 let (faces, _, _) = self.profile(*sketch, regions)?;
                 let tool = self.surface_tool(f.id, faces)?;

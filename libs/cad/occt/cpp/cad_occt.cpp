@@ -16,6 +16,9 @@
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <Geom2d_Curve.hxx>
+#include <algorithm>
+#include <array>
 #include <TColgp_Array1OfPnt2d.hxx>
 #include <gp_Ax3.hxx>
 #include <BRepLib.hxx>
@@ -837,6 +840,54 @@ CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, do
         if (!mk.IsDone()) throw Standard_Failure("grosor incompatible con la forma");
         record(mk, {s->s}, mk.Shape());
         return wrap_checked(mk.Shape(), "cáscara");
+    });
+}
+
+CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance) {
+    return guard("extender superficie", (CadShape*)nullptr, [&] {
+        if (distance <= 0) throw Standard_Failure("la distancia tiene que ser mayor que cero");
+        auto em = map_of(s->s, TopAbs_EDGE);
+        TopTools_IndexedDataMapOfShapeListOfShape anc;
+        TopExp::MapShapesAndAncestors(s->s, TopAbs_EDGE, TopAbs_FACE, anc);
+        // Por cara, qué lados de su parámetro se extienden (u mín, u máx, v mín, v máx)
+        std::vector<std::pair<TopoDS_Face, std::array<bool, 4>>> todo;
+        for (int32_t i = 0; i < n; i++) {
+            if (edges[i] < 0 || edges[i] >= em.Extent()) throw Standard_Failure("arista inexistente");
+            TopoDS_Edge e = TopoDS::Edge(em(edges[i] + 1));
+            const TopTools_ListOfShape& fl = anc.FindFromKey(e);
+            if (fl.Extent() != 1) throw Standard_Failure("solo se extienden bordes libres de una superficie");
+            TopoDS_Face f = TopoDS::Face(fl.First());
+            double u0, u1, v0, v1, a, b;
+            BRepTools::UVBounds(f, u0, u1, v0, v1);
+            Handle(Geom2d_Curve) pc = BRep_Tool::CurveOnSurface(e, f, a, b);
+            if (pc.IsNull()) throw Standard_Failure("el borde no está sobre la superficie");
+            gp_Pnt2d m = pc->Value((a + b) / 2);
+            double d[4] = {std::fabs(m.X() - u0), std::fabs(m.X() - u1), std::fabs(m.Y() - v0), std::fabs(m.Y() - v1)};
+            int side = int(std::min_element(d, d + 4) - d);
+            auto it = std::find_if(todo.begin(), todo.end(), [&](auto& t) { return t.first.IsSame(f); });
+            if (it == todo.end()) {
+                todo.push_back({f, {false, false, false, false}});
+                it = todo.end() - 1;
+            }
+            it->second[side] = true;
+        }
+        // Las caras extendidas en su lugar; las demás como estaban
+        TopoDS_Compound c;
+        BRep_Builder bld;
+        bld.MakeCompound(c);
+        for (TopExp_Explorer fx(s->s, TopAbs_FACE); fx.More(); fx.Next()) {
+            TopoDS_Face f = TopoDS::Face(fx.Current());
+            auto it = std::find_if(todo.begin(), todo.end(), [&](auto& t) { return t.first.IsSame(f); });
+            if (it == todo.end()) {
+                bld.Add(c, f);
+                continue;
+            }
+            TopoDS_Face ext;
+            BRepLib::ExtendFace(f, distance, it->second[0], it->second[1], it->second[2], it->second[3], ext);
+            if (ext.IsNull()) throw Standard_Failure("no se pudo extender la superficie");
+            bld.Add(c, ext);
+        }
+        return wrap_checked(c, "superficie extendida");
     });
 }
 

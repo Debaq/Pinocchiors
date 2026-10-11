@@ -253,6 +253,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
   const surfaces: (Tool | "-")[] = [
     { label: "Superficie extruida", icon: D.SurfaceExtrude, run: a.addSurfaceExtrude, tip: "Las curvas de un sketch (abiertas o cerradas) empujadas: una superficie sin espesor" },
     { label: "Superficie de revolución", icon: D.SurfaceRevolve, run: a.addSurfaceRevolve, tip: "Las curvas de un sketch giradas alrededor de un eje" },
+    { label: "Extender superficie", icon: D.SurfaceExtrude, run: () => void a.startEdges("surface_extend"), needsBody: true, tip: "Alarga una superficie más allá de sus bordes elegidos, siguiendo su forma" },
     { label: "Superficie por barrido", icon: D.Sweep, run: a.addSurfaceSweep, tip: "Las curvas de un sketch llevadas a lo largo de otro (el último)" },
     { label: "Superficie plana", icon: D.Fill, run: a.addSurfacePlanar, tip: "Las regiones cerradas de un sketch como superficie" },
     { label: "Superficie desfasada", icon: D.Thicken, run: a.addSurfaceOffset, needsBody: true, tip: "Copia de superficies (o de la piel de una pieza) a una distancia" },

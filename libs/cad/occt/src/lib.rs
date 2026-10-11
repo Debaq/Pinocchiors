@@ -563,6 +563,12 @@ impl Shape {
         wrap(unsafe { ffi::cad_shell_faces(self.ptr(), f.as_ptr(), f.len() as i32, thickness, ov.as_ptr(), ot.as_ptr(), ov.len() as i32) })
     }
 
+    /// Extiende las superficies `distance` más allá de los bordes libres `edges`.
+    pub fn extend_surface(&self, edges: &[usize], distance: f64) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_extend_surface(self.ptr(), e.as_ptr(), e.len() as i32, distance) })
+    }
+
     /// Saca las caras y cierra el hueco extendiendo las vecinas (agujeros, redondeos, resaltes).
     pub fn remove_faces(&self, faces: &[usize]) -> Result<Shape> {
         let f = idx(faces);

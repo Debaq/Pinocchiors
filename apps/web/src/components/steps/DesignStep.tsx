@@ -2349,6 +2349,24 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "surface_extend" && (f().kind as Extract<FeatureKind, { type: "surface_extend" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:bordes`}
+                  kind="edges"
+                  label="Bordes a extender"
+                  lost={lost("edges")}
+                  refs={k().edges}
+                  onChange={(refs) => update((x) => x.type === "surface_extend" && (x.edges = refs as EdgeRef[]))}
+                />
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_extend" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Bordes libres de superficies: cada cara se alarga por ese lado siguiendo su forma.</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "delete_face" && (f().kind as Extract<FeatureKind, { type: "delete_face" }>)}>
             {(k) => (
               <>

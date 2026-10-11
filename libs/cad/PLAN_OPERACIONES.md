@@ -28,11 +28,11 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 |---|---|
 | Ciega, simétrica, dos direcciones, hasta el siguiente, pasante | ✅ |
 | Hasta vértice | ✅ (`Extent::UpToVertex`, 2026-10-11) |
-| Hasta superficie | 🟡 solo hasta el plano de la cara (F3) |
-| Hasta superficie con desfase | ❌ (F3) |
-| Desde plano desfasado | 🟡 el desfase es del sketch, no de la extrusión (F3) |
+| Hasta superficie | 🟡 hasta el plano de la cara, con separación (2026-10-11); falta cara curva (F3) |
+| Hasta superficie con desfase | ✅ (`UpToFace.offset`, 2026-10-11) |
+| Desde plano desfasado | ✅ (`Extrude.start`, 2026-10-11) |
 | Ángulo de desmoldeo, pared delgada, invertir, selección de regiones | ✅ |
-| Dirección personalizada | ❌ (F3) |
+| Dirección personalizada | ✅ (`Extrude.direction`, 2026-10-11; sin desmolde) |
 
 ### Opciones de revolución
 | Función | Estado |
@@ -46,7 +46,8 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Perfil y trayectoria | ✅ (sketch, sketch 3D, hélice) |
-| Curvas guía, torsión, orientación, barrido circular simple, pared delgada | ❌ (F4) |
+| Orientación (sigue, Frenet, fija), barrido circular simple, pared delgada | ✅ (`Sweep.orient`, `circle`, `thin`, 2026-10-11) |
+| Curvas guía, torsión | ❌ (F4) |
 
 ### Opciones de recubrimiento
 | Función | Estado |
@@ -65,15 +66,16 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Redondeo de radio constante | ✅ |
-| Redondeo de radio variable | 🟡 lineal de `radius` a `radius2`; faltan radios por punto (F6) |
+| Redondeo de radio variable | ✅ lineal y por puntos (`Fillet.points`, 2026-10-11) |
 | Redondeo de cara, redondeo completo | ❌ (F6) |
 | Chaflán por distancia, dos distancias, distancia y ángulo | ✅ |
 | Chaflán de vértice | ❌ (F6) |
 | Vaciado | ✅ |
-| Vaciado con espesores distintos por cara | ❌ (F6) |
+| Vaciado con espesores distintos por cara | ✅ (`Shell.overrides`, 2026-10-11) |
 | Ángulo de desmoldeo, engrosar | ✅ |
 | Desfasar cara, mover cara | 🟡 solo planas y a lo largo de la normal (F6) |
-| Rotar cara, eliminar cara | ❌ (F6) |
+| Eliminar cara | ✅ (`DeleteFace`, defeaturing, 2026-10-11) |
+| Rotar cara | ❌ (F6) |
 | Reemplazar cara | 🟡 solo hasta un plano (F6) |
 
 ### Patrones y simetría
@@ -93,7 +95,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Función | Estado |
 |---|---|
 | Mover, rotar, copiar (desplazamiento, giro o de punto a punto) | ✅ (`Transform`, 2026-10-11); falta el manipulador (F1) |
-| Alinear a cara o plano | ❌ (F1) |
+| Alinear a cara o plano | ✅ cara plana sobre un plano (`Motion::Align`, 2026-10-11) |
 | Escalar uniforme y no uniforme | ✅ (`Scale.factor` por eje) |
 
 ### Geometría de referencia
@@ -116,17 +118,17 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Función | Estado |
 |---|---|
 | Por extrusión, por revolución, relleno, recortar, coser, cortar sólido con superficie | ✅ |
-| Por barrido | ❌ (F4) |
+| Por barrido | ✅ (`SurfaceSweep`, 2026-10-11) |
 | Por recubrimiento | ❌ (F5) |
 | Plana | ✅ (`SurfacePlanar`, 2026-10-11) |
 | Desfasada | ✅ (`SurfaceOffset`; de un sólido, su piel, 2026-10-11) |
-| Extender | ❌ (F9) |
+| Extender | ✅ por bordes libres (`SurfaceExtend`, `BRepLib::ExtendFace`, 2026-10-11) |
 
 ### Gestión de operaciones
 | Función | Estado |
 |---|---|
 | Editar, editar croquis, suprimir, reordenar, eliminar, renombrar | ✅ |
-| Copiar y pegar | ❌ (solo «Pegar sketch») (F2) |
+| Copiar y pegar | ✅ Ctrl+C / Ctrl+V en el árbol y «Duplicar» (2026-10-11) |
 | Retroceder (rollback), vista previa en vivo | ✅ |
 | Manipuladores gráficos | 🟡 flecha de extrusión y agujero (F10) |
 | Ámbito, fusionar o crear cuerpo nuevo | ✅ (`scope`, `BodyOp::New`) |
@@ -325,6 +327,28 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
   en piezas reales.
 - **OCCT 7.6 de la nube**: `g++` da 3 errores que ya estaban (`WriteStream`, `std::max` con
   lista) porque el proyecto usa un OCCT más nuevo; no son de estos cambios.
+- **Tanda media (2026-10-11)**: `cargo test -p cad-model --test operations --test sweep` y los
+  e2e «operaciones:» (17 en total). Hipótesis:
+  - `record` del puente pasó a ser plantilla (sirve para `BRepOffset_MakeOffset` y el
+    defeaturing); si el compilador de la PC se queja, es eso.
+  - Alinear: la cara se apoya corriéndose solo a lo largo de la normal del plano (no va al
+    origen del plano); el giro es alrededor del punto de la cara.
+  - Eliminar cara con `BRepAlgoAPI_Defeaturing`: la prueba tapa un agujero pasante; con caras
+    que tocan muchas vecinas puede fallar (se avisa con error).
+  - Vaciado por cara: `BRepOffset_MakeOffset` con `SetOffsetOnFace` y `GeomAbs_Arc`; la
+    prueba supone paredes rectas en una caja (fondo de 3, paredes de 1).
+  - Redondeo por puntos: los `at` son fracción del parámetro de la arista (en rectas es el
+    largo; en curvas puede no ser proporcional al largo).
+  - Barrido fijo: `SetMode(gp_Ax2)`; la prueba del cuarto de círculo supone que el perfil no
+    gira (no pasa de z = 10) y que el sólido sale válido aunque al final el perfil quede casi
+    de canto.
+  - Extender superficie: cada borde elige el lado del parámetro (u/v mín/máx) más cercano a su
+    punto medio; las caras extendidas quedan sueltas en un compuesto (se pierde la costura con
+    las vecinas) y sin nombres heredados.
+  - Copiar y pegar: los ids se cambian en las claves `sketch`, `feature`, `curve` y las listas
+    `features`; si alguna operación guarda ids con otra clave, la copia apuntaría al original.
+  - e2e: `faceWhere`/`edgeNear` recorren las caras y aristas por el puente (`cad_face_info`,
+    `cad_edge_ref`); el punto de `EdgeRef` se supone sobre la arista (cerca del medio).
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 

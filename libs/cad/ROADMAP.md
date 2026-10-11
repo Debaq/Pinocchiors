@@ -711,3 +711,9 @@ cargo test -p cad-model
   `standard::INCH` y en el diálogo, «Sistema»), espiral plana y hélice cónica (`Helix.radius2`,
   `flat`), superficie plana y desfasada (`cad_offset_shape`), patrón por puntos de un sketch y
   revolución delgada. Pruebas en `model/tests/operations.rs` y `hole.rs`; e2e «operaciones:».
+- **2026-10-11 Operaciones, tanda media** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): alinear
+  un cuerpo a un plano, eliminar cara (defeaturing), vaciado con espesor por cara, redondeo con
+  radios en el medio, extrusión con dirección propia / desde un plano corrido / hasta una cara
+  con separación, barrido circular, delgado y con orientación, superficie por barrido, extender
+  superficie y copiar/pegar/duplicar operaciones. Puente: `cad_shell_faces`, `cad_remove_faces`,
+  `cad_fillet_points`, `cad_pipe_ex`, `cad_extend_surface` (y `record` como plantilla).

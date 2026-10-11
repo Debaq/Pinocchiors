@@ -850,6 +850,9 @@ pub enum FeatureKind {
     /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
     /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
     SurfaceOffset { parts: Vec<PartId>, distance: f64 },
+    /// Extiende superficies `distance` más allá de bordes libres (cada cara
+    /// por el lado de su parámetro donde está el borde, siguiendo su forma).
+    SurfaceExtend { edges: Vec<EdgeRef>, distance: f64 },
     /// Superficie que deja una curva de un sketch llevada a lo largo de un camino.
     SurfaceSweep {
         sketch: FeatureId,
@@ -1287,6 +1290,7 @@ impl FeatureKind {
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
+            FeatureKind::SurfaceExtend { .. } => "Extender superficie",
             FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",
