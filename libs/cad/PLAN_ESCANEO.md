@@ -22,7 +22,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Detección automática (plano, cilindro, esfera) | ✅ (`cad_scan::detect_all`, `merge_coplanar`) |
 | Desviación diseño ↔ escaneo | ✅ (`cad_scan::deviation`, mapa de color) |
 | Limpiar la malla (reparar, remallar, simplificar, suavizar) | ✅ (Preparar) |
-| Escaneo como cuerpo para booleanas | ❌ motor decidido en E0: OCCT + vóxeles/isótropo + sólido directo (E2) |
+| Escaneo como cuerpo para booleanas | ✅ con holgura por vóxeles (E2) |
 | Elegir qué objeto es el escaneo | ✅ (E1.1) |
 | Alinear el escaneo por rasgos | ✅ (E1.2) |
 | Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
@@ -132,15 +132,42 @@ escaneo ✅, E1.4 sketch anclado al corte ✅. **E1 cerrada (2026-10-10).**
   e2e «escaneo: el sketch se ancla al corte del escaneo». Pendiente: tramos abiertos (escaneo
   con huecos) solo se ven, no se copian; el corte copiado no queda ligado al escaneo.
 
-### E2 — El escaneo como cuerpo
+### E2 — El escaneo como cuerpo ✅ (2026-10-10)
 
-- `FeatureKind::MeshBody { scan, max_faces, offset }`: simplificar con error medido (lo de
-  `remesh::simplify`), cerrar huecos chicos (pinocchio-repair) y convertir a sólido (o
-  superficie si sigue abierto). Motor según E0.
-- Desfase (holgura) robusto por vóxeles (distancia con signo, `remesh::voxel_grid`):
-  escaneo +0,2 mm para encajes, −x para interiores.
-- Booleanas con las piezas: restar el escaneo de un bloque (encaje, negativo, cuna), unir,
-  intersecar. Ejemplo de prueba: base para el gonfoterio = bloque − (escaneo + 0,3 mm).
+- ✅ `FeatureKind::ScanBody(ScanBody { offset, faces, op })` («Cuerpo del escaneo»): el
+  escaneo elegido como sólido que se une, resta o interseca como cualquier herramienta
+  (con piezas, por defecto resta con 0,2 mm de holgura: la cuna o el encaje). La malla
+  preparada no se guarda: la app la pone antes de cada recálculo (`fit_scan_references`,
+  caché por escaneo + holgura + triángulos en `ScanCache.bodies`) y de ella solo viaja la
+  huella (`ScanBodyMesh`, entra en la caché de operaciones). Sigue al escaneo como las
+  referencias: si se alinea, repara o se elige otro, se rehace.
+- ✅ `cad_scan::prepare_body`: vóxeles con desfase → isótropo → sólido directo. El desfase
+  va en la reconstrucción por vóxeles (`VoxelOptions.offset`, `rebuild_with_limit`): la
+  banda se ensancha la holgura y adentro = distancia exacta con signo < holgura (el signo,
+  el del volumen sin correr: con el del número de vueltas recalculado, en escaneos abiertos
+  los cruces quedaban sobre la grilla y salía no manifold). Esfera ±0,2 y cubo redondeado
+  exactos al 1 %. El lado del isótropo se calcula con el área ya cerrada y corrida (los
+  huecos tapados y el ruido la cambian ×1,5–2) y ¾ de relleno medido. Se tiran las motas
+  (< 1 % del volumen mayor). Al soldar se caen astillas sin área y quedan agujeros en fila o
+  microscópicos: se funde el vértice más llano con su vecino (`close_open_edges`); los
+  demás agujeros, abanico; si algo queda, otro intento con el lado +1,3 %.
+  Sin eso OCCT cose (89 s en vez de 1,4 s).
+- ✅ Visor: los cuerpos de malla (≥ 64 caras de un triángulo) no dibujan las aristas entre
+  facetas a menos de 30° (`hide_facet_edges`, quedan vacías para no correr los índices).
+- ✅ UI: «Escaneo como cuerpo» en la pestaña del escaneo; en el diálogo, holgura,
+  triángulos (500–100 000) y operación.
+- Banco: `cargo run --release -p cad-scan --example scan_body -- malla N holgura [salida.stl]`
+  (`CORTE`, `SOLO_PREPARAR`). A 20 000 triángulos: preparar 2–5 s, a sólido 0,8 s, caja −
+  cuerpo 3,5–4,5 s (conejo, gonfoterio y sus escaneos con huecos, holgura 0 / +0,3 / −0,5);
+  50 000: 4 + 2,6 + 13 s. Volúmenes: conejo cerrado 13 778 → +0,3 mm 17 489 (≈ V + A·0,3).
+  Prueba `scan_body_leaves_a_cradle_with_clearance` (placa con ruido + 0,3 mm,
+  volumen = V + A·0,3 al 2 %; bloque − escaneo = mitad agrandada al 2 %) y e2e «escaneo:
+  cuerpo del escaneo deja la cuna en un bloque».
+- Pendiente: superficie si el escaneo no cierra (con vóxeles siempre cierra); OCCT falla la
+  booleana si la cara de la otra pieza cae justo sobre una zona plana del escaneo (conejo
+  −0,5 mm cortado a media altura: «el resultado no es un sólido válido»; al 37 % o 62 %
+  anda): avisar o correr la herramienta una centésima; avisar el tiempo antes de recalcular
+  con muchos triángulos.
 
 ### E3 — Extruir hasta el escaneo
 

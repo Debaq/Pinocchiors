@@ -21,6 +21,9 @@ pub struct VoxelOptions {
     /// Remallado isótropo después, con este lado (`None`: los triángulos de
     /// la grilla, de tamaños dispares).
     pub isotropic_edge: Option<f64>,
+    /// Corre la superficie hacia afuera esta distancia (negativo: hacia
+    /// adentro), medida exacta desde la malla; 0: la superficie misma.
+    pub offset: f64,
 }
 
 /// Vóxeles en el eje más largo, a lo sumo.
@@ -72,7 +75,7 @@ pub fn voxel(positions: &[[f32; 3]], indices: &[u32], options: &VoxelOptions) ->
     }
     let surface = super::surface_of(positions, indices)?;
     let diagonal = surface.bbox_diagonal();
-    let mut rebuilt = crate::rebuild::rebuild_with_limit(&surface, options.voxel_size, MAX_CELLS);
+    let mut rebuilt = crate::rebuild::rebuild_with_limit(&surface, options.voxel_size, MAX_CELLS, options.offset);
     rebuilt.weld(diagonal * 1e-7);
     if rebuilt.triangles.is_empty() {
         return Err(RemeshError::EmptyMesh);

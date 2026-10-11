@@ -410,6 +410,7 @@ dependencies = [
  "nalgebra",
  "quadriflow-core",
  "serde",
+ "serde_json",
  "stl_io",
  "thiserror 2.0.18",
 ]

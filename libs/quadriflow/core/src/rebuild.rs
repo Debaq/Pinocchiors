@@ -27,6 +27,8 @@ const BAND: f64 = 1.75;
 const NEAR: u8 = 1;
 const INSIDE: u8 = 2;
 const KNOWN: u8 = 4;
+/// Adentro del volumen sin desfase (con desfase, `INSIDE` es el corrido)
+const WOUND: u8 = 8;
 
 /// Vértices muestreados para buscar cáscaras superpuestas.
 const OVERLAP_SAMPLES: usize = 10_000;
@@ -86,7 +88,7 @@ fn edge_state(surface: &Surface) -> EdgeState {
 /// Reconstruye la superficie cerrada que encierra la unión de los volúmenes
 /// de `surface`, con vóxeles de lado cercano a `voxel`.
 pub(crate) fn rebuild(surface: &Surface, voxel: f64) -> Surface {
-    rebuild_with_limit(surface, voxel, MAX_CELLS)
+    rebuild_with_limit(surface, voxel, MAX_CELLS, 0.0)
 }
 
 /// Lado del vóxel que se usa de verdad: entre `extent / max_cells` y
@@ -100,9 +102,14 @@ pub(crate) fn grid_dims(size: [f64; 3], h: f64) -> [usize; 3] {
     size.map(|e| (e / h).ceil() as usize + 6)
 }
 
-/// Como [`rebuild`], con a lo sumo `max_cells` vóxeles en el eje más largo.
-pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64) -> Surface {
+/// Como [`rebuild`], con a lo sumo `max_cells` vóxeles en el eje más largo y
+/// la superficie corrida `offset` hacia afuera (negativo: hacia adentro) por
+/// la distancia exacta: los puntos a menos de `offset` del volumen también
+/// cuentan como adentro.
+pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, offset: f64) -> Surface {
     let (lo, hi) = bounds(&surface.positions);
+    let grow = V3::repeat(offset.max(0.0));
+    let (lo, hi) = (lo - grow, hi + grow);
     let extent = (hi - lo).max();
     let h = voxel_size(extent, voxel, max_cells);
     // Desfase irracional: las caras alineadas con la caja (piezas CAD) no caen
@@ -112,10 +119,34 @@ pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64) 
     let grid = Grid { origin, h, dims: grid_dims([size.x, size.y, size.z], h) };
 
     let tree = WindingTree::build(surface);
-    let flags = classify(surface, &grid, &tree);
+    // Con desfase la banda llega hasta la superficie corrida: fuera de ella
+    // el signo de la distancia menos el desfase es el del volumen
+    let band = BAND * h + offset.abs();
+    let mut flags = classify(surface, &grid, &tree, band);
 
     // Distancia exacta en los puntos con un vecino del otro lado
     let bvh = triangle_bvh(surface);
+    if offset != 0.0 {
+        for f in flags.iter_mut().filter(|f| **f & INSIDE != 0) {
+            *f |= WOUND;
+        }
+        let near: Vec<u32> = (0..flags.len() as u32).filter(|&i| flags[i as usize] & NEAR != 0).collect();
+        let inside: Vec<bool> = near
+            .par_iter()
+            .map(|&i| {
+                let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i)));
+                let d = if flags[i as usize] & INSIDE != 0 { -d } else { d };
+                d < offset
+            })
+            .collect();
+        for (&i, inside) in near.iter().zip(inside) {
+            if inside {
+                flags[i as usize] |= INSIDE;
+            } else {
+                flags[i as usize] &= !INSIDE;
+            }
+        }
+    }
     let near: Vec<u32> = (0..flags.len() as u32).filter(|&i| flags[i as usize] & NEAR != 0).collect();
     // Sobre una superficie abierta el signo también cambia al cruzar un agujero,
     // así que puede cambiar entre un punto de la banda y uno de afuera
@@ -148,8 +179,19 @@ pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64) 
     crossing.sort_unstable();
     crossing.dedup();
     let signed = |i: u32| {
-        let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i))).max(1e-6 * h);
-        if flags[i as usize] & INSIDE != 0 { -d } else { d }
+        // Con desfase, el signo es el del volumen sin correr (`WOUND`; lejos
+        // de la banda coincide con `INSIDE`)
+        let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i)));
+        let d = if offset == 0.0 {
+            if flags[i as usize] & INSIDE != 0 { -d } else { d }
+        } else if flags[i as usize] & WOUND != 0 {
+            -d - offset
+        } else {
+            d - offset
+        };
+        // Nunca cero: el corte quedaría justo sobre el punto de la grilla
+        let tiny = 1e-6 * h;
+        if flags[i as usize] & INSIDE != 0 { d.min(-tiny) } else { d.max(tiny) }
     };
     let crossing: HashMap<u32, f64> = crossing.par_iter().map(|&i| (i, signed(i))).collect();
 
@@ -212,9 +254,9 @@ impl Grid {
 /// Marca la banda cercana a la superficie y decide qué puntos están adentro:
 /// uno por uno en la banda y por inundación fuera de ella, donde el número de
 /// vueltas es constante en cada región conexa.
-fn classify(surface: &Surface, grid: &Grid, tree: &WindingTree) -> Vec<u8> {
+fn classify(surface: &Surface, grid: &Grid, tree: &WindingTree, band: f64) -> Vec<u8> {
     let mut flags = vec![0u8; grid.len()];
-    let band = BAND * grid.h;
+    let reach = band / grid.h;
     let near: Vec<u32> = surface
         .triangles
         .par_iter()
@@ -222,8 +264,8 @@ fn classify(surface: &Surface, grid: &Grid, tree: &WindingTree) -> Vec<u8> {
             let [a, b, c] = t.map(|i| surface.positions[i as usize]);
             let n = (b - a).cross(&(c - a));
             let n = if n.norm() > 0.0 { n.normalize() } else { n };
-            let lo = ((a.inf(&b).inf(&c) - grid.origin) / grid.h).map(|v| (v - BAND).ceil().max(0.0) as usize);
-            let hi = ((a.sup(&b).sup(&c) - grid.origin) / grid.h).map(|v| (v + BAND).floor() as usize);
+            let lo = ((a.inf(&b).inf(&c) - grid.origin) / grid.h).map(|v| (v - reach).ceil().max(0.0) as usize);
+            let hi = ((a.sup(&b).sup(&c) - grid.origin) / grid.h).map(|v| (v + reach).floor() as usize);
             let hi = [hi.x.min(grid.dims[0] - 1), hi.y.min(grid.dims[1] - 1), hi.z.min(grid.dims[2] - 1)];
             let mut found = Vec::new();
             for z in lo.z..=hi[2] {

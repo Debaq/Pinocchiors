@@ -456,6 +456,22 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       </Button>
                     </div>
                   </div>
+                  <div class="space-y-1.5" aria-label="Escaneo como cuerpo">
+                    <span class="text-xs text-text-muted">El escaneo como cuerpo (encajes, cunas, moldes)</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      fullWidth
+                      title="El escaneo cerrado como sólido: restarlo de una pieza deja el hueco donde calza, con la holgura que se elija"
+                      onClick={() => {
+                        // Con piezas, lo habitual es dejar el hueco donde calza el escaneo
+                        const cut = !!store.result()?.body;
+                        void store.addFeature({ type: "scan_body", offset: cut ? 0.2 : 0, faces: 20000, op: cut ? "cut" : "new" });
+                      }}
+                    >
+                      Escaneo como cuerpo
+                    </Button>
+                  </div>
                   <span class="block text-xs text-text-muted">Tomar del escaneo</span>
                   <div class="grid grid-cols-2 gap-1.5">
                     <Button size="sm" onClick={() => pickScan("plane")}>
@@ -2065,6 +2081,26 @@ export const FeatureEditor: Component<{
               <>
                 <p class="text-[11px] text-text-dim">{k().format.toUpperCase()} · {(k().data.length / 1024).toFixed(0)} KB</p>
                 <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "import" && (x.op = o)))}</Row>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "scan_body" && (f().kind as Extract<FeatureKind, { type: "scan_body" }>)}>
+            {(k) => (
+              <>
+                <p class="text-[11px] text-text-dim leading-relaxed">
+                  El escaneo cerrado por vóxeles. Sigue al escaneo: si se alinea, se repara o se elige otro, se rehace.
+                </p>
+                <Num label="Holgura" suffix="mm" step={0.05} value={k().offset} onCommit={(v) => update((x) => x.type === "scan_body" && (x.offset = v))} />
+                <p class="text-[11px] text-text-dim leading-relaxed">Positiva agranda el escaneo (el encaje no aprieta); negativa lo achica.</p>
+                <Num
+                  label="Triángulos"
+                  step={1000}
+                  min={500}
+                  value={k().faces}
+                  onCommit={(v) => update((x) => x.type === "scan_body" && (x.faces = Math.round(Math.min(100000, Math.max(500, v)))))}
+                />
+                <p class="text-[11px] text-text-dim leading-relaxed">Más es más fiel y hace más lentas las operaciones (unos 3 s cada 20 000).</p>
+                <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "scan_body" && (x.op = o)))}</Row>
               </>
             )}
           </Match>

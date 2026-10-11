@@ -6774,6 +6774,39 @@ const scenarios = {
     await b.shot("escaneo-corte-sketch");
   },
 
+  async "escaneo: cuerpo del escaneo deja la cuna en un bloque"(b) {
+    // Cubo de 20 mm (0..20) como escaneo y un bloque que toma su mitad de abajo
+    const stl = twoCubesStl().split("endfacet\n").slice(0, 12).join("endfacet\n") + "endfacet\nendsolid uno\n";
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-cuna.stl`;
+    writeFileSync(path, stl);
+    await importModel(b, path);
+    await begin(b);
+    const doc = await call("cad_get_document");
+    const id = doc.next_id;
+    doc.features.push({ id, name: "Bloque", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 40, dy: 40, dz: 15, centered: false }, origin: [-10, -10, -5], z: [0, 0, 1], x: [1, 0, 0], op: "new" } });
+    doc.next_id = id + 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await tab(b, "Desde el escaneo");
+    await b.clickText("Escaneo como cuerpo");
+    // Prepara el escaneo (vóxeles) y resta: unos segundos
+    const state = () => b.eval(`JSON.stringify(window.__cadStore.result()?.status.map((s) => s.state.type ?? s.state))`).then(JSON.parse);
+    for (let t = 0; t < 120 && (await state())?.length !== 2; t++) await sleep(250);
+    await b.eval(`window.__cadStore.settled()`);
+    await accept(b, 3000);
+    const r = await evaluate();
+    const st = r.status.map((s) => s.state.type ?? s.state);
+    if (st[1] !== "ok") throw new Error(`cuerpo del escaneo: ${JSON.stringify(r.status[1])}`);
+    if (r.parts.length !== 1) throw new Error(`piezas: ${r.parts.length}`);
+    // Se lleva la mitad de abajo del cubo con 0,2 mm de holgura: 20,4 × 20,4 × 10,2
+    // (las aristas del cubo quedan algo redondeadas por los vóxeles)
+    near(r.parts[0].volume, 40 * 40 * 15 - 20.4 * 20.4 * 10.2, 80, "bloque menos el escaneo");
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 1.2])`);
+    await sleep(800);
+    await b.shot("escaneo-cuna");
+  },
+
   async "mallas: caja del diseño en Fabricar"(b) {
     // La malla soldada de una pieza trae una sola normal por vértice en las
     // aristas vivas: la marca por vértice hace que las caras se dibujen planas

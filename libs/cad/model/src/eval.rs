@@ -2035,6 +2035,24 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
                 self.apply(f.id, tool, *op)
             }
+            FeatureKind::ScanBody(b) => {
+                let mesh = b.mesh.as_ref().ok_or("no hay un escaneo elegido")?;
+                if let Some(e) = &mesh.error {
+                    return Err(format!("no se pudo preparar el escaneo: {e}"));
+                }
+                if mesh.data.1.is_empty() {
+                    return Err("no hay un escaneo elegido".into());
+                }
+                let tool = Shape::from_mesh(&mesh.data.0, &mesh.data.1, 1e-4).map_err(err)?;
+                if tool.kind() != cad_occt::ShapeKind::Solid {
+                    return Err("el escaneo no cerró como sólido".into());
+                }
+                // Todas sus caras son piel: entre ellas se elige por cercanía
+                let tags = vec![vec![tag(f.id, "piel")]; tool.face_count()];
+                let tool = Tagged { shape: tool, tags };
+                self.ev.tools.insert(f.id, (tool.clone(), b.op));
+                self.apply(f.id, tool, b.op)
+            }
             FeatureKind::Fillet { edges, radius, radius2 } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());

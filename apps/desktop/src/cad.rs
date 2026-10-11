@@ -78,6 +78,8 @@ pub struct ScanCache {
     pub mm_per_unit: f64,
     /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
     pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
+    /// Cuerpos del escaneo preparados (por holgura y triángulos)
+    pub bodies: Mutex<HashMap<(u64, usize), cad_model::ScanBodyMesh>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,17 +272,12 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
-/// Las referencias tomadas del escaneo, ajustadas contra el escaneo de hoy
-/// (`None` si el diseño no tiene o no hay escaneo: se usa lo guardado). Así
-/// siguen al escaneo si se alinea, se deshace o se repara.
+/// Las referencias tomadas del escaneo, ajustadas contra el escaneo de hoy,
+/// y los cuerpos del escaneo con su malla preparada (`None` si el diseño no
+/// usa el escaneo o no hay: se usa lo guardado). Así siguen al escaneo si se
+/// alinea, se deshace o se repara.
 fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
-    let has = |f: &cad_model::Feature| {
-        matches!(
-            &f.kind,
-            FeatureKind::Plane { def: PlaneDef::Scan { .. } } | FeatureKind::Axis { def: AxisDef::Scan { .. } } | FeatureKind::Point { def: PointSpec::Scan { .. } }
-        )
-    };
-    if !doc.features.iter().any(has) {
+    if !doc.features.iter().any(|f| uses_scan(&f.kind)) {
         return None;
     }
     let mut out = doc.clone();
@@ -307,12 +304,52 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                         *point = p;
                     }
                 }
+                // Solo lo que no está suprimido ni vuelto atrás (prepararlo tarda)
+                FeatureKind::ScanBody(b) if !f.suppressed => b.mesh = Some(scan_body_mesh(scan, b.offset, b.faces)),
                 _ => {}
             }
         }
         Ok(())
     });
     done.ok().map(|_| out)
+}
+
+fn uses_scan(kind: &FeatureKind) -> bool {
+    matches!(
+        kind,
+        FeatureKind::Plane { def: PlaneDef::Scan { .. } }
+            | FeatureKind::Axis { def: AxisDef::Scan { .. } }
+            | FeatureKind::Point { def: PointSpec::Scan { .. } }
+            | FeatureKind::ScanBody(_)
+    )
+}
+
+/// El escaneo cerrado con la holgura, listo para sólido (en caché por escaneo,
+/// holgura y triángulos). Si no se puede, la malla queda vacía con el motivo.
+fn scan_body_mesh(scan: &ScanCache, offset: f64, faces: usize) -> cad_model::ScanBodyMesh {
+    use std::hash::{Hash, Hasher};
+    let faces = faces.clamp(cad_scan::MIN_FACES, cad_scan::MAX_FACES);
+    let key = (offset.to_bits(), faces);
+    let mut bodies = scan.bodies.lock().unwrap();
+    // Cada una pesa ~1 MB cada 20 000 triángulos: no guardar cada holgura probada
+    if bodies.len() >= 6 && !bodies.contains_key(&key) {
+        bodies.clear();
+    }
+    bodies
+        .entry(key)
+        .or_insert_with(|| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (scan.scene_hash, key).hash(&mut h);
+            let options = cad_scan::BodyOptions { faces, offset };
+            match cad_scan::prepare_body(&scan.mesh.vertices, &scan.mesh.triangles, &options) {
+                Ok(b) => cad_model::ScanBodyMesh { hash: h.finish(), data: std::sync::Arc::new((b.vertices, b.triangles)), error: None },
+                Err(e) => {
+                    e.hash(&mut h);
+                    cad_model::ScanBodyMesh { hash: h.finish(), data: Default::default(), error: Some(e) }
+                }
+            }
+        })
+        .clone()
 }
 
 /// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
@@ -718,11 +755,40 @@ fn compare_impl(state: &AppState, other: &Document) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Los cuerpos hechos de una malla (el escaneo como cuerpo, un STL pasado a
+/// sólido) tienen una cara plana por triángulo: sus aristas casi planas no se
+/// dibujan (quedan vacías, así no cambian los índices de las demás).
+fn hide_facet_edges(body: &cad_model::Shape, t: &mut cad_model::occt::Tessellation) {
+    let mut count = vec![0u32; body.face_count()];
+    let mut normal = vec![[0.0; 3]; count.len()];
+    for (tri, &f) in t.triangles.iter().zip(&t.triangle_face) {
+        let Some(c) = count.get_mut(f as usize) else { continue };
+        *c += 1;
+        let [a, b, c] = tri.map(|i| t.positions[i as usize]);
+        normal[f as usize] = cad_model::geom::normalize(cad_model::geom::cross(cad_model::geom::sub(b, a), cad_model::geom::sub(c, a)));
+    }
+    // Pocas facetas: no vale la pena (ni hay malla)
+    if count.iter().filter(|&&c| c == 1).count() < 64 {
+        return;
+    }
+    let Ok(pairs) = body.edge_face_pairs() else { return };
+    let facet = |f: Option<usize>| f.filter(|&f| count.get(f) == Some(&1));
+    for (edge, pair) in t.edges.iter_mut().zip(pairs) {
+        if let (Some(a), Some(b)) = (facet(pair[0]), facet(pair[1])) {
+            // Menos de 30° entre caras
+            if cad_model::geom::dot(normal[a], normal[b]) > 0.866 {
+                edge.clear();
+            }
+        }
+    }
+}
+
 /// Teselado para el visor: posiciones y normales (Y arriba, unidades de la
 /// escena), triángulos, cara de cada triángulo y aristas como polilíneas.
 fn encode_view_mesh(body: &cad_model::Shape, scale: f64) -> Result<Vec<u8>, String> {
     {
-        let t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+        let mut t = body.tessellate(VIEW_DEFLECTION, VIEW_ANGLE).map_err(|e| e.to_string())?;
+        hide_facet_edges(body, &mut t);
         let edge_points: usize = t.edges.iter().map(|e| e.len()).sum();
         let mut out = Vec::with_capacity(16 + t.positions.len() * 24 + t.triangles.len() * 16 + edge_points * 12);
         for w in [t.positions.len(), t.triangles.len(), t.edges.len(), edge_points] {
@@ -1713,7 +1779,7 @@ fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String
             vertices.extend(prim.positions.iter().map(|p| [p[0] as f64 * mm, p[1] as f64 * mm, p[2] as f64 * mm]));
             triangles.extend(prim.triangles.iter().map(|t| t.map(|i| i + base)));
         }
-        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default() });
+        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default(), bodies: Mutex::default() });
     }
     f(cache.as_ref().unwrap())
 }

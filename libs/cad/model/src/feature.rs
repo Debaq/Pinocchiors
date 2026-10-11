@@ -382,6 +382,67 @@ pub enum PatternKind {
     },
 }
 
+/// El escaneo elegido como sólido: se rehace por vóxeles (cerrado, con la
+/// holgura) a unos `faces` triángulos y se une, resta o interseca como
+/// cualquier herramienta. Sigue al escaneo: si se alinea, repara o cambia,
+/// se rehace.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanBody {
+    /// Holgura (mm): positiva agranda el escaneo (un encaje que no apriete),
+    /// negativa lo achica.
+    #[serde(default)]
+    pub offset: f64,
+    /// Triángulos del cuerpo: más es más fiel y hace más lentas las booleanas.
+    #[serde(default = "scan_body_faces")]
+    pub faces: usize,
+    #[serde(default)]
+    pub op: BodyOp,
+    /// La malla preparada que pone la app antes de cada recálculo (no se
+    /// guarda: de ella solo viaja la huella, que entra en la caché).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mesh: Option<ScanBodyMesh>,
+}
+
+fn scan_body_faces() -> usize {
+    20_000
+}
+
+impl Default for ScanBody {
+    fn default() -> Self {
+        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, mesh: None }
+    }
+}
+
+/// Malla cerrada del escaneo con la holgura (Z arriba, mm).
+#[derive(Debug, Clone)]
+pub struct ScanBodyMesh {
+    pub hash: u64,
+    pub data: std::sync::Arc<(Vec<P3>, Vec<[u32; 3]>)>,
+    /// Por qué no se pudo preparar (la malla queda vacía)
+    pub error: Option<String>,
+}
+
+impl PartialEq for ScanBodyMesh {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash
+    }
+}
+
+impl Serialize for ScanBodyMesh {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        // Como texto: JSON no guarda u64 enteros
+        s.serialize_str(&format!("{:016x}", self.hash))
+    }
+}
+
+impl<'de> Deserialize<'de> for ScanBodyMesh {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(d)?;
+        let hash = u64::from_str_radix(&text, 16).unwrap_or_default();
+        Ok(Self { hash, data: Default::default(), error: None })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportFormat {
@@ -443,6 +504,8 @@ pub enum FeatureKind {
         #[serde(default)]
         op: BodyOp,
     },
+    /// El escaneo como cuerpo, para encajes, cunas y negativos.
+    ScanBody(ScanBody),
     /// Booleana entre piezas: unir todas en la primera de `targets`, restar
     /// `tools` de cada una de `targets` (conservándolas o no) o dejar lo común.
     Boolean {
@@ -928,6 +991,7 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "Simetría",
             FeatureKind::Split { .. } => "Corte",
             FeatureKind::Import { .. } => "Importado",
+            FeatureKind::ScanBody(_) => "Cuerpo del escaneo",
             FeatureKind::Boolean { .. } => "Booleana",
             FeatureKind::SplitParts { .. } => "Separar piezas",
             FeatureKind::DeleteParts { .. } => "Borrar pieza",

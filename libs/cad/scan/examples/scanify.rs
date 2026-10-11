@@ -304,7 +304,7 @@ fn main() {
         Ok(m) => m,
         Err(e) => {
             println!("isótropo no se pudo ({e}); se rehace por vóxeles");
-            let opts = VoxelOptions { voxel_size: edge, smooth_iterations: 0, isotropic_edge: Some(edge) };
+            let opts = VoxelOptions { voxel_size: edge, smooth_iterations: 0, isotropic_edge: Some(edge), offset: 0.0 };
             voxel(&positions, &indices, &opts).expect("vóxeles")
         }
     };

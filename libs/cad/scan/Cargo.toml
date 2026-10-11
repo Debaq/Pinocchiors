@@ -11,11 +11,13 @@ rust-version.workspace = true
 cad-model = { workspace = true }
 cad-solver = { workspace = true }
 nalgebra = { workspace = true }
+quadriflow-core = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }
+serde_json = { workspace = true }
 stl_io = { workspace = true }
 converter-core = { workspace = true }
 quadriflow-core = { workspace = true, features = ["simplify"] }

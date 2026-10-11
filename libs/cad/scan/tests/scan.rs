@@ -286,3 +286,52 @@ fn references_follow_the_scan() {
     let ScanGeom::Plane(p) = fit_reference(&finer, &ScanFit::Zone { seed }, &opts).unwrap() else { panic!() };
     assert_relative_eq!(p.origin[2], 20.0, epsilon = 0.05);
 }
+
+/// El escaneo como cuerpo: cerrado y corrido la holgura, restado de un bloque
+/// deja la cuna donde calza la pieza.
+#[test]
+fn scan_body_leaves_a_cradle_with_clearance() {
+    if !occt::available() {
+        return;
+    }
+    let scan = scan_of(&part(), 0.02);
+    let clearance = 0.3;
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 8000, offset: clearance }).unwrap();
+    assert_eq!(solid_problems(&body.vertices, &body.triangles), Default::default());
+    assert_eq!(open_edges(&body.triangles), 0);
+    let solid = Shape::from_mesh(&body.vertices, &body.triangles, 1e-4).unwrap();
+    // Volumen + área × holgura (las aristas se redondean: algo menos)
+    let m = part().mass().unwrap();
+    let grown = solid.mass().unwrap().volume;
+    assert_relative_eq!(grown, m.volume + m.area * clearance, max_relative = 0.02);
+
+    // Bloque que toma la mitad de abajo de la pieza, menos el escaneo
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 120.0, dy: 80.0, dz: 20.0, centered: false, centered_z: false },
+        origin: [-10.0, -10.0, -10.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+    }));
+    let id = doc.add(FeatureKind::ScanBody(ScanBody { offset: clearance, faces: 8000, op: BodyOp::Cut, mesh: None }));
+    // Sin malla (sin escaneo): la operación avisa
+    let ev = doc.evaluate();
+    assert!(matches!(ev.status[1].state, FeatureState::Error { .. }), "{:?}", ev.status[1].state);
+    let FeatureKind::ScanBody(b) = &mut doc.features[1].kind else { unreachable!() };
+    b.mesh = Some(ScanBodyMesh { hash: 1, data: std::sync::Arc::new((body.vertices.clone(), body.triangles.clone())), error: None });
+    let ev = doc.evaluate();
+    assert_eq!(ev.status[1].state, FeatureState::Ok, "{id:?}");
+    let cradle = ev.body.as_ref().unwrap();
+    assert!(cradle.is_valid());
+    // Lo que se llevó: la mitad de abajo de la pieza agrandada (placa de 20 mm
+    // entre z = 0 y 10 → la mitad), sin tocar el tetón que va arriba
+    let removed = 120.0 * 80.0 * 20.0 - cradle.mass().unwrap().volume;
+    let half = (100.0 + 2.0 * clearance) * (60.0 + 2.0 * clearance) * (10.0 + clearance) - PI * (8.0 - clearance).powi(2) * (10.0 + clearance);
+    assert_relative_eq!(removed, half, max_relative = 0.02);
+    // La huella viaja en el JSON (caché del recálculo) pero la malla no
+    let json = serde_json::to_string(&doc.features[1].kind).unwrap();
+    assert!(json.contains("\"mesh\":\"0000000000000001\""), "{json}");
+    assert!(json.len() < 200);
+}

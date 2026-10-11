@@ -555,6 +555,8 @@ export type FeatureKind =
   | { type: "mirror"; features: number[]; plane: PlaneSpec }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
   | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
+  /** El escaneo elegido como sólido (rehecho por vóxeles con la holgura, a unos `faces` triángulos) */
+  | { type: "scan_body"; offset: number; faces: number; op: BodyOp }
   /** Entre piezas: unir todas en la primera, restar `tools` de `targets` o dejar lo común */
   | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
   /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
@@ -1298,6 +1300,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   mirror: "Simetría",
   split: "Corte",
   import: "Importado",
+  scan_body: "Cuerpo del escaneo",
   boolean: "Booleana",
   split_parts: "Separar piezas",
   delete_parts: "Borrar pieza",
@@ -1469,6 +1472,9 @@ function defaultName(doc: CadDocument, kind: FeatureKind): string {
 /** Plano, eje o punto de referencia tomado del escaneo */
 export const isScanReference = (kind: FeatureKind) =>
   (kind.type === "plane" || kind.type === "axis" || kind.type === "point") && kind.def.type === "scan";
+
+/** La operación sale del escaneo: se rehace cuando el escaneo cambia */
+export const usesScan = (kind: FeatureKind) => isScanReference(kind) || kind.type === "scan_body";
 
 /** Operaciones de las que depende `kind` (mismo criterio que el backend) */
 export function dependencies(kind: FeatureKind): number[] {
@@ -3468,11 +3474,11 @@ export function createCadStore() {
 
     /**
      * El escaneo cambió (se alineó, se deshizo, se reparó, se eligió otro): las
-     * referencias tomadas de él se vuelven a ajustar en el recálculo
+     * referencias tomadas de él se vuelven a ajustar y sus cuerpos se rehacen
      */
     async refreshScanReferences() {
       const d = draft()?.doc ?? doc();
-      if (!d?.features.some((f) => isScanReference(f.kind))) return;
+      if (!d?.features.some((f) => usesScan(f.kind))) return;
       try {
         await apply(await invoke<CadResult>("cad_evaluate"));
       } catch (e) {
