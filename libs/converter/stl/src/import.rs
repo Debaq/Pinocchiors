@@ -53,11 +53,15 @@ fn read_scene<R: Read + Seek>(reader: &mut R, name: &str) -> Result<Scene, StlIm
         })
         .collect();
 
-    // Calcular normales por vértice promediando las normales de las caras adyacentes.
-    // STL provee normales por cara, no por vértice.
+    // Normales por vértice: promedio de las caras vecinas, pesado por área. La
+    // normal escrita en el archivo no se usa (muchos programas escriben 0 0 0
+    // o una que no coincide con el orden de los vértices): como los
+    // laminadores, manda el orden de los vértices.
     let mut vertex_normals = vec![[0.0f32; 3]; positions.len()];
     for face in &stl_mesh.faces {
-        let n = z_up_to_y_up([face.normal[0], face.normal[1], face.normal[2]]);
+        let [a, b, c] = face.vertices.map(|i| positions[i]);
+        let (u, v) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
         for &vi in &face.vertices {
             vertex_normals[vi][0] += n[0];
             vertex_normals[vi][1] += n[1];
@@ -237,6 +241,20 @@ mod tests {
         assert!(import_stl_bytes(b"not an stl file at all").is_err());
         // Binario válido sin triángulos: cabecera de 80 bytes + contador 0
         assert!(matches!(import_stl_bytes(&[0u8; 84]), Err(StlImportError::Empty)));
+    }
+
+    #[test]
+    fn normals_follow_winding_not_the_file() {
+        // Normal escrita en cero (permitido; muchos programas lo hacen)
+        let scene = import_stl_bytes(ASCII_TRIANGLE.replace("facet normal 0 0 1", "facet normal 0 0 0").as_bytes()).unwrap();
+        let normals = scene.meshes[0].primitives[0].attributes.iter().find_map(|a| match a {
+            VertexAttribute::Normals(n) => Some(n.clone()),
+            _ => None,
+        });
+        // Antihorario visto desde +Z del STL = +Y de la escena
+        for n in normals.unwrap() {
+            assert!((n[1] - 1.0).abs() < 1e-6, "{n:?}");
+        }
     }
 
     const ASCII_TRIANGLE: &str = "solid t

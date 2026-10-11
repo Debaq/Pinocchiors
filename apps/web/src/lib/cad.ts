@@ -707,6 +707,8 @@ export interface CadDocument {
   active_configuration?: number | null;
   /** Instantáneas con nombre (el documento de ese momento, sin sus versiones) */
   versions?: NamedVersion[];
+  /** Objeto de la escena elegido como escaneo de referencia */
+  scan_object?: number | null;
 }
 
 export interface NamedVersion {

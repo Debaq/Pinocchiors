@@ -1679,6 +1679,54 @@ export const App: Component = () => {
   const [hiddenGhosts, setHiddenGhosts] = createSignal<number[]>([]);
   const ghostCache = new Map<string, MeshData>();
   let ghostRequest = 0;
+
+  // Escaneo de referencia de Diseñar: el elegido en el diseño o, si no hay,
+  // el importado activo o el primero importado con malla. No depende de qué
+  // objeto esté activo (una pieza del diseño puede estarlo)
+  const scanCandidates = createMemo(() =>
+    objects()
+      .filter((o) => o.source.kind === "import" && (o.id === activeObjectId() ? meshLoaded() : materialized(o, activeObjectId())))
+      .map((o) => ({ id: o.id, name: o.name }))
+  );
+  const scanObjectId = createMemo(() => {
+    const list = scanCandidates();
+    const chosen = cad.doc()?.scan_object;
+    if (chosen != null && list.some((o) => o.id === chosen)) return chosen;
+    const active = activeObjectId();
+    return list.some((o) => o.id === active) ? active : list[0]?.id;
+  });
+  createEffect(() => {
+    const object = scanObjectId() ?? null;
+    void invoke("cad_scan_use", { object }).catch(() => {});
+  });
+  const [scanMesh, setScanMesh] = createSignal<MeshData | null>(null);
+  let scanRequest = 0;
+  createEffect(() => {
+    const id = scanObjectId();
+    const active = activeObjectId();
+    const request = ++scanRequest;
+    if (id === undefined) return setScanMesh(null);
+    if (id === active) return setScanMesh(meshLoaded() ? (meshData() ?? null) : null);
+    // Guardado: su malla en las unidades del activo (como los objetos en gris)
+    const rev = objects().find((o) => o.id === id)?.rev ?? 0;
+    void (async () => {
+      await switchingObject;
+      const key = `${id}:${rev}:${active}`;
+      let data = ghostCache.get(key);
+      if (!data) {
+        try {
+          data = decodeMesh(await rawInvoke<ArrayBuffer>("object_mesh_data", { id }));
+        } catch {
+          if (request === scanRequest) setScanMesh(null);
+          return;
+        }
+        for (const k of [...ghostCache.keys()]) if (k.startsWith(`${id}:`)) ghostCache.delete(k);
+        ghostCache.set(key, data);
+      }
+      if (request === scanRequest) setScanMesh(data);
+    })();
+  });
+
   createEffect(() => {
     const v = viewer();
     if (!v) return;
@@ -7170,7 +7218,7 @@ export const App: Component = () => {
 
             {/* Espacio Diseñar: su propio visor encima del principal */}
             <Show when={showCad()}>
-              <CadView store={cad} ui={cadUi} toolsMount={cadToolsMount()} scanMesh={meshLoaded() && !isCadObject(activeObject()) ? meshData() : null} showGrid={showGrid()} actions={designActions}
+              <CadView store={cad} ui={cadUi} toolsMount={cadToolsMount()} scanMesh={scanMesh()} showGrid={showGrid()} actions={designActions}
                 lights={lights()}
                 trackpad={trackpadNavigation()}
                 initialPose={meshLoaded() ? viewer()?.getCameraPose() : undefined}
@@ -7308,7 +7356,7 @@ export const App: Component = () => {
           <Show when={showContextPanel()}>
           <ContextPanel
             activeStep={pipeline.activeStep()}
-            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} hasModel={meshLoaded()} />}
+            designPanel={(section) => <DesignStep store={cad} ui={cadUi} actions={designActions} section={section()} scans={scanCandidates()} scanId={scanObjectId()} />}
             structureProps={{
               structure: sceneStructure(),
               fileName: fileName(),

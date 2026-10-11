@@ -1631,14 +1631,23 @@ fn scene_hash(scene: &Scene) -> u64 {
     h.finish()
 }
 
-/// Corre `f` con la malla del modelo actual lista para escaneo → CAD (Z arriba,
-/// mm). Se prepara una vez y queda en caché mientras el modelo no cambie.
+/// Corre `f` con la malla del escaneo lista para escaneo → CAD (Z arriba, mm):
+/// el objeto elegido con `cad_scan_use` (guardado o activo) o, si no hay, el
+/// activo. Se prepara una vez y queda en caché mientras no cambie.
 fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String>) -> Result<T, String> {
-    let scene_lock = state.scene.lock().unwrap();
-    let scene = scene_lock.as_ref().ok_or("No hay un modelo cargado para tomar medidas")?;
-    let hash = scene_hash(scene);
+    let object = *state.cad_scan_object.lock().unwrap();
+    let stored = object.and_then(|id| crate::project::stored_object_hash(state, id).map(|h| (id, h)));
+    let hash = match stored {
+        // Otro número que el de una escena activa con la misma huella
+        Some((id, h)) => h ^ id.rotate_left(32) ^ 0x5ca1,
+        None => scene_hash(state.scene.lock().unwrap().as_ref().ok_or("No hay un modelo cargado para tomar medidas")?),
+    };
     let mut cache = state.cad_scan.lock().unwrap();
     if cache.as_ref().is_none_or(|c| c.scene_hash != hash) {
+        let scene = match stored {
+            Some((id, _)) => crate::project::stored_object_scene(state, id).ok_or("El escaneo elegido ya no está")??,
+            None => state.scene.lock().unwrap().clone().ok_or("No hay un modelo cargado para tomar medidas")?,
+        };
         let mm = scene.meters_per_unit * 1000.0;
         let mut vertices = Vec::new();
         let mut triangles = Vec::new();
@@ -1650,6 +1659,12 @@ fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String
         *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm });
     }
     f(cache.as_ref().unwrap())
+}
+
+/// Qué objeto de la escena es el escaneo (`None`: el activo).
+#[tauri::command]
+pub fn cad_scan_use(object: Option<u64>, state: tauri::State<'_, AppState>) {
+    *state.cad_scan_object.lock().unwrap() = object;
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -1949,6 +1964,10 @@ pub mod bridge {
                 ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
             }
             "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
+            "cad_scan_use" => {
+                *state.cad_scan_object.lock().unwrap() = arg(args, "object")?;
+                ok(())
+            }
             // Unidades del modelo (grilla y cámara) y materiales, como en la app
             "get_scene_structure" => {
                 let scene = state.scene.lock().unwrap();

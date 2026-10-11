@@ -121,7 +121,10 @@ export interface DesignStepProps {
   /** Pestaña del panel */
   section: "design" | "design_part" | "design_inspect" | "design_scan";
   /** Hay un modelo cargado que se puede usar como escaneo de referencia */
-  hasModel: boolean;
+  /** Objetos que pueden servir de escaneo (importados, con malla) */
+  scans: { id: number; name: string }[];
+  /** El que se usa (el elegido o, si no hay, el que decide la app) */
+  scanId?: number;
 }
 
 // ─── Controles chicos ─────────────────────────────────────────────────────
@@ -336,13 +339,23 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
             </Match>
             <Match when={props.section === "design_scan"}>
               <Show
-                when={props.hasModel}
-                fallback={<p class="text-xs text-text-dim">Importa un modelo (un escaneo) para tomar de él planos, cilindros y contornos.</p>}
+                when={props.scanId !== undefined}
+                fallback={<p class="text-xs text-text-dim">Importa un modelo (un escaneo, un STL u OBJ) para tomar de él planos, cilindros y contornos.</p>}
               >
                 <Section title="Desde el escaneo">
                   <p class="text-[11px] text-text-dim leading-relaxed">
-                    El modelo cargado se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.
+                    El escaneo se ve translúcido detrás del diseño. Elegir una zona ajusta un plano o un cilindro y lo convierte en operaciones.
                   </p>
+                  <Show when={props.scans.length > 1}>
+                    <label class="flex items-center gap-2 text-xs text-text-muted" aria-label="Escaneo de referencia">
+                      <span class="shrink-0">Escaneo</span>
+                      <Select
+                        options={props.scans.map((o) => ({ value: String(o.id), label: o.name }))}
+                        value={String(props.scanId)}
+                        onChange={(v) => void store.commit((d) => { d.scan_object = Number(v); })}
+                      />
+                    </label>
+                  </Show>
                   <div class="grid grid-cols-2 gap-1.5">
                     <Button size="sm" onClick={() => pickScan("plane")}>
                       Cara plana

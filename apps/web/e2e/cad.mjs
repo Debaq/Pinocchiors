@@ -6569,6 +6569,61 @@ const scenarios = {
     await b.shot("objetos");
   },
 
+  async "escaneo: sigue de referencia con una pieza activa"(b) {
+    // El "escaneo": dos cubos de 20 mm en STL (24 triángulos)
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-dos-cubos.stl`;
+    writeFileSync(path, twoCubesStl());
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Modelo cargado")`)); t++) await sleep(250);
+    await begin(b);
+    const scanCount = () => b.eval(`window.__cadViewer?.scan?.geometry.index.count / 3`);
+    for (let t = 0; t < 20 && (await scanCount()) !== 24; t++) await sleep(250);
+    if ((await scanCount()) !== 24) throw new Error(`no se ve el escaneo: ${await scanCount()}`);
+    // Una pieza, a Fabricar (queda activa) y de vuelta a Diseñar
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.clickText("Fabricar");
+    await sleep(1000);
+    const rows = () => b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
+    await b.eval(`[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === "Pieza 1").click()`);
+    for (let t = 0; t < 40 && (await rows()).indexOf("Malla generada") !== (await rows()).indexOf("Pieza 1") + 1; t++) await sleep(250);
+    const got = await rows();
+    if (got.indexOf("Malla generada") !== got.indexOf("Pieza 1") + 1) throw new Error(`la pieza no quedó activa: ${JSON.stringify(got)}`);
+    await b.clickText("Diseñar");
+    await sleep(1000);
+    for (let t = 0; t < 20 && (await scanCount()) !== 24; t++) await sleep(250);
+    if ((await scanCount()) !== 24) throw new Error(`el escaneo desapareció con la pieza activa: ${await scanCount()}`);
+    // Y las medidas se toman del escaneo, no de la pieza: 12 caras planas (6 por cubo, sin unir)
+    const found = await b.eval(`window.__cadStore.scanDetect().then((d) => d.filter((x) => x.shape.type === "plane").length)`);
+    if (found < 7) throw new Error(`planos detectados: ${found} (esperaba los de los dos cubos)`);
+    await tab(b, "Desde el escaneo");
+    await sleep(500);
+    await b.shot("escaneo-pieza-activa");
+    // Un segundo escaneo (un solo cubo): pasa a ser el de referencia al
+    // importarlo (queda activo) y se puede volver a elegir el primero
+    const one = path.replace("dos-cubos", "un-cubo");
+    writeFileSync(one, twoCubesStl().split("endfacet\n").slice(0, 12).join("endfacet\n") + "endfacet\nendsolid uno\n");
+    await b.eval(`window.__nextPath = ${JSON.stringify(one)}`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
+    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("escaneo-un-cubo")`)); t++) await sleep(250);
+    await sleep(1000);
+    await b.clickText("Diseñar");
+    await sleep(1000);
+    await tab(b, "Desde el escaneo");
+    for (let t = 0; t < 40 && (await scanCount()) !== 12; t++) await sleep(250);
+    if ((await scanCount()) !== 12) throw new Error(`el escaneo nuevo no es la referencia: ${await scanCount()}`);
+    if (!(await b.eval(`!!document.querySelector('[aria-label="Escaneo de referencia"]')`))) throw new Error("falta el selector de escaneo");
+    const first = await b.eval(`window.__objects().find((o) => o.name === "escaneo-dos-cubos.stl").id`);
+    await b.eval(`window.__cadStore.commit((d) => { d.scan_object = ${first}; })`);
+    for (let t = 0; t < 40 && (await scanCount()) !== 24; t++) await sleep(250);
+    if ((await scanCount()) !== 24) throw new Error(`no volvió al primer escaneo: ${await scanCount()}`);
+    const planes = await b.eval(`window.__cadStore.scanDetect().then((d) => d.filter((x) => x.shape.type === "plane").length)`);
+    if (planes < 7) throw new Error(`las medidas no son del escaneo elegido: ${planes} planos`);
+    await b.shot("escaneo-elegido");
+  },
+
   async "mallas: caja del diseño en Fabricar"(b) {
     // La malla soldada de una pieza trae una sola normal por vértice en las
     // aristas vivas: la marca por vértice hace que las caras se dibujen planas

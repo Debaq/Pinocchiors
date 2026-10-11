@@ -847,6 +847,28 @@ fn object_scene(state: &AppState, id: u64) -> Result<Scene, String> {
     project.scene.ok_or_else(|| "Un objeto elegido no tiene malla".to_string())
 }
 
+/// Huella de la escena de un objeto guardado (`None` si no está guardado: es
+/// el activo). Barata: no lo deserializa.
+pub(crate) fn stored_object_hash(state: &AppState, id: u64) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    let objects = state.objects.lock().unwrap();
+    let stored = objects.stored.iter().find(|o| o.id == id)?;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    stored.state.hash(&mut h);
+    Some(h.finish())
+}
+
+/// Escena de un objeto guardado (`None` si no está guardado: es el activo)
+pub(crate) fn stored_object_scene(state: &AppState, id: u64) -> Option<Result<Scene, String>> {
+    let objects = state.objects.lock().unwrap();
+    let stored = objects.stored.iter().find(|o| o.id == id)?;
+    Some(
+        rmp_serde::from_slice::<ProjectState>(&stored.state)
+            .map_err(|e| format!("Objeto ilegible: {e}"))
+            .and_then(|p| p.scene.ok_or_else(|| "El escaneo elegido no tiene malla".to_string())),
+    )
+}
+
 /// Cómo llevar una escena a milímetros con Y arriba: giro y escala, y su caja
 /// envolvente así (sin trasladar)
 fn to_mm(scene: &Scene) -> (converter_scene::glam::Quat, f32, [f32; 3], [f32; 3], usize, f64) {

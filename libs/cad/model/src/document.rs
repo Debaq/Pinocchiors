@@ -83,6 +83,10 @@ pub struct Document {
     /// de ese momento, sin sus propias versiones. No cambian el diseño.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub versions: Vec<NamedVersion>,
+    /// Objeto de la escena elegido como escaneo de referencia (ninguno = el
+    /// que decida la interfaz). No cambia el diseño.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_object: Option<u64>,
 }
 
 /// Una versión guardada: nombre, fecha (ISO 8601), nota y el documento.

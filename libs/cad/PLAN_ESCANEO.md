@@ -23,7 +23,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Desviación diseño ↔ escaneo | ✅ (`cad_scan::deviation`, mapa de color) |
 | Limpiar la malla (reparar, remallar, simplificar, suavizar) | ✅ (Preparar) |
 | Escaneo como cuerpo para booleanas | ❌ motor decidido en E0: OCCT + vóxeles/isótropo + sólido directo (E2) |
-| Elegir qué objeto es el escaneo | ❌ hoy es «el modelo cargado» (`with_scan`) (E1) |
+| Elegir qué objeto es el escaneo | ✅ (E1.1) |
 | Alinear el escaneo por rasgos | ❌ Objeto solo da piso/frente (E1) |
 | Referencias (punto, plano, eje) tomadas de la malla | 🟡 solo plano de zona plana (E1) |
 | Sketch anclado a la malla | ❌ `solidRefs` solo mira el sólido (E1) |
@@ -97,9 +97,17 @@ de CAD y de STL.
 
 ### E1 — El escaneo como referencia del diseño
 
-- El escaneo es un objeto elegido en el Outliner (no «el modelo cargado»): `Document.scans`
-  guarda id de objeto + huella; si el objeto cambia (reparado, remallado) lo que depende de él
-  se rehace solo, como el resto de objetos.
+Partes: E1.1 escaneo elegido ✅, E1.2 alinear por rasgos, E1.3 referencias ligadas al
+escaneo, E1.4 sketch anclado al corte.
+
+- ✅ E1.1 (2026-10-10): el escaneo es un objeto importado elegido, no «el activo».
+  `Document.scan_object` guarda la elección (si no hay: el importado activo o el primero con
+  malla; selector «Escaneo» en la pestaña si hay más de uno). La app le avisa al backend con
+  `cad_scan_use`; `with_scan` toma la escena del casillero del objeto (caché por huella de sus
+  bytes) o la activa. Con una pieza del diseño activa, el escaneo se sigue viendo y midiendo.
+  De paso: el STL importado calculaba las normales con la del archivo (`facet normal 0 0 0`
+  dejaba la malla negra); ahora por el orden de los vértices, como los laminadores.
+  e2e «escaneo: sigue de referencia con una pieza activa».
 - Alinear el escaneo por rasgos: plano detectado → piso (XY), eje de cilindro → Z o X, punto →
   origen; también por 3 puntos. Mueve el objeto con `apply_placement` (deshacer = inversa).
 - Referencias tomadas de la malla, como operaciones del árbol ligadas al escaneo: punto (clic

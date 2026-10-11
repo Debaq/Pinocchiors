@@ -175,6 +175,8 @@ pub struct AppState {
     pub cad_ops: Mutex<cad_model::EvalCache>,
     /// Modelo preparado para escaneo → CAD
     pub cad_scan: Mutex<Option<crate::cad::ScanCache>>,
+    /// Objeto de la escena que se usa como escaneo (`None`: el activo)
+    pub cad_scan_object: Mutex<Option<u64>>,
 
     // ── Objetos ──
     /// Objetos de la escena que no están activos (el activo es todo lo de arriba)
@@ -218,6 +220,7 @@ impl AppState {
             cad_cache: Mutex::new(None),
             cad_ops: Mutex::new(cad_model::EvalCache::default()),
             cad_scan: Mutex::new(None),
+            cad_scan_object: Mutex::new(None),
             objects: Mutex::new(Default::default()),
         }
     }
