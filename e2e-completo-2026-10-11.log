@@ -1,0 +1,149 @@
+✓ caja, sketch dibujado y extrusión
+✓ outliner: lo elegido en el visor se marca en su fila
+    al crear: {"shape":{"type":"box","dx":20,"dy":20,"dz":20,"centered":true,"centered_z":true},"bbox":[[-10,-10,-10],[10,10,10]],"draft":true,"field":"20"}
+    campo: 50
+    con el diálogo, ancho 50: {"shape":{"type":"box","dx":50,"dy":20,"dz":20,"centered":true,"centered_z":true},"bbox":[[-25,-10,-10],[25,10,10]],"draft":true,"field":"50"}
+    tres pasos de rueda hacia abajo: {"shape":{"type":"box","dx":47,"dy":20,"dz":20,"centered":true,"centered_z":true},"bbox":[[-23.5,-10,-10],[23.5,10,10]],"draft":true,"field":"47"}
+    aceptada: {"shape":{"type":"box","dx":47,"dy":20,"dz":20,"centered":true,"centered_z":true},"bbox":[[-23.5,-10,-10],[23.5,10,10]],"draft":false}
+✓ caja: cambiar sus medidas en el diálogo cambia el sólido
+✓ sketch: barra de restricciones arriba; la cota de ángulo mide lo que hay y dibuja su arco
+✓ sketch edición III: arrastrar una línea y el radio, recortar en rojo, similares, Tab, copias y construcción
+✓ sketch edición IV: recortar splines y elipses, límite elegido con Ctrl+clic, extender una spline y a puntos de paso
+✓ sketch edición V: patrón que se edita y omite copias, encimadas que se juntan, lista de problemas y cruces
+✓ sketch edición VI: equidistante con el cursor y escrito, campo flotante al mover, soltar, arrastre libre y filtro de selección
+✓ preselección: lo que está bajo el mouse se resalta
+✓ redondeo eligiendo aristas y cambio de radio
+✓ cajas de selección: sumar, quitar y volver a elegir
+✓ redondeo: se ve mientras se elige y escribir el radio sigue eligiendo
+✓ rueda del mouse sobre un campo numérico
+✓ redondeo con arista ya elegida: clic en otra la suma
+✓ árbol: sketch vacío en azul, suelto en rojo
+✗ referencia perdida: advertencia, en rojo y reemplazo: tras reemplazar: Arista 1,Arista 2 · no encontrada,Arista 3
+✓ árbol: barra de retroceso y reordenar arrastrando
+✓ menú de la cara: editar la operación que la creó
+✓ medir: cara, vértices y dos caras
+✓ masa con material y centro de masa
+✓ vistas: atajos, cubo, acercar y mirar de frente
+✓ menú del clic derecho: redondear, sketch en la cara y vistas
+✓ filtros y selección por caja
+✓ vista de corte con tapa
+✓ carpetas en el árbol
+✓ cambios rápidos: se calcula el último
+✓ piezas: nueva, color, ocultar y exportar
+✓ piezas: booleana, corte que separa y borrar
+✓ material por pieza y masa total
+✓ plano de referencia: sketch encima y extrusión
+✓ extrusión: dos direcciones, desmolde y delgada
+✗ barrido y transición: no encontré: Transición
+✓ agujero avellanado y medir su diámetro
+✓ agujero: la pieza más cercana y cambiarla
+✓ flecha: invertir y arrastrar la extrusión; el agujero avisa si no corta
+✓ cámara: girar por encima del polo y desplazar
+✓ hélice y engrosar
+✓ mover cara y escala
+✓ plano 2D con vistas, ocultas y exportar SVG
+✓ plano 2D: dibujar sobre la hoja con el editor del sketch
+✓ plano 2D: medida al dibujar sobre la hoja (queda solo si se escribe o con Enter) y cotas donde se dejaron
+✓ planos 2D en el Outliner: varios, elementos, ventana de propiedades
+✓ plano 2D: seis vistas en primer y tercer diedro
+✓ plano 2D: las vistas como referencia del dibujo (anclar, usar, recortar, cotas que siguen al modelo)
+✓ plano 2D: las escalas dicen la verdad (lo dibujado mide la pieza por la escala)
+✓ plano 2D: mover vistas (y lo dibujado con ellas), vista nueva y girar en 3D
+✓ plano 2D: cortes por línea y escalonados, medio corte, rotura, vista 3D cortada y sombreada
+✓ plano 2D: rayado por pieza según su material, DXF de los cortes y vista del corte alineada
+✓ plano 2D: radio, ángulo, detalle y corte movido
+✓ ensamble: instancias, bisagra, grados libres y choques
+✓ caja de regiones al editar una extrusión
+✓ herramienta translúcida en la vista previa
+✗ diálogo de operación: cancelar y aceptar: no encontré: Deshacer
+✓ caja centrada y exportar el diseño
+✓ triángulo cerrado con clics y agujero
+✓ agujero pasante sobre una cara
+✓ anclajes a las aristas del sólido
+✓ cota editada en el visor
+✓ polígono y ranura
+✓ redondear esquina del sketch
+✓ nervio desde una línea hasta el sólido
+✓ reemplazar cara hasta un plano
+✓ revolución con el eje elegido en el visor
+✓ caja de selección dentro del sketch
+✓ deshacer y rehacer dentro del sketch
+✓ mover, copiar y pegar, girar, escalar y partir en el sketch
+✓ cotas: distancia a la línea, entre paralelas, diámetro respecto del eje y largo de arco
+✓ cotas II y restricciones II: suplementario, largo total en pulgadas, mínima entre círculos, coradiales, intersección, bloqueo, ordenadas y texto movido
+✓ sketch 3D: clics en el plano y en un vértice, ejes, largo, conflicto, perforar, barrido y sketch envuelto
+✓ solver II: grados libres, sugerir, definir todo, cambio grande sin dar vuelta y conflicto parcial
+✓ edición II: recortar arrastrando, unir, chaflán, equidistante a los dos lados, estirar, duplicados, reparar y cerrar
+✓ asistencia al dibujo: coordenadas escritas, polilínea línea-arco, rejilla sin inferencias, simetría al dibujar y línea central
+✓ plano del sketch: horizontal según un eje y normal invertida sin mover el dibujo (ni las regiones ni los textos), corte y modelo oculto al dibujar
+✓ archivos y fórmulas: curva por ecuación con parámetro, CSV, DXF importado y exportado, SVG y calco calibrado
+✓ organización: bloques con copias que cambian juntas, capas ocultas y bloqueadas, pegar el sketch en otro plano y validar la revolución
+✓ curvas: spline por polos, punto en spline, tangente en la unión, cónica, paralelogramo, arco elíptico, línea infinita, ranura por 3 puntos, convertir, peine y texto sobre curva
+✓ rectángulo por 3 puntos, círculos por 2 y 3 puntos y tangente, polígono circunscrito, ranuras y colineal
+✓ revisión del sketch: extremos sueltos y aviso al extruir
+✓ modo construcción, mostrar y ocultar, lista de entidades, cadena y variantes en menús
+✓ íconos de restricciones: elegir, quitar, ocultar, todas las cotas y lazo
+✓ agujero con rosca modelada
+✓ rosca exterior en un eje
+✓ usar arista del sólido en el sketch
+✗ usar del modelo: cara, silueta, intersección, otro sketch y romper vínculo: no está Intersección
+✓ configuraciones: variante, valores y exportar todas
+✓ versiones: guardar, ver, comparar y restaurar
+✓ piezas estándar: tornillo en un agujero y tuerca roscada
+✓ roscas coordinadas: tornillo en agujero roscado y rosca alrededor de un tornillo
+✓ chapa: pestañas y desarrollo en DXF
+✓ chapa: alivios
+✓ superficies: tubo, rellenos y coser
+✓ patrones por tabla y de relleno, partir y recortar superficies
+✓ chaflán de dos distancias y redondeo variable
+✓ línea desde el centro
+✓ recortar y equidistante
+✓ parámetros y fórmulas
+✓ arco tangente, extender, recortar círculo y gestor de restricciones
+✓ caja de selección empezando sobre el sólido
+✓ barra de estado: atajos según lo que se hace
+✗ selección como Onshape: región, cara y arista: selección: 
+✓ anclajes: origen, punto medio y cuadrante
+✓ anclajes: intersección
+✓ anclajes: alineado y perpendicular
+✓ círculos tangentes desde el panel
+✓ colores por entidad y cota de referencia
+✓ rectángulo por el centro, arco por 3 puntos, punto y Q
+✓ simetría y patrones en el sketch
+✓ patrones del sketch: grilla, ángulo, en curva, tabla y relleno
+✓ elipse extruida
+✓ spline con manijas
+✓ texto extruido
+✓ escaneo: comparar el diseño con colores de desviación
+✓ escaneo: cilindro elegido con un clic
+✗ outliner: planos, operaciones y piezas: árbol: ["PLANOS","Grid","Planta (XY)","Frente (XZ)","Lateral (YZ)","Plano 1","OPERACIONES","OBJETOS","Pieza 1","Pieza 2","PLANOS 2D"]
+✓ remallar: los modos con la retopología adentro
+✓ remallar: simplificar con vista previa, aplicar y deshacer
+✓ remallar: suavizar sin cambiar la conectividad, aplicar y deshacer
+✗ remallar: isótropo con lado en mm y aristas vivas: deshacer no devolvió la malla
+✓ remallar: vóxeles une piezas que se cruzan y avisa si es pesado
+✓ remallar: triángulos a quads y OBJ con quads
+  (sin /home/nick/Descargas/chilesaurus_animado.glb: se salta)
+✓ remallar: isótropo traslada textura y pesos, o los descarta
+✓ objetos: las piezas pasan solas a Fabricar
+✗ escaneo: sigue de referencia con una pieza activa: no encontré la pestaña Desde el escaneo
+✓ escaneo: alinear por cara al piso y punto al origen
+✓ escaneo: referencias ligadas siguen al alinear
+✓ escaneo: el sketch se ancla al corte del escaneo
+✓ escaneo: cuerpo del escaneo deja la cuna en un bloque
+✓ escaneo: extruir y llevar una cara hasta el escaneo
+✓ escaneo: carcasa y parche bajo un sketch
+✓ mallas: caja del diseño en Fabricar
+✓ mallas: STL del diseño importado
+✓ objetos: varios elegidos se exportan juntos
+✓ visor principal: derecho desplaza o abre el menú, Ver todo encuadra
+✓ visor: la misma cámara en Diseñar y en Fabricar
+✓ objetos: el remallado se rehace si cambia el diseño
+✓ objetos: lo hecho sobre la malla se rehace si cambia el diseño
+✓ redondeo en vivo: cara entera y quitar con clic
+✓ chaflán en vivo: una cara entera
+✓ agujero en una cara sin sketch y extruir una cara
+✓ sketch encima de otro sketch, anclado a sus puntos
+✓ regiones de formas que se cruzan
+✓ texto: caja, se elige entero y doble clic lo cambia
+exit 1
