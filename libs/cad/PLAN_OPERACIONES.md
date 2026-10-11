@@ -354,7 +354,7 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
   - e2e: `faceWhere`/`edgeNear` recorren las caras y aristas por el puente (`cad_face_info`,
     `cad_edge_ref`); el punto de `EdgeRef` se supone sobre la arista (cerca del medio).
 - **Los difíciles (2026-10-11)**: `cargo test -p cad-model --test operations --test sweep` y los
-  e2e «operaciones:» (30 en total). Hipótesis:
+  e2e «operaciones:» (27 en total). Hipótesis:
   - Referencias por clics: la deducción (qué plano, eje o punto sale de lo elegido) está en
     `picked_plane`/`picked_axis`/`picked_point` (eval.rs); el orden de los clics no importa salvo
     en plano + línea (en ángulo). La tangente a una curva sale de muestras (256) y una búsqueda
