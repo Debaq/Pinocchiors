@@ -717,3 +717,11 @@ cargo test -p cad-model
   con separación, barrido circular, delgado y con orientación, superficie por barrido, extender
   superficie y copiar/pegar/duplicar operaciones. Puente: `cad_shell_faces`, `cad_remove_faces`,
   `cad_fillet_points`, `cad_pipe_ex`, `cad_extend_surface` (y `record` como plantilla).
+- **2026-10-11 Operaciones difíciles** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): planos, ejes
+  y puntos de referencia por clics (el tipo se deduce de lo elegido), curvas como operación
+  (compuesta, proyectada, de cruce, por puntos), extrusión hasta una cara curva y revolución hasta
+  una cara, transición completa (punta, cerrada, delgada, línea central, guía) y superficie por
+  transición, girar cara, chaflán de vértice, redondeo completo, grabado y relieve, línea de
+  partición, barrido con curva guía y flechas en más operaciones. Faltan: torsión, tangencia en
+  los extremos de la transición, redondeo de cara, partición por silueta, sistema de
+  coordenadas y manipuladores de ángulo.

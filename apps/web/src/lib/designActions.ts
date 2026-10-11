@@ -166,6 +166,22 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
   };
 
+  /** Grabado o relieve con el último sketch envuelto */
+  const addWrap = (emboss: boolean) => {
+    const s = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "surface_sketch");
+    if (!s) return say("Primero un sketch envuelto: «Sketch» sobre una cara curva, con regiones cerradas");
+    ui.clearPicks();
+    void store.addFeature({ type: "wrap", sketch: s.id, depth: 1, emboss });
+  };
+
+  /** Línea de partición: las caras elegidas, partidas por la planta (se cambia en el diálogo) */
+  const startSplitFaces = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "split_faces", faces, tool: { type: "plane", plane: { type: "xy" } } });
+  };
+
   /** Girar caras: las elegidas, con bisagra en Z (se cambia en el diálogo) */
   const startRotateFace = async () => {
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
@@ -711,6 +727,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addHole,
     addTube,
     startRotateFace,
+    addWrap,
+    startSplitFaces,
     startVertexChamfer,
     startFullRound,
     addSurfaceSweep,

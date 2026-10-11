@@ -781,6 +781,7 @@ fn tube_along(curve: FeatureId, r: f64) -> FeatureKind {
         orient: SweepOrient::Follow,
         circle: Some(r),
         thin: None,
+        guide: None,
     })
 }
 
@@ -990,4 +991,102 @@ fn full_round_on_a_rib() {
     let (_, hi, v) = bbox(&eval_ok(&doc));
     assert_relative_eq!(v, 800.0 - 160.0 + PI * 4.0 / 2.0 * 20.0, max_relative = 1e-6);
     assert_relative_eq!(hi[2], 10.0, epsilon = 1e-6);
+}
+
+// ─── Grabado, relieve y línea de partición ───
+
+/// Cilindro de radio 10 y alto 20 con un sketch envuelto en su pared: un cuadrado de 4
+fn cylinder_with_wrapped_square() -> (Document, FeatureId) {
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 10.0, height: 20.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let wall = face_at(&doc, [10.0, 0.0, 10.0], [1.0, 0.0, 0.0]);
+    let mut s = Sketch::new();
+    s.rectangle([-2.0, -2.0], [2.0, 2.0]);
+    let sk = doc.add(FeatureKind::SurfaceSketch { face: wall, sketch: s });
+    (doc, sk)
+}
+
+#[test]
+fn wrap_engraves_and_embosses() {
+    if !occt() {
+        return;
+    }
+    let full = PI * 100.0 * 20.0;
+    // Grabado de 1: un poco menos que 4 × 4 × 1 (la pared se curva hacia adentro)
+    let (mut doc, sk) = cylinder_with_wrapped_square();
+    let w = doc.add(FeatureKind::Wrap { sketch: sk, depth: 1.0, emboss: false });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    let cut = full - v;
+    assert!(cut > 14.0 && cut < 16.0, "grabado: {cut}");
+    // Relieve de 1: un poco más que 16
+    doc.get_mut(w).unwrap().kind = FeatureKind::Wrap { sketch: sk, depth: 1.0, emboss: true };
+    let (_, hi, v) = bbox(&eval_ok(&doc));
+    let added = v - full;
+    assert!(added > 16.0 && added < 18.0, "relieve: {added}");
+    assert!(hi[0] > 10.9, "sobresale: {}", hi[0]);
+    // Con un sketch común: error
+    let mut plain = Sketch::new();
+    plain.rectangle([0.0, 0.0], [1.0, 1.0]);
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: plain });
+    doc.get_mut(w).unwrap().kind = FeatureKind::Wrap { sketch: p, depth: 1.0, emboss: true };
+    let f = doc.features.iter().position(|x| x.id == w).unwrap();
+    let moved = doc.features.remove(f);
+    doc.features.push(moved);
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn parting_line_splits_faces_not_the_part() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let sides: Vec<FaceRef> = [([0.0, 5.0, 5.0], [-1.0, 0.0, 0.0]), ([10.0, 5.0, 5.0], [1.0, 0.0, 0.0]), ([5.0, 0.0, 5.0], [0.0, -1.0, 0.0]), ([5.0, 10.0, 5.0], [0.0, 1.0, 0.0])]
+        .into_iter()
+        .map(|(p, n)| face_at(&doc, p, n))
+        .collect();
+    let before = eval_ok(&doc).body.unwrap().face_count();
+    doc.add(FeatureKind::SplitFaces { faces: sides, tool: PartingTool::Plane { plane: PlaneSpec::Custom { plane: Plane { origin: [0.0, 0.0, 4.0], ..Plane::XY } } } });
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 1);
+    let body = ev.body.as_ref().unwrap();
+    assert_eq!(body.face_count(), before + 4);
+    assert_relative_eq!(body.mass().unwrap().volume, 1000.0, max_relative = 1e-9);
+}
+
+#[test]
+fn sweep_with_a_guide_curve() {
+    if !occt() {
+        return;
+    }
+    // Cuadrado de 4 en la planta por una recta de 20 hacia arriba, con una guía
+    // que se abre: el perfil se agranda (más volumen que el prisma de 4 × 4 × 20)
+    let mut doc = Document::new();
+    let mut prof = Sketch::new();
+    prof.rectangle([-2.0, -2.0], [2.0, 2.0]);
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: prof });
+    let at = |q: P3| PointSpec::At { point: q };
+    let spine = doc.add(FeatureKind::Curve { def: CurveDef::Points { points: vec![at([0.0; 3]), at([0.0, 0.0, 20.0])], closed: false } });
+    let guide = doc.add(FeatureKind::Curve { def: CurveDef::Points { points: vec![at([2.0, 2.0, 0.0]), at([4.0, 4.0, 20.0])], closed: false } });
+    doc.add(FeatureKind::Sweep(Sweep {
+        sketch: p,
+        regions: RegionSelection::All,
+        path: SweepPath::Curve { feature: spine },
+        op: BodyOp::Join,
+        orient: SweepOrient::Follow,
+        circle: None,
+        thin: None,
+        guide: Some(SweepPath::Curve { feature: guide }),
+    }));
+    let (_, hi, v) = bbox(&eval_ok(&doc));
+    assert!(v > 16.0 * 20.0 * 1.2, "volumen {v}");
+    assert!(hi[0] > 3.5, "se abre: {}", hi[0]);
 }

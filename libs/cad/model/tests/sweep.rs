@@ -44,7 +44,7 @@ fn straight_sweep_is_an_extrusion_and_l_path_adds_up() {
         sketch: p,
         regions: RegionSelection::All,
         path: SweepPath::Sketch { sketch: c, entities: vec![] },
-        op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None,
+        op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None,
     }));
     assert_relative_eq!(vol(&doc), PI * 4.0 * 20.0, max_relative = 1e-6);
     // Camino en L (arriba 20, luego 10 de costado), con las entidades al revés: se encadenan solas
@@ -110,7 +110,7 @@ fn spring_along_a_helix_and_thicken() {
     let mut prof = Sketch::default();
     prof.circle([0.0, 0.0], 1.0);
     let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Custom { plane }, offset: 0.0, sketch: prof });
-    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None }));
+    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let len = 2.0 * ((2.0 * PI * 10.0f64).powi(2) + 25.0).sqrt();
@@ -146,7 +146,7 @@ fn arc_path(doc: &mut Document) -> FeatureId {
 }
 
 fn tube(sketch: FeatureId, path: FeatureId, circle: Option<f64>, thin: Option<f64>, orient: SweepOrient) -> FeatureKind {
-    FeatureKind::Sweep(Sweep { sketch, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: path, entities: vec![] }, op: BodyOp::Join, orient, circle, thin })
+    FeatureKind::Sweep(Sweep { sketch, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: path, entities: vec![] }, op: BodyOp::Join, orient, circle, thin, guide: None })
 }
 
 #[test]

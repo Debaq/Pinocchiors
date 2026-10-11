@@ -2500,6 +2500,49 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "wrap" && (f().kind as Extract<FeatureKind, { type: "wrap" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch envuelto">
+                  <Select
+                    options={(props.store.doc()?.features ?? []).filter((x) => x.kind.type === "surface_sketch").map((x) => ({ value: String(x.id), label: x.name }))}
+                    value={String(k().sketch)}
+                    onChange={(v) => update((x) => x.type === "wrap" && (x.sketch = +v))}
+                  />
+                </Row>
+                {field("Profundidad", "kind.depth", k().depth, (x, v) => x.type === "wrap" && (x.depth = v), "mm")}
+                <Checkbox small label="Relieve (sobresale)" checked={k().emboss} onChange={(c) => update((x) => x.type === "wrap" && (x.emboss = c))} />
+                <p class="text-[11px] text-text-dim">Las regiones cerradas del sketch, siguiendo la forma de la cara: hundidas (grabado) o levantadas (relieve).</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "split_faces" && (f().kind as Extract<FeatureKind, { type: "split_faces" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a partir"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "split_faces" && (x.faces = refs as FaceRef[]))}
+                />
+                <Row label="Con">
+                  <Select
+                    options={[{ value: "plane", label: "Un plano" }, ...refOptions(props.store, "curve", f().id).map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    value={k().tool.type === "plane" ? "plane" : `curve:${(k().tool as { feature: number }).feature}`}
+                    onChange={(v) => update((x) => x.type === "split_faces" && (x.tool = v === "plane" ? { type: "plane", plane: { type: "xy" } } : { type: "curve", feature: +v.slice(6) }))}
+                  />
+                </Row>
+                <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
+                  {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_faces" && (x.tool = { type: "plane", plane: p })))}</Row>}
+                </Show>
+                <p class="text-[11px] text-text-dim">Las caras quedan partidas (para desmoldes o colores distintos); la pieza sigue entera.</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "rotate_face" && (f().kind as Extract<FeatureKind, { type: "rotate_face" }>)}>
             {(k) => (
               <>
@@ -3782,6 +3825,22 @@ export const FeatureEditor: Component<{
                   </Show>
                   <Row label="Orientación">
                     <Select options={ORIENT_OPTIONS} value={k().orient ?? "follow"} onChange={(v) => update((x) => x.type === "sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))} />
+                  </Row>
+                  <Row label="Curva guía">
+                    <Select
+                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      value={(() => {
+                        const g = k().guide;
+                        return !g ? "" : g.type === "sketch" ? String(g.sketch) : `curve:${g.feature}`;
+                      })()}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "sweep" &&
+                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                        )
+                      }
+                    />
                   </Row>
                   <Checkbox
                     small

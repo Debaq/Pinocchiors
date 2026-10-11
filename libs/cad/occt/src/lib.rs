@@ -594,6 +594,21 @@ impl Shape {
         wrap(unsafe { ffi::cad_intersect_curves(self.ptr(), other.ptr()) })
     }
 
+    /// Parche sobre la superficie de esta cara: lazos en (u, v), el primero el
+    /// de afuera y los demás agujeros; queda con la normal de la cara.
+    pub fn face_patch(&self, loops: &[Vec<[f64; 2]>]) -> Result<Shape> {
+        let uv: Vec<f64> = loops.iter().flatten().flat_map(|p| [p[0], p[1]]).collect();
+        let sizes: Vec<i32> = loops.iter().map(|l| l.len() as i32).collect();
+        wrap(unsafe { ffi::cad_face_patch(self.ptr(), uv.as_ptr(), sizes.as_ptr(), sizes.len() as i32) })
+    }
+
+    /// Parte las caras `faces` donde las cruza `tool` (un plano grande o
+    /// curvas sobre ellas), sin separar el sólido (con historia).
+    pub fn split_faces(&self, faces: &[usize], tool: &Shape) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_split_faces(self.ptr(), f.as_ptr(), f.len() as i32, tool.ptr()) })
+    }
+
     /// Esta cara extendida `distance` por todos sus lados, siguiendo su superficie.
     pub fn extend_face(&self, distance: f64) -> Result<Shape> {
         wrap(unsafe { ffi::cad_extend_face(self.ptr(), distance) })

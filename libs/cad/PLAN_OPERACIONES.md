@@ -21,14 +21,14 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Nervio | ✅ (`Rib`) |
 | Agujero | ✅ |
 | Rosca | ✅ (cosmética, modelada y coordinada con `ThreadLink`) |
-| Envolver croquis sobre cara (grabado y relieve) | 🟡 las curvas se llevan a la cara (`SurfaceSketch`); falta grabar/relieve (F7) |
+| Envolver croquis sobre cara (grabado y relieve) | ✅ (`Wrap` sobre un `SurfaceSketch`, 2026-10-11) |
 
 ### Opciones de extrusión
 | Función | Estado |
 |---|---|
 | Ciega, simétrica, dos direcciones, hasta el siguiente, pasante | ✅ |
 | Hasta vértice | ✅ (`Extent::UpToVertex`, 2026-10-11) |
-| Hasta superficie | 🟡 hasta el plano de la cara, con separación (2026-10-11); falta cara curva (F3) |
+| Hasta superficie | ✅ plana (con separación) o curva (partida por la cara extendida; sin separación), 2026-10-11 |
 | Hasta superficie con desfase | ✅ (`UpToFace.offset`, 2026-10-11) |
 | Desde plano desfasado | ✅ (`Extrude.start`, 2026-10-11) |
 | Ángulo de desmoldeo, pared delgada, invertir, selección de regiones | ✅ |
@@ -40,20 +40,22 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Completa, por ángulo, selección de eje | ✅ |
 | Simétrica, dos ángulos | ✅ (`Revolve.extent`, 2026-10-11) |
 | Pared delgada | ✅ (`Revolve.thin`, 2026-10-11) |
-| Hasta superficie | ❌ (F3) |
+| Hasta superficie | ✅ (`RevolveExtent::UpToFace`, a menos de 350°, 2026-10-11) |
 
 ### Opciones de barrido
 | Función | Estado |
 |---|---|
 | Perfil y trayectoria | ✅ (sketch, sketch 3D, hélice) |
 | Orientación (sigue, Frenet, fija), barrido circular simple, pared delgada | ✅ (`Sweep.orient`, `circle`, `thin`, 2026-10-11) |
-| Curvas guía, torsión | ❌ (F4) |
+| Curva guía | ✅ (`Sweep.guide`, el perfil se escala para tocarla, 2026-10-11) |
+| Torsión | ❌ OCCT no la trae en `MakePipeShell`: hace falta una guía helicoidal armada a mano (F4) |
 
 ### Opciones de recubrimiento
 | Función | Estado |
 |---|---|
 | Entre varios perfiles | ✅ |
-| Curvas guía, línea central, tangencia en extremos, a punto, cerrado, pared delgada | ❌ (F5) |
+| Curva guía, línea central, a punto, cerrado, pared delgada | ✅ (`Loft.guide`, `path`, `start_point`/`end_point`, `closed`, `thin`, 2026-10-11) |
+| Tangencia en extremos | ❌ `ThruSections` no la da (F5, riesgo) |
 
 ### Opciones de agujero
 | Función | Estado |
@@ -67,15 +69,16 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 |---|---|
 | Redondeo de radio constante | ✅ |
 | Redondeo de radio variable | ✅ lineal y por puntos (`Fillet.points`, 2026-10-11) |
-| Redondeo de cara, redondeo completo | ❌ (F6) |
+| Redondeo completo | ✅ caras planas (`FullRound`, 2026-10-11) |
+| Redondeo de cara | ❌ sin API en OCCT (F6) |
 | Chaflán por distancia, dos distancias, distancia y ángulo | ✅ |
-| Chaflán de vértice | ❌ (F6) |
+| Chaflán de vértice | ✅ esquinas de tres aristas rectas (`VertexChamfer`, 2026-10-11) |
 | Vaciado | ✅ |
 | Vaciado con espesores distintos por cara | ✅ (`Shell.overrides`, 2026-10-11) |
 | Ángulo de desmoldeo, engrosar | ✅ |
 | Desfasar cara, mover cara | 🟡 solo planas y a lo largo de la normal (F6) |
 | Eliminar cara | ✅ (`DeleteFace`, defeaturing, 2026-10-11) |
-| Rotar cara | ❌ (F6) |
+| Rotar cara | ✅ caras planas con bisagra (`RotateFace`, 2026-10-11) |
 | Reemplazar cara | 🟡 solo hasta un plano (F6) |
 
 ### Patrones y simetría
@@ -102,17 +105,18 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Función | Estado |
 |---|---|
 | Plano desfasado, en ángulo, por 3 puntos, medio; eje; punto | ✅ |
-| Plano tangente, plano normal a curva, sistema de coordenadas | ❌ (F8) |
+| Plano tangente, plano normal a curva | ✅ por clics (`PlaneDef::Picked`, 2026-10-11) |
+| Sistema de coordenadas | ❌ (F8) |
 
 ### Curvas 3D
 | Función | Estado |
 |---|---|
 | Hélice | ✅ |
 | Espiral | ✅ plana y hélice cónica (`Helix.radius2`, `flat`; spline por puntos, 2026-10-11) |
-| Curva por puntos | 🟡 splines del sketch 3D (F8) |
-| Curva proyectada, curva de intersección | 🟡 solo hacia el plano de un sketch (F8) |
-| Línea de partición | ❌ (F8) |
-| Curva compuesta | 🟡 el barrido encadena; no hay operación propia (F8) |
+| Curva por puntos | ✅ (`CurveDef::Points`, 2026-10-11) |
+| Curva proyectada, curva de intersección | ✅ sobre caras y entre caras (`CurveDef::Projected`, `Intersection`, 2026-10-11) |
+| Línea de partición | ✅ por plano o curva (`SplitFaces`, 2026-10-11); falta por silueta (F8) |
+| Curva compuesta | ✅ (`CurveDef::Composite`, 2026-10-11) |
 
 ### Superficies
 | Función | Estado |
@@ -130,7 +134,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Editar, editar croquis, suprimir, reordenar, eliminar, renombrar | ✅ |
 | Copiar y pegar | ✅ Ctrl+C / Ctrl+V en el árbol y «Duplicar» (2026-10-11) |
 | Retroceder (rollback), vista previa en vivo | ✅ |
-| Manipuladores gráficos | 🟡 flecha de extrusión y agujero (F10) |
+| Manipuladores gráficos | 🟡 flechas en extrusión, agujero, chapa, mover cara, engrosar, vaciado, redondeo, chaflán y patrón lineal (2026-10-11); faltan los de ángulo (arcos) (F10) |
 | Ámbito, fusionar o crear cuerpo nuevo | ✅ (`scope`, `BodyOp::New`) |
 
 ## Fases
@@ -349,6 +353,36 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
     `features`; si alguna operación guarda ids con otra clave, la copia apuntaría al original.
   - e2e: `faceWhere`/`edgeNear` recorren las caras y aristas por el puente (`cad_face_info`,
     `cad_edge_ref`); el punto de `EdgeRef` se supone sobre la arista (cerca del medio).
+- **Los difíciles (2026-10-11)**: `cargo test -p cad-model --test operations --test sweep` y los
+  e2e «operaciones:» (30 en total). Hipótesis:
+  - Referencias por clics: la deducción (qué plano, eje o punto sale de lo elegido) está en
+    `picked_plane`/`picked_axis`/`picked_point` (eval.rs); el orden de los clics no importa salvo
+    en plano + línea (en ángulo). La tangente a una curva sale de muestras (256) y una búsqueda
+    fina; la normal de una cara curva, de Newton sobre `face_eval`.
+  - El nuevo modo del visor «refs» elige vértice, arista, cara o plano, en ese orden de cercanía;
+    el vértice se liga con `cad_vertex_spec` (extremo de una arista).
+  - Al crear un plano sin nada elegido ahora sale «por clics» desde la planta a 10 (la prueba vieja
+    «plano de referencia» escribe «Distancia» y sigue andando).
+  - Curvas: `ShapeAnalysis_FreeBounds::ConnectEdgesToWires` encadena; la proyección es
+    `BRepProj_Projection` cilíndrica (a lo largo de la normal del sketch).
+  - Hasta una cara curva: se extiende la cara con `BRepLib::ExtendFace` y se parte el prisma; en
+    caras periódicas (el cilindro entero) puede no extenderse en u: si falla, es eso.
+  - Revolución hasta una cara: gira 350° y parte; si la cara está entre 350° y 360°, no la encuentra.
+  - Transición: con punta usa `ThruSections::AddVertex`; cerrada repite la primera (costura C0);
+    con línea central o guía usa `MakePipeShell` (la guía con `BRepFill_ContactOnBorder`).
+  - Girar cara: cuña entre el plano viejo y el girado, sumada afuera y restada adentro (prismas
+    de la cara a lo largo de su normal); con mucho giro (>78°) da error.
+  - Chaflán de vértice: corta con una esfera alrededor del vértice partida por el plano de los
+    tres puntos; en esquinas cóncavas puede cortar de más.
+  - Redondeo completo: saca la cara del medio un radio hacia adentro y pone medio cilindro; solo
+    caras planas (costados paralelos, la del medio perpendicular).
+  - Grabado y relieve: las regiones del sketch envuelto se arman en (u, v) de la cara
+    (`cad_face_patch`, polígonos de las regiones) y se engrosan; la prueba supone ~15,2 y ~16,8
+    mm³ para un cuadrado de 4 en un cilindro de radio 10 con 1 de profundidad.
+  - Línea de partición: `BRepFeat_SplitShape` con las aristas de la sección de cada cara con la
+    herramienta (un cuadrado grande del plano o la curva); historia por `record`.
+  - Flechas nuevas: el cálculo deja la flecha (`Handle`) y el visor la muestra siempre que haya;
+    arrastrar cambia el campo de `handleField`.
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 

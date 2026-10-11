@@ -8405,6 +8405,62 @@ const scenarios = {
     await accept(b);
     await b.shot("operaciones_redondeo_completo");
   },
+
+  async "operaciones: grabado y relieve sobre una cara curva"(b) {
+    await begin(b);
+    // Cilindro de radio 10 y alto 20; en su pared, un cuadrado de 4 envuelto
+    const doc = await call("cad_get_document");
+    doc.features.push({ id: doc.next_id++, name: "Rollo", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 10, height: 20 }, origin: [0, 0, 0], z: [0, 0, 1], x: [1, 0, 0], op: "join" } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const wall = await b.eval(`window.__cadStore.faceRef(${await faceWhere((f) => f.surface === "cylinder")})`);
+    const P = [[-2, -2], [2, -2], [2, 2], [-2, 2]];
+    const sketch = { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 };
+    await b.eval(`__cadStore.commit((d) => { d.features.push({ id: d.next_id, name: "Marca", suppressed: false, kind: { type: "surface_sketch", face: ${JSON.stringify(wall)}, sketch: ${JSON.stringify(sketch)} } }); d.next_id += 1; })`);
+    await sleep(2500);
+    const full = Math.PI * 100 * 20;
+    await b.clickText("Grabado");
+    await lastIs(b, "wrap");
+    await sleep(3000);
+    const cut = full - (await body()).volume;
+    if (!(cut > 14 && cut < 16)) throw new Error(`grabado: ${cut}`);
+    await b.clickText("Relieve (sobresale)");
+    await sleep(3000);
+    const added = (await body()).volume - full;
+    if (!(added > 16 && added < 18)) throw new Error(`relieve: ${added}`);
+    await accept(b);
+    await b.shot("operaciones_grabado_relieve");
+  },
+
+  async "operaciones: línea de partición y flechas en más operaciones"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Los cuatro costados partidos por la planta (z = 0, a media altura)
+    const sides = [];
+    for (const test of [(f) => f.normal[0] > 0.99, (f) => f.normal[0] < -0.99, (f) => f.normal[1] > 0.99, (f) => f.normal[1] < -0.99]) sides.push(await faceWhere((f) => f.surface === "plane" && test(f)));
+    await b.eval(`window.__cadUi.setPicks(${JSON.stringify(sides.map((face) => ({ kind: "face", face })))})`);
+    await b.clickText("Línea de partición");
+    await lastIs(b, "split_faces");
+    await sleep(2500);
+    let r = await body();
+    if (r.faces !== 10) throw new Error(`caras: ${r.faces}`);
+    near(r.volume, 8000, 1e-3, "la pieza sigue entera");
+    if ((await evaluate()).parts.length !== 1) throw new Error("se separó la pieza");
+    await accept(b);
+    // Mover cara: con flecha (la del cálculo)
+    const top = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }])`);
+    await b.clickText("Mover cara");
+    await lastIs(b, "move_face");
+    await sleep(2500);
+    const h = await b.eval(`(() => { const id = window.__cadStore.doc().features.at(-1).id; return JSON.parse(JSON.stringify(window.__cadStore.stateOf(id)?.handle ?? null)); })()`);
+    if (!h || Math.abs(h.dir[2]) < 0.99) throw new Error(`flecha: ${JSON.stringify(h)}`);
+    await b.shot("operaciones_flecha_mover_cara");
+    await accept(b);
+  },
 };
 
 const filter = process.argv[2];

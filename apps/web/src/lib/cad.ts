@@ -652,7 +652,13 @@ export type FeatureKind =
       circle?: number | null;
       /** Barrido delgado: espesor de la pared */
       thin?: number | null;
+      /** Curva guía: el perfil gira y se escala para tocarla */
+      guide?: SweepPathSpec | null;
     }
+  /** Grabado (o relieve con `emboss`): las regiones de un sketch envuelto, `depth` mm siguiendo la cara */
+  | { type: "wrap"; sketch: number; depth: number; emboss: boolean }
+  /** Línea de partición: parte caras donde las cruza un plano o una curva, sin separar la pieza */
+  | { type: "split_faces"; faces: FaceRef[]; tool: { type: "plane"; plane: PlaneSpec } | { type: "curve"; feature: number } }
   /** Curva de referencia hecha de otras */
   | { type: "curve"; def: CurveDef }
   /** Superficies extendidas `distance` más allá de bordes libres */
@@ -1160,7 +1166,10 @@ export function handleField(k: FeatureKind, h: FeatureHandle): string | undefine
   if (h.kind === "fixed") return undefined;
   if (k.type === "extrude") return "kind.extent.distance";
   if (k.type === "hole") return "kind.depth.depth";
-  if (k.type === "sheet_metal") return "kind.thickness";
+  if (k.type === "sheet_metal" || k.type === "thicken" || k.type === "shell") return "kind.thickness";
+  if (k.type === "move_face" || k.type === "chamfer") return "kind.distance";
+  if (k.type === "fillet") return "kind.radius";
+  if (k.type === "pattern" && k.pattern.type === "linear") return "kind.pattern.spacing";
   return undefined;
 }
 
@@ -1168,6 +1177,9 @@ export function handleField(k: FeatureKind, h: FeatureHandle): string | undefine
 export function flipByHandle(k: FeatureKind, h: FeatureHandle) {
   if (k.type === "extrude" || k.type === "hole") k.reverse = !h.reversed;
   else if (k.type === "sheet_metal") k.flip = !h.reversed;
+  else if (k.type === "move_face") k.distance = -k.distance;
+  else if (k.type === "thicken") k.thickness = -k.thickness;
+  else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.direction = k.pattern.direction.map((c) => -c || 0) as P3;
 }
 
 /**
@@ -1190,7 +1202,12 @@ export function dragByHandle(k: FeatureKind, h: FeatureHandle, t: number) {
   } else if (k.type === "sheet_metal") {
     k.thickness = len;
     k.flip = reversed;
-  }
+  } else if (k.type === "move_face") k.distance = reversed ? -len : len;
+  else if (k.type === "thicken") k.thickness = reversed ? -len : len;
+  else if (k.type === "shell") k.thickness = len;
+  else if (k.type === "fillet") k.radius = len;
+  else if (k.type === "chamfer") k.distance = len;
+  else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.spacing = len;
 }
 
 export interface Loop {
@@ -1468,6 +1485,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   surface_loft: "Superficie por transición",
   surface_extend: "Extender superficie",
   curve: "Curva",
+  wrap: "Grabado",
+  split_faces: "Línea de partición",
   surface_offset: "Superficie desfasada",
 };
 
@@ -1725,8 +1744,13 @@ export function dependencies(kind: FeatureKind): number[] {
     case "point":
       return point(kind.def);
     case "sweep":
+      return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature, ...(kind.guide ? [kind.guide.type === "sketch" ? kind.guide.sketch : kind.guide.feature] : [])];
     case "surface_sweep":
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
+    case "wrap":
+      return [kind.sketch];
+    case "split_faces":
+      return kind.tool.type === "plane" ? plane(kind.tool.plane) : [kind.tool.feature];
     case "helix":
     case "rotate_face":
       return axis(kind.axis);

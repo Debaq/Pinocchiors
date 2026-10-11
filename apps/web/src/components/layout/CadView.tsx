@@ -873,7 +873,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!d || d.selecting || ui.session()) return undefined;
     const f = d.doc.features.find((x) => x.id === d.feature);
     const h = f && store.stateOf(f.id)?.handle;
-    return f && h && ["extrude", "hole", "sheet_metal"].includes(f.kind.type) ? { id: f.id, h } : undefined;
+    // Las operaciones con flecha la traen del cálculo (extrusión, agujero, chapa, mover cara, engrosar,
+    // vaciado, redondeo, chaflán, patrón lineal)
+    return f && h ? { id: f.id, h } : undefined;
   });
   const [handleHot, setHandleHot] = createSignal(false);
   // Arrastre en curso: la flecha del comienzo y dónde va la punta (mm, con signo)

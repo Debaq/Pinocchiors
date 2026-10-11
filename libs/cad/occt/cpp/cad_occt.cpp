@@ -16,6 +16,8 @@
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <GCE2d_MakeSegment.hxx>
+#include <BRepFeat_SplitShape.hxx>
 #include <BRepProj_Projection.hxx>
 #include <ShapeAnalysis_FreeBounds.hxx>
 #include <TopTools_HSequenceOfShape.hxx>
@@ -736,7 +738,7 @@ CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape*
         if (n < 1) throw Standard_Failure("se necesita al menos una sección");
         BRepOffsetAPI_MakePipeShell mk(wire_of(spine->s));
         // Con curva guía, el perfil la sigue (gira y se escala para tocarla)
-        if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_NoContact);
+        if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_ContactOnBorder);
         else mk.SetMode(Standard_False);
         for (int32_t i = 0; i < n; i++) mk.Add(wire_of(wires[i]->s), Standard_False, Standard_False);
         mk.Build();
@@ -934,6 +936,68 @@ CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) {
         if (!sec.IsDone()) throw Standard_Failure("no se pudo calcular el cruce");
         if (!TopExp_Explorer(sec.Shape(), TopAbs_EDGE).More()) throw Standard_Failure("las caras no se cruzan");
         return wrap(chain_edges({sec.Shape()}));
+    });
+}
+
+CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* sizes, int32_t n) {
+    return guard("parche sobre la cara", (CadShape*)nullptr, [&] {
+        TopExp_Explorer fx(face->s, TopAbs_FACE);
+        if (!fx.More()) throw Standard_Failure("se esperaba una cara");
+        TopoDS_Face f = TopoDS::Face(fx.Current());
+        Handle(Geom_Surface) surf = BRep_Tool::Surface(f);
+        if (n < 1) throw Standard_Failure("sin contorno");
+        // Cada lazo: segmentos rectos en (u, v), que sobre la superficie siguen su forma
+        int at = 0;
+        std::vector<TopoDS_Wire> loops;
+        for (int32_t k = 0; k < n; k++) {
+            BRepBuilderAPI_MakeWire mw;
+            int m = sizes[k];
+            for (int i = 0; i < m; i++) {
+                gp_Pnt2d a(uv[2 * (at + i)], uv[2 * (at + i) + 1]);
+                gp_Pnt2d b(uv[2 * (at + (i + 1) % m)], uv[2 * (at + (i + 1) % m) + 1]);
+                if (a.Distance(b) < 1e-12) continue;
+                Handle(Geom2d_TrimmedCurve) seg = GCE2d_MakeSegment(a, b).Value();
+                mw.Add(BRepBuilderAPI_MakeEdge(seg, surf).Edge());
+            }
+            if (!mw.IsDone()) throw Standard_Failure("un contorno no se pudo armar sobre la cara");
+            loops.push_back(mw.Wire());
+            at += m;
+        }
+        BRepBuilderAPI_MakeFace mf(surf, loops[0], Standard_True);
+        for (size_t k = 1; k < loops.size(); k++) mf.Add(loops[k]);
+        if (!mf.IsDone()) throw Standard_Failure("el contorno no forma una cara");
+        TopoDS_Face patch = mf.Face();
+        BRepLib::BuildCurves3d(patch);
+        ShapeFix_Face fix(patch);
+        fix.Perform();
+        patch = fix.Face();
+        // Con la normal hacia afuera, como la cara de la que sale
+        if (f.Orientation() == TopAbs_REVERSED) patch.Reverse();
+        return wrap(patch);
+    });
+}
+
+CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, const CadShape* tool) {
+    return guard("línea de partición", (CadShape*)nullptr, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        BRepFeat_SplitShape split(s->s);
+        int added = 0;
+        for (int32_t i = 0; i < n; i++) {
+            if (faces[i] < 0 || faces[i] >= m.Extent()) throw Standard_Failure("cara inexistente");
+            TopoDS_Face f = TopoDS::Face(m(faces[i] + 1));
+            // Lo que la herramienta deja sobre la cara (con su curva en el parámetro de la cara)
+            BRepAlgoAPI_Section sec(f, tool->s, Standard_False);
+            sec.ComputePCurveOn1(Standard_True);
+            sec.Approximation(Standard_True);
+            sec.Build();
+            if (!sec.IsDone()) continue;
+            for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next(), added++) split.Add(TopoDS::Edge(ex.Current()), f);
+        }
+        if (added == 0) throw Standard_Failure("la herramienta no cruza las caras elegidas");
+        split.Build();
+        if (!split.IsDone()) throw Standard_Failure("no se pudieron partir las caras");
+        record(split, {s->s}, split.Shape());
+        return wrap_checked(split.Shape(), "línea de partición");
     });
 }
 

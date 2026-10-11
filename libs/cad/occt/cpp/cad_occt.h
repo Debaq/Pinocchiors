@@ -95,6 +95,11 @@ CadShape* cad_chain(const CadShape* const* shapes, int32_t n);
 CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction);
 // Curvas donde se cruzan dos formas (caras o piezas), encadenadas.
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
+// Parche sobre la superficie de `face`: `n` lazos en (u, v) (el primero el de afuera, los demás
+// agujeros), `sizes[k]` puntos cada uno; la normal como la de la cara.
+CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* sizes, int32_t n);
+// Parte las caras `faces` donde las cruza `tool` (un plano grande o curvas sobre ellas), sin separar el sólido.
+CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, const CadShape* tool);
 // La cara extendida `distance` por todos sus lados (siguiendo su superficie).
 CadShape* cad_extend_face(const CadShape* face, double distance);
 // Transición con punta (vértice al comienzo o al final, nulos si no) y cerrada (vuelve a la primera).

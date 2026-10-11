@@ -154,6 +154,15 @@ pub enum PlaneDef {
     },
 }
 
+/// Con qué se parten las caras en una línea de partición.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PartingTool {
+    Plane { plane: PlaneSpec },
+    /// Una curva del historial que pasa por las caras (proyectada, de cruce...).
+    Curve { feature: FeatureId },
+}
+
 /// Cómo se arma una curva de referencia.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -931,6 +940,17 @@ pub enum FeatureKind {
     /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
     /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
     SurfaceOffset { parts: Vec<PartId>, distance: f64 },
+    /// Grabado o relieve: las regiones de un sketch envuelto sobre su cara,
+    /// hundidas (o levantadas con `emboss`) `depth` mm siguiendo la superficie.
+    Wrap {
+        sketch: FeatureId,
+        depth: f64,
+        #[serde(default)]
+        emboss: bool,
+    },
+    /// Línea de partición: parte caras donde las cruza un plano o una curva,
+    /// sin separar la pieza (para desmoldes y caras de colores distintos).
+    SplitFaces { faces: Vec<FaceRef>, tool: PartingTool },
     /// Curva de referencia hecha de otras (usable como camino de barridos y patrones).
     Curve { def: CurveDef },
     /// Extiende superficies `distance` más allá de bordes libres (cada cara
@@ -1139,6 +1159,9 @@ pub struct Sweep {
     /// Barrido delgado: una pared de este espesor siguiendo el contorno.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thin: Option<f64>,
+    /// Curva guía: el perfil gira y se escala para seguirla.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide: Option<SweepPath>,
 }
 
 /// Orientación del perfil en un barrido.
@@ -1277,9 +1300,19 @@ impl FeatureKind {
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),
-            FeatureKind::Sweep(s) => match &s.path {
-                SweepPath::Sketch { sketch, .. } => vec![s.sketch, *sketch],
-                SweepPath::Curve { feature } => vec![s.sketch, *feature],
+            FeatureKind::Sweep(s) => {
+                let dep = |p: &SweepPath| match p {
+                    SweepPath::Sketch { sketch, .. } => *sketch,
+                    SweepPath::Curve { feature } => *feature,
+                };
+                let mut d = vec![s.sketch, dep(&s.path)];
+                d.extend(s.guide.iter().map(dep));
+                d
+            }
+            FeatureKind::Wrap { sketch, .. } => vec![*sketch],
+            FeatureKind::SplitFaces { tool, .. } => match tool {
+                PartingTool::Plane { plane } => plane_deps(plane),
+                PartingTool::Curve { feature } => vec![*feature],
             },
             FeatureKind::SurfaceSweep { sketch, path, .. } => match path {
                 SweepPath::Sketch { sketch: p, .. } => vec![*sketch, *p],
@@ -1426,6 +1459,9 @@ impl FeatureKind {
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
             FeatureKind::SurfaceLoft { .. } => "Superficie por transición",
             FeatureKind::SurfaceExtend { .. } => "Extender superficie",
+            FeatureKind::Wrap { emboss: true, .. } => "Relieve",
+            FeatureKind::Wrap { .. } => "Grabado",
+            FeatureKind::SplitFaces { .. } => "Línea de partición",
             FeatureKind::Curve { def: CurveDef::Composite { .. } } => "Curva compuesta",
             FeatureKind::Curve { def: CurveDef::Projected { .. } } => "Curva proyectada",
             FeatureKind::Curve { def: CurveDef::Intersection { .. } } => "Curva de cruce",

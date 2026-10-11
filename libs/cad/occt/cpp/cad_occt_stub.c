@@ -35,6 +35,8 @@ CadShape* cad_pipe_ex(const CadShape* p, const CadShape* s, int32_t m, int32_t s
 CadShape* cad_chain(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
 CadShape* cad_project_curves(const CadShape* c, const CadShape* t, const double* d) { (void)c; (void)t; (void)d; FAIL_PTR; }
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) { (void)a; (void)b; FAIL_PTR; }
+CadShape* cad_face_patch(const CadShape* f, const double* uv, const int32_t* s, int32_t n) { (void)f; (void)uv; (void)s; (void)n; FAIL_PTR; }
+CadShape* cad_split_faces(const CadShape* s, const int32_t* f, int32_t n, const CadShape* t) { (void)s; (void)f; (void)n; (void)t; FAIL_PTR; }
 CadShape* cad_extend_face(const CadShape* f, double d) { (void)f; (void)d; FAIL_PTR; }
 CadShape* cad_loft_ex(const CadShape* const* w, int32_t n, int32_t s, int32_t r, const double* a, const double* b, int32_t c) { (void)w; (void)n; (void)s; (void)r; (void)a; (void)b; (void)c; FAIL_PTR; }
 CadShape* cad_loft_pipe(const CadShape* const* w, int32_t n, const CadShape* sp, const CadShape* g, int32_t s) { (void)w; (void)n; (void)sp; (void)g; (void)s; FAIL_PTR; }
