@@ -466,7 +466,12 @@ impl Mesh {
                         let nrm = normals[v].try_normalize(1e-30).unwrap_or_else(V3::zeros);
                         let d = c - p;
                         let q = p + d - nrm * nrm.dot(&d);
-                        bvh.query_closest(&pinocchio_math::Vector3(q)).map_or(q, |hit| hit.point.0)
+                        // En láminas delgadas (cáscaras) la piel de enfrente
+                        // puede quedar más cerca: solo las caras que miran igual
+                        let q = pinocchio_math::Vector3(q);
+                        bvh.query_closest_facing(&q, &pinocchio_math::Vector3(nrm))
+                            .or_else(|| bvh.query_closest(&q))
+                            .map_or(q.0, |hit| hit.point.0)
                     }
                 }
             })

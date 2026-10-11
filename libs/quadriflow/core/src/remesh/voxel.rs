@@ -24,6 +24,9 @@ pub struct VoxelOptions {
     /// Corre la superficie hacia afuera esta distancia (negativo: hacia
     /// adentro), medida exacta desde la malla; 0: la superficie misma.
     pub offset: f64,
+    /// Distinto de cero: una cáscara de este espesor desde la superficie
+    /// corrida `offset` (positivo: hacia afuera; negativo: hacia adentro).
+    pub thickness: f64,
 }
 
 /// Vóxeles en el eje más largo, a lo sumo.
@@ -75,7 +78,7 @@ pub fn voxel(positions: &[[f32; 3]], indices: &[u32], options: &VoxelOptions) ->
     }
     let surface = super::surface_of(positions, indices)?;
     let diagonal = surface.bbox_diagonal();
-    let mut rebuilt = crate::rebuild::rebuild_with_limit(&surface, options.voxel_size, MAX_CELLS, options.offset);
+    let mut rebuilt = crate::rebuild::rebuild_with_limit(&surface, options.voxel_size, MAX_CELLS, options.offset, options.thickness);
     rebuilt.weld(diagonal * 1e-7);
     if rebuilt.triangles.is_empty() {
         return Err(RemeshError::EmptyMesh);

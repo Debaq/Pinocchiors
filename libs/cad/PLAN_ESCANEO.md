@@ -28,7 +28,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
 | Sketch anclado a la malla | ✅ corte como guía, anclajes y «Usar el corte» (E1.4) |
 | Extruir hasta el escaneo | ✅ extrusión, cara y nervio (E3) |
-| Formas que siguen la piel (engrosar parche, carcasa, molde) | ❌ (E4) |
+| Formas que siguen la piel (engrosar parche, carcasa, molde) | 🟡 carcasa y parche bajo sketch (E4.1) |
 | Curvas sobre la malla | ❌ (E5) |
 | Verificar calce (choque/holgura firmada) | 🟡 desviación sin signo de calce (E6) |
 | Ajuste de cono, toro, redondeos | ❌ (E7) |
@@ -193,11 +193,45 @@ escaneo ✅, E1.4 sketch anclado al corte ✅. **E1 cerrada (2026-10-10).**
 
 ### E4 — Formas que siguen la piel
 
-- Región sobre la malla: pintar con pincel o proyectar un contorno cerrado de un sketch.
-- Parche → engrosar hacia afuera o adentro con separación → cuerpo cerrado (férula, almohadilla,
-  tapa que calza). Carcasa completa = desfase exterior − desfase interior.
-- Molde: caja − escaneo desfasado, partido por plano o por la línea de mayor contorno, con
-  llaves de registro (`print3d` ya tiene tarugos).
+Partes: E4.1 carcasa y parche bajo un sketch, E4.2 región pintada con pincel, E4.3 molde.
+
+- E4.1 carcasa y parche:
+  - `ScanBody.thickness`: carcasa de ese espesor desde la piel corrida la holgura (negativo:
+    hacia adentro). Sale de una sola pasada de vóxeles (`VoxelOptions.thickness`: adentro =
+    distancia con signo entre los dos desfases), no de dos booleanas. Un escaneo cerrado da
+    dos pieles (la de afuera y la del hueco); uno abierto, una «taza» que rodea el borde.
+  - `ScanBody.region` (sketch + regiones): el prisma de las regiones (atraviesa todo) ∩ la
+    carcasa, y de los pedazos solo los primeros que encuentran los rayos desde el sketch
+    hacia cada lado (sketch arriba de un brazo: la cara de arriba, no la de abajo). Paredes
+    del borde paralelas a la normal del sketch.
+  - UI: «Carcasa» y «Parche desde sketch» en la pestaña del escaneo (2 mm afuera, 0,2 mm de
+    holgura, pieza nueva); en el diálogo, Forma (lleno / carcasa afuera / adentro), Espesor y
+    «Solo bajo» (sketch + regiones).
+  - Hallazgos: (1) en un escaneo abierto el signo de la distancia salta en los huecos y la
+    piel de adentro rodea el borde como un tubo del grosor de la holgura; el isótropo lo
+    pliega (~900 cruces en el conejo) y OCCT da booleanas vacías sin avisar. Se cierra el
+    escaneo primero por vóxeles (del doble de lado: la carcasa cuesta según los triángulos
+    que recibe) y la carcasa sale de esa piel cerrada. (2) Lado del isótropo ≤ espesor. (3)
+    El isótropo reproyecta solo sobre caras que miran igual (`Bvh::query_closest_facing`):
+    en láminas delgadas la piel de enfrente puede estar más cerca. (4) Triángulos-astilla
+    (altura < 1 % del lado) se giran o se funden (`fix_slivers`). (5) `cad_from_mesh` arma
+    una cáscara por pieza conexa: las de volumen negativo son huecos del sólido que las
+    contiene; orientada por volumen con signo. (6) En `rebuild` el corte nunca a menos de
+    1e-3 vóxel de un punto de la grilla (la soldadura abría agujeros).
+  - Límites: espesor ≥ 2,5 vóxeles (la grilla tiene tope de 640 por eje: en el gonfoterio de
+    1 m, ≥ 4,2 mm) y ≤ 100 000 triángulos estimados (lado ≤ espesor; gonfoterio ≥ 7 mm, y
+    aun así tarda minutos). Conejo, 2 mm: preparar 12 s, sólido 0,9 s, caja − carcasa 4 s.
+  - Pruebas: `voxel_shell_keeps_the_band_between_two_offsets` (quadriflow),
+    `scan_shell_and_patch_under_a_sketch` (esfera: carcasa con hueco al 2 %, parche solo
+    arriba) y e2e «escaneo: carcasa y parche bajo un sketch». Banco: `ESPESOR=2` en
+    `scan_body`.
+  - Pendiente: la caja − cuerpo del conejo a −0,5 mm cortado a media altura sigue fallando
+    (no eran las astillas); paredes del parche perpendiculares a la piel (llega con E4.2).
+- E4.2 región pintada: pincel sobre la malla (muestras ligadas al escaneo como las
+  referencias de E1.3), campo por vértice interpolado en el punto más cercano; bordes
+  perpendiculares a la piel.
+- E4.3 molde: caja − escaneo desfasado, partido por plano o por la línea de mayor contorno,
+  con llaves de registro (`print3d` ya tiene tarugos) y bebedero.
 
 ### E5 — Curvas sobre la piel
 

@@ -10,7 +10,7 @@
 use std::collections::HashMap;
 
 use cad_model::geom::{P3, add, cross, dot, norm, scale, sub};
-use quadriflow_core::remesh::{IsotropicOptions, VoxelOptions, isotropic, surface_stats, voxel};
+use quadriflow_core::remesh::{IsotropicOptions, VoxelOptions, isotropic, surface_stats, voxel, voxel_grid};
 
 /// Cómo preparar el cuerpo.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -21,6 +21,10 @@ pub struct BodyOptions {
     /// Holgura (mm): positiva agranda el escaneo (encajes que no aprieten),
     /// negativa lo achica.
     pub offset: f64,
+    /// Distinto de cero: una cáscara de este espesor desde la piel corrida
+    /// `offset` (positivo: hacia afuera; negativo: hacia adentro), en vez del
+    /// cuerpo lleno.
+    pub thickness: f64,
 }
 
 /// Malla cerrada y manifold, orientada hacia afuera.
@@ -37,13 +41,17 @@ pub const MIN_FACES: usize = 500;
 /// Más ya no es razonable para booleanas de OpenCASCADE (~10 s cada una).
 pub const MAX_FACES: usize = 100_000;
 
+/// Vóxeles que tiene que abarcar el espesor de una cáscara (con menos, las
+/// dos pieles se tocan y se abren agujeros).
+const MIN_SHELL_VOXELS: f64 = 2.5;
+
 /// Triángulos del isótropo / triángulos equiláteros del lado pedido en la misma área.
 const ISOTROPIC_FILL: f64 = 0.75;
 
 /// Prepara el escaneo como cuerpo.
 pub fn prepare_body(vertices: &[P3], triangles: &[[u32; 3]], options: &BodyOptions) -> Result<BodyMesh, String> {
-    if !(options.offset.is_finite()) {
-        return Err("la holgura no es un número".into());
+    if !(options.offset.is_finite() && options.thickness.is_finite()) {
+        return Err("la holgura o el espesor no es un número".into());
     }
     let faces = options.faces.clamp(MIN_FACES, MAX_FACES);
     let positions: Vec<[f32; 3]> = vertices.iter().map(|p| p.map(|c| c as f32)).collect();
@@ -53,10 +61,50 @@ pub fn prepare_body(vertices: &[P3], triangles: &[[u32; 3]], options: &BodyOptio
         return Err("el escaneo no tiene superficie".into());
     }
     let triangle_area = |edge: f64| 3f64.sqrt() / 4.0 * edge * edge;
-    // Vóxeles a la mitad del lado que tendría el cuerpo con el área del escaneo
+    // Vóxeles a la mitad del lado que tendría el cuerpo con el área del
+    // escaneo; en una cáscara, también menos de un tercio del espesor (si no,
+    // las dos pieles se tocan)
     let rough = (stats.area / triangle_area(1.0) / faces as f64).sqrt();
-    let opts = VoxelOptions { voxel_size: rough / 2.0, smooth_iterations: 0, isotropic_edge: None, offset: options.offset };
-    let closed = voxel(&positions, &indices, &opts).map_err(|e| match e {
+    let rough = if options.thickness != 0.0 { rough.min(options.thickness.abs() * 2.0 / 3.0) } else { rough };
+    if options.thickness != 0.0 {
+        // Los triángulos no pueden ser más largos que el espesor (ver abajo):
+        // con las dos pieles (~el doble del área), cuántos harían falta
+        let needed = |t: f64| ISOTROPIC_FILL * 2.0 * stats.area / triangle_area(t);
+        if needed(options.thickness.abs()) > MAX_FACES as f64 {
+            let min = (ISOTROPIC_FILL * 2.0 * stats.area / (triangle_area(1.0) * MAX_FACES as f64)).sqrt();
+            return Err(format!(
+                "la carcasa necesita demasiados triángulos para el tamaño del escaneo ({:.0} mm de largo): espesor de al menos {min:.1} mm",
+                stats.extent
+            ));
+        }
+    }
+    // La grilla tiene un tope de vóxeles por eje: en escaneos grandes una
+    // cáscara fina no entra (sale en pedazos)
+    let voxel_size = voxel_grid(&positions, &indices, rough / 2.0).voxel_size;
+    if options.thickness != 0.0 && options.thickness.abs() < MIN_SHELL_VOXELS * voxel_size {
+        return Err(format!(
+            "el espesor es muy fino para el tamaño del escaneo ({:.0} mm de largo): al menos {:.1} mm",
+            stats.extent,
+            MIN_SHELL_VOXELS * voxel_size
+        ));
+    }
+    // Carcasa de un escaneo abierto: primero cerrado (los huecos tapados).
+    // Sobre la malla abierta el signo de la distancia salta en los huecos y
+    // la piel de adentro rodea el borde como un tubo del grosor de la
+    // holgura, que el isótropo pliega (las pieles se cruzan)
+    let reclosed;
+    let (positions, indices) = if options.thickness != 0.0 && open_edges(triangles) > 0 {
+        // Con vóxeles del doble: la carcasa cuesta según los triángulos que
+        // recibe (cada uno recorre la banda), y los de la grilla fina son muchos
+        let close = VoxelOptions { voxel_size: rough, smooth_iterations: 0, isotropic_edge: None, offset: 0.0, thickness: 0.0 };
+        reclosed = voxel(&positions, &indices, &close).map_err(|e| e.to_string())?;
+        (&reclosed.positions, &reclosed.indices)
+    } else {
+        (&positions, &indices)
+    };
+    let opts = VoxelOptions { voxel_size: rough / 2.0, smooth_iterations: 0, isotropic_edge: None, offset: options.offset, thickness: options.thickness };
+    let closed = voxel(positions, indices, &opts).map_err(|e| match e {
+        quadriflow_core::RemeshError::EmptyMesh if options.thickness != 0.0 => "la cáscara quedó vacía".to_string(),
         quadriflow_core::RemeshError::EmptyMesh => "la holgura se comió el escaneo entero".to_string(),
         e => e.to_string(),
     })?;
@@ -66,6 +114,9 @@ pub fn prepare_body(vertices: &[P3], triangles: &[[u32; 3]], options: &BodyOptio
     // equiláteros que cabrían (medido)
     let area = surface_stats(&closed.positions, &closed.indices).area;
     let edge = (ISOTROPIC_FILL * area / triangle_area(1.0) / faces as f64).sqrt();
+    // En una carcasa, triángulos más largos que el espesor cruzan las dos
+    // pieles en las concavidades: hacen falta más triángulos que los pedidos
+    let edge = if options.thickness != 0.0 { edge.min(options.thickness.abs()) } else { edge };
     // El isótropo a veces deja un agujero de tres vértices en fila (una
     // astilla que se cayó al soldar): se tapa y, si queda alguno sin área, se
     // rehace con un lado apenas distinto. Sin eso OpenCASCADE tiene que
@@ -79,12 +130,107 @@ pub fn prepare_body(vertices: &[P3], triangles: &[[u32; 3]], options: &BodyOptio
         let mut triangles: Vec<[u32; 3]> = mesh.indices.chunks_exact(3).map(|t| [t[0], t[1], t[2]]).collect();
         drop_specks(&mut triangles, &vertices);
         close_open_edges(&mut vertices, &mut triangles);
+        fix_slivers(&vertices, &mut triangles, edge * SLIVER);
         last = solid_problems(&vertices, &triangles);
         if last == SolidProblems::default() {
             return Ok(BodyMesh { vertices, triangles, edge });
         }
     }
     Err(format!("el escaneo no quedó cerrado ({last:?})"))
+}
+
+/// Altura mínima de un triángulo, en lados del isótropo.
+const SLIVER: f64 = 0.01;
+
+/// Triángulos casi sin altura (lo que a veces dejan el isótropo o el tapado
+/// de agujeros): OpenCASCADE los toma con tolerancias que se pisan y las
+/// booleanas dan vacío sin avisar. Un capuchón (el vértice casi sobre el lado
+/// largo) se arregla girando ese lado con el triángulo vecino; una aguja (un
+/// lado casi nulo), juntando sus dos puntas.
+fn fix_slivers(vertices: &[P3], triangles: &mut Vec<[u32; 3]>, min_height: f64) {
+    let p = |i: u32| vertices[i as usize];
+    for _ in 0..4 {
+        let mut owner: HashMap<(u32, u32), usize> = HashMap::new();
+        for (i, t) in triangles.iter().enumerate() {
+            for k in 0..3 {
+                owner.insert((t[k], t[(k + 1) % 3]), i);
+            }
+        }
+        let mut ring: HashMap<u32, Vec<u32>> = HashMap::new();
+        for t in triangles.iter() {
+            for k in 0..3 {
+                ring.entry(t[k]).or_default().push(t[(k + 1) % 3]);
+            }
+        }
+        let mut merge: HashMap<u32, u32> = HashMap::new();
+        // Vértices cuyo entorno ya cambió en esta pasada
+        let mut locked: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut touched = vec![false; triangles.len()];
+        let mut changed = false;
+        for i in 0..triangles.len() {
+            if touched[i] {
+                continue;
+            }
+            let t = triangles[i];
+            let len = |k: usize| norm(sub(p(t[(k + 1) % 3]), p(t[k])));
+            let k = (0..3).max_by(|&a, &b| len(a).total_cmp(&len(b))).unwrap();
+            let area2 = norm(cross(sub(p(t[1]), p(t[0])), sub(p(t[2]), p(t[0]))));
+            if area2 / len(k).max(1e-300) >= min_height {
+                continue;
+            }
+            let (a, b, c) = (t[k], t[(k + 1) % 3], t[(k + 2) % 3]);
+            let shortest = (0..3).map(len).fold(f64::INFINITY, f64::min);
+            if shortest < min_height {
+                // Aguja: las puntas del lado corto a su punto medio
+                let s = (0..3).min_by(|&x, &y| len(x).total_cmp(&len(y))).unwrap();
+                let (u, v) = (t[s], t[(s + 1) % 3]);
+                if locked.contains(&u) || locked.contains(&v) {
+                    continue;
+                }
+                // Condición de enlace: u y v comparten solo los dos vértices
+                // opuestos de sus caras (si no, juntar pellizca la superficie)
+                let (nu, nv) = (&ring[&u], &ring[&v]);
+                let common = nu.iter().filter(|w| nv.contains(w)).count();
+                if common != 2 || nu.len() <= 3 || nv.len() <= 3 {
+                    continue;
+                }
+                locked.extend(nu.iter().chain(nv).copied());
+                locked.extend([u, v]);
+                merge.insert(v, u);
+                touched[i] = true;
+                changed = true;
+                continue;
+            }
+            // Capuchón: girar el lado largo a–b con el vecino (b, a, d)
+            let Some(&j) = owner.get(&(b, a)) else { continue };
+            if touched[j] {
+                continue;
+            }
+            let o = triangles[j];
+            let d = o[(o.iter().position(|&x| x == b).unwrap() + 2) % 3];
+            if d == c || owner.contains_key(&(c, d)) || owner.contains_key(&(d, c)) || [a, b, c, d].iter().any(|x| locked.contains(x)) {
+                continue;
+            }
+            // Las aristas cerca ya no son las del mapa: nada más en esta pasada
+            locked.extend([a, b, c, d]);
+            triangles[i] = [a, d, c];
+            triangles[j] = [d, b, c];
+            touched[i] = true;
+            touched[j] = true;
+            changed = true;
+        }
+        if !merge.is_empty() {
+            // La punta que se va queda en el lugar de la otra (sin mover
+            // vértices: los demás triángulos que la usan siguen igual de planos)
+            for t in triangles.iter_mut() {
+                *t = t.map(|i| merge.get(&i).copied().unwrap_or(i));
+            }
+            triangles.retain(|t| t[0] != t[1] && t[1] != t[2] && t[2] != t[0]);
+        }
+        if !changed {
+            break;
+        }
+    }
 }
 
 /// Aristas con una sola cara (o con más de dos), contando ambos sentidos.
@@ -131,6 +277,7 @@ pub fn solid_problems(vertices: &[P3], triangles: &[[u32; 3]]) -> SolidProblems 
 
 /// Las motas sueltas (restos de ruido o de partes finas que la holgura
 /// negativa se comió) se descartan: menos del 1 % del volumen de la mayor.
+/// Los huecos (pieles hacia adentro de una cáscara) cuentan por su tamaño.
 fn drop_specks(triangles: &mut Vec<[u32; 3]>, vertices: &[P3]) {
     let mut parent: Vec<u32> = (0..vertices.len() as u32).collect();
     fn root(p: &mut [u32], mut x: u32) -> u32 {
@@ -153,11 +300,11 @@ fn drop_specks(triangles: &mut Vec<[u32; 3]>, vertices: &[P3]) {
         let [a, b, c] = t.map(|i| vertices[i as usize]);
         *volume.entry(*r).or_default() += dot(a, cross(b, c)) / 6.0;
     }
-    let largest = volume.values().copied().fold(0.0, f64::max);
+    let largest = volume.values().map(|v| v.abs()).fold(0.0, f64::max);
     let mut k = 0;
     triangles.retain(|_| {
         k += 1;
-        volume[&roots[k - 1]] >= largest * 0.01
+        volume[&roots[k - 1]].abs() >= largest * 0.01
     });
 }
 

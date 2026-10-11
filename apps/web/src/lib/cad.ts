@@ -557,8 +557,19 @@ export type FeatureKind =
   | { type: "mirror"; features: number[]; plane: PlaneSpec }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
   | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
-  /** El escaneo elegido como sólido (rehecho por vóxeles con la holgura, a unos `faces` triángulos) */
-  | { type: "scan_body"; offset: number; faces: number; op: BodyOp }
+  /**
+   * El escaneo elegido como sólido (rehecho por vóxeles con la holgura, a unos `faces` triángulos).
+   * `thickness` ≠ 0: carcasa de ese espesor (negativo, hacia adentro); `region`: solo el parche
+   * bajo esas regiones de un sketch
+   */
+  | {
+      type: "scan_body";
+      offset: number;
+      faces: number;
+      op: BodyOp;
+      thickness?: number;
+      region?: { sketch: number; regions: RegionSelection } | null;
+    }
   /** Entre piezas: unir todas en la primera, restar `tools` de `targets` o dejar lo común */
   | { type: "boolean"; op: "union" | "subtract" | "intersect"; targets: PartId[]; tools: PartId[]; keep_tools: boolean }
   /** Separa los sólidos sueltos de cada pieza (vacío = todas) */
@@ -1466,6 +1477,8 @@ export function editsAsSketch(kind: FeatureKind): kind is Extract<FeatureKind, {
 
 /** Nombre del tipo de operación (las primitivas, por su forma) */
 export function kindLabel(kind: FeatureKind): string {
+  if (kind.type === "scan_body" && kind.region) return "Parche del escaneo";
+  if (kind.type === "scan_body" && kind.thickness) return "Carcasa del escaneo";
   return kind.type === "primitive" ? PRIMITIVE_LABELS[kind.shape.type] : FEATURE_LABELS[kind.type];
 }
 
@@ -1543,6 +1556,8 @@ export function dependencies(kind: FeatureKind): number[] {
       return [...kind.features, ...plane(kind.plane)];
     case "boolean":
       return [...kind.targets, ...kind.tools].map((p) => p.feature);
+    case "scan_body":
+      return kind.region ? [kind.region.sketch] : [];
     case "split_parts":
     case "delete_parts":
       return kind.parts.map((p) => p.feature);

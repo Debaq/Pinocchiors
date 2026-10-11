@@ -296,7 +296,7 @@ fn scan_body_leaves_a_cradle_with_clearance() {
     }
     let scan = scan_of(&part(), 0.02);
     let clearance = 0.3;
-    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 8000, offset: clearance }).unwrap();
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 8000, offset: clearance, thickness: 0.0 }).unwrap();
     assert_eq!(solid_problems(&body.vertices, &body.triangles), Default::default());
     assert_eq!(open_edges(&body.triangles), 0);
     let solid = Shape::from_mesh(&body.vertices, &body.triangles, 1e-4).unwrap();
@@ -315,7 +315,7 @@ fn scan_body_leaves_a_cradle_with_clearance() {
         op: BodyOp::New,
         link: None,
     }));
-    let id = doc.add(FeatureKind::ScanBody(ScanBody { offset: clearance, faces: 8000, op: BodyOp::Cut, mesh: None }));
+    let id = doc.add(FeatureKind::ScanBody(ScanBody { offset: clearance, faces: 8000, op: BodyOp::Cut, ..Default::default() }));
     // Sin malla (sin escaneo): la operación avisa
     let ev = doc.evaluate();
     assert!(matches!(ev.status[1].state, FeatureState::Error { .. }), "{:?}", ev.status[1].state);
@@ -346,7 +346,7 @@ fn extrude_up_to_the_scan_follows_the_curved_skin() {
     let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
     let scan = ScanMesh::new(&t.positions, &t.triangles);
     let gap = 0.5;
-    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap }).unwrap();
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap, thickness: 0.0 }).unwrap();
     let mesh = ScanBodyMesh { hash: 7, data: std::sync::Arc::new((body.vertices, body.triangles)), error: None };
 
     let r = 5.0;
@@ -381,7 +381,7 @@ fn extrude_up_to_the_scan_follows_the_curved_skin() {
 fn floating_ball(gap: f64) -> ScanBodyMesh {
     let t = Shape::sphere([0.0, 0.0, 40.0], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
     let scan = ScanMesh::new(&t.positions, &t.triangles);
-    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap }).unwrap();
+    let body = prepare_body(&scan.vertices, &scan.triangles, &BodyOptions { faces: 20000, offset: gap, thickness: 0.0 }).unwrap();
     ScanBodyMesh { hash: 11 + gap.to_bits(), data: std::sync::Arc::new((body.vertices, body.triangles)), error: None }
 }
 
@@ -454,4 +454,47 @@ fn face_and_rib_up_to_the_scan() {
     // El nervio sigue la piel por tramos (32 por línea)
     assert_relative_eq!(m.volume, 1000.0 + rib, max_relative = 0.01);
     assert_eq!(ev.parts.len(), 1, "el nervio se une al bloque");
+}
+
+/// Carcasa que copia la piel de una esfera escaneada (dos pieles: la de
+/// afuera y la del hueco) y el parche que cae bajo un círculo de un sketch
+/// puesto arriba: solo la tapa de arriba, no la de abajo.
+#[test]
+fn scan_shell_and_patch_under_a_sketch() {
+    if !occt::available() {
+        return;
+    }
+    let t = Shape::sphere([0.0; 3], 20.0).unwrap().tessellate(0.02, 0.05).unwrap();
+    let scan = ScanMesh::new(&t.positions, &t.triangles);
+    let (gap, thick) = (0.5, 2.0);
+    let options = BodyOptions { faces: 20000, offset: gap, thickness: thick };
+    let shell = prepare_body(&scan.vertices, &scan.triangles, &options).unwrap();
+    assert_eq!(solid_problems(&shell.vertices, &shell.triangles), Default::default());
+    let solid = Shape::from_mesh(&shell.vertices, &shell.triangles, 1e-4).unwrap();
+    assert_eq!(solid.kind(), occt::ShapeKind::Solid);
+    assert!(solid.is_valid());
+    let (r1, r2) = (20.0 + gap, 20.0 + gap + thick);
+    let ball = |r: f64| 4.0 / 3.0 * PI * r * r * r;
+    assert_relative_eq!(solid.mass().unwrap().volume, ball(r2) - ball(r1), max_relative = 0.02);
+    // El hueco: un punto adentro de la esfera queda afuera del sólido
+    assert_eq!(solid.ray_hit([0.0; 3], [0.0, 0.0, 1.0]).map(|t| (t - r1).abs() < 0.2), Some(true));
+
+    // Parche bajo un círculo de radio 10 a 30 mm de altura
+    let mesh = ScanBodyMesh { hash: 5, data: std::sync::Arc::new((shell.vertices, shell.triangles)), error: None };
+    let r = 10.0;
+    let mut sketch = Sketch::default();
+    sketch.circle([0.0, 0.0], r);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 30.0, sketch });
+    let region = Some(ScanRegion { sketch: sk, regions: RegionSelection::All });
+    doc.add(FeatureKind::ScanBody(ScanBody { offset: gap, thickness: thick, region, mesh: Some(mesh), ..Default::default() }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(doc.features[1].kind.label(), "Parche del escaneo");
+    let m = ev.body.unwrap().mass().unwrap();
+    // ∫ 2πρ (√(r2² − ρ²) − √(r1² − ρ²)) dρ, ρ de 0 a 10
+    let cap = |big: f64| 2.0 * PI / 3.0 * (big.powi(3) - (big * big - r * r).powf(1.5));
+    assert_relative_eq!(m.volume, cap(r2) - cap(r1), max_relative = 0.02);
+    assert!(m.bbox_min[2] > 15.0, "solo la tapa de arriba: {:?}", m.bbox_min);
+    assert_relative_eq!(m.bbox_max[0], r, epsilon = 0.05);
 }

@@ -2,7 +2,8 @@
 //! isótropo), la pasa a sólido y le resta una caja que la corta por la mitad.
 //!
 //! `cargo run --release -p cad-scan --example scan_body -- malla N holgura [salida.stl]`
-//! (`CORTE=0.37`: altura del corte de la caja, fracción del alto; `SOLO_PREPARAR=1`: sin OCCT)
+//! (`CORTE=0.37`: altura del corte de la caja, fracción del alto; `SOLO_PREPARAR=1`: sin OCCT;
+//! `ESPESOR=2`: cáscara de ese espesor desde la piel corrida la holgura, negativo hacia adentro)
 
 use std::time::Instant;
 
@@ -28,7 +29,8 @@ fn main() {
     println!("{}: {} triángulos, {} aristas sueltas", path, triangles.len(), open_edges(&triangles));
 
     let t0 = Instant::now();
-    let body = prepare_body(&vertices, &triangles, &BodyOptions { faces, offset }).unwrap();
+    let thickness: f64 = std::env::var("ESPESOR").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+    let body = prepare_body(&vertices, &triangles, &BodyOptions { faces, offset, thickness }).unwrap();
     println!("preparado en {:.2} s: {} triángulos, lado {:.3} mm, {} aristas sueltas", t0.elapsed().as_secs_f64(), body.triangles.len(), body.edge, open_edges(&body.triangles));
     println!("{:?}", cad_scan::solid_problems(&body.vertices, &body.triangles));
     if let Some(out) = out {

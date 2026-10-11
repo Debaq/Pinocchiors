@@ -33,7 +33,7 @@ fn main() {
         let t0 = Instant::now();
         let area = surface_stats(&positions, &indices).area;
         let edge = (area / (3f64.sqrt() / 4.0 * target as f64)).sqrt();
-        let m = voxel(&positions, &indices, &VoxelOptions { voxel_size: edge / 2.0, smooth_iterations: 0, isotropic_edge: Some(edge), offset: 0.0 }).unwrap();
+        let m = voxel(&positions, &indices, &VoxelOptions { voxel_size: edge / 2.0, smooth_iterations: 0, isotropic_edge: Some(edge), offset: 0.0, thickness: 0.0 }).unwrap();
         println!("vóxeles + isótropo (lado {edge:.3} mm) en {:.2} s", t0.elapsed().as_secs_f64());
         positions = m.positions;
         indices = m.indices;

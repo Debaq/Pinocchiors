@@ -471,6 +471,24 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                     >
                       Escaneo como cuerpo
                     </Button>
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Pieza que copia la piel del escaneo con un espesor (carcasa, funda)"
+                        onClick={() => actions.startScanShell(false)}
+                      >
+                        Carcasa
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="Solo lo que cae bajo el contorno de un sketch, con espesor (férula, almohadilla, tapa que calza)"
+                        onClick={() => actions.startScanShell(true)}
+                      >
+                        Parche desde sketch
+                      </Button>
+                    </div>
                     <p class="text-[11px] text-text-dim leading-relaxed">
                       Hasta la piel: extrusión «Hasta el escaneo», «Cara al escaneo» (Modificar) y nervio «Hasta el escaneo».
                     </p>
@@ -2109,6 +2127,61 @@ export const FeatureEditor: Component<{
                 </p>
                 <Num label="Holgura" suffix="mm" step={0.05} value={k().offset} onCommit={(v) => update((x) => x.type === "scan_body" && (x.offset = v))} />
                 <p class="text-[11px] text-text-dim leading-relaxed">Positiva agranda el escaneo (el encaje no aprieta); negativa lo achica.</p>
+                <Row label="Forma">
+                  <Select
+                    options={[
+                      { value: "full", label: "Lleno" },
+                      { value: "out", label: "Carcasa hacia afuera" },
+                      { value: "in", label: "Carcasa hacia adentro" },
+                    ]}
+                    value={!k().thickness ? "full" : k().thickness! > 0 ? "out" : "in"}
+                    onChange={(v) =>
+                      update((x) => {
+                        if (x.type !== "scan_body") return;
+                        const t = Math.abs(x.thickness || 2);
+                        x.thickness = v === "full" ? 0 : v === "out" ? t : -t;
+                      })
+                    }
+                  />
+                </Row>
+                <Show when={k().thickness}>
+                  <Num
+                    label="Espesor"
+                    suffix="mm"
+                    step={0.5}
+                    min={0.1}
+                    value={Math.abs(k().thickness ?? 0)}
+                    onCommit={(v) => update((x) => x.type === "scan_body" && (x.thickness = Math.sign(x.thickness || 1) * Math.max(0.1, Math.abs(v))))}
+                  />
+                  <p class="text-[11px] text-text-dim leading-relaxed">
+                    Desde la piel corrida la holgura. En escaneos grandes hay un mínimo (la grilla de vóxeles tiene un tope).
+                  </p>
+                </Show>
+                <Row label="Solo bajo">
+                  <Select
+                    options={[{ value: "", label: "Todo el escaneo" }, ...sketchOptions()]}
+                    value={k().region ? String(k().region!.sketch) : ""}
+                    onChange={(v) => update((x) => x.type === "scan_body" && (x.region = v ? { sketch: +v, regions: { type: "all" } } : null))}
+                  />
+                </Row>
+                <Show when={k().region}>
+                  {(r) => (
+                    <>
+                      <RegionBox
+                        ui={props.ui}
+                        store={props.store}
+                        owner={`${f().id}:regiones`}
+                        lost={lost("regions")}
+                        sketch={r().sketch}
+                        value={r().regions}
+                        onChange={(sel) => update((x) => x.type === "scan_body" && x.region && (x.region.regions = sel))}
+                      />
+                      <p class="text-[11px] text-text-dim leading-relaxed">
+                        El contorno se proyecta por la normal del sketch: queda el primer tramo del escaneo hacia cada lado.
+                      </p>
+                    </>
+                  )}
+                </Show>
                 <Num
                   label="Triángulos"
                   step={1000}

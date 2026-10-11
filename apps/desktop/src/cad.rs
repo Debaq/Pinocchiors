@@ -78,8 +78,8 @@ pub struct ScanCache {
     pub mm_per_unit: f64,
     /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
     pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
-    /// Cuerpos del escaneo preparados (por holgura y triángulos)
-    pub bodies: Mutex<HashMap<(u64, usize), cad_model::ScanBodyMesh>>,
+    /// Cuerpos del escaneo preparados (por holgura, espesor y triángulos)
+    pub bodies: Mutex<HashMap<(u64, u64, usize), cad_model::ScanBodyMesh>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -305,12 +305,12 @@ fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
                     }
                 }
                 // Solo lo que no está suprimido ni vuelto atrás (prepararlo tarda)
-                FeatureKind::ScanBody(b) if !f.suppressed => b.mesh = Some(scan_body_mesh(scan, b.offset, b.faces)),
+                FeatureKind::ScanBody(b) if !f.suppressed => b.mesh = Some(scan_body_mesh(scan, b.offset, b.thickness, b.faces)),
                 FeatureKind::Extrude(cad_model::Extrude { extent: cad_model::Extent::UpToScan { offset, mesh }, .. }) if !f.suppressed => {
-                    *mesh = Some(scan_body_mesh(scan, *offset, SCAN_FACES));
+                    *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES));
                 }
-                FeatureKind::FaceToScan { offset, mesh, .. } if !f.suppressed => *mesh = Some(scan_body_mesh(scan, *offset, SCAN_FACES)),
-                FeatureKind::Rib { scan: Some(r), .. } if !f.suppressed => r.mesh = Some(scan_body_mesh(scan, r.offset, SCAN_FACES)),
+                FeatureKind::FaceToScan { offset, mesh, .. } if !f.suppressed => *mesh = Some(scan_body_mesh(scan, *offset, 0.0, SCAN_FACES)),
+                FeatureKind::Rib { scan: Some(r), .. } if !f.suppressed => r.mesh = Some(scan_body_mesh(scan, r.offset, 0.0, SCAN_FACES)),
                 _ => {}
             }
         }
@@ -335,12 +335,13 @@ fn uses_scan(kind: &FeatureKind) -> bool {
 /// Triángulos del escaneo cuando lo usa otra operación (extruir hasta él)
 const SCAN_FACES: usize = 20_000;
 
-/// El escaneo cerrado con la holgura, listo para sólido (en caché por escaneo,
-/// holgura y triángulos). Si no se puede, la malla queda vacía con el motivo.
-fn scan_body_mesh(scan: &ScanCache, offset: f64, faces: usize) -> cad_model::ScanBodyMesh {
+/// El escaneo cerrado con la holgura (o la carcasa de ese espesor), listo para
+/// sólido (en caché por escaneo, holgura, espesor y triángulos). Si no se
+/// puede, la malla queda vacía con el motivo.
+fn scan_body_mesh(scan: &ScanCache, offset: f64, thickness: f64, faces: usize) -> cad_model::ScanBodyMesh {
     use std::hash::{Hash, Hasher};
     let faces = faces.clamp(cad_scan::MIN_FACES, cad_scan::MAX_FACES);
-    let key = (offset.to_bits(), faces);
+    let key = (offset.to_bits(), thickness.to_bits(), faces);
     let mut bodies = scan.bodies.lock().unwrap();
     // Cada una pesa ~1 MB cada 20 000 triángulos: no guardar cada holgura probada
     if bodies.len() >= 6 && !bodies.contains_key(&key) {
@@ -351,7 +352,7 @@ fn scan_body_mesh(scan: &ScanCache, offset: f64, faces: usize) -> cad_model::Sca
         .or_insert_with(|| {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (scan.scene_hash, key).hash(&mut h);
-            let options = cad_scan::BodyOptions { faces, offset };
+            let options = cad_scan::BodyOptions { faces, offset, thickness };
             match cad_scan::prepare_body(&scan.mesh.vertices, &scan.mesh.triangles, &options) {
                 Ok(b) => cad_model::ScanBodyMesh { hash: h.finish(), data: std::sync::Arc::new((b.vertices, b.triangles)), error: None },
                 Err(e) => {

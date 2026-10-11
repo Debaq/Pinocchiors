@@ -431,6 +431,7 @@ fn compute(scene: &Scene, params: &RemeshParams, progress: &Channel<Progress>) -
                 smooth_iterations: p.smooth_iterations,
                 isotropic_edge: p.even.map(|k| k * voxel).or(p.isotropic_edge_mm.map(|e| e / mm)),
                 offset: 0.0,
+                thickness: 0.0,
             };
             let mesh = remesh::voxel(&positions, &indices, &options).map_err(|e| e.to_string())?;
             replace_geometry(scene, &mesh, None)

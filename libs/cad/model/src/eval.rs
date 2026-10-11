@@ -572,7 +572,13 @@ fn scan_solid(mesh: Option<&ScanBodyMesh>) -> R<Shape> {
         return Ok(s.clone());
     }
     let solid = Shape::from_mesh(&mesh.data.0, &mesh.data.1, 1e-4).map_err(err)?;
-    if solid.kind() != cad_occt::ShapeKind::Solid {
+    // Una carcasa puede salir en varios pedazos (un compuesto de sólidos)
+    let solid_ok = match solid.kind() {
+        cad_occt::ShapeKind::Solid => true,
+        cad_occt::ShapeKind::Compound => solid.solids().is_ok_and(|v| !v.is_empty()),
+        _ => false,
+    };
+    if !solid_ok {
         return Err("el escaneo no cerró como sólido".into());
     }
     let mut cache = SOLIDS.lock().unwrap();
@@ -1743,6 +1749,62 @@ impl Ctx<'_> {
         }
     }
 
+    /// Lo del escaneo que cae bajo las regiones de un sketch: el prisma de las
+    /// regiones (que lo atraviesa entero) ∩ el escaneo, y de los pedazos solo
+    /// los primeros que encuentran los rayos desde el sketch hacia cada lado
+    /// (con el plano por encima de un brazo, la cara de arriba y no la de abajo).
+    fn scan_patch(&self, id: FeatureId, skin: Tagged, r: &ScanRegion) -> R<Tagged> {
+        let (faces, _, samples) = self.profile(r.sketch, &r.regions)?;
+        let plane = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?.plane;
+        let n = normalize(plane.normal);
+        let m = skin.shape.mass().map_err(err)?;
+        let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { m.bbox_min[a] } else { m.bbox_max[a] }));
+        let reach = corners.map(|c| dot(sub(c, plane.origin), n).abs()).fold(0.0, f64::max) * 1.1 + 1.0;
+        let prisms = faces
+            .iter()
+            .map(|fc| fc.translate(scale(n, -reach)).and_then(|fc| fc.prism(scale(n, 2.0 * reach))).map_err(err))
+            .collect::<R<Vec<_>>>()?;
+        let prism = fuse(prisms)?;
+        let walls = vec![vec![tag(id, "borde")]; prism.face_count()];
+        let (cut, h) = with_history(|| skin.shape.intersect(&prism)).map_err(err)?;
+        let tags = propagate(&[&skin.tags, &walls], &h, cut.face_count()).0;
+        let pieces = cut.solids().map_err(err)?;
+        if pieces.is_empty() {
+            return Err("las regiones del sketch no caen sobre el escaneo".into());
+        }
+        let mut keep = vec![false; pieces.len()];
+        for p in &samples {
+            for dir in [n, scale(n, -1.0)] {
+                let first = pieces
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(k, s)| s.ray_hit(*p, dir).map(|t| (k, t)))
+                    .min_by(|a, b| a.1.total_cmp(&b.1));
+                if let Some((k, _)) = first {
+                    keep[k] = true;
+                }
+            }
+        }
+        if !keep.contains(&true) {
+            return Err("desde las regiones del sketch no se ve el escaneo".into());
+        }
+        if keep.iter().all(|&k| k) {
+            return Ok(Tagged { shape: cut, tags });
+        }
+        // Las caras de los pedazos que quedan son las mismas: por su centro
+        let key = |c: P3| c.map(|v| (v * 1e6).round() as i64);
+        let mut by_center = HashMap::new();
+        for (i, t) in tags.into_iter().enumerate() {
+            by_center.insert(key(cut.face_info(i).map_err(err)?.center), t);
+        }
+        let kept: Vec<Shape> = pieces.into_iter().zip(keep).filter(|(_, k)| *k).map(|(s, _)| s).collect();
+        let shape = if kept.len() == 1 { kept.into_iter().next().unwrap() } else { Shape::compound(&kept).map_err(err)? };
+        let tags = (0..shape.face_count())
+            .map(|i| shape.face_info(i).ok().and_then(|f| by_center.get(&key(f.center)).cloned()).unwrap_or_else(|| vec![tag(id, "piel")]))
+            .collect();
+        Ok(Tagged { shape, tags })
+    }
+
     /// Pared del nervio: por cada línea del sketch, rayos en el plano hasta el
     /// sólido; el polígono entre la línea y lo que tocan, con espesor centrado.
     /// Con `scan`, las paredes van hasta su piel (sin meterse) en vez del sólido.
@@ -2098,7 +2160,10 @@ impl Ctx<'_> {
                 let tool = scan_solid(b.mesh.as_ref())?;
                 // Todas sus caras son piel: entre ellas se elige por cercanía
                 let tags = vec![vec![tag(f.id, "piel")]; tool.face_count()];
-                let tool = Tagged { shape: tool, tags };
+                let mut tool = Tagged { shape: tool, tags };
+                if let Some(r) = &b.region {
+                    tool = self.scan_patch(f.id, tool, r)?;
+                }
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
                 self.apply(f.id, tool, b.op)
             }

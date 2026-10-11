@@ -395,7 +395,8 @@ pub enum PatternKind {
 /// El escaneo elegido como sólido: se rehace por vóxeles (cerrado, con la
 /// holgura) a unos `faces` triángulos y se une, resta o interseca como
 /// cualquier herramienta. Sigue al escaneo: si se alinea, repara o cambia,
-/// se rehace.
+/// se rehace. Con espesor es una carcasa que copia la piel; con región, solo
+/// el parche bajo un sketch (férula, almohadilla, tapa que calza).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScanBody {
     /// Holgura (mm): positiva agranda el escaneo (un encaje que no apriete),
@@ -407,10 +408,26 @@ pub struct ScanBody {
     pub faces: usize,
     #[serde(default)]
     pub op: BodyOp,
+    /// Distinto de cero: carcasa de este espesor (mm) desde la piel corrida
+    /// la holgura; positivo hacia afuera, negativo hacia adentro.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub thickness: f64,
+    /// Solo lo que cae bajo estas regiones de un sketch, mirando desde su
+    /// plano: el primer tramo del escaneo hacia cada lado.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub region: Option<ScanRegion>,
     /// La malla preparada que pone la app antes de cada recálculo (no se
     /// guarda: de ella solo viaja la huella, que entra en la caché).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mesh: Option<ScanBodyMesh>,
+}
+
+/// Regiones de un sketch proyectadas sobre el escaneo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanRegion {
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub regions: RegionSelection,
 }
 
 fn scan_body_faces() -> usize {
@@ -419,7 +436,7 @@ fn scan_body_faces() -> usize {
 
 impl Default for ScanBody {
     fn default() -> Self {
-        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, mesh: None }
+        Self { offset: 0.0, faces: scan_body_faces(), op: BodyOp::New, thickness: 0.0, region: None, mesh: None }
     }
 }
 
@@ -956,6 +973,7 @@ impl FeatureKind {
             FeatureKind::Primitive(p) => p.link.iter().map(|l| l.feature).collect(),
             FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
             FeatureKind::Rib { sketch, .. } => vec![*sketch],
+            FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
             FeatureKind::Extrude(e) => vec![e.sketch],
@@ -1024,6 +1042,8 @@ impl FeatureKind {
             FeatureKind::Mirror { .. } => "Simetría",
             FeatureKind::Split { .. } => "Corte",
             FeatureKind::Import { .. } => "Importado",
+            FeatureKind::ScanBody(b) if b.region.is_some() => "Parche del escaneo",
+            FeatureKind::ScanBody(b) if b.thickness != 0.0 => "Carcasa del escaneo",
             FeatureKind::ScanBody(_) => "Cuerpo del escaneo",
             FeatureKind::Boolean { .. } => "Booleana",
             FeatureKind::SplitParts { .. } => "Separar piezas",

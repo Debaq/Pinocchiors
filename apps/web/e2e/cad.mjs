@@ -22,6 +22,28 @@ function near(actual, expected, tol, what) {
 }
 
 /** STL de texto con dos cubos de 20 mm, el segundo corrido 10 mm en cada eje */
+/** Esfera de radio `R` con centro a `cz` mm de altura, como STL en la carpeta del e2e */
+function sphereStl(R, cz, name) {
+  const [rings, segs] = [48, 96];
+  const at = (i, j) => {
+    const th = (Math.PI * i) / rings;
+    const ph = (2 * Math.PI * j) / segs;
+    return [R * Math.sin(th) * Math.cos(ph), R * Math.sin(th) * Math.sin(ph), cz + R * Math.cos(th)];
+  };
+  let stl = "solid esfera\n";
+  const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
+  for (let i = 0; i < rings; i++)
+    for (let j = 0; j < segs; j++) {
+      const [a, c, d, e] = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+      if (i > 0) facet(a, c, e);
+      if (i < rings - 1) facet(e, c, d);
+    }
+  stl += "endsolid esfera\n";
+  const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/${name}.stl`;
+  writeFileSync(path, stl);
+  return path;
+}
+
 function twoCubesStl() {
   const quads = [
     [[0, 0, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]],
@@ -6809,24 +6831,8 @@ const scenarios = {
 
   async "escaneo: extruir y llevar una cara hasta el escaneo"(b) {
     // Esfera de radio 20 con centro a 40 mm de altura (la panza en z = 20)
-    const [R, cz, rings, segs] = [20, 40, 48, 96];
-    const at = (i, j) => {
-      const th = (Math.PI * i) / rings;
-      const ph = (2 * Math.PI * j) / segs;
-      return [R * Math.sin(th) * Math.cos(ph), R * Math.sin(th) * Math.sin(ph), cz + R * Math.cos(th)];
-    };
-    let stl = "solid esfera\n";
-    const facet = (a, c, d) => (stl += `facet normal 0 0 0\nouter loop\nvertex ${a.join(" ")}\nvertex ${c.join(" ")}\nvertex ${d.join(" ")}\nendloop\nendfacet\n`);
-    for (let i = 0; i < rings; i++)
-      for (let j = 0; j < segs; j++) {
-        const [a, c, d, e] = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
-        if (i > 0) facet(a, c, e);
-        if (i < rings - 1) facet(e, c, d);
-      }
-    stl += "endsolid esfera\n";
-    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-esfera.stl`;
-    writeFileSync(path, stl);
-    await importModel(b, path);
+    const [R, cz] = [20, 40];
+    await importModel(b, sphereStl(R, cz, "escaneo-esfera"));
     await begin(b);
     // Círculo de radio 5 en la planta, extruido hasta el escaneo con 0,5 mm de separación
     const sketch = {
@@ -6889,6 +6895,66 @@ const scenarios = {
     await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.4])`);
     await sleep(800);
     await b.shot("escaneo-cara");
+  },
+
+  async "escaneo: carcasa y parche bajo un sketch"(b) {
+    // Esfera de radio 20 con centro a 40 mm; círculo de radio 10 arriba, en z = 70
+    const [R, cz, r] = [20, 40, 10];
+    await importModel(b, sphereStl(R, cz, "escaneo-carcasa"));
+    await begin(b);
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }],
+      entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: r } }],
+      constraints: [],
+      next_id: 3,
+      origin: 0,
+    };
+    const doc = await call("cad_get_document");
+    doc.features = [{ id: 1, name: "Sketch 1", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 70, sketch } }];
+    doc.next_id = 2;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const settle = async (n) => {
+      let res;
+      for (let t = 0; t < 240; t++) {
+        res = await evaluate();
+        if (res.status?.length === n && ["ok", "error"].includes(res.status[n - 1].state?.type ?? res.status[n - 1].state)) break;
+        await sleep(250);
+      }
+      const st = res.status[n - 1].state;
+      if ((st.type ?? st) !== "ok") throw new Error(`operación ${n}: ${JSON.stringify(res.status[n - 1])}`);
+      return res;
+    };
+    // Parche desde el sketch: 0,2 mm de holgura y 2 mm hacia afuera, solo la tapa de arriba
+    await tab(b, "Desde el escaneo");
+    await b.clickText("Parche desde sketch");
+    let res = await settle(2);
+    await b.eval(`window.__cadStore.settled()`);
+    await accept(b, 3000);
+    const [r1, r2] = [R + 0.2, R + 2.2];
+    const cap = (big) => ((2 * Math.PI) / 3) * (big ** 3 - (big * big - r * r) ** 1.5);
+    near(res.parts[0].volume, cap(r2) - cap(r1), (cap(r2) - cap(r1)) * 0.03, "parche bajo el círculo");
+    if (res.body.bbox_min[2] < cz) throw new Error(`el parche baja hasta ${res.body.bbox_min[2]}: tomó también la cara de abajo`);
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
+    await sleep(800);
+    await b.shot("escaneo-parche");
+    // El diálogo muestra la forma, el espesor y el sketch
+    await b.eval(`window.__cadStore.select(2)`);
+    await sleep(1500);
+    const text = await b.eval(`document.body.innerText`);
+    for (const w of ["Carcasa hacia afuera", "Espesor", "Solo bajo"]) if (!text.includes(w)) throw new Error(`el diálogo no muestra «${w}»`);
+    await b.key("Escape", "Escape", 27);
+    await sleep(500);
+    // Carcasa entera: otra pieza, con el hueco de la esfera adentro
+    await tab(b, "Desde el escaneo");
+    await b.clickText("Carcasa");
+    res = await settle(3);
+    await b.eval(`window.__cadStore.settled()`);
+    await accept(b, 3000);
+    const ball = (x) => (4 / 3) * Math.PI * x ** 3;
+    const shell = res.parts.find((p) => Math.abs(p.volume - (ball(r2) - ball(r1))) < (ball(r2) - ball(r1)) * 0.03);
+    if (!shell) throw new Error(`no hay una carcasa de ${(ball(r2) - ball(r1)).toFixed(0)} mm³: ${res.parts.map((p) => p.volume.toFixed(0))}`);
   },
 
   async "mallas: caja del diseño en Fabricar"(b) {

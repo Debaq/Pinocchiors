@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 /// Esfera UV de radio `r` centrada en `c` (triángulos muy dispares: alargados
 /// cerca del ecuador, en abanico en los polos)
-fn sphere(c: [f32; 3], r: f32, rings: usize, segments: usize) -> (Vec<[f32; 3]>, Vec<u32>) {
+pub fn sphere(c: [f32; 3], r: f32, rings: usize, segments: usize) -> (Vec<[f32; 3]>, Vec<u32>) {
     let mut p = vec![[c[0], c[1] + r, c[2]]];
     for i in 1..rings {
         let phi = std::f32::consts::PI * i as f32 / rings as f32;
@@ -98,7 +98,7 @@ fn voxel_joins_crossing_shells_into_one_closed_surface() {
     let n = p.len() as u32;
     p.extend(q);
     t.extend(u.iter().map(|i| i + n));
-    let out = voxel(&p, &t, &VoxelOptions { voxel_size: 0.04, smooth_iterations: 0, isotropic_edge: None, offset: 0.0 }).unwrap();
+    let out = voxel(&p, &t, &VoxelOptions { voxel_size: 0.04, smooth_iterations: 0, isotropic_edge: None, offset: 0.0, thickness: 0.0 }).unwrap();
     assert!(closed_manifold(&out.indices));
     // Volumen de la unión: 2·(4/3)π − la lente de r = 1, d = 1 (5π/12)
     let union = 2.0 * 4.0 / 3.0 * std::f64::consts::PI - 5.0 * std::f64::consts::PI / 12.0;
@@ -112,8 +112,8 @@ fn voxel_joins_crossing_shells_into_one_closed_surface() {
 #[test]
 fn voxel_smoothing_and_isotropic_after() {
     let (p, t) = sphere([0.0; 3], 1.0, 30, 60);
-    let raw = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 0, isotropic_edge: None, offset: 0.0 }).unwrap();
-    let even = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 3, isotropic_edge: Some(0.1), offset: 0.0 }).unwrap();
+    let raw = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 0, isotropic_edge: None, offset: 0.0, thickness: 0.0 }).unwrap();
+    let even = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 3, isotropic_edge: Some(0.1), offset: 0.0, thickness: 0.0 }).unwrap();
     assert!(closed_manifold(&even.indices));
     assert!(even.indices.len() < raw.indices.len() / 2, "{} → {}", raw.indices.len() / 3, even.indices.len() / 3);
     let lengths = edge_lengths(&even.positions, &even.indices);
@@ -138,7 +138,7 @@ fn voxel_grid_is_limited_and_estimated() {
 fn voxel_offset_grows_and_shrinks_by_the_exact_distance() {
     let (p, t) = sphere([0.0; 3], 1.0, 30, 60);
     for offset in [0.2f64, -0.2] {
-        let out = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 0, isotropic_edge: None, offset }).unwrap();
+        let out = voxel(&p, &t, &VoxelOptions { voxel_size: 0.05, smooth_iterations: 0, isotropic_edge: None, offset, thickness: 0.0 }).unwrap();
         assert!(closed_manifold(&out.indices));
         // La esfera de 30×60 está inscripta (radio medio algo menor que 1)
         let r = out.positions.iter().map(|v| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() as f64).sum::<f64>() / out.positions.len() as f64;
@@ -149,9 +149,24 @@ fn voxel_offset_grows_and_shrinks_by_the_exact_distance() {
     let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
     let tris: Vec<u32> = quads.iter().flat_map(|q| [q[0], q[1], q[2], q[0], q[2], q[3]]).collect();
     let r = 0.1;
-    let out = voxel(&cube, &tris, &VoxelOptions { voxel_size: 0.02, smooth_iterations: 0, isotropic_edge: None, offset: r }).unwrap();
+    let out = voxel(&cube, &tris, &VoxelOptions { voxel_size: 0.02, smooth_iterations: 0, isotropic_edge: None, offset: r, thickness: 0.0 }).unwrap();
     let pi = std::f64::consts::PI;
     let expected = 1.0 + 6.0 * r + 3.0 * pi * r * r + 4.0 / 3.0 * pi * r * r * r;
     let v = volume(&out.positions, &out.indices);
     assert!((v - expected).abs() / expected < 0.01, "volumen {v} (esperado {expected})");
+}
+
+#[test]
+fn voxel_shell_keeps_the_band_between_two_offsets() {
+    let (p, t) = sphere([0.0; 3], 1.0, 30, 60);
+    let pi = std::f64::consts::PI;
+    let ball = |r: f64| 4.0 / 3.0 * pi * r * r * r;
+    // Afuera con separación y hacia adentro desde la piel
+    for (offset, thickness, expected) in [(0.1, 0.2, ball(1.3) - ball(1.1)), (0.0, -0.2, ball(1.0) - ball(0.8))] {
+        let opts = VoxelOptions { voxel_size: 0.04, smooth_iterations: 0, isotropic_edge: None, offset, thickness };
+        let out = voxel(&p, &t, &opts).unwrap();
+        assert!(closed_manifold(&out.indices));
+        let v = volume(&out.positions, &out.indices);
+        assert!((v - expected).abs() / expected < 0.03, "{offset} {thickness}: volumen {v} (esperado {expected})");
+    }
 }

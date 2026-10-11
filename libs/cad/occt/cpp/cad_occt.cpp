@@ -17,6 +17,7 @@
 #include <BRepOffset_MakeOffset.hxx>
 #include <gp_Ax3.hxx>
 #include <BRepLib.hxx>
+#include <BRepClass3d_SolidClassifier.hxx>
 #include <IntCurvesFace_ShapeIntersector.hxx>
 #include <LocOpe_DPrism.hxx>
 #include <BRepOffsetAPI_MakeOffset.hxx>
@@ -852,7 +853,9 @@ CadShape* cad_split_by(const CadShape* s, const CadShape* const* tools, int32_t 
 // Malla cerrada, manifold y orientada (cada arista dirigida una sola vez, con
 // su opuesta en otra cara): las caras se arman compartiendo vértices y aristas,
 // sin coser. Con 20 k triángulos baja de ~10 s a menos de 1 s. Si la malla no
-// cumple, devuelve una forma nula y se cose.
+// cumple, devuelve una forma nula y se cose. Cada pieza conexa es una cáscara:
+// las de volumen positivo, sólidos; las de volumen negativo (pieles que miran
+// a un hueco), huecos del sólido que las contiene.
 static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, const int32_t* tris,
                                       int32_t n_tris, double tolerance) {
     std::map<std::pair<int32_t, int32_t>, int32_t> directed;
@@ -866,6 +869,17 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
     }
     for (const auto& [e, f] : directed)
         if (!directed.count({e.second, e.first})) return TopoDS_Shape();
+    // Piezas conexas por aristas compartidas
+    std::vector<int32_t> parent(n_tris);
+    for (int32_t i = 0; i < n_tris; i++) parent[i] = i;
+    auto root = [&](int32_t x) {
+        while (parent[x] != x) x = parent[x] = parent[parent[x]];
+        return x;
+    };
+    for (const auto& [e, f] : directed) parent[root(f)] = root(directed.at({e.second, e.first}));
+    std::map<int32_t, TopoDS_Shell> shells;
+    std::map<int32_t, double> volume;
+    std::map<int32_t, int32_t> sample;
 
     BRep_Builder builder;
     std::vector<TopoDS_Vertex> vertex(n_verts);
@@ -874,8 +888,6 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
         if (vertex[i].IsNull()) builder.MakeVertex(vertex[i], pnt(verts + 3 * i), tolerance);
         return vertex[i];
     };
-    TopoDS_Shell shell;
-    builder.MakeShell(shell);
     for (int32_t i = 0; i < n_tris; i++) {
         const int32_t* t = tris + 3 * i;
         gp_Pnt pa = pnt(verts + 3 * t[0]), pb = pnt(verts + 3 * t[1]), pc = pnt(verts + 3 * t[2]);
@@ -897,14 +909,62 @@ static TopoDS_Shape mesh_shell_direct(const double* verts, int32_t n_verts, cons
         wire.Closed(Standard_True);
         BRepBuilderAPI_MakeFace mf(gp_Pln(pa, gp_Dir(n)), wire, Standard_True);
         if (!mf.IsDone()) return TopoDS_Shape();
-        builder.Add(shell, mf.Face());
+        auto it = shells.find(root(i));
+        if (it == shells.end()) {
+            TopoDS_Shell shell;
+            builder.MakeShell(shell);
+            it = shells.emplace(root(i), shell).first;
+            sample[root(i)] = t[0];
+        }
+        builder.Add(it->second, mf.Face());
+        volume[root(i)] += gp_Vec(pa.XYZ()).Dot(gp_Vec(pb.XYZ()).Crossed(gp_Vec(pc.XYZ()))) / 6.0;
     }
-    shell.Closed(Standard_True);
-    TopoDS_Solid solid;
-    builder.MakeSolid(solid);
-    builder.Add(solid, shell);
-    BRepLib::OrientClosedSolid(solid);
-    return solid;
+    if (shells.size() == 1) {
+        // Orientada por el volumen con signo: el clasificador de
+        // OrientClosedSolid a veces se equivoca con mallas grandes (dejaba
+        // el sólido al revés y las booleanas daban vacío)
+        TopoDS_Shell shell = shells.begin()->second;
+        shell.Closed(Standard_True);
+        if (volume.begin()->second < 0.0) shell.Reverse();
+        TopoDS_Solid solid;
+        builder.MakeSolid(solid);
+        builder.Add(solid, shell);
+        return solid;
+    }
+    std::vector<std::pair<TopoDS_Solid, TopoDS_Solid>> outer;  // (con huecos, sola)
+    std::vector<int32_t> voids;
+    for (auto& [r, shell] : shells) {
+        shell.Closed(Standard_True);
+        if (volume[r] < 0.0) {
+            voids.push_back(r);
+            continue;
+        }
+        TopoDS_Solid solid, alone;
+        builder.MakeSolid(solid);
+        builder.Add(solid, shell);
+        builder.MakeSolid(alone);
+        builder.Add(alone, shell);
+        outer.emplace_back(solid, alone);
+    }
+    if (outer.empty()) return TopoDS_Shape();
+    for (int32_t r : voids) {
+        gp_Pnt p = pnt(verts + 3 * sample[r]);
+        bool placed = false;
+        for (auto& [solid, alone] : outer) {
+            BRepClass3d_SolidClassifier in(alone, p, tolerance);
+            if (in.State() == TopAbs_IN) {
+                builder.Add(solid, shells[r]);
+                placed = true;
+                break;
+            }
+        }
+        if (!placed) return TopoDS_Shape();
+    }
+    if (outer.size() == 1) return outer[0].first;
+    TopoDS_Compound all;
+    builder.MakeCompound(all);
+    for (auto& [solid, alone] : outer) builder.Add(all, solid);
+    return all;
 }
 
 CadShape* cad_from_mesh(const double* verts, int32_t n_verts, const int32_t* tris, int32_t n_tris,

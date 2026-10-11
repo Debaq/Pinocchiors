@@ -208,6 +208,18 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "replace_face", faces: refs, target });
   };
 
+  /**
+   * Carcasa que copia la piel del escaneo (pieza nueva, 2 mm hacia afuera); con `patch`, solo
+   * lo que cae bajo las regiones del sketch elegido o del último (férula, almohadilla, tapa)
+   */
+  const startScanShell = (patch: boolean) => {
+    const sel = selectedFeature();
+    const sketch = sel?.kind.type === "sketch" ? sel : [...sketches()].pop();
+    if (patch && !sketch) return say("Primero un sketch con el contorno del parche, en un plano que mire al escaneo");
+    const region = patch && sketch ? { sketch: sketch.id, regions: { type: "all" as const } } : null;
+    void store.addFeature({ type: "scan_body", offset: 0.2, thickness: 2, faces: 20000, op: "new", region });
+  };
+
   /** Cara al escaneo: las caras elegidas hasta la piel del escaneo */
   const startFaceToScan = async () => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
@@ -645,6 +657,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startThread,
     startReplaceFace,
     startFaceToScan,
+    startScanShell,
     importStep,
     addSplitBy,
     trimWithPlane,

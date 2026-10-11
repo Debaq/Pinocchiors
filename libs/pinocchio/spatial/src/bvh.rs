@@ -209,7 +209,21 @@ impl Bvh {
         best
     }
 
+    /// Punto más cercano entre los triángulos que miran hacia el mismo lado
+    /// que `normal` (producto escalar positivo): en una lámina delgada, la
+    /// piel propia y no la de enfrente.
+    pub fn query_closest_facing(&self, point: &Vector3, normal: &Vector3) -> Option<ClosestHit> {
+        let root = self.root.as_ref()?;
+        let mut best: Option<ClosestHit> = None;
+        self.closest_filtered(root, point, &mut best, &|t: &Triangle| t.normal().dot(normal) > 0.0);
+        best
+    }
+
     fn closest_recursive(&self, node: &BvhNode, point: &Vector3, best: &mut Option<ClosestHit>) {
+        self.closest_filtered(node, point, best, &|_: &Triangle| true)
+    }
+
+    fn closest_filtered(&self, node: &BvhNode, point: &Vector3, best: &mut Option<ClosestHit>, keep: &dyn Fn(&Triangle) -> bool) {
         let best_dist = best.map_or(Real::INFINITY, |h| h.distance);
         if Self::get_bounds(node).distance_to_point(point) >= best_dist {
             return;
@@ -217,6 +231,9 @@ impl Bvh {
         match node {
             BvhNode::Leaf { triangle_idx, .. } => {
                 let tri = &self.triangles[*triangle_idx];
+                if !keep(tri) {
+                    return;
+                }
                 let closest = closest_point_on_triangle(point, &tri.v0, &tri.v1, &tri.v2);
                 let distance = point.distance(&closest);
                 if distance < best_dist {
@@ -227,11 +244,11 @@ impl Bvh {
                 let left_dist = Self::get_bounds(left).distance_to_point(point);
                 let right_dist = Self::get_bounds(right).distance_to_point(point);
                 if left_dist < right_dist {
-                    self.closest_recursive(left, point, best);
-                    self.closest_recursive(right, point, best);
+                    self.closest_filtered(left, point, best, keep);
+                    self.closest_filtered(right, point, best, keep);
                 } else {
-                    self.closest_recursive(right, point, best);
-                    self.closest_recursive(left, point, best);
+                    self.closest_filtered(right, point, best, keep);
+                    self.closest_filtered(left, point, best, keep);
                 }
             }
         }

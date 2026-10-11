@@ -88,7 +88,7 @@ fn edge_state(surface: &Surface) -> EdgeState {
 /// Reconstruye la superficie cerrada que encierra la unión de los volúmenes
 /// de `surface`, con vóxeles de lado cercano a `voxel`.
 pub(crate) fn rebuild(surface: &Surface, voxel: f64) -> Surface {
-    rebuild_with_limit(surface, voxel, MAX_CELLS, 0.0)
+    rebuild_with_limit(surface, voxel, MAX_CELLS, 0.0, 0.0)
 }
 
 /// Lado del vóxel que se usa de verdad: entre `extent / max_cells` y
@@ -106,9 +106,15 @@ pub(crate) fn grid_dims(size: [f64; 3], h: f64) -> [usize; 3] {
 /// la superficie corrida `offset` hacia afuera (negativo: hacia adentro) por
 /// la distancia exacta: los puntos a menos de `offset` del volumen también
 /// cuentan como adentro.
-pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, offset: f64) -> Surface {
+///
+/// Con `thickness` distinto de cero sale una cáscara: lo que queda entre la
+/// superficie corrida `offset` y la corrida `offset + thickness` (dos pieles,
+/// la de adentro mirando al hueco).
+pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, offset: f64, thickness: f64) -> Surface {
+    let shell = (thickness != 0.0).then(|| (offset.min(offset + thickness), offset.max(offset + thickness)));
+    let reach = shell.map_or(offset, |(_, outer)| outer);
     let (lo, hi) = bounds(&surface.positions);
-    let grow = V3::repeat(offset.max(0.0));
+    let grow = V3::repeat(reach.max(0.0));
     let (lo, hi) = (lo - grow, hi + grow);
     let extent = (hi - lo).max();
     let h = voxel_size(extent, voxel, max_cells);
@@ -121,12 +127,38 @@ pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, 
     let tree = WindingTree::build(surface);
     // Con desfase la banda llega hasta la superficie corrida: fuera de ella
     // el signo de la distancia menos el desfase es el del volumen
-    let band = BAND * h + offset.abs();
+    let band = BAND * h + shell.map_or(offset.abs(), |(inner, outer)| inner.abs().max(outer.abs()));
     let mut flags = classify(surface, &grid, &tree, band);
 
     // Distancia exacta en los puntos con un vecino del otro lado
     let bvh = triangle_bvh(surface);
-    if offset != 0.0 {
+    if let Some((inner, outer)) = shell {
+        // Fuera de la banda la distancia pasa los dos desfases: afuera
+        for f in flags.iter_mut() {
+            if *f & INSIDE != 0 {
+                *f |= WOUND;
+            }
+            if *f & NEAR == 0 {
+                *f &= !INSIDE;
+            }
+        }
+        let near: Vec<u32> = (0..flags.len() as u32).filter(|&i| flags[i as usize] & NEAR != 0).collect();
+        let inside: Vec<bool> = near
+            .par_iter()
+            .map(|&i| {
+                let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i)));
+                let s = if flags[i as usize] & WOUND != 0 { -d } else { d };
+                inner < s && s < outer
+            })
+            .collect();
+        for (&i, inside) in near.iter().zip(inside) {
+            if inside {
+                flags[i as usize] |= INSIDE;
+            } else {
+                flags[i as usize] &= !INSIDE;
+            }
+        }
+    } else if offset != 0.0 {
         for f in flags.iter_mut().filter(|f| **f & INSIDE != 0) {
             *f |= WOUND;
         }
@@ -182,15 +214,20 @@ pub(crate) fn rebuild_with_limit(surface: &Surface, voxel: f64, max_cells: f64, 
         // Con desfase, el signo es el del volumen sin correr (`WOUND`; lejos
         // de la banda coincide con `INSIDE`)
         let d = bvh.query_distance(&pinocchio_math::Vector3(grid.point(i)));
-        let d = if offset == 0.0 {
+        let d = if let Some((inner, outer)) = shell {
+            let s = if flags[i as usize] & WOUND != 0 { -d } else { d };
+            (inner - s).max(s - outer)
+        } else if offset == 0.0 {
             if flags[i as usize] & INSIDE != 0 { -d } else { d }
         } else if flags[i as usize] & WOUND != 0 {
             -d - offset
         } else {
             d - offset
         };
-        // Nunca cero: el corte quedaría justo sobre el punto de la grilla
-        let tiny = 1e-6 * h;
+        // Nunca cero: el corte quedaría justo sobre el punto de la grilla, y
+        // tampoco tan cerca que la soldadura junte los vértices de las aristas
+        // que llegan a él (abre agujeros); las aristas cortas se colapsan después
+        let tiny = 1e-3 * h;
         if flags[i as usize] & INSIDE != 0 { d.min(-tiny) } else { d.max(tiny) }
     };
     let crossing: HashMap<u32, f64> = crossing.par_iter().map(|&i| (i, signed(i))).collect();
