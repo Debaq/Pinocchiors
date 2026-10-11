@@ -42,7 +42,7 @@ fn table_pattern_copies_by_offsets() {
         return;
     }
     let (mut doc, hole) = plate_with_hole();
-    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] } });
+    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] }, skip: vec![] });
     assert_relative_eq!(volume(&doc), 12000.0 - 4.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
 }
 
@@ -58,6 +58,7 @@ fn fill_pattern_square_and_hex() {
         doc.add(FeatureKind::Pattern {
             features: vec![hole],
             pattern: PatternKind::Fill { sketch: region, regions: RegionSelection::All, spacing: 10.0, hex, margin: 3.0 },
+            skip: vec![],
         });
         assert_relative_eq!(volume(&doc), 12000.0 - holes * PI * 4.0 * 2.0, max_relative = 1e-6);
     }

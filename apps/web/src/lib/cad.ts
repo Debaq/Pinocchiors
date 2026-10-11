@@ -192,7 +192,18 @@ export type Extent =
   /** Hasta la primera cara del sólido que encuentra */
   | { type: "up_to_next" }
   /** Hasta la piel del escaneo (aunque sea curva), dejando `offset` mm de separación */
-  | { type: "up_to_scan"; offset: number };
+  | { type: "up_to_scan"; offset: number }
+  /** Hasta un punto (un vértice): lo que avanza el punto sobre la dirección */
+  | { type: "up_to_vertex"; point: PointSpec };
+
+/** Cómo se reparte el giro de una revolución: todo a un lado, mitad a cada lado o `second` grados hacia atrás */
+export type RevolveExtent = { type: "one" } | { type: "symmetric" } | { type: "two_angles"; second: number };
+
+/** Movimiento de piezas enteras (mover, girar, de un punto a otro) */
+export type Motion =
+  | { type: "translate"; vector: P3 }
+  | { type: "rotate"; axis: AxisSpec; angle: number }
+  | { type: "points"; from: PointSpec; to: PointSpec };
 
 export interface SketchPoint {
   id: number;
@@ -514,7 +525,8 @@ export interface Seat {
 }
 
 export type PatternKind =
-  | { type: "linear"; direction: P3; count: number; spacing: number }
+  /** Con `second`, también en una segunda dirección (grilla) */
+  | { type: "linear"; direction: P3; count: number; spacing: number; second?: { direction: P3; count: number; spacing: number } | null }
   | { type: "circular"; axis: AxisSpec; count: number; angle: number }
   /** Copias repartidas de punta a punta de un camino */
   | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
@@ -544,7 +556,7 @@ export type FeatureKind =
       /** Extrusión delgada: espesor de la pared */
       thin?: number | null;
     }
-  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp }
+  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent }
   /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
@@ -553,8 +565,12 @@ export type FeatureKind =
   | { type: "chamfer"; edges: EdgeRef[]; distance: number; second?: ChamferSecond | null }
   | { type: "shell"; faces: FaceRef[]; thickness: number }
   | { type: "draft"; faces: FaceRef[]; neutral: PlaneSpec; angle: number }
-  | { type: "pattern"; features: number[]; pattern: PatternKind }
-  | { type: "mirror"; features: number[]; plane: PlaneSpec }
+  /** `skip`: copias que no se hacen (1 es la primera copia) */
+  | { type: "pattern"; features: number[]; pattern: PatternKind; skip?: number[] }
+  /** `op` "new": con todo el cuerpo, cada reflejo queda como pieza aparte */
+  | { type: "mirror"; features: number[]; plane: PlaneSpec; op?: BodyOp }
+  /** Mueve o gira piezas enteras (vacío = todas); `copy` deja las originales y agrega las copias */
+  | { type: "transform"; parts: PartId[]; motion: Motion; copy: boolean }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
   | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
   /**
@@ -1343,6 +1359,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   replace_face: "Reemplazar cara",
   face_to_scan: "Cara al escaneo",
   scale: "Escala",
+  transform: "Mover cuerpo",
 };
 
 /**
@@ -1541,6 +1558,7 @@ export function dependencies(kind: FeatureKind): number[] {
     case "hole":
       return [kind.sketch];
     case "extrude":
+      return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : [])];
     case "sheet_metal":
       return [kind.sketch];
     case "revolve":
@@ -1554,6 +1572,11 @@ export function dependencies(kind: FeatureKind): number[] {
       return point(kind.center);
     case "mirror":
       return [...kind.features, ...plane(kind.plane)];
+    case "transform": {
+      const m = kind.motion;
+      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : [];
+      return [...kind.parts.map((p) => p.feature), ...extra];
+    }
     case "boolean":
       return [...kind.targets, ...kind.tools].map((p) => p.feature);
     case "scan_body":

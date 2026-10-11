@@ -87,7 +87,8 @@ fn integer_fields_are_rounded() {
     let pin = doc.add(caja());
     let pat = doc.add(FeatureKind::Pattern {
         features: vec![pin],
-        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 2, spacing: 5.0 },
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 2, spacing: 5.0, second: None },
+        skip: vec![],
     });
     doc.parameters = vec![param("n", "3.6")];
     doc.bindings.insert(format!("{}.kind.pattern.count", pat.0), "n".into());

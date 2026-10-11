@@ -25,13 +25,13 @@ fn revolve_profile_across_the_axis() {
     // En el frente (x, z): rectángulo de x −2..5 alrededor del eje Z
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: rect(-2.0, 0.0, 5.0, 10.0) });
-    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join }));
+    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join, extent: RevolveExtent::One }));
     let e = error_of(&doc, rv).expect("tiene que avisar");
     assert!(e.contains("cruza el eje"), "{e}");
     // Tocando el eje (x 0..5) está bien
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: rect(0.0, 0.0, 5.0, 10.0) });
-    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join }));
+    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join, extent: RevolveExtent::One }));
     assert_eq!(error_of(&doc, rv), None);
 }
 

@@ -87,6 +87,7 @@ fn pattern_along_a_sketch_path() {
     let p = doc.add(FeatureKind::Pattern {
         features: vec![c],
         pattern: PatternKind::Curve { path: SweepPath::Sketch { sketch: sk, entities: vec![] }, count: 5 },
+        skip: vec![],
     });
     let ev = eval_ok(&doc);
     let m = ev.body.as_ref().unwrap().mass().unwrap();

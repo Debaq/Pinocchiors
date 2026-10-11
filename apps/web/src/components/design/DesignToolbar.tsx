@@ -221,6 +221,10 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Nervio", icon: D.Rib, run: a.startRib, needsBody: true, tip: "Pared desde las líneas de un sketch hasta el sólido" },
     { label: "Rosca", icon: D.Thread, run: () => void a.startThread(), needsBody: true, tip: "Rosca modelada sobre una cara cilíndrica: exterior en un eje, interior en un agujero" },
     { label: "Escala", icon: D.Scale, run: a.addScale, needsBody: true, tip: "Escala las piezas alrededor de un punto" },
+    "-",
+    { label: "Mover cuerpo", icon: D.MoveFace, run: () => a.addTransform("translate"), needsBody: true, tip: "Mueve piezas enteras (las elegidas, o todas): un desplazamiento o de un punto a otro" },
+    { label: "Girar cuerpo", icon: D.PatternCircular, run: () => a.addTransform("rotate"), needsBody: true, tip: "Gira piezas enteras alrededor de un eje" },
+    { label: "Copiar cuerpo", icon: D.PatternLinear, run: () => a.addTransform("translate", true), needsBody: true, tip: "Copia piezas enteras corridas o giradas; las copias quedan como piezas nuevas" },
   ];
   const patterns: (Tool | "-")[] = [
     { label: "Patrón lineal", icon: D.PatternLinear, run: () => a.addPattern("linear"), needsBody: true },

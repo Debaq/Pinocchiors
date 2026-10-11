@@ -27,7 +27,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Ciega, simétrica, dos direcciones, hasta el siguiente, pasante | ✅ |
-| Hasta vértice | ❌ (F3) |
+| Hasta vértice | ✅ (`Extent::UpToVertex`, 2026-10-11) |
 | Hasta superficie | 🟡 solo hasta el plano de la cara (F3) |
 | Hasta superficie con desfase | ❌ (F3) |
 | Desde plano desfasado | 🟡 el desfase es del sketch, no de la extrusión (F3) |
@@ -38,7 +38,8 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Completa, por ángulo, selección de eje | ✅ |
-| Simétrica, dos ángulos, hasta superficie, pared delgada | ❌ (F3) |
+| Simétrica, dos ángulos | ✅ (`Revolve.extent`, 2026-10-11) |
+| Hasta superficie, pared delgada | ❌ (F3) |
 
 ### Opciones de barrido
 | Función | Estado |
@@ -78,11 +79,11 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Lineal, circular, a lo largo de curva, relleno de región | ✅ (además por tabla) |
-| Lineal en dos direcciones | ❌ en operaciones (el sketch sí) (F2) |
+| Lineal en dos direcciones | ✅ (`Linear.second`, 2026-10-11) |
 | Guiado por puntos de croquis | ❌ (F2) |
-| Omitir instancias | ❌ (F2) |
+| Omitir instancias | 🟡 escritas en el diálogo (`Pattern.skip`); falta prender y apagar con clic en el visor (F2) |
 | Simetría de operaciones | ✅ |
-| Simetría de cuerpos | 🟡 refleja el cuerpo entero pero siempre une (F1) |
+| Simetría de cuerpos | ✅ unido o como pieza aparte (`Mirror.op`, 2026-10-11) |
 
 ### Operaciones entre cuerpos
 Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ todas.
@@ -90,7 +91,8 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 ### Transformaciones
 | Función | Estado |
 |---|---|
-| Mover, rotar, copiar, alinear a cara o plano | ❌ (solo en ensamble y al ubicar primitivas) (F1) |
+| Mover, rotar, copiar (desplazamiento, giro o de punto a punto) | ✅ (`Transform`, 2026-10-11); falta el manipulador (F1) |
+| Alinear a cara o plano | ❌ (F1) |
 | Escalar uniforme y no uniforme | ✅ (`Scale.factor` por eje) |
 
 ### Geometría de referencia
@@ -136,6 +138,10 @@ abran los proyectos viejos.
 
 ### F1 — Transformar cuerpos
 
+Hecho el 2026-10-11: `Transform` con `Translate`, `Rotate` y `Points`, `copy`, y `Mirror.op`
+(«Mover cuerpo», «Girar cuerpo» y «Copiar cuerpo» en Pieza; «El reflejo como pieza aparte» en la
+simetría). Falta: `Motion::Align` y el manipulador de flechas y arcos.
+
 - `FeatureKind::Transform { parts: Vec<PartId>, motion: Motion, copy: bool }` con
   `Motion::Translate { vector }`, `Rotate { axis: AxisSpec, angle }`,
   `Align { from: FaceRef | PlaneSpec, to: PlaneSpec, flip }` (lleva una cara plana sobre un
@@ -150,6 +156,10 @@ abran los proyectos viejos.
 
 ### F2 — Copiar y pegar operaciones; patrones que faltan
 
+Hecho el 2026-10-11: `Linear.second` (grilla; la copia k = j·cantidad + i) y `Pattern.skip`
+escrito en el diálogo («Omitir copias»). Falta: copiar y pegar, `PatternKind::Points` y omitir
+con clic en el visor.
+
 - Copiar: lo elegido en el árbol va al portapapeles de `cadUi` con sus dependencias internas.
   Pegar renumera ids (`FeatureId`) y vuelve a apuntar las referencias internas; las externas
   quedan igual si existen, y si no, la operación queda con referencia perdida (ya se muestra).
@@ -161,6 +171,11 @@ abran los proyectos viejos.
   apaga o la prende.
 
 ### F3 — Extrusión y revolución completas
+
+Hecho el 2026-10-11: `Extent::UpToVertex` («Hasta un punto») y `Revolve.extent`
+(`One | Symmetric | TwoAngles { second }`, sin migrar `angle`: queda como el ángulo hacia el
+primer lado o el total en la simétrica). Falta: hasta superficie con desfase o curva, dirección
+personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 
 - `Extent::UpToVertex { point: PointSpec }` (distancia = proyección sobre la dirección).
 - `Extent::UpToFace { face, offset: f64 }`; cara curva: extruir pasante y quedarse con el lado
@@ -273,6 +288,8 @@ abran los proyectos viejos.
 - Chapa: más allá de pestañas, alivios y esquinas cerradas (dobladillos, pestañas en arista
   curva, desdoblar/doblar).
 - Suite e2e completa, push y release CAD Windows/macOS cuando el usuario lo pida.
+- e2e de lo hecho el 2026-10-11 sin correr todavía (en la nube no se bajan los crates):
+  `node apps/web/e2e/cad.mjs operaciones` (5 escenarios) y `cargo test -p cad-model --test operations`.
 
 ## Riesgos
 

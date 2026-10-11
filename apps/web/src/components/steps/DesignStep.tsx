@@ -56,6 +56,7 @@ import {
   folderRange,
   type Material,
   type MissingRef,
+  type Motion,
   type P2,
   type P3,
   type AxisDef,
@@ -1478,6 +1479,7 @@ export const FeatureEditor: Component<{
                         { value: "through_all", label: "Atravesar todo" },
                         { value: "up_to_next", label: "Hasta la siguiente" },
                         { value: "up_to_face", label: "Hasta una cara" },
+                        { value: "up_to_vertex", label: "Hasta un punto" },
                         { value: "up_to_scan", label: "Hasta el escaneo" },
                       ]}
                       value={extentType()}
@@ -1488,6 +1490,7 @@ export const FeatureEditor: Component<{
                         else if (v === "two_sides") setExtent({ type: "two_sides", distance: d, second: d / 2 });
                         else if (v === "through_all" || v === "up_to_next") setExtent({ type: v });
                         else if (v === "up_to_scan") setExtent({ type: "up_to_scan", offset: 0 });
+                        else if (v === "up_to_vertex") setExtent({ type: "up_to_vertex", point: { type: "at", point: [0, 0, 10] } });
                         else setUpTo(true);
                       }}
                     />
@@ -1506,6 +1509,24 @@ export const FeatureEditor: Component<{
                         setUpTo(false);
                       }}
                     />
+                  </Show>
+                  <Show when={k().extent.type === "up_to_vertex" && (k().extent as Extract<Extent, { type: "up_to_vertex" }>)}>
+                    {(e) => (
+                      <>
+                        <PointField
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:hasta-punto`}
+                          label="Hasta el punto"
+                          value={e().point}
+                          except={f().id}
+                          onChange={(p) => setExtent({ type: "up_to_vertex", point: p })}
+                        />
+                        <p class="text-[11px] text-text-dim leading-relaxed">
+                          Llega hasta la altura del punto medida sobre la dirección de la extrusión; si el punto está detrás del plano, va hacia ese lado.
+                        </p>
+                      </>
+                    )}
                   </Show>
                   <Show when={k().extent.type === "blind" || k().extent.type === "symmetric" || k().extent.type === "two_sides"}>
                     {field(
@@ -1626,7 +1647,33 @@ export const FeatureEditor: Component<{
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
                   />
+                  <Row label="Hacia">
+                    <Select
+                      options={[
+                        { value: "one", label: "Un lado" },
+                        { value: "symmetric", label: "Simétrica" },
+                        { value: "two_angles", label: "Dos ángulos" },
+                      ]}
+                      value={k().extent?.type ?? "one"}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "revolve" &&
+                            (x.extent = v === "two_angles" ? { type: "two_angles", second: 45 } : v === "symmetric" ? { type: "symmetric" } : undefined),
+                        )
+                      }
+                    />
+                  </Row>
                   {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
+                  <Show when={k().extent?.type === "two_angles"}>
+                    {field(
+                      "Hacia atrás",
+                      "kind.extent.second",
+                      (k().extent as { second: number }).second,
+                      (x, v) => x.type === "revolve" && x.extent?.type === "two_angles" && (x.extent.second = v),
+                      "°",
+                    )}
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
                 </>
               );
@@ -2067,11 +2114,50 @@ export const FeatureEditor: Component<{
                       </Row>
                       {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
+                      <Checkbox
+                        small
+                        label="También en otra dirección"
+                        checked={!!lin().second}
+                        onChange={(c) =>
+                          update((x) => {
+                            if (x.type !== "pattern" || x.pattern.type !== "linear") return;
+                            const other: P3 = Math.abs(x.pattern.direction[0]) > 0.5 ? [0, 1, 0] : [1, 0, 0];
+                            x.pattern.second = c ? { direction: other, count: 2, spacing: x.pattern.spacing } : null;
+                          })
+                        }
+                      />
+                      <Show when={lin().second}>
+                        {(s2) => (
+                          <>
+                            <Row label="Dirección 2">
+                              <Select
+                                options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
+                                value={Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - s2().direction[i]) < 1e-9))?.[0] ?? "y"}
+                                onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.direction = AXIS_DIRS[v]))}
+                              />
+                            </Row>
+                            {field(
+                              "Cantidad 2",
+                              "kind.pattern.second.count",
+                              s2().count,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.count = Math.max(1, Math.round(v))),
+                            )}
+                            {field(
+                              "Separación 2",
+                              "kind.pattern.second.spacing",
+                              s2().spacing,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.spacing = v),
+                              "mm",
+                            )}
+                          </>
+                        )}
+                      </Show>
                     </>
                   )}
                 </Show>
                 </Show>
                 </Show>
+                <SkipCopies value={k().skip ?? []} onChange={(v) => update((x) => x.type === "pattern" && (x.skip = v.length ? v : undefined))} />
               </>
             )}
           </Match>
@@ -2080,6 +2166,102 @@ export const FeatureEditor: Component<{
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "mirror" && (x.features = ids))} />
                 <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "mirror" && (x.plane = p)))}</Row>
+                <Checkbox
+                  small
+                  label="El reflejo como pieza aparte"
+                  checked={k().op === "new"}
+                  onChange={(c) => update((x) => x.type === "mirror" && (x.op = c ? "new" : undefined))}
+                />
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "transform" && (f().kind as Extract<FeatureKind, { type: "transform" }>)}>
+            {(k) => (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  ui={props.ui}
+                  featureId={f().id}
+                  label="Piezas"
+                  empty="Todas"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "transform" && (x.parts = v))}
+                />
+                <Row label="Movimiento">
+                  <Select
+                    options={[
+                      { value: "translate", label: "Desplazar" },
+                      { value: "rotate", label: "Girar" },
+                      { value: "points", label: "De un punto a otro" },
+                    ]}
+                    value={k().motion.type}
+                    onChange={(v) =>
+                      update((x) => {
+                        if (x.type !== "transform" || x.motion.type === v) return;
+                        x.motion =
+                          v === "rotate"
+                            ? { type: "rotate", axis: { type: "z" }, angle: 90 }
+                            : v === "points"
+                              ? { type: "points", from: { type: "at", point: [0, 0, 0] }, to: { type: "at", point: [20, 0, 0] } }
+                              : { type: "translate", vector: [20, 0, 0] };
+                      })
+                    }
+                  />
+                </Row>
+                <Show when={k().motion.type === "translate" && (k().motion as Extract<Motion, { type: "translate" }>)}>
+                  {(m) => (
+                    <div class="grid grid-cols-3 gap-1" aria-label="Desplazamiento">
+                      <For each={["X", "Y", "Z"]}>
+                        {(axis, i) =>
+                          field(axis, `kind.motion.vector.${i()}`, m().vector[i()], (x, v) => x.type === "transform" && x.motion.type === "translate" && (x.motion.vector[i()] = v))
+                        }
+                      </For>
+                    </div>
+                  )}
+                </Show>
+                <Show when={k().motion.type === "rotate" && (k().motion as Extract<Motion, { type: "rotate" }>)}>
+                  {(m) => (
+                    <>
+                      <AxisField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:eje`}
+                        label="Eje"
+                        value={m().axis}
+                        except={f().id}
+                        onChange={(a) => update((x) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.axis = a))}
+                      />
+                      {field("Ángulo", "kind.motion.angle", m().angle, (x, v) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.angle = v), "°")}
+                    </>
+                  )}
+                </Show>
+                <Show when={k().motion.type === "points" && (k().motion as Extract<Motion, { type: "points" }>)}>
+                  {(m) => (
+                    <>
+                      <PointField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:desde`}
+                        label="Desde"
+                        value={m().from}
+                        except={f().id}
+                        onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.from = p))}
+                      />
+                      <PointField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:hasta`}
+                        label="Hasta"
+                        value={m().to}
+                        except={f().id}
+                        onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.to = p))}
+                      />
+                    </>
+                  )}
+                </Show>
+                <Checkbox small label="Copiar (las originales quedan)" checked={k().copy} onChange={(c) => update((x) => x.type === "transform" && (x.copy = c))} />
+                <p class="text-[11px] text-text-dim">Sin piezas elegidas mueve todas. Las copias quedan como piezas nuevas.</p>
               </>
             )}
           </Match>
@@ -3377,7 +3559,7 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
   const current = () => (props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
   const edgeOf = () => (props.value.type === "center" || props.value.type === "on_edge" ? [props.value.edge] : []);
   return (
-    <div class="space-y-1">
+    <div class="space-y-1" data-point-field={props.label}>
       <Row label={props.label}>
         <Select
           options={[
@@ -3442,6 +3624,34 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
  * (otra vez la quita), y la lista muestra solo las elegidas (con muchas piezas,
  * una lista de casillas no sirve). Sin elegir, las que toca.
  */
+/** Copias de un patrón que no se hacen, escritas como lista ("2, 5") */
+const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }> = (props) => (
+  <>
+    <label class="flex items-center gap-2 text-xs">
+      <span class="text-text-muted shrink-0 w-24">Omitir copias</span>
+      <input
+        type="text"
+        aria-label="Omitir copias"
+        placeholder="ninguna"
+        value={props.value.join(", ")}
+        class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+        onChange={(e) => {
+          const nums = e.currentTarget.value
+            .split(/[\s,;]+/)
+            .map(Number)
+            .filter((n) => Number.isInteger(n) && n >= 1);
+          props.onChange([...new Set(nums)].sort((a, b) => a - b));
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          e.stopPropagation();
+        }}
+      />
+    </label>
+    <p class="text-[11px] text-text-dim">Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).</p>
+  </>
+);
+
 const PartChecklist: Component<{
   store: CadStore;
   ui: CadUi;

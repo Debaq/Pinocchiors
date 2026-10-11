@@ -35,7 +35,8 @@ fn sample() -> Document {
     let hole = doc.add(prim(PrimitiveShape::Cylinder { radius: 2.0, height: 40.0 }, [45.0, 15.0, -5.0], BodyOp::Cut));
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
-        pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 10.0 },
+        pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 10.0, second: None },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     let body = ev.body.as_ref().unwrap();
@@ -45,7 +46,7 @@ fn sample() -> Document {
     let (top, corner) = (ev.edge_ref(top).unwrap(), ev.edge_ref(corner).unwrap());
     doc.add(FeatureKind::Fillet { edges: vec![top], radius: 1.5, radius2: None });
     doc.add(FeatureKind::Chamfer { edges: vec![corner], distance: 2.0, second: None });
-    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Yz });
+    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Yz, op: BodyOp::Join });
     doc
 }
 

@@ -193,6 +193,18 @@ pub enum BodyOp {
     New,
 }
 
+/// Movimiento de [`FeatureKind::Transform`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Motion {
+    /// Traslación (mm).
+    Translate { vector: P3 },
+    /// Giro de `angle` grados alrededor de un eje.
+    Rotate { axis: AxisSpec, angle: f64 },
+    /// Traslación de un punto a otro.
+    Points { from: PointSpec, to: PointSpec },
+}
+
 /// Pieza del diseño: la operación que la creó y el número de pieza dentro de
 /// ella (una unión que junta piezas conserva el de la primera).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -226,6 +238,8 @@ pub enum Extent {
     TwoSides { distance: f64, second: f64 },
     /// Hasta la primera cara del sólido que encuentra.
     UpToNext,
+    /// Hasta un punto (un vértice): el largo es lo que avanza el punto sobre la dirección.
+    UpToVertex { point: PointSpec },
     /// Hasta la piel del escaneo (aunque sea curva), dejando `offset` de
     /// separación; va hacia el lado donde está el escaneo.
     UpToScan {
@@ -270,6 +284,28 @@ pub struct Revolve {
     pub angle: f64,
     #[serde(default)]
     pub op: BodyOp,
+    /// Hacia dónde gira `angle` desde el plano del sketch.
+    #[serde(default, skip_serializing_if = "RevolveExtent::is_one")]
+    pub extent: RevolveExtent,
+}
+
+/// Cómo se reparte el giro de una revolución alrededor del plano del sketch.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RevolveExtent {
+    /// Todo `angle` hacia un lado.
+    #[default]
+    One,
+    /// Mitad de `angle` hacia cada lado.
+    Symmetric,
+    /// `angle` hacia un lado y `second` (grados) hacia el otro.
+    TwoAngles { second: f64 },
+}
+
+impl RevolveExtent {
+    fn is_one(&self) -> bool {
+        *self == RevolveExtent::One
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -367,10 +403,25 @@ fn default_x() -> P3 {
     [1.0, 0.0, 0.0]
 }
 
+/// Segunda dirección de un patrón lineal.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LinearSecond {
+    pub direction: P3,
+    pub count: u32,
+    pub spacing: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PatternKind {
-    Linear { direction: P3, count: u32, spacing: f64 },
+    /// Con `second`, también en una segunda dirección (grilla).
+    Linear {
+        direction: P3,
+        count: u32,
+        spacing: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        second: Option<LinearSecond>,
+    },
     /// `angle` total; 360 reparte las copias en la vuelta completa.
     Circular { axis: AxisSpec, count: u32, angle: f64 },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
@@ -524,10 +575,32 @@ pub enum FeatureKind {
     Shell { faces: Vec<FaceRef>, thickness: f64 },
     /// Desmolde: inclina `faces` respecto de la normal de `neutral`.
     Draft { faces: Vec<FaceRef>, neutral: PlaneSpec, angle: f64 },
-    /// Repite las herramientas de `features` (vacío = todo el cuerpo).
-    Pattern { features: Vec<FeatureId>, pattern: PatternKind },
-    /// Refleja las herramientas de `features` (vacío = todo el cuerpo) y las une.
-    Mirror { features: Vec<FeatureId>, plane: PlaneSpec },
+    /// Repite las herramientas de `features` (vacío = todo el cuerpo);
+    /// `skip`: copias que no se hacen (1 es la primera copia, 0 el original).
+    Pattern {
+        features: Vec<FeatureId>,
+        pattern: PatternKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skip: Vec<u32>,
+    },
+    /// Refleja las herramientas de `features` (vacío = todo el cuerpo). Con
+    /// todo el cuerpo, `op` `New` deja cada reflejo como pieza aparte en vez
+    /// de unirlo.
+    Mirror {
+        features: Vec<FeatureId>,
+        plane: PlaneSpec,
+        #[serde(default)]
+        op: BodyOp,
+    },
+    /// Mueve o gira piezas enteras (vacío = todas); con `copy` las deja y
+    /// agrega las copias como piezas nuevas.
+    Transform {
+        #[serde(default)]
+        parts: Vec<PartId>,
+        motion: Motion,
+        #[serde(default)]
+        copy: bool,
+    },
     /// Corta por un plano y conserva el lado de la normal (o el otro con `flip`).
     Split {
         plane: PlaneSpec,
@@ -976,7 +1049,10 @@ impl FeatureKind {
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
-            FeatureKind::Extrude(e) => vec![e.sketch],
+            FeatureKind::Extrude(e) => match &e.extent {
+                Extent::UpToVertex { point } => [vec![e.sketch], point_deps(point)].concat(),
+                _ => vec![e.sketch],
+            },
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
                 d.extend(axis_dep(&r.axis));
@@ -997,7 +1073,7 @@ impl FeatureKind {
                 }
                 d
             }
-            FeatureKind::Pattern { features, pattern } => {
+            FeatureKind::Pattern { features, pattern, .. } => {
                 let mut d = features.clone();
                 match pattern {
                     PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
@@ -1008,7 +1084,16 @@ impl FeatureKind {
                 }
                 d
             }
-            FeatureKind::Mirror { features, plane } => [features.clone(), plane_deps(plane)].concat(),
+            FeatureKind::Mirror { features, plane, .. } => [features.clone(), plane_deps(plane)].concat(),
+            FeatureKind::Transform { parts, motion, .. } => {
+                let mut d: Vec<FeatureId> = parts.iter().map(|p| p.feature).collect();
+                match motion {
+                    Motion::Translate { .. } => {}
+                    Motion::Rotate { axis, .. } => d.extend(axis_deps(axis)),
+                    Motion::Points { from, to } => d.extend([point_deps(from), point_deps(to)].concat()),
+                }
+                d
+            }
             // Las operaciones que crearon las piezas que usa
             FeatureKind::Boolean { targets, tools, .. } => targets.iter().chain(tools).map(|p| p.feature).collect(),
             FeatureKind::SplitParts { parts } | FeatureKind::DeleteParts { parts } => parts.iter().map(|p| p.feature).collect(),
@@ -1069,6 +1154,9 @@ impl FeatureKind {
             FeatureKind::SplitBy { .. } => "Partir",
             FeatureKind::MoveFace { .. } => "Mover cara",
             FeatureKind::Scale { .. } => "Escala",
+            FeatureKind::Transform { copy: true, .. } => "Copiar cuerpo",
+            FeatureKind::Transform { motion: Motion::Rotate { .. }, .. } => "Girar cuerpo",
+            FeatureKind::Transform { .. } => "Mover cuerpo",
         }
     }
 }

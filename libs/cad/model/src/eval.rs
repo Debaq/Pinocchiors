@@ -2094,11 +2094,24 @@ impl Ctx<'_> {
                 let axis = self.axis("axis", &r.axis)?;
                 self.check_revolve_profile(r.sketch, &r.regions, axis)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
+                // Desde dónde (`start`, girando el perfil antes) y cuánto en total
                 let angle = r.angle.to_radians();
+                let (start, angle) = match r.extent {
+                    RevolveExtent::One => (0.0, angle),
+                    RevolveExtent::Symmetric => (-angle / 2.0, angle),
+                    RevolveExtent::TwoAngles { second } => (-second.to_radians(), angle + second.to_radians()),
+                };
                 if angle.abs() < 1e-9 {
                     return Err("ángulo cero".into());
                 }
-                let solids = faces.iter().map(|fc| fc.revolve(axis, angle)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                if angle.abs() > 2.0 * std::f64::consts::PI + 1e-9 {
+                    return Err("entre los dos ángulos pasan de 360°".into());
+                }
+                let solids = faces
+                    .iter()
+                    .map(|fc| if start != 0.0 { fc.rotate(axis, start).and_then(|g| g.revolve(axis, angle)) } else { fc.revolve(axis, angle) })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
                 let shape = fuse(solids)?;
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 let rot = |p: P3, a: f64| {
@@ -2107,12 +2120,12 @@ impl Ctx<'_> {
                 };
                 // Lateral de cada entidad: su punto medio girado a la mitad del ángulo
                 for (id, p) in &entities {
-                    mark(&shape, &mut tags, rot(*p, angle / 2.0), tag(f.id, format!("lado:{id}")));
+                    mark(&shape, &mut tags, rot(*p, start + angle / 2.0), tag(f.id, format!("lado:{id}")));
                 }
                 if angle.abs() < 2.0 * std::f64::consts::PI - 1e-9 {
                     for p in &samples {
-                        mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
-                        mark(&shape, &mut tags, rot(*p, angle), tag(f.id, "fin"));
+                        mark(&shape, &mut tags, rot(*p, start), tag(f.id, "inicio"));
+                        mark(&shape, &mut tags, rot(*p, start + angle), tag(f.id, "fin"));
                     }
                 }
                 let tool = Tagged { shape, tags };
@@ -2211,21 +2224,22 @@ impl Ctx<'_> {
                 let groups = self.by_part(&idx, false);
                 self.per_part(groups, |s, fs| s.draft(fs, p.normal, angle.to_radians(), p.origin, p.normal), |_| None)
             }
-            FeatureKind::Pattern { features, pattern } => {
+            FeatureKind::Pattern { features, pattern, skip } => {
                 // Dónde está lo que se copia: el centro de la primera operación (o del sólido)
                 let seed = match features.first() {
                     Some(id) => self.tool(*id)?.0.shape.mass().map_err(err)?,
                     None => self.body()?.mass().map_err(err)?,
                 };
                 let seed = scale(add(seed.bbox_min, seed.bbox_max), 0.5);
-                let transforms = self.pattern_transforms(pattern, seed)?;
+                // Las omitidas no se hacen; las demás conservan su número (y sus nombres)
+                let transforms: Vec<(usize, ShapeFn)> =
+                    self.pattern_transforms(pattern, seed)?.into_iter().enumerate().filter(|(k, _)| !skip.contains(&(*k as u32 + 1))).collect();
                 if transforms.is_empty() {
                     return Ok(());
                 }
                 let copies_of = |src: &Tagged| -> R<Vec<Tagged>> {
                     transforms
                         .iter()
-                        .enumerate()
                         .map(|(k, t)| {
                             let (shape, h) = with_history(|| t(&src.shape).map_err(occt_err)).map_err(err)?;
                             let tags = suffixed(&src.tags, &h, shape.face_count(), &format!("#{}", k + 1));
@@ -2253,7 +2267,7 @@ impl Ctx<'_> {
                 }
                 Ok(())
             }
-            FeatureKind::Mirror { features, plane } => {
+            FeatureKind::Mirror { features, plane, op: mirror_op } => {
                 let p = self.plane("plane", plane)?;
                 let mirrored = |src: &Tagged| -> R<Tagged> {
                     let (shape, h) = with_history(|| src.shape.mirror(p.origin, p.normal)).map_err(err)?;
@@ -2266,6 +2280,10 @@ impl Ctx<'_> {
                     for i in 0..self.ev.parts.len() {
                         let part = Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() };
                         let m = mirrored(&part)?;
+                        if *mirror_op == BodyOp::New {
+                            self.new_part(f.id, m);
+                            continue;
+                        }
                         let fused = fuse_tagged(vec![part, m])?;
                         self.ev.parts[i].shape = fused.shape;
                         self.ev.parts[i].tags = fused.tags;
@@ -2276,7 +2294,7 @@ impl Ctx<'_> {
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
                     let m = mirrored(&tool)?;
-                    self.apply(f.id, m, op)?;
+                    self.apply(f.id, m, if *mirror_op == BodyOp::New { BodyOp::New } else { op })?;
                 }
                 Ok(())
             }
@@ -2365,6 +2383,42 @@ impl Ctx<'_> {
                     let part = self.ev.parts[i].shape.clone();
                     let (new, h) = with_history(|| part.transform(m)).map_err(err)?;
                     self.replace_part(i, new, &h, |_| None);
+                }
+                self.sync();
+                Ok(())
+            }
+            FeatureKind::Transform { parts, motion, copy } => {
+                self.body()?;
+                let shift = |v: P3| [[1.0, 0.0, 0.0, v[0]], [0.0, 1.0, 0.0, v[1]], [0.0, 0.0, 1.0, v[2]]];
+                let m = match motion {
+                    Motion::Translate { vector } => {
+                        if norm(*vector) < 1e-12 {
+                            return Err("el desplazamiento es cero".into());
+                        }
+                        shift(*vector)
+                    }
+                    Motion::Rotate { axis, angle } => {
+                        let ax = self.axis("axis", axis)?;
+                        if norm(ax.dir) < 1e-12 {
+                            return Err("el eje no tiene dirección".into());
+                        }
+                        cad_occt::rotation_matrix(ax, angle.to_radians())
+                    }
+                    Motion::Points { from, to } => {
+                        let (a, b) = (self.point("a", from)?, self.point("b", to)?);
+                        shift(sub(b, a))
+                    }
+                };
+                let which: Vec<usize> = if parts.is_empty() { (0..self.ev.parts.len()).collect() } else { self.find_parts("parts", parts)? };
+                for i in which {
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.transform(m)).map_err(err)?;
+                    if *copy {
+                        let tags = suffixed(&self.ev.parts[i].tags, &h, new.face_count(), "#copia");
+                        self.new_part(f.id, Tagged { shape: new, tags });
+                    } else {
+                        self.replace_part(i, new, &h, |_| None);
+                    }
                 }
                 self.sync();
                 Ok(())
@@ -2951,14 +3005,24 @@ impl Ctx<'_> {
     fn pattern_transforms(&self, p: &PatternKind, seed: P3) -> R<Vec<ShapeFn>> {
         let mut out: Vec<ShapeFn> = Vec::new();
         match p {
-            PatternKind::Linear { direction, count, spacing } => {
-                if *count < 2 {
+            PatternKind::Linear { direction, count, spacing, second } => {
+                // Copia k = j·count + i (0 es el original): por filas de la primera dirección
+                let (d2, count2, spacing2) = match second {
+                    Some(s) => (normalize(s.direction), s.count.max(1), s.spacing),
+                    None => ([0.0; 3], 1, 0.0),
+                };
+                if *count * count2 < 2 {
                     return Err("se necesitan al menos 2 instancias".into());
                 }
                 let d = normalize(*direction);
-                for k in 1..*count {
-                    let v = scale(d, spacing * k as f64);
-                    out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                for j in 0..count2 {
+                    for i in 0..*count {
+                        if i == 0 && j == 0 {
+                            continue;
+                        }
+                        let v = add(scale(d, spacing * i as f64), scale(d2, spacing2 * j as f64));
+                        out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                    }
                 }
             }
             PatternKind::Curve { path, count } => {
@@ -3333,6 +3397,17 @@ impl Ctx<'_> {
                 let d = dot(sub(info.point, plane.origin), n);
                 if d.abs() < 1e-9 {
                     return Err("la cara está sobre el plano del sketch".into());
+                }
+                if d < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                vec![(0.0, d.abs())]
+            }
+            Extent::UpToVertex { point } => {
+                let p = self.point("extent", point)?;
+                let d = dot(sub(p, plane.origin), n);
+                if d.abs() < 1e-9 {
+                    return Err("el punto está sobre el plano del sketch".into());
                 }
                 if d < 0.0 {
                     n = scale(n, -1.0);

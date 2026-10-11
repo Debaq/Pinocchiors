@@ -116,6 +116,7 @@ fn sketch_on_reference_plane_and_revolve_on_reference_axis() {
         axis: AxisSpec::Reference { feature: ax },
         angle: 360.0,
         op: BodyOp::Join,
+        extent: RevolveExtent::One,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());

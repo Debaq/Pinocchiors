@@ -701,3 +701,8 @@ cargo test -p cad-model
   (sigue con una pieza activa), alinear por rasgos (cara al piso/frente, eje vertical, punto al
   origen), referencias del árbol ligadas al escaneo (`ScanFit`, se reajustan en cada recálculo)
   y sketch anclado al corte del escaneo («Usar el corte»).
+- **2026-10-11 Operaciones fáciles** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md), F1–F3):
+  mover, girar y copiar cuerpos (`Transform`), simetría del cuerpo como pieza aparte
+  (`Mirror.op`), patrón lineal en dos direcciones y copias omitidas (`Linear.second`,
+  `Pattern.skip`), revolución simétrica o a dos ángulos (`Revolve.extent`) y extrusión hasta un
+  punto (`Extent::UpToVertex`). Pruebas en `model/tests/operations.rs` y e2e «operaciones:».

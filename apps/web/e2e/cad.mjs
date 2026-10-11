@@ -136,6 +136,36 @@ const setInput = (b, labelStart, value) =>
     i.dispatchEvent(new Event("change", { bubbles: true }));
     return true;
   })()`);
+/** Elige `option` en el desplegable de la fila `row` de un diálogo (Kobalte: clic en el botón y en la opción) */
+async function chooseOption(b, row, option) {
+  const r = await b.eval(`(() => {
+    const s = [...document.querySelectorAll("span")].find((x) => x.textContent.trim() === ${JSON.stringify(row)} && x.offsetParent !== null);
+    const t = s?.parentElement?.querySelector("button");
+    if (!t) return null; t.scrollIntoView({ block: "center" }); const q = t.getBoundingClientRect(); return [q.x + q.width / 2, q.y + q.height / 2];
+  })()`);
+  if (!r) throw new Error("no encontré el desplegable " + row);
+  await b.click(r[0], r[1], { wait: 500 });
+  await b.clickText(option);
+  await sleep(1500);
+}
+/** Escribe en el campo `index` (0, 1, 2…) de los que encuentra `selector` */
+const setInputIn = (b, selector, index, value) =>
+  b.eval(`(() => {
+    const i = document.querySelectorAll(${JSON.stringify(selector)})[${index}];
+    if (!i) return false;
+    i.value = ${JSON.stringify(String(value))};
+    i.dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
+  })()`);
+/** Espera a que la última operación del documento sea de tipo `type` */
+async function lastIs(b, type) {
+  for (let t = 0; t < 30; t++) {
+    if ((await b.eval(`window.__cadStore.doc().features.at(-1)?.kind.type`)) === type) return;
+    await sleep(250);
+  }
+  throw new Error("no se creó la operación " + type);
+}
+const lastKind = (b) => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.doc().features.at(-1).kind))`);
 
 const scenarios = {
   async "caja, sketch dibujado y extrusión"(b) {
@@ -7393,6 +7423,229 @@ const scenarios = {
     const now = await b.eval(`__cadUi.session().sketch.texts[0].text`);
     if (now !== "Hola") throw new Error(`texto: ${now}`);
     await b.shot("texto-caja");
+  },
+  // ─── Plan de operaciones (F1–F3, las fáciles) ──────────────────────────
+  // node apps/web/e2e/cad.mjs operaciones
+
+  async "operaciones: simetría del cuerpo como pieza aparte"(b) {
+    await begin(b);
+    // Caja de 20 apoyada en el plano lateral (x de 0 a 20): el reflejo la toca
+    await b.clickText("Caja");
+    await sleep(1500);
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.origin = [10, 0, 0]; })`);
+    await sleep(1200);
+    await accept(b);
+    await b.clickText("Simetría");
+    await lastIs(b, "mirror");
+    // Todo el cuerpo, en el plano lateral (YZ, el de por defecto)
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.features = []; })`);
+    await sleep(2000);
+    let ps = (await evaluate()).parts;
+    if (ps.length !== 1) throw new Error(`unido: ${ps.length} piezas`);
+    near((await body()).volume, 16000, 1e-3, "unido");
+    // Como pieza aparte: dos piezas de 8000
+    await b.clickText("El reflejo como pieza aparte");
+    await sleep(2000);
+    ps = (await evaluate()).parts;
+    if (ps.length !== 2) throw new Error(`aparte: ${ps.length} piezas`);
+    for (const p of ps) near(p.volume, 8000, 1e-3, "cada pieza");
+    const r = await body();
+    near(r.bbox_min[0], -20, 1e-6, "reflejo en −X");
+    await accept(b);
+    if ((await lastKind(b)).op !== "new") throw new Error("no quedó op: new");
+    await b.shot("operaciones_simetria_aparte");
+  },
+
+  async "operaciones: mover, girar y copiar el cuerpo"(b) {
+    await begin(b);
+    // Caja de 20 en x de 0 a 20 (y, z de −10 a 10)
+    await b.clickText("Caja");
+    await sleep(1500);
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.origin = [10, 0, 0]; })`);
+    await sleep(1200);
+    await accept(b);
+    await b.clickText("Mover cuerpo");
+    await lastIs(b, "transform");
+    await sleep(2000);
+    // Por defecto 20 en X
+    let r = await body();
+    near(r.bbox_min[0], 20, 1e-6, "desplazado por defecto");
+    // X = 0, Z = 15
+    await setInputIn(b, '[aria-label="Desplazamiento"] input', 0, 0);
+    await sleep(1200);
+    await setInputIn(b, '[aria-label="Desplazamiento"] input', 2, 15);
+    await sleep(2000);
+    r = await body();
+    near(r.bbox_min[0], 0, 1e-6, "x sin mover");
+    near(r.bbox_min[2], 5, 1e-6, "subido 15");
+    near(r.volume, 8000, 1e-3, "mismo volumen");
+    // Girar 90° alrededor de Z: (x, y) → (−y, x)
+    await chooseOption(b, "Movimiento", "Girar");
+    r = await body();
+    near(r.bbox_min[0], -10, 1e-6, "girado: x");
+    near(r.bbox_min[1], 0, 1e-6, "girado: y desde 0");
+    near(r.bbox_max[1], 20, 1e-6, "girado: y hasta 20");
+    await setInput(b, "Ángulo", 180);
+    await sleep(2000);
+    r = await body();
+    near(r.bbox_min[0], -20, 1e-6, "media vuelta");
+    near(r.bbox_max[0], 0, 1e-6, "media vuelta");
+    // De un punto a otro: del origen a (20, 0, 0)
+    await chooseOption(b, "Movimiento", "De un punto a otro");
+    r = await body();
+    near(r.bbox_min[0], 20, 1e-6, "de punto a punto");
+    // Copiar: la original queda y la copia es otra pieza
+    await b.clickText("Copiar (las originales quedan)");
+    await sleep(2000);
+    const ps = (await evaluate()).parts;
+    if (ps.length !== 2) throw new Error(`copia: ${ps.length} piezas`);
+    r = await body();
+    near(r.bbox_min[0], 0, 1e-6, "la original");
+    near(r.bbox_max[0], 40, 1e-6, "la copia");
+    near(r.volume, 16000, 1e-3, "dos cajas");
+    await accept(b);
+    const k = await lastKind(b);
+    if (!k.copy || k.motion.type !== "points") throw new Error(`guardado: ${JSON.stringify(k)}`);
+    await b.shot("operaciones_mover_copiar");
+  },
+
+  async "operaciones: patrón lineal en dos direcciones y copias omitidas"(b) {
+    await begin(b);
+    // Placa de 100 × 60 × 2 y un agujero de Ø4 en (10, 10)
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    await b.eval(`window.__cadStore.select(${hole})`);
+    await b.clickText("Patrón lineal");
+    await lastIs(b, "pattern");
+    await sleep(1500);
+    // 3 en X cada 20
+    await setInput(b, "Separación", 20);
+    await sleep(2000);
+    near((await body()).volume, 12000 - 3 * holeV, 1e-3, "3 en X");
+    // Segunda dirección: Y por defecto, 2 cada 30 → grilla de 3 × 2
+    await b.clickText("También en otra dirección");
+    await sleep(1500);
+    await setInput(b, "Separación 2", 30);
+    await sleep(2000);
+    near((await body()).volume, 12000 - 6 * holeV, 1e-3, "grilla 3 × 2");
+    const k = await lastKind(b);
+    if (k.pattern.second?.direction?.[1] !== 1) throw new Error(`segunda dirección: ${JSON.stringify(k.pattern.second)}`);
+    // Omitir la copia 4 (segunda fila, segunda columna) y la 2
+    await setInput(b, "Omitir copias", "4, 2");
+    await sleep(2000);
+    near((await body()).volume, 12000 - 4 * holeV, 1e-3, "sin las copias 2 y 4");
+    await b.shot("operaciones_patron_grilla_omitidas");
+    await accept(b);
+    const saved = await lastKind(b);
+    if (JSON.stringify(saved.skip) !== "[2,4]") throw new Error(`omitidas: ${JSON.stringify(saved.skip)}`);
+    // Volver a abrir y quitar las omitidas: vuelven las 6
+    await clickRow(b, (await b.eval(`window.__cadStore.doc().features.at(-1).name`)));
+    await sleep(1200);
+    await setInput(b, "Omitir copias", "");
+    await sleep(2000);
+    near((await body()).volume, 12000 - 6 * holeV, 1e-3, "sin omitir");
+    await accept(b);
+  },
+
+  async "operaciones: revolución simétrica y a dos ángulos"(b) {
+    await begin(b);
+    // En el frente: rectángulo x 10..15, z 0..20; gira alrededor de Z
+    const doc = await call("cad_get_document");
+    const P = [[10, 0], [15, 0], [15, 20], [10, 20]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const sketch = { points, entities: [line(7, 1, 2), line(8, 2, 3), line(9, 3, 4), line(10, 4, 1)], constraints: [], next_id: 12, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Revolución");
+    await lastIs(b, "revolve");
+    await sleep(2000);
+    const full = Math.PI * (15 ** 2 - 10 ** 2) * 20;
+    near((await body()).volume, full, 1e-3, "vuelta completa");
+    // 90° hacia un lado: todo en y ≥ 0 (o ≤ 0)
+    await setInput(b, "Ángulo", 90);
+    await sleep(2000);
+    let r = await body();
+    near(r.volume, full / 4, 1e-3, "un lado");
+    if (Math.min(Math.abs(r.bbox_min[1]), Math.abs(r.bbox_max[1])) > 1e-6) throw new Error(`un lado: y de ${r.bbox_min[1]} a ${r.bbox_max[1]}`);
+    // Simétrica: 45° a cada lado del plano del sketch
+    await chooseOption(b, "Hacia", "Simétrica");
+    r = await body();
+    near(r.volume, full / 4, 1e-3, "simétrica");
+    near(r.bbox_min[1], -r.bbox_max[1], 1e-6, "simétrica respecto del frente");
+    if (r.bbox_max[1] < 5) throw new Error(`simétrica: y hasta ${r.bbox_max[1]}`);
+    // Dos ángulos: 90 + 45 por defecto, luego 90 + 90
+    await chooseOption(b, "Hacia", "Dos ángulos");
+    near((await body()).volume, (full * 135) / 360, 1e-3, "90 + 45");
+    await setInput(b, "Hacia atrás", 90);
+    await sleep(2000);
+    near((await body()).volume, full / 2, 1e-3, "90 + 90");
+    // Entre los dos más de una vuelta: la operación da error
+    await setInput(b, "Hacia atrás", 300);
+    await sleep(2000);
+    const st = (await evaluate()).status.at(-1);
+    if (st.state !== "error") throw new Error(`más de 360°: ${JSON.stringify(st)}`);
+    await setInput(b, "Hacia atrás", 90);
+    await sleep(2000);
+    await accept(b);
+    const k = await lastKind(b);
+    if (k.extent?.type !== "two_angles" || k.extent.second !== 90) throw new Error(`guardado: ${JSON.stringify(k.extent)}`);
+    await b.shot("operaciones_revolucion_dos_angulos");
+  },
+
+  async "operaciones: extrusión hasta un punto"(b) {
+    await begin(b);
+    // Cuadrado de 10 centrado en la planta
+    const doc = await call("cad_get_document");
+    const P = [[-5, -5], [5, -5], [5, 5], [-5, 5]];
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))],
+      entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })),
+      constraints: [], next_id: 20, origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Cuadrado", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Extrusión");
+    await lastIs(b, "extrude");
+    await sleep(2000);
+    await chooseOption(b, "Hasta", "Hasta un punto");
+    // Por defecto el punto (0, 0, 10)
+    let r = await body();
+    near(r.volume, 1000, 1e-3, "hasta z = 10");
+    near(r.bbox_max[2], 10, 1e-6, "hasta z = 10");
+    // El punto a z = −6: va hacia abajo
+    const point = `[data-point-field="Hasta el punto"] input[type=number]`;
+    if (!(await setInputIn(b, point, 2, -6))) throw new Error("no encontré las coordenadas del punto");
+    await sleep(2000);
+    r = await body();
+    near(r.volume, 600, 1e-3, "hasta z = −6");
+    near(r.bbox_min[2], -6, 1e-6, "hacia abajo");
+    near(r.bbox_max[2], 0, 1e-6, "desde la planta");
+    await accept(b);
+    const k = await lastKind(b);
+    if (k.extent.type !== "up_to_vertex" || k.extent.point.point[2] !== -6) throw new Error(`guardado: ${JSON.stringify(k.extent)}`);
+    await b.shot("operaciones_extrusion_hasta_punto");
   },
 };
 

@@ -245,6 +245,7 @@ fn revolve_around_sketch_line() {
         axis: AxisSpec::SketchLine { sketch: sk, line: axis },
         angle: 360.0,
         op: BodyOp::Join,
+        extent: RevolveExtent::One,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -278,13 +279,14 @@ fn circular_pattern_of_holes_and_mirror() {
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: AxisSpec::Z, count: 6, angle: 360.0 },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), PI * 2500.0 * 5.0 - 6.0 * PI * 9.0 * 5.0, max_relative = 1e-6);
 
     // Simetría de todo el cuerpo respecto de z = 0: el disco se duplica hacia abajo
-    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Xy });
+    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Xy, op: BodyOp::Join });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), 2.0 * (PI * 2500.0 * 5.0 - 6.0 * PI * 9.0 * 5.0), max_relative = 1e-6);
@@ -330,7 +332,8 @@ fn shell_split_and_linear_pattern() {
     }));
     doc.add(FeatureKind::Pattern {
         features: vec![pin],
-        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 5, spacing: 3.0 },
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 5, spacing: 3.0, second: None },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);

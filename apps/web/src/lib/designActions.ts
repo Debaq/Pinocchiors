@@ -669,6 +669,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSketch3d: () => void store.addFeature({ type: "sketch3d", sketch: { points: [], entities: [], constraints: [], next_id: 1 } }),
     startSurfaceSketch,
     addScale: () => void store.addFeature({ type: "scale", factor: [2, 2, 2], center: { type: "at", point: [0, 0, 0] } }),
+    /** Mover, girar o copiar piezas enteras (las elegidas, o todas) */
+    addTransform: (motion: "translate" | "rotate", copy = false) =>
+      void store.addFeature({
+        type: "transform",
+        parts: pickedParts(),
+        motion: motion === "rotate" ? { type: "rotate", axis: { type: "z" }, angle: 90 } : { type: "translate", vector: [20, 0, 0] },
+        copy,
+      }),
     sketches,
     toolFeatures,
     selectedFeature,
