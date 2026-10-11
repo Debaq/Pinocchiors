@@ -98,6 +98,25 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
       if (!r) throw new Error("no encontré: " + text);
       await api.click(r[0], r[1]);
     },
+    /** Vuelve a abrir `url` desde cero en el mismo Chromium (unos 3 s menos
+     * que lanzar otro): pasa por about:blank, borra lo que guardó la página
+     * (localStorage, IndexedDB, caché de servicio…) y espera el documento nuevo */
+    async reload(url) {
+      // Un botón que quedó apretado (prueba cortada a mitad de un arrastre)
+      await send("Input.dispatchMouseEvent", { type: "mouseReleased", x: 0, y: 0, button: "left", buttons: 0, clickCount: 1 });
+      await send("Page.navigate", { url: "about:blank" });
+      for (let i = 0; i < 50 && (await api.eval("location.href")) !== "about:blank"; i++) await sleep(50);
+      await send("Storage.clearDataForOrigin", { origin: new URL(url).origin, storageTypes: "cookies,local_storage,indexeddb,websql,service_workers,cache_storage,file_systems,shader_cache" });
+      logs.length = 0;
+      await send("Page.navigate", { url });
+      for (let i = 0; i < 200; i++) {
+        await sleep(100);
+        try {
+          if (await api.eval(`location.href !== "about:blank" && document.readyState === "complete"`)) return;
+        } catch {}
+      }
+      throw new Error("la página no volvió a cargar");
+    },
     async shot(name) {
       const r = await send("Page.captureScreenshot", { format: "png" });
       writeFileSync(`${OUT}/${name}.png`, Buffer.from(r.result.data, "base64"));

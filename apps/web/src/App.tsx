@@ -1837,15 +1837,20 @@ export const App: Component = () => {
     try {
       return await run((d) => void (description = d));
     } finally {
-      operations--;
       recorders.splice(recorders.lastIndexOf(ops), 1);
-      if (description === undefined) {
-        if (id !== undefined) invoke("drop_snapshot", { id }).catch(() => {});
-      } else if (id === undefined) {
-        history.milestone(description, { kind: "snapshot", data: { ops } });
-      } else {
-        snapshotUi.set(id, { before, after: projectUi(false) });
-        await history.execute(description, { kind: "snapshot", data: { id, ops } }, { applied: true });
+      // La operación cuenta como en curso hasta que su paso está en el
+      // historial: un deshacer antes de eso desharía el paso anterior
+      try {
+        if (description === undefined) {
+          if (id !== undefined) invoke("drop_snapshot", { id }).catch(() => {});
+        } else if (id === undefined) {
+          history.milestone(description, { kind: "snapshot", data: { ops } });
+        } else {
+          snapshotUi.set(id, { before, after: projectUi(false) });
+          await history.execute(description, { kind: "snapshot", data: { id, ops } }, { applied: true });
+        }
+      } finally {
+        operations--;
       }
     }
   };

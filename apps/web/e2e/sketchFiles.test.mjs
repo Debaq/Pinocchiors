@@ -42,8 +42,9 @@ test("DXF: rectángulo en polilínea con un lado curvo, círculo y arco, en pulg
   near(at(arc.center).x, 0, "cx");
   near(at(arc.center).y, 12.7, "cy");
   near(s.entities[4].geometry.radius, 25.4, "círculo");
-  // La polilínea cerró; el arco termina en su vértice (0, 1 pulgada): queda suelto solo su comienzo
-  assert.equal(checkSketch(s).looseEnds.length, 1);
+  // La polilínea cerró; el arco termina en su vértice (0, 1 pulgada) y empieza
+  // en (1 pulgada, 0), en medio del lado de abajo: apoyado en T, no queda suelto
+  assert.equal(checkSketch(s).looseEnds.length, 0);
 });
 
 test("DXF: spline por polos con sus nudos, por puntos de paso, elipse y lo que no es DXF", () => {
