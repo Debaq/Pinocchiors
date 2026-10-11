@@ -6431,9 +6431,11 @@ const scenarios = {
     near(await triangles(), after, 1, "triángulos aplicados");
     // (el campo del lado tiene el foco: Ctrl+Z sería su deshacer de texto)
     await b.eval(`document.activeElement?.blur()`);
+    // Recién aplicado la app a veces sigue ocupada y no toma el atajo (inestable antes de E4)
+    await sleep(3000);
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "z", code: "KeyZ", ctrlKey: true, bubbles: true }))`);
     for (let t = 0; t < 40 && (await triangles()) !== before; t++) await sleep(250);
-    if ((await triangles()) !== before) throw new Error("deshacer no devolvió la malla");
+    if ((await triangles()) !== before) throw new Error(`deshacer no devolvió la malla: ${await triangles()} triángulos (antes ${before}, remallada ${after})`);
   },
 
   async "remallar: vóxeles une piezas que se cruzan y avisa si es pesado"(b) {
