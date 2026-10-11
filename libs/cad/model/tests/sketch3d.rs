@@ -125,7 +125,7 @@ fn sweep_along_a_3d_sketch_attached_to_the_model() {
     prof.constrain(SketchConstraint::Pierce { point: center, curve: path.0, at: [1.0, 1.0] });
     prof.constrain(SketchConstraint::Radius { entity: c, value: 1.0, reference: false, opts: Default::default() });
     let pf = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Yz, offset: 0.0, sketch: prof });
-    doc.add(FeatureKind::Sweep(Sweep { sketch: pf, regions: RegionSelection::All, path: SweepPath::Curve { feature: path }, op: BodyOp::Join }));
+    doc.add(FeatureKind::Sweep(Sweep { sketch: pf, regions: RegionSelection::All, path: SweepPath::Curve { feature: path }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None, twist: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let r = &ev.sketches3d[&path].report;
@@ -222,7 +222,7 @@ fn pierce_finds_the_helix_crossing() {
         return;
     }
     let mut doc = Document::new();
-    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false });
+    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false, radius2: None, flat: false });
     // El plano XZ corta la hélice en x = ±10; el punto arranca cerca de (10, 0)
     let mut s = Sketch::default();
     let p = s.add_point(9.0, 1.0);

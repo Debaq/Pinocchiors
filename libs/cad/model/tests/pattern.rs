@@ -27,12 +27,12 @@ fn volume(doc: &Document) -> f64 {
 fn plate_with_hole() -> (Document, FeatureId) {
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: rect_sketch(0.0, 0.0, 100.0, 60.0) });
-    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::Blind { distance: 2.0 }, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None }));
+    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::Blind { distance: 2.0 }, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None, direction: None, start: 0.0 }));
     let mut c = Sketch::default();
     let o = c.add_point(10.0, 10.0);
     c.add_entity(Geometry::Circle { center: o, radius: 2.0 });
     let hs = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: c });
-    let hole = doc.add(FeatureKind::Extrude(Extrude { sketch: hs, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None }));
+    let hole = doc.add(FeatureKind::Extrude(Extrude { sketch: hs, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None, direction: None, start: 0.0 }));
     (doc, hole)
 }
 
@@ -42,7 +42,7 @@ fn table_pattern_copies_by_offsets() {
         return;
     }
     let (mut doc, hole) = plate_with_hole();
-    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] } });
+    doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Table { offsets: vec![[30.0, 0.0, 0.0], [0.0, 25.0, 0.0], [70.0, 40.0, 0.0]] }, skip: vec![] });
     assert_relative_eq!(volume(&doc), 12000.0 - 4.0 * PI * 4.0 * 2.0, max_relative = 1e-6);
 }
 
@@ -58,6 +58,7 @@ fn fill_pattern_square_and_hex() {
         doc.add(FeatureKind::Pattern {
             features: vec![hole],
             pattern: PatternKind::Fill { sketch: region, regions: RegionSelection::All, spacing: 10.0, hex, margin: 3.0 },
+            skip: vec![],
         });
         assert_relative_eq!(volume(&doc), 12000.0 - holes * PI * 4.0 * 2.0, max_relative = 1e-6);
     }

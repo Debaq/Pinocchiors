@@ -1296,7 +1296,7 @@ mod tests {
             reverse: true,
             op: cad_model::BodyOp::Join,
             draft: 0.0,
-            thin: None,
+            thin: None, direction: None, start: 0.0,
         }));
         doc.add(cad_model::FeatureKind::Import { format: cad_model::ImportFormat::Step, data: vec![0, 1, 2, 255], op: cad_model::BodyOp::Cut });
         *state.cad_document.lock().unwrap() = Some(doc.clone());

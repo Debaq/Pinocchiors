@@ -103,7 +103,7 @@ fn reverse_engineer_plate() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     doc.add(boss.feature());
     let ev = doc.evaluate();
@@ -362,7 +362,7 @@ fn extrude_up_to_the_scan_follows_the_curved_skin() {
         reverse: false,
         op: BodyOp::New,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());

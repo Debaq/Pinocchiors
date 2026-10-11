@@ -72,7 +72,28 @@ export type PointSpec =
   /** Un extremo de una arista (vértice del sólido): el final con `end` */
   | { type: "edge_end"; edge: EdgeRef; end?: boolean }
   /** Tomado del escaneo; `point` es lo último ajustado */
-  | { type: "scan"; fit: ScanFit; point: P3 };
+  | { type: "scan"; fit: ScanFit; point: P3 }
+  /** Por clics: el tipo sale de lo elegido (vértice, medio o centro de una arista, cruce...) */
+  | { type: "picked"; refs: RefPick[] };
+
+/** Cómo se arma una curva de referencia (usable como camino) */
+export type CurveDef =
+  /** Aristas del sólido y curvas del historial encadenadas */
+  | { type: "composite"; edges: EdgeRef[]; curves: number[] }
+  /** Curvas de un sketch (vacío = todas) proyectadas sobre caras a lo largo de la normal del sketch */
+  | { type: "projected"; sketch: number; entities: number[]; faces: FaceRef[] }
+  /** Donde se cruzan unas caras con otras */
+  | { type: "intersection"; a: FaceRef[]; b: FaceRef[] }
+  /** Spline por los puntos (cerrada con `closed`) */
+  | { type: "points"; points: PointSpec[]; closed: boolean };
+
+/** Algo del modelo elegido con un clic para armar un plano, un eje o un punto de referencia */
+export type RefPick =
+  | { type: "plane"; plane: PlaneSpec }
+  | { type: "face"; face: FaceRef }
+  | { type: "edge"; edge: EdgeRef }
+  | { type: "point"; point: PointSpec }
+  | { type: "axis"; axis: AxisSpec };
 
 /** Dónde se hizo clic sobre el escaneo (sigue al escaneo si se mueve o se rehace) */
 export interface ScanSeed {
@@ -94,17 +115,20 @@ export type PlaneDef =
   | { type: "angle"; base: PlaneSpec; axis: AxisSpec; angle: number }
   | { type: "midplane"; a: PlaneSpec; b: PlaneSpec }
   | { type: "three_points"; points: [PointSpec, PointSpec, PointSpec] }
-  | { type: "scan"; fit: ScanFit; plane: Plane };
+  | { type: "scan"; fit: ScanFit; plane: Plane }
+  /** Por clics: el tipo sale de lo elegido; `offset` lo corre, `angle` lo gira alrededor de la línea elegida */
+  | { type: "picked"; refs: RefPick[]; offset?: number; angle?: number; flip?: boolean };
 
 export type AxisDef =
   | { type: "two_points"; a: PointSpec; b: PointSpec }
   | { type: "edge"; edge: EdgeRef }
   | { type: "face"; face: FaceRef }
   | { type: "planes"; a: PlaneSpec; b: PlaneSpec }
-  | { type: "scan"; fit: ScanFit; origin: P3; direction: P3 };
+  | { type: "scan"; fit: ScanFit; origin: P3; direction: P3 }
+  | { type: "picked"; refs: RefPick[] };
 
-/** Geometría de referencia calculada */
-export type RefView = { id: number } & (
+/** Geometría de referencia calculada; `how`: en las de clics, qué se dedujo de lo elegido */
+export type RefView = { id: number; how?: string } & (
   | { kind: "plane"; plane: Plane }
   | { kind: "axis"; origin: P3; dir: P3 }
   | { kind: "point"; point: P3 }
@@ -186,13 +210,39 @@ export type Extent =
   | { type: "blind"; distance: number }
   | { type: "symmetric"; distance: number }
   | { type: "through_all" }
-  | { type: "up_to_face"; face: FaceRef }
+  /** `offset`: se queda a esa distancia antes de la cara (negativo, la pasa) */
+  | { type: "up_to_face"; face: FaceRef; offset?: number }
   /** `distance` hacia la normal y `second` hacia atrás */
   | { type: "two_sides"; distance: number; second: number }
   /** Hasta la primera cara del sólido que encuentra */
   | { type: "up_to_next" }
   /** Hasta la piel del escaneo (aunque sea curva), dejando `offset` mm de separación */
-  | { type: "up_to_scan"; offset: number };
+  | { type: "up_to_scan"; offset: number }
+  /** Hasta un punto (un vértice): lo que avanza el punto sobre la dirección */
+  | { type: "up_to_vertex"; point: PointSpec };
+
+export type SweepOrient = "follow" | "frenet" | "fixed";
+/** Redondeo de cara: lo decide la geometría, canto convexo (saca) o rincón cóncavo (agrega) */
+export type BlendSide = "auto" | "convex" | "concave";
+
+/** Camino: entidades de un sketch (vacío = todas) o una curva del historial */
+export type SweepPathSpec = { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
+
+/** Cómo se reparte el giro de una revolución: todo a un lado, mitad a cada lado o `second` grados hacia atrás */
+export type RevolveExtent =
+  | { type: "one" }
+  | { type: "symmetric" }
+  | { type: "two_angles"; second: number }
+  /** Hasta una cara (plana o curva), a menos de 350° del perfil */
+  | { type: "up_to_face"; face: FaceRef };
+
+/** Movimiento de piezas enteras (mover, girar, de un punto a otro) */
+export type Motion =
+  | { type: "translate"; vector: P3 }
+  | { type: "rotate"; axis: AxisSpec; angle: number }
+  | { type: "points"; from: PointSpec; to: PointSpec }
+  /** Una cara plana apoyada en un plano (normal contra normal; `flip`, a favor) */
+  | { type: "align"; face: FaceRef; to: PlaneSpec; flip: boolean };
 
 export interface SketchPoint {
   id: number;
@@ -514,14 +564,17 @@ export interface Seat {
 }
 
 export type PatternKind =
-  | { type: "linear"; direction: P3; count: number; spacing: number }
+  /** Con `second`, también en una segunda dirección (grilla) */
+  | { type: "linear"; direction: P3; count: number; spacing: number; second?: { direction: P3; count: number; spacing: number } | null }
   | { type: "circular"; axis: AxisSpec; count: number; angle: number }
   /** Copias repartidas de punta a punta de un camino */
   | { type: "curve"; path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number }; count: number }
   /** Copias trasladadas según una tabla de desplazamientos (mm) */
   | { type: "table"; offsets: P3[] }
   /** Copias en grilla (cuadrada o hexagonal) que llenan regiones de un sketch */
-  | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number };
+  | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number }
+  /** Una copia en cada punto suelto de un sketch (o en `points`), desde el punto más cercano al original */
+  | { type: "points"; sketch: number; points: number[] };
 
 /** Con qué se parte: un plano u otra pieza (una superficie curva, por ejemplo) */
 export type SplitTool = { type: "plane"; plane: PlaneSpec } | { type: "part"; part: PartId };
@@ -543,18 +596,31 @@ export type FeatureKind =
       draft?: number;
       /** Extrusión delgada: espesor de la pared */
       thin?: number | null;
+      /** Dirección propia (un eje, una arista o una línea) en vez de la normal del plano */
+      direction?: AxisSpec | null;
+      /** Arranca a esta distancia del plano del sketch */
+      start?: number;
     }
-  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp }
+  /** `thin`: revolución delgada, una pared de ese espesor siguiendo el contorno */
+  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent; thin?: number | null }
   /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
-  | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null }
+  /** `points`: radios en el medio de cada arista (`at`, fracción del largo de 0 a 1) */
+  | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null; points?: { at: number; radius: number }[] }
   /** Con `second`, asimétrico: otra distancia o un ángulo (`distance` va sobre una cara; `flip`, la otra) */
   | { type: "chamfer"; edges: EdgeRef[]; distance: number; second?: ChamferSecond | null }
-  | { type: "shell"; faces: FaceRef[]; thickness: number }
+  /** `overrides`: caras con su propio espesor */
+  | { type: "shell"; faces: FaceRef[]; thickness: number; overrides?: { face: FaceRef; thickness: number }[] }
+  /** Saca caras y cierra el hueco extendiendo las vecinas */
+  | { type: "delete_face"; faces: FaceRef[] }
   | { type: "draft"; faces: FaceRef[]; neutral: PlaneSpec; angle: number }
-  | { type: "pattern"; features: number[]; pattern: PatternKind }
-  | { type: "mirror"; features: number[]; plane: PlaneSpec }
+  /** `skip`: copias que no se hacen (1 es la primera copia) */
+  | { type: "pattern"; features: number[]; pattern: PatternKind; skip?: number[] }
+  /** `op` "new": con todo el cuerpo, cada reflejo queda como pieza aparte */
+  | { type: "mirror"; features: number[]; plane: PlaneSpec; op?: BodyOp }
+  /** Mueve o gira piezas enteras (vacío = todas); `copy` deja las originales y agrega las copias */
+  | { type: "transform"; parts: PartId[]; motion: Motion; copy: boolean }
   | { type: "split"; plane: PlaneSpec; flip: boolean }
   | { type: "import"; format: "step" | "brep"; data: number[]; op: BodyOp }
   /**
@@ -582,11 +648,49 @@ export type FeatureKind =
       regions: RegionSelection;
       path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
       op: BodyOp;
+      /** Cómo gira el perfil: sigue el camino, Frenet o fijo (no gira) */
+      orient?: SweepOrient;
+      /** Barrido circular: un círculo de este radio al comienzo del camino (sin sketch de perfil) */
+      circle?: number | null;
+      /** Barrido delgado: espesor de la pared */
+      thin?: number | null;
+      /** Curva guía: el perfil gira y se escala para tocarla */
+      guide?: SweepPathSpec | null;
+      /** Torsión: grados que gira el perfil alrededor del camino de punta a punta */
+      twist?: number | null;
+    }
+  /** Grabado (o relieve con `emboss`): las regiones de un sketch envuelto, `depth` mm siguiendo la cara */
+  | { type: "wrap"; sketch: number; depth: number; emboss: boolean }
+  /** Línea de partición: parte caras donde las cruza un plano o una curva, sin separar la pieza */
+  | { type: "split_faces"; faces: FaceRef[]; tool: { type: "plane"; plane: PlaneSpec } | { type: "curve"; feature: number } | { type: "silhouette"; direction: AxisSpec } }
+  /** Curva de referencia hecha de otras */
+  | { type: "curve"; def: CurveDef }
+  /** Superficies extendidas `distance` más allá de bordes libres */
+  | { type: "surface_extend"; edges: EdgeRef[]; distance: number }
+  /** Curvas de un sketch llevadas a lo largo de un camino: superficie */
+  | {
+      type: "surface_sweep";
+      sketch: number;
+      entities: number[];
+      path: { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
+      orient?: SweepOrient;
     }
   /** Hélice de referencia (camino de resortes y roscas) */
-  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean }
+  /** `radius2`: cónica (el radio pasa de `radius` a `radius2`); `flat`: espiral plana (sin avance) */
+  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean; radius2?: number | null; flat?: boolean }
+  /** Las regiones cerradas de un sketch como superficie plana */
+  | { type: "surface_planar"; sketch: number; regions: RegionSelection }
+  /** Copia desfasada de superficies (o de la piel de sólidos), como pieza nueva */
+  | { type: "surface_offset"; parts: PartId[]; distance: number }
   /** Espesor a caras del sólido */
   | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
+  /** Caras planas giradas alrededor de un eje (bisagra) */
+  | { type: "rotate_face"; faces: FaceRef[]; axis: AxisSpec; angle: number }
+  /** Corta la esquina de un vértice de tres aristas a `distance` sobre cada una */
+  | { type: "vertex_chamfer"; vertex: PointSpec; distance: number }
+  /** La cara del medio entre dos laterales paralelas, como medio cilindro */
+  | { type: "full_round"; side_a: FaceRef; middle: FaceRef; side_b: FaceRef }
+  | { type: "face_blend"; a: FaceRef[]; b: FaceRef[]; radius: number; side?: BlendSide }
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
   | { type: "move_face"; faces: FaceRef[]; distance: number }
   /** Pared desde las líneas de un sketch hasta el sólido, centrada en su plano */
@@ -599,7 +703,28 @@ export type FeatureKind =
   /** Escala por eje alrededor de un punto */
   | { type: "scale"; factor: P3; center: PointSpec }
   /** Sólido que pasa por varias secciones, una región por sketch */
-  | { type: "loft"; sections: { sketch: number; regions: RegionSelection }[]; ruled: boolean; op: BodyOp }
+  /**
+   * `start_point`/`end_point`: termina en una punta; `closed`: vuelve a la primera; `thin`: pared;
+   * `path`: línea central (con `guide`, curva guía)
+   */
+  | {
+      type: "loft";
+      sections: { sketch: number; regions: RegionSelection }[];
+      ruled: boolean;
+      op: BodyOp;
+      start_point?: PointSpec | null;
+      end_point?: PointSpec | null;
+      closed?: boolean;
+      thin?: number | null;
+      path?: SweepPathSpec | null;
+      guide?: SweepPathSpec | null;
+      /** Sale perpendicular a la primera sección; el peso es el largo de la tangente (en veces la distancia a la siguiente) */
+      start_tangent?: number | null;
+      /** Llega perpendicular a la última sección */
+      end_tangent?: number | null;
+    }
+  /** Superficie que pasa por curvas de varios sketches */
+  | { type: "surface_loft"; sections: { sketch: number; entities: number[] }[]; ruled: boolean }
   /** Agujeros en los puntos de un sketch (o sus círculos); `reverse`: a favor de la normal del plano (sin elegir, hacia el material) */
   | {
       type: "hole";
@@ -607,7 +732,12 @@ export type FeatureKind =
       points: number[];
       diameter: number;
       depth: { type: "blind"; depth: number } | { type: "through_all" };
-      style: { type: "simple" } | { type: "counterbore"; diameter: number; depth: number } | { type: "countersink"; diameter: number; angle: number };
+      /** `tapered`: el agujero se angosta hacia el fondo; `angle` es el de la pared con el eje (NPT 1°47' = 1,7833) */
+      style:
+        | { type: "simple" }
+        | { type: "counterbore"; diameter: number; depth: number }
+        | { type: "countersink"; diameter: number; angle: number }
+        | { type: "tapered"; angle: number };
       tip_angle: number;
       thread?: string | null;
       /** Rosca modelada (el filete de verdad, para imprimir) */
@@ -1045,7 +1175,10 @@ export function handleField(k: FeatureKind, h: FeatureHandle): string | undefine
   if (h.kind === "fixed") return undefined;
   if (k.type === "extrude") return "kind.extent.distance";
   if (k.type === "hole") return "kind.depth.depth";
-  if (k.type === "sheet_metal") return "kind.thickness";
+  if (k.type === "sheet_metal" || k.type === "thicken" || k.type === "shell") return "kind.thickness";
+  if (k.type === "move_face" || k.type === "chamfer") return "kind.distance";
+  if (k.type === "fillet") return "kind.radius";
+  if (k.type === "pattern" && k.pattern.type === "linear") return "kind.pattern.spacing";
   return undefined;
 }
 
@@ -1053,6 +1186,9 @@ export function handleField(k: FeatureKind, h: FeatureHandle): string | undefine
 export function flipByHandle(k: FeatureKind, h: FeatureHandle) {
   if (k.type === "extrude" || k.type === "hole") k.reverse = !h.reversed;
   else if (k.type === "sheet_metal") k.flip = !h.reversed;
+  else if (k.type === "move_face") k.distance = -k.distance;
+  else if (k.type === "thicken") k.thickness = -k.thickness;
+  else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.direction = k.pattern.direction.map((c) => -c || 0) as P3;
 }
 
 /**
@@ -1075,7 +1211,12 @@ export function dragByHandle(k: FeatureKind, h: FeatureHandle, t: number) {
   } else if (k.type === "sheet_metal") {
     k.thickness = len;
     k.flip = reversed;
-  }
+  } else if (k.type === "move_face") k.distance = reversed ? -len : len;
+  else if (k.type === "thicken") k.thickness = reversed ? -len : len;
+  else if (k.type === "shell") k.thickness = len;
+  else if (k.type === "fillet") k.radius = len;
+  else if (k.type === "chamfer") k.distance = len;
+  else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.spacing = len;
 }
 
 export interface Loop {
@@ -1343,6 +1484,20 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   replace_face: "Reemplazar cara",
   face_to_scan: "Cara al escaneo",
   scale: "Escala",
+  transform: "Mover cuerpo",
+  surface_planar: "Superficie plana",
+  delete_face: "Eliminar cara",
+  rotate_face: "Girar cara",
+  vertex_chamfer: "Chaflán de vértice",
+  full_round: "Redondeo completo",
+  face_blend: "Redondeo de cara",
+  surface_sweep: "Superficie por barrido",
+  surface_loft: "Superficie por transición",
+  surface_extend: "Extender superficie",
+  curve: "Curva",
+  wrap: "Grabado",
+  split_faces: "Línea de partición",
+  surface_offset: "Superficie desfasada",
 };
 
 /**
@@ -1363,6 +1518,45 @@ export const METRIC_HOLES: { size: string; nominal: number; pitch: number; tap: 
   { size: "M16", nominal: 16, pitch: 2, tap: 14, clearance: 17.5, cbore: 26, cboreDepth: 16, csink: 32.4 },
 ];
 
+export type HoleSize = (typeof METRIC_HOLES)[number] & { csinkAngle?: number };
+
+/**
+ * Roscas unificadas en pulgadas (UNC gruesa y UNF fina, de #2 a 1/2"), en mm:
+ * broca para roscar, pasante (ajuste normal), caja para cabeza cilíndrica y
+ * avellanado a 82°. Los nombres son los del backend ("1/4-20 UNC").
+ */
+export const INCH_HOLES: HoleSize[] = (
+  [
+  ["#2", 0.086, 56, 64, 0.07, 0.07, 0.096, 0.188, 0.086, 0.172],
+  ["#4", 0.112, 40, 48, 0.089, 0.0935, 0.12, 0.219, 0.112, 0.225],
+  ["#6", 0.138, 32, 40, 0.1065, 0.113, 0.144, 0.281, 0.138, 0.279],
+  ["#8", 0.164, 32, 36, 0.136, 0.136, 0.17, 0.312, 0.164, 0.332],
+  ["#10", 0.19, 24, 32, 0.1495, 0.159, 0.196, 0.375, 0.19, 0.385],
+  ["1/4", 0.25, 20, 28, 0.201, 0.213, 0.266, 0.438, 0.25, 0.507],
+  ["5/16", 0.3125, 18, 24, 0.257, 0.272, 0.328, 0.531, 0.312, 0.635],
+  ["3/8", 0.375, 16, 24, 0.3125, 0.332, 0.397, 0.625, 0.375, 0.762],
+  ["7/16", 0.4375, 14, 20, 0.368, 0.3906, 0.469, 0.719, 0.438, 0.812],
+  ["1/2", 0.5, 13, 20, 0.4219, 0.4531, 0.531, 0.812, 0.5, 0.875],
+  ] as [string, number, number, number, number, number, number, number, number, number][]
+).flatMap(([name, d, unc, unf, tapC, tapF, clear, cbore, cboreDepth, csink]) =>
+  (
+    [
+      [unc, "UNC", tapC],
+      [unf, "UNF", tapF],
+    ] as [number, string, number][]
+  ).map(([tpi, series, tap]) => ({
+    size: `${name}-${tpi} ${series}`,
+    nominal: d * 25.4,
+    pitch: 25.4 / tpi,
+    tap: +(tap * 25.4).toFixed(3),
+    clearance: +(clear * 25.4).toFixed(3),
+    cbore: +(cbore * 25.4).toFixed(3),
+    cboreDepth: +(cboreDepth * 25.4).toFixed(3),
+    csink: +(csink * 25.4).toFixed(3),
+    csinkAngle: 82,
+  })),
+);
+
 /** Alto de la tuerca hexagonal ISO 4032 por medida */
 export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4, M4: 3.2, M5: 4.7, M6: 5.2, M8: 6.8, M10: 8.4, M12: 10.8, M16: 14.8 };
 
@@ -1370,8 +1564,10 @@ export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4,
  * Largo de tornillo para atravesar `depth` mm: con tuerca (pasante) suma la
  * tuerca y dos pasos; si no, el largo normal más cercano por arriba.
  */
-/** "M6", "M8×1", "M6 izq." */
+/** "M6", "M8×1", "M6 izq.", "1/4-20 UNC" */
 export function threadName(s: ThreadSpec): string {
+  const inch = INCH_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-6);
+  if (inch) return `${inch.size}${s.left ? " izq." : ""}`;
   const coarse = METRIC_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-9);
   const d = String(+s.nominal.toFixed(3)).replace(".", ",");
   return `${coarse ? coarse.size : `M${d}×${String(s.pitch).replace(".", ",")}`}${s.left ? " izq." : ""}`;
@@ -1454,6 +1650,27 @@ export function offsetPlane(base: "xy" | "xz" | "yz", offset: number): Plane {
   return { ...p, origin: [p.normal[0] * offset, p.normal[1] * offset, p.normal[2] * offset] };
 }
 
+/** Claves con el id de otra operación (un número) en lo que guarda una operación */
+const FEATURE_ID_KEYS = new Set(["sketch", "feature", "curve"]);
+
+/**
+ * Cambia, en el lugar, los ids de operaciones según `map` en todo lo que
+ * cuelga de `v` (sketch, feature, curve y las listas `features`): al pegar
+ * operaciones, lo que se referían entre sí apunta a las copias; lo demás queda.
+ */
+export function remapFeatureIds(v: unknown, map: Map<number, number>): void {
+  if (!v || typeof v !== "object") return;
+  if (Array.isArray(v)) return v.forEach((x) => remapFeatureIds(x, map));
+  const o = v as Record<string, unknown>;
+  for (const [k, x] of Object.entries(o)) {
+    if (typeof x === "number" && FEATURE_ID_KEYS.has(k)) {
+      if (map.has(x)) o[k] = map.get(x)!;
+    } else if (k === "features" && Array.isArray(x)) {
+      o[k] = x.map((i) => (typeof i === "number" && map.has(i) ? map.get(i)! : i));
+    } else remapFeatureIds(x, map);
+  }
+}
+
 function nextFeatureId(doc: CadDocument): number {
   const max = doc.features.reduce((m, f) => Math.max(m, f.id + 1), 0);
   return Math.max(max, doc.next_id ?? 0);
@@ -1504,7 +1721,9 @@ export const usesScan = (kind: FeatureKind) =>
 export function dependencies(kind: FeatureKind): number[] {
   const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" ? [a.feature] : []);
   const plane = (p: PlaneSpec) => (p.type === "reference" ? [p.feature] : []);
-  const point = (p: PointSpec) => (p.type === "reference" ? [p.feature] : []);
+  const pick = (r: RefPick): number[] =>
+    r.type === "plane" ? plane(r.plane) : r.type === "point" ? point(r.point) : r.type === "axis" ? axis(r.axis) : [];
+  const point = (p: PointSpec): number[] => (p.type === "reference" ? [p.feature] : p.type === "picked" ? p.refs.flatMap(pick) : []);
   switch (kind.type) {
     case "sketch":
       return [
@@ -1522,38 +1741,74 @@ export function dependencies(kind: FeatureKind): number[] {
       if (d.type === "angle") return [...plane(d.base), ...axis(d.axis)];
       if (d.type === "midplane") return [...plane(d.a), ...plane(d.b)];
       if (d.type === "scan") return [];
+      if (d.type === "picked") return d.refs.flatMap(pick);
       return d.points.flatMap(point);
     }
     case "axis": {
       const d = kind.def;
       if (d.type === "two_points") return [...point(d.a), ...point(d.b)];
       if (d.type === "planes") return [...plane(d.a), ...plane(d.b)];
+      if (d.type === "picked") return d.refs.flatMap(pick);
       return [];
     }
     case "point":
       return point(kind.def);
     case "sweep":
+      return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature, ...(kind.guide ? [kind.guide.type === "sketch" ? kind.guide.sketch : kind.guide.feature] : [])];
+    case "surface_sweep":
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
+    case "wrap":
+      return [kind.sketch];
+    case "split_faces":
+      return kind.tool.type === "plane" ? plane(kind.tool.plane) : kind.tool.type === "silhouette" ? axis(kind.tool.direction) : [kind.tool.feature];
     case "helix":
+    case "rotate_face":
       return axis(kind.axis);
-    case "loft":
+    case "vertex_chamfer":
+      return point(kind.vertex);
+    case "curve": {
+      const d = kind.def;
+      return d.type === "composite" ? d.curves : d.type === "projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
+    }
+    case "loft": {
+      const p = (s?: SweepPathSpec | null) => (s ? [s.type === "sketch" ? s.sketch : s.feature] : []);
+      return [...kind.sections.map((x) => x.sketch), ...(kind.start_point ? point(kind.start_point) : []), ...(kind.end_point ? point(kind.end_point) : []), ...p(kind.path), ...p(kind.guide)];
+    }
+    case "surface_loft":
       return kind.sections.map((x) => x.sketch);
     case "hole":
       return [kind.sketch];
     case "extrude":
+      return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : []), ...(kind.direction ? axis(kind.direction) : [])];
+    case "surface_planar":
+      return [kind.sketch];
+    case "surface_offset":
+      return kind.parts.map((p) => p.feature);
     case "sheet_metal":
       return [kind.sketch];
     case "revolve":
       return [kind.sketch, ...axis(kind.axis)];
     case "pattern": {
       const p = kind.pattern;
-      const extra = p.type === "circular" ? axis(p.axis) : p.type === "curve" ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature] : [];
+      const extra =
+        p.type === "circular"
+          ? axis(p.axis)
+          : p.type === "curve"
+            ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature]
+            : p.type === "fill" || p.type === "points"
+              ? [p.sketch]
+              : [];
       return [...kind.features, ...extra];
     }
     case "scale":
       return point(kind.center);
     case "mirror":
       return [...kind.features, ...plane(kind.plane)];
+    case "transform": {
+      const m = kind.motion;
+      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : m.type === "align" ? plane(m.to) : [];
+      return [...kind.parts.map((p) => p.feature), ...extra];
+    }
     case "boolean":
       return [...kind.targets, ...kind.tools].map((p) => p.feature);
     case "scan_body":
@@ -3280,6 +3535,8 @@ export interface ResolvedRefs {
 export function createCadStore() {
   const [status, setStatus] = createSignal<CadStatus>();
   const [committed, setDoc] = createSignal<CadDocument | null>(null);
+  // Operaciones copiadas del árbol (Ctrl+C), para pegarlas (Ctrl+V)
+  const [featureClip, setFeatureClip] = createSignal<Feature[]>();
   const [draft, setDraft] = createSignal<Draft>();
   // Herramienta de la operación en el diálogo (vista previa verde/roja)
   const [tool, setTool] = createSignal<{ mesh: CadMesh; op: BodyOp } | null>(null);
@@ -3577,6 +3834,43 @@ export function createCadStore() {
       insert(next);
       await openDraft({ feature: id, isNew: true, base: current, doc: next });
       return id;
+    },
+
+    featureClip,
+    /** Copia las operaciones (en el orden del árbol); cuántas */
+    copyFeatures(ids: number[]): number {
+      const list = (committed()?.features ?? []).filter((f) => ids.includes(f.id));
+      if (list.length) setFeatureClip(clone(list));
+      return list.length;
+    },
+    /**
+     * Pega operaciones (las copiadas, o `list`) al final o en la barra de
+     * retroceso: ids nuevos, lo que se referían entre sí apunta a las copias y
+     * lo de afuera queda igual (si ya no está, se ve como referencia perdida).
+     */
+    async pasteFeatures(list: Feature[] | undefined = featureClip()): Promise<number[]> {
+      if (!list?.length) return [];
+      if (draft()) await acceptDraft();
+      const ids: number[] = [];
+      await commit((d) => {
+        let next = nextFeatureId(d);
+        const map = new Map<number, number>();
+        for (const f of list) map.set(f.id, next++);
+        const copies = list.map((f) => {
+          const c = clone(f);
+          c.id = map.get(f.id)!;
+          c.name = `${f.name} (copia)`;
+          remapFeatureIds(c.kind, map);
+          if (c.scope) remapFeatureIds(c.scope, map);
+          return c;
+        });
+        const at = Math.min(d.rollback ?? d.features.length, d.features.length);
+        d.features.splice(at, 0, ...copies);
+        d.next_id = next;
+        if (d.rollback != null) d.rollback += copies.length;
+        ids.push(...copies.map((c) => c.id));
+      });
+      return ids;
     },
 
     updateFeature(id: number, mutate: (f: Feature) => void) {

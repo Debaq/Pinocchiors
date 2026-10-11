@@ -873,7 +873,9 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (!d || d.selecting || ui.session()) return undefined;
     const f = d.doc.features.find((x) => x.id === d.feature);
     const h = f && store.stateOf(f.id)?.handle;
-    return f && h && ["extrude", "hole", "sheet_metal"].includes(f.kind.type) ? { id: f.id, h } : undefined;
+    // Las operaciones con flecha la traen del cálculo (extrusión, agujero, chapa, mover cara, engrosar,
+    // vaciado, redondeo, chaflán, patrón lineal)
+    return f && h ? { id: f.id, h } : undefined;
   });
   const [handleHot, setHandleHot] = createSignal(false);
   // Arrastre en curso: la flecha del comienzo y dónde va la punta (mm, con signo)
@@ -2218,6 +2220,8 @@ export const CadView: Component<CadViewProps> = (props) => {
         return { edges: true };
       case "place":
         return { faces: true, planes: true, refPlanes: true, regions: true };
+      case "refs":
+        return { faces: true, edges: true, vertices: true, planes: true, refPlanes: true };
       case "hole":
       case "parts":
         return { faces: true };
@@ -2340,6 +2344,18 @@ export const CadView: Component<CadViewProps> = (props) => {
         if (hit?.kind !== "scan") return;
         ui.setPick({ kind: "none" });
         mode.done(viewer.fromView(hit.point), hit.triangle);
+      } else if (mode.kind === "refs") {
+        // Primero lo más chico bajo el clic: vértice, arista, cara y por último un plano
+        const hit = viewer.pick(e.clientX, e.clientY, { faces: true, edges: true, vertices: true, planes: true, refPlanes: true });
+        if (!hit) return;
+        if (hit.kind === "vertex") {
+          // El vértice como extremo de una arista: sigue al modelo
+          const point = await invoke<import("../../lib/cad").PointSpec>("cad_vertex_spec", { point: hit.at }).catch(() => ({ type: "at" as const, point: hit.at }));
+          mode.add({ type: "point", point });
+        } else if (hit.kind === "edge") mode.add({ type: "edge", edge: await store.edgeRef(hit.edge) });
+        else if (hit.kind === "face") mode.add({ type: "face", face: await store.faceRef(hit.face) });
+        else if (hit.kind === "plane") mode.add({ type: "plane", plane: { type: hit.plane } });
+        else if (hit.kind === "refplane") mode.add({ type: "plane", plane: { type: "reference", feature: hit.feature } });
       } else if (mode.kind === "parts") {
         // La pieza de la cara bajo el clic (en el sólido mostrado)
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });

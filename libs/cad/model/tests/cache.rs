@@ -29,13 +29,14 @@ fn sample() -> Document {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     doc.add(prim(PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 10.0, centered: false, centered_z: false }, [35.0, 10.0, 8.0], BodyOp::Join));
     let hole = doc.add(prim(PrimitiveShape::Cylinder { radius: 2.0, height: 40.0 }, [45.0, 15.0, -5.0], BodyOp::Cut));
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
-        pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 10.0 },
+        pattern: PatternKind::Linear { direction: [0.0, 1.0, 0.0], count: 2, spacing: 10.0, second: None },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     let body = ev.body.as_ref().unwrap();
@@ -43,9 +44,9 @@ fn sample() -> Document {
     let (top, _) = body.closest_edge([10.0, 0.0, 8.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let (corner, _) = body.closest_edge([0.0, 40.0, 4.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
     let (top, corner) = (ev.edge_ref(top).unwrap(), ev.edge_ref(corner).unwrap());
-    doc.add(FeatureKind::Fillet { edges: vec![top], radius: 1.5, radius2: None });
+    doc.add(FeatureKind::Fillet { edges: vec![top], radius: 1.5, radius2: None, points: vec![] });
     doc.add(FeatureKind::Chamfer { edges: vec![corner], distance: 2.0, second: None });
-    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Yz });
+    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Yz, op: BodyOp::Join });
     doc
 }
 
@@ -156,7 +157,7 @@ fn bench_thirty_operations() {
     let body = ev.body.as_ref().unwrap();
     let (e1, _) = body.closest_edge([100.0, 0.0, 20.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
     let (e2, _) = body.closest_edge([100.0, 200.0, 20.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
-    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e1).unwrap()], radius: 3.0, radius2: None });
+    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e1).unwrap()], radius: 3.0, radius2: None, points: vec![] });
     doc.add(FeatureKind::Chamfer { edges: vec![ev.edge_ref(e2).unwrap()], distance: 2.0, second: None });
     assert_eq!(doc.features.len(), 30);
 

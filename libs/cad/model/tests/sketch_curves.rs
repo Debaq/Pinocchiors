@@ -33,7 +33,7 @@ fn extrude_volume(s: Sketch) -> Option<f64> {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "errores: {:?}", ev.errors());

@@ -701,3 +701,36 @@ cargo test -p cad-model
   (sigue con una pieza activa), alinear por rasgos (cara al piso/frente, eje vertical, punto al
   origen), referencias del árbol ligadas al escaneo (`ScanFit`, se reajustan en cada recálculo)
   y sketch anclado al corte del escaneo («Usar el corte»).
+- **2026-10-11 Operaciones fáciles** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md), F1–F3):
+  mover, girar y copiar cuerpos (`Transform`), simetría del cuerpo como pieza aparte
+  (`Mirror.op`), patrón lineal en dos direcciones y copias omitidas (`Linear.second`,
+  `Pattern.skip`), revolución simétrica o a dos ángulos (`Revolve.extent`) y extrusión hasta un
+  punto (`Extent::UpToVertex`). Pruebas en `model/tests/operations.rs` y e2e «operaciones:».
+- **2026-10-11 Operaciones fáciles, segunda tanda** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)):
+  agujero cónico (`HoleStyle::Tapered`), roscas UNC/UNF de #2 a 1/2" (tabla en
+  `standard::INCH` y en el diálogo, «Sistema»), espiral plana y hélice cónica (`Helix.radius2`,
+  `flat`), superficie plana y desfasada (`cad_offset_shape`), patrón por puntos de un sketch y
+  revolución delgada. Pruebas en `model/tests/operations.rs` y `hole.rs`; e2e «operaciones:».
+- **2026-10-11 Operaciones, tanda media** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): alinear
+  un cuerpo a un plano, eliminar cara (defeaturing), vaciado con espesor por cara, redondeo con
+  radios en el medio, extrusión con dirección propia / desde un plano corrido / hasta una cara
+  con separación, barrido circular, delgado y con orientación, superficie por barrido, extender
+  superficie y copiar/pegar/duplicar operaciones. Puente: `cad_shell_faces`, `cad_remove_faces`,
+  `cad_fillet_points`, `cad_pipe_ex`, `cad_extend_surface` (y `record` como plantilla).
+- **2026-10-11 Operaciones difíciles** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): planos, ejes
+  y puntos de referencia por clics (el tipo se deduce de lo elegido), curvas como operación
+  (compuesta, proyectada, de cruce, por puntos), extrusión hasta una cara curva y revolución hasta
+  una cara, transición completa (punta, cerrada, delgada, línea central, guía) y superficie por
+  transición, girar cara, chaflán de vértice, redondeo completo, grabado y relieve, línea de
+  partición, barrido con curva guía y flechas en más operaciones. Faltan: torsión, tangencia en
+  los extremos de la transición, redondeo de cara, partición por silueta, sistema de
+  coordenadas y manipuladores de ángulo.
+- **2026-10-11 Redondeo de cara** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): la bola que rueda
+  entre dos grupos de caras (vecinas o no, planas o curvas, cadenas tangentes), que redondea el
+  canto o rellena el rincón (`FaceBlend`, `cad_face_blend`: cruce de las caras desfasadas, cuña
+  menos tubo). Probado contra OCCT real en un banco de 9 casos con volúmenes exactos.
+- **2026-10-11 Torsión, tangencias y silueta** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)):
+  barrido con torsión (espina auxiliar con marco de rotación mínima), transición que sale y
+  llega perpendicular a las secciones de las puntas (superficie Hermite armada a mano: OCCT no
+  tiene loft con condiciones de borde) y línea de partición por silueta (marching squares sobre
+  n·d en el parámetro de la cara). Cada una probada contra OCCT real en `libs/cad/occt/bench`.

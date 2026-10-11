@@ -475,6 +475,42 @@ impl Shape {
         wrap(unsafe { ffi::cad_pipe(self.ptr(), spine.ptr()) })
     }
 
+    /// Barrido con la orientación del perfil: 0 sigue el camino, 1 Frenet, 2
+    /// fija (se traslada sin girar). Sin `solid`, los alambres del perfil dan
+    /// superficies.
+    pub fn sweep_with(&self, spine: &Shape, mode: i32, solid: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_pipe_ex(self.ptr(), spine.ptr(), mode, solid as i32) })
+    }
+
+    /// Barrido con torsión: el perfil gira `twist` radianes alrededor del camino,
+    /// parejo con el largo recorrido (sin torsión propia: marco de rotación mínima).
+    pub fn sweep_twisted(&self, spine: &Shape, twist: f64, solid: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_pipe_twist(self.ptr(), spine.ptr(), twist, solid as i32) })
+    }
+
+    /// Loft que puede empezar o terminar en un punto y cerrarse sobre la primera sección.
+    pub fn loft_ex(sections: &[Shape], solid: bool, ruled: bool, start: Option<P3>, end: Option<P3>, closed: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        let ptr = |o: &Option<P3>| o.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
+        wrap(unsafe { ffi::cad_loft_ex(p.as_ptr(), p.len() as i32, solid as i32, ruled as i32, ptr(&start), ptr(&end), closed as i32) })
+    }
+
+    /// Loft por las secciones a lo largo de `spine` (línea central), con una curva guía opcional.
+    pub fn loft_along(sections: &[Shape], spine: &Shape, guide: Option<&Shape>, solid: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        let g = guide.map_or(std::ptr::null(), |g| g.ptr());
+        wrap(unsafe { ffi::cad_loft_pipe(p.as_ptr(), p.len() as i32, spine.ptr(), g, solid as i32) })
+    }
+
+    /// Loft que sale perpendicular a la primera sección y/o llega perpendicular a
+    /// la última; el peso (> 0) es el largo de la tangente en veces la distancia a
+    /// la sección vecina, y 0 deja la punta libre. Las secciones tienen que tener
+    /// la misma cantidad de lados.
+    pub fn loft_tangent(sections: &[Shape], start_weight: f64, end_weight: f64, solid: bool) -> Result<Shape> {
+        let p = ptrs(sections);
+        wrap(unsafe { ffi::cad_loft_tangent(p.as_ptr(), p.len() as i32, start_weight, end_weight, solid as i32) })
+    }
+
     /// Loft entre perfiles (alambres o caras).
     pub fn loft(sections: &[Shape], solid: bool, ruled: bool) -> Result<Shape> {
         let p = ptrs(sections);
@@ -546,6 +582,87 @@ impl Shape {
     pub fn shell(&self, open_faces: &[usize], thickness: f64) -> Result<Shape> {
         let f = idx(open_faces);
         wrap(unsafe { ffi::cad_shell(self.ptr(), f.as_ptr(), f.len() as i32, thickness) })
+    }
+
+    /// Como [`Shape::shell`] pero con otro grosor en algunas caras (mismo signo).
+    pub fn shell_faces(&self, open_faces: &[usize], thickness: f64, overrides: &[(usize, f64)]) -> Result<Shape> {
+        let f = idx(open_faces);
+        let ov: Vec<i32> = overrides.iter().map(|o| o.0 as i32).collect();
+        let ot: Vec<f64> = overrides.iter().map(|o| o.1).collect();
+        wrap(unsafe { ffi::cad_shell_faces(self.ptr(), f.as_ptr(), f.len() as i32, thickness, ov.as_ptr(), ot.as_ptr(), ov.len() as i32) })
+    }
+
+    /// Las aristas de las formas encadenadas en alambres (uno, o un compuesto
+    /// de los que queden sueltos).
+    pub fn chain(shapes: &[Shape]) -> Result<Shape> {
+        let p = ptrs(shapes);
+        wrap(unsafe { ffi::cad_chain(p.as_ptr(), p.len() as i32) })
+    }
+
+    /// Estas curvas proyectadas sobre `target` a lo largo de `direction`.
+    pub fn project_onto(&self, target: &Shape, direction: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_project_curves(self.ptr(), target.ptr(), direction.as_ptr()) })
+    }
+
+    /// Curvas donde se cruzan esta forma y `other`.
+    pub fn intersection_curves(&self, other: &Shape) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_intersect_curves(self.ptr(), other.ptr()) })
+    }
+
+    /// Parche sobre la superficie de esta cara: lazos en (u, v), el primero el
+    /// de afuera y los demás agujeros; queda con la normal de la cara.
+    pub fn face_patch(&self, loops: &[Vec<[f64; 2]>]) -> Result<Shape> {
+        let uv: Vec<f64> = loops.iter().flatten().flat_map(|p| [p[0], p[1]]).collect();
+        let sizes: Vec<i32> = loops.iter().map(|l| l.len() as i32).collect();
+        wrap(unsafe { ffi::cad_face_patch(self.ptr(), uv.as_ptr(), sizes.as_ptr(), sizes.len() as i32) })
+    }
+
+    /// Redondeo de cara: la bola de radio `radius` que rueda apoyada en las caras
+    /// `a` y en las caras `b` (vecinas o no) y redondea el canto o rellena el
+    /// rincón entre ellas. `side`: 0 elige solo, 1 canto convexo (saca
+    /// material), 2 rincón cóncavo (agrega).
+    pub fn face_blend(&self, a: &[usize], b: &[usize], radius: f64, side: i32) -> Result<Shape> {
+        let (fa, fb) = (idx(a), idx(b));
+        wrap(unsafe { ffi::cad_face_blend(self.ptr(), fa.as_ptr(), fa.len() as i32, fb.as_ptr(), fb.len() as i32, radius, side) })
+    }
+
+    /// Parte las caras `faces` donde las cruza `tool` (un plano grande o
+    /// curvas sobre ellas), sin separar el sólido (con historia).
+    pub fn split_faces(&self, faces: &[usize], tool: &Shape) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_split_faces(self.ptr(), f.as_ptr(), f.len() as i32, tool.ptr()) })
+    }
+
+    /// Parte las caras `faces` por su silueta vista a lo largo de `dir` (donde la
+    /// normal es perpendicular a la mirada), sin separar el sólido (con historia).
+    pub fn split_silhouette(&self, faces: &[usize], dir: P3) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_split_silhouette(self.ptr(), f.as_ptr(), f.len() as i32, dir.as_ptr()) })
+    }
+
+    /// Esta cara extendida `distance` por todos sus lados, siguiendo su superficie.
+    pub fn extend_face(&self, distance: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_extend_face(self.ptr(), distance) })
+    }
+
+    /// Extiende las superficies `distance` más allá de los bordes libres `edges`.
+    pub fn extend_surface(&self, edges: &[usize], distance: f64) -> Result<Shape> {
+        let e = idx(edges);
+        wrap(unsafe { ffi::cad_extend_surface(self.ptr(), e.as_ptr(), e.len() as i32, distance) })
+    }
+
+    /// Saca las caras y cierra el hueco extendiendo las vecinas (agujeros, redondeos, resaltes).
+    pub fn remove_faces(&self, faces: &[usize]) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_remove_faces(self.ptr(), f.as_ptr(), f.len() as i32) })
+    }
+
+    /// Redondeo con el radio dado en puntos de cada arista: pares (fracción
+    /// del largo de 0 a 1, radio), en orden, del comienzo al final.
+    pub fn fillet_points(&self, edges: &[usize], law: &[(f64, f64)]) -> Result<Shape> {
+        let e = idx(edges);
+        let l: Vec<f64> = law.iter().flat_map(|p| [p.0, p.1]).collect();
+        wrap(unsafe { ffi::cad_fillet_points(self.ptr(), e.as_ptr(), e.len() as i32, l.as_ptr(), law.len() as i32) })
     }
 
     /// Ángulo de desmolde para las caras indicadas.
@@ -759,6 +876,12 @@ impl Shape {
     /// Sólido de espesor `thickness` a partir de esta cara (o caras), hacia su normal.
     pub fn thicken(&self, thickness: f64) -> Result<Shape> {
         wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })
+    }
+
+    /// Copia desfasada `distance` sobre la normal de las caras (de un sólido,
+    /// su piel como superficie).
+    pub fn offset_shape(&self, distance: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_offset_shape(self.ptr(), distance) })
     }
 
     /// Superficie que llena un borde cerrado: cada arista con su cara vecina

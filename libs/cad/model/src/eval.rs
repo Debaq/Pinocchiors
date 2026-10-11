@@ -159,6 +159,8 @@ pub struct Evaluation {
     pub sketches3d: HashMap<FeatureId, Sketch3dResult>,
     /// Planos, ejes y puntos de referencia.
     pub references: HashMap<FeatureId, RefGeom>,
+    /// Qué se dedujo de lo elegido en las referencias por clics («Plano medio», «Por dos puntos»...).
+    pub ref_kinds: HashMap<FeatureId, String>,
     /// Curvas de referencia (alambres), para barridos.
     pub curves: HashMap<FeatureId, Shape>,
     /// Herramienta de cada operación que la tiene (para patrones y simetrías).
@@ -236,6 +238,7 @@ struct CacheEntry {
     sketch: Option<SketchResult>,
     sketch3d: Option<Sketch3dResult>,
     reference: Option<RefGeom>,
+    ref_kind: Option<String>,
     curve: Option<Shape>,
     tool: Option<(Tagged, BodyOp)>,
     threads: Vec<ThreadAxis>,
@@ -482,6 +485,26 @@ impl Evaluation {
 type R<T> = Result<T, String>;
 type ShapeFn = Box<dyn Fn(&Shape) -> R<Shape>>;
 
+/// Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
+/// (extrusión y revolución delgadas); sin espesor, las caras como están.
+fn thin_faces(faces: Vec<Shape>, thin: Option<f64>) -> R<Vec<Shape>> {
+    match thin {
+        Some(t) if t > 0.0 => faces
+            .iter()
+            .map(|f| {
+                let outer = f.offset_face(t / 2.0).map_err(err)?;
+                match f.offset_face(-t / 2.0) {
+                    Ok(inner) => outer.cut(&inner).map_err(err),
+                    // Más angosto que la pared: queda lleno
+                    Err(_) => Ok(outer),
+                }
+            })
+            .collect(),
+        Some(_) => Err("el espesor tiene que ser mayor que cero".into()),
+        None => Ok(faces),
+    }
+}
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -529,6 +552,28 @@ fn occt_err(e: String) -> cad_occt::Error {
 /// Aviso de un corte que no se lleva nada.
 /// El prisma menos el escaneo, solo los sólidos que arrancan en el plano del
 /// perfil (lo que queda del otro lado del escaneo se descarta).
+/// Lo del prisma que va desde su comienzo (la tapa en `start`, normal a `cap`)
+/// hasta la lámina `sheet` (una cara curva extendida): se parte con ella y quedan
+/// los pedazos que arrancan en la tapa.
+fn until_sheet(prism: &Shape, sheet: &Shape, start: P3, cap: P3) -> R<Shape> {
+    let pieces = prism.split_by(std::slice::from_ref(sheet)).map_err(err)?.solids().map_err(err)?;
+    let size = prism.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let starts = |s: &Shape| {
+        (0..s.face_count()).any(|i| {
+            s.face_info(i).is_ok_and(|f| f.surface == SurfaceKind::Plane && dot(f.normal, cap).abs() > 0.999 && dot(sub(f.point, start), cap).abs() < size * 1e-6)
+        })
+    };
+    if pieces.len() < 2 {
+        return Err("la cara no corta el perfil: no tapa lo que se extruye".into());
+    }
+    let kept: Vec<Shape> = pieces.into_iter().filter(starts).collect();
+    match kept.len() {
+        0 => Err("no quedó nada entre el perfil y la cara".into()),
+        1 => Ok(kept.into_iter().next().unwrap()),
+        _ => fuse(kept),
+    }
+}
+
 fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3) -> R<Shape> {
     let reach = prism.mass().map_err(err)?;
     let far = (0..8)
@@ -637,6 +682,9 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             if let Some(r) = &e.reference {
                 ctx.ev.references.insert(f.id, r.clone());
             }
+            if let Some(k) = &e.ref_kind {
+                ctx.ev.ref_kinds.insert(f.id, k.clone());
+            }
             if let Some(c) = &e.curve {
                 ctx.ev.curves.insert(f.id, c.clone());
             }
@@ -681,6 +729,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 sketch: ctx.ev.sketches.get(&f.id).cloned(),
                 sketch3d: ctx.ev.sketches3d.get(&f.id).cloned(),
                 reference: ctx.ev.references.get(&f.id).cloned(),
+                ref_kind: ctx.ev.ref_kinds.get(&f.id).cloned(),
                 curve: ctx.ev.curves.get(&f.id).cloned(),
                 tool: ctx.ev.tools.get(&f.id).cloned(),
                 threads: ctx.ev.threads.iter().filter(|t| t.feature == f.id).cloned().collect(),
@@ -1327,9 +1376,11 @@ impl Ctx<'_> {
     /// Sketch envuelto sobre una cara: el sketch se dibuja en el plano tangente
     /// en el centro de la cara (X a lo largo de u, Y de v) y cada curva se lleva
     /// a la superficie midiendo sobre ella (en un cilindro, el desarrollo).
-    fn surface_sketch(&mut self, id: FeatureId, face: &FaceRef, sketch: &Sketch) -> R<()> {
-        let i = self.face("face", face)?;
-        let body = self.body()?.clone();
+    /// Cómo se envuelve un sketch sobre la cara `i`: el plano tangente en el
+    /// centro del parámetro y el paso de (x, y) del sketch a (u, v):
+    /// u = u0 + x / su, v = v0 + flip · y / sv.
+    fn wrap_frame(&self, i: usize) -> R<(Plane, [f64; 5])> {
+        let body = self.body()?;
         let (b, _) = body.face_eval(i, &[]).map_err(err)?;
         let (u0, v0) = ((b[0] + b[1]) / 2.0, (b[2] + b[3]) / 2.0);
         let (_, c) = body.face_eval(i, &[[u0, v0]]).map_err(err)?;
@@ -1341,6 +1392,13 @@ impl Ctx<'_> {
         let x = normalize(c.du);
         let plane = Plane { origin: c.point, normal: normalize(c.normal), x_dir: x };
         let flip = if dot(c.dv, plane.y_dir()) < 0.0 { -1.0 } else { 1.0 };
+        Ok((plane, [u0, v0, su, sv, flip]))
+    }
+
+    fn surface_sketch(&mut self, id: FeatureId, face: &FaceRef, sketch: &Sketch) -> R<()> {
+        let i = self.face("face", face)?;
+        let body = self.body()?.clone();
+        let (plane, [u0, v0, su, sv, flip]) = self.wrap_frame(i)?;
         let mut solved = sketch.clone();
         let report = solved.solve().map_err(err)?;
         let regions = find_regions(&solved).map_err(err)?;
@@ -1399,6 +1457,7 @@ impl Ctx<'_> {
                 let info = self.body()?.edge_info(i).map_err(err)?;
                 if *end { info.end } else { info.start }
             }
+            PointSpec::Picked { refs } => self.picked_point(refs)?.0,
             PointSpec::Reference { feature } => match self.ev.references.get(feature) {
                 Some(RefGeom::Point { point }) => *point,
                 _ => {
@@ -1462,6 +1521,12 @@ impl Ctx<'_> {
         {
             return Err("la rosca necesita un paso positivo y menor que el diámetro".into());
         }
+        let taper = match h.style {
+            HoleStyle::Tapered { angle } if h.modeled.is_some() => return Err(format!("un agujero cónico ({angle}°) no lleva rosca modelada")),
+            HoleStyle::Tapered { angle } if !(angle > 0.0 && angle < 45.0) => return Err("el ángulo del cono va entre 0 y 45°".into()),
+            HoleStyle::Tapered { angle } => Some(angle.to_radians().tan()),
+            _ => None,
+        };
         // Con rosca modelada el taladro es el diámetro menor (más la holgura)
         let r = h.modeled.map_or(r, |t| (t.minor() + t.clearance) / 2.0);
         let centers = ids.iter().map(|pid| s.sketch.point(*pid).map(|p| s.plane.to_world(p))).collect::<Result<Vec<P3>, _>>().map_err(err)?;
@@ -1516,7 +1581,13 @@ impl Ctx<'_> {
         // Rosca cosmética: la medida sale de la tabla
         let cosmetic = match src {
             Some(t) => Some(ThreadSpec { clearance: 0.0, ..t.spec }),
-            None => h.thread.as_deref().and_then(crate::standard::size).map(|m| ThreadSpec { nominal: m.d, pitch: m.pitch, clearance: 0.0, left: false }),
+            None => h.thread.as_deref().and_then(|name| {
+                let (d, pitch) = match crate::standard::size(name) {
+                    Some(m) => (m.d, m.pitch),
+                    None => crate::standard::inch(name).map(|t| (t.d, t.pitch))?,
+                };
+                Some(ThreadSpec { nominal: d, pitch, clearance: 0.0, left: false })
+            }),
         };
         let mut aligned = false;
         for (k, &c) in centers.iter().enumerate() {
@@ -1566,16 +1637,29 @@ impl Ctx<'_> {
                     let helix = Frame { origin: top, z: down, x: hx };
                     parts.push(Shape::thread(helix, r, (t.nominal + t.clearance) / 2.0, t.pitch, len + lift, t.left).map_err(err)?);
                 }
-                None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
+                None => match taper {
+                    // Cónico: hasta el fondo (o hasta donde termina el sólido), angostándose
+                    Some(t) => {
+                        let len = through_len(0.0);
+                        if r - len * t <= 1e-6 {
+                            return Err("el cono se cierra antes del fondo: menos ángulo o menos profundidad".into());
+                        }
+                        parts.push(Shape::cone(frame(top), r + lift * t, r - len * t, len + lift).map_err(err)?);
+                    }
+                    None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
+                },
             }
-            probes.push((add(add(c, scale(down, depth / 2.0)), scale(x, r)), format!("agujero:{k}:pared")));
+            // El radio a una profundidad (el cónico se angosta) y la pared a la mitad
+            let len = if taper.is_some() { through_len(0.0) } else { depth };
+            let r_at = |d: f64| r - d * taper.unwrap_or(0.0);
+            probes.push((add(add(c, scale(down, len / 2.0)), scale(x, r_at(len / 2.0))), format!("agujero:{k}:pared")));
             // Punta de broca en los ciegos
             if matches!(h.depth, HoleDepth::Blind { .. }) && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
-                let tip = r / (h.tip_angle.to_radians() / 2.0).tan();
-                parts.push(Shape::cone(frame(add(c, scale(down, depth))), r, 0.0, tip).map_err(err)?);
+                let tip = r_at(depth) / (h.tip_angle.to_radians() / 2.0).tan();
+                parts.push(Shape::cone(frame(add(c, scale(down, depth))), r_at(depth), 0.0, tip).map_err(err)?);
             }
             match h.style {
-                HoleStyle::Simple => {}
+                HoleStyle::Simple | HoleStyle::Tapered { .. } => {}
                 HoleStyle::Counterbore { diameter, depth: d } => {
                     if diameter <= h.diameter || d <= 0.0 {
                         return Err("la caja tiene que ser más ancha que el agujero y tener profundidad".into());
@@ -2024,6 +2108,7 @@ impl Ctx<'_> {
                 Plane { origin: a, normal: normalize(n), x_dir: normalize(sub(b, a)) }
             }
             PlaneDef::Scan { plane, .. } => *plane,
+            PlaneDef::Picked { refs, offset, angle, flip } => self.picked_plane(refs, *offset, *angle, *flip)?.0,
         })
     }
 
@@ -2061,6 +2146,7 @@ impl Ctx<'_> {
                 }
                 Axis { origin: *origin, dir: normalize(*direction) }
             }
+            AxisDef::Picked { refs } => self.picked_axis(refs)?.0,
         })
     }
 
@@ -2094,12 +2180,41 @@ impl Ctx<'_> {
                 let axis = self.axis("axis", &r.axis)?;
                 self.check_revolve_profile(r.sketch, &r.regions, axis)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
+                let faces = thin_faces(faces, r.thin)?;
+                // Desde dónde (`start`, girando el perfil antes) y cuánto en total
                 let angle = r.angle.to_radians();
+                let mut sheet = None;
+                let (start, angle) = match &r.extent {
+                    RevolveExtent::One => (0.0, angle),
+                    RevolveExtent::Symmetric => (-angle / 2.0, angle),
+                    RevolveExtent::TwoAngles { second } => (-second.to_radians(), angle + second.to_radians()),
+                    RevolveExtent::UpToFace { face } => {
+                        // Casi una vuelta (que quede tapa al final), partida por la cara extendida
+                        let i = self.face("extent", face)?;
+                        let fs = self.body()?.face_shape(i).map_err(err)?;
+                        sheet = Some(fs.extend_face(self.diag()).map_err(err)?);
+                        (0.0, 350f64.to_radians() * if angle < 0.0 { -1.0 } else { 1.0 })
+                    }
+                };
                 if angle.abs() < 1e-9 {
                     return Err("ángulo cero".into());
                 }
-                let solids = faces.iter().map(|fc| fc.revolve(axis, angle)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                if angle.abs() > 2.0 * std::f64::consts::PI + 1e-9 {
+                    return Err("entre los dos ángulos pasan de 360°".into());
+                }
+                let solids = faces
+                    .iter()
+                    .map(|fc| if start != 0.0 { fc.rotate(axis, start).and_then(|g| g.revolve(axis, angle)) } else { fc.revolve(axis, angle) })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
                 let shape = fuse(solids)?;
+                let shape = match &sheet {
+                    Some(s) => {
+                        let plane = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?.plane;
+                        until_sheet(&shape, s, plane.origin, plane.normal)?
+                    }
+                    None => shape,
+                };
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 let rot = |p: P3, a: f64| {
                     let m = cad_occt::rotation_matrix(axis, a);
@@ -2107,12 +2222,18 @@ impl Ctx<'_> {
                 };
                 // Lateral de cada entidad: su punto medio girado a la mitad del ángulo
                 for (id, p) in &entities {
-                    mark(&shape, &mut tags, rot(*p, angle / 2.0), tag(f.id, format!("lado:{id}")));
+                    mark(&shape, &mut tags, rot(*p, start + angle / 2.0), tag(f.id, format!("lado:{id}")));
                 }
                 if angle.abs() < 2.0 * std::f64::consts::PI - 1e-9 {
                     for p in &samples {
-                        mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
-                        mark(&shape, &mut tags, rot(*p, angle), tag(f.id, "fin"));
+                        mark(&shape, &mut tags, rot(*p, start), tag(f.id, "inicio"));
+                        mark(&shape, &mut tags, rot(*p, start + angle), tag(f.id, "fin"));
+                    }
+                }
+                // Delgada: las paredes corridas no siempre caen en los puntos de arriba
+                for (i, slot) in tags.iter_mut().enumerate() {
+                    if slot.is_empty() {
+                        slot.push(tag(f.id, format!("cara:{i}")));
                     }
                 }
                 let tool = Tagged { shape, tags };
@@ -2167,20 +2288,36 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
                 self.apply(f.id, tool, b.op)
             }
-            FeatureKind::Fillet { edges, radius, radius2 } => {
+            FeatureKind::Fillet { edges, radius, radius2, points } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
+                self.edge_handle(idx[0], *radius);
                 let groups = self.by_part(&idx, true);
                 let end = radius2.unwrap_or(*radius);
-                self.per_part(groups, |s, e| s.fillet_variable(e, *radius, end), |k| Some(tag(f.id, format!("redondeo:{k}"))))
+                if points.is_empty() {
+                    return self.per_part(groups, |s, e| s.fillet_variable(e, *radius, end), |k| Some(tag(f.id, format!("redondeo:{k}"))));
+                }
+                // Por puntos: los extremos y los del medio, en orden a lo largo de la arista
+                if points.iter().any(|p| !(p.at > 0.0 && p.at < 1.0) || p.radius <= 0.0) {
+                    return Err("cada punto va entre el comienzo y el final de la arista (0 a 1), con radio positivo".into());
+                }
+                let mut law: Vec<(f64, f64)> = vec![(0.0, *radius)];
+                law.extend(points.iter().map(|p| (p.at, p.radius)));
+                law.push((1.0, end));
+                law.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if law.windows(2).any(|w| w[1].0 - w[0].0 < 1e-6) {
+                    return Err("dos puntos del redondeo en el mismo lugar".into());
+                }
+                self.per_part(groups, |s, e| s.fillet_points(e, &law), |k| Some(tag(f.id, format!("redondeo:{k}"))))
             }
             FeatureKind::Chamfer { edges, distance, second } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
+                self.edge_handle(idx[0], *distance);
                 let groups = self.by_part(&idx, true);
                 let second = *second;
                 self.per_part(
@@ -2193,14 +2330,47 @@ impl Ctx<'_> {
                     |k| Some(tag(f.id, format!("chaflan:{k}"))),
                 )
             }
-            FeatureKind::Shell { faces, thickness } => {
+            FeatureKind::Shell { faces, thickness, overrides } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara para abrir".into());
                 }
                 let idx = self.faces("faces", faces)?;
+                self.face_handle(idx[0], thickness.abs(), true);
                 // Solo las piezas de las caras elegidas
                 let groups = self.by_part(&idx, false);
-                self.per_part(groups, |s, fs| s.shell(fs, -thickness.abs()), |_| None)
+                if overrides.is_empty() {
+                    return self.per_part(groups, |s, fs| s.shell(fs, -thickness.abs()), |_| None);
+                }
+                if overrides.iter().any(|o| o.thickness.abs() < 1e-9) {
+                    return Err("cada cara con su espesor necesita uno mayor que cero".into());
+                }
+                // Las caras con otro espesor, con su índice dentro de su pieza
+                let mut special: Vec<(usize, usize, f64)> = Vec::new();
+                for (k, o) in overrides.iter().enumerate() {
+                    let g = self.ev.resolve_face(&o.face).inspect_err(|_| self.miss("overrides", k))?;
+                    for (p, local) in self.by_part(&[g], false) {
+                        special.push((p, local[0], -o.thickness.abs()));
+                    }
+                }
+                // Pieza por pieza (de atrás para adelante, como `per_part`), cada una con sus caras especiales
+                let mut work = groups;
+                work.sort_by(|a, b| b.0.cmp(&a.0));
+                for (pi, local) in work {
+                    let ov: Vec<(usize, f64)> = special.iter().filter(|x| x.0 == pi).map(|x| (x.1, x.2)).collect();
+                    let part = self.ev.parts[pi].shape.clone();
+                    let (new, h) = with_history(|| part.shell_faces(&local, -thickness.abs(), &ov)).map_err(err)?;
+                    self.replace_part(pi, new, &h, |_| None);
+                }
+                self.sync();
+                Ok(())
+            }
+            FeatureKind::DeleteFace { faces } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let groups = self.by_part(&idx, false);
+                self.per_part(groups, |s, fs| s.remove_faces(fs), |_| None)
             }
             FeatureKind::Draft { faces, neutral, angle } => {
                 if faces.is_empty() {
@@ -2211,21 +2381,28 @@ impl Ctx<'_> {
                 let groups = self.by_part(&idx, false);
                 self.per_part(groups, |s, fs| s.draft(fs, p.normal, angle.to_radians(), p.origin, p.normal), |_| None)
             }
-            FeatureKind::Pattern { features, pattern } => {
+            FeatureKind::Pattern { features, pattern, skip } => {
                 // Dónde está lo que se copia: el centro de la primera operación (o del sólido)
                 let seed = match features.first() {
                     Some(id) => self.tool(*id)?.0.shape.mass().map_err(err)?,
                     None => self.body()?.mass().map_err(err)?,
                 };
                 let seed = scale(add(seed.bbox_min, seed.bbox_max), 0.5);
-                let transforms = self.pattern_transforms(pattern, seed)?;
+                // Flecha de la separación del patrón lineal, desde lo que se repite
+                if let PatternKind::Linear { direction, spacing, .. } = pattern
+                    && norm(*direction) > 1e-12
+                {
+                    *self.handle.borrow_mut() = Some(Handle { origin: seed, dir: normalize(*direction), length: *spacing, reversed: false, kind: HandleKind::Blind });
+                }
+                // Las omitidas no se hacen; las demás conservan su número (y sus nombres)
+                let transforms: Vec<(usize, ShapeFn)> =
+                    self.pattern_transforms(pattern, seed)?.into_iter().enumerate().filter(|(k, _)| !skip.contains(&(*k as u32 + 1))).collect();
                 if transforms.is_empty() {
                     return Ok(());
                 }
                 let copies_of = |src: &Tagged| -> R<Vec<Tagged>> {
                     transforms
                         .iter()
-                        .enumerate()
                         .map(|(k, t)| {
                             let (shape, h) = with_history(|| t(&src.shape).map_err(occt_err)).map_err(err)?;
                             let tags = suffixed(&src.tags, &h, shape.face_count(), &format!("#{}", k + 1));
@@ -2253,7 +2430,7 @@ impl Ctx<'_> {
                 }
                 Ok(())
             }
-            FeatureKind::Mirror { features, plane } => {
+            FeatureKind::Mirror { features, plane, op: mirror_op } => {
                 let p = self.plane("plane", plane)?;
                 let mirrored = |src: &Tagged| -> R<Tagged> {
                     let (shape, h) = with_history(|| src.shape.mirror(p.origin, p.normal)).map_err(err)?;
@@ -2266,6 +2443,10 @@ impl Ctx<'_> {
                     for i in 0..self.ev.parts.len() {
                         let part = Tagged { shape: self.ev.parts[i].shape.clone(), tags: self.ev.parts[i].tags.clone() };
                         let m = mirrored(&part)?;
+                        if *mirror_op == BodyOp::New {
+                            self.new_part(f.id, m);
+                            continue;
+                        }
                         let fused = fuse_tagged(vec![part, m])?;
                         self.ev.parts[i].shape = fused.shape;
                         self.ev.parts[i].tags = fused.tags;
@@ -2276,15 +2457,51 @@ impl Ctx<'_> {
                 for id in features {
                     let (tool, op) = self.tool(*id)?;
                     let m = mirrored(&tool)?;
-                    self.apply(f.id, m, op)?;
+                    self.apply(f.id, m, if *mirror_op == BodyOp::New { BodyOp::New } else { op })?;
                 }
                 Ok(())
             }
             FeatureKind::Boolean { op, targets, tools, keep_tools } => self.boolean(f.id, *op, targets, tools, *keep_tools),
             FeatureKind::Sweep(sw) => {
-                let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
-                let spine = self.path_wire(&sw.path, samples.first().copied())?;
-                let solids = faces.iter().map(|fc| fc.sweep(&spine)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                let (faces, samples, spine) = match sw.circle {
+                    // Circular: el círculo al comienzo del camino, perpendicular a él
+                    Some(r) => {
+                        if r <= 0.0 {
+                            return Err("el radio tiene que ser mayor que cero".into());
+                        }
+                        let spine = self.path_wire(&sw.path, None)?;
+                        let (p0, t0) = spine.sample_curve(2).map_err(err)?[0];
+                        let face = Shape::face(&[vec![Curve::Circle { center: p0, normal: normalize(t0), radius: r }]]).map_err(err)?;
+                        (vec![face], vec![p0], spine)
+                    }
+                    None => {
+                        let (faces, _, samples) = self.profile(sw.sketch, &sw.regions)?;
+                        let spine = self.path_wire(&sw.path, samples.first().copied())?;
+                        (faces, samples, spine)
+                    }
+                };
+                let faces = thin_faces(faces, sw.thin)?;
+                let mode = sw.orient.code();
+                let guide = sw.guide.as_ref().map(|g| self.path_wire(g, None)).transpose()?;
+                if guide.is_some() && sw.thin.is_some() {
+                    return Err("el barrido con curva guía todavía no va delgado".into());
+                }
+                let twist = sw.twist.filter(|t| t.abs() > 1e-9);
+                if twist.is_some() && guide.is_some() {
+                    return Err("con curva guía el giro lo da la guía: sacar la torsión".into());
+                }
+                let solids = faces
+                    .iter()
+                    .map(|fc| match &guide {
+                        // Con guía: el perfil gira y se escala para seguirla
+                        Some(g) => Shape::loft_along(std::slice::from_ref(fc), &spine, Some(g), true),
+                        // Con torsión: gira parejo alrededor del camino
+                        None if twist.is_some() => fc.sweep_twisted(&spine, twist.unwrap_or(0.0).to_radians(), true),
+                        None if mode == 0 => fc.sweep(&spine),
+                        None => fc.sweep_with(&spine, mode, true),
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
                 let shape = fuse(solids)?;
                 // La tapa del perfil; el resto por su número (no hay más origen estable)
                 let mut tags = vec![Vec::new(); shape.face_count()];
@@ -2300,15 +2517,206 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), sw.op));
                 self.apply(f.id, tool, sw.op)
             }
-            FeatureKind::Helix { axis, radius, pitch, turns, left } => {
+            FeatureKind::Helix { axis, radius, pitch, turns, left, radius2, flat } => {
                 let ax = self.axis("axis", axis)?;
                 let ax = Axis { origin: ax.origin, dir: normalize(ax.dir) };
-                let wire = Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?;
+                let r2 = radius2.unwrap_or(*radius);
+                let wire = if *flat || (r2 - radius).abs() > 1e-9 {
+                    // Cónica o espiral plana: spline por puntos de la curva (32 por vuelta)
+                    if *turns <= 0.0 {
+                        return Err("las vueltas tienen que ser más que cero".into());
+                    }
+                    if *radius < 0.0 || r2 < 0.0 || radius.max(r2) <= 0.0 {
+                        return Err("los radios no pueden ser negativos (y uno tiene que ser mayor que cero)".into());
+                    }
+                    if *flat && (r2 - radius).abs() < 1e-9 {
+                        return Err("la espiral plana necesita dos radios distintos".into());
+                    }
+                    let x = default_x(ax.dir);
+                    let y = cross(ax.dir, x);
+                    let n = ((turns * 32.0).ceil() as usize).max(16);
+                    let hand = if *left { -1.0 } else { 1.0 };
+                    let points: Vec<P3> = (0..=n)
+                        .map(|k| {
+                            let t = k as f64 / n as f64;
+                            let a = hand * 2.0 * std::f64::consts::PI * turns * t;
+                            let r = radius + (r2 - radius) * t;
+                            let h = if *flat { 0.0 } else { pitch * turns * t };
+                            add(add(ax.origin, scale(ax.dir, h)), add(scale(x, r * a.cos()), scale(y, r * a.sin())))
+                        })
+                        .collect();
+                    Shape::wire(&[Curve::Spline(points)]).map_err(err)?
+                } else {
+                    Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?
+                };
                 // Polilínea para el visor: la del teselado del alambre mismo
                 let points: Vec<P3> = wire.tessellate(0.05, 0.1).map_err(err)?.edges.concat();
                 self.ev.references.insert(f.id, RefGeom::Curve { points });
                 self.ev.curves.insert(f.id, wire);
                 Ok(())
+            }
+            FeatureKind::RotateFace { faces, axis, angle } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                if angle.abs() < 1e-9 {
+                    return Err("ángulo cero".into());
+                }
+                let ax = self.axis("axis", axis)?;
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                let far = self.diag() * 4.0;
+                let m = cad_occt::rotation_matrix(ax, angle.to_radians());
+                let rot = |v: P3, w: f64| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] + w * m[i][3]);
+                // Cada cara: la cuña entre su plano y el girado (afuera suma, adentro resta)
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("por ahora solo se giran caras planas".into());
+                    }
+                    let n = normalize(info.normal);
+                    let (o1, n1) = (rot(info.point, 1.0), normalize(rot(n, 0.0)));
+                    if dot(n, n1) < 0.2 {
+                        return Err("demasiado giro: la cara quedaría casi de canto".into());
+                    }
+                    let fc = body.face_shape(i).map_err(err)?;
+                    let grow = fc.prism(scale(n, far)).and_then(|p| p.split_keep(o1, scale(n1, -1.0))).map_err(err)?;
+                    let shrink = fc.prism(scale(n, -far)).and_then(|p| p.split_keep(o1, n1)).map_err(err)?;
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    jobs.push((part, grow, shrink));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                let mut r = Ok(());
+                for (k, (part, grow, shrink)) in jobs.into_iter().enumerate() {
+                    self.scope = vec![part];
+                    for (tool, op) in [(grow, BodyOp::Join), (shrink, BodyOp::Cut)] {
+                        if tool.mass().is_ok_and(|m| m.volume > 1e-9) {
+                            let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; tool.face_count()];
+                            r = self.apply(f.id, Tagged { shape: tool, tags }, op);
+                            if r.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    if r.is_err() {
+                        break;
+                    }
+                }
+                self.scope = saved;
+                r
+            }
+            FeatureKind::VertexChamfer { vertex, distance } => {
+                if *distance <= 0.0 {
+                    return Err("la distancia tiene que ser mayor que cero".into());
+                }
+                let p = self.point("vertex", vertex)?;
+                let body = self.body()?.clone();
+                let tol = self.diag().max(1.0) * 1e-6;
+                // Las aristas que llegan al vértice y, sobre cada una, el punto a `distance`
+                let mut pts = Vec::new();
+                let mut part = None;
+                for (i, e) in body.edges().map_err(err)?.iter().enumerate() {
+                    let other = if norm(sub(e.start, p)) < tol {
+                        e.end
+                    } else if norm(sub(e.end, p)) < tol {
+                        e.start
+                    } else {
+                        continue;
+                    };
+                    if e.curve != cad_occt::CurveKind::Line {
+                        return Err("el chaflán de vértice va con aristas rectas".into());
+                    }
+                    if norm(sub(other, p)) <= *distance {
+                        return Err("la distancia es más larga que una de las aristas".into());
+                    }
+                    pts.push(add(p, scale(normalize(sub(other, p)), *distance)));
+                    if part.is_none() {
+                        part = self.ev.part_ranges().into_iter().find(|(_, _, es)| es.contains(&i)).map(|(id, _, _)| id);
+                    }
+                }
+                if pts.len() != 3 {
+                    return Err(format!("el vértice tiene {} aristas: el chaflán de vértice va en esquinas de tres", pts.len()));
+                }
+                let mut n = normalize(cross(sub(pts[1], pts[0]), sub(pts[2], pts[0])));
+                if dot(sub(p, pts[0]), n) < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                // La esquina: una esfera alrededor del vértice, del lado del vértice
+                let corner = Shape::sphere(p, distance * 1.5).and_then(|s| s.split_keep(pts[0], n)).map_err(err)?;
+                let saved = std::mem::take(&mut self.scope);
+                self.scope = part.into_iter().collect();
+                let tags = vec![vec![tag(f.id, "chaflan")]; corner.face_count()];
+                let r = self.apply(f.id, Tagged { shape: corner, tags }, BodyOp::Cut);
+                self.scope = saved;
+                r
+            }
+            FeatureKind::FullRound { side_a, middle, side_b } => {
+                let (ia, im, ib) = (self.face("side_a", side_a)?, self.face("middle", middle)?, self.face("side_b", side_b)?);
+                let body = self.body()?.clone();
+                let (a, m, b) = (body.face_info(ia).map_err(err)?, body.face_info(im).map_err(err)?, body.face_info(ib).map_err(err)?);
+                if [a.surface, m.surface, b.surface].iter().any(|s| *s != SurfaceKind::Plane) {
+                    return Err("por ahora el redondeo completo va con caras planas".into());
+                }
+                let (na, nm, nb) = (normalize(a.normal), normalize(m.normal), normalize(b.normal));
+                if dot(na, nb) > -0.999 {
+                    return Err("las caras de los costados tienen que ser paralelas y opuestas".into());
+                }
+                if dot(na, nm).abs() > 1e-3 {
+                    return Err("la cara del medio tiene que ser perpendicular a las de los costados".into());
+                }
+                let w = dot(sub(b.point, a.point), na).abs();
+                let r = w / 2.0;
+                // Lo que se saca: la cara del medio hacia adentro el radio; lo que queda: medio cilindro
+                let fm = body.face_shape(im).map_err(err)?;
+                let slab = fm.prism(scale(nm, -r)).map_err(err)?;
+                let dir = normalize(cross(na, nm));
+                let mid = scale(add(a.point, b.point), 0.5);
+                let c0 = add(m.point, scale(na, dot(sub(mid, m.point), na)));
+                let c = sub(c0, scale(nm, r));
+                let fmm = fm.mass().map_err(err)?;
+                let along = (0..8).map(|k| [0, 1, 2].map(|q| if k >> q & 1 == 0 { fmm.bbox_min[q] } else { fmm.bbox_max[q] })).map(|v| dot(sub(v, c), dir));
+                let (lo, hi) = along.fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), x| (l.min(x), h.max(x)));
+                let cyl = Shape::cylinder(Frame { origin: add(c, scale(dir, lo)), z: dir, x: nm }, r, hi - lo).map_err(err)?;
+                let round = cyl.intersect(&slab).map_err(err)?;
+                let part = self.ev.part_of_face(im).ok_or("la cara no es de ninguna pieza")?;
+                let saved = std::mem::take(&mut self.scope);
+                self.scope = vec![part];
+                let tags = |s: &Shape, t: &str| vec![vec![tag(f.id, t.to_string())]; s.face_count()];
+                let mut res = self.apply(f.id, Tagged { tags: tags(&slab, "corte"), shape: slab }, BodyOp::Cut);
+                if res.is_ok() {
+                    res = self.apply(f.id, Tagged { tags: tags(&round, "redondeo"), shape: round }, BodyOp::Join);
+                }
+                self.scope = saved;
+                res
+            }
+            FeatureKind::FaceBlend { a, b, radius, side } => {
+                if a.is_empty() || b.is_empty() {
+                    return Err("elegir caras de los dos lados".into());
+                }
+                if *radius <= 0.0 {
+                    return Err("el radio tiene que ser mayor que cero".into());
+                }
+                let (ia, ib) = (self.faces("a", a)?, self.faces("b", b)?);
+                if ia.iter().any(|i| ib.contains(i)) {
+                    return Err("una misma cara no puede estar en los dos lados".into());
+                }
+                let (ga, gb) = (self.by_part(&ia, false), self.by_part(&ib, false));
+                let (Some((pa, la)), Some((pb, lb))) = (ga.first(), gb.first()) else {
+                    return Err("las caras no son de ninguna pieza".into());
+                };
+                if ga.len() > 1 || gb.len() > 1 || pa != pb {
+                    return Err("las caras de los dos lados tienen que ser de la misma pieza".into());
+                }
+                let na = la.len();
+                let all: Vec<usize> = la.iter().chain(lb).copied().collect();
+                let side = match side {
+                    BlendSide::Auto => 0,
+                    BlendSide::Convex => 1,
+                    BlendSide::Concave => 2,
+                };
+                let r = *radius;
+                self.per_part(vec![(*pa, all)], |s, fs| s.face_blend(&fs[..na], &fs[na..], r, side), |_| Some(tag(f.id, "redondeo")))
             }
             FeatureKind::MoveFace { faces, distance } => {
                 if faces.is_empty() {
@@ -2318,6 +2726,7 @@ impl Ctx<'_> {
                     return Err("distancia cero".into());
                 }
                 let idx = self.faces("faces", faces)?;
+                self.face_handle(idx[0], *distance, false);
                 let body = self.body()?.clone();
                 // Cada cara: el prisma que barre al moverse, sumado o restado de su pieza
                 let mut jobs = Vec::new();
@@ -2369,11 +2778,81 @@ impl Ctx<'_> {
                 self.sync();
                 Ok(())
             }
+            FeatureKind::Transform { parts, motion, copy } => {
+                self.body()?;
+                let shift = |v: P3| [[1.0, 0.0, 0.0, v[0]], [0.0, 1.0, 0.0, v[1]], [0.0, 0.0, 1.0, v[2]]];
+                // Con alinear, la pieza de la cara (si no se eligieron piezas)
+                let mut face_part = None;
+                let m = match motion {
+                    Motion::Translate { vector } => {
+                        if norm(*vector) < 1e-12 {
+                            return Err("el desplazamiento es cero".into());
+                        }
+                        shift(*vector)
+                    }
+                    Motion::Rotate { axis, angle } => {
+                        let ax = self.axis("axis", axis)?;
+                        if norm(ax.dir) < 1e-12 {
+                            return Err("el eje no tiene dirección".into());
+                        }
+                        cad_occt::rotation_matrix(ax, angle.to_radians())
+                    }
+                    Motion::Points { from, to } => {
+                        let (a, b) = (self.point("a", from)?, self.point("b", to)?);
+                        shift(sub(b, a))
+                    }
+                    Motion::Align { face, to, flip } => {
+                        let i = self.face("face", face)?;
+                        let info = self.body()?.face_info(i).map_err(err)?;
+                        if info.surface != SurfaceKind::Plane {
+                            return Err("la cara a alinear tiene que ser plana".into());
+                        }
+                        face_part = self.ev.part_of_face(i);
+                        let target = self.plane("plane", to)?;
+                        let (n, t) = (normalize(info.normal), normalize(target.normal));
+                        let want = if *flip { t } else { scale(t, -1.0) };
+                        // Giro que lleva la normal de la cara a la buscada, alrededor del punto de la cara
+                        let c = dot(n, want).clamp(-1.0, 1.0);
+                        let axis = if norm(cross(n, want)) > 1e-9 {
+                            normalize(cross(n, want))
+                        } else {
+                            // Paralelas: cualquier eje perpendicular (si son opuestas, media vuelta)
+                            let a = if n[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+                            normalize(cross(n, a))
+                        };
+                        let mut m = cad_occt::rotation_matrix(Axis { origin: info.point, dir: axis }, c.acos());
+                        // Después, a lo largo de la normal del plano hasta apoyarla
+                        let v = scale(t, -dot(sub(info.point, target.origin), t));
+                        for k in 0..3 {
+                            m[k][3] += v[k];
+                        }
+                        m
+                    }
+                };
+                let which: Vec<usize> = match (parts.is_empty(), face_part) {
+                    (true, Some(id)) => self.find_parts("face", &[id])?,
+                    (true, None) => (0..self.ev.parts.len()).collect(),
+                    _ => self.find_parts("parts", parts)?,
+                };
+                for i in which {
+                    let part = self.ev.parts[i].shape.clone();
+                    let (new, h) = with_history(|| part.transform(m)).map_err(err)?;
+                    if *copy {
+                        let tags = suffixed(&self.ev.parts[i].tags, &h, new.face_count(), "#copia");
+                        self.new_part(f.id, Tagged { shape: new, tags });
+                    } else {
+                        self.replace_part(i, new, &h, |_| None);
+                    }
+                }
+                self.sync();
+                Ok(())
+            }
             FeatureKind::Thicken { faces, thickness, op } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());
                 }
                 let idx = self.faces("faces", faces)?;
+                self.face_handle(idx[0], *thickness, false);
                 let mut solids = Vec::new();
                 // Las caras de una superficie, cosidas antes: así las esquinas se
                 // engrosan juntas; las de un sólido, cada una
@@ -2604,7 +3083,7 @@ impl Ctx<'_> {
                     reverse: *flip,
                     op: *op,
                     draft: 0.0,
-                    thin: None,
+                    thin: None, direction: None, start: 0.0,
                 };
                 let tool = self.extrude_dir(f.id, &e, *flip)?;
                 self.ev.tools.insert(f.id, (tool.clone(), *op));
@@ -2683,6 +3162,145 @@ impl Ctx<'_> {
                     let w = if from.abs() > 0.0 { w.translate(scale(n, from)).map_err(err)? } else { w };
                     shapes.push(w.prism(scale(n, len)).map_err(err)?);
                 }
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceLoft { sections, ruled } => {
+                if sections.len() < 2 {
+                    return Err("hacen falta al menos dos secciones".into());
+                }
+                let mut wires = Vec::new();
+                for (i, sec) in sections.iter().enumerate() {
+                    let mut w = self.curve_wires(sec.sketch, &sec.entities)?;
+                    if w.len() != 1 {
+                        return Err(format!("la sección {} tiene {} cadenas de curvas: cada sección tiene que ser una", i + 1, w.len()));
+                    }
+                    wires.push(w.pop().unwrap());
+                }
+                let shape = Shape::loft(&wires, false, *ruled).map_err(err)?;
+                let tool = self.surface_tool(f.id, vec![shape])?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceSweep { sketch, entities, path, orient } => {
+                let spine = self.path_wire(path, None)?;
+                let shapes = self
+                    .curve_wires(*sketch, entities)?
+                    .iter()
+                    .map(|w| w.sweep_with(&spine, orient.code(), false))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(err)?;
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::Wrap { sketch, depth, emboss } => {
+                if *depth <= 0.0 {
+                    return Err("la profundidad tiene que ser mayor que cero".into());
+                }
+                let Some(FeatureKind::SurfaceSketch { face, .. }) = self.doc.get(*sketch).map(|x| &x.kind) else {
+                    return Err("elegir un sketch envuelto (dibujado sobre una cara)".into());
+                };
+                let i = self.face("face", face)?;
+                let (_, [u0, v0, su, sv, flip]) = self.wrap_frame(i)?;
+                let res = self.ev.sketches.get(sketch).ok_or("el sketch envuelto no está calculado")?;
+                let regions = self.selected_regions(res, &RegionSelection::All)?;
+                if regions.is_empty() {
+                    return Err("el sketch envuelto no tiene regiones cerradas".into());
+                }
+                let to_uv = |p: &P2| [u0 + p[0] / su, v0 + flip * p[1] / sv];
+                let area = |l: &[[f64; 2]]| (0..l.len()).map(|k| l[k][0] * l[(k + 1) % l.len()][1] - l[(k + 1) % l.len()][0] * l[k][1]).sum::<f64>();
+                let fs = self.body()?.face_shape(i).map_err(err)?;
+                let mut solids = Vec::new();
+                for r in &regions {
+                    // El contorno de afuera antihorario en (u, v) y los agujeros al revés
+                    let mut outer: Vec<[f64; 2]> = r.outer.polygon.iter().map(to_uv).collect();
+                    if area(&outer) < 0.0 {
+                        outer.reverse();
+                    }
+                    let mut loops = vec![outer];
+                    for h in &r.holes {
+                        let mut l: Vec<[f64; 2]> = h.polygon.iter().map(to_uv).collect();
+                        if area(&l) > 0.0 {
+                            l.reverse();
+                        }
+                        loops.push(l);
+                    }
+                    let patch = fs.face_patch(&loops).map_err(err)?;
+                    solids.push(patch.thicken(if *emboss { *depth } else { -*depth }).map_err(err)?);
+                }
+                let shape = fuse(solids)?;
+                let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                let tags = (0..shape.face_count()).map(|k| vec![tag(f.id, format!("cara:{k}"))]).collect();
+                let saved = std::mem::take(&mut self.scope);
+                self.scope = vec![part];
+                let r = self.apply(f.id, Tagged { shape, tags }, if *emboss { BodyOp::Join } else { BodyOp::Cut });
+                self.scope = saved;
+                r
+            }
+            FeatureKind::SplitFaces { faces, tool } => {
+                if faces.is_empty() {
+                    return Err("elegir las caras a partir".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                if let PartingTool::Silhouette { direction } = tool {
+                    let d = self.axis("tool", direction)?.dir;
+                    let groups = self.by_part(&idx, false);
+                    return self.per_part(groups, |s, fs| s.split_silhouette(fs, d), |_| None);
+                }
+                let cutter = match tool {
+                    PartingTool::Plane { plane } => {
+                        // Un cuadrado grande del plano
+                        let p = self.plane("plane", plane)?;
+                        let (x, y, l) = (normalize(p.x_dir), normalize(p.y_dir()), self.diag() * 4.0 + 1.0);
+                        let corner = |a: f64, b: f64| add(p.origin, add(scale(x, a * l), scale(y, b * l)));
+                        Shape::polygon(&[corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)]).map_err(err)?
+                    }
+                    PartingTool::Curve { feature } => self.ev.curves.get(feature).cloned().ok_or_else(|| {
+                        self.miss("tool", 0);
+                        "la curva no está calculada".to_string()
+                    })?,
+                    PartingTool::Silhouette { .. } => unreachable!(),
+                };
+                let groups = self.by_part(&idx, false);
+                self.per_part(groups, |s, fs| s.split_faces(fs, &cutter), |_| None)
+            }
+            FeatureKind::Curve { def } => {
+                let wire = self.curve_feature(def)?;
+                let lines = wire.tessellate(0.05, 0.1).map_err(err)?.edges;
+                if lines.is_empty() {
+                    return Err("la curva quedó vacía".into());
+                }
+                self.ev.references.insert(f.id, RefGeom::Curves { lines });
+                self.ev.curves.insert(f.id, wire);
+                Ok(())
+            }
+            FeatureKind::SurfaceExtend { edges, distance } => {
+                if edges.is_empty() {
+                    return Err("elegir al menos un borde de una superficie".into());
+                }
+                if *distance <= 0.0 {
+                    return Err("la distancia tiene que ser mayor que cero".into());
+                }
+                let idx = self.edges("edges", edges)?;
+                let groups = self.by_part(&idx, true);
+                if groups.iter().any(|(p, _)| !self.ev.parts[*p].is_surface()) {
+                    return Err("solo se extienden superficies (no bordes de sólidos)".into());
+                }
+                self.per_part(groups, |s, e| s.extend_surface(e, *distance), |_| None)
+            }
+            FeatureKind::SurfacePlanar { sketch, regions } => {
+                let (faces, _, _) = self.profile(*sketch, regions)?;
+                let tool = self.surface_tool(f.id, faces)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceOffset { parts, distance } => {
+                if parts.is_empty() {
+                    return Err("elegir al menos una pieza".into());
+                }
+                if distance.abs() < 1e-9 {
+                    return Err("distancia cero".into());
+                }
+                let idx = self.find_parts("parts", parts)?;
+                let shapes = idx.iter().map(|&i| self.ev.parts[i].shape.offset_shape(*distance)).collect::<Result<Vec<_>, _>>().map_err(err)?;
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }
@@ -2832,8 +3450,29 @@ impl Ctx<'_> {
                 Ok(())
             }
             FeatureKind::Loft(l) => {
-                if l.sections.len() < 2 {
-                    return Err("hacen falta al menos dos secciones".into());
+                let start = l.start_point.as_ref().map(|p| self.point("start_point", p)).transpose()?;
+                let end = l.end_point.as_ref().map(|p| self.point("end_point", p)).transpose()?;
+                let ends = start.is_some() as usize + end.is_some() as usize;
+                if l.sections.len() + ends < 2 || l.sections.is_empty() {
+                    return Err("hacen falta al menos dos secciones (o una y un punto)".into());
+                }
+                if l.closed && (ends > 0 || l.sections.len() < 3) {
+                    return Err("una transición cerrada necesita al menos tres secciones y no termina en un punto".into());
+                }
+                if (l.path.is_some() || l.guide.is_some()) && (ends > 0 || l.closed) {
+                    return Err("con línea central o curva guía no va a un punto ni cerrada".into());
+                }
+                let weight = |w: Option<f64>| -> R<f64> {
+                    match w {
+                        Some(w) if w <= 0.0 => Err("el peso de la tangencia tiene que ser mayor que cero".into()),
+                        Some(w) => Ok(w),
+                        None => Ok(0.0),
+                    }
+                };
+                let (tan0, tan1) = (weight(l.start_tangent)?, weight(l.end_tangent)?);
+                let tangent = tan0 > 0.0 || tan1 > 0.0;
+                if tangent && (ends > 0 || l.closed || l.ruled || l.path.is_some() || l.guide.is_some()) {
+                    return Err("la tangencia en las puntas no va con punta, cerrada, reglada, línea central ni guía".into());
                 }
                 let mut faces = Vec::new();
                 let mut samples = Vec::new();
@@ -2845,7 +3484,29 @@ impl Ctx<'_> {
                     faces.extend(fs);
                     samples.push(sm);
                 }
-                let shape = Shape::loft(&faces, true, l.ruled).map_err(err)?;
+                let spine = l.path.as_ref().map(|p| self.path_wire(p, samples[0].first().copied())).transpose()?;
+                let guide = l.guide.as_ref().map(|p| self.path_wire(p, None)).transpose()?;
+                if guide.is_some() && spine.is_none() {
+                    return Err("la curva guía va con una línea central".into());
+                }
+                let build = |faces: &[Shape]| -> R<Shape> {
+                    match &spine {
+                        Some(sp) => Shape::loft_along(faces, sp, guide.as_ref(), true).map_err(err),
+                        None if tangent => Shape::loft_tangent(faces, tan0, tan1, true).map_err(err),
+                        None if ends == 0 && !l.closed => Shape::loft(faces, true, l.ruled).map_err(err),
+                        None => Shape::loft_ex(faces, true, l.ruled, start, end, l.closed).map_err(err),
+                    }
+                };
+                let shape = match l.thin {
+                    // Delgada: la transición del contorno corrido afuera menos la del corrido adentro
+                    Some(t) if t > 0.0 => {
+                        let off = |d: f64| faces.iter().map(|f| f.offset_face(d)).collect::<Result<Vec<_>, _>>().map_err(err);
+                        let (outer, inner) = (off(t / 2.0)?, off(-t / 2.0)?);
+                        build(&outer)?.cut(&build(&inner)?).map_err(err)?
+                    }
+                    Some(_) => return Err("el espesor tiene que ser mayor que cero".into()),
+                    None => build(&faces)?,
+                };
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 for p in &samples[0] {
                     mark(&shape, &mut tags, *p, tag(f.id, "inicio"));
@@ -2863,16 +3524,28 @@ impl Ctx<'_> {
                 self.apply(f.id, tool, l.op)
             }
             FeatureKind::Plane { def } => {
+                if let PlaneDef::Picked { refs, offset, angle, flip } = def {
+                    let how = self.picked_plane(refs, *offset, *angle, *flip)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let plane = self.reference_plane(def)?;
                 self.ev.references.insert(f.id, RefGeom::Plane { plane });
                 Ok(())
             }
             FeatureKind::Axis { def } => {
+                if let AxisDef::Picked { refs } = def {
+                    let how = self.picked_axis(refs)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let a = self.reference_axis(def)?;
                 self.ev.references.insert(f.id, RefGeom::Axis { origin: a.origin, dir: a.dir });
                 Ok(())
             }
             FeatureKind::Point { def } => {
+                if let PointSpec::Picked { refs } = def {
+                    let how = self.picked_point(refs)?.1;
+                    self.ev.ref_kinds.insert(f.id, how.to_string());
+                }
                 let point = self.point("def", def)?;
                 self.ev.references.insert(f.id, RefGeom::Point { point });
                 Ok(())
@@ -2951,14 +3624,51 @@ impl Ctx<'_> {
     fn pattern_transforms(&self, p: &PatternKind, seed: P3) -> R<Vec<ShapeFn>> {
         let mut out: Vec<ShapeFn> = Vec::new();
         match p {
-            PatternKind::Linear { direction, count, spacing } => {
-                if *count < 2 {
+            PatternKind::Linear { direction, count, spacing, second } => {
+                // Copia k = j·count + i (0 es el original): por filas de la primera dirección
+                let (d2, count2, spacing2) = match second {
+                    Some(s) => (normalize(s.direction), s.count.max(1), s.spacing),
+                    None => ([0.0; 3], 1, 0.0),
+                };
+                if *count * count2 < 2 {
                     return Err("se necesitan al menos 2 instancias".into());
                 }
                 let d = normalize(*direction);
-                for k in 1..*count {
-                    let v = scale(d, spacing * k as f64);
-                    out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                for j in 0..count2 {
+                    for i in 0..*count {
+                        if i == 0 && j == 0 {
+                            continue;
+                        }
+                        let v = add(scale(d, spacing * i as f64), scale(d2, spacing2 * j as f64));
+                        out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                    }
+                }
+            }
+            PatternKind::Points { sketch, points } => {
+                let s = self.ev.sketches.get(sketch).ok_or("el sketch de los puntos no está calculado")?;
+                let ids: Vec<u32> = if points.is_empty() {
+                    s.sketch
+                        .entities
+                        .iter()
+                        .filter_map(|e| match e.geometry {
+                            Geometry::Point { point } if !e.construction => Some(point),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    points.clone()
+                };
+                let pts = ids.iter().map(|id| s.sketch.point(*id).map(|p| s.plane.to_world(p))).collect::<Result<Vec<P3>, _>>().map_err(err)?;
+                if pts.len() < 2 {
+                    return Err("el sketch necesita al menos 2 puntos sueltos".into());
+                }
+                // Desde el punto más cercano a lo que se copia: ahí está el original
+                let from = pts.iter().copied().min_by(|a, b| norm(sub(*a, seed)).total_cmp(&norm(sub(*b, seed)))).unwrap();
+                for p in pts {
+                    let v = sub(p, from);
+                    if norm(v) > 1e-9 {
+                        out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                    }
                 }
             }
             PatternKind::Curve { path, count } => {
@@ -3293,26 +4003,28 @@ impl Ctx<'_> {
     fn extrude_dir(&self, id: FeatureId, e: &Extrude, reverse: bool) -> R<Tagged> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
         let (faces, entities, samples) = self.profile(e.sketch, &e.regions)?;
-        // Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
-        let faces = match e.thin {
-            Some(t) if t > 0.0 => faces
-                .iter()
-                .map(|f| {
-                    let outer = f.offset_face(t / 2.0).map_err(err)?;
-                    match f.offset_face(-t / 2.0) {
-                        Ok(inner) => outer.cut(&inner).map_err(err),
-                        // Más angosto que la pared: queda lleno
-                        Err(_) => Ok(outer),
-                    }
-                })
-                .collect::<R<Vec<_>>>()?,
-            Some(_) => return Err("el espesor tiene que ser mayor que cero".into()),
-            None => faces,
+        let faces = thin_faces(faces, e.thin)?;
+        // La dirección: la normal del plano o la propia (que no puede ir a lo largo del plano)
+        let dir = match &e.direction {
+            None => plane.normal,
+            Some(a) => {
+                let d = normalize(self.axis("direction", a)?.dir);
+                if dot(d, plane.normal).abs() < 1e-3 {
+                    return Err("la dirección no puede ir a lo largo del plano del sketch".into());
+                }
+                // Hacia el lado de la normal (el sentido lo da «hacia el otro lado»)
+                if dot(d, plane.normal) < 0.0 { scale(d, -1.0) } else { d }
+            }
         };
-        let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
+        let mut n = if reverse { scale(dir, -1.0) } else { dir };
         let drafted = e.draft.abs() > 1e-9;
+        if drafted && e.direction.is_some() {
+            return Err("el desmolde va con la dirección normal al plano".into());
+        }
         // Hasta el escaneo: su sólido y la distancia al primer choque
         let mut up_to_scan: Option<(Shape, f64)> = None;
+        // Hasta una cara curva: la cara extendida, que corta el prisma
+        let mut up_to_sheet: Option<Shape> = None;
         // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
         // (las paredes se angostan a partir del plano del sketch)
         let segments: Vec<(f64, f64)> = match &e.extent {
@@ -3327,12 +4039,44 @@ impl Ctx<'_> {
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
                 vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
             }
-            Extent::UpToFace { face } => {
+            Extent::UpToFace { face, offset } if self.body()?.face_info(self.face("extent", face)?).map_err(err)?.surface != SurfaceKind::Plane => {
+                // Curva: un prisma que la pasa entera, partido por la cara extendida
+                if offset.abs() > 1e-12 {
+                    return Err("la separación todavía solo va con caras planas".into());
+                }
+                let i = self.face("extent", face)?;
+                let body = self.body()?;
+                let info = body.face_info(i).map_err(err)?;
+                if dot(sub(info.point, plane.origin), n) < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                let fm = body.face_shape(i).and_then(|s| s.mass()).map_err(err)?;
+                let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { fm.bbox_min[a] } else { fm.bbox_max[a] }));
+                let reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
+                let ext = self.diag().max(norm(sub(fm.bbox_max, fm.bbox_min)));
+                up_to_sheet = Some(body.face_shape(i).and_then(|s| s.extend_face(ext)).map_err(err)?);
+                vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
+            }
+            Extent::UpToFace { face, offset } => {
                 let i = self.face("extent", face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
                 let d = dot(sub(info.point, plane.origin), n);
                 if d.abs() < 1e-9 {
                     return Err("la cara está sobre el plano del sketch".into());
+                }
+                if d < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                if d.abs() - offset <= 1e-9 {
+                    return Err("con esa separación la extrusión no llega a empezar".into());
+                }
+                vec![(0.0, d.abs() - offset)]
+            }
+            Extent::UpToVertex { point } => {
+                let p = self.point("extent", point)?;
+                let d = dot(sub(p, plane.origin), n);
+                if d.abs() < 1e-9 {
+                    return Err("el punto está sobre el plano del sketch".into());
                 }
                 if d < 0.0 {
                     n = scale(n, -1.0);
@@ -3368,6 +4112,15 @@ impl Ctx<'_> {
                 }
                 vec![(0.0, t)]
             }
+        };
+        // Desde un plano corrido: lo ciego se corre entero; lo que va «hasta» algo se acorta
+        let segments: Vec<(f64, f64)> = if e.start.abs() < 1e-12 {
+            segments
+        } else {
+            // El corrimiento es sobre la normal del plano: medido a lo largo de `n`
+            let s = e.start / dot(n, plane.normal);
+            let up_to = matches!(e.extent, Extent::UpToFace { .. } | Extent::UpToVertex { .. } | Extent::UpToNext);
+            segments.into_iter().map(|(a, l)| if up_to { (a + s, l - s) } else { (a + s, l) }).collect()
         };
         if segments.iter().all(|(_, l)| l.abs() < 1e-9) {
             return Err("distancia cero".into());
@@ -3407,6 +4160,10 @@ impl Ctx<'_> {
         let mut shape = fuse(solids)?;
         let lo = segments.iter().map(|(s, l)| s.min(s + l)).fold(f64::INFINITY, f64::min);
         let mut hi = segments.iter().map(|(s, l)| s.max(s + l)).fold(f64::NEG_INFINITY, f64::max);
+        if let Some(sheet) = &up_to_sheet {
+            let s0 = segments.iter().map(|(s, _)| *s).fold(f64::INFINITY, f64::min);
+            shape = until_sheet(&shape, sheet, add(plane.origin, scale(n, s0)), plane.normal)?;
+        }
         if let Some((scan, hit)) = &up_to_scan {
             shape = until_scan(&shape, scan, plane.origin, n)?;
             // Los laterales se marcan antes del escaneo
@@ -3416,10 +4173,12 @@ impl Ctx<'_> {
         // entidad del sketch que barren (su punto medio, a media altura)
         let mut tags = vec![Vec::new(); shape.face_count()];
         let scale_tol = self.diag().max(hi - lo) * 1e-6;
+        // Las tapas son paralelas al plano; su posición, medida a lo largo de `n`
+        let along = dot(n, plane.normal);
         for (i, slot) in tags.iter_mut().enumerate() {
             let info = shape.face_info(i).map_err(err)?;
-            if info.surface == SurfaceKind::Plane && dot(info.normal, n).abs() > 0.999 {
-                let d = dot(sub(info.point, plane.origin), n);
+            if info.surface == SurfaceKind::Plane && dot(info.normal, plane.normal).abs() > 0.999 {
+                let d = dot(sub(info.point, plane.origin), plane.normal) / along;
                 if (d - lo).abs() <= scale_tol {
                     slot.push(tag(id, "inicio"));
                 } else if (d - hi).abs() <= scale_tol {
@@ -3809,4 +4568,392 @@ fn loop_curves(s: &Sketch, plane: &Plane, l: &Loop) -> R<Vec<Curve>> {
         out.push(c);
     }
     Ok(out)
+}
+
+// ─── Referencias por clics ─────────────────────────────────────────────────
+
+/// Lo que es geométricamente cada cosa elegida para armar una referencia.
+#[derive(Debug, Clone, Copy)]
+enum Geo {
+    Plane(Plane),
+    /// Recta (arista recta, eje, línea de un sketch); con `edge`, la arista.
+    Line { axis: Axis, edge: Option<usize> },
+    Circle { center: P3, axis: P3, edge: usize },
+    /// Arista curva que no es circunferencia.
+    Curve { edge: usize },
+    Point(P3),
+    /// Cara cilíndrica o cónica: su eje.
+    Round { axis: Axis, face: usize },
+    Sphere { center: P3, face: usize },
+    /// Otra cara curva.
+    Surface { face: usize },
+}
+
+fn plane_at(origin: P3, normal: P3) -> Plane {
+    let n = normalize(normal);
+    Plane { origin, normal: n, x_dir: default_x(n) }
+}
+
+/// Distancia de `p` a la recta del eje.
+fn line_distance(a: &Axis, p: P3) -> f64 {
+    let d = normalize(a.dir);
+    let v = sub(p, a.origin);
+    norm(sub(v, scale(d, dot(v, d))))
+}
+
+impl Ctx<'_> {
+    fn geo(&self, k: usize, pick: &RefPick) -> R<Geo> {
+        let miss = |e: String| {
+            self.miss("refs", k);
+            e
+        };
+        Ok(match pick {
+            RefPick::Plane { plane } => Geo::Plane(self.plane("refs", plane)?),
+            RefPick::Point { point } => Geo::Point(self.point("refs", point)?),
+            RefPick::Axis { axis } => Geo::Line { axis: self.axis("refs", axis)?, edge: None },
+            RefPick::Face { face } => {
+                self.body()?;
+                let i = self.ev.resolve_face(face).map_err(miss)?;
+                let info = self.body()?.face_info(i).map_err(err)?;
+                match (info.surface, info.axis) {
+                    (SurfaceKind::Plane, _) => Geo::Plane(plane_at(info.point, info.normal)),
+                    (SurfaceKind::Cylinder | SurfaceKind::Cone, Some(axis)) => Geo::Round { axis, face: i },
+                    (SurfaceKind::Sphere, Some(axis)) => Geo::Sphere { center: axis.origin, face: i },
+                    _ => Geo::Surface { face: i },
+                }
+            }
+            RefPick::Edge { edge } => {
+                self.body()?;
+                let i = self.ev.resolve_edge(edge).map_err(miss)?;
+                let info = self.body()?.edge_info(i).map_err(err)?;
+                match info.circle {
+                    Some((center, axis, _)) => Geo::Circle { center, axis, edge: i },
+                    None if info.curve == cad_occt::CurveKind::Line => {
+                        Geo::Line { axis: Axis { origin: info.start, dir: normalize(sub(info.end, info.start)) }, edge: Some(i) }
+                    }
+                    None => Geo::Curve { edge: i },
+                }
+            }
+        })
+    }
+
+    /// Las caras elegidas como una forma (una sola, o un compuesto).
+    fn faces_shape(&self, field: &str, faces: &[FaceRef]) -> R<Shape> {
+        if faces.is_empty() {
+            return Err("elegir al menos una cara".into());
+        }
+        let idx = self.faces(field, faces)?;
+        let body = self.body()?;
+        let mut shapes = idx.iter().map(|&i| body.face_shape(i)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+        Ok(if shapes.len() == 1 { shapes.pop().unwrap() } else { Shape::compound(&shapes).map_err(err)? })
+    }
+
+    fn curve_feature(&self, def: &CurveDef) -> R<Shape> {
+        match def {
+            CurveDef::Composite { edges, curves } => {
+                let mut shapes = Vec::new();
+                if !edges.is_empty() {
+                    let idx = self.edges("edges", edges)?;
+                    let body = self.body()?;
+                    for i in idx {
+                        shapes.push(body.edge_shape(i).map_err(err)?);
+                    }
+                }
+                for (k, c) in curves.iter().enumerate() {
+                    let w = self.ev.curves.get(c).cloned().ok_or_else(|| {
+                        self.miss("curves", k);
+                        "una de las curvas no está calculada".to_string()
+                    })?;
+                    shapes.push(w);
+                }
+                if shapes.is_empty() {
+                    return Err("elegir aristas o curvas".into());
+                }
+                Shape::chain(&shapes).map_err(err)
+            }
+            CurveDef::Projected { sketch, entities, faces } => {
+                let plane = self.ev.sketches.get(sketch).ok_or("el sketch no está calculado")?.plane;
+                let wires = self.curve_wires(*sketch, entities)?;
+                let curves = if wires.len() == 1 { wires[0].clone() } else { Shape::compound(&wires).map_err(err)? };
+                let target = self.faces_shape("faces", faces)?;
+                curves.project_onto(&target, plane.normal).map_err(err)
+            }
+            CurveDef::Intersection { a, b } => {
+                let (sa, sb) = (self.faces_shape("a", a)?, self.faces_shape("b", b)?);
+                sa.intersection_curves(&sb).map_err(err)
+            }
+            CurveDef::Points { points, closed } => {
+                let mut pts = points.iter().map(|p| self.point("points", p)).collect::<R<Vec<P3>>>()?;
+                if pts.len() < 2 {
+                    return Err("hacen falta al menos dos puntos".into());
+                }
+                if *closed {
+                    if pts.len() < 3 {
+                        return Err("una curva cerrada necesita al menos tres puntos".into());
+                    }
+                    pts.push(pts[0]);
+                }
+                Shape::wire(&[Curve::Spline(pts)]).map_err(err)
+            }
+        }
+    }
+
+    /// Flecha desde una cara plana del cuerpo a lo largo de su normal (afuera
+    /// con `value` positivo; si `inward`, hacia adentro siempre).
+    fn face_handle(&self, face: usize, value: f64, inward: bool) {
+        let Ok(info) = self.body().and_then(|b| b.face_info(face).map_err(err)) else { return };
+        let n = normalize(info.normal);
+        let (dir, reversed) = if inward { (scale(n, -1.0), false) } else if value < 0.0 { (scale(n, -1.0), true) } else { (n, false) };
+        *self.handle.borrow_mut() = Some(Handle { origin: info.point, dir, length: value.abs(), reversed, kind: HandleKind::Blind });
+    }
+
+    /// Flecha desde el medio de una arista hacia adentro del material (entre sus dos caras).
+    fn edge_handle(&self, edge: usize, value: f64) {
+        let Ok(body) = self.body() else { return };
+        let (Ok(info), Ok(faces)) = (body.edge_info(edge), body.edge_faces(edge)) else { return };
+        let normals: Vec<P3> = faces.iter().filter_map(|&f| body.face_info(f).ok()).map(|f| normalize(f.normal)).collect();
+        if normals.len() != 2 {
+            return;
+        }
+        let d = add(normals[0], normals[1]);
+        if norm(d) < 1e-9 {
+            return;
+        }
+        *self.handle.borrow_mut() = Some(Handle { origin: info.mid, dir: scale(normalize(d), -1.0), length: value, reversed: false, kind: HandleKind::Blind });
+    }
+
+    fn geos(&self, refs: &[RefPick]) -> R<Vec<Geo>> {
+        if refs.is_empty() {
+            return Err("elegir en el visor lo que la define (caras, aristas, vértices o planos)".into());
+        }
+        refs.iter().enumerate().map(|(k, r)| self.geo(k, r)).collect()
+    }
+
+    /// Punto de la arista más cercano a `p`, la tangente ahí y la distancia
+    /// (muestras de la arista y después búsqueda fina en el tramo más cercano).
+    fn edge_point_tangent(&self, edge: usize, p: P3) -> R<(P3, P3, f64)> {
+        let body = self.body()?;
+        let n = 256;
+        let fr: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+        let pts = body.edge_points(edge, &fr).map_err(err)?;
+        let dist = |q: P3| norm(sub(q, p));
+        let k = (0..pts.len()).min_by(|&a, &b| dist(pts[a]).total_cmp(&dist(pts[b]))).ok_or("arista vacía")?;
+        let at = |f: f64| -> R<P3> { Ok(body.edge_points(edge, &[f.clamp(0.0, 1.0)]).map_err(err)?[0]) };
+        // Sección áurea entre las muestras vecinas
+        let (mut lo, mut hi) = (fr[k.saturating_sub(1)], fr[(k + 1).min(n)]);
+        for _ in 0..40 {
+            let (m1, m2) = (lo + (hi - lo) * 0.382, lo + (hi - lo) * 0.618);
+            if dist(at(m1)?) < dist(at(m2)?) {
+                hi = m2;
+            } else {
+                lo = m1;
+            }
+        }
+        let f = (lo + hi) / 2.0;
+        let h = 1e-6;
+        let (a, b) = (at(f - h)?, at(f + h)?);
+        let q = at(f)?;
+        let t = if norm(sub(b, a)) > 0.0 { normalize(sub(b, a)) } else { normalize(sub(pts[(k + 1).min(n)], pts[k.saturating_sub(1)])) };
+        Ok((q, t, dist(q)))
+    }
+
+    /// Punto de la cara más cercano a `p` y la normal ahí (Newton sobre la superficie).
+    fn face_point_normal(&self, face: usize, p: P3) -> R<(P3, P3)> {
+        let body = self.body()?;
+        let (bounds, _) = body.face_eval(face, &[]).map_err(err)?;
+        let [u0, u1, v0, v1] = bounds;
+        let g = 16;
+        let grid: Vec<[f64; 2]> = (0..=g).flat_map(|i| (0..=g).map(move |j| [u0 + (u1 - u0) * i as f64 / g as f64, v0 + (v1 - v0) * j as f64 / g as f64])).collect();
+        let (_, pts) = body.face_eval(face, &grid).map_err(err)?;
+        let k = (0..pts.len()).min_by(|&a, &b| norm(sub(pts[a].point, p)).total_cmp(&norm(sub(pts[b].point, p)))).ok_or("cara vacía")?;
+        let mut uv = grid[k];
+        let mut sp = pts[k];
+        for _ in 0..8 {
+            let r = sub(p, sp.point);
+            let (a11, a12, a22) = (dot(sp.du, sp.du), dot(sp.du, sp.dv), dot(sp.dv, sp.dv));
+            let (b1, b2) = (dot(sp.du, r), dot(sp.dv, r));
+            let det = a11 * a22 - a12 * a12;
+            if det.abs() < 1e-18 {
+                break;
+            }
+            uv = [(uv[0] + (b1 * a22 - b2 * a12) / det).clamp(u0, u1), (uv[1] + (a11 * b2 - a12 * b1) / det).clamp(v0, v1)];
+            sp = body.face_eval(face, &[uv]).map_err(err)?.1[0];
+        }
+        Ok((sp.point, normalize(sp.normal)))
+    }
+
+    /// Plano por clics: el tipo según lo elegido y el nombre de lo deducido.
+    fn picked_plane(&self, refs: &[RefPick], offset: f64, angle: f64, flip: bool) -> R<(Plane, &'static str)> {
+        let g = self.geos(refs)?;
+        let tol = self.diag().max(1.0) * 1e-6;
+        let rotate = |n: P3, d: P3, a: f64| {
+            let m = cad_occt::rotation_matrix(Axis { origin: [0.0; 3], dir: d }, a.to_radians());
+            [0, 1, 2].map(|i| m[i][0] * n[0] + m[i][1] * n[1] + m[i][2] * n[2])
+        };
+        let (plane, how) = match g.as_slice() {
+            [Geo::Plane(p)] => (*p, "Desfasado de un plano o una cara"),
+            [Geo::Circle { center, axis, .. }] => (plane_at(*center, *axis), "Plano de la circunferencia"),
+            [Geo::Line { axis, edge: Some(e) }] => (plane_at(self.body()?.edge_info(*e).map_err(err)?.mid, axis.dir), "Normal a la arista en su medio"),
+            [Geo::Curve { edge }] => {
+                let mid = self.body()?.edge_info(*edge).map_err(err)?.mid;
+                let (q, t, _) = self.edge_point_tangent(*edge, mid)?;
+                (plane_at(q, t), "Normal a la arista en su medio")
+            }
+            [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }] => {
+                let p = self.body()?.face_info(*face).map_err(err)?.point;
+                let (q, n) = self.face_point_normal(*face, p)?;
+                (plane_at(q, n), "Tangente a la cara")
+            }
+            [Geo::Plane(a), Geo::Plane(b)] => {
+                let (na, nb) = (normalize(a.normal), normalize(b.normal));
+                if norm(cross(na, nb)) < 1e-6 {
+                    let d = dot(sub(b.origin, a.origin), na);
+                    (Plane { origin: add(a.origin, scale(na, d / 2.0)), ..*a }, "Plano medio")
+                } else {
+                    // Bisector: por el cruce de los dos, a mitad del ángulo
+                    let ax = self.reference_axis(&AxisDef::Planes { a: PlaneSpec::Custom { plane: *a }, b: PlaneSpec::Custom { plane: *b } })?;
+                    let nb = if dot(na, nb) < 0.0 { scale(nb, -1.0) } else { nb };
+                    (plane_at(ax.origin, normalize(sub(na, nb))), "Bisector de dos planos")
+                }
+            }
+            [Geo::Plane(p), Geo::Line { axis, .. }] | [Geo::Line { axis, .. }, Geo::Plane(p)] => {
+                let d = normalize(axis.dir);
+                let n = normalize(p.normal);
+                // Por la línea: paralelo al plano si la línea lo es; si no, perpendicular a él
+                let start = if dot(d, n).abs() < 1e-6 { n } else { normalize(cross(d, cross(n, d))) };
+                let start = if norm(start) < 1e-9 { normalize(cross(d, n)) } else { start };
+                (plane_at(axis.origin, rotate(start, d, angle)), "Por una línea, en ángulo con el plano")
+            }
+            [Geo::Plane(p), Geo::Point(q)] | [Geo::Point(q), Geo::Plane(p)] => (Plane { origin: *q, ..*p }, "Paralelo por un punto"),
+            [Geo::Line { axis, edge }, Geo::Point(q)] | [Geo::Point(q), Geo::Line { axis, edge }] => {
+                let _ = edge;
+                if line_distance(axis, *q) < tol {
+                    (plane_at(*q, axis.dir), "Normal a la línea por el punto")
+                } else {
+                    let n = cross(axis.dir, sub(*q, axis.origin));
+                    (plane_at(axis.origin, n), "Por una línea y un punto")
+                }
+            }
+            [Geo::Curve { edge } | Geo::Circle { edge, .. }, Geo::Point(q)] | [Geo::Point(q), Geo::Curve { edge } | Geo::Circle { edge, .. }] => {
+                let (at, t, d) = self.edge_point_tangent(*edge, *q)?;
+                if d > tol.max(1e-4) {
+                    // Fuera de la curva: en el punto más cercano de la curva
+                    (plane_at(at, t), "Normal a la curva en el punto más cercano")
+                } else {
+                    (plane_at(*q, t), "Normal a la curva en el punto")
+                }
+            }
+            [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }, Geo::Point(q)]
+            | [Geo::Point(q), Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }] => {
+                let (at, n) = self.face_point_normal(*face, *q)?;
+                (plane_at(at, n), "Tangente a la cara por el punto")
+            }
+            [Geo::Point(a), Geo::Point(b), Geo::Point(c)] => {
+                let n = cross(sub(*b, *a), sub(*c, *a));
+                if norm(n) < tol * norm(sub(*b, *a)).max(1.0) {
+                    return Err("los tres puntos están alineados".into());
+                }
+                (Plane { origin: *a, normal: normalize(n), x_dir: normalize(sub(*b, *a)) }, "Por tres puntos")
+            }
+            _ => return Err(format!("no sé armar un plano con eso ({} elegidos): una cara o un plano; dos planos; un plano y una línea; una línea y un punto; una curva y un punto; una cara curva (y un punto); o tres puntos", g.len())),
+        };
+        let plane = if flip { Plane { normal: scale(plane.normal, -1.0), ..plane } } else { plane };
+        Ok((if offset != 0.0 { plane.offset(offset) } else { plane }, how))
+    }
+
+    /// Eje por clics.
+    fn picked_axis(&self, refs: &[RefPick]) -> R<(Axis, &'static str)> {
+        let g = self.geos(refs)?;
+        Ok(match g.as_slice() {
+            [Geo::Line { axis, .. }] => (*axis, "Por la arista o la línea"),
+            [Geo::Circle { center, axis, .. }] => (Axis { origin: *center, dir: normalize(*axis) }, "Eje de la circunferencia"),
+            [Geo::Round { axis, .. }] => (Axis { origin: axis.origin, dir: normalize(axis.dir) }, "Eje de la cara"),
+            [Geo::Point(a), Geo::Point(b)] => {
+                if norm(sub(*b, *a)) < 1e-9 {
+                    return Err("los dos puntos coinciden".into());
+                }
+                (Axis { origin: *a, dir: normalize(sub(*b, *a)) }, "Por dos puntos")
+            }
+            [Geo::Plane(a), Geo::Plane(b)] => {
+                let ax = self.reference_axis(&AxisDef::Planes { a: PlaneSpec::Custom { plane: *a }, b: PlaneSpec::Custom { plane: *b } })?;
+                (ax, "Cruce de dos planos")
+            }
+            [Geo::Plane(p), Geo::Point(q)] | [Geo::Point(q), Geo::Plane(p)] => (Axis { origin: *q, dir: normalize(p.normal) }, "Normal al plano por el punto"),
+            [Geo::Line { axis, .. }, Geo::Point(q)] | [Geo::Point(q), Geo::Line { axis, .. }] => (Axis { origin: *q, dir: normalize(axis.dir) }, "Paralelo por un punto"),
+            _ => return Err(format!("no sé armar un eje con eso ({} elegidos): una arista o línea; una circunferencia; una cara cilíndrica; dos puntos; dos planos; un plano y un punto", g.len())),
+        })
+    }
+
+    /// Punto por clics.
+    fn picked_point(&self, refs: &[RefPick]) -> R<(P3, &'static str)> {
+        let g = self.geos(refs)?;
+        let tol = self.diag().max(1.0) * 1e-6;
+        // Cruce de una arista con un plano: por muestras de la arista (cambio de lado)
+        let edge_plane = |edge: usize, p: &Plane| -> R<P3> {
+            let n = 512;
+            let fr: Vec<f64> = (0..=n).map(|k| k as f64 / n as f64).collect();
+            let pts = self.body()?.edge_points(edge, &fr).map_err(err)?;
+            let side = |q: P3| dot(sub(q, p.origin), normalize(p.normal));
+            for w in pts.windows(2) {
+                let (a, b) = (side(w[0]), side(w[1]));
+                if a.abs() < tol {
+                    return Ok(w[0]);
+                }
+                if a * b < 0.0 {
+                    return Ok(add(w[0], scale(sub(w[1], w[0]), a / (a - b))));
+                }
+            }
+            Err("la arista no cruza ese plano".into())
+        };
+        Ok(match g.as_slice() {
+            [Geo::Point(p)] => (*p, "Vértice o punto"),
+            [Geo::Line { edge: Some(e), .. }] => (self.body()?.edge_info(*e).map_err(err)?.mid, "Medio de la arista"),
+            [Geo::Curve { edge }] => (self.body()?.edge_info(*edge).map_err(err)?.mid, "Medio de la arista"),
+            [Geo::Circle { center, .. }] => (*center, "Centro de la circunferencia"),
+            [Geo::Sphere { center, .. }] => (*center, "Centro de la esfera"),
+            [Geo::Point(a), Geo::Point(b)] => (scale(add(*a, *b), 0.5), "Punto medio"),
+            [Geo::Point(q), Geo::Plane(p)] | [Geo::Plane(p), Geo::Point(q)] => {
+                let n = normalize(p.normal);
+                (sub(*q, scale(n, dot(sub(*q, p.origin), n))), "Proyección sobre el plano")
+            }
+            [Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }, Geo::Plane(p)]
+            | [Geo::Plane(p), Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }] => (edge_plane(*e, p)?, "Cruce de la arista con la cara"),
+            [Geo::Line { axis, edge: None }, Geo::Plane(p)] | [Geo::Plane(p), Geo::Line { axis, edge: None }] => {
+                let n = normalize(p.normal);
+                let den = dot(axis.dir, n);
+                if den.abs() < 1e-9 {
+                    return Err("la línea es paralela al plano".into());
+                }
+                let t = dot(sub(p.origin, axis.origin), n) / den;
+                (add(axis.origin, scale(axis.dir, t)), "Cruce de la línea con el plano")
+            }
+            [Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }, Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }]
+            | [Geo::Round { face, .. } | Geo::Sphere { face, .. } | Geo::Surface { face }, Geo::Line { edge: Some(e), .. } | Geo::Curve { edge: e } | Geo::Circle { edge: e, .. }] => {
+                let body = self.body()?;
+                let (es, fs) = (body.edge_shape(*e).map_err(err)?, body.face_shape(*face).map_err(err)?);
+                match es.min_distance(&fs) {
+                    Some((d, p, _)) if d < tol.max(1e-6) * 10.0 => (p, "Cruce de la arista con la cara"),
+                    _ => return Err("la arista no toca esa cara".into()),
+                }
+            }
+            [Geo::Line { axis: a, .. }, Geo::Line { axis: b, .. }] => {
+                // Lo más cerca entre las dos rectas; si no se cortan, error
+                let (da, db) = (normalize(a.dir), normalize(b.dir));
+                let w = sub(a.origin, b.origin);
+                let (bb, d, e) = (dot(da, db), dot(da, w), dot(db, w));
+                let den = 1.0 - bb * bb;
+                if den.abs() < 1e-12 {
+                    return Err("las dos líneas son paralelas".into());
+                }
+                let s = (bb * e - d) / den;
+                let t = (e - bb * d) / den;
+                let (p, q) = (add(a.origin, scale(da, s)), add(b.origin, scale(db, t)));
+                if norm(sub(p, q)) > tol.max(1e-6) * 10.0 {
+                    return Err("las dos líneas no se cruzan".into());
+                }
+                (p, "Cruce de dos líneas")
+            }
+            _ => return Err(format!("no sé armar un punto con eso ({} elegidos): un vértice; una arista (su medio o su centro); una esfera; dos puntos; una arista y una cara; dos líneas", g.len())),
+        })
+    }
 }

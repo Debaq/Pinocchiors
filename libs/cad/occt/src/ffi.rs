@@ -104,6 +104,23 @@ unsafe extern "C" {
     pub fn cad_fillet(s: *const CadShape, edges: *const i32, n: i32, radius: f64, radius2: f64) -> *mut CadShape;
     pub fn cad_chamfer(s: *const CadShape, edges: *const i32, n: i32, distance: f64, second: f64, mode: i32, flip: i32) -> *mut CadShape;
     pub fn cad_shell(s: *const CadShape, faces: *const i32, n: i32, thickness: f64) -> *mut CadShape;
+    pub fn cad_shell_faces(s: *const CadShape, faces: *const i32, n: i32, thickness: f64, ov: *const i32, ov_thickness: *const f64, n_ov: i32) -> *mut CadShape;
+    pub fn cad_pipe_ex(profile: *const CadShape, spine: *const CadShape, mode: i32, solid: i32) -> *mut CadShape;
+    pub fn cad_chain(shapes: *const *const CadShape, n: i32) -> *mut CadShape;
+    pub fn cad_project_curves(curves: *const CadShape, target: *const CadShape, direction: *const f64) -> *mut CadShape;
+    pub fn cad_intersect_curves(a: *const CadShape, b: *const CadShape) -> *mut CadShape;
+    pub fn cad_face_patch(face: *const CadShape, uv: *const f64, sizes: *const i32, n: i32) -> *mut CadShape;
+    pub fn cad_pipe_twist(profile: *const CadShape, spine: *const CadShape, twist: f64, solid: i32) -> *mut CadShape;
+    pub fn cad_loft_tangent(wires: *const *const CadShape, n: i32, start_w: f64, end_w: f64, solid: i32) -> *mut CadShape;
+    pub fn cad_face_blend(s: *const CadShape, fa: *const i32, na: i32, fb: *const i32, nb: i32, r: f64, side: i32) -> *mut CadShape;
+    pub fn cad_split_silhouette(s: *const CadShape, faces: *const i32, n: i32, dir: *const f64) -> *mut CadShape;
+    pub fn cad_split_faces(s: *const CadShape, faces: *const i32, n: i32, tool: *const CadShape) -> *mut CadShape;
+    pub fn cad_extend_face(face: *const CadShape, distance: f64) -> *mut CadShape;
+    pub fn cad_loft_ex(wires: *const *const CadShape, n: i32, solid: i32, ruled: i32, start: *const f64, end: *const f64, closed: i32) -> *mut CadShape;
+    pub fn cad_loft_pipe(wires: *const *const CadShape, n: i32, spine: *const CadShape, guide: *const CadShape, solid: i32) -> *mut CadShape;
+    pub fn cad_extend_surface(s: *const CadShape, edges: *const i32, n: i32, distance: f64) -> *mut CadShape;
+    pub fn cad_remove_faces(s: *const CadShape, faces: *const i32, n: i32) -> *mut CadShape;
+    pub fn cad_fillet_points(s: *const CadShape, edges: *const i32, n: i32, law: *const f64, np: i32) -> *mut CadShape;
     pub fn cad_draft(
         s: *const CadShape,
         faces: *const i32,
@@ -148,6 +165,7 @@ unsafe extern "C" {
     pub fn cad_make_helix(origin: *const f64, dir: *const f64, radius: f64, pitch: f64, turns: f64, left: i32) -> *mut CadShape;
     pub fn cad_make_thread(origin: *const f64, dir: *const f64, xdir: *const f64, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: i32, chamfer: i32) -> *mut CadShape;
     pub fn cad_thicken(faces: *const CadShape, thickness: f64) -> *mut CadShape;
+    pub fn cad_offset_shape(s: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_fill(edges: *const *const CadShape, faces: *const *const CadShape, n: i32, points: *const f64, n_points: i32) -> *mut CadShape;
     pub fn cad_sew(shapes: *const *const CadShape, n: i32, tolerance: f64, solid: i32) -> *mut CadShape;
     pub fn cad_split_by(s: *const CadShape, tools: *const *const CadShape, n: i32) -> *mut CadShape;

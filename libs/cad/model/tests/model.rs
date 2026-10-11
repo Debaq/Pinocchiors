@@ -145,7 +145,7 @@ fn plate_doc() -> (Document, FeatureId, [usize; 2]) {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     (doc, sk, cons)
 }
@@ -164,7 +164,7 @@ fn extrude_plate_with_hole_and_change_parameters() {
     let body = ev.body.as_ref().unwrap();
     let (edge, _) = body.closest_edge([50.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.9).unwrap();
     let r = ev.edge_ref(edge).unwrap();
-    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0, radius2: None });
+    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0, radius2: None, points: vec![] });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     let with_fillet = volume(&ev);
@@ -201,7 +201,7 @@ fn pocket_on_face_through_all_and_up_to_face() {
         reverse: true,
         op: BodyOp::Cut,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -216,11 +216,11 @@ fn pocket_on_face_through_all_and_up_to_face() {
     doc.add(FeatureKind::Extrude(Extrude {
         sketch: sk2,
         regions: RegionSelection::All,
-        extent: Extent::UpToFace { face: top_ref },
+        extent: Extent::UpToFace { face: top_ref, offset: 0.0 },
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -245,6 +245,8 @@ fn revolve_around_sketch_line() {
         axis: AxisSpec::SketchLine { sketch: sk, line: axis },
         angle: 360.0,
         op: BodyOp::Join,
+        extent: RevolveExtent::One,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -278,13 +280,14 @@ fn circular_pattern_of_holes_and_mirror() {
     doc.add(FeatureKind::Pattern {
         features: vec![hole],
         pattern: PatternKind::Circular { axis: AxisSpec::Z, count: 6, angle: 360.0 },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), PI * 2500.0 * 5.0 - 6.0 * PI * 9.0 * 5.0, max_relative = 1e-6);
 
     // Simetría de todo el cuerpo respecto de z = 0: el disco se duplica hacia abajo
-    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Xy });
+    doc.add(FeatureKind::Mirror { features: vec![], plane: PlaneSpec::Xy, op: BodyOp::Join });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), 2.0 * (PI * 2500.0 * 5.0 - 6.0 * PI * 9.0 * 5.0), max_relative = 1e-6);
@@ -305,7 +308,7 @@ fn shell_split_and_linear_pattern() {
         link: None,
     }));
     let top = FaceRef { point: [20.0, 10.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
-    doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0 });
+    doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0, overrides: vec![] });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), 8000.0 - 38.0 * 18.0 * 9.0, max_relative = 1e-6);
@@ -330,7 +333,8 @@ fn shell_split_and_linear_pattern() {
     }));
     doc.add(FeatureKind::Pattern {
         features: vec![pin],
-        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 5, spacing: 3.0 },
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 5, spacing: 3.0, second: None },
+        skip: vec![],
     });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -348,6 +352,7 @@ fn errors_stay_local_rollback_and_suppress() {
         edges: vec![EdgeRef { point: [50.0, 0.0, 10.0], direction: [1.0, 0.0, 0.0], ..Default::default() }],
         radius: 50.0,
         radius2: None,
+        points: vec![],
     });
     let cut = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 30.0, centered: false, centered_z: false },
@@ -451,7 +456,7 @@ fn cut_on_face_points_into_material() {
         reverse: false, // hacia afuera de la cara: se da vuelta sola
         op: BodyOp::Cut,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -810,7 +815,7 @@ fn ellipse_is_dimensioned_and_extruded_exactly() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);
@@ -850,7 +855,7 @@ fn spline_handles_set_end_tangents() {
             reverse: false,
             op: BodyOp::Join,
             draft: 0.0,
-            thin: None,
+            thin: None, direction: None, start: 0.0,
         }));
         let ev = doc.evaluate();
         assert_all_ok(&ev);
@@ -1108,7 +1113,7 @@ fn extrude_part_of_crossing_shapes() {
             reverse: false,
             op: BodyOp::Join,
             draft: 0.0,
-            thin: None,
+            thin: None, direction: None, start: 0.0,
         }));
         let ev = doc.evaluate();
         assert_all_ok(&ev);
@@ -1127,7 +1132,7 @@ fn extrude_part_of_crossing_shapes() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);

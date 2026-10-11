@@ -93,6 +93,9 @@ pub enum PointSpec {
     },
     /// Tomado del escaneo; `point` es lo último ajustado (ver [`ScanFit`]).
     Scan { fit: ScanFit, point: P3 },
+    /// Por clics: el tipo sale de lo elegido (vértice, medio o centro de una
+    /// arista, centro de una esfera, cruce de arista y cara, punto medio...).
+    Picked { refs: Vec<RefPick> },
 }
 
 /// Dónde se hizo clic sobre el escaneo: el triángulo y el punto dentro de él
@@ -137,6 +140,82 @@ pub enum PlaneDef {
     ThreePoints { points: [PointSpec; 3] },
     /// Tomado del escaneo; `plane` es lo último ajustado.
     Scan { fit: ScanFit, plane: Plane },
+    /// Por clics: el tipo sale de lo elegido (ver [`RefPick`]). `offset`
+    /// corre el plano sobre su normal, `angle` lo gira alrededor de la línea
+    /// elegida y `flip` da vuelta la normal.
+    Picked {
+        refs: Vec<RefPick>,
+        #[serde(default)]
+        offset: f64,
+        #[serde(default)]
+        angle: f64,
+        #[serde(default)]
+        flip: bool,
+    },
+}
+
+/// Con qué se parten las caras en una línea de partición.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PartingTool {
+    Plane { plane: PlaneSpec },
+    /// Una curva del historial que pasa por las caras (proyectada, de cruce...).
+    Curve { feature: FeatureId },
+    /// La silueta vista a lo largo del eje: donde la normal de la cara es
+    /// perpendicular a la mirada (la línea de partición de un molde).
+    Silhouette { direction: AxisSpec },
+}
+
+/// Cómo se arma una curva de referencia.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CurveDef {
+    /// Aristas del sólido y curvas del historial encadenadas en una.
+    Composite {
+        #[serde(default)]
+        edges: Vec<EdgeRef>,
+        #[serde(default)]
+        curves: Vec<FeatureId>,
+    },
+    /// Curvas de un sketch (vacío = todas) proyectadas sobre caras a lo largo de la normal del sketch.
+    Projected {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        faces: Vec<FaceRef>,
+    },
+    /// Donde se cruzan unas caras con otras.
+    Intersection { a: Vec<FaceRef>, b: Vec<FaceRef> },
+    /// Spline que pasa por los puntos (cerrada con `closed`).
+    Points {
+        points: Vec<PointSpec>,
+        #[serde(default)]
+        closed: bool,
+    },
+}
+
+/// Algo del modelo elegido con un clic para armar un plano, un eje o un
+/// punto de referencia; sigue al modelo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RefPick {
+    /// Un plano base o de referencia.
+    Plane { plane: PlaneSpec },
+    Face { face: FaceRef },
+    Edge { edge: EdgeRef },
+    /// Un vértice, un punto de referencia o uno fijo.
+    Point { point: PointSpec },
+    /// Un eje de referencia o una línea de un sketch.
+    Axis { axis: AxisSpec },
+}
+
+fn pick_deps(p: &RefPick) -> Vec<FeatureId> {
+    match p {
+        RefPick::Plane { plane } => plane_deps(plane),
+        RefPick::Point { point } => point_deps(point),
+        RefPick::Axis { axis } => axis_deps(axis),
+        RefPick::Face { .. } | RefPick::Edge { .. } => vec![],
+    }
 }
 
 /// Cómo se define un eje de referencia.
@@ -152,6 +231,8 @@ pub enum AxisDef {
     Planes { a: PlaneSpec, b: PlaneSpec },
     /// Tomado del escaneo; `origin` y `direction` son lo último ajustado.
     Scan { fit: ScanFit, origin: P3, direction: P3 },
+    /// Por clics: el tipo sale de lo elegido.
+    Picked { refs: Vec<RefPick> },
 }
 
 fn origin_point() -> PointSpec {
@@ -176,6 +257,7 @@ fn axis_deps(a: &AxisSpec) -> Vec<FeatureId> {
 fn point_deps(p: &PointSpec) -> Vec<FeatureId> {
     match p {
         PointSpec::Reference { feature } => vec![*feature],
+        PointSpec::Picked { refs } => refs.iter().flat_map(pick_deps).collect(),
         _ => vec![],
     }
 }
@@ -191,6 +273,41 @@ pub enum BodyOp {
     Cut,
     Intersect,
     New,
+}
+
+/// Radio de un redondeo variable en un punto de la arista (`at`: fracción del largo, de 0 a 1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FilletPoint {
+    pub at: f64,
+    pub radius: f64,
+}
+
+/// Una cara con su propio espesor en un vaciado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaceThickness {
+    pub face: FaceRef,
+    pub thickness: f64,
+}
+
+/// Movimiento de [`FeatureKind::Transform`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum Motion {
+    /// Traslación (mm).
+    Translate { vector: P3 },
+    /// Giro de `angle` grados alrededor de un eje.
+    Rotate { axis: AxisSpec, angle: f64 },
+    /// Traslación de un punto a otro.
+    Points { from: PointSpec, to: PointSpec },
+    /// Lleva una cara plana sobre un plano: la normal de la cara contra la
+    /// del plano (con `flip`, a favor) y la cara apoyada en él (se corre solo
+    /// a lo largo de la normal). Sin piezas elegidas mueve la de la cara.
+    Align {
+        face: FaceRef,
+        to: PlaneSpec,
+        #[serde(default)]
+        flip: bool,
+    },
 }
 
 /// Pieza del diseño: la operación que la creó y el número de pieza dentro de
@@ -220,12 +337,19 @@ pub enum Extent {
     Symmetric { distance: f64 },
     /// Atraviesa todo el cuerpo.
     ThroughAll,
-    /// Hasta el plano de una cara.
-    UpToFace { face: FaceRef },
+    /// Hasta el plano de una cara; con `offset`, se queda a esa distancia antes
+    /// (negativo: la pasa).
+    UpToFace {
+        face: FaceRef,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        offset: f64,
+    },
     /// Hacia los dos lados del plano: `distance` hacia la normal y `second` hacia atrás.
     TwoSides { distance: f64, second: f64 },
     /// Hasta la primera cara del sólido que encuentra.
     UpToNext,
+    /// Hasta un punto (un vértice): el largo es lo que avanza el punto sobre la dirección.
+    UpToVertex { point: PointSpec },
     /// Hasta la piel del escaneo (aunque sea curva), dejando `offset` de
     /// separación; va hacia el lado donde está el escaneo.
     UpToScan {
@@ -259,6 +383,13 @@ pub struct Extrude {
     /// Extrusión delgada: una pared de este espesor siguiendo el contorno.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thin: Option<f64>,
+    /// Dirección propia (la de un eje, una arista o una línea) en vez de la
+    /// normal del plano; las medidas se toman a lo largo de ella.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<AxisSpec>,
+    /// Arranca a esta distancia del plano del sketch (a lo largo de su normal).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub start: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -270,6 +401,34 @@ pub struct Revolve {
     pub angle: f64,
     #[serde(default)]
     pub op: BodyOp,
+    /// Hacia dónde gira `angle` desde el plano del sketch.
+    #[serde(default, skip_serializing_if = "RevolveExtent::is_one")]
+    pub extent: RevolveExtent,
+    /// Revolución delgada: una pared de este espesor siguiendo el contorno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
+}
+
+/// Cómo se reparte el giro de una revolución alrededor del plano del sketch.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RevolveExtent {
+    /// Todo `angle` hacia un lado.
+    #[default]
+    One,
+    /// Mitad de `angle` hacia cada lado.
+    Symmetric,
+    /// `angle` hacia un lado y `second` (grados) hacia el otro.
+    TwoAngles { second: f64 },
+    /// Hasta una cara (plana o curva), hacia el lado del signo de `angle`;
+    /// la cara tiene que estar a menos de 350° del perfil.
+    UpToFace { face: FaceRef },
+}
+
+impl RevolveExtent {
+    fn is_one(&self) -> bool {
+        *self == RevolveExtent::One
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -367,16 +526,39 @@ fn default_x() -> P3 {
     [1.0, 0.0, 0.0]
 }
 
+/// Segunda dirección de un patrón lineal.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LinearSecond {
+    pub direction: P3,
+    pub count: u32,
+    pub spacing: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PatternKind {
-    Linear { direction: P3, count: u32, spacing: f64 },
+    /// Con `second`, también en una segunda dirección (grilla).
+    Linear {
+        direction: P3,
+        count: u32,
+        spacing: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        second: Option<LinearSecond>,
+    },
     /// `angle` total; 360 reparte las copias en la vuelta completa.
     Circular { axis: AxisSpec, count: u32, angle: f64 },
     /// Copias repartidas a lo largo de un camino (de punta a punta), trasladadas.
     Curve { path: SweepPath, count: u32 },
     /// Copias trasladadas según una tabla de desplazamientos (mm).
     Table { offsets: Vec<P3> },
+    /// Una copia en cada punto suelto de un sketch (o en los de `points`),
+    /// trasladada desde el punto más cercano a la operación original (ahí no
+    /// se copia).
+    Points {
+        sketch: FeatureId,
+        #[serde(default)]
+        points: Vec<u32>,
+    },
     /// Copias en grilla (cuadrada o hexagonal) que llenan regiones de un
     /// sketch, a `spacing` entre centros y a `margin` como mínimo del borde.
     /// La grilla pasa por la operación original (su centro, en el plano).
@@ -487,6 +669,19 @@ pub enum ImportFormat {
     Brep,
 }
 
+/// Qué hace el redondeo de cara entre los dos grupos de caras.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendSide {
+    /// Lo decide la geometría (primero prueba el canto, después el rincón).
+    #[default]
+    Auto,
+    /// Canto convexo: saca material.
+    Convex,
+    /// Rincón cóncavo: agrega material.
+    Concave,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FeatureKind {
@@ -507,11 +702,14 @@ pub enum FeatureKind {
     Revolve(Revolve),
     Primitive(Primitive),
     /// Redondeo; con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final.
+    /// Con `points`, además pasa por esos radios en el medio (fracción del largo, radio).
     Fillet {
         edges: Vec<EdgeRef>,
         radius: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius2: Option<f64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        points: Vec<FilletPoint>,
     },
     /// Chaflán: `distance` en las dos caras, o asimétrico con `second`.
     Chamfer {
@@ -520,14 +718,45 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         second: Option<ChamferSecond>,
     },
-    /// Ahuecar dejando paredes de `thickness` y abriendo `faces`.
-    Shell { faces: Vec<FaceRef>, thickness: f64 },
+    /// Ahuecar dejando paredes de `thickness` y abriendo `faces`; las de
+    /// `overrides` con su propio espesor.
+    Shell {
+        faces: Vec<FaceRef>,
+        thickness: f64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overrides: Vec<FaceThickness>,
+    },
+    /// Saca caras y cierra el hueco extendiendo las vecinas (un agujero, un
+    /// redondeo, un resalte).
+    DeleteFace { faces: Vec<FaceRef> },
     /// Desmolde: inclina `faces` respecto de la normal de `neutral`.
     Draft { faces: Vec<FaceRef>, neutral: PlaneSpec, angle: f64 },
-    /// Repite las herramientas de `features` (vacío = todo el cuerpo).
-    Pattern { features: Vec<FeatureId>, pattern: PatternKind },
-    /// Refleja las herramientas de `features` (vacío = todo el cuerpo) y las une.
-    Mirror { features: Vec<FeatureId>, plane: PlaneSpec },
+    /// Repite las herramientas de `features` (vacío = todo el cuerpo);
+    /// `skip`: copias que no se hacen (1 es la primera copia, 0 el original).
+    Pattern {
+        features: Vec<FeatureId>,
+        pattern: PatternKind,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        skip: Vec<u32>,
+    },
+    /// Refleja las herramientas de `features` (vacío = todo el cuerpo). Con
+    /// todo el cuerpo, `op` `New` deja cada reflejo como pieza aparte en vez
+    /// de unirlo.
+    Mirror {
+        features: Vec<FeatureId>,
+        plane: PlaneSpec,
+        #[serde(default)]
+        op: BodyOp,
+    },
+    /// Mueve o gira piezas enteras (vacío = todas); con `copy` las deja y
+    /// agrega las copias como piezas nuevas.
+    Transform {
+        #[serde(default)]
+        parts: Vec<PartId>,
+        motion: Motion,
+        #[serde(default)]
+        copy: bool,
+    },
     /// Corta por un plano y conserva el lado de la normal (o el otro con `flip`).
     Split {
         plane: PlaneSpec,
@@ -571,7 +800,9 @@ pub enum FeatureKind {
     Loft(Loft),
     /// Agujeros en los puntos de un sketch.
     Hole(Hole),
-    /// Curva helicoidal de referencia (camino de resortes y roscas).
+    /// Curva helicoidal de referencia (camino de resortes y roscas). Con
+    /// `radius2`, cónica (el radio pasa de `radius` a `radius2`); con `flat`,
+    /// espiral plana de Arquímedes (sin avance: `pitch` no cuenta).
     Helix {
         axis: AxisSpec,
         radius: f64,
@@ -579,9 +810,31 @@ pub enum FeatureKind {
         turns: f64,
         #[serde(default)]
         left: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius2: Option<f64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        flat: bool,
     },
     /// Mueve caras planas a lo largo de su normal (afuera suma, adentro resta).
     MoveFace { faces: Vec<FaceRef>, distance: f64 },
+    /// Gira caras planas alrededor de un eje (una bisagra): lo que sale suma, lo que entra resta.
+    RotateFace { faces: Vec<FaceRef>, axis: AxisSpec, angle: f64 },
+    /// Chaflán de un vértice: corta la esquina por el plano de los puntos a
+    /// `distance` del vértice sobre cada una de sus tres aristas.
+    VertexChamfer { vertex: PointSpec, distance: f64 },
+    /// Redondeo completo: la cara del medio, entre dos caras laterales
+    /// paralelas, se vuelve medio cilindro de radio la mitad del ancho.
+    FullRound { side_a: FaceRef, middle: FaceRef, side_b: FaceRef },
+    /// Redondeo de cara: la bola de radio `radius` que rueda apoyada en las
+    /// caras `a` y en las caras `b` (vecinas o no, de la misma pieza) redondea
+    /// el canto o rellena el rincón entre los dos grupos.
+    FaceBlend {
+        a: Vec<FaceRef>,
+        b: Vec<FaceRef>,
+        radius: f64,
+        #[serde(default)]
+        side: BlendSide,
+    },
     /// Escala las piezas (o las del alcance) alrededor de un punto, por eje.
     Scale {
         factor: P3,
@@ -703,6 +956,46 @@ pub enum FeatureKind {
         extent: Extent,
         #[serde(default)]
         reverse: bool,
+    },
+    /// Superficie plana: las regiones cerradas de un sketch como caras.
+    SurfacePlanar {
+        sketch: FeatureId,
+        #[serde(default)]
+        regions: RegionSelection,
+    },
+    /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
+    /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
+    SurfaceOffset { parts: Vec<PartId>, distance: f64 },
+    /// Grabado o relieve: las regiones de un sketch envuelto sobre su cara,
+    /// hundidas (o levantadas con `emboss`) `depth` mm siguiendo la superficie.
+    Wrap {
+        sketch: FeatureId,
+        depth: f64,
+        #[serde(default)]
+        emboss: bool,
+    },
+    /// Línea de partición: parte caras donde las cruza un plano o una curva,
+    /// sin separar la pieza (para desmoldes y caras de colores distintos).
+    SplitFaces { faces: Vec<FaceRef>, tool: PartingTool },
+    /// Curva de referencia hecha de otras (usable como camino de barridos y patrones).
+    Curve { def: CurveDef },
+    /// Extiende superficies `distance` más allá de bordes libres (cada cara
+    /// por el lado de su parámetro donde está el borde, siguiendo su forma).
+    SurfaceExtend { edges: Vec<EdgeRef>, distance: f64 },
+    /// Superficie que pasa por curvas de varios sketches (una cadena por sección).
+    SurfaceLoft {
+        sections: Vec<CurveSection>,
+        #[serde(default)]
+        ruled: bool,
+    },
+    /// Superficie que deja una curva de un sketch llevada a lo largo de un camino.
+    SurfaceSweep {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        path: SweepPath,
+        #[serde(default)]
+        orient: SweepOrient,
     },
     /// Superficie que deja una curva de un sketch girada alrededor de un eje.
     SurfaceRevolve {
@@ -868,6 +1161,9 @@ pub enum HoleStyle {
     Counterbore { diameter: f64, depth: f64 },
     /// Avellanado: diámetro en la superficie y ángulo total (grados).
     Countersink { diameter: f64, angle: f64 },
+    /// Cónico: el agujero se angosta hacia el fondo; `angle` es el de la
+    /// pared con el eje (grados; NPT 1°47' = 1,7833).
+    Tapered { angle: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -879,6 +1175,51 @@ pub struct Sweep {
     pub path: SweepPath,
     #[serde(default)]
     pub op: BodyOp,
+    /// Cómo gira el perfil a lo largo del camino.
+    #[serde(default, skip_serializing_if = "SweepOrient::is_follow")]
+    pub orient: SweepOrient,
+    /// Barrido circular simple: un círculo de este radio al comienzo del
+    /// camino, perpendicular a él, en vez del sketch (tubos, cables).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circle: Option<f64>,
+    /// Barrido delgado: una pared de este espesor siguiendo el contorno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
+    /// Curva guía: el perfil gira y se escala para seguirla.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide: Option<SweepPath>,
+    /// Torsión: cuánto gira el perfil (grados) alrededor del camino de punta a
+    /// punta, parejo con el largo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist: Option<f64>,
+}
+
+/// Orientación del perfil en un barrido.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SweepOrient {
+    /// Sigue el camino sin retorcerse (Frenet corregido).
+    #[default]
+    Follow,
+    /// Triedro de Frenet: gira con la curvatura (hélices exactas).
+    Frenet,
+    /// Fijo: el perfil se traslada sin girar.
+    Fixed,
+}
+
+impl SweepOrient {
+    fn is_follow(&self) -> bool {
+        *self == SweepOrient::Follow
+    }
+
+    /// Código del puente (`cad_pipe_ex`).
+    pub fn code(self) -> i32 {
+        match self {
+            SweepOrient::Follow => 0,
+            SweepOrient::Frenet => 1,
+            SweepOrient::Fixed => 2,
+        }
+    }
 }
 
 /// Camino de un barrido.
@@ -904,6 +1245,38 @@ pub struct Loft {
     pub ruled: bool,
     #[serde(default)]
     pub op: BodyOp,
+    /// Arranca o termina en un punto (una punta).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_point: Option<PointSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_point: Option<PointSpec>,
+    /// Vuelve a la primera sección (un anillo).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub closed: bool,
+    /// Delgada: una pared de este espesor siguiendo los contornos.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
+    /// Línea central: las secciones se llevan a lo largo de ella.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<SweepPath>,
+    /// Curva guía (va con la línea central): el perfil gira y se escala para tocarla.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guide: Option<SweepPath>,
+    /// Tangencia al comienzo: sale perpendicular a la primera sección, con este
+    /// peso (cuánto dura la tangente, en veces la distancia a la siguiente).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_tangent: Option<f64>,
+    /// Tangencia al final: llega perpendicular a la última sección.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_tangent: Option<f64>,
+}
+
+/// Una sección de una superficie por recubrimiento: curvas de un sketch (vacío = todas).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CurveSection {
+    pub sketch: FeatureId,
+    #[serde(default)]
+    pub entities: Vec<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -955,20 +1328,55 @@ impl FeatureKind {
                 PlaneDef::Midplane { a, b } => [plane_deps(a), plane_deps(b)].concat(),
                 PlaneDef::ThreePoints { points } => points.iter().flat_map(point_deps).collect(),
                 PlaneDef::Scan { .. } => vec![],
+                PlaneDef::Picked { refs, .. } => refs.iter().flat_map(pick_deps).collect(),
             },
             FeatureKind::Axis { def } => match def {
                 AxisDef::TwoPoints { a, b } => [point_deps(a), point_deps(b)].concat(),
                 AxisDef::Planes { a, b } => [plane_deps(a), plane_deps(b)].concat(),
+                AxisDef::Picked { refs } => refs.iter().flat_map(pick_deps).collect(),
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),
-            FeatureKind::Sweep(s) => match &s.path {
-                SweepPath::Sketch { sketch, .. } => vec![s.sketch, *sketch],
-                SweepPath::Curve { feature } => vec![s.sketch, *feature],
+            FeatureKind::Sweep(s) => {
+                let dep = |p: &SweepPath| match p {
+                    SweepPath::Sketch { sketch, .. } => *sketch,
+                    SweepPath::Curve { feature } => *feature,
+                };
+                let mut d = vec![s.sketch, dep(&s.path)];
+                d.extend(s.guide.iter().map(dep));
+                d
+            }
+            FeatureKind::Wrap { sketch, .. } => vec![*sketch],
+            FeatureKind::SplitFaces { tool, .. } => match tool {
+                PartingTool::Plane { plane } => plane_deps(plane),
+                PartingTool::Curve { feature } => vec![*feature],
+                PartingTool::Silhouette { direction } => axis_deps(direction),
+            },
+            FeatureKind::SurfaceSweep { sketch, path, .. } => match path {
+                SweepPath::Sketch { sketch: p, .. } => vec![*sketch, *p],
+                SweepPath::Curve { feature } => vec![*sketch, *feature],
             },
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
+            FeatureKind::RotateFace { axis, .. } => axis_deps(axis),
+            FeatureKind::VertexChamfer { vertex, .. } => point_deps(vertex),
+            FeatureKind::Curve { def } => match def {
+                CurveDef::Composite { curves, .. } => curves.clone(),
+                CurveDef::Projected { sketch, .. } => vec![*sketch],
+                CurveDef::Intersection { .. } => vec![],
+                CurveDef::Points { points, .. } => points.iter().flat_map(point_deps).collect(),
+            },
             FeatureKind::Scale { center, .. } => point_deps(center),
-            FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
+            FeatureKind::Loft(l) => {
+                let path_dep = |p: &SweepPath| match p {
+                    SweepPath::Sketch { sketch, .. } => *sketch,
+                    SweepPath::Curve { feature } => *feature,
+                };
+                let mut d: Vec<FeatureId> = l.sections.iter().map(|s| s.sketch).collect();
+                d.extend(l.start_point.iter().chain(&l.end_point).flat_map(point_deps));
+                d.extend(l.path.iter().chain(&l.guide).map(path_dep));
+                d
+            }
+            FeatureKind::SurfaceLoft { sections, .. } => sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
             FeatureKind::Primitive(p) => p.link.iter().map(|l| l.feature).collect(),
             FeatureKind::Thread { link, .. } => link.iter().map(|l| l.feature).collect(),
@@ -976,13 +1384,23 @@ impl FeatureKind {
             FeatureKind::ScanBody(b) => b.region.iter().map(|r| r.sketch).collect(),
             FeatureKind::SheetMetal { sketch, .. } => vec![*sketch],
             FeatureKind::ReplaceFace { target, .. } => plane_deps(target),
-            FeatureKind::Extrude(e) => vec![e.sketch],
+            FeatureKind::Extrude(e) => {
+                let mut d = vec![e.sketch];
+                if let Extent::UpToVertex { point } = &e.extent {
+                    d.extend(point_deps(point));
+                }
+                if let Some(a) = &e.direction {
+                    d.extend(axis_deps(a));
+                }
+                d
+            }
             FeatureKind::Revolve(r) => {
                 let mut d = vec![r.sketch];
                 d.extend(axis_dep(&r.axis));
                 d
             }
-            FeatureKind::SurfaceExtrude { sketch, .. } => vec![*sketch],
+            FeatureKind::SurfaceExtrude { sketch, .. } | FeatureKind::SurfacePlanar { sketch, .. } => vec![*sketch],
+            FeatureKind::SurfaceOffset { parts, .. } => parts.iter().map(|p| p.feature).collect(),
             FeatureKind::SurfaceRevolve { sketch, axis, .. } => {
                 let mut d = vec![*sketch];
                 d.extend(axis_dep(axis));
@@ -997,18 +1415,28 @@ impl FeatureKind {
                 }
                 d
             }
-            FeatureKind::Pattern { features, pattern } => {
+            FeatureKind::Pattern { features, pattern, .. } => {
                 let mut d = features.clone();
                 match pattern {
                     PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
                     PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
                     PatternKind::Curve { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
-                    PatternKind::Fill { sketch, .. } => d.push(*sketch),
+                    PatternKind::Fill { sketch, .. } | PatternKind::Points { sketch, .. } => d.push(*sketch),
                     _ => {}
                 }
                 d
             }
-            FeatureKind::Mirror { features, plane } => [features.clone(), plane_deps(plane)].concat(),
+            FeatureKind::Mirror { features, plane, .. } => [features.clone(), plane_deps(plane)].concat(),
+            FeatureKind::Transform { parts, motion, .. } => {
+                let mut d: Vec<FeatureId> = parts.iter().map(|p| p.feature).collect();
+                match motion {
+                    Motion::Translate { .. } => {}
+                    Motion::Rotate { axis, .. } => d.extend(axis_deps(axis)),
+                    Motion::Points { from, to } => d.extend([point_deps(from), point_deps(to)].concat()),
+                    Motion::Align { to, .. } => d.extend(plane_deps(to)),
+                }
+                d
+            }
             // Las operaciones que crearon las piezas que usa
             FeatureKind::Boolean { targets, tools, .. } => targets.iter().chain(tools).map(|p| p.feature).collect(),
             FeatureKind::SplitParts { parts } | FeatureKind::DeleteParts { parts } => parts.iter().map(|p| p.feature).collect(),
@@ -1037,6 +1465,7 @@ impl FeatureKind {
             FeatureKind::Fillet { .. } => "Redondeo",
             FeatureKind::Chamfer { .. } => "Chaflán",
             FeatureKind::Shell { .. } => "Vaciado",
+            FeatureKind::DeleteFace { .. } => "Eliminar cara",
             FeatureKind::Draft { .. } => "Desmolde",
             FeatureKind::Pattern { .. } => "Patrón",
             FeatureKind::Mirror { .. } => "Simetría",
@@ -1054,6 +1483,7 @@ impl FeatureKind {
             FeatureKind::Sweep(_) => "Barrido",
             FeatureKind::Loft(_) => "Transición",
             FeatureKind::Hole(_) => "Agujero",
+            FeatureKind::Helix { flat: true, .. } => "Espiral",
             FeatureKind::Helix { .. } => "Hélice",
             FeatureKind::Thicken { .. } => "Engrosar",
             FeatureKind::Rib { .. } => "Nervio",
@@ -1063,12 +1493,31 @@ impl FeatureKind {
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
+            FeatureKind::SurfacePlanar { .. } => "Superficie plana",
+            FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
+            FeatureKind::SurfaceLoft { .. } => "Superficie por transición",
+            FeatureKind::SurfaceExtend { .. } => "Extender superficie",
+            FeatureKind::Wrap { emboss: true, .. } => "Relieve",
+            FeatureKind::Wrap { .. } => "Grabado",
+            FeatureKind::SplitFaces { .. } => "Línea de partición",
+            FeatureKind::Curve { def: CurveDef::Composite { .. } } => "Curva compuesta",
+            FeatureKind::Curve { def: CurveDef::Projected { .. } } => "Curva proyectada",
+            FeatureKind::Curve { def: CurveDef::Intersection { .. } } => "Curva de cruce",
+            FeatureKind::Curve { def: CurveDef::Points { .. } } => "Curva por puntos",
+            FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",
             FeatureKind::Sew { .. } => "Coser",
             FeatureKind::SplitBy { .. } => "Partir",
             FeatureKind::MoveFace { .. } => "Mover cara",
+            FeatureKind::RotateFace { .. } => "Girar cara",
+            FeatureKind::VertexChamfer { .. } => "Chaflán de vértice",
+            FeatureKind::FullRound { .. } => "Redondeo completo",
+            FeatureKind::FaceBlend { .. } => "Redondeo de cara",
             FeatureKind::Scale { .. } => "Escala",
+            FeatureKind::Transform { copy: true, .. } => "Copiar cuerpo",
+            FeatureKind::Transform { motion: Motion::Rotate { .. }, .. } => "Girar cuerpo",
+            FeatureKind::Transform { .. } => "Mover cuerpo",
         }
     }
 }

@@ -19,7 +19,7 @@ fn square(size: f64) -> Sketch {
 }
 
 fn extrude(sketch: FeatureId, extent: Extent) -> Extrude {
-    Extrude { sketch, regions: RegionSelection::All, extent, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None }
+    Extrude { sketch, regions: RegionSelection::All, extent, reverse: false, op: BodyOp::Join, draft: 0.0, thin: None, direction: None, start: 0.0 }
 }
 
 fn vol(doc: &Document) -> f64 {

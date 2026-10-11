@@ -65,7 +65,7 @@ fn sketch_dimensions_and_extrusion_follow_parameters() {
         reverse: false,
         op: BodyOp::Join,
         draft: 0.0,
-        thin: None,
+        thin: None, direction: None, start: 0.0,
     }));
     doc.parameters = vec![param("largo", "50"), param("espesor", "largo * 0.1")];
     doc.bindings.insert(format!("{}.kind.sketch.constraints.{largo}.value", sk.0), "largo".into());
@@ -87,7 +87,8 @@ fn integer_fields_are_rounded() {
     let pin = doc.add(caja());
     let pat = doc.add(FeatureKind::Pattern {
         features: vec![pin],
-        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 2, spacing: 5.0 },
+        pattern: PatternKind::Linear { direction: [1.0, 0.0, 0.0], count: 2, spacing: 5.0, second: None },
+        skip: vec![],
     });
     doc.parameters = vec![param("n", "3.6")];
     doc.bindings.insert(format!("{}.kind.pattern.count", pat.0), "n".into());

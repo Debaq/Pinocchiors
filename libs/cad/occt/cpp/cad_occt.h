@@ -83,6 +83,45 @@ CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double
                       int32_t flip);
 // Ahueca el sólido quitando las caras indicadas; grosor negativo = hacia adentro.
 CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double thickness);
+// Barrido con la orientación del perfil (0 sigue el camino, 1 Frenet, 2 fija); sin `solid`,
+// cada alambre del perfil da una superficie.
+CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mode, int32_t solid);
+// Barrido con torsión: el perfil gira `twist` radianes alrededor del camino, parejo con el largo.
+CadShape* cad_pipe_twist(const CadShape* profile, const CadShape* spine, double twist, int32_t solid);
+// Cáscara con otro espesor en algunas caras (`ov[i]` con `ov_thickness[i]`).
+CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, double thickness, const int32_t* ov,
+                          const double* ov_thickness, int32_t n_ov);
+// Las aristas de las formas encadenadas en alambres (uno, o un compuesto de los que queden sueltos).
+CadShape* cad_chain(const CadShape* const* shapes, int32_t n);
+// Curvas proyectadas sobre `target` a lo largo de `direction`, encadenadas.
+CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction);
+// Curvas donde se cruzan dos formas (caras o piezas), encadenadas.
+CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
+// Redondeo de cara entre las caras `fa` y `fb` con una bola de radio `r`: `side` 0 lo deduce,
+// 1 canto convexo (saca material), 2 rincón cóncavo (agrega).
+CadShape* cad_face_blend(const CadShape* s, const int32_t* fa, int32_t na, const int32_t* fb, int32_t nb, double r, int32_t side);
+// Parche sobre la superficie de `face`: `n` lazos en (u, v) (el primero el de afuera, los demás
+// agujeros), `sizes[k]` puntos cada uno; la normal como la de la cara.
+CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* sizes, int32_t n);
+// Parte las caras `faces` donde las cruza `tool` (un plano grande o curvas sobre ellas), sin separar el sólido.
+CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, const CadShape* tool);
+// Parte las caras por su silueta vista desde `dir` (donde la normal es perpendicular a la mirada).
+CadShape* cad_split_silhouette(const CadShape* s, const int32_t* faces, int32_t n, const double* dir);
+// La cara extendida `distance` por todos sus lados (siguiendo su superficie).
+CadShape* cad_extend_face(const CadShape* face, double distance);
+// Transición con punta (vértice al comienzo o al final, nulos si no) y cerrada (vuelve a la primera).
+CadShape* cad_loft_ex(const CadShape* const* wires, int32_t n, int32_t solid, int32_t ruled, const double* start, const double* end,
+                      int32_t closed);
+// Transición por las secciones a lo largo de una línea central, con una curva guía opcional (nula si no).
+CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape* spine, const CadShape* guide, int32_t solid);
+// Transición que sale y/o llega perpendicular a la sección de la punta (peso ≤ 0: libre).
+CadShape* cad_loft_tangent(const CadShape* const* wires, int32_t n, double start_w, double end_w, int32_t solid);
+// Extiende las superficies por los bordes libres `edges`, `distance` más allá (cada cara por sus lados).
+CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance);
+// Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).
+CadShape* cad_remove_faces(const CadShape* s, const int32_t* faces, int32_t n);
+// Redondeo de radio variable por puntos: `law` = `np` pares (fracción 0..1 del largo, radio).
+CadShape* cad_fillet_points(const CadShape* s, const int32_t* edges, int32_t n, const double* law, int32_t np);
 // Ángulo de desmolde (rad) a las caras indicadas respecto de `dir`, con plano neutro.
 CadShape* cad_draft(const CadShape* s, const int32_t* faces, int32_t n, const double* dir,
                     double angle, const double* neutral_origin, const double* neutral_normal);
@@ -185,6 +224,8 @@ CadShape* cad_make_helix(const double* origin, const double* dir, double radius,
 CadShape* cad_make_thread(const double* origin, const double* dir, const double* xdir, double r_minor, double r_major, double pitch,
                           double length, int32_t left, int32_t chamfer);
 CadShape* cad_thicken(const CadShape* faces, double thickness);
+// Copia de la forma desfasada `distance` sobre la normal de sus caras (de un sólido, su piel).
+CadShape* cad_offset_shape(const CadShape* s, double distance);
 /* Superficie que llena un borde cerrado de aristas (con `faces[i]` no nula,
    tangente a esa cara a lo largo de la arista i) y pasa por los puntos. */
 CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,

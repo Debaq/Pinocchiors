@@ -30,6 +30,7 @@ import {
   removeEntity,
   removeText,
   type AxisSpec,
+  type RefPick,
   type CadStore,
   type DimOpts,
   type EdgeRef,
@@ -155,6 +156,8 @@ export type PickMode =
   | { kind: "axis"; prompt: string; owner?: string; sketch: number; done: (axis: AxisSpec) => void }
   /** Dónde va un sketch nuevo: un plano base, una cara plana o el plano de otro sketch (con su corrimiento) */
   | { kind: "place"; prompt: string; done: (spec: PlaneSpec, offset?: number) => void }
+  /** Lo que arma una referencia por clics: caras, aristas, vértices y planos (cada clic suma uno) */
+  | { kind: "refs"; prompt: string; owner?: string; add: (pick: RefPick) => void }
   /** Piezas con un clic sobre ellas (otra vez la quita) */
   | { kind: "parts"; prompt: string; owner?: string; toggle: (part: PartId) => void }
   /** Dónde va un agujero: una cara plana y el punto del clic (mm) */

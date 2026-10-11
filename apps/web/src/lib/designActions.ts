@@ -22,6 +22,8 @@ import {
   type P2,
   type PartId,
   type PlaneSpec,
+  type PointSpec,
+  type RefPick,
   type Sketch,
   type PrimitiveShape,
   type RegionSelection,
@@ -152,6 +154,88 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
       path: { type: "sketch", sketch: path.id, entities: [] },
       op: "join",
     });
+  };
+
+  /** Barrido circular (tubo, cable) por el último sketch o la última curva del historial */
+  const addTube = () => {
+    const doc = store.doc();
+    const last = [...(doc?.features ?? [])].reverse().find((f) => f.kind.type === "sketch" || f.kind.type === "helix" || f.kind.type === "sketch3d" || f.kind.type === "curve");
+    if (!last) return say("Primero hace falta un camino: un sketch, una hélice o una curva");
+    const path = last.kind.type === "sketch" ? { type: "sketch" as const, sketch: last.id, entities: [] } : { type: "curve" as const, feature: last.id };
+    ui.clearPicks();
+    void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
+  };
+
+  /** Grabado o relieve con el último sketch envuelto */
+  const addWrap = (emboss: boolean) => {
+    const s = [...(store.doc()?.features ?? [])].reverse().find((f) => f.kind.type === "surface_sketch");
+    if (!s) return say("Primero un sketch envuelto: «Sketch» sobre una cara curva, con regiones cerradas");
+    ui.clearPicks();
+    void store.addFeature({ type: "wrap", sketch: s.id, depth: 1, emboss });
+  };
+
+  /** Línea de partición: las caras elegidas, partidas por la planta (se cambia en el diálogo) */
+  const startSplitFaces = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "split_faces", faces, tool: { type: "plane", plane: { type: "xy" } } });
+  };
+
+  /** Girar caras: las elegidas, con bisagra en Z (se cambia en el diálogo) */
+  const startRotateFace = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "rotate_face", faces, axis: { type: "z" }, angle: 10 });
+  };
+
+  /** Chaflán del vértice elegido (o elegirlo en el diálogo) */
+  const startVertexChamfer = async () => {
+    const v = ui.picks().find((p) => p.kind === "vertex");
+    ui.clearPicks();
+    const refs: RefPick[] =
+      v?.kind === "vertex" ? [{ type: "point", point: await invoke<PointSpec>("cad_vertex_spec", { point: v.at }).catch((): PointSpec => ({ type: "at", point: v.at })) }] : [];
+    void store.addFeature({ type: "vertex_chamfer", vertex: { type: "picked", refs }, distance: 2 });
+  };
+
+  /** Redondeo completo con tres caras elegidas: las dos paralelas opuestas son los costados */
+  const startFullRound = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    if (picked.length !== 3) return say("Elegir tres caras: los dos costados paralelos y la del medio");
+    const infos = await Promise.all(picked.map((f) => invoke<{ normal: P3 }>("cad_face_info", { face: f })));
+    const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const pair = [[0, 1], [0, 2], [1, 2]].find(([i, j]) => dot(infos[i].normal, infos[j].normal) < -0.999);
+    if (!pair) return say("Dos de las tres caras tienen que ser paralelas y opuestas (los costados)");
+    const middle = [0, 1, 2].find((k) => !pair.includes(k))!;
+    const [a, m, b] = await Promise.all([picked[pair[0]], picked[middle], picked[pair[1]]].map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "full_round", side_a: a, middle: m, side_b: b });
+  };
+
+  /** Redondeo de cara: con dos caras elegidas, una de cada lado (después se suman más en el diálogo) */
+  const startFaceBlend = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const refs = await Promise.all(picked.slice(0, 2).map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "face_blend", a: refs[0] ? [refs[0]] : [], b: refs[1] ? [refs[1]] : [], radius: 2 });
+  };
+
+  /** Superficie por transición: por las curvas de los dos últimos sketches */
+  const addSurfaceLoft = () => {
+    const list = sketches();
+    if (list.length < 2) return say("Hacen falta dos sketches con curvas");
+    ui.clearPicks();
+    void store.addFeature({ type: "surface_loft", sections: list.slice(-2).map((s) => ({ sketch: s.id, entities: [] })), ruled: false });
+  };
+
+  /** Superficie por barrido: las curvas del anteúltimo sketch por el último */
+  const addSurfaceSweep = () => {
+    const list = sketches();
+    if (list.length < 2) return say("Hacen falta dos sketches: las curvas del perfil y el camino");
+    const [profile, path] = list.slice(-2);
+    ui.clearPicks();
+    void store.addFeature({ type: "surface_sweep", sketch: profile.id, entities: [], path: { type: "sketch", sketch: path.id, entities: [] } });
   };
 
   /** Engrosar las caras elegidas (si no hay, se eligen en la caja del diálogo) */
@@ -432,22 +516,24 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   });
 
   /** Redondeo o chaflán con las aristas ya elegidas; si no hay, se eligen en la caja del diálogo */
-  const startEdges = async (kind: "fillet" | "chamfer") => {
+  const startEdges = async (kind: "fillet" | "chamfer" | "surface_extend") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
     const picked = ui.picks().flatMap((p) => (p.kind === "edge" ? [p.edge] : []));
     const edges = await Promise.all(picked.map((e) => store.edgeRef(e)));
     ui.clearPicks();
     if (kind === "fillet") void store.addFeature({ type: "fillet", edges, radius: 1 });
+    else if (kind === "surface_extend") void store.addFeature({ type: "surface_extend", edges, distance: 5 });
     else void store.addFeature({ type: "chamfer", edges, distance: 1 });
   };
 
   /** Vaciado o desmolde con las caras ya elegidas; si no hay, se eligen en la caja del diálogo */
-  const startFaces = async (kind: "shell" | "draft") => {
+  const startFaces = async (kind: "shell" | "draft" | "delete_face") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
     const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
     if (kind === "shell") void store.addFeature({ type: "shell", faces, thickness: 1 });
+    else if (kind === "delete_face") void store.addFeature({ type: "delete_face", faces });
     else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
   };
 
@@ -460,9 +546,19 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     draft: () => void startFaces("draft"),
   });
 
-  const addPattern = (kind: "linear" | "circular" | "table" | "fill") => {
+  const addPattern = (kind: "linear" | "circular" | "table" | "fill" | "points") => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    if (kind === "points") {
+      // Los puntos: el último sketch con puntos sueltos que no sea el de lo que se repite
+      const own = sel && "sketch" in sel.kind ? (sel.kind as { sketch: number }).sketch : undefined;
+      const withPoints = sketches()
+        .filter((s) => s.id !== own && s.kind.type === "sketch" && s.kind.sketch.entities.some((e) => e.geometry.type === "point" && !e.construction))
+        .pop();
+      if (!withPoints) return say("Primero un sketch con puntos sueltos (y la operación que se repite)");
+      void store.addFeature({ type: "pattern", features, pattern: { type: "points", sketch: withPoints.id, points: [] } });
+      return;
+    }
     if (kind === "fill") {
       // La región a llenar: el último sketch con una región cerrada que no sea el de lo que se repite
       const own = sel && "sketch" in sel.kind ? (sel.kind as { sketch: number }).sketch : undefined;
@@ -535,26 +631,28 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
    */
   const addReference = async (kind: "plane" | "axis" | "point") => {
     const picks = ui.picks();
-    const face = picks.find((p) => p.kind === "face");
-    const edge = picks.find((p) => p.kind === "edge");
-    const vertex = picks.find((p) => p.kind === "vertex");
-    const plane = picks.find((p) => p.kind === "plane" || p.kind === "refplane");
-    ui.clearPicks();
-    if (kind === "plane") {
-      let base: PlaneSpec = { type: "xy" };
-      if (plane?.kind === "plane") base = { type: plane.plane };
-      else if (plane?.kind === "refplane") base = { type: "reference", feature: plane.feature };
-      else if (face?.kind === "face") base = { type: "face", face: await store.faceRef(face.face) };
-      return void store.addFeature({ type: "plane", def: { type: "offset", base, distance: 10 } });
+    // Por clics: lo que ya está elegido arma la referencia (el tipo se deduce)
+    const refs: RefPick[] = [];
+    for (const p of picks) {
+      if (p.kind === "face") refs.push({ type: "face", face: await store.faceRef(p.face) });
+      else if (p.kind === "edge") refs.push({ type: "edge", edge: await store.edgeRef(p.edge) });
+      else if (p.kind === "plane") refs.push({ type: "plane", plane: { type: p.plane } });
+      else if (p.kind === "refplane") refs.push({ type: "plane", plane: { type: "reference", feature: p.feature } });
+      else if (p.kind === "vertex") {
+        const point = await invoke<PointSpec>("cad_vertex_spec", { point: p.at }).catch((): PointSpec => ({ type: "at", point: p.at }));
+        refs.push({ type: "point", point });
+      }
     }
-    if (kind === "axis") {
-      if (edge?.kind === "edge") return void store.addFeature({ type: "axis", def: { type: "edge", edge: await store.edgeRef(edge.edge) } });
-      if (face?.kind === "face") return void store.addFeature({ type: "axis", def: { type: "face", face: await store.faceRef(face.face) } });
-      return void store.addFeature({ type: "axis", def: { type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } } });
+    if (refs.length) {
+      ui.clearPicks();
+      if (kind === "plane") return void store.addFeature({ type: "plane", def: { type: "picked", refs } });
+      if (kind === "axis") return void store.addFeature({ type: "axis", def: { type: "picked", refs } });
+      return void store.addFeature({ type: "point", def: { type: "picked", refs } });
     }
-    if (vertex?.kind === "vertex") return void store.addFeature({ type: "point", def: { type: "at", point: vertex.at } });
-    if (edge?.kind === "edge") return void store.addFeature({ type: "point", def: { type: "center", edge: await store.edgeRef(edge.edge) } });
-    void store.addFeature({ type: "point", def: { type: "at", point: [0, 0, 0] } });
+    // Sin nada elegido: el plano, desfasado de la planta; el eje y el punto, eligiendo en el visor
+    if (kind === "plane") return void store.addFeature({ type: "plane", def: { type: "picked", refs: [{ type: "plane", plane: { type: "xy" } }], offset: 10 } });
+    if (kind === "axis") return void store.addFeature({ type: "axis", def: { type: "picked", refs: [] } });
+    void store.addFeature({ type: "point", def: { type: "picked", refs: [] } });
   };
 
   /** Booleana: con piezas elegidas, la primera es la que queda y las demás, las que restan */
@@ -635,6 +733,15 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSweep,
     addLoft,
     addHole,
+    addTube,
+    startRotateFace,
+    addWrap,
+    startSplitFaces,
+    startVertexChamfer,
+    startFullRound,
+    startFaceBlend,
+    addSurfaceSweep,
+    addSurfaceLoft,
     addPrimitive,
     addSheetMetal,
     startFlange,
@@ -666,9 +773,55 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),
     addDeleteParts: () => void store.addFeature({ type: "delete_parts", parts: pickedParts() }),
     addHelix: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false }),
+    /** Curvas de referencia con lo elegido: aristas (compuesta), caras (proyectada o de cruce) o vértices (por puntos) */
+    addCurve: async (kind: "composite" | "projected" | "intersection" | "points") => {
+      const picks = ui.picks();
+      const edges = await Promise.all(picks.flatMap((p) => (p.kind === "edge" ? [store.edgeRef(p.edge)] : [])));
+      const faces = await Promise.all(picks.flatMap((p) => (p.kind === "face" ? [store.faceRef(p.face)] : [])));
+      const points = await Promise.all(
+        picks.flatMap((p) =>
+          p.kind === "vertex" ? [invoke<PointSpec>("cad_vertex_spec", { point: p.at }).catch((): PointSpec => ({ type: "at", point: p.at }))] : [],
+        ),
+      );
+      ui.clearPicks();
+      if (kind === "composite") return void store.addFeature({ type: "curve", def: { type: "composite", edges, curves: [] } });
+      if (kind === "intersection") return void store.addFeature({ type: "curve", def: { type: "intersection", a: faces.slice(0, 1), b: faces.slice(1) } });
+      if (kind === "projected") {
+        const s = targetSketch();
+        if (!s) return say("Primero un sketch con las curvas a proyectar");
+        return void store.addFeature({ type: "curve", def: { type: "projected", sketch: s.id, entities: [], faces } });
+      }
+      const pts: PointSpec[] = points.length >= 2 ? points : [{ type: "at", point: [0, 0, 0] }, { type: "at", point: [20, 0, 0] }, { type: "at", point: [20, 20, 10] }];
+      void store.addFeature({ type: "curve", def: { type: "points", points: pts, closed: false } });
+    },
+    /** Espiral plana de Arquímedes (resortes de reloj, bobinas) */
+    addSpiral: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 2, pitch: 5, turns: 4, left: false, radius2: 20, flat: true }),
+    /** Las regiones del sketch elegido (o del último) como superficie plana */
+    addSurfacePlanar: () => {
+      const s = targetSketch();
+      if (!s) return say("Primero hace falta un sketch con una región cerrada");
+      ui.clearPicks();
+      void store.addFeature({ type: "surface_planar", sketch: s.id, regions: { type: "all" } });
+    },
+    /** Copia desfasada de las superficies elegidas (o de todas; con una pieza sólida elegida, su piel) */
+    addSurfaceOffset: () => {
+      const picked = pickedParts();
+      const parts = picked.length > 0 ? picked : surfaceParts();
+      if (parts.length === 0) return say("Elegir una superficie (o una pieza) para desfasar");
+      ui.clearPicks();
+      void store.addFeature({ type: "surface_offset", parts, distance: 5 });
+    },
     addSketch3d: () => void store.addFeature({ type: "sketch3d", sketch: { points: [], entities: [], constraints: [], next_id: 1 } }),
     startSurfaceSketch,
     addScale: () => void store.addFeature({ type: "scale", factor: [2, 2, 2], center: { type: "at", point: [0, 0, 0] } }),
+    /** Mover, girar o copiar piezas enteras (las elegidas, o todas) */
+    addTransform: (motion: "translate" | "rotate", copy = false) =>
+      void store.addFeature({
+        type: "transform",
+        parts: pickedParts(),
+        motion: motion === "rotate" ? { type: "rotate", axis: { type: "z" }, angle: 90 } : { type: "translate", vector: [20, 0, 0] },
+        copy,
+      }),
     sketches,
     toolFeatures,
     selectedFeature,

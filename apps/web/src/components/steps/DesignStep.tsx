@@ -10,6 +10,7 @@ import {
   MATERIALS,
   MATE_LABELS,
   METRIC_HOLES,
+  INCH_HOLES,
   BOLT_HEADS,
   type BoltHead,
   designMass,
@@ -56,6 +57,9 @@ import {
   folderRange,
   type Material,
   type MissingRef,
+  type Motion,
+  type SweepOrient,
+  type BlendSide,
   type P2,
   type P3,
   type AxisDef,
@@ -65,6 +69,8 @@ import {
   type PartId,
   type PlaneDef,
   type PointSpec,
+  type RefPick,
+  type CurveDef,
   type Plane,
   type Sketch3d,
   type Constraint3d,
@@ -237,6 +243,18 @@ const CORNER_OPTIONS = [
   { value: "square", label: "Cuadrada" },
 ];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+const BLEND_SIDE_OPTIONS = [
+  { value: "auto", label: "Según la geometría" },
+  { value: "convex", label: "Canto (saca material)" },
+  { value: "concave", label: "Rincón (agrega material)" },
+];
+
+const ORIENT_OPTIONS = [
+  { value: "follow", label: "Sigue el camino" },
+  { value: "frenet", label: "Frenet (gira con la curva)" },
+  { value: "fixed", label: "Fija (no gira)" },
+];
 
 /** Número con `d` decimales; lo que redondea a cero se muestra sin signo (no "-0,00") */
 const fmt = (v: number, d = 2) => (Math.abs(v) < 0.5 * 10 ** -d ? 0 : v).toLocaleString("es", { maximumFractionDigits: d, minimumFractionDigits: d });
@@ -1008,6 +1026,34 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const r = selRange();
     return rangeTo() !== undefined && r !== null && r[0] <= i && i <= r[1];
   };
+  // Copiar y pegar operaciones: Ctrl+C con la elegida (o el tramo con Mayús) y Ctrl+V
+  const selectedIds = () => {
+    const r = selRange();
+    return r ? doc()!.features.slice(r[0], r[1] + 1).map((f) => f.id) : [];
+  };
+  const copyOps = () => {
+    const n = store.copyFeatures(selectedIds());
+    props.ui.setMessage(n ? `${n === 1 ? "Operación copiada" : `${n} operaciones copiadas`}: Ctrl+V para pegar` : "Elegir en el árbol lo que se copia");
+  };
+  const pasteOps = async (list?: Feature[]) => {
+    const ids = await store.pasteFeatures(list);
+    if (ids.length) props.ui.setMessage(`${ids.length === 1 ? "Pegada una operación" : `Pegadas ${ids.length} operaciones`} (lo que usaban de afuera queda igual)`);
+  };
+  const onTreeKey = (e: KeyboardEvent) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || props.ui.session()) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const key = e.key.toLowerCase();
+    if (key === "c" && store.selected() !== undefined) {
+      e.preventDefault();
+      copyOps();
+    } else if (key === "v" && store.featureClip()) {
+      e.preventDefault();
+      void pasteOps();
+    }
+  };
+  window.addEventListener("keydown", onTreeKey);
+  onCleanup(() => window.removeEventListener("keydown", onTreeKey));
   const [renaming, setRenaming] = createSignal<number>();
   /** Dónde se dibuja la línea del hueco mientras se arrastra */
   const dropGap = () => {
@@ -1171,6 +1217,17 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       </span>
                     </Show>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      <IconButton
+                        aria-label="Duplicar"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          const ids = inRange(i()) ? selectedIds() : [f().id];
+                          void pasteOps(doc()!.features.filter((x) => ids.includes(x.id)));
+                        }}
+                      >
+                        <Icons.Copy size={11} />
+                      </IconButton>
                       <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
                         <Icons.CaretDown size={10} class="rotate-180" />
                       </IconButton>
@@ -1478,6 +1535,7 @@ export const FeatureEditor: Component<{
                         { value: "through_all", label: "Atravesar todo" },
                         { value: "up_to_next", label: "Hasta la siguiente" },
                         { value: "up_to_face", label: "Hasta una cara" },
+                        { value: "up_to_vertex", label: "Hasta un punto" },
                         { value: "up_to_scan", label: "Hasta el escaneo" },
                       ]}
                       value={extentType()}
@@ -1488,6 +1546,7 @@ export const FeatureEditor: Component<{
                         else if (v === "two_sides") setExtent({ type: "two_sides", distance: d, second: d / 2 });
                         else if (v === "through_all" || v === "up_to_next") setExtent({ type: v });
                         else if (v === "up_to_scan") setExtent({ type: "up_to_scan", offset: 0 });
+                        else if (v === "up_to_vertex") setExtent({ type: "up_to_vertex", point: { type: "at", point: [0, 0, 10] } });
                         else setUpTo(true);
                       }}
                     />
@@ -1502,10 +1561,37 @@ export const FeatureEditor: Component<{
                       lost={lost("extent")}
                       refs={k().extent.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
                       onChange={(refs) => {
-                        if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef });
+                        if (refs[0]) setExtent({ type: "up_to_face", face: refs[0] as FaceRef, offset: (k().extent as { offset?: number }).offset });
                         setUpTo(false);
                       }}
                     />
+                    <Show when={k().extent.type === "up_to_face"}>
+                      {field(
+                        "Antes de la cara",
+                        "kind.extent.offset",
+                        (k().extent as { offset?: number }).offset ?? 0,
+                        (x, v) => x.type === "extrude" && x.extent.type === "up_to_face" && (x.extent.offset = v || undefined),
+                        "mm",
+                      )}
+                    </Show>
+                  </Show>
+                  <Show when={k().extent.type === "up_to_vertex" && (k().extent as Extract<Extent, { type: "up_to_vertex" }>)}>
+                    {(e) => (
+                      <>
+                        <PointField
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:hasta-punto`}
+                          label="Hasta el punto"
+                          value={e().point}
+                          except={f().id}
+                          onChange={(p) => setExtent({ type: "up_to_vertex", point: p })}
+                        />
+                        <p class="text-[11px] text-text-dim leading-relaxed">
+                          Llega hasta la altura del punto medida sobre la dirección de la extrusión; si el punto está detrás del plano, va hacia ese lado.
+                        </p>
+                      </>
+                    )}
                   </Show>
                   <Show when={k().extent.type === "blind" || k().extent.type === "symmetric" || k().extent.type === "two_sides"}>
                     {field(
@@ -1537,6 +1623,26 @@ export const FeatureEditor: Component<{
                       "mm",
                     )}
                   </Show>
+                  {field("Desde el plano a", "kind.start", k().start ?? 0, (x, v) => x.type === "extrude" && (x.start = v || undefined), "mm")}
+                  <Checkbox
+                    small
+                    label="Dirección propia"
+                    checked={!!k().direction}
+                    onChange={(c) => update((x) => x.type === "extrude" && (x.direction = c ? { type: "z" } : null))}
+                  />
+                  <Show when={k().direction}>
+                    {(d) => (
+                      <AxisField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:direccion`}
+                        label="A lo largo de"
+                        value={d()}
+                        except={f().id}
+                        onChange={(a) => update((x) => x.type === "extrude" && (x.direction = a))}
+                      />
+                    )}
+                  </Show>
                   {field("Desmolde", "kind.draft", k().draft ?? 0, (x, v) => x.type === "extrude" && (x.draft = v), "°")}
                   <Checkbox
                     small
@@ -1564,6 +1670,8 @@ export const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "revolve" && (f().kind as Extract<FeatureKind, { type: "revolve" }>)}>
             {(k) => {
+              // «Hasta una cara» elegido y todavía sin cara
+              const [upToFace, setUpToFace] = createSignal(false);
               const sketch = () => props.sketches.find((s) => s.id === k().sketch);
               const lines = () => {
                 const s = sketch();
@@ -1626,7 +1734,61 @@ export const FeatureEditor: Component<{
                     value={k().regions}
                     onChange={(r) => update((x) => x.type === "revolve" && (x.regions = r))}
                   />
+                  <Row label="Hacia">
+                    <Select
+                      options={[
+                        { value: "one", label: "Un lado" },
+                        { value: "symmetric", label: "Simétrica" },
+                        { value: "two_angles", label: "Dos ángulos" },
+                        { value: "up_to_face", label: "Hasta una cara" },
+                      ]}
+                      value={upToFace() ? "up_to_face" : (k().extent?.type ?? "one")}
+                      onChange={(v) => {
+                        setUpToFace(v === "up_to_face" && k().extent?.type !== "up_to_face");
+                        if (v === "up_to_face") return;
+                        update(
+                          (x) =>
+                            x.type === "revolve" &&
+                            (x.extent = v === "two_angles" ? { type: "two_angles", second: 45 } : v === "symmetric" ? { type: "symmetric" } : undefined),
+                        );
+                      }}
+                    />
+                  </Row>
+                  <Show when={upToFace() || k().extent?.type === "up_to_face"}>
+                    <SelectionBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:hasta`}
+                      kind="face"
+                      label="Hasta la cara"
+                      lost={lost("extent")}
+                      refs={k().extent?.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
+                      onChange={(refs) => {
+                        if (refs[0]) update((x) => x.type === "revolve" && (x.extent = { type: "up_to_face", face: refs[0] as FaceRef }));
+                        setUpToFace(false);
+                      }}
+                    />
+                    <p class="text-[11px] text-text-dim">Gira hacia el lado del signo del ángulo hasta encontrar la cara (plana o curva).</p>
+                  </Show>
                   {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
+                  <Checkbox
+                    small
+                    label="Delgada (solo una pared)"
+                    checked={k().thin != null}
+                    onChange={(c) => update((x) => x.type === "revolve" && (x.thin = c ? 1 : null))}
+                  />
+                  <Show when={k().thin != null}>
+                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "revolve" && (x.thin = v), "mm")}
+                  </Show>
+                  <Show when={k().extent?.type === "two_angles"}>
+                    {field(
+                      "Hacia atrás",
+                      "kind.extent.second",
+                      (k().extent as { second: number }).second,
+                      (x, v) => x.type === "revolve" && x.extent?.type === "two_angles" && (x.extent.second = v),
+                      "°",
+                    )}
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "revolve" && (x.op = o)))}</Row>
                 </>
               );
@@ -1857,6 +2019,48 @@ export const FeatureEditor: Component<{
                     <Show when={(k() as { radius2?: number | null }).radius2 != null}>
                       {field("Radio al final", "kind.radius2", (k() as { radius2: number }).radius2, (x, v) => x.type === "fillet" && (x.radius2 = v), "mm")}
                     </Show>
+                    <div class="space-y-1" aria-label="Radios en el medio">
+                      <For each={(k() as { points?: { at: number; radius: number }[] }).points ?? []}>
+                        {(pt, i) => (
+                          <div class="flex items-center gap-1" data-fillet-point={i()}>
+                            <Num label="En %" value={pt.at * 100} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].at = v / 100))} />
+                            <Num label="R" value={pt.radius} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].radius = v))} />
+                            <IconButton
+                              aria-label={`Quitar el radio ${i() + 1}`}
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                update((x) => {
+                                  if (x.type !== "fillet" || !x.points) return;
+                                  x.points.splice(i(), 1);
+                                  if (!x.points.length) x.points = undefined;
+                                })
+                              }
+                            >
+                              <Icons.Trash size={11} />
+                            </IconButton>
+                          </div>
+                        )}
+                      </For>
+                      <Button
+                        size="sm"
+                        fullWidth
+                        onClick={() =>
+                          update((x) => {
+                            if (x.type !== "fillet") return;
+                            // En el medio del tramo más largo que quede libre
+                            const ats = [0, ...(x.points ?? []).map((p) => p.at), 1].sort((a, b) => a - b);
+                            let at = 0.5;
+                            let gap = 0;
+                            for (let j = 1; j < ats.length; j++)
+                              if (ats[j] - ats[j - 1] > gap) [gap, at] = [ats[j] - ats[j - 1], (ats[j] + ats[j - 1]) / 2];
+                            x.points = [...(x.points ?? []), { at, radius: x.radius * 2 }].sort((a, b) => a.at - b.at);
+                          })
+                        }
+                      >
+                        Agregar radio en el medio
+                      </Button>
+                    </div>
                   </Show>
                   <Show when={kind.type === "chamfer" && (k() as { second?: ChamferSecond | null }).second}>
                     {(sec) => (
@@ -1907,6 +2111,30 @@ export const FeatureEditor: Component<{
                         <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)), lost("neutral").length > 0)}</Row>
                       </>
                     )}
+                  </Show>
+                  <Show when={kind.type === "shell"}>
+                    <SelectionBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:otras`}
+                      kind="faces"
+                      label="Caras con otro espesor"
+                      refs={((k() as { overrides?: { face: FaceRef }[] }).overrides ?? []).map((o) => o.face)}
+                      onChange={(refs) =>
+                        update((x) => {
+                          if (x.type !== "shell") return;
+                          const old = x.overrides ?? [];
+                          const same = (a: FaceRef, b: FaceRef) => JSON.stringify(a) === JSON.stringify(b);
+                          const next = (refs as FaceRef[]).map((face) => old.find((o) => same(o.face, face)) ?? { face, thickness: x.thickness * 2 });
+                          x.overrides = next.length ? next : undefined;
+                        })
+                      }
+                    />
+                    <For each={(k() as { overrides?: { face: FaceRef; thickness: number }[] }).overrides ?? []}>
+                      {(o, i) =>
+                        field(`Espesor cara ${i() + 1}`, `kind.overrides.${i()}.thickness`, o.thickness, (x, v) => x.type === "shell" && !!x.overrides && (x.overrides[i()].thickness = v), "mm")
+                      }
+                    </For>
                   </Show>
                   <SelectionBox
                     store={props.store}
@@ -2003,7 +2231,30 @@ export const FeatureEditor: Component<{
                     </>
                   )}
                 </Show>
-                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill"}>
+                <Show when={k().pattern.type === "points" && (k().pattern as Extract<PatternKind, { type: "points" }>)}>
+                  {(pt) => {
+                    const loose = () => {
+                      const s = props.sketches.find((x) => x.id === pt().sketch);
+                      return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => e.geometry.type === "point" && !e.construction).length : 0;
+                    };
+                    return (
+                      <>
+                        <Row label="Puntos de">
+                          <Select
+                            options={sketchOptions()}
+                            value={String(pt().sketch)}
+                            onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "points" && ((x.pattern.sketch = +v), (x.pattern.points = [])))}
+                          />
+                        </Row>
+                        <p class="text-[11px] text-text-dim">
+                          {pt().points.length ? `${pt().points.length} puntos elegidos` : `${loose()} puntos sueltos`}: una copia en cada uno, desde el más cercano a lo que se
+                          repite (ahí queda el original).
+                        </p>
+                      </>
+                    );
+                  }}
+                </Show>
+                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points"}>
                 <Show
                   when={k().pattern.type !== "curve"}
                   fallback={
@@ -2067,11 +2318,50 @@ export const FeatureEditor: Component<{
                       </Row>
                       {field("Cantidad", "kind.pattern.count", lin().count, (x, v) => x.type === "pattern" && "count" in x.pattern && (x.pattern.count = Math.max(2, Math.round(v))))}
                       {field("Separación", "kind.pattern.spacing", lin().spacing, (x, v) => x.type === "pattern" && x.pattern.type === "linear" && (x.pattern.spacing = v), "mm")}
+                      <Checkbox
+                        small
+                        label="También en otra dirección"
+                        checked={!!lin().second}
+                        onChange={(c) =>
+                          update((x) => {
+                            if (x.type !== "pattern" || x.pattern.type !== "linear") return;
+                            const other: P3 = Math.abs(x.pattern.direction[0]) > 0.5 ? [0, 1, 0] : [1, 0, 0];
+                            x.pattern.second = c ? { direction: other, count: 2, spacing: x.pattern.spacing } : null;
+                          })
+                        }
+                      />
+                      <Show when={lin().second}>
+                        {(s2) => (
+                          <>
+                            <Row label="Dirección 2">
+                              <Select
+                                options={["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() }))}
+                                value={Object.entries(AXIS_DIRS).find(([, d]) => d.every((c, i) => Math.abs(c - s2().direction[i]) < 1e-9))?.[0] ?? "y"}
+                                onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.direction = AXIS_DIRS[v]))}
+                              />
+                            </Row>
+                            {field(
+                              "Cantidad 2",
+                              "kind.pattern.second.count",
+                              s2().count,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.count = Math.max(1, Math.round(v))),
+                            )}
+                            {field(
+                              "Separación 2",
+                              "kind.pattern.second.spacing",
+                              s2().spacing,
+                              (x, v) => x.type === "pattern" && x.pattern.type === "linear" && x.pattern.second && (x.pattern.second.spacing = v),
+                              "mm",
+                            )}
+                          </>
+                        )}
+                      </Show>
                     </>
                   )}
                 </Show>
                 </Show>
                 </Show>
+                <SkipCopies value={k().skip ?? []} onChange={(v) => update((x) => x.type === "pattern" && (x.skip = v.length ? v : undefined))} />
               </>
             )}
           </Match>
@@ -2080,8 +2370,469 @@ export const FeatureEditor: Component<{
               <>
                 <ToolChecklist tools={props.tools.filter((t) => t.id !== f().id)} value={k().features} onChange={(ids) => update((x) => x.type === "mirror" && (x.features = ids))} />
                 <Row label="Plano">{planeSpecSelect(k().plane, (p) => update((x) => x.type === "mirror" && (x.plane = p)))}</Row>
+                <Checkbox
+                  small
+                  label="El reflejo como pieza aparte"
+                  checked={k().op === "new"}
+                  onChange={(c) => update((x) => x.type === "mirror" && (x.op = c ? "new" : undefined))}
+                />
               </>
             )}
+          </Match>
+          <Match when={f().kind.type === "curve" && (f().kind as Extract<FeatureKind, { type: "curve" }>)}>
+            {(k) => {
+              const def = () => k().def;
+              const setDef = (d: CurveDef) => update((x) => x.type === "curve" && (x.def = d));
+              return (
+                <>
+                  <Switch>
+                    <Match when={def().type === "composite" && (def() as Extract<CurveDef, { type: "composite" }>)}>
+                      {(d) => (
+                        <>
+                          <SelectionBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:aristas`}
+                            kind="edges"
+                            label="Aristas"
+                            lost={lost("edges")}
+                            refs={d().edges}
+                            onChange={(refs) => setDef({ ...d(), edges: refs as EdgeRef[] })}
+                          />
+                          <For each={refOptions(props.store, "curve", f().id)}>
+                            {(o) => (
+                              <Checkbox
+                                small
+                                label={o.label}
+                                checked={d().curves.includes(+o.value.slice(4))}
+                                onChange={(c) => setDef({ ...d(), curves: c ? [...d().curves, +o.value.slice(4)] : d().curves.filter((x) => x !== +o.value.slice(4)) })}
+                              />
+                            )}
+                          </For>
+                          <p class="text-[11px] text-text-dim">Las aristas y curvas se encadenan por sus extremos en una sola.</p>
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "projected" && (def() as Extract<CurveDef, { type: "projected" }>)}>
+                      {(d) => (
+                        <>
+                          <Row label="Curvas de">
+                            <Select options={sketchOptions()} value={String(d().sketch)} onChange={(v) => setDef({ ...d(), sketch: +v, entities: [] })} />
+                          </Row>
+                          <SelectionBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:caras`}
+                            kind="faces"
+                            label="Sobre las caras"
+                            lost={lost("faces")}
+                            refs={d().faces}
+                            onChange={(refs) => setDef({ ...d(), faces: refs as FaceRef[] })}
+                          />
+                          <p class="text-[11px] text-text-dim">Se proyectan a lo largo de la normal del sketch.</p>
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "intersection" && (def() as Extract<CurveDef, { type: "intersection" }>)}>
+                      {(d) => (
+                        <>
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras" lost={lost("a")} refs={d().a} onChange={(refs) => setDef({ ...d(), a: refs as FaceRef[] })} />
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Con las caras" lost={lost("b")} refs={d().b} onChange={(refs) => setDef({ ...d(), b: refs as FaceRef[] })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "points" && (def() as Extract<CurveDef, { type: "points" }>)}>
+                      {(d) => (
+                        <>
+                          <For each={d().points}>
+                            {(p, i) => (
+                              <div class="flex items-start gap-1">
+                                <div class="flex-1">
+                                  <PointField
+                                    store={props.store}
+                                    ui={props.ui}
+                                    owner={`${f().id}:p${i()}`}
+                                    label={`Punto ${i() + 1}`}
+                                    value={p}
+                                    except={f().id}
+                                    onChange={(q) => setDef({ ...d(), points: d().points.map((x, k) => (k === i() ? q : x)) })}
+                                  />
+                                </div>
+                                <IconButton
+                                  aria-label={`Quitar el punto ${i() + 1}`}
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDef({ ...d(), points: d().points.filter((_, k) => k !== i()) })}
+                                >
+                                  <Icons.Trash size={11} />
+                                </IconButton>
+                              </div>
+                            )}
+                          </For>
+                          <Button
+                            size="sm"
+                            fullWidth
+                            onClick={() => {
+                              const last = d().points[d().points.length - 1];
+                              const at: P3 = last?.type === "at" ? [last.point[0] + 10, last.point[1], last.point[2]] : [0, 0, 0];
+                              setDef({ ...d(), points: [...d().points, { type: "at", point: at }] });
+                            }}
+                          >
+                            Agregar punto
+                          </Button>
+                          <Checkbox small label="Cerrada" checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
+                        </>
+                      )}
+                    </Match>
+                  </Switch>
+                </>
+              );
+            }}
+          </Match>
+          <Match when={f().kind.type === "surface_extend" && (f().kind as Extract<FeatureKind, { type: "surface_extend" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:bordes`}
+                  kind="edges"
+                  label="Bordes a extender"
+                  lost={lost("edges")}
+                  refs={k().edges}
+                  onChange={(refs) => update((x) => x.type === "surface_extend" && (x.edges = refs as EdgeRef[]))}
+                />
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_extend" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Bordes libres de superficies: cada cara se alarga por ese lado siguiendo su forma.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "wrap" && (f().kind as Extract<FeatureKind, { type: "wrap" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch envuelto">
+                  <Select
+                    options={(props.store.doc()?.features ?? []).filter((x) => x.kind.type === "surface_sketch").map((x) => ({ value: String(x.id), label: x.name }))}
+                    value={String(k().sketch)}
+                    onChange={(v) => update((x) => x.type === "wrap" && (x.sketch = +v))}
+                  />
+                </Row>
+                {field("Profundidad", "kind.depth", k().depth, (x, v) => x.type === "wrap" && (x.depth = v), "mm")}
+                <Checkbox small label="Relieve (sobresale)" checked={k().emboss} onChange={(c) => update((x) => x.type === "wrap" && (x.emboss = c))} />
+                <p class="text-[11px] text-text-dim">Las regiones cerradas del sketch, siguiendo la forma de la cara: hundidas (grabado) o levantadas (relieve).</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "split_faces" && (f().kind as Extract<FeatureKind, { type: "split_faces" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a partir"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "split_faces" && (x.faces = refs as FaceRef[]))}
+                />
+                <Row label="Con">
+                  <Select
+                    options={[
+                      { value: "plane", label: "Un plano" },
+                      { value: "silhouette", label: "La silueta (vista desde un eje)" },
+                      ...refOptions(props.store, "curve", f().id).map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label })),
+                    ]}
+                    value={k().tool.type === "plane" ? "plane" : k().tool.type === "silhouette" ? "silhouette" : `curve:${(k().tool as { feature: number }).feature}`}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "split_faces" &&
+                          (x.tool =
+                            v === "plane" ? { type: "plane", plane: { type: "xy" } } : v === "silhouette" ? { type: "silhouette", direction: { type: "z" } } : { type: "curve", feature: +v.slice(6) }),
+                      )
+                    }
+                  />
+                </Row>
+                <Show when={k().tool.type === "silhouette" && (k().tool as { direction: AxisSpec })}>
+                  {(t) => (
+                    <AxisField
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:mirada`}
+                      label="Mirando a lo largo de"
+                      value={t().direction}
+                      except={f().id}
+                      onChange={(a) => update((x) => x.type === "split_faces" && (x.tool = { type: "silhouette", direction: a }))}
+                    />
+                  )}
+                </Show>
+                <Show when={k().tool.type === "plane" && (k().tool as { plane: PlaneSpec })}>
+                  {(t) => <Row label="Plano">{planeSpecSelect(t().plane, (p) => update((x) => x.type === "split_faces" && (x.tool = { type: "plane", plane: p })))}</Row>}
+                </Show>
+                <p class="text-[11px] text-text-dim">Las caras quedan partidas (para desmoldes o colores distintos); la pieza sigue entera.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "rotate_face" && (f().kind as Extract<FeatureKind, { type: "rotate_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a girar"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "rotate_face" && (x.faces = refs as FaceRef[]))}
+                />
+                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Bisagra" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "rotate_face" && (x.axis = a))} />
+                {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "rotate_face" && (x.angle = v), "°")}
+                <p class="text-[11px] text-text-dim">La bisagra suele ser una arista de la cara. Lo que sale de la pieza suma material y lo que entra resta.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "vertex_chamfer" && (f().kind as Extract<FeatureKind, { type: "vertex_chamfer" }>)}>
+            {(k) => (
+              <>
+                <Show
+                  when={k().vertex.type === "picked" && (k().vertex as Extract<PointSpec, { type: "picked" }>)}
+                  fallback={<PointField store={props.store} ui={props.ui} owner={`${f().id}:vertice`} label="Vértice" value={k().vertex} except={f().id} onChange={(p) => update((x) => x.type === "vertex_chamfer" && (x.vertex = p))} />}
+                >
+                  {(v) => (
+                    <RefPicksBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:vertice`}
+                      feature={f().id}
+                      what="point"
+                      refs={v().refs}
+                      onChange={(refs) => update((x) => x.type === "vertex_chamfer" && (x.vertex = { type: "picked", refs }))}
+                    />
+                  )}
+                </Show>
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "vertex_chamfer" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Clic en el vértice (una esquina de tres aristas rectas): se corta a esa distancia sobre cada arista.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "full_round" && (f().kind as Extract<FeatureKind, { type: "full_round" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="face" label="Un costado" lost={lost("side_a" as MissingRef["field"])} refs={k().side_a ? [k().side_a] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_a = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label="La cara del medio" lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label="El otro costado" lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
+                <p class="text-[11px] text-text-dim">El radio es la mitad de la distancia entre los costados (por ahora, caras planas).</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "face_blend" && (f().kind as Extract<FeatureKind, { type: "face_blend" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras de un lado" lost={lost("a")} refs={k().a} onChange={(r) => update((x) => x.type === "face_blend" && (x.a = r as FaceRef[]))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Caras del otro lado" lost={lost("b")} refs={k().b} onChange={(r) => update((x) => x.type === "face_blend" && (x.b = r as FaceRef[]))} />
+                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "face_blend" && (x.radius = v), "mm")}
+                <Row label="Lado">
+                  <Select options={BLEND_SIDE_OPTIONS} value={k().side ?? "auto"} onChange={(v) => update((x) => x.type === "face_blend" && (x.side = v === "auto" ? undefined : (v as BlendSide)))} />
+                </Row>
+                <p class="text-[11px] text-text-dim">
+                  Una bola del radio rueda apoyada a la vez en las caras de los dos lados (pueden no ser vecinas, ni planas): si están en un canto lo redondea,
+                  si forman un rincón lo rellena. Cada lado puede ser una cadena de caras tangentes (un óvalo, una pared con redondeos).
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "delete_face" && (f().kind as Extract<FeatureKind, { type: "delete_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a eliminar"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "delete_face" && (x.faces = refs as FaceRef[]))}
+                />
+                <p class="text-[11px] text-text-dim">
+                  Las caras vecinas se extienden hasta cerrar el hueco: sirve para tapar un agujero, sacar un redondeo o un resalte. Si las vecinas no se
+                  cruzan, da error.
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "surface_planar" && (f().kind as Extract<FeatureKind, { type: "surface_planar" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_planar" && ((x.sketch = +v), (x.regions = { type: "all" })))} />
+                </Row>
+                <RegionBox
+                  ui={props.ui}
+                  store={props.store}
+                  owner={`${f().id}:regiones`}
+                  lost={lost("regions")}
+                  sketch={k().sketch}
+                  value={k().regions}
+                  onChange={(r) => update((x) => x.type === "surface_planar" && (x.regions = r))}
+                />
+                <p class="text-[11px] text-text-dim">Las regiones quedan como una superficie sin espesor, aparte de las piezas.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "surface_offset" && (f().kind as Extract<FeatureKind, { type: "surface_offset" }>)}>
+            {(k) => (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  ui={props.ui}
+                  featureId={f().id}
+                  label="Desfasar"
+                  empty="Elegir superficies o piezas"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "surface_offset" && (x.parts = v))}
+                />
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_offset" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">
+                  Una copia a esa distancia sobre la normal (negativa, hacia el otro lado). De una pieza sólida se copia su piel. Queda como superficie nueva.
+                </p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "transform" && (f().kind as Extract<FeatureKind, { type: "transform" }>)}>
+            {(k) => {
+              const [alignPending, setAlignPending] = createSignal(false);
+              return (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  ui={props.ui}
+                  featureId={f().id}
+                  label="Piezas"
+                  empty="Todas"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "transform" && (x.parts = v))}
+                />
+                <Row label="Movimiento">
+                  <Select
+                    options={[
+                      { value: "translate", label: "Desplazar" },
+                      { value: "rotate", label: "Girar" },
+                      { value: "points", label: "De un punto a otro" },
+                      { value: "align", label: "Alinear una cara a un plano" },
+                    ]}
+                    value={alignPending() ? "align" : k().motion.type}
+                    onChange={(v) => {
+                      // Alinear necesita la cara: se elige primero en el visor
+                      setAlignPending(v === "align" && k().motion.type !== "align");
+                      if (v === "align") return;
+                      update((x) => {
+                        if (x.type !== "transform" || x.motion.type === v) return;
+                        x.motion =
+                          v === "rotate"
+                            ? { type: "rotate", axis: { type: "z" }, angle: 90 }
+                            : v === "points"
+                              ? { type: "points", from: { type: "at", point: [0, 0, 0] }, to: { type: "at", point: [20, 0, 0] } }
+                              : { type: "translate", vector: [20, 0, 0] };
+                      });
+                    }}
+                  />
+                </Row>
+                <Show when={alignPending() || k().motion.type === "align"}>
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:cara`}
+                    kind="face"
+                    label="Cara a apoyar"
+                    lost={lost("face")}
+                    refs={k().motion.type === "align" ? [(k().motion as Extract<Motion, { type: "align" }>).face] : []}
+                    onChange={(refs) => {
+                      const face = refs[refs.length - 1] as FaceRef | undefined;
+                      if (!face) return;
+                      setAlignPending(false);
+                      update((x) => {
+                        if (x.type !== "transform") return;
+                        x.motion = x.motion.type === "align" ? { ...x.motion, face } : { type: "align", face, to: { type: "xy" }, flip: false };
+                      });
+                    }}
+                  />
+                </Show>
+                <Show when={k().motion.type === "align" && (k().motion as Extract<Motion, { type: "align" }>)}>
+                  {(m) => (
+                    <>
+                      <Row label="Sobre el plano">{planeSpecSelect(m().to, (p) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.to = p)))}</Row>
+                      <Checkbox
+                        small
+                        label="Del otro lado del plano"
+                        checked={m().flip}
+                        onChange={(c) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.flip = c))}
+                      />
+                    </>
+                  )}
+                </Show>
+                <Show when={k().motion.type === "translate" && (k().motion as Extract<Motion, { type: "translate" }>)}>
+                  {(m) => (
+                    <div class="grid grid-cols-3 gap-1" aria-label="Desplazamiento">
+                      <For each={["X", "Y", "Z"]}>
+                        {(axis, i) =>
+                          field(axis, `kind.motion.vector.${i()}`, m().vector[i()], (x, v) => x.type === "transform" && x.motion.type === "translate" && (x.motion.vector[i()] = v))
+                        }
+                      </For>
+                    </div>
+                  )}
+                </Show>
+                <Show when={k().motion.type === "rotate" && (k().motion as Extract<Motion, { type: "rotate" }>)}>
+                  {(m) => (
+                    <>
+                      <AxisField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:eje`}
+                        label="Eje"
+                        value={m().axis}
+                        except={f().id}
+                        onChange={(a) => update((x) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.axis = a))}
+                      />
+                      {field("Ángulo", "kind.motion.angle", m().angle, (x, v) => x.type === "transform" && x.motion.type === "rotate" && (x.motion.angle = v), "°")}
+                    </>
+                  )}
+                </Show>
+                <Show when={k().motion.type === "points" && (k().motion as Extract<Motion, { type: "points" }>)}>
+                  {(m) => (
+                    <>
+                      <PointField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:desde`}
+                        label="Desde"
+                        value={m().from}
+                        except={f().id}
+                        onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.from = p))}
+                      />
+                      <PointField
+                        store={props.store}
+                        ui={props.ui}
+                        owner={`${f().id}:hasta`}
+                        label="Hasta"
+                        value={m().to}
+                        except={f().id}
+                        onChange={(p) => update((x) => x.type === "transform" && x.motion.type === "points" && (x.motion.to = p))}
+                      />
+                    </>
+                  )}
+                </Show>
+                <Checkbox small label="Copiar (las originales quedan)" checked={k().copy} onChange={(c) => update((x) => x.type === "transform" && (x.copy = c))} />
+                <p class="text-[11px] text-text-dim">
+                  Sin piezas elegidas mueve todas (al alinear, la de la cara). Las copias quedan como piezas nuevas.
+                </p>
+              </>
+              );
+            }}
           </Match>
           <Match when={f().kind.type === "split" && (f().kind as Extract<FeatureKind, { type: "split" }>)}>
             {(k) => {
@@ -2298,17 +3049,30 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "hole" && (f().kind as Extract<FeatureKind, { type: "hole" }>)}>
             {(k) => {
               // Tamaño estándar que corresponde a los diámetros actuales (si alguno)
+              const ALL_HOLES = [...METRIC_HOLES, ...INCH_HOLES];
               const fit = (): { size: string; mode: "clearance" | "tap" | "modeled" } | null => {
                 const mod = k().modeled;
-                if (mod) return { size: METRIC_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6)?.size ?? "", mode: "modeled" };
-                for (const m of METRIC_HOLES) {
+                if (mod)
+                  return {
+                    size: ALL_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6 && Math.abs(m.pitch - mod.pitch) < 1e-6)?.size ??
+                      METRIC_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6)?.size ??
+                      "",
+                    mode: "modeled",
+                  };
+                // La rosca cosmética dice la medida (el pasante y la broca de UNC y UNF a veces coinciden)
+                const named = ALL_HOLES.find((m) => m.size === k().thread);
+                if (named) return { size: named.size, mode: "tap" };
+                for (const m of ALL_HOLES) {
                   if (Math.abs(m.clearance - k().diameter) < 1e-6) return { size: m.size, mode: "clearance" };
                   if (Math.abs(m.tap - k().diameter) < 1e-6) return { size: m.size, mode: "tap" };
                 }
                 return null;
               };
+              // Sistema de medidas: el de la medida actual, o el elegido
+              const [inch, setInch] = createSignal(INCH_HOLES.some((m) => m.size === fit()?.size));
+              const table = () => (inch() ? INCH_HOLES : METRIC_HOLES);
               const applySize = (size: string, mode: "clearance" | "tap" | "modeled") => {
-                const m = METRIC_HOLES.find((x) => x.size === size);
+                const m = ALL_HOLES.find((x) => x.size === size);
                 if (!m) return;
                 update((x) => {
                   if (x.type !== "hole") return;
@@ -2317,7 +3081,7 @@ export const FeatureEditor: Component<{
                   // Al cambiar de medida la rosca modelada toma el paso grueso y conserva la holgura
                   x.modeled = mode === "modeled" ? { nominal: m.nominal, pitch: m.pitch, clearance: x.modeled?.clearance ?? 0, left: x.modeled?.left ?? false } : null;
                   if (x.style.type === "counterbore") x.style = { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth };
-                  if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: 90 };
+                  if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: (m as { csinkAngle?: number }).csinkAngle ?? 90 };
                 });
               };
               const view = () => props.store.sketchView(k().sketch);
@@ -2339,19 +3103,27 @@ export const FeatureEditor: Component<{
                         { value: "simple", label: "Simple" },
                         { value: "counterbore", label: "Con caja" },
                         { value: "countersink", label: "Avellanado" },
+                        { value: "tapered", label: "Cónico" },
                       ]}
                       value={k().style.type}
                       onChange={(v) => {
                         if (v === k().style.type) return;
-                        const m = METRIC_HOLES.find((x) => x.size === fit()?.size) ?? METRIC_HOLES.find((x) => x.size === "M6")!;
+                        const m = ALL_HOLES.find((x) => x.size === fit()?.size) ?? METRIC_HOLES.find((x) => x.size === "M6")!;
                         update((x) => {
                           if (x.type !== "hole") return;
                           x.style =
                             v === "counterbore"
                               ? { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth }
                               : v === "countersink"
-                                ? { type: "countersink", diameter: m.csink, angle: 90 }
-                                : { type: "simple" };
+                                ? { type: "countersink", diameter: m.csink, angle: (m as { csinkAngle?: number }).csinkAngle ?? 90 }
+                                : v === "tapered"
+                                  ? { type: "tapered", angle: 1.7833 }
+                                  : { type: "simple" };
+                          // Un cónico no lleva rosca modelada: queda cosmética
+                          if (v === "tapered" && x.modeled) {
+                            x.thread = threadName(x.modeled);
+                            x.modeled = null;
+                          }
                         });
                       }}
                     />
@@ -2379,10 +3151,27 @@ export const FeatureEditor: Component<{
                     />
                   </Show>
                   <Show when={!k().link}>
+                  <Row label="Sistema">
+                    <Select
+                      options={[
+                        { value: "metric", label: "Métrico (ISO)" },
+                        { value: "inch", label: "Pulgadas (UNC/UNF)" },
+                      ]}
+                      value={inch() ? "inch" : "metric"}
+                      onChange={(v) => {
+                        if ((v === "inch") === inch()) return;
+                        setInch(v === "inch");
+                        // La medida más parecida del otro sistema, con el mismo uso
+                        const now = ALL_HOLES.find((m) => m.size === fit()?.size);
+                        const near = (now ? [...table()].sort((a, b) => Math.abs(a.nominal - now.nominal) - Math.abs(b.nominal - now.nominal))[0] : undefined) ?? table()[0];
+                        applySize(near.size, fit()?.mode ?? "clearance");
+                      }}
+                    />
+                  </Row>
                   <Row label="Tamaño">
                     <Select
-                      options={[{ value: "", label: "A medida" }, ...METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))]}
-                      value={fit()?.size ?? ""}
+                      options={[{ value: "", label: "A medida" }, ...table().map((m) => ({ value: m.size, label: m.size }))]}
+                      value={table().some((m) => m.size === fit()?.size) ? (fit()?.size ?? "") : ""}
                       onChange={(v) => v && applySize(v, fit()?.mode ?? "clearance")}
                     />
                   </Row>
@@ -2416,7 +3205,7 @@ export const FeatureEditor: Component<{
                           <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
                         </Show>
                         <p class="text-[11px] text-text-dim">
-                          M{t().nominal} × {t().pitch}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
+                          {threadName(t())}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
                           una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.
                         </p>
                       </>
@@ -2470,6 +3259,16 @@ export const FeatureEditor: Component<{
                       </>
                     )}
                   </Show>
+                  <Show when={k().style.type === "tapered" && (k().style as { angle: number })}>
+                    {(st) => (
+                      <>
+                        {field("Cono: ángulo", "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "tapered" && (x.style.angle = v), "°")}
+                        <p class="text-[11px] text-text-dim">
+                          Ángulo de la pared con el eje (NPT: 1°47' = 1,7833°). El diámetro es el de la boca; se angosta hasta el fondo.
+                        </p>
+                      </>
+                    )}
+                  </Show>
                   <Show when={k().thread && !k().modeled}>
                     <p class="text-[11px] text-text-dim">Rosca {k().thread} (cosmética: no se modela)</p>
                   </Show>
@@ -2504,8 +3303,37 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Eje" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "helix" && (x.axis = a))} />
-                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
-                {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                {field(k().radius2 != null ? "Radio inicial" : "Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
+                <Checkbox
+                  small
+                  label="Espiral plana"
+                  checked={!!k().flat}
+                  onChange={(c) =>
+                    update((x) => {
+                      if (x.type !== "helix") return;
+                      x.flat = c || undefined;
+                      if (c && x.radius2 == null) x.radius2 = x.radius * 2;
+                    })
+                  }
+                />
+                <Checkbox
+                  small
+                  label="Cónica (dos radios)"
+                  checked={k().radius2 != null}
+                  onChange={(c) =>
+                    update((x) => {
+                      if (x.type !== "helix") return;
+                      x.radius2 = c ? x.radius / 2 : null;
+                      if (!c) x.flat = undefined;
+                    })
+                  }
+                />
+                <Show when={k().radius2 != null}>
+                  {field("Radio final", "kind.radius2", k().radius2 ?? k().radius, (x, v) => x.type === "helix" && (x.radius2 = v), "mm")}
+                </Show>
+                <Show when={!k().flat}>
+                  {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                </Show>
                 {field("Vueltas", "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
                 <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
                 <p class="text-[11px] text-text-dim">Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.</p>
@@ -2979,18 +3807,33 @@ export const FeatureEditor: Component<{
               const NAMES: Record<string, string> = { line: "Línea", arc: "Arco", spline: "Spline" };
               return (
                 <>
-                  <Row label="Perfil">
-                    <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
+                  <Row label="Tipo de perfil">
+                    <Select
+                      options={[
+                        { value: "sketch", label: "Regiones de un sketch" },
+                        { value: "circle", label: "Círculo (tubo)" },
+                      ]}
+                      value={k().circle != null ? "circle" : "sketch"}
+                      onChange={(v) => update((x) => x.type === "sweep" && (x.circle = v === "circle" ? 2 : null))}
+                    />
                   </Row>
-                  <RegionBox
-                    ui={props.ui}
-                    store={props.store}
-                    owner={`${f().id}:regiones`}
-                    lost={lost("regions")}
-                    sketch={k().sketch}
-                    value={k().regions}
-                    onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
-                  />
+                  <Show
+                    when={k().circle == null}
+                    fallback={field("Radio del tubo", "kind.circle", k().circle ?? 2, (x, v) => x.type === "sweep" && (x.circle = v), "mm")}
+                  >
+                    <Row label="Perfil">
+                      <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "sweep" && (x.sketch = +v))} />
+                    </Row>
+                    <RegionBox
+                      ui={props.ui}
+                      store={props.store}
+                      owner={`${f().id}:regiones`}
+                      lost={lost("regions")}
+                      sketch={k().sketch}
+                      value={k().regions}
+                      onChange={(r) => update((x) => x.type === "sweep" && (x.regions = r))}
+                    />
+                  </Show>
                   <Row label="Camino">
                     <Select
                       options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
@@ -3027,10 +3870,107 @@ export const FeatureEditor: Component<{
                     </For>
                   </div>
                   </Show>
+                  <Row label="Orientación">
+                    <Select options={ORIENT_OPTIONS} value={k().orient ?? "follow"} onChange={(v) => update((x) => x.type === "sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))} />
+                  </Row>
+                  <Row label="Curva guía">
+                    <Select
+                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      value={(() => {
+                        const g = k().guide;
+                        return !g ? "" : g.type === "sketch" ? String(g.sketch) : `curve:${g.feature}`;
+                      })()}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "sweep" &&
+                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                        )
+                      }
+                    />
+                  </Row>
+                  <Show when={!k().guide}>
+                    {field("Torsión", "kind.twist", k().twist ?? 0, (x, v) => x.type === "sweep" && (x.twist = v === 0 ? null : v), "°")}
+                  </Show>
+                  <Checkbox
+                    small
+                    label="Delgado (solo una pared)"
+                    checked={k().thin != null}
+                    onChange={(c) => update((x) => x.type === "sweep" && (x.thin = c ? 1 : null))}
+                  />
+                  <Show when={k().thin != null}>
+                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "sweep" && (x.thin = v), "mm")}
+                  </Show>
                   <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "sweep" && (x.op = o)))}</Row>
                 </>
               );
             }}
+          </Match>
+          <Match when={f().kind.type === "surface_sweep" && (f().kind as Extract<FeatureKind, { type: "surface_sweep" }>)}>
+            {(k) => (
+              <>
+                <Row label="Curvas de">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_sweep" && ((x.sketch = +v), (x.entities = [])))} />
+                </Row>
+                <Row label="Camino">
+                  <Select
+                    options={[...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    value={(() => {
+                      const p = k().path;
+                      return p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                    })()}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "surface_sweep" &&
+                          (x.path = v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                      )
+                    }
+                  />
+                </Row>
+                <Row label="Orientación">
+                  <Select
+                    options={ORIENT_OPTIONS}
+                    value={k().orient ?? "follow"}
+                    onChange={(v) => update((x) => x.type === "surface_sweep" && (x.orient = v === "follow" ? undefined : (v as SweepOrient)))}
+                  />
+                </Row>
+                <p class="text-[11px] text-text-dim">Cada curva del sketch (abierta o cerrada) da una superficie sin espesor.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "surface_loft" && (f().kind as Extract<FeatureKind, { type: "surface_loft" }>)}>
+            {(k) => (
+              <>
+                <For each={k().sections}>
+                  {(sec, i) => (
+                    <Row label={`Sección ${i() + 1}`}>
+                      <Select
+                        options={sketchOptions()}
+                        value={String(sec.sketch)}
+                        onChange={(v) => update((x) => x.type === "surface_loft" && (x.sections[i()] = { sketch: +v, entities: [] }))}
+                      />
+                    </Row>
+                  )}
+                </For>
+                <Button
+                  size="sm"
+                  fullWidth
+                  onClick={() =>
+                    update((x) => {
+                      if (x.type !== "surface_loft") return;
+                      const used = new Set(x.sections.map((s) => s.sketch));
+                      const next = props.sketches.find((s) => !used.has(s.id));
+                      if (next) x.sections.push({ sketch: next.id, entities: [] });
+                    })
+                  }
+                >
+                  Agregar sección
+                </Button>
+                <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "surface_loft" && (x.ruled = c))} />
+                <p class="text-[11px] text-text-dim">Cada sección es una cadena de curvas (abierta o cerrada) de un sketch.</p>
+              </>
+            )}
           </Match>
           <Match when={f().kind.type === "loft" && (f().kind as Extract<FeatureKind, { type: "loft" }>)}>
             {(k) => (
@@ -3074,6 +4014,81 @@ export const FeatureEditor: Component<{
                   Agregar sección
                 </Button>
                 <Checkbox small label="Caras planas entre secciones" checked={k().ruled} onChange={(c) => update((x) => x.type === "loft" && (x.ruled = c))} />
+                <Checkbox
+                  small
+                  label="Empieza en un punto"
+                  checked={!!k().start_point}
+                  onChange={(c) => update((x) => x.type === "loft" && (x.start_point = c ? { type: "at", point: [0, 0, -10] } : null))}
+                />
+                <Show when={k().start_point}>
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:desde`} label="Punta inicial" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.start_point = q))} />}
+                </Show>
+                <Checkbox
+                  small
+                  label="Termina en un punto"
+                  checked={!!k().end_point}
+                  onChange={(c) => update((x) => x.type === "loft" && (x.end_point = c ? { type: "at", point: [0, 0, 20] } : null))}
+                />
+                <Show when={k().end_point}>
+                  {(p) => <PointField store={props.store} ui={props.ui} owner={`${f().id}:hasta`} label="Punta final" value={p()} except={f().id} onChange={(q) => update((x) => x.type === "loft" && (x.end_point = q))} />}
+                </Show>
+                <Checkbox small label="Cerrada (vuelve a la primera)" checked={!!k().closed} onChange={(c) => update((x) => x.type === "loft" && (x.closed = c || undefined))} />
+                <Checkbox
+                  small
+                  label="Sale perpendicular a la primera sección"
+                  checked={k().start_tangent != null}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.start_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                />
+                <Show when={k().start_tangent != null}>
+                  {field("Peso al comienzo", "kind.start_tangent", k().start_tangent ?? 1, (x, v) => x.type === "loft" && (x.start_tangent = v))}
+                </Show>
+                <Checkbox
+                  small
+                  label="Llega perpendicular a la última sección"
+                  checked={k().end_tangent != null}
+                  onChange={(c) => update((x) => x.type === "loft" && ((x.end_tangent = c ? 1 : null), c && (x.ruled = false)))}
+                />
+                <Show when={k().end_tangent != null}>
+                  {field("Peso al final", "kind.end_tangent", k().end_tangent ?? 1, (x, v) => x.type === "loft" && (x.end_tangent = v))}
+                </Show>
+                <Checkbox small label="Delgada (solo una pared)" checked={k().thin != null} onChange={(c) => update((x) => x.type === "loft" && (x.thin = c ? 1 : null))} />
+                <Show when={k().thin != null}>
+                  {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "loft" && (x.thin = v), "mm")}
+                </Show>
+                <Row label="Línea central">
+                  <Select
+                    options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                    value={(() => {
+                      const p = k().path;
+                      return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                    })()}
+                    onChange={(v) =>
+                      update(
+                        (x) =>
+                          x.type === "loft" &&
+                          (x.path = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                      )
+                    }
+                  />
+                </Row>
+                <Show when={k().path}>
+                  <Row label="Curva guía">
+                    <Select
+                      options={[{ value: "", label: "Ninguna" }, ...sketchOptions(), ...refOptions(props.store, "curve").map((o) => ({ value: o.value.replace("ref:", "curve:"), label: o.label }))]}
+                      value={(() => {
+                        const p = k().guide;
+                        return !p ? "" : p.type === "sketch" ? String(p.sketch) : `curve:${p.feature}`;
+                      })()}
+                      onChange={(v) =>
+                        update(
+                          (x) =>
+                            x.type === "loft" &&
+                            (x.guide = !v ? null : v.startsWith("curve:") ? { type: "curve", feature: +v.slice(6) } : { type: "sketch", sketch: +v, entities: [] }),
+                        )
+                      }
+                    />
+                  </Row>
+                </Show>
                 <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
               </>
             )}
@@ -3098,11 +4113,13 @@ export const FeatureEditor: Component<{
                         { value: "angle", label: "En ángulo" },
                         { value: "midplane", label: "Plano medio" },
                         { value: "three_points", label: "Por tres puntos" },
+                        { value: "picked", label: "Por clics (se deduce)" },
                       ]}
                       value={def().type}
                       onChange={(v) => {
                         if (v === def().type) return;
-                        if (v === "offset") setDef({ type: "offset", base: base(), distance: 10 });
+                        if (v === "picked") setDef({ type: "picked", refs: [] });
+                        else if (v === "offset") setDef({ type: "offset", base: base(), distance: 10 });
                         else if (v === "angle") setDef({ type: "angle", base: base(), axis: { type: "x" }, angle: 45 });
                         else if (v === "midplane") setDef({ type: "midplane", a: base(), b: { type: "xy" } });
                         else
@@ -3118,6 +4135,25 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Switch>
+                    <Match when={def().type === "picked" && (def() as Extract<PlaneDef, { type: "picked" }>)}>
+                      {(d) => (
+                        <>
+                          <RefPicksBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:refs`}
+                            feature={f().id}
+                            what="plane"
+                            refs={d().refs}
+                            lost={lost("refs" as MissingRef["field"])}
+                            onChange={(refs) => setDef({ ...d(), refs })}
+                          />
+                          {field("Distancia", "kind.def.offset", d().offset ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.offset = v || undefined), "mm")}
+                          {field("Ángulo", "kind.def.angle", d().angle ?? 0, (x, v) => x.type === "plane" && x.def.type === "picked" && (x.def.angle = v || undefined), "°")}
+                          <Checkbox small label="Dar vuelta la normal" checked={!!d().flip} onChange={(c) => setDef({ ...d(), flip: c || undefined })} />
+                        </>
+                      )}
+                    </Match>
                     <Match when={def().type === "offset" && (def() as Extract<PlaneDef, { type: "offset" }>)}>
                       {(d) => (
                         <>
@@ -3178,11 +4214,13 @@ export const FeatureEditor: Component<{
                         { value: "edge", label: "Arista" },
                         { value: "face", label: "Eje de un cilindro" },
                         { value: "planes", label: "Cruce de dos planos" },
+                        { value: "picked", label: "Por clics (se deduce)" },
                       ]}
                       value={def().type}
                       onChange={(v) => {
                         if (v === def().type) return;
-                        if (v === "two_points") setDef({ type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } });
+                        if (v === "picked") setDef({ type: "picked", refs: [] });
+                        else if (v === "two_points") setDef({ type: "two_points", a: { type: "at", point: [0, 0, 0] }, b: { type: "at", point: [0, 0, 10] } });
                         else if (v === "planes") setDef({ type: "planes", a: { type: "xz" }, b: { type: "yz" } });
                         else if (v === "edge") setDef({ type: "edge", edge: undefined as unknown as EdgeRef });
                         else setDef({ type: "face", face: undefined as unknown as FaceRef });
@@ -3190,6 +4228,20 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   <Switch>
+                    <Match when={def().type === "picked" && (def() as Extract<AxisDef, { type: "picked" }>)}>
+                      {(d) => (
+                        <RefPicksBox
+                          store={props.store}
+                          ui={props.ui}
+                          owner={`${f().id}:refs`}
+                          feature={f().id}
+                          what="axis"
+                          refs={d().refs}
+                          lost={lost("refs" as MissingRef["field"])}
+                          onChange={(refs) => setDef({ type: "picked", refs })}
+                        />
+                      )}
+                    </Match>
                     <Match when={def().type === "two_points" && (def() as Extract<AxisDef, { type: "two_points" }>)}>
                       {(d) => (
                         <>
@@ -3241,15 +4293,50 @@ export const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "point" && (f().kind as Extract<FeatureKind, { type: "point" }>)}>
             {(k) => (
-              <PointField
-                store={props.store}
-                ui={props.ui}
-                owner={`${f().id}:punto`}
-                label="Punto"
-                value={k().def}
-                except={f().id}
-                onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
-              />
+              <>
+                <Row label="Tipo">
+                  <Select
+                    options={[
+                      { value: "picked", label: "Por clics (se deduce)" },
+                      { value: "other", label: "Coordenadas, arista o referencia" },
+                    ]}
+                    value={k().def.type === "picked" ? "picked" : "other"}
+                    onChange={(v) =>
+                      update((x) => {
+                        if (x.type !== "point" || (v === "picked") === (x.def.type === "picked")) return;
+                        x.def = v === "picked" ? { type: "picked", refs: [] } : { type: "at", point: [0, 0, 0] };
+                      })
+                    }
+                  />
+                </Row>
+                <Show
+                  when={k().def.type === "picked" && (k().def as Extract<PointSpec, { type: "picked" }>)}
+                  fallback={
+                    <PointField
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:punto`}
+                      label="Punto"
+                      value={k().def}
+                      except={f().id}
+                      onChange={(p) => update((x) => x.type === "point" && (x.def = p))}
+                    />
+                  }
+                >
+                  {(d) => (
+                    <RefPicksBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:refs`}
+                      feature={f().id}
+                      what="point"
+                      refs={d().refs}
+                      lost={lost("refs" as MissingRef["field"])}
+                      onChange={(refs) => update((x) => x.type === "point" && (x.def = { type: "picked", refs }))}
+                    />
+                  )}
+                </Show>
+              </>
             )}
           </Match>
         </Switch>
@@ -3377,7 +4464,7 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
   const current = () => (props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
   const edgeOf = () => (props.value.type === "center" || props.value.type === "on_edge" ? [props.value.edge] : []);
   return (
-    <div class="space-y-1">
+    <div class="space-y-1" data-point-field={props.label}>
       <Row label={props.label}>
         <Select
           options={[
@@ -3442,6 +4529,34 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
  * (otra vez la quita), y la lista muestra solo las elegidas (con muchas piezas,
  * una lista de casillas no sirve). Sin elegir, las que toca.
  */
+/** Copias de un patrón que no se hacen, escritas como lista ("2, 5") */
+const SkipCopies: Component<{ value: number[]; onChange: (v: number[]) => void }> = (props) => (
+  <>
+    <label class="flex items-center gap-2 text-xs">
+      <span class="text-text-muted shrink-0 w-24">Omitir copias</span>
+      <input
+        type="text"
+        aria-label="Omitir copias"
+        placeholder="ninguna"
+        value={props.value.join(", ")}
+        class="w-full min-w-0 px-2 py-1 rounded bg-surface/40 border border-border text-xs text-text font-mono outline-none focus:border-accent"
+        onChange={(e) => {
+          const nums = e.currentTarget.value
+            .split(/[\s,;]+/)
+            .map(Number)
+            .filter((n) => Number.isInteger(n) && n >= 1);
+          props.onChange([...new Set(nums)].sort((a, b) => a - b));
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+          e.stopPropagation();
+        }}
+      />
+    </label>
+    <p class="text-[11px] text-text-dim">Números de las copias que no se hacen (1 es la primera; en dos direcciones se cuentan por filas).</p>
+  </>
+);
+
 const PartChecklist: Component<{
   store: CadStore;
   ui: CadUi;
@@ -3550,6 +4665,131 @@ const PartChecklist: Component<{
 // ─── Cajas de selección ───────────────────────────────────────────────────
 
 const NOUNS = { edges: "Arista", faces: "Cara", face: "Cara" } as const;
+const REF_PROMPTS = {
+  plane: "Clic en lo que define el plano: una cara o un plano; dos planos; un plano y una arista; una arista y un punto; tres vértices…",
+  axis: "Clic en lo que define el eje: una arista, una cara cilíndrica, dos vértices, dos planos…",
+  point: "Clic en lo que define el punto: un vértice, una arista (su medio o su centro), una arista y una cara…",
+};
+const REF_HINTS = {
+  plane: "Una cara o un plano (desfasado) · dos planos (medio o bisector) · un plano y una línea (en ángulo) · una línea y un punto · una curva y un punto (normal) · una cara curva y un punto (tangente) · tres puntos",
+  axis: "Una arista o línea · una circunferencia · una cara cilíndrica o cónica · dos puntos · dos planos (su cruce) · un plano y un punto (normal)",
+  point: "Un vértice · una arista (su medio, o el centro si es circular) · una esfera · dos puntos (el medio) · una arista y una cara (el cruce) · un punto y un plano (la proyección) · dos líneas (su cruce)",
+};
+
+/**
+ * Lo que arma una referencia por clics: cada clic en el visor suma algo
+ * (cara, arista, vértice o plano) y el tipo se deduce de lo elegido; abajo
+ * dice qué se armó. También se suman referencias del árbol.
+ */
+const RefPicksBox: Component<{
+  store: CadStore;
+  ui: CadUi;
+  owner: string;
+  feature: number;
+  what: "plane" | "axis" | "point";
+  refs: RefPick[];
+  lost?: number[];
+  onChange: (refs: RefPick[]) => void;
+}> = (props) => {
+  const ui = props.ui;
+  const active = () => (ui.pick() as { owner?: string }).owner === props.owner;
+  const names = () => new Map((props.store.doc()?.features ?? []).map((f) => [f.id, f.name]));
+  const label = (r: RefPick): string => {
+    if (r.type === "face") return "Cara";
+    if (r.type === "edge") return "Arista";
+    if (r.type === "plane") {
+      const p = r.plane;
+      return p.type === "reference" ? (names().get(p.feature) ?? "Plano") : p.type === "face" ? "Cara plana" : p.type === "custom" ? "Plano propio" : PLANE_LABELS[p.type];
+    }
+    if (r.type === "axis") {
+      const a = r.axis;
+      return a.type === "reference" ? (names().get(a.feature) ?? "Eje") : a.type === "sketch_line" ? `Línea ${a.line}` : a.type === "x" || a.type === "y" || a.type === "z" ? `Eje ${a.type.toUpperCase()}` : "Eje";
+    }
+    const p = r.point;
+    if (p.type === "edge_end") return "Vértice";
+    if (p.type === "reference") return names().get(p.feature) ?? "Punto";
+    if (p.type === "at") return `Punto (${p.point.map((v) => +v.toFixed(2)).join("; ")})`;
+    return "Punto";
+  };
+  const activate = () => {
+    void props.store.setSelecting(true);
+    ui.setPick({ kind: "refs", owner: props.owner, prompt: REF_PROMPTS[props.what], add: (p) => props.onChange([...props.refs, p]) });
+  };
+  // Vacía al abrir el diálogo: se empieza eligiendo
+  createEffect(
+    on(
+      () => !!props.store.draft(),
+      (open) => {
+        if (open && untrack(() => props.refs.length === 0)) queueMicrotask(() => props.store.draft() && activate());
+      },
+    ),
+  );
+  createEffect(
+    on(active, (now, before) => {
+      if (!now && before && ui.pick().kind === "none") void props.store.setSelecting(false);
+    }),
+  );
+  onCleanup(() => {
+    if (active()) ui.cancelPick();
+  });
+  const how = () => props.store.result()?.references.find((r) => r.id === props.feature)?.how;
+  const problem = () => {
+    const st = props.store.stateOf(props.feature);
+    return st?.state === "error" ? st.message : undefined;
+  };
+  // Del árbol: planos, ejes y puntos de referencia (y los ejes base)
+  const treeOptions = () => [
+    { value: "", label: "Sumar del árbol…" },
+    ...(["x", "y", "z"] as const).map((a) => ({ value: `axis:${a}`, label: `Eje ${a.toUpperCase()}` })),
+    ...refOptions(props.store, "plane", props.feature).map((o) => ({ value: `plane:${o.value.slice(4)}`, label: o.label })),
+    ...refOptions(props.store, "axis", props.feature).map((o) => ({ value: `axisref:${o.value.slice(4)}`, label: o.label })),
+    ...refOptions(props.store, "point", props.feature).map((o) => ({ value: `point:${o.value.slice(4)}`, label: o.label })),
+  ];
+  const addFromTree = (v: string) => {
+    const [kind, id] = v.split(":");
+    const r: RefPick | undefined =
+      kind === "axis"
+        ? { type: "axis", axis: { type: id as "x" | "y" | "z" } }
+        : kind === "plane"
+          ? { type: "plane", plane: { type: "reference", feature: +id } }
+          : kind === "axisref"
+            ? { type: "axis", axis: { type: "reference", feature: +id } }
+            : kind === "point"
+              ? { type: "point", point: { type: "reference", feature: +id } }
+              : undefined;
+    if (r) props.onChange([...props.refs, r]);
+  };
+  return (
+    <div class="space-y-1" aria-label="Lo elegido" data-ref-picks>
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-xs text-text-muted">Elegido</span>
+        <Button size="sm" variant={active() ? "primary" : "default"} onClick={() => (active() ? ui.cancelPick() : activate())}>
+          {active() ? "Listo" : "Elegir en el visor"}
+        </Button>
+      </div>
+      <For each={props.refs} fallback={<p class="text-[11px] text-text-dim">Nada todavía: clic en el visor</p>}>
+        {(r, i) => (
+          <div class="flex items-center gap-1 text-xs" data-ref-pick={i()}>
+            <span class={clsx("flex-1 truncate", (props.lost ?? []).includes(i()) ? "text-error" : "text-text")}>
+              {label(r)}
+              {(props.lost ?? []).includes(i()) ? " · no encontrada" : ""}
+            </span>
+            <IconButton aria-label={`Quitar ${label(r)}`} size="sm" variant="ghost" onClick={() => props.onChange(props.refs.filter((_, k) => k !== i()))}>
+              <Icons.Trash size={11} />
+            </IconButton>
+          </div>
+        )}
+      </For>
+      <Select options={treeOptions()} value="" onChange={(v) => v && addFromTree(v)} />
+      <Show when={how()} fallback={<p class="text-[11px] text-text-dim leading-relaxed">{problem() ?? REF_HINTS[props.what]}</p>}>
+        <p class="text-[11px] text-accent" data-ref-how>
+          Se armó: {how()}
+        </p>
+      </Show>
+    </div>
+  );
+};
+
 const PROMPTS = {
   edges: "Clic en las aristas (otra vez para quitarla)",
   faces: "Clic en las caras (otra vez para quitarla)",

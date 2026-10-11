@@ -113,7 +113,7 @@ fn fillet_and_shell_work_per_part() {
     let body = ev.body.as_ref().unwrap();
     // Arista de arriba adelante de la segunda pieza
     let (e, _) = body.closest_edge([35.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.99).unwrap();
-    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e).unwrap()], radius: 2.0, radius2: None });
+    doc.add(FeatureKind::Fillet { edges: vec![ev.edge_ref(e).unwrap()], radius: 2.0, radius2: None, points: vec![] });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let v = volumes(&ev);
@@ -123,7 +123,7 @@ fn fillet_and_shell_work_per_part() {
     let body = ev.body.as_ref().unwrap();
     let (top, _) = body.closest_face([5.0, 5.0, 10.0], Some([0.0, 0.0, 1.0]), 0.99).unwrap();
     let second = v[1];
-    doc.add(FeatureKind::Shell { faces: vec![ev.face_ref(top).unwrap()], thickness: 1.0 });
+    doc.add(FeatureKind::Shell { faces: vec![ev.face_ref(top).unwrap()], thickness: 1.0, overrides: vec![] });
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let v = volumes(&ev);

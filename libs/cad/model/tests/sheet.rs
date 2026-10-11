@@ -100,7 +100,7 @@ fn flange_down_at_an_angle_and_a_hole() {
         s.add_entity(Geometry::Circle { center: c, radius: 5.0 });
         s
     } });
-    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None }));
+    doc.add(FeatureKind::Extrude(Extrude { sketch: sk, regions: RegionSelection::All, extent: Extent::ThroughAll, reverse: false, op: BodyOp::Cut, draft: 0.0, thin: None, direction: None, start: 0.0 }));
     let b = body(&doc);
     let flat = sheet::flat_pattern(&b, 0.44, None, None).unwrap();
     assert_relative_eq!(flat.thickness, 2.0, epsilon = 1e-6);

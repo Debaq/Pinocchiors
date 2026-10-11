@@ -25,13 +25,13 @@ fn revolve_profile_across_the_axis() {
     // En el frente (x, z): rectángulo de x −2..5 alrededor del eje Z
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: rect(-2.0, 0.0, 5.0, 10.0) });
-    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join }));
+    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join, extent: RevolveExtent::One, thin: None }));
     let e = error_of(&doc, rv).expect("tiene que avisar");
     assert!(e.contains("cruza el eje"), "{e}");
     // Tocando el eje (x 0..5) está bien
     let mut doc = Document::new();
     let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: rect(0.0, 0.0, 5.0, 10.0) });
-    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join }));
+    let rv = doc.add(FeatureKind::Revolve(Revolve { sketch: sk, regions: RegionSelection::All, axis: AxisSpec::Z, angle: 360.0, op: BodyOp::Join, extent: RevolveExtent::One, thin: None }));
     assert_eq!(error_of(&doc, rv), None);
 }
 
@@ -54,7 +54,7 @@ fn sweep_path_with_branches() {
     path.add_line(b, c);
     path.add_line(b, d);
     let ps = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
-    let sw = doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: ps, entities: vec![] }, op: BodyOp::Join }));
+    let sw = doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: ps, entities: vec![] }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None, twist: None }));
     let e = error_of(&doc, sw).expect("tiene que avisar");
     assert!(e.contains("ramas") && e.contains("3 tramos"), "{e}");
 }
@@ -75,7 +75,7 @@ fn loft_section_with_two_regions() {
     let lf = doc.add(FeatureKind::Loft(Loft {
         sections: vec![LoftSection { sketch: a, regions: RegionSelection::All }, LoftSection { sketch: b, regions: RegionSelection::All }],
         ruled: false,
-        op: BodyOp::Join,
+        op: BodyOp::Join, start_point: None, end_point: None, closed: false, thin: None, path: None, guide: None, start_tangent: None, end_tangent: None,
     }));
     let e = error_of(&doc, lf).expect("tiene que avisar");
     assert!(e.contains("sección 1") && e.contains("2 regiones"), "{e}");
