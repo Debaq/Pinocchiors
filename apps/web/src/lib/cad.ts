@@ -674,6 +674,12 @@ export type FeatureKind =
   | { type: "surface_offset"; parts: PartId[]; distance: number }
   /** Espesor a caras del sólido */
   | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
+  /** Caras planas giradas alrededor de un eje (bisagra) */
+  | { type: "rotate_face"; faces: FaceRef[]; axis: AxisSpec; angle: number }
+  /** Corta la esquina de un vértice de tres aristas a `distance` sobre cada una */
+  | { type: "vertex_chamfer"; vertex: PointSpec; distance: number }
+  /** La cara del medio entre dos laterales paralelas, como medio cilindro */
+  | { type: "full_round"; side_a: FaceRef; middle: FaceRef; side_b: FaceRef }
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
   | { type: "move_face"; faces: FaceRef[]; distance: number }
   /** Pared desde las líneas de un sketch hasta el sólido, centrada en su plano */
@@ -1455,6 +1461,9 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   transform: "Mover cuerpo",
   surface_planar: "Superficie plana",
   delete_face: "Eliminar cara",
+  rotate_face: "Girar cara",
+  vertex_chamfer: "Chaflán de vértice",
+  full_round: "Redondeo completo",
   surface_sweep: "Superficie por barrido",
   surface_loft: "Superficie por transición",
   surface_extend: "Extender superficie",
@@ -1719,7 +1728,10 @@ export function dependencies(kind: FeatureKind): number[] {
     case "surface_sweep":
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
     case "helix":
+    case "rotate_face":
       return axis(kind.axis);
+    case "vertex_chamfer":
+      return point(kind.vertex);
     case "curve": {
       const d = kind.def;
       return d.type === "composite" ? d.curves : d.type === "projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];

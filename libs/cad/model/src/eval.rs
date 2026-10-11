@@ -2522,6 +2522,141 @@ impl Ctx<'_> {
                 self.ev.curves.insert(f.id, wire);
                 Ok(())
             }
+            FeatureKind::RotateFace { faces, axis, angle } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                if angle.abs() < 1e-9 {
+                    return Err("ángulo cero".into());
+                }
+                let ax = self.axis("axis", axis)?;
+                let idx = self.faces("faces", faces)?;
+                let body = self.body()?.clone();
+                let far = self.diag() * 4.0;
+                let m = cad_occt::rotation_matrix(ax, angle.to_radians());
+                let rot = |v: P3, w: f64| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] + w * m[i][3]);
+                // Cada cara: la cuña entre su plano y el girado (afuera suma, adentro resta)
+                let mut jobs = Vec::new();
+                for &i in &idx {
+                    let info = body.face_info(i).map_err(err)?;
+                    if info.surface != SurfaceKind::Plane {
+                        return Err("por ahora solo se giran caras planas".into());
+                    }
+                    let n = normalize(info.normal);
+                    let (o1, n1) = (rot(info.point, 1.0), normalize(rot(n, 0.0)));
+                    if dot(n, n1) < 0.2 {
+                        return Err("demasiado giro: la cara quedaría casi de canto".into());
+                    }
+                    let fc = body.face_shape(i).map_err(err)?;
+                    let grow = fc.prism(scale(n, far)).and_then(|p| p.split_keep(o1, scale(n1, -1.0))).map_err(err)?;
+                    let shrink = fc.prism(scale(n, -far)).and_then(|p| p.split_keep(o1, n1)).map_err(err)?;
+                    let part = self.ev.part_of_face(i).ok_or("la cara no es de ninguna pieza")?;
+                    jobs.push((part, grow, shrink));
+                }
+                let saved = std::mem::take(&mut self.scope);
+                let mut r = Ok(());
+                for (k, (part, grow, shrink)) in jobs.into_iter().enumerate() {
+                    self.scope = vec![part];
+                    for (tool, op) in [(grow, BodyOp::Join), (shrink, BodyOp::Cut)] {
+                        if tool.mass().is_ok_and(|m| m.volume > 1e-9) {
+                            let tags = vec![vec![tag(f.id, format!("cara:{k}"))]; tool.face_count()];
+                            r = self.apply(f.id, Tagged { shape: tool, tags }, op);
+                            if r.is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    if r.is_err() {
+                        break;
+                    }
+                }
+                self.scope = saved;
+                r
+            }
+            FeatureKind::VertexChamfer { vertex, distance } => {
+                if *distance <= 0.0 {
+                    return Err("la distancia tiene que ser mayor que cero".into());
+                }
+                let p = self.point("vertex", vertex)?;
+                let body = self.body()?.clone();
+                let tol = self.diag().max(1.0) * 1e-6;
+                // Las aristas que llegan al vértice y, sobre cada una, el punto a `distance`
+                let mut pts = Vec::new();
+                let mut part = None;
+                for (i, e) in body.edges().map_err(err)?.iter().enumerate() {
+                    let other = if norm(sub(e.start, p)) < tol {
+                        e.end
+                    } else if norm(sub(e.end, p)) < tol {
+                        e.start
+                    } else {
+                        continue;
+                    };
+                    if e.curve != cad_occt::CurveKind::Line {
+                        return Err("el chaflán de vértice va con aristas rectas".into());
+                    }
+                    if norm(sub(other, p)) <= *distance {
+                        return Err("la distancia es más larga que una de las aristas".into());
+                    }
+                    pts.push(add(p, scale(normalize(sub(other, p)), *distance)));
+                    if part.is_none() {
+                        part = self.ev.part_ranges().into_iter().find(|(_, _, es)| es.contains(&i)).map(|(id, _, _)| id);
+                    }
+                }
+                if pts.len() != 3 {
+                    return Err(format!("el vértice tiene {} aristas: el chaflán de vértice va en esquinas de tres", pts.len()));
+                }
+                let mut n = normalize(cross(sub(pts[1], pts[0]), sub(pts[2], pts[0])));
+                if dot(sub(p, pts[0]), n) < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                // La esquina: una esfera alrededor del vértice, del lado del vértice
+                let corner = Shape::sphere(p, distance * 1.5).and_then(|s| s.split_keep(pts[0], n)).map_err(err)?;
+                let saved = std::mem::take(&mut self.scope);
+                self.scope = part.into_iter().collect();
+                let tags = vec![vec![tag(f.id, "chaflan")]; corner.face_count()];
+                let r = self.apply(f.id, Tagged { shape: corner, tags }, BodyOp::Cut);
+                self.scope = saved;
+                r
+            }
+            FeatureKind::FullRound { side_a, middle, side_b } => {
+                let (ia, im, ib) = (self.face("side_a", side_a)?, self.face("middle", middle)?, self.face("side_b", side_b)?);
+                let body = self.body()?.clone();
+                let (a, m, b) = (body.face_info(ia).map_err(err)?, body.face_info(im).map_err(err)?, body.face_info(ib).map_err(err)?);
+                if [a.surface, m.surface, b.surface].iter().any(|s| *s != SurfaceKind::Plane) {
+                    return Err("por ahora el redondeo completo va con caras planas".into());
+                }
+                let (na, nm, nb) = (normalize(a.normal), normalize(m.normal), normalize(b.normal));
+                if dot(na, nb) > -0.999 {
+                    return Err("las caras de los costados tienen que ser paralelas y opuestas".into());
+                }
+                if dot(na, nm).abs() > 1e-3 {
+                    return Err("la cara del medio tiene que ser perpendicular a las de los costados".into());
+                }
+                let w = dot(sub(b.point, a.point), na).abs();
+                let r = w / 2.0;
+                // Lo que se saca: la cara del medio hacia adentro el radio; lo que queda: medio cilindro
+                let fm = body.face_shape(im).map_err(err)?;
+                let slab = fm.prism(scale(nm, -r)).map_err(err)?;
+                let dir = normalize(cross(na, nm));
+                let mid = scale(add(a.point, b.point), 0.5);
+                let c0 = add(m.point, scale(na, dot(sub(mid, m.point), na)));
+                let c = sub(c0, scale(nm, r));
+                let fmm = fm.mass().map_err(err)?;
+                let along = (0..8).map(|k| [0, 1, 2].map(|q| if k >> q & 1 == 0 { fmm.bbox_min[q] } else { fmm.bbox_max[q] })).map(|v| dot(sub(v, c), dir));
+                let (lo, hi) = along.fold((f64::INFINITY, f64::NEG_INFINITY), |(l, h), x| (l.min(x), h.max(x)));
+                let cyl = Shape::cylinder(Frame { origin: add(c, scale(dir, lo)), z: dir, x: nm }, r, hi - lo).map_err(err)?;
+                let round = cyl.intersect(&slab).map_err(err)?;
+                let part = self.ev.part_of_face(im).ok_or("la cara no es de ninguna pieza")?;
+                let saved = std::mem::take(&mut self.scope);
+                self.scope = vec![part];
+                let tags = |s: &Shape, t: &str| vec![vec![tag(f.id, t.to_string())]; s.face_count()];
+                let mut res = self.apply(f.id, Tagged { tags: tags(&slab, "corte"), shape: slab }, BodyOp::Cut);
+                if res.is_ok() {
+                    res = self.apply(f.id, Tagged { tags: tags(&round, "redondeo"), shape: round }, BodyOp::Join);
+                }
+                self.scope = saved;
+                res
+            }
             FeatureKind::MoveFace { faces, distance } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());

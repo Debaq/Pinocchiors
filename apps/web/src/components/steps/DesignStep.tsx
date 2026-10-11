@@ -2500,6 +2500,59 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "rotate_face" && (f().kind as Extract<FeatureKind, { type: "rotate_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a girar"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "rotate_face" && (x.faces = refs as FaceRef[]))}
+                />
+                <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Bisagra" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "rotate_face" && (x.axis = a))} />
+                {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "rotate_face" && (x.angle = v), "°")}
+                <p class="text-[11px] text-text-dim">La bisagra suele ser una arista de la cara. Lo que sale de la pieza suma material y lo que entra resta.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "vertex_chamfer" && (f().kind as Extract<FeatureKind, { type: "vertex_chamfer" }>)}>
+            {(k) => (
+              <>
+                <Show
+                  when={k().vertex.type === "picked" && (k().vertex as Extract<PointSpec, { type: "picked" }>)}
+                  fallback={<PointField store={props.store} ui={props.ui} owner={`${f().id}:vertice`} label="Vértice" value={k().vertex} except={f().id} onChange={(p) => update((x) => x.type === "vertex_chamfer" && (x.vertex = p))} />}
+                >
+                  {(v) => (
+                    <RefPicksBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:vertice`}
+                      feature={f().id}
+                      what="point"
+                      refs={v().refs}
+                      onChange={(refs) => update((x) => x.type === "vertex_chamfer" && (x.vertex = { type: "picked", refs }))}
+                    />
+                  )}
+                </Show>
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "vertex_chamfer" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">Clic en el vértice (una esquina de tres aristas rectas): se corta a esa distancia sobre cada arista.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "full_round" && (f().kind as Extract<FeatureKind, { type: "full_round" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="face" label="Un costado" lost={lost("side_a" as MissingRef["field"])} refs={k().side_a ? [k().side_a] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_a = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label="La cara del medio" lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label="El otro costado" lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
+                <p class="text-[11px] text-text-dim">El radio es la mitad de la distancia entre los costados (por ahora, caras planas).</p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "delete_face" && (f().kind as Extract<FeatureKind, { type: "delete_face" }>)}>
             {(k) => (
               <>

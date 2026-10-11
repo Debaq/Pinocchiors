@@ -166,6 +166,37 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
   };
 
+  /** Girar caras: las elegidas, con bisagra en Z (se cambia en el diálogo) */
+  const startRotateFace = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "rotate_face", faces, axis: { type: "z" }, angle: 10 });
+  };
+
+  /** Chaflán del vértice elegido (o elegirlo en el diálogo) */
+  const startVertexChamfer = async () => {
+    const v = ui.picks().find((p) => p.kind === "vertex");
+    ui.clearPicks();
+    const refs: RefPick[] =
+      v?.kind === "vertex" ? [{ type: "point", point: await invoke<PointSpec>("cad_vertex_spec", { point: v.at }).catch((): PointSpec => ({ type: "at", point: v.at })) }] : [];
+    void store.addFeature({ type: "vertex_chamfer", vertex: { type: "picked", refs }, distance: 2 });
+  };
+
+  /** Redondeo completo con tres caras elegidas: las dos paralelas opuestas son los costados */
+  const startFullRound = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    if (picked.length !== 3) return say("Elegir tres caras: los dos costados paralelos y la del medio");
+    const infos = await Promise.all(picked.map((f) => invoke<{ normal: P3 }>("cad_face_info", { face: f })));
+    const dot = (a: P3, b: P3) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const pair = [[0, 1], [0, 2], [1, 2]].find(([i, j]) => dot(infos[i].normal, infos[j].normal) < -0.999);
+    if (!pair) return say("Dos de las tres caras tienen que ser paralelas y opuestas (los costados)");
+    const middle = [0, 1, 2].find((k) => !pair.includes(k))!;
+    const [a, m, b] = await Promise.all([picked[pair[0]], picked[middle], picked[pair[1]]].map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "full_round", side_a: a, middle: m, side_b: b });
+  };
+
   /** Superficie por transición: por las curvas de los dos últimos sketches */
   const addSurfaceLoft = () => {
     const list = sketches();
@@ -679,6 +710,9 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addLoft,
     addHole,
     addTube,
+    startRotateFace,
+    startVertexChamfer,
+    startFullRound,
     addSurfaceSweep,
     addSurfaceLoft,
     addPrimitive,

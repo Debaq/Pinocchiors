@@ -933,3 +933,61 @@ fn revolve_up_to_a_face() {
     assert_eq!(ev.parts.len(), 2);
     assert_relative_eq!(ev.parts[1].shape.mass().unwrap().volume, PI * (225.0 - 100.0) * 20.0 / 4.0, max_relative = 1e-6);
 }
+
+// ─── Caras difíciles ───
+
+#[test]
+fn rotate_face_about_a_hinge() {
+    if !occt() {
+        return;
+    }
+    let wedge = 0.5 * 10.0 * 10.0 * 10f64.to_radians().tan() * 10.0;
+    for (angle, expected) in [(10.0, 1000.0 - wedge), (-10.0, 1000.0 + wedge)] {
+        let mut doc = Document::new();
+        doc.add(cube(0.0, 10.0, BodyOp::Join));
+        let top = face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+        // Bisagra en la arista de arriba de x = 0 (a lo largo de Y)
+        doc.add(FeatureKind::RotateFace { faces: vec![top], axis: AxisSpec::Custom { origin: [0.0, 0.0, 10.0], direction: [0.0, 1.0, 0.0] }, angle });
+        let (_, _, v) = bbox(&eval_ok(&doc));
+        assert_relative_eq!(v, expected, max_relative = 1e-6);
+    }
+}
+
+#[test]
+fn vertex_chamfer_cuts_the_corner() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let c = doc.add(FeatureKind::VertexChamfer { vertex: PointSpec::At { point: [10.0, 10.0, 10.0] }, distance: 2.0 });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 1000.0 - 8.0 / 6.0, max_relative = 1e-6);
+    // Más largo que la arista: error
+    doc.get_mut(c).unwrap().kind = FeatureKind::VertexChamfer { vertex: PointSpec::At { point: [10.0, 10.0, 10.0] }, distance: 12.0 };
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn full_round_on_a_rib() {
+    if !occt() {
+        return;
+    }
+    // Nervio de 20 de largo, 4 de ancho y 10 de alto: arriba, medio cilindro de radio 2
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 20.0, dy: 4.0, dz: 10.0, centered: false, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let a = face_at(&doc, [10.0, 0.0, 5.0], [0.0, -1.0, 0.0]);
+    let b = face_at(&doc, [10.0, 4.0, 5.0], [0.0, 1.0, 0.0]);
+    let m = face_at(&doc, [10.0, 2.0, 10.0], [0.0, 0.0, 1.0]);
+    doc.add(FeatureKind::FullRound { side_a: a, middle: m, side_b: b });
+    let (_, hi, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 800.0 - 160.0 + PI * 4.0 / 2.0 * 20.0, max_relative = 1e-6);
+    assert_relative_eq!(hi[2], 10.0, epsilon = 1e-6);
+}

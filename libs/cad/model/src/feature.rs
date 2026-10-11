@@ -792,6 +792,14 @@ pub enum FeatureKind {
     },
     /// Mueve caras planas a lo largo de su normal (afuera suma, adentro resta).
     MoveFace { faces: Vec<FaceRef>, distance: f64 },
+    /// Gira caras planas alrededor de un eje (una bisagra): lo que sale suma, lo que entra resta.
+    RotateFace { faces: Vec<FaceRef>, axis: AxisSpec, angle: f64 },
+    /// Chaflán de un vértice: corta la esquina por el plano de los puntos a
+    /// `distance` del vértice sobre cada una de sus tres aristas.
+    VertexChamfer { vertex: PointSpec, distance: f64 },
+    /// Redondeo completo: la cara del medio, entre dos caras laterales
+    /// paralelas, se vuelve medio cilindro de radio la mitad del ancho.
+    FullRound { side_a: FaceRef, middle: FaceRef, side_b: FaceRef },
     /// Escala las piezas (o las del alcance) alrededor de un punto, por eje.
     Scale {
         factor: P3,
@@ -1278,6 +1286,8 @@ impl FeatureKind {
                 SweepPath::Curve { feature } => vec![*sketch, *feature],
             },
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
+            FeatureKind::RotateFace { axis, .. } => axis_deps(axis),
+            FeatureKind::VertexChamfer { vertex, .. } => point_deps(vertex),
             FeatureKind::Curve { def } => match def {
                 CurveDef::Composite { curves, .. } => curves.clone(),
                 CurveDef::Projected { sketch, .. } => vec![*sketch],
@@ -1426,6 +1436,9 @@ impl FeatureKind {
             FeatureKind::Sew { .. } => "Coser",
             FeatureKind::SplitBy { .. } => "Partir",
             FeatureKind::MoveFace { .. } => "Mover cara",
+            FeatureKind::RotateFace { .. } => "Girar cara",
+            FeatureKind::VertexChamfer { .. } => "Chaflán de vértice",
+            FeatureKind::FullRound { .. } => "Redondeo completo",
             FeatureKind::Scale { .. } => "Escala",
             FeatureKind::Transform { copy: true, .. } => "Copiar cuerpo",
             FeatureKind::Transform { motion: Motion::Rotate { .. }, .. } => "Girar cuerpo",

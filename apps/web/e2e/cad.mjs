@@ -8345,6 +8345,66 @@ const scenarios = {
     if (!k.end_point || !k.ruled) throw new Error(`guardado: ${JSON.stringify(k)}`);
     await b.shot("operaciones_transicion");
   },
+
+  async "operaciones: girar cara con bisagra"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const top = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }])`);
+    await b.clickText("Girar cara");
+    await lastIs(b, "rotate_face");
+    await sleep(1500);
+    // Bisagra en la arista de arriba de x = −10 (a lo largo de Y), 10°: baja el lado de x = 10
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.axis = { type: "custom", origin: [-10, 0, 10], direction: [0, 1, 0] }; })`);
+    await sleep(2500);
+    const wedge = 0.5 * 20 * 20 * Math.tan((10 * Math.PI) / 180) * 20;
+    near((await body()).volume, 8000 - wedge, 0.05, "baja 10°");
+    await setInput(b, "Ángulo", -10);
+    await sleep(2500);
+    near((await body()).volume, 8000 + wedge, 0.05, "sube 10°");
+    await accept(b);
+    await b.shot("operaciones_girar_cara");
+  },
+
+  async "operaciones: chaflán de vértice"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "vertex", at: [10, 10, 10] }])`);
+    await b.clickText("Chaflán de vértice");
+    await lastIs(b, "vertex_chamfer");
+    await sleep(2500);
+    near((await body()).volume, 8000 - 8 / 6, 1e-3, "esquina de 2");
+    await setInput(b, "Distancia", 3);
+    await sleep(2000);
+    near((await body()).volume, 8000 - 27 / 6, 1e-3, "esquina de 3");
+    await accept(b);
+    const k = await lastKind(b);
+    if (k.vertex.type !== "picked" || k.vertex.refs[0].point.type !== "edge_end") throw new Error(`vértice: ${JSON.stringify(k.vertex)}`);
+    await b.shot("operaciones_chaflan_vertice");
+  },
+
+  async "operaciones: redondeo completo"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Los costados y = ±10 y la cara de arriba: medio cilindro de radio 10 a lo largo de X
+    const a = await faceWhere((f) => f.surface === "plane" && f.normal[1] < -0.99);
+    const m = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    const c = await faceWhere((f) => f.surface === "plane" && f.normal[1] > 0.99);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${m} }, { kind: "face", face: ${a} }, { kind: "face", face: ${c} }])`);
+    await b.clickText("Redondeo completo");
+    await lastIs(b, "full_round");
+    await sleep(2500);
+    near((await body()).volume, 8000 - 4000 + (Math.PI * 100 * 20) / 2, 0.05, "medio cilindro arriba");
+    near((await body()).bbox_max[2], 10, 1e-6, "misma altura");
+    await accept(b);
+    await b.shot("operaciones_redondeo_completo");
+  },
 };
 
 const filter = process.argv[2];
