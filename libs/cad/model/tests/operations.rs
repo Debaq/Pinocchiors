@@ -1097,10 +1097,11 @@ fn wrap_engraves_and_embosses() {
     assert!(cut > 14.0 && cut < 16.0, "grabado: {cut}");
     // Relieve de 1: un poco más que 16
     doc.get_mut(w).unwrap().kind = FeatureKind::Wrap { sketch: sk, depth: 1.0, emboss: true };
-    let (_, hi, v) = bbox(&eval_ok(&doc));
+    let (lo, _, v) = bbox(&eval_ok(&doc));
     let added = v - full;
     assert!(added > 16.0 && added < 18.0, "relieve: {added}");
-    assert!(hi[0] > 10.9, "sobresale: {}", hi[0]);
+    // El sketch envuelto va en el centro (u, v) de la pared: u = π, del lado −X
+    assert!(lo[0] < -10.9, "sobresale: {}", lo[0]);
     // Con un sketch común: error
     let mut plain = Sketch::new();
     plain.rectangle([0.0, 0.0], [1.0, 1.0]);

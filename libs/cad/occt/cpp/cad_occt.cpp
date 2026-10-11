@@ -97,6 +97,10 @@
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
 #include <GCPnts_AbscissaPoint.hxx>
+#include <Law_Interpol.hxx>
+#include <TopTools_MapOfShape.hxx>
+#include <IntCurveSurface_HInter.hxx>
+#include <GeomAdaptor_Surface.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GProp_GProps.hxx>
@@ -819,14 +823,73 @@ CadShape* cad_loft_ex(const CadShape* const* wires, int32_t n, int32_t solid, in
     });
 }
 
+// Escala del perfil a lo largo del camino para que siga tocando la guía: en cada fracción del
+// largo del camino (el dominio con que OCCT recorre la ley), la distancia del camino a la guía
+// en el plano normal, dividida por la del arranque
+static Handle(Law_Function) guide_scale(const TopoDS_Wire& spine, const TopoDS_Wire& guide) {
+    BRepAdaptor_CompCurve sc(spine);
+    Handle(BRepAdaptor_CompCurve) gh = new BRepAdaptor_CompCurve(guide);
+    const double len = GCPnts_AbscissaPoint::Length(sc);
+    if (len < Precision::Confusion()) throw Standard_Failure("el camino no tiene largo");
+    const int N = 32;
+    TColgp_Array1OfPnt2d law(1, N + 1);
+    double r0 = 0;
+    gp_Pnt last;
+    for (int k = 0; k <= N; k++) {
+        const double frac = double(k) / N;
+        GCPnts_AbscissaPoint ap(sc, frac * len, sc.FirstParameter());
+        const double t = ap.IsDone() ? ap.Parameter() : sc.FirstParameter() + frac * (sc.LastParameter() - sc.FirstParameter());
+        gp_Pnt p;
+        gp_Vec d;
+        sc.D1(t, p, d);
+        if (d.Magnitude() < 1e-12) throw Standard_Failure("el camino tiene un punto sin dirección");
+        // Cruce de la guía con el plano normal; el más cercano al anterior (o al camino al empezar)
+        Handle(GeomAdaptor_Surface) pl = new GeomAdaptor_Surface(new Geom_Plane(p, gp_Dir(d)));
+        IntCurveSurface_HInter in;
+        in.Perform(gh, pl);
+        const gp_Pnt ref = k == 0 ? p : last;
+        bool found = false;
+        gp_Pnt g;
+        for (int j = 1; in.IsDone() && j <= in.NbPoints(); j++) {
+            gp_Pnt q = in.Point(j).Pnt();
+            if (!found || q.Distance(ref) < g.Distance(ref)) g = q;
+            found = true;
+        }
+        if (!found) {
+            // La guía no llega a ese plano: su punto más cercano
+            BRepExtrema_DistShapeShape ext(BRepBuilderAPI_MakeVertex(p).Vertex(), guide);
+            if (!ext.IsDone() || ext.NbSolution() < 1) throw Standard_Failure("la guía no acompaña al camino");
+            g = ext.PointOnShape2(1);
+        }
+        last = g;
+        const double r = g.Distance(p);
+        if (k == 0) {
+            if (r < Precision::Confusion()) throw Standard_Failure("la guía arranca sobre el camino");
+            r0 = r;
+        }
+        law.SetValue(k + 1, gp_Pnt2d(frac, std::max(r / r0, 1e-6)));
+    }
+    Handle(Law_Interpol) l = new Law_Interpol();
+    l->Set(law, Standard_False);
+    return l;
+}
+
 CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape* spine, const CadShape* guide, int32_t solid) {
     return guard("transición por un camino", (CadShape*)nullptr, [&] {
         if (n < 1) throw Standard_Failure("se necesita al menos una sección");
         BRepOffsetAPI_MakePipeShell mk(wire_of(spine->s));
-        // Con curva guía, el perfil la sigue (gira y se escala para tocarla)
-        if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_ContactOnBorder);
-        else mk.SetDiscreteMode();
-        for (int32_t i = 0; i < n; i++) mk.Add(wire_of(wires[i]->s), Standard_False, Standard_False);
+        if (guide && n == 1) {
+            // Con curva guía, el perfil la sigue: gira con ella y se escala para seguir tocándola.
+            // El contacto automático de OCCT (BRepFill_ContactOnBorder) falla aun en casos simples,
+            // así que la guía solo orienta y la escala va como ley aparte: la distancia del camino
+            // a la guía en el plano normal, relativa a la del arranque
+            mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_NoContact);
+            mk.SetLaw(wire_of(wires[0]->s), guide_scale(wire_of(spine->s), wire_of(guide->s)), Standard_False, Standard_False);
+        } else {
+            if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_ContactOnBorder);
+            else mk.SetDiscreteMode();
+            for (int32_t i = 0; i < n; i++) mk.Add(wire_of(wires[i]->s), Standard_False, Standard_False);
+        }
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("no se pudo pasar por las secciones a lo largo del camino");
         if (solid && !mk.MakeSolid()) throw Standard_Failure("la transición no cierra un sólido");
@@ -1664,18 +1727,37 @@ CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* 
 CadShape* cad_split_faces(const CadShape* s, const int32_t* faces, int32_t n, const CadShape* tool) {
     return guard("línea de partición", (CadShape*)nullptr, [&] {
         auto m = map_of(s->s, TopAbs_FACE);
-        BRepFeat_SplitShape split(s->s);
-        int added = 0;
+        TopTools_MapOfShape chosen;
         for (int32_t i = 0; i < n; i++) {
             if (faces[i] < 0 || faces[i] >= m.Extent()) throw Standard_Failure("cara inexistente");
+            chosen.Add(m(faces[i] + 1));
+        }
+        // Lo que la herramienta deja sobre la pieza entera, de una vez: así las aristas de caras
+        // vecinas comparten el vértice donde cruzan el borde común (cortando cara por cara cada
+        // una tiene el suyo y BRepFeat_SplitShape solo parte la primera)
+        BRepAlgoAPI_Section sec(s->s, tool->s, Standard_False);
+        sec.ComputePCurveOn1(Standard_True);
+        sec.Approximation(Standard_True);
+        sec.Build();
+        if (!sec.IsDone()) throw Standard_Failure("no se pudo cruzar la herramienta con la pieza");
+        BRepFeat_SplitShape split(s->s);
+        int added = 0;
+        for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next()) {
+            TopoDS_Shape f;
+            if (!sec.HasAncestorFaceOn1(ex.Current(), f) || !chosen.Contains(f)) continue;
+            split.Add(TopoDS::Edge(ex.Current()), TopoDS::Face(f));
+            added++;
+        }
+        // Curvas apoyadas sobre las caras (el cruce no las asigna a ninguna): cara por cara
+        const bool on_faces = added == 0;
+        for (int32_t i = 0; on_faces && i < n; i++) {
             TopoDS_Face f = TopoDS::Face(m(faces[i] + 1));
-            // Lo que la herramienta deja sobre la cara (con su curva en el parámetro de la cara)
-            BRepAlgoAPI_Section sec(f, tool->s, Standard_False);
-            sec.ComputePCurveOn1(Standard_True);
-            sec.Approximation(Standard_True);
-            sec.Build();
-            if (!sec.IsDone()) continue;
-            for (TopExp_Explorer ex(sec.Shape(), TopAbs_EDGE); ex.More(); ex.Next(), added++) split.Add(TopoDS::Edge(ex.Current()), f);
+            BRepAlgoAPI_Section fs(f, tool->s, Standard_False);
+            fs.ComputePCurveOn1(Standard_True);
+            fs.Approximation(Standard_True);
+            fs.Build();
+            if (!fs.IsDone()) continue;
+            for (TopExp_Explorer ex(fs.Shape(), TopAbs_EDGE); ex.More(); ex.Next(), added++) split.Add(TopoDS::Edge(ex.Current()), f);
         }
         if (added == 0) throw Standard_Failure("la herramienta no cruza las caras elegidas");
         split.Build();
@@ -2387,6 +2469,13 @@ int32_t cad_closest_face(const CadShape* s, const double* point, const double* n
                     proj.LowerDistanceParameters(u, w);
                 }
                 BRepGProp_Face(face).Normal(u, w, p, n);
+                // En un polo (esfera, cono) la normal se anula: se toma la de al lado, hacia el medio de la cara
+                if (n.Magnitude() < 1e-12) {
+                    double u0, u1, w0, w1;
+                    BRepTools::UVBounds(face, u0, u1, w0, w1);
+                    for (double e = 1e-6; n.Magnitude() < 1e-12 && e < 0.1; e *= 10)
+                        BRepGProp_Face(face).Normal(u + (0.5 * (u0 + u1) - u) * e, w + (0.5 * (w0 + w1) - w) * e, p, n);
+                }
                 if (n.Magnitude() < 1e-12) continue;
                 n.Normalize();
                 if (n.Dot(gp_Vec(normal[0], normal[1], normal[2]).Normalized()) < min_cos) continue;
