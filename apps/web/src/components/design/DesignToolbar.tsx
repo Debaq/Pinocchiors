@@ -270,6 +270,10 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Punto", icon: D.Point, run: () => void a.addReference("point") },
     { label: "Hélice", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas" },
     { label: "Espiral", icon: D.Helix, run: a.addSpiral, tip: "Espiral plana o hélice cónica (con dos radios)" },
+    { label: "Curva por puntos", icon: D.Helix, run: () => void a.addCurve("points"), tip: "Spline por vértices elegidos o puntos escritos" },
+    { label: "Curva compuesta", icon: D.Helix, run: () => void a.addCurve("composite"), tip: "Aristas elegidas (y otras curvas) encadenadas en una sola" },
+    { label: "Curva proyectada", icon: D.Helix, run: () => void a.addCurve("projected"), tip: "Las curvas del último sketch proyectadas sobre las caras elegidas" },
+    { label: "Curva de cruce", icon: D.Helix, run: () => void a.addCurve("intersection"), tip: "Donde se cruzan la primera cara elegida con las demás" },
   ];
 
   return (

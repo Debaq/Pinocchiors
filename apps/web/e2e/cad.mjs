@@ -8208,6 +8208,48 @@ const scenarios = {
     await accept(b);
     await b.shot("operaciones_referencias_por_clics");
   },
+
+  async "operaciones: curvas compuesta y por puntos como caminos"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    const lines = async () => {
+      const id = await b.eval(`window.__cadStore.doc().features.at(-1).id`);
+      const r = (await evaluate()).references.find((x) => x.id === id);
+      if (r?.kind !== "curves") throw new Error(`sin curva: ${JSON.stringify(r?.kind)}`);
+      return r.lines.flat();
+    };
+    // Las dos aristas de arriba del frente y del costado derecho, encadenadas
+    const a = await edgeNear([0, -10, 10]);
+    const c = await edgeNear([10, 0, 10]);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "edge", edge: ${a} }, { kind: "edge", edge: ${c} }])`);
+    await b.clickText("Curva compuesta");
+    await lastIs(b, "curve");
+    await sleep(2000);
+    let pts = await lines();
+    if (!pts.every((p) => Math.abs(p[2] - 10) < 1e-6)) throw new Error("la compuesta no está arriba");
+    if (!pts.some((p) => Math.abs(p[0] - 10) < 1e-6 && Math.abs(p[1] - 10) < 1e-6)) throw new Error("no llega a la esquina de atrás");
+    await accept(b);
+    // Un tubo de radio 2 por ella (sin errores)
+    await b.clickText("Tubo");
+    await lastIs(b, "sweep");
+    await sleep(2500);
+    let st = (await evaluate()).status.at(-1);
+    if (st.state !== "ok") throw new Error(`tubo por la compuesta: ${JSON.stringify(st)}`);
+    await accept(b);
+    // Curva por puntos (sin nada elegido: tres puntos escritos, hasta z = 10)
+    await b.clickText("Curva por puntos");
+    await lastIs(b, "curve");
+    await sleep(2000);
+    pts = await lines();
+    near(Math.max(...pts.map((p) => p[2])), 10, 1e-3, "pasa por z = 10");
+    await b.clickText("Agregar punto");
+    await sleep(1500);
+    if ((await lastKind(b)).def.points.length !== 4) throw new Error("no sumó el punto");
+    await accept(b);
+    await b.shot("operaciones_curvas");
+  },
 };
 
 const filter = process.argv[2];

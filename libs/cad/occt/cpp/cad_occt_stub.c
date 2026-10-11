@@ -32,6 +32,9 @@ CadShape* cad_chamfer(const CadShape* s, const int32_t* e, int32_t n, double d, 
 CadShape* cad_shell(const CadShape* s, const int32_t* f, int32_t n, double t) { (void)s; (void)f; (void)n; (void)t; FAIL_PTR; }
 CadShape* cad_shell_faces(const CadShape* s, const int32_t* f, int32_t n, double t, const int32_t* o, const double* ot, int32_t no) { (void)s; (void)f; (void)n; (void)t; (void)o; (void)ot; (void)no; FAIL_PTR; }
 CadShape* cad_pipe_ex(const CadShape* p, const CadShape* s, int32_t m, int32_t so) { (void)p; (void)s; (void)m; (void)so; FAIL_PTR; }
+CadShape* cad_chain(const CadShape* const* s, int32_t n) { (void)s; (void)n; FAIL_PTR; }
+CadShape* cad_project_curves(const CadShape* c, const CadShape* t, const double* d) { (void)c; (void)t; (void)d; FAIL_PTR; }
+CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) { (void)a; (void)b; FAIL_PTR; }
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* e, int32_t n, double d) { (void)s; (void)e; (void)n; (void)d; FAIL_PTR; }
 CadShape* cad_remove_faces(const CadShape* s, const int32_t* f, int32_t n) { (void)s; (void)f; (void)n; FAIL_PTR; }
 CadShape* cad_fillet_points(const CadShape* s, const int32_t* e, int32_t n, const double* l, int32_t np) { (void)s; (void)e; (void)n; (void)l; (void)np; FAIL_PTR; }

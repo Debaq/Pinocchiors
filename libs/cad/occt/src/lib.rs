@@ -563,6 +563,23 @@ impl Shape {
         wrap(unsafe { ffi::cad_shell_faces(self.ptr(), f.as_ptr(), f.len() as i32, thickness, ov.as_ptr(), ot.as_ptr(), ov.len() as i32) })
     }
 
+    /// Las aristas de las formas encadenadas en alambres (uno, o un compuesto
+    /// de los que queden sueltos).
+    pub fn chain(shapes: &[Shape]) -> Result<Shape> {
+        let p = ptrs(shapes);
+        wrap(unsafe { ffi::cad_chain(p.as_ptr(), p.len() as i32) })
+    }
+
+    /// Estas curvas proyectadas sobre `target` a lo largo de `direction`.
+    pub fn project_onto(&self, target: &Shape, direction: P3) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_project_curves(self.ptr(), target.ptr(), direction.as_ptr()) })
+    }
+
+    /// Curvas donde se cruzan esta forma y `other`.
+    pub fn intersection_curves(&self, other: &Shape) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_intersect_curves(self.ptr(), other.ptr()) })
+    }
+
     /// Extiende las superficies `distance` más allá de los bordes libres `edges`.
     pub fn extend_surface(&self, edges: &[usize], distance: f64) -> Result<Shape> {
         let e = idx(edges);

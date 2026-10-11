@@ -159,8 +159,8 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   /** Barrido circular (tubo, cable) por el último sketch o la última curva del historial */
   const addTube = () => {
     const doc = store.doc();
-    const last = [...(doc?.features ?? [])].reverse().find((f) => f.kind.type === "sketch" || f.kind.type === "helix" || f.kind.type === "sketch3d");
-    if (!last) return say("Primero hace falta un camino: un sketch o una hélice");
+    const last = [...(doc?.features ?? [])].reverse().find((f) => f.kind.type === "sketch" || f.kind.type === "helix" || f.kind.type === "sketch3d" || f.kind.type === "curve");
+    if (!last) return say("Primero hace falta un camino: un sketch, una hélice o una curva");
     const path = last.kind.type === "sketch" ? { type: "sketch" as const, sketch: last.id, entities: [] } : { type: "curve" as const, feature: last.id };
     ui.clearPicks();
     void store.addFeature({ type: "sweep", sketch: last.id, regions: { type: "all" }, path, op: "join", circle: 2 });
@@ -703,6 +703,27 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),
     addDeleteParts: () => void store.addFeature({ type: "delete_parts", parts: pickedParts() }),
     addHelix: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false }),
+    /** Curvas de referencia con lo elegido: aristas (compuesta), caras (proyectada o de cruce) o vértices (por puntos) */
+    addCurve: async (kind: "composite" | "projected" | "intersection" | "points") => {
+      const picks = ui.picks();
+      const edges = await Promise.all(picks.flatMap((p) => (p.kind === "edge" ? [store.edgeRef(p.edge)] : [])));
+      const faces = await Promise.all(picks.flatMap((p) => (p.kind === "face" ? [store.faceRef(p.face)] : [])));
+      const points = await Promise.all(
+        picks.flatMap((p) =>
+          p.kind === "vertex" ? [invoke<PointSpec>("cad_vertex_spec", { point: p.at }).catch((): PointSpec => ({ type: "at", point: p.at }))] : [],
+        ),
+      );
+      ui.clearPicks();
+      if (kind === "composite") return void store.addFeature({ type: "curve", def: { type: "composite", edges, curves: [] } });
+      if (kind === "intersection") return void store.addFeature({ type: "curve", def: { type: "intersection", a: faces.slice(0, 1), b: faces.slice(1) } });
+      if (kind === "projected") {
+        const s = targetSketch();
+        if (!s) return say("Primero un sketch con las curvas a proyectar");
+        return void store.addFeature({ type: "curve", def: { type: "projected", sketch: s.id, entities: [], faces } });
+      }
+      const pts: PointSpec[] = points.length >= 2 ? points : [{ type: "at", point: [0, 0, 0] }, { type: "at", point: [20, 0, 0] }, { type: "at", point: [20, 20, 10] }];
+      void store.addFeature({ type: "curve", def: { type: "points", points: pts, closed: false } });
+    },
     /** Espiral plana de Arquímedes (resortes de reloj, bobinas) */
     addSpiral: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 2, pitch: 5, turns: 4, left: false, radius2: 20, flat: true }),
     /** Las regiones del sketch elegido (o del último) como superficie plana */

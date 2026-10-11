@@ -154,6 +154,34 @@ pub enum PlaneDef {
     },
 }
 
+/// Cómo se arma una curva de referencia.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CurveDef {
+    /// Aristas del sólido y curvas del historial encadenadas en una.
+    Composite {
+        #[serde(default)]
+        edges: Vec<EdgeRef>,
+        #[serde(default)]
+        curves: Vec<FeatureId>,
+    },
+    /// Curvas de un sketch (vacío = todas) proyectadas sobre caras a lo largo de la normal del sketch.
+    Projected {
+        sketch: FeatureId,
+        #[serde(default)]
+        entities: Vec<u32>,
+        faces: Vec<FaceRef>,
+    },
+    /// Donde se cruzan unas caras con otras.
+    Intersection { a: Vec<FaceRef>, b: Vec<FaceRef> },
+    /// Spline que pasa por los puntos (cerrada con `closed`).
+    Points {
+        points: Vec<PointSpec>,
+        #[serde(default)]
+        closed: bool,
+    },
+}
+
 /// Algo del modelo elegido con un clic para armar un plano, un eje o un
 /// punto de referencia; sigue al modelo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -892,6 +920,8 @@ pub enum FeatureKind {
     /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
     /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
     SurfaceOffset { parts: Vec<PartId>, distance: f64 },
+    /// Curva de referencia hecha de otras (usable como camino de barridos y patrones).
+    Curve { def: CurveDef },
     /// Extiende superficies `distance` más allá de bordes libres (cada cara
     /// por el lado de su parámetro donde está el borde, siguiendo su forma).
     SurfaceExtend { edges: Vec<EdgeRef>, distance: f64 },
@@ -1214,6 +1244,12 @@ impl FeatureKind {
                 SweepPath::Curve { feature } => vec![*sketch, *feature],
             },
             FeatureKind::Helix { axis, .. } => axis_deps(axis),
+            FeatureKind::Curve { def } => match def {
+                CurveDef::Composite { curves, .. } => curves.clone(),
+                CurveDef::Projected { sketch, .. } => vec![*sketch],
+                CurveDef::Intersection { .. } => vec![],
+                CurveDef::Points { points, .. } => points.iter().flat_map(point_deps).collect(),
+            },
             FeatureKind::Scale { center, .. } => point_deps(center),
             FeatureKind::Loft(l) => l.sections.iter().map(|s| s.sketch).collect(),
             FeatureKind::Hole(h) => [vec![h.sketch], h.link.iter().map(|l| l.feature).collect()].concat(),
@@ -1335,6 +1371,10 @@ impl FeatureKind {
             FeatureKind::SurfacePlanar { .. } => "Superficie plana",
             FeatureKind::SurfaceSweep { .. } => "Superficie por barrido",
             FeatureKind::SurfaceExtend { .. } => "Extender superficie",
+            FeatureKind::Curve { def: CurveDef::Composite { .. } } => "Curva compuesta",
+            FeatureKind::Curve { def: CurveDef::Projected { .. } } => "Curva proyectada",
+            FeatureKind::Curve { def: CurveDef::Intersection { .. } } => "Curva de cruce",
+            FeatureKind::Curve { def: CurveDef::Points { .. } } => "Curva por puntos",
             FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",

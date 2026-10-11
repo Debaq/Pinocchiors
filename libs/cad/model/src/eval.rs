@@ -2941,6 +2941,16 @@ impl Ctx<'_> {
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }
+            FeatureKind::Curve { def } => {
+                let wire = self.curve_feature(def)?;
+                let lines = wire.tessellate(0.05, 0.1).map_err(err)?.edges;
+                if lines.is_empty() {
+                    return Err("la curva quedó vacía".into());
+                }
+                self.ev.references.insert(f.id, RefGeom::Curves { lines });
+                self.ev.curves.insert(f.id, wire);
+                Ok(())
+            }
             FeatureKind::SurfaceExtend { edges, distance } => {
                 if edges.is_empty() {
                     return Err("elegir al menos un borde de una superficie".into());
@@ -4236,6 +4246,67 @@ impl Ctx<'_> {
                 }
             }
         })
+    }
+
+    /// Las caras elegidas como una forma (una sola, o un compuesto).
+    fn faces_shape(&self, field: &str, faces: &[FaceRef]) -> R<Shape> {
+        if faces.is_empty() {
+            return Err("elegir al menos una cara".into());
+        }
+        let idx = self.faces(field, faces)?;
+        let body = self.body()?;
+        let mut shapes = idx.iter().map(|&i| body.face_shape(i)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+        Ok(if shapes.len() == 1 { shapes.pop().unwrap() } else { Shape::compound(&shapes).map_err(err)? })
+    }
+
+    fn curve_feature(&self, def: &CurveDef) -> R<Shape> {
+        match def {
+            CurveDef::Composite { edges, curves } => {
+                let mut shapes = Vec::new();
+                if !edges.is_empty() {
+                    let idx = self.edges("edges", edges)?;
+                    let body = self.body()?;
+                    for i in idx {
+                        shapes.push(body.edge_shape(i).map_err(err)?);
+                    }
+                }
+                for (k, c) in curves.iter().enumerate() {
+                    let w = self.ev.curves.get(c).cloned().ok_or_else(|| {
+                        self.miss("curves", k);
+                        "una de las curvas no está calculada".to_string()
+                    })?;
+                    shapes.push(w);
+                }
+                if shapes.is_empty() {
+                    return Err("elegir aristas o curvas".into());
+                }
+                Shape::chain(&shapes).map_err(err)
+            }
+            CurveDef::Projected { sketch, entities, faces } => {
+                let plane = self.ev.sketches.get(sketch).ok_or("el sketch no está calculado")?.plane;
+                let wires = self.curve_wires(*sketch, entities)?;
+                let curves = if wires.len() == 1 { wires[0].clone() } else { Shape::compound(&wires).map_err(err)? };
+                let target = self.faces_shape("faces", faces)?;
+                curves.project_onto(&target, plane.normal).map_err(err)
+            }
+            CurveDef::Intersection { a, b } => {
+                let (sa, sb) = (self.faces_shape("a", a)?, self.faces_shape("b", b)?);
+                sa.intersection_curves(&sb).map_err(err)
+            }
+            CurveDef::Points { points, closed } => {
+                let mut pts = points.iter().map(|p| self.point("points", p)).collect::<R<Vec<P3>>>()?;
+                if pts.len() < 2 {
+                    return Err("hacen falta al menos dos puntos".into());
+                }
+                if *closed {
+                    if pts.len() < 3 {
+                        return Err("una curva cerrada necesita al menos tres puntos".into());
+                    }
+                    pts.push(pts[0]);
+                }
+                Shape::wire(&[Curve::Spline(pts)]).map_err(err)
+            }
+        }
     }
 
     fn geos(&self, refs: &[RefPick]) -> R<Vec<Geo>> {

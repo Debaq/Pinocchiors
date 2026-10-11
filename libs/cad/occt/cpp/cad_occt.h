@@ -89,6 +89,12 @@ CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mo
 // Cáscara con otro espesor en algunas caras (`ov[i]` con `ov_thickness[i]`).
 CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, double thickness, const int32_t* ov,
                           const double* ov_thickness, int32_t n_ov);
+// Las aristas de las formas encadenadas en alambres (uno, o un compuesto de los que queden sueltos).
+CadShape* cad_chain(const CadShape* const* shapes, int32_t n);
+// Curvas proyectadas sobre `target` a lo largo de `direction`, encadenadas.
+CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction);
+// Curvas donde se cruzan dos formas (caras o piezas), encadenadas.
+CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
 // Extiende las superficies por los bordes libres `edges`, `distance` más allá (cada cara por sus lados).
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance);
 // Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).

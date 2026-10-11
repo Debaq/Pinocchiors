@@ -16,6 +16,9 @@
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <BRepProj_Projection.hxx>
+#include <ShapeAnalysis_FreeBounds.hxx>
+#include <TopTools_HSequenceOfShape.hxx>
 #include <Geom2d_Curve.hxx>
 #include <algorithm>
 #include <array>
@@ -840,6 +843,53 @@ CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, do
         if (!mk.IsDone()) throw Standard_Failure("grosor incompatible con la forma");
         record(mk, {s->s}, mk.Shape());
         return wrap_checked(mk.Shape(), "cáscara");
+    });
+}
+
+// Las aristas de las formas encadenadas en alambres (uno, o un compuesto si quedan sueltos)
+static TopoDS_Shape chain_edges(const std::vector<TopoDS_Shape>& shapes) {
+    Handle(TopTools_HSequenceOfShape) edges = new TopTools_HSequenceOfShape();
+    for (const TopoDS_Shape& s : shapes)
+        for (TopExp_Explorer ex(s, TopAbs_EDGE); ex.More(); ex.Next()) edges->Append(ex.Current());
+    if (edges->IsEmpty()) throw Standard_Failure("no hay curvas");
+    Handle(TopTools_HSequenceOfShape) wires;
+    ShapeAnalysis_FreeBounds::ConnectEdgesToWires(edges, 1e-4, Standard_False, wires);
+    if (wires.IsNull() || wires->IsEmpty()) throw Standard_Failure("las curvas no se pudieron encadenar");
+    if (wires->Length() == 1) return wires->Value(1);
+    TopoDS_Compound c;
+    BRep_Builder b;
+    b.MakeCompound(c);
+    for (int i = 1; i <= wires->Length(); i++) b.Add(c, wires->Value(i));
+    return c;
+}
+
+CadShape* cad_chain(const CadShape* const* shapes, int32_t n) {
+    return guard("encadenar curvas", (CadShape*)nullptr, [&] {
+        std::vector<TopoDS_Shape> v;
+        for (int32_t i = 0; i < n; i++) v.push_back(shapes[i]->s);
+        return wrap(chain_edges(v));
+    });
+}
+
+CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction) {
+    return guard("proyectar curvas", (CadShape*)nullptr, [&] {
+        BRepProj_Projection proj(curves->s, target->s, gp_Dir(direction[0], direction[1], direction[2]));
+        if (!proj.IsDone()) throw Standard_Failure("las curvas no caen sobre esa cara");
+        TopoDS_Shape r = proj.Shape();
+        if (!TopExp_Explorer(r, TopAbs_EDGE).More()) throw Standard_Failure("las curvas no caen sobre esa cara");
+        return wrap(chain_edges({r}));
+    });
+}
+
+CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) {
+    return guard("cruce de caras", (CadShape*)nullptr, [&] {
+        BRepAlgoAPI_Section sec(a->s, b->s, Standard_False);
+        sec.ComputePCurveOn1(Standard_True);
+        sec.Approximation(Standard_True);
+        sec.Build();
+        if (!sec.IsDone()) throw Standard_Failure("no se pudo calcular el cruce");
+        if (!TopExp_Explorer(sec.Shape(), TopAbs_EDGE).More()) throw Standard_Failure("las caras no se cruzan");
+        return wrap(chain_edges({sec.Shape()}));
     });
 }
 

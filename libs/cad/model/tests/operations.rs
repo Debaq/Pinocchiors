@@ -762,3 +762,110 @@ fn axes_and_points_by_clicks() {
     }
     assert_eq!(ev.ref_kinds.get(&ax2).map(String::as_str), Some("Normal al plano por el punto"));
 }
+
+// ─── Curvas como operación ───
+
+fn curve_lines(ev: &Evaluation, id: FeatureId) -> Vec<P3> {
+    match ev.references.get(&id) {
+        Some(RefGeom::Curves { lines }) => lines.concat(),
+        other => panic!("sin curva: {other:?}"),
+    }
+}
+
+fn tube_along(curve: FeatureId, r: f64) -> FeatureKind {
+    FeatureKind::Sweep(Sweep {
+        sketch: curve,
+        regions: RegionSelection::All,
+        path: SweepPath::Curve { feature: curve },
+        op: BodyOp::New,
+        orient: SweepOrient::Follow,
+        circle: Some(r),
+        thin: None,
+    })
+}
+
+#[test]
+fn curve_through_points_works_as_a_path() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let at = |p: P3| PointSpec::At { point: p };
+    let c = doc.add(FeatureKind::Curve { def: CurveDef::Points { points: vec![at([0.0; 3]), at([10.0, 0.0, 0.0]), at([10.0, 10.0, 5.0])], closed: false } });
+    let ev = eval_ok(&doc);
+    let pts = curve_lines(&ev, c);
+    let top = pts.iter().map(|p| p[2]).fold(f64::NEG_INFINITY, f64::max);
+    assert_relative_eq!(top, 5.0, epsilon = 1e-3);
+    // Un tubo a lo largo de ella
+    doc.add(tube_along(c, 1.0));
+    let ev = eval_ok(&doc);
+    assert!(ev.body.unwrap().mass().unwrap().volume > PI * 20.0);
+    // Cerrada con dos puntos: error
+    doc.get_mut(c).unwrap().kind = FeatureKind::Curve { def: CurveDef::Points { points: vec![at([0.0; 3]), at([10.0, 0.0, 0.0])], closed: true } };
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn composite_curve_of_two_edges() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let a = edge_at(&doc, [5.0, 0.0, 10.0]);
+    let b = edge_at(&doc, [10.0, 5.0, 10.0]);
+    let c = doc.add(FeatureKind::Curve { def: CurveDef::Composite { edges: vec![a, b], curves: vec![] } });
+    let ev = eval_ok(&doc);
+    let pts = curve_lines(&ev, c);
+    // Las dos aristas de arriba: del frente y del costado, en z = 10
+    assert!(pts.iter().all(|p| (p[2] - 10.0).abs() < 1e-6));
+    assert!(pts.iter().any(|p| (p[0] - 10.0).abs() < 1e-6 && (p[1] - 10.0).abs() < 1e-6));
+    assert!(pts.iter().any(|p| p[0].abs() < 1e-6 && p[1].abs() < 1e-6));
+}
+
+#[test]
+fn projected_and_intersection_curves() {
+    if !occt() {
+        return;
+    }
+    // Un círculo de radio 2 a z = 30 proyectado sobre la cara de arriba de la caja (z = 10)
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let top = face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+    let mut s = Sketch::default();
+    let o = s.add_point(5.0, 5.0);
+    s.add_entity(Geometry::Circle { center: o, radius: 2.0 });
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 30.0, sketch: s });
+    let c = doc.add(FeatureKind::Curve { def: CurveDef::Projected { sketch: sk, entities: vec![], faces: vec![top] } });
+    let ev = eval_ok(&doc);
+    let pts = curve_lines(&ev, c);
+    assert!(pts.iter().all(|p| (p[2] - 10.0).abs() < 1e-6));
+    assert!(pts.iter().all(|p| ((p[0] - 5.0).hypot(p[1] - 5.0) - 2.0).abs() < 1e-3));
+
+    // Cruce de la pared de un cilindro (r 5) con la cara de arriba de una placa a z = 4
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 20.0, dy: 20.0, dz: 4.0, centered: true, centered_z: false },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+    }));
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 5.0, height: 10.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::New,
+        link: None,
+    }));
+    let plate = face_at(&doc, [8.0, 8.0, 4.0], [0.0, 0.0, 1.0]);
+    let wall = face_at(&doc, [5.0, 0.0, 8.0], [1.0, 0.0, 0.0]);
+    let c = doc.add(FeatureKind::Curve { def: CurveDef::Intersection { a: vec![wall], b: vec![plate] } });
+    let ev = eval_ok(&doc);
+    let pts = curve_lines(&ev, c);
+    assert!(!pts.is_empty());
+    assert!(pts.iter().all(|p| (p[2] - 4.0).abs() < 1e-4), "fuera de z = 4");
+    assert!(pts.iter().all(|p| (p[0].hypot(p[1]) - 5.0).abs() < 1e-3), "fuera del radio 5");
+}

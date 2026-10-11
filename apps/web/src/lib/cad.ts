@@ -76,6 +76,17 @@ export type PointSpec =
   /** Por clics: el tipo sale de lo elegido (vértice, medio o centro de una arista, cruce...) */
   | { type: "picked"; refs: RefPick[] };
 
+/** Cómo se arma una curva de referencia (usable como camino) */
+export type CurveDef =
+  /** Aristas del sólido y curvas del historial encadenadas */
+  | { type: "composite"; edges: EdgeRef[]; curves: number[] }
+  /** Curvas de un sketch (vacío = todas) proyectadas sobre caras a lo largo de la normal del sketch */
+  | { type: "projected"; sketch: number; entities: number[]; faces: FaceRef[] }
+  /** Donde se cruzan unas caras con otras */
+  | { type: "intersection"; a: FaceRef[]; b: FaceRef[] }
+  /** Spline por los puntos (cerrada con `closed`) */
+  | { type: "points"; points: PointSpec[]; closed: boolean };
+
 /** Algo del modelo elegido con un clic para armar un plano, un eje o un punto de referencia */
 export type RefPick =
   | { type: "plane"; plane: PlaneSpec }
@@ -634,6 +645,8 @@ export type FeatureKind =
       /** Barrido delgado: espesor de la pared */
       thin?: number | null;
     }
+  /** Curva de referencia hecha de otras */
+  | { type: "curve"; def: CurveDef }
   /** Superficies extendidas `distance` más allá de bordes libres */
   | { type: "surface_extend"; edges: EdgeRef[]; distance: number }
   /** Curvas de un sketch llevadas a lo largo de un camino: superficie */
@@ -1419,6 +1432,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   delete_face: "Eliminar cara",
   surface_sweep: "Superficie por barrido",
   surface_extend: "Extender superficie",
+  curve: "Curva",
   surface_offset: "Superficie desfasada",
 };
 
@@ -1680,6 +1694,10 @@ export function dependencies(kind: FeatureKind): number[] {
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature];
     case "helix":
       return axis(kind.axis);
+    case "curve": {
+      const d = kind.def;
+      return d.type === "composite" ? d.curves : d.type === "projected" ? [d.sketch] : d.type === "points" ? d.points.flatMap(point) : [];
+    }
     case "loft":
       return kind.sections.map((x) => x.sketch);
     case "hole":

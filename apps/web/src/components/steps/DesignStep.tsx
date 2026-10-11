@@ -69,6 +69,7 @@ import {
   type PlaneDef,
   type PointSpec,
   type RefPick,
+  type CurveDef,
   type Plane,
   type Sketch3d,
   type Constraint3d,
@@ -2349,6 +2350,116 @@ export const FeatureEditor: Component<{
                 />
               </>
             )}
+          </Match>
+          <Match when={f().kind.type === "curve" && (f().kind as Extract<FeatureKind, { type: "curve" }>)}>
+            {(k) => {
+              const def = () => k().def;
+              const setDef = (d: CurveDef) => update((x) => x.type === "curve" && (x.def = d));
+              return (
+                <>
+                  <Switch>
+                    <Match when={def().type === "composite" && (def() as Extract<CurveDef, { type: "composite" }>)}>
+                      {(d) => (
+                        <>
+                          <SelectionBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:aristas`}
+                            kind="edges"
+                            label="Aristas"
+                            lost={lost("edges")}
+                            refs={d().edges}
+                            onChange={(refs) => setDef({ ...d(), edges: refs as EdgeRef[] })}
+                          />
+                          <For each={refOptions(props.store, "curve", f().id)}>
+                            {(o) => (
+                              <Checkbox
+                                small
+                                label={o.label}
+                                checked={d().curves.includes(+o.value.slice(4))}
+                                onChange={(c) => setDef({ ...d(), curves: c ? [...d().curves, +o.value.slice(4)] : d().curves.filter((x) => x !== +o.value.slice(4)) })}
+                              />
+                            )}
+                          </For>
+                          <p class="text-[11px] text-text-dim">Las aristas y curvas se encadenan por sus extremos en una sola.</p>
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "projected" && (def() as Extract<CurveDef, { type: "projected" }>)}>
+                      {(d) => (
+                        <>
+                          <Row label="Curvas de">
+                            <Select options={sketchOptions()} value={String(d().sketch)} onChange={(v) => setDef({ ...d(), sketch: +v, entities: [] })} />
+                          </Row>
+                          <SelectionBox
+                            store={props.store}
+                            ui={props.ui}
+                            owner={`${f().id}:caras`}
+                            kind="faces"
+                            label="Sobre las caras"
+                            lost={lost("faces")}
+                            refs={d().faces}
+                            onChange={(refs) => setDef({ ...d(), faces: refs as FaceRef[] })}
+                          />
+                          <p class="text-[11px] text-text-dim">Se proyectan a lo largo de la normal del sketch.</p>
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "intersection" && (def() as Extract<CurveDef, { type: "intersection" }>)}>
+                      {(d) => (
+                        <>
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras" lost={lost("a")} refs={d().a} onChange={(refs) => setDef({ ...d(), a: refs as FaceRef[] })} />
+                          <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Con las caras" lost={lost("b")} refs={d().b} onChange={(refs) => setDef({ ...d(), b: refs as FaceRef[] })} />
+                        </>
+                      )}
+                    </Match>
+                    <Match when={def().type === "points" && (def() as Extract<CurveDef, { type: "points" }>)}>
+                      {(d) => (
+                        <>
+                          <For each={d().points}>
+                            {(p, i) => (
+                              <div class="flex items-start gap-1">
+                                <div class="flex-1">
+                                  <PointField
+                                    store={props.store}
+                                    ui={props.ui}
+                                    owner={`${f().id}:p${i()}`}
+                                    label={`Punto ${i() + 1}`}
+                                    value={p}
+                                    except={f().id}
+                                    onChange={(q) => setDef({ ...d(), points: d().points.map((x, k) => (k === i() ? q : x)) })}
+                                  />
+                                </div>
+                                <IconButton
+                                  aria-label={`Quitar el punto ${i() + 1}`}
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => setDef({ ...d(), points: d().points.filter((_, k) => k !== i()) })}
+                                >
+                                  <Icons.Trash size={11} />
+                                </IconButton>
+                              </div>
+                            )}
+                          </For>
+                          <Button
+                            size="sm"
+                            fullWidth
+                            onClick={() => {
+                              const last = d().points[d().points.length - 1];
+                              const at: P3 = last?.type === "at" ? [last.point[0] + 10, last.point[1], last.point[2]] : [0, 0, 0];
+                              setDef({ ...d(), points: [...d().points, { type: "at", point: at }] });
+                            }}
+                          >
+                            Agregar punto
+                          </Button>
+                          <Checkbox small label="Cerrada" checked={d().closed} onChange={(c) => setDef({ ...d(), closed: c })} />
+                        </>
+                      )}
+                    </Match>
+                  </Switch>
+                </>
+              );
+            }}
           </Match>
           <Match when={f().kind.type === "surface_extend" && (f().kind as Extract<FeatureKind, { type: "surface_extend" }>)}>
             {(k) => (
