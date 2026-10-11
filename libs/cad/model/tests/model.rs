@@ -164,7 +164,7 @@ fn extrude_plate_with_hole_and_change_parameters() {
     let body = ev.body.as_ref().unwrap();
     let (edge, _) = body.closest_edge([50.0, 0.0, 10.0], Some([1.0, 0.0, 0.0]), 0.9).unwrap();
     let r = ev.edge_ref(edge).unwrap();
-    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0, radius2: None });
+    let fillet = doc.add(FeatureKind::Fillet { edges: vec![r], radius: 2.0, radius2: None, points: vec![] });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     let with_fillet = volume(&ev);
@@ -308,7 +308,7 @@ fn shell_split_and_linear_pattern() {
         link: None,
     }));
     let top = FaceRef { point: [20.0, 10.0, 10.0], normal: [0.0, 0.0, 1.0], ..Default::default() };
-    doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0 });
+    doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0, overrides: vec![] });
     let ev = doc.evaluate();
     assert_all_ok(&ev);
     assert_relative_eq!(volume(&ev), 8000.0 - 38.0 * 18.0 * 9.0, max_relative = 1e-6);
@@ -352,6 +352,7 @@ fn errors_stay_local_rollback_and_suppress() {
         edges: vec![EdgeRef { point: [50.0, 0.0, 10.0], direction: [1.0, 0.0, 0.0], ..Default::default() }],
         radius: 50.0,
         radius2: None,
+        points: vec![],
     });
     let cut = doc.add(FeatureKind::Primitive(Primitive {
         shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 30.0, centered: false, centered_z: false },

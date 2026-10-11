@@ -207,7 +207,7 @@ fn variable_fillet() {
     // De radio 1 a radio 3 a lo largo de la arista: quita entre lo de un radio fijo de 1 y de 3
     let mut doc = cube();
     let edge = top_front_edge(&doc);
-    doc.add(FeatureKind::Fillet { edges: vec![edge], radius: 1.0, radius2: Some(3.0) });
+    doc.add(FeatureKind::Fillet { edges: vec![edge], radius: 1.0, radius2: Some(3.0), points: vec![] });
     let v = eval_ok(&doc).body.unwrap().mass().unwrap().volume;
     let removed = |r: f64| (1.0 - std::f64::consts::PI / 4.0) * r * r * 10.0;
     assert!(v < 1000.0 - removed(1.0) && v > 1000.0 - removed(3.0), "{v}");

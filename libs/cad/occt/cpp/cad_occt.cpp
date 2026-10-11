@@ -15,6 +15,8 @@
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
+#include <BRepAlgoAPI_Defeaturing.hxx>
+#include <TColgp_Array1OfPnt2d.hxx>
 #include <gp_Ax3.hxx>
 #include <BRepLib.hxx>
 #include <BRepClass3d_SolidClassifier.hxx>
@@ -361,7 +363,9 @@ TopTools_IndexedMapOfShape map_of(const TopoDS_Shape& s, TopAbs_ShapeEnum t) {
 
 // Anota en g_history qué caras de `inputs` terminaron en cuáles de `result`
 // (y, si se pasan, qué caras generó cada arista de `generators`).
-void record(BRepBuilderAPI_MakeShape& mk, const std::vector<TopoDS_Shape>& inputs, const TopoDS_Shape& result,
+// Cualquier algoritmo con Generated/Modified/IsDeleted (los de BRepBuilderAPI y BRepOffset_MakeOffset)
+template <class Mk>
+void record(Mk& mk, const std::vector<TopoDS_Shape>& inputs, const TopoDS_Shape& result,
             const std::vector<TopoDS_Shape>& generators = {}) {
     g_history.clear();
     TopTools_IndexedMapOfShape out;
@@ -744,6 +748,69 @@ CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double t
         if (!mk.IsDone()) throw Standard_Failure("grosor incompatible con la forma");
         record(mk, {s->s}, mk.Shape());
         return wrap_checked(mk.Shape(), "cáscara");
+    });
+}
+
+CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, double thickness, const int32_t* ov,
+                          const double* ov_thickness, int32_t n_ov) {
+    return guard("cáscara", (CadShape*)nullptr, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        auto face = [&](int32_t i) {
+            if (i < 0 || i >= m.Extent()) throw Standard_Failure("cara inexistente");
+            return TopoDS::Face(m(i + 1));
+        };
+        if (n == 0) throw Standard_Failure("elegir al menos una cara para abrir");
+        BRepOffset_MakeOffset mk;
+        mk.Initialize(s->s, thickness, 1e-3, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Arc, Standard_False);
+        for (int32_t i = 0; i < n; i++) mk.AddFace(face(faces[i]));
+        // Las caras con otro espesor
+        for (int32_t i = 0; i < n_ov; i++) mk.SetOffsetOnFace(face(ov[i]), ov_thickness[i]);
+        mk.MakeThickSolid();
+        if (!mk.IsDone()) throw Standard_Failure("grosor incompatible con la forma");
+        record(mk, {s->s}, mk.Shape());
+        return wrap_checked(mk.Shape(), "cáscara");
+    });
+}
+
+CadShape* cad_remove_faces(const CadShape* s, const int32_t* faces, int32_t n) {
+    return guard("eliminar cara", (CadShape*)nullptr, [&] {
+        auto m = map_of(s->s, TopAbs_FACE);
+        if (n == 0) throw Standard_Failure("elegir al menos una cara");
+        BRepAlgoAPI_Defeaturing df;
+        df.SetShape(s->s);
+        for (int32_t i = 0; i < n; i++) {
+            if (faces[i] < 0 || faces[i] >= m.Extent()) throw Standard_Failure("cara inexistente");
+            df.AddFaceToRemove(m(faces[i] + 1));
+        }
+        df.SetRunParallel(Standard_False);
+        df.Build();
+        if (!df.IsDone() || df.HasErrors()) throw Standard_Failure("las caras vecinas no alcanzan a cerrar el hueco");
+        record(df, {s->s}, df.Shape());
+        return wrap_checked(df.Shape(), "eliminar cara");
+    });
+}
+
+CadShape* cad_fillet_points(const CadShape* s, const int32_t* edges, int32_t n, const double* law, int32_t np) {
+    return guard("redondeo", (CadShape*)nullptr, [&] {
+        // `law`: `np` pares (fracción del largo de 0 a 1, radio), en orden
+        if (np < 2) throw Standard_Failure("hacen falta al menos dos radios");
+        auto m = map_of(s->s, TopAbs_EDGE);
+        BRepFilletAPI_MakeFillet mk(s->s);
+        std::vector<TopoDS_Shape> chosen;
+        for (int32_t i = 0; i < n; i++) {
+            if (edges[i] < 0 || edges[i] >= m.Extent()) throw Standard_Failure("arista inexistente");
+            TopoDS_Edge e = TopoDS::Edge(m(edges[i] + 1));
+            double first, last;
+            BRep_Tool::Range(e, first, last);
+            TColgp_Array1OfPnt2d ur(1, np);
+            for (int32_t k = 0; k < np; k++) ur.SetValue(k + 1, gp_Pnt2d(first + law[2 * k] * (last - first), law[2 * k + 1]));
+            mk.Add(ur, e);
+            chosen.push_back(e);
+        }
+        mk.Build();
+        if (!mk.IsDone()) throw Standard_Failure("radio demasiado grande para esas aristas");
+        record(mk, {s->s}, mk.Shape(), chosen);
+        return wrap_checked(mk.Shape(), "el radio no entra en esas aristas");
     });
 }
 

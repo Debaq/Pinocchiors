@@ -2232,14 +2232,28 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), b.op));
                 self.apply(f.id, tool, b.op)
             }
-            FeatureKind::Fillet { edges, radius, radius2 } => {
+            FeatureKind::Fillet { edges, radius, radius2, points } => {
                 if edges.is_empty() {
                     return Err("elegir al menos una arista".into());
                 }
                 let idx = self.edges("edges", edges)?;
                 let groups = self.by_part(&idx, true);
                 let end = radius2.unwrap_or(*radius);
-                self.per_part(groups, |s, e| s.fillet_variable(e, *radius, end), |k| Some(tag(f.id, format!("redondeo:{k}"))))
+                if points.is_empty() {
+                    return self.per_part(groups, |s, e| s.fillet_variable(e, *radius, end), |k| Some(tag(f.id, format!("redondeo:{k}"))));
+                }
+                // Por puntos: los extremos y los del medio, en orden a lo largo de la arista
+                if points.iter().any(|p| !(p.at > 0.0 && p.at < 1.0) || p.radius <= 0.0) {
+                    return Err("cada punto va entre el comienzo y el final de la arista (0 a 1), con radio positivo".into());
+                }
+                let mut law: Vec<(f64, f64)> = vec![(0.0, *radius)];
+                law.extend(points.iter().map(|p| (p.at, p.radius)));
+                law.push((1.0, end));
+                law.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if law.windows(2).any(|w| w[1].0 - w[0].0 < 1e-6) {
+                    return Err("dos puntos del redondeo en el mismo lugar".into());
+                }
+                self.per_part(groups, |s, e| s.fillet_points(e, &law), |k| Some(tag(f.id, format!("redondeo:{k}"))))
             }
             FeatureKind::Chamfer { edges, distance, second } => {
                 if edges.is_empty() {
@@ -2258,14 +2272,46 @@ impl Ctx<'_> {
                     |k| Some(tag(f.id, format!("chaflan:{k}"))),
                 )
             }
-            FeatureKind::Shell { faces, thickness } => {
+            FeatureKind::Shell { faces, thickness, overrides } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara para abrir".into());
                 }
                 let idx = self.faces("faces", faces)?;
                 // Solo las piezas de las caras elegidas
                 let groups = self.by_part(&idx, false);
-                self.per_part(groups, |s, fs| s.shell(fs, -thickness.abs()), |_| None)
+                if overrides.is_empty() {
+                    return self.per_part(groups, |s, fs| s.shell(fs, -thickness.abs()), |_| None);
+                }
+                if overrides.iter().any(|o| o.thickness.abs() < 1e-9) {
+                    return Err("cada cara con su espesor necesita uno mayor que cero".into());
+                }
+                // Las caras con otro espesor, con su índice dentro de su pieza
+                let mut special: Vec<(usize, usize, f64)> = Vec::new();
+                for (k, o) in overrides.iter().enumerate() {
+                    let g = self.ev.resolve_face(&o.face).inspect_err(|_| self.miss("overrides", k))?;
+                    for (p, local) in self.by_part(&[g], false) {
+                        special.push((p, local[0], -o.thickness.abs()));
+                    }
+                }
+                // Pieza por pieza (de atrás para adelante, como `per_part`), cada una con sus caras especiales
+                let mut work = groups;
+                work.sort_by(|a, b| b.0.cmp(&a.0));
+                for (pi, local) in work {
+                    let ov: Vec<(usize, f64)> = special.iter().filter(|x| x.0 == pi).map(|x| (x.1, x.2)).collect();
+                    let part = self.ev.parts[pi].shape.clone();
+                    let (new, h) = with_history(|| part.shell_faces(&local, -thickness.abs(), &ov)).map_err(err)?;
+                    self.replace_part(pi, new, &h, |_| None);
+                }
+                self.sync();
+                Ok(())
+            }
+            FeatureKind::DeleteFace { faces } => {
+                if faces.is_empty() {
+                    return Err("elegir al menos una cara".into());
+                }
+                let idx = self.faces("faces", faces)?;
+                let groups = self.by_part(&idx, false);
+                self.per_part(groups, |s, fs| s.remove_faces(fs), |_| None)
             }
             FeatureKind::Draft { faces, neutral, angle } => {
                 if faces.is_empty() {
@@ -2470,6 +2516,8 @@ impl Ctx<'_> {
             FeatureKind::Transform { parts, motion, copy } => {
                 self.body()?;
                 let shift = |v: P3| [[1.0, 0.0, 0.0, v[0]], [0.0, 1.0, 0.0, v[1]], [0.0, 0.0, 1.0, v[2]]];
+                // Con alinear, la pieza de la cara (si no se eligieron piezas)
+                let mut face_part = None;
                 let m = match motion {
                     Motion::Translate { vector } => {
                         if norm(*vector) < 1e-12 {
@@ -2488,8 +2536,39 @@ impl Ctx<'_> {
                         let (a, b) = (self.point("a", from)?, self.point("b", to)?);
                         shift(sub(b, a))
                     }
+                    Motion::Align { face, to, flip } => {
+                        let i = self.face("face", face)?;
+                        let info = self.body()?.face_info(i).map_err(err)?;
+                        if info.surface != SurfaceKind::Plane {
+                            return Err("la cara a alinear tiene que ser plana".into());
+                        }
+                        face_part = self.ev.part_of_face(i);
+                        let target = self.plane("plane", to)?;
+                        let (n, t) = (normalize(info.normal), normalize(target.normal));
+                        let want = if *flip { t } else { scale(t, -1.0) };
+                        // Giro que lleva la normal de la cara a la buscada, alrededor del punto de la cara
+                        let c = dot(n, want).clamp(-1.0, 1.0);
+                        let axis = if norm(cross(n, want)) > 1e-9 {
+                            normalize(cross(n, want))
+                        } else {
+                            // Paralelas: cualquier eje perpendicular (si son opuestas, media vuelta)
+                            let a = if n[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+                            normalize(cross(n, a))
+                        };
+                        let mut m = cad_occt::rotation_matrix(Axis { origin: info.point, dir: axis }, c.acos());
+                        // Después, a lo largo de la normal del plano hasta apoyarla
+                        let v = scale(t, -dot(sub(info.point, target.origin), t));
+                        for k in 0..3 {
+                            m[k][3] += v[k];
+                        }
+                        m
+                    }
                 };
-                let which: Vec<usize> = if parts.is_empty() { (0..self.ev.parts.len()).collect() } else { self.find_parts("parts", parts)? };
+                let which: Vec<usize> = match (parts.is_empty(), face_part) {
+                    (true, Some(id)) => self.find_parts("face", &[id])?,
+                    (true, None) => (0..self.ev.parts.len()).collect(),
+                    _ => self.find_parts("parts", parts)?,
+                };
                 for i in which {
                     let part = self.ev.parts[i].shape.clone();
                     let (new, h) = with_history(|| part.transform(m)).map_err(err)?;

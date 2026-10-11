@@ -193,6 +193,20 @@ pub enum BodyOp {
     New,
 }
 
+/// Radio de un redondeo variable en un punto de la arista (`at`: fracción del largo, de 0 a 1).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct FilletPoint {
+    pub at: f64,
+    pub radius: f64,
+}
+
+/// Una cara con su propio espesor en un vaciado.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FaceThickness {
+    pub face: FaceRef,
+    pub thickness: f64,
+}
+
 /// Movimiento de [`FeatureKind::Transform`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -203,6 +217,15 @@ pub enum Motion {
     Rotate { axis: AxisSpec, angle: f64 },
     /// Traslación de un punto a otro.
     Points { from: PointSpec, to: PointSpec },
+    /// Lleva una cara plana sobre un plano: la normal de la cara contra la
+    /// del plano (con `flip`, a favor) y la cara apoyada en él (se corre solo
+    /// a lo largo de la normal). Sin piezas elegidas mueve la de la cara.
+    Align {
+        face: FaceRef,
+        to: PlaneSpec,
+        #[serde(default)]
+        flip: bool,
+    },
 }
 
 /// Pieza del diseño: la operación que la creó y el número de pieza dentro de
@@ -569,11 +592,14 @@ pub enum FeatureKind {
     Revolve(Revolve),
     Primitive(Primitive),
     /// Redondeo; con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final.
+    /// Con `points`, además pasa por esos radios en el medio (fracción del largo, radio).
     Fillet {
         edges: Vec<EdgeRef>,
         radius: f64,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         radius2: Option<f64>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        points: Vec<FilletPoint>,
     },
     /// Chaflán: `distance` en las dos caras, o asimétrico con `second`.
     Chamfer {
@@ -582,8 +608,17 @@ pub enum FeatureKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         second: Option<ChamferSecond>,
     },
-    /// Ahuecar dejando paredes de `thickness` y abriendo `faces`.
-    Shell { faces: Vec<FaceRef>, thickness: f64 },
+    /// Ahuecar dejando paredes de `thickness` y abriendo `faces`; las de
+    /// `overrides` con su propio espesor.
+    Shell {
+        faces: Vec<FaceRef>,
+        thickness: f64,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        overrides: Vec<FaceThickness>,
+    },
+    /// Saca caras y cierra el hueco extendiendo las vecinas (un agujero, un
+    /// redondeo, un resalte).
+    DeleteFace { faces: Vec<FaceRef> },
     /// Desmolde: inclina `faces` respecto de la normal de `neutral`.
     Draft { faces: Vec<FaceRef>, neutral: PlaneSpec, angle: f64 },
     /// Repite las herramientas de `features` (vacío = todo el cuerpo);
@@ -1121,6 +1156,7 @@ impl FeatureKind {
                     Motion::Translate { .. } => {}
                     Motion::Rotate { axis, .. } => d.extend(axis_deps(axis)),
                     Motion::Points { from, to } => d.extend([point_deps(from), point_deps(to)].concat()),
+                    Motion::Align { to, .. } => d.extend(plane_deps(to)),
                 }
                 d
             }
@@ -1152,6 +1188,7 @@ impl FeatureKind {
             FeatureKind::Fillet { .. } => "Redondeo",
             FeatureKind::Chamfer { .. } => "Chaflán",
             FeatureKind::Shell { .. } => "Vaciado",
+            FeatureKind::DeleteFace { .. } => "Eliminar cara",
             FeatureKind::Draft { .. } => "Desmolde",
             FeatureKind::Pattern { .. } => "Patrón",
             FeatureKind::Mirror { .. } => "Simetría",

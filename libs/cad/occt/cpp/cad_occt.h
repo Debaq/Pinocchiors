@@ -83,6 +83,13 @@ CadShape* cad_chamfer(const CadShape* s, const int32_t* edges, int32_t n, double
                       int32_t flip);
 // Ahueca el sólido quitando las caras indicadas; grosor negativo = hacia adentro.
 CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double thickness);
+// Cáscara con otro espesor en algunas caras (`ov[i]` con `ov_thickness[i]`).
+CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, double thickness, const int32_t* ov,
+                          const double* ov_thickness, int32_t n_ov);
+// Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).
+CadShape* cad_remove_faces(const CadShape* s, const int32_t* faces, int32_t n);
+// Redondeo de radio variable por puntos: `law` = `np` pares (fracción 0..1 del largo, radio).
+CadShape* cad_fillet_points(const CadShape* s, const int32_t* edges, int32_t n, const double* law, int32_t np);
 // Ángulo de desmolde (rad) a las caras indicadas respecto de `dir`, con plano neutro.
 CadShape* cad_draft(const CadShape* s, const int32_t* faces, int32_t n, const double* dir,
                     double angle, const double* neutral_origin, const double* neutral_normal);

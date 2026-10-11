@@ -442,12 +442,13 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
   };
 
   /** Vaciado o desmolde con las caras ya elegidas; si no hay, se eligen en la caja del diálogo */
-  const startFaces = async (kind: "shell" | "draft") => {
+  const startFaces = async (kind: "shell" | "draft" | "delete_face") => {
     if (!store.result()?.body) return say("Primero hace falta un sólido");
     const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
     const faces = await Promise.all(picked.map((f) => store.faceRef(f)));
     ui.clearPicks();
     if (kind === "shell") void store.addFeature({ type: "shell", faces, thickness: 1 });
+    else if (kind === "delete_face") void store.addFeature({ type: "delete_face", faces });
     else void store.addFeature({ type: "draft", faces, neutral: { type: "xy" }, angle: 3 });
   };
 

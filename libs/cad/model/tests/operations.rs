@@ -389,3 +389,98 @@ fn inch_thread_names() {
     // La métrica sigue igual
     assert_eq!(threads::spec_name(&ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false }), "M6");
 }
+
+// ─── Tanda media ───
+
+/// Referencia a la cara del cuerpo más cercana a `p` con normal `n`
+fn face_at(doc: &Document, p: P3, n: P3) -> FaceRef {
+    let ev = eval_ok(doc);
+    let (i, _) = ev.body.as_ref().unwrap().closest_face(p, Some(n), 0.99).unwrap();
+    ev.face_ref(i).unwrap()
+}
+
+#[test]
+fn transform_aligns_a_face_to_a_plane() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let top = face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+    // La cara de arriba contra el frente (normal −Y): la caja queda del lado −Y, apoyada en y = 0
+    let t = doc.add(FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top.clone(), to: PlaneSpec::Xz, flip: false }, copy: false });
+    let (lo, hi, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 1000.0, max_relative = 1e-9);
+    for (a, b) in [(lo, [0.0, -10.0, 5.0]), (hi, [10.0, 0.0, 15.0])] {
+        for k in 0..3 {
+            assert_relative_eq!(a[k], b[k], epsilon = 1e-6);
+        }
+    }
+    // Dada vuelta: del lado +Y
+    doc.get_mut(t).unwrap().kind = FeatureKind::Transform { parts: vec![], motion: Motion::Align { face: top, to: PlaneSpec::Xz, flip: true }, copy: false };
+    let (lo, hi, _) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(lo[1], 0.0, epsilon = 1e-6);
+    assert_relative_eq!(hi[1], 10.0, epsilon = 1e-6);
+}
+
+/// Primer índice de arista del cuerpo cuyo medio está cerca de `p`
+fn edge_at(doc: &Document, p: P3) -> EdgeRef {
+    let ev = eval_ok(doc);
+    let body = ev.body.as_ref().unwrap();
+    let i = (0..body.edge_count()).min_by(|&a, &b| {
+        let d = |k: usize| {
+            let m = body.edge_info(k).unwrap().mid;
+            (0..3).map(|j| (m[j] - p[j]).powi(2)).sum::<f64>()
+        };
+        d(a).total_cmp(&d(b))
+    });
+    ev.edge_ref(i.unwrap()).unwrap()
+}
+
+#[test]
+fn delete_face_closes_a_hole() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, _) = plate_with_hole();
+    let wall = face_at(&doc, [12.0, 10.0, 1.0], [-1.0, 0.0, 0.0]);
+    doc.add(FeatureKind::DeleteFace { faces: vec![wall] });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 12000.0, max_relative = 1e-6);
+}
+
+#[test]
+fn shell_with_a_thicker_face() {
+    if !occt() {
+        return;
+    }
+    // Caja de 20 abierta arriba: paredes de 1 y el fondo de 3
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 20.0, BodyOp::Join));
+    let top = face_at(&doc, [10.0, 10.0, 20.0], [0.0, 0.0, 1.0]);
+    let bottom = face_at(&doc, [10.0, 10.0, 0.0], [0.0, 0.0, -1.0]);
+    doc.add(FeatureKind::Shell { faces: vec![top], thickness: 1.0, overrides: vec![FaceThickness { face: bottom, thickness: 3.0 }] });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 8000.0 - 18.0 * 18.0 * 17.0, max_relative = 1e-6);
+}
+
+#[test]
+fn fillet_through_radius_points() {
+    if !occt() {
+        return;
+    }
+    // Arista de arriba al frente de una caja de 20: 2 en las puntas y 5 en el medio
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 20.0, BodyOp::Join));
+    let e = edge_at(&doc, [10.0, 0.0, 20.0]);
+    let f = doc.add(FeatureKind::Fillet { edges: vec![e], radius: 2.0, radius2: None, points: vec![FilletPoint { at: 0.5, radius: 5.0 }] });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    // Quita entre lo de radio 2 y lo de radio 5 a lo largo de los 20
+    let cut = |r: f64| (1.0 - PI / 4.0) * r * r * 20.0;
+    assert!(v < 8000.0 - cut(2.0) && v > 8000.0 - cut(5.0), "volumen {v}");
+    // Un punto fuera de la arista: error
+    if let FeatureKind::Fillet { points, .. } = &mut doc.get_mut(f).unwrap().kind {
+        points[0].at = 1.5;
+    }
+    assert!(!doc.evaluate().errors().is_empty());
+}

@@ -203,7 +203,9 @@ export type RevolveExtent = { type: "one" } | { type: "symmetric" } | { type: "t
 export type Motion =
   | { type: "translate"; vector: P3 }
   | { type: "rotate"; axis: AxisSpec; angle: number }
-  | { type: "points"; from: PointSpec; to: PointSpec };
+  | { type: "points"; from: PointSpec; to: PointSpec }
+  /** Una cara plana apoyada en un plano (normal contra normal; `flip`, a favor) */
+  | { type: "align"; face: FaceRef; to: PlaneSpec; flip: boolean };
 
 export interface SketchPoint {
   id: number;
@@ -563,10 +565,14 @@ export type FeatureKind =
   /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
-  | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null }
+  /** `points`: radios en el medio de cada arista (`at`, fracción del largo de 0 a 1) */
+  | { type: "fillet"; edges: EdgeRef[]; radius: number; radius2?: number | null; points?: { at: number; radius: number }[] }
   /** Con `second`, asimétrico: otra distancia o un ángulo (`distance` va sobre una cara; `flip`, la otra) */
   | { type: "chamfer"; edges: EdgeRef[]; distance: number; second?: ChamferSecond | null }
-  | { type: "shell"; faces: FaceRef[]; thickness: number }
+  /** `overrides`: caras con su propio espesor */
+  | { type: "shell"; faces: FaceRef[]; thickness: number; overrides?: { face: FaceRef; thickness: number }[] }
+  /** Saca caras y cierra el hueco extendiendo las vecinas */
+  | { type: "delete_face"; faces: FaceRef[] }
   | { type: "draft"; faces: FaceRef[]; neutral: PlaneSpec; angle: number }
   /** `skip`: copias que no se hacen (1 es la primera copia) */
   | { type: "pattern"; features: number[]; pattern: PatternKind; skip?: number[] }
@@ -1374,6 +1380,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   scale: "Escala",
   transform: "Mover cuerpo",
   surface_planar: "Superficie plana",
+  delete_face: "Eliminar cara",
   surface_offset: "Superficie desfasada",
 };
 
@@ -1641,7 +1648,7 @@ export function dependencies(kind: FeatureKind): number[] {
       return [...kind.features, ...plane(kind.plane)];
     case "transform": {
       const m = kind.motion;
-      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : [];
+      const extra = m.type === "rotate" ? axis(m.axis) : m.type === "points" ? [...point(m.from), ...point(m.to)] : m.type === "align" ? plane(m.to) : [];
       return [...kind.parts.map((p) => p.feature), ...extra];
     }
     case "boolean":

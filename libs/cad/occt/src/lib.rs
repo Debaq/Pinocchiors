@@ -548,6 +548,28 @@ impl Shape {
         wrap(unsafe { ffi::cad_shell(self.ptr(), f.as_ptr(), f.len() as i32, thickness) })
     }
 
+    /// Como [`Shape::shell`] pero con otro grosor en algunas caras (mismo signo).
+    pub fn shell_faces(&self, open_faces: &[usize], thickness: f64, overrides: &[(usize, f64)]) -> Result<Shape> {
+        let f = idx(open_faces);
+        let ov: Vec<i32> = overrides.iter().map(|o| o.0 as i32).collect();
+        let ot: Vec<f64> = overrides.iter().map(|o| o.1).collect();
+        wrap(unsafe { ffi::cad_shell_faces(self.ptr(), f.as_ptr(), f.len() as i32, thickness, ov.as_ptr(), ot.as_ptr(), ov.len() as i32) })
+    }
+
+    /// Saca las caras y cierra el hueco extendiendo las vecinas (agujeros, redondeos, resaltes).
+    pub fn remove_faces(&self, faces: &[usize]) -> Result<Shape> {
+        let f = idx(faces);
+        wrap(unsafe { ffi::cad_remove_faces(self.ptr(), f.as_ptr(), f.len() as i32) })
+    }
+
+    /// Redondeo con el radio dado en puntos de cada arista: pares (fracción
+    /// del largo de 0 a 1, radio), en orden, del comienzo al final.
+    pub fn fillet_points(&self, edges: &[usize], law: &[(f64, f64)]) -> Result<Shape> {
+        let e = idx(edges);
+        let l: Vec<f64> = law.iter().flat_map(|p| [p.0, p.1]).collect();
+        wrap(unsafe { ffi::cad_fillet_points(self.ptr(), e.as_ptr(), e.len() as i32, l.as_ptr(), law.len() as i32) })
+    }
+
     /// Ángulo de desmolde para las caras indicadas.
     pub fn draft(&self, faces: &[usize], pull: P3, angle: f64, neutral_origin: P3, neutral_normal: P3) -> Result<Shape> {
         let f = idx(faces);

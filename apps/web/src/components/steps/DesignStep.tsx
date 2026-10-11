@@ -1914,6 +1914,48 @@ export const FeatureEditor: Component<{
                     <Show when={(k() as { radius2?: number | null }).radius2 != null}>
                       {field("Radio al final", "kind.radius2", (k() as { radius2: number }).radius2, (x, v) => x.type === "fillet" && (x.radius2 = v), "mm")}
                     </Show>
+                    <div class="space-y-1" aria-label="Radios en el medio">
+                      <For each={(k() as { points?: { at: number; radius: number }[] }).points ?? []}>
+                        {(pt, i) => (
+                          <div class="flex items-center gap-1" data-fillet-point={i()}>
+                            <Num label="En %" value={pt.at * 100} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].at = v / 100))} />
+                            <Num label="R" value={pt.radius} onCommit={(v) => update((x) => x.type === "fillet" && !!x.points && (x.points[i()].radius = v))} />
+                            <IconButton
+                              aria-label={`Quitar el radio ${i() + 1}`}
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                update((x) => {
+                                  if (x.type !== "fillet" || !x.points) return;
+                                  x.points.splice(i(), 1);
+                                  if (!x.points.length) x.points = undefined;
+                                })
+                              }
+                            >
+                              <Icons.Trash size={11} />
+                            </IconButton>
+                          </div>
+                        )}
+                      </For>
+                      <Button
+                        size="sm"
+                        fullWidth
+                        onClick={() =>
+                          update((x) => {
+                            if (x.type !== "fillet") return;
+                            // En el medio del tramo más largo que quede libre
+                            const ats = [0, ...(x.points ?? []).map((p) => p.at), 1].sort((a, b) => a - b);
+                            let at = 0.5;
+                            let gap = 0;
+                            for (let j = 1; j < ats.length; j++)
+                              if (ats[j] - ats[j - 1] > gap) [gap, at] = [ats[j] - ats[j - 1], (ats[j] + ats[j - 1]) / 2];
+                            x.points = [...(x.points ?? []), { at, radius: x.radius * 2 }].sort((a, b) => a.at - b.at);
+                          })
+                        }
+                      >
+                        Agregar radio en el medio
+                      </Button>
+                    </div>
                   </Show>
                   <Show when={kind.type === "chamfer" && (k() as { second?: ChamferSecond | null }).second}>
                     {(sec) => (
@@ -1964,6 +2006,30 @@ export const FeatureEditor: Component<{
                         <Row label="Plano neutro">{planeSpecSelect(d().neutral, (p) => update((x) => x.type === "draft" && (x.neutral = p)), lost("neutral").length > 0)}</Row>
                       </>
                     )}
+                  </Show>
+                  <Show when={kind.type === "shell"}>
+                    <SelectionBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:otras`}
+                      kind="faces"
+                      label="Caras con otro espesor"
+                      refs={((k() as { overrides?: { face: FaceRef }[] }).overrides ?? []).map((o) => o.face)}
+                      onChange={(refs) =>
+                        update((x) => {
+                          if (x.type !== "shell") return;
+                          const old = x.overrides ?? [];
+                          const same = (a: FaceRef, b: FaceRef) => JSON.stringify(a) === JSON.stringify(b);
+                          const next = (refs as FaceRef[]).map((face) => old.find((o) => same(o.face, face)) ?? { face, thickness: x.thickness * 2 });
+                          x.overrides = next.length ? next : undefined;
+                        })
+                      }
+                    />
+                    <For each={(k() as { overrides?: { face: FaceRef; thickness: number }[] }).overrides ?? []}>
+                      {(o, i) =>
+                        field(`Espesor cara ${i() + 1}`, `kind.overrides.${i()}.thickness`, o.thickness, (x, v) => x.type === "shell" && !!x.overrides && (x.overrides[i()].thickness = v), "mm")
+                      }
+                    </For>
                   </Show>
                   <SelectionBox
                     store={props.store}
@@ -2208,6 +2274,26 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "delete_face" && (f().kind as Extract<FeatureKind, { type: "delete_face" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:caras`}
+                  kind="faces"
+                  label="Caras a eliminar"
+                  lost={lost("faces")}
+                  refs={k().faces}
+                  onChange={(refs) => update((x) => x.type === "delete_face" && (x.faces = refs as FaceRef[]))}
+                />
+                <p class="text-[11px] text-text-dim">
+                  Las caras vecinas se extienden hasta cerrar el hueco: sirve para tapar un agujero, sacar un redondeo o un resalte. Si las vecinas no se
+                  cruzan, da error.
+                </p>
+              </>
+            )}
+          </Match>
           <Match when={f().kind.type === "surface_planar" && (f().kind as Extract<FeatureKind, { type: "surface_planar" }>)}>
             {(k) => (
               <>
@@ -2248,7 +2334,9 @@ export const FeatureEditor: Component<{
             )}
           </Match>
           <Match when={f().kind.type === "transform" && (f().kind as Extract<FeatureKind, { type: "transform" }>)}>
-            {(k) => (
+            {(k) => {
+              const [alignPending, setAlignPending] = createSignal(false);
+              return (
               <>
                 <PartChecklist
                   store={props.store}
@@ -2266,9 +2354,13 @@ export const FeatureEditor: Component<{
                       { value: "translate", label: "Desplazar" },
                       { value: "rotate", label: "Girar" },
                       { value: "points", label: "De un punto a otro" },
+                      { value: "align", label: "Alinear una cara a un plano" },
                     ]}
-                    value={k().motion.type}
-                    onChange={(v) =>
+                    value={alignPending() ? "align" : k().motion.type}
+                    onChange={(v) => {
+                      // Alinear necesita la cara: se elige primero en el visor
+                      setAlignPending(v === "align" && k().motion.type !== "align");
+                      if (v === "align") return;
                       update((x) => {
                         if (x.type !== "transform" || x.motion.type === v) return;
                         x.motion =
@@ -2277,10 +2369,43 @@ export const FeatureEditor: Component<{
                             : v === "points"
                               ? { type: "points", from: { type: "at", point: [0, 0, 0] }, to: { type: "at", point: [20, 0, 0] } }
                               : { type: "translate", vector: [20, 0, 0] };
-                      })
-                    }
+                      });
+                    }}
                   />
                 </Row>
+                <Show when={alignPending() || k().motion.type === "align"}>
+                  <SelectionBox
+                    store={props.store}
+                    ui={props.ui}
+                    owner={`${f().id}:cara`}
+                    kind="face"
+                    label="Cara a apoyar"
+                    lost={lost("face")}
+                    refs={k().motion.type === "align" ? [(k().motion as Extract<Motion, { type: "align" }>).face] : []}
+                    onChange={(refs) => {
+                      const face = refs[refs.length - 1] as FaceRef | undefined;
+                      if (!face) return;
+                      setAlignPending(false);
+                      update((x) => {
+                        if (x.type !== "transform") return;
+                        x.motion = x.motion.type === "align" ? { ...x.motion, face } : { type: "align", face, to: { type: "xy" }, flip: false };
+                      });
+                    }}
+                  />
+                </Show>
+                <Show when={k().motion.type === "align" && (k().motion as Extract<Motion, { type: "align" }>)}>
+                  {(m) => (
+                    <>
+                      <Row label="Sobre el plano">{planeSpecSelect(m().to, (p) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.to = p)))}</Row>
+                      <Checkbox
+                        small
+                        label="Del otro lado del plano"
+                        checked={m().flip}
+                        onChange={(c) => update((x) => x.type === "transform" && x.motion.type === "align" && (x.motion.flip = c))}
+                      />
+                    </>
+                  )}
+                </Show>
                 <Show when={k().motion.type === "translate" && (k().motion as Extract<Motion, { type: "translate" }>)}>
                   {(m) => (
                     <div class="grid grid-cols-3 gap-1" aria-label="Desplazamiento">
@@ -2333,9 +2458,12 @@ export const FeatureEditor: Component<{
                   )}
                 </Show>
                 <Checkbox small label="Copiar (las originales quedan)" checked={k().copy} onChange={(c) => update((x) => x.type === "transform" && (x.copy = c))} />
-                <p class="text-[11px] text-text-dim">Sin piezas elegidas mueve todas. Las copias quedan como piezas nuevas.</p>
+                <p class="text-[11px] text-text-dim">
+                  Sin piezas elegidas mueve todas (al alinear, la de la cara). Las copias quedan como piezas nuevas.
+                </p>
               </>
-            )}
+              );
+            }}
           </Match>
           <Match when={f().kind.type === "split" && (f().kind as Extract<FeatureKind, { type: "split" }>)}>
             {(k) => {
