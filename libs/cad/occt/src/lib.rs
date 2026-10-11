@@ -482,6 +482,12 @@ impl Shape {
         wrap(unsafe { ffi::cad_pipe_ex(self.ptr(), spine.ptr(), mode, solid as i32) })
     }
 
+    /// Barrido con torsión: el perfil gira `twist` radianes alrededor del camino,
+    /// parejo con el largo recorrido (sin torsión propia: marco de rotación mínima).
+    pub fn sweep_twisted(&self, spine: &Shape, twist: f64, solid: bool) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_pipe_twist(self.ptr(), spine.ptr(), twist, solid as i32) })
+    }
+
     /// Loft que puede empezar o terminar en un punto y cerrarse sobre la primera sección.
     pub fn loft_ex(sections: &[Shape], solid: bool, ruled: bool, start: Option<P3>, end: Option<P3>, closed: bool) -> Result<Shape> {
         let p = ptrs(sections);

@@ -44,7 +44,7 @@ fn straight_sweep_is_an_extrusion_and_l_path_adds_up() {
         sketch: p,
         regions: RegionSelection::All,
         path: SweepPath::Sketch { sketch: c, entities: vec![] },
-        op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None,
+        op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None, twist: None,
     }));
     assert_relative_eq!(vol(&doc), PI * 4.0 * 20.0, max_relative = 1e-6);
     // Camino en L (arriba 20, luego 10 de costado), con las entidades al revés: se encadenan solas
@@ -110,7 +110,7 @@ fn spring_along_a_helix_and_thicken() {
     let mut prof = Sketch::default();
     prof.circle([0.0, 0.0], 1.0);
     let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Custom { plane }, offset: 0.0, sketch: prof });
-    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None }));
+    doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Curve { feature: hx }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None, twist: None }));
     let ev = doc.evaluate();
     assert!(ev.errors().is_empty(), "{:?}", ev.errors());
     let len = 2.0 * ((2.0 * PI * 10.0f64).powi(2) + 25.0).sqrt();
@@ -146,7 +146,7 @@ fn arc_path(doc: &mut Document) -> FeatureId {
 }
 
 fn tube(sketch: FeatureId, path: FeatureId, circle: Option<f64>, thin: Option<f64>, orient: SweepOrient) -> FeatureKind {
-    FeatureKind::Sweep(Sweep { sketch, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: path, entities: vec![] }, op: BodyOp::Join, orient, circle, thin, guide: None })
+    FeatureKind::Sweep(Sweep { sketch, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: path, entities: vec![] }, op: BodyOp::Join, orient, circle, thin, guide: None, twist: None })
 }
 
 #[test]
@@ -189,6 +189,37 @@ fn fixed_orientation_keeps_the_profile_still() {
     };
     assert_relative_eq!(top(SweepOrient::Follow), 12.0, epsilon = 1e-3);
     assert!(top(SweepOrient::Fixed) < 10.0 + 1e-3);
+}
+
+#[test]
+fn twisted_sweep_keeps_the_volume_and_turns_the_profile() {
+    if !occt() {
+        return;
+    }
+    let twisted = |path: FeatureId, doc: &mut Document, p: FeatureId, deg: f64| {
+        let FeatureKind::Sweep(sw) = tube(p, path, None, None, SweepOrient::Follow) else { unreachable!() };
+        doc.add(FeatureKind::Sweep(Sweep { twist: Some(deg), ..sw }))
+    };
+    // Recta de 20 con 45°: la esquina del cuadrado de 4 pasa por el eje x (llega a 2√2)
+    let mut doc = Document::new();
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(4.0) });
+    let mut path = Sketch::default();
+    let a = path.add_point(0.0, 0.0);
+    let b = path.add_point(0.0, 20.0);
+    path.add_line(a, b);
+    let c = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
+    twisted(c, &mut doc, p, 45.0);
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let m = ev.body.unwrap().mass().unwrap();
+    assert_relative_eq!(m.volume, 16.0 * 20.0, max_relative = 1e-5);
+    assert_relative_eq!(m.bbox_max[0], 2.0 * 2f64.sqrt(), epsilon = 1e-2);
+    // Por el cuarto de círculo de radio 10 con 90°: el volumen es el mismo que sin torsión
+    let mut doc = Document::new();
+    let p = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: square(4.0) });
+    let path = arc_path(&mut doc);
+    twisted(path, &mut doc, p, 90.0);
+    assert_relative_eq!(vol(&doc), 16.0 * PI / 2.0 * 10.0, max_relative = 1e-4);
 }
 
 #[test]

@@ -782,6 +782,7 @@ fn tube_along(curve: FeatureId, r: f64) -> FeatureKind {
         circle: Some(r),
         thin: None,
         guide: None,
+        twist: None,
     })
 }
 
@@ -1154,6 +1155,7 @@ fn sweep_with_a_guide_curve() {
         circle: None,
         thin: None,
         guide: Some(SweepPath::Curve { feature: guide }),
+        twist: None,
     }));
     let (_, hi, v) = bbox(&eval_ok(&doc));
     assert!(v > 16.0 * 20.0 * 1.2, "volumen {v}");

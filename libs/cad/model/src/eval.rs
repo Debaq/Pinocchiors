@@ -2486,11 +2486,17 @@ impl Ctx<'_> {
                 if guide.is_some() && sw.thin.is_some() {
                     return Err("el barrido con curva guía todavía no va delgado".into());
                 }
+                let twist = sw.twist.filter(|t| t.abs() > 1e-9);
+                if twist.is_some() && guide.is_some() {
+                    return Err("con curva guía el giro lo da la guía: sacar la torsión".into());
+                }
                 let solids = faces
                     .iter()
                     .map(|fc| match &guide {
                         // Con guía: el perfil gira y se escala para seguirla
                         Some(g) => Shape::loft_along(std::slice::from_ref(fc), &spine, Some(g), true),
+                        // Con torsión: gira parejo alrededor del camino
+                        None if twist.is_some() => fc.sweep_twisted(&spine, twist.unwrap_or(0.0).to_radians(), true),
                         None if mode == 0 => fc.sweep(&spine),
                         None => fc.sweep_with(&spine, mode, true),
                     })

@@ -1185,6 +1185,10 @@ pub struct Sweep {
     /// Curva guía: el perfil gira y se escala para seguirla.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guide: Option<SweepPath>,
+    /// Torsión: cuánto gira el perfil (grados) alrededor del camino de punta a
+    /// punta, parejo con el largo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub twist: Option<f64>,
 }
 
 /// Orientación del perfil en un barrido.

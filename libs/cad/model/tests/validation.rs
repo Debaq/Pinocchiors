@@ -54,7 +54,7 @@ fn sweep_path_with_branches() {
     path.add_line(b, c);
     path.add_line(b, d);
     let ps = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: path });
-    let sw = doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: ps, entities: vec![] }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None }));
+    let sw = doc.add(FeatureKind::Sweep(Sweep { sketch: p, regions: RegionSelection::All, path: SweepPath::Sketch { sketch: ps, entities: vec![] }, op: BodyOp::Join, orient: SweepOrient::Follow, circle: None, thin: None, guide: None, twist: None }));
     let e = error_of(&doc, sw).expect("tiene que avisar");
     assert!(e.contains("ramas") && e.contains("3 tramos"), "{e}");
 }

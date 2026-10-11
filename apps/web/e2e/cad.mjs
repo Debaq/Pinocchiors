@@ -8052,6 +8052,33 @@ const scenarios = {
     await b.shot("operaciones_tubo_y_superficie_por_barrido");
   },
 
+  async "operaciones: barrido con torsión"(b) {
+    await begin(b);
+    // Perfil: cuadrado de 4 en la planta; camino: recta de 20 hacia arriba en el frente
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[-2, -2], [2, -2], [2, 2], [-2, 2]];
+    const square = { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 };
+    doc.features.push({ id: id(), name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: square } });
+    doc.features.push({ id: id(), name: "Camino", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 20 }], entities: [{ id: 2, geometry: { type: "line", start: 0, end: 1 } }], constraints: [], next_id: 3, origin: 0 } } });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Barrido");
+    await lastIs(b, "sweep");
+    await sleep(2500);
+    near((await body()).volume, 16 * 20, 1e-3, "prisma de 4 × 4 × 20");
+    near((await body()).bbox_max[0], 2, 1e-3, "sin torsión");
+    // 45°: el volumen no cambia y la esquina pasa por el eje x (2√2)
+    await setInput(b, "Torsión", 45);
+    await sleep(3000);
+    near((await body()).volume, 16 * 20, 1e-2, "con torsión, mismo volumen");
+    near((await body()).bbox_max[0], 2 * Math.SQRT2, 2e-2, "la esquina gira");
+    await accept(b);
+    if ((await lastKind(b)).twist !== 45) throw new Error("no quedó la torsión");
+    await b.shot("operaciones_barrido_con_torsion");
+  },
+
   async "operaciones: extender superficie"(b) {
     await begin(b);
     const doc = await call("cad_get_document");

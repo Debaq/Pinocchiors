@@ -3865,6 +3865,9 @@ export const FeatureEditor: Component<{
                       }
                     />
                   </Row>
+                  <Show when={!k().guide}>
+                    {field("Torsión", "kind.twist", k().twist ?? 0, (x, v) => x.type === "sweep" && (x.twist = v === 0 ? null : v), "°")}
+                  </Show>
                   <Checkbox
                     small
                     label="Delgado (solo una pared)"

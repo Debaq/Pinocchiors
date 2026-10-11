@@ -48,7 +48,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Perfil y trayectoria | ✅ (sketch, sketch 3D, hélice) |
 | Orientación (sigue, Frenet, fija), barrido circular simple, pared delgada | ✅ (`Sweep.orient`, `circle`, `thin`, 2026-10-11) |
 | Curva guía | ✅ (`Sweep.guide`, el perfil se escala para tocarla, 2026-10-11) |
-| Torsión | ❌ OCCT no la trae en `MakePipeShell`: hace falta una guía helicoidal armada a mano (F4) |
+| Torsión | ✅ grados de punta a punta, parejo con el largo (`Sweep.twist`, espina auxiliar con marco de rotación mínima, 2026-10-11) |
 
 ### Opciones de recubrimiento
 | Función | Estado |
@@ -406,6 +406,16 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
     en OCCT 7.6).
   - Los escenarios se probaron en la nube; el ensamblado en Rust (ffi, `face_blend`) solo por
     sintaxis.
+- **Torsión del barrido (2026-10-11)**: `cargo test -p cad-model --test sweep`
+  (`twisted_sweep_*`) y el e2e «operaciones: barrido con torsión». El C++ se probó en la nube
+  (banco `t_twist`: recta y arco, volumen exacto con cualquier giro). Hipótesis:
+  - `MakePipeShell::SetMode(espina auxiliar, false, NoContact)`: el punto de la auxiliar es el que
+    cae en el plano normal al camino. Con equivalencia por largo (`true`) el perfil se inclinaba
+    en las curvas (el volumen bajaba con el giro).
+  - La auxiliar es el camino corrido 1 % de su largo hacia un vector de rotación mínima (doble
+    reflexión) girado en proporción al largo; con caminos muy cerrados (radio de curvatura menor
+    que ese 1 %) podría cruzarse.
+  - Con curva guía no se permite torsión (la guía ya decide el giro).
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 

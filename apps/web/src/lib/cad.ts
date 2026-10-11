@@ -656,6 +656,8 @@ export type FeatureKind =
       thin?: number | null;
       /** Curva guía: el perfil gira y se escala para tocarla */
       guide?: SweepPathSpec | null;
+      /** Torsión: grados que gira el perfil alrededor del camino de punta a punta */
+      twist?: number | null;
     }
   /** Grabado (o relieve con `emboss`): las regiones de un sketch envuelto, `depth` mm siguiendo la cara */
   | { type: "wrap"; sketch: number; depth: number; emboss: boolean }

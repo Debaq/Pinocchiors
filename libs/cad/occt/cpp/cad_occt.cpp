@@ -643,7 +643,59 @@ CadShape* cad_pipe(const CadShape* profile, const CadShape* spine) {
     });
 }
 
-CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mode, int32_t solid) {
+// Espina auxiliar de un barrido con torsión: cada punto del camino corrido un poco hacia un
+// vector que no gira solo (marco de rotación mínima, doble reflexión) y que se gira `twist`
+// radianes en proporción al largo recorrido. MakePipeShell orienta el perfil hacia ella.
+static TopoDS_Wire twist_aux(const TopoDS_Wire& w, double twist) {
+    BRepAdaptor_CompCurve c(w);
+    const double total = GCPnts_AbscissaPoint::Length(c);
+    if (total < 1e-9) throw Standard_Failure("el camino no tiene largo");
+    const int n = std::max(64, (int)std::ceil(std::fabs(twist) / (M_PI / 32)) * 4);
+    std::vector<gp_Pnt> x(n + 1);
+    std::vector<gp_Vec> t(n + 1);
+    std::vector<double> s(n + 1);
+    for (int i = 0; i <= n; i++) {
+        double u = c.FirstParameter();
+        if (i == n) u = c.LastParameter();
+        else if (i > 0) {
+            GCPnts_AbscissaPoint ap(c, total * i / n, c.FirstParameter());
+            u = ap.IsDone() ? ap.Parameter() : c.FirstParameter() + (c.LastParameter() - c.FirstParameter()) * i / n;
+        }
+        gp_Vec d;
+        c.D1(u, x[i], d);
+        if (d.Magnitude() < 1e-12) throw Standard_Failure("el camino tiene un punto sin dirección");
+        t[i] = d.Normalized();
+        s[i] = total * i / n;
+    }
+    // Primer vector: perpendicular a la tangente, hacia el eje más de costado
+    gp_Vec ref = std::fabs(t[0].X()) < 0.9 ? gp_Vec(1, 0, 0) : gp_Vec(0, 1, 0);
+    gp_Vec r = (ref - t[0] * ref.Dot(t[0])).Normalized();
+    const double h = 0.01 * total;
+    Handle(TColgp_HArray1OfPnt) pts = new TColgp_HArray1OfPnt(1, n + 1);
+    for (int i = 0; i <= n; i++) {
+        if (i > 0) {
+            gp_Vec v1(x[i - 1], x[i]);
+            double c1 = v1.Dot(v1);
+            if (c1 > 1e-24) {
+                gp_Vec rl = r - v1 * (2 / c1 * v1.Dot(r));
+                gp_Vec tl = t[i - 1] - v1 * (2 / c1 * v1.Dot(t[i - 1]));
+                gp_Vec v2 = t[i] - tl;
+                double c2 = v2.Dot(v2);
+                r = c2 > 1e-24 ? rl - v2 * (2 / c2 * v2.Dot(rl)) : rl;
+            }
+            r = (r - t[i] * r.Dot(t[i])).Normalized();
+        }
+        double a = twist * s[i] / total;
+        gp_Vec d = r * std::cos(a) + t[i].Crossed(r) * std::sin(a);
+        pts->SetValue(i + 1, x[i].Translated(d * h));
+    }
+    GeomAPI_Interpolate in(pts, Standard_False, 1e-9);
+    in.Perform();
+    if (!in.IsDone()) throw Standard_Failure("no se pudo armar la torsión");
+    return BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(in.Curve()).Edge()).Wire();
+}
+
+static CadShape* pipe_impl(const CadShape* profile, const CadShape* spine, int32_t mode, double twist, int32_t solid) {
     return guard("barrer", (CadShape*)nullptr, [&] {
         TopoDS_Wire w;
         if (spine->s.ShapeType() == TopAbs_WIRE) {
@@ -653,9 +705,16 @@ CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mo
         } else {
             throw Standard_Failure("la trayectoria debe ser un alambre");
         }
-        // Orientación del perfil: 0 sigue el camino (Frenet corregido), 1 Frenet, 2 fija (no gira)
+        // Orientación del perfil: 0 sigue el camino (Frenet corregido), 1 Frenet, 2 fija (no gira),
+        // 3 con torsión (hacia la espina auxiliar)
+        TopoDS_Wire aux;
+        if (mode == 3) aux = twist_aux(w, twist);
         auto setup = [&](BRepOffsetAPI_MakePipeShell& mk) {
-            if (mode == 1) {
+            if (mode == 3) {
+                // El punto de la auxiliar es el que cae en el plano normal al camino (por largo
+                // relativo se desfasa en las curvas y el perfil se inclina)
+                mk.SetMode(aux, Standard_False, BRepFill_NoContact);
+            } else if (mode == 1) {
                 mk.SetMode(Standard_True);
             } else if (mode == 2) {
                 BRepAdaptor_CompCurve c(w);
@@ -714,6 +773,14 @@ CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mo
         if (count == 0) throw Standard_Failure("el perfil no tiene curvas");
         return wrap_checked(c, "barrido");
     });
+}
+
+CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mode, int32_t solid) {
+    return pipe_impl(profile, spine, mode, 0.0, solid);
+}
+
+CadShape* cad_pipe_twist(const CadShape* profile, const CadShape* spine, double twist, int32_t solid) {
+    return pipe_impl(profile, spine, 3, twist, solid);
 }
 
 // El alambre de una sección o un camino: el alambre mismo, una arista, el contorno de una cara

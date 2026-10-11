@@ -110,6 +110,7 @@ unsafe extern "C" {
     pub fn cad_project_curves(curves: *const CadShape, target: *const CadShape, direction: *const f64) -> *mut CadShape;
     pub fn cad_intersect_curves(a: *const CadShape, b: *const CadShape) -> *mut CadShape;
     pub fn cad_face_patch(face: *const CadShape, uv: *const f64, sizes: *const i32, n: i32) -> *mut CadShape;
+    pub fn cad_pipe_twist(profile: *const CadShape, spine: *const CadShape, twist: f64, solid: i32) -> *mut CadShape;
     pub fn cad_face_blend(s: *const CadShape, fa: *const i32, na: i32, fb: *const i32, nb: i32, r: f64, side: i32) -> *mut CadShape;
     pub fn cad_split_faces(s: *const CadShape, faces: *const i32, n: i32, tool: *const CadShape) -> *mut CadShape;
     pub fn cad_extend_face(face: *const CadShape, distance: f64) -> *mut CadShape;

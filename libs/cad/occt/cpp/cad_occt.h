@@ -86,6 +86,8 @@ CadShape* cad_shell(const CadShape* s, const int32_t* faces, int32_t n, double t
 // Barrido con la orientación del perfil (0 sigue el camino, 1 Frenet, 2 fija); sin `solid`,
 // cada alambre del perfil da una superficie.
 CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mode, int32_t solid);
+// Barrido con torsión: el perfil gira `twist` radianes alrededor del camino, parejo con el largo.
+CadShape* cad_pipe_twist(const CadShape* profile, const CadShape* spine, double twist, int32_t solid);
 // Cáscara con otro espesor en algunas caras (`ov[i]` con `ov_thickness[i]`).
 CadShape* cad_shell_faces(const CadShape* s, const int32_t* faces, int32_t n, double thickness, const int32_t* ov,
                           const double* ov_thickness, int32_t n_ov);
