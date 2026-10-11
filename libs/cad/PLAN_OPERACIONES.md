@@ -123,7 +123,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 |---|---|
 | Por extrusión, por revolución, relleno, recortar, coser, cortar sólido con superficie | ✅ |
 | Por barrido | ✅ (`SurfaceSweep`, 2026-10-11) |
-| Por recubrimiento | ❌ (F5) |
+| Por recubrimiento | ✅ (`SurfaceLoft`, 2026-10-11) |
 | Plana | ✅ (`SurfacePlanar`, 2026-10-11) |
 | Desfasada | ✅ (`SurfaceOffset`; de un sólido, su piel, 2026-10-11) |
 | Extender | ✅ por bordes libres (`SurfaceExtend`, `BRepLib::ExtendFace`, 2026-10-11) |
@@ -148,7 +148,8 @@ abran los proyectos viejos.
 
 Hecho el 2026-10-11: `Transform` con `Translate`, `Rotate` y `Points`, `copy`, y `Mirror.op`
 («Mover cuerpo», «Girar cuerpo» y «Copiar cuerpo» en Pieza; «El reflejo como pieza aparte» en la
-simetría). Falta: `Motion::Align` y el manipulador de flechas y arcos.
+simetría); después `Motion::Align` (cara plana sobre un plano). Falta: el manipulador de
+flechas y arcos.
 
 - `FeatureKind::Transform { parts: Vec<PartId>, motion: Motion, copy: bool }` con
   `Motion::Translate { vector }`, `Rotate { axis: AxisSpec, angle }`,
@@ -165,8 +166,8 @@ simetría). Falta: `Motion::Align` y el manipulador de flechas y arcos.
 ### F2 — Copiar y pegar operaciones; patrones que faltan
 
 Hecho el 2026-10-11: `Linear.second` (grilla; la copia k = j·cantidad + i) y `Pattern.skip`
-escrito en el diálogo («Omitir copias»). Falta: copiar y pegar, `PatternKind::Points` y omitir
-con clic en el visor.
+escrito en el diálogo («Omitir copias»); después copiar y pegar (Ctrl+C / Ctrl+V y «Duplicar») y
+`PatternKind::Points`. Falta: omitir con clic en el visor.
 
 - Copiar: lo elegido en el árbol va al portapapeles de `cadUi` con sus dependencias internas.
   Pegar renumera ids (`FeatureId`) y vuelve a apuntar las referencias internas; las externas
@@ -182,8 +183,8 @@ con clic en el visor.
 
 Hecho el 2026-10-11: `Extent::UpToVertex` («Hasta un punto») y `Revolve.extent`
 (`One | Symmetric | TwoAngles { second }`, sin migrar `angle`: queda como el ángulo hacia el
-primer lado o el total en la simétrica). Falta: hasta superficie con desfase o curva, dirección
-personalizada, desde plano desfasado, revolución hasta una cara y delgada.
+primer lado o el total en la simétrica); después hasta una cara con separación o curva,
+dirección propia, desde un plano corrido, revolución hasta una cara y delgada. Completa.
 
 - `Extent::UpToVertex { point: PointSpec }` (distancia = proyección sobre la dirección).
 - `Extent::UpToFace { face, offset: f64 }`; cara curva: extruir pasante y quedarse con el lado
@@ -197,6 +198,9 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 
 ### F4 — Barrido completo (+ superficie por barrido)
 
+Hecho el 2026-10-11: orientación, circular, delgado, curva guía (la guía orienta y la escala va
+como ley propia), torsión y `SurfaceSweep`. Completa.
+
 - `BRepOffsetAPI_MakePipeShell` (ya se usa):
   - Orientación `SweepOrient { Follow, Fixed, Frenet, Normal { dir } }` → `SetMode`.
   - Curvas guía: `SetMode(guide wire, KeepContact)`; con dos guías, escala y giro del perfil.
@@ -208,6 +212,10 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 
 ### F5 — Recubrimiento completo (+ superficie por recubrimiento)
 
+Hecho el 2026-10-11: a punto, cerrado, delgado, línea central, guía, tangencia perpendicular a
+la sección de la punta (superficie Hermite propia) y `SurfaceLoft`. Falta: tangente a una cara
+vecina (`TangentToFace`).
+
 - A punto: `LoftSection::Point { point: PointSpec }` al comienzo o al final
   (`ThruSections::AddVertex`).
 - Línea central y curvas guía: pasar a `MakePipeShell` con varias secciones (`Add` de cada
@@ -218,6 +226,10 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 - `Loft.thin: Option<f64>`; `SurfaceLoft` sin `isSolid`.
 
 ### F6 — Caras, redondeos y chaflanes
+
+Hecho el 2026-10-11: eliminar cara, girar cara plana con bisagra, vaciado por cara, redondeo por
+puntos, redondeo completo (caras planas), redondeo de cara y chaflán de vértice. Falta: mover y
+desfasar caras curvas, y reemplazar cara por una superficie.
 
 - Eliminar cara: `BRepAlgoAPI_Defeaturing` (cierra el hueco extendiendo las vecinas).
 - Mover y rotar cara: caras planas → plano transformado (como `ReplaceFace`); cilíndricas
@@ -238,6 +250,8 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 
 ### F7 — Agujero y envolver
 
+Hecho el 2026-10-11 (cónico, UNC/UNF, grabado y relieve). Completa.
+
 - `HoleStyle::Tapered { angle }` (cónico, p. ej. NPT 1°47').
 - Tabla de pulgadas UNC/UNF (#2–1/2") junto a la ISO; elegir sistema en el diálogo.
 - Grabado y relieve: `FeatureKind::Wrap { sketch: FeatureId (SurfaceSketch), depth, emboss }`:
@@ -245,6 +259,10 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
   espesor sobre la normal (`MakeThickSolid`), sumar o restar.
 
 ### F8 — Referencias y curvas
+
+Hecho el 2026-10-11: planos, ejes y puntos por clics (tangente y normal a curva incluidos),
+espiral, curvas como operación y línea de partición (plano, curva, silueta). Falta: el sistema
+de coordenadas (`Frame`).
 
 - **Primero (usuario, 2026-10-10: «los planos de referencia se construyen de una forma
   ridícula, con datos, no clics ni referencias a los objetos, líneas ni nada»).** Hoy el plano,
@@ -275,11 +293,16 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 
 ### F9 — Superficies restantes
 
+Hecho el 2026-10-11 (plana, desfasada, extender). Completa.
+
 - Plana: `SurfacePlanar { sketch, regions }` (`BRepBuilderAPI_MakeFace` del contorno).
 - Desfasada: `SurfaceOffset { parts, distance }` (`BRepOffsetAPI_MakeOffsetShape`).
 - Extender: `SurfaceExtend { edges, distance, natural }` (`GeomLib::ExtendSurfByLength`).
 
 ### F10 — Manipuladores en más operaciones
+
+Hecho el 2026-10-11: flechas de largo en mover cara, engrosar, vaciado, redondeo, chaflán y
+patrón lineal. Falta: `HandleKind::Angle` (arcos) para revolución, patrón circular y girar.
 
 - `HandleKind` gana `Angle` (arco con punta arrastrable) y `Radius`.
 - Revolución (ángulo), redondeo (radio), chaflán (distancia), vaciado y engrosar (espesor),
