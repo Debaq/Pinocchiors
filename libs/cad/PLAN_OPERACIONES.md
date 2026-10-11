@@ -290,11 +290,43 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 - Chapa: más allá de pestañas, alivios y esquinas cerradas (dobladillos, pestañas en arista
   curva, desdoblar/doblar).
 - Suite e2e completa, push y release CAD Windows/macOS cuando el usuario lo pida.
-- Segunda tanda del 2026-10-11 (agujero cónico, UNC/UNF, espiral, superficies plana y
-  desfasada, patrón por puntos, revolución delgada): también sin correr; mismos comandos (10
-  escenarios «operaciones:») y `cargo test -p cad-model --test operations --test hole`.
-- e2e de lo hecho el 2026-10-11 sin correr todavía (en la nube no se bajan los crates):
-  `node apps/web/e2e/cad.mjs operaciones` (5 escenarios) y `cargo test -p cad-model --test operations`.
+
+## Por probar (lo hecho en la nube sin compilar Rust)
+
+Desde el 2026-10-11 el CAD se trabaja también en la nube, donde `cargo` no baja los crates
+(`static.crates.io` bloqueado): el Rust se revisa solo por sintaxis (`rustfmt`), el TypeScript con
+`tsc` y el C++ con `g++ -fsyntax-only` contra OCCT 7.6. Al correrlo en la PC, en este orden:
+
+1. `cargo test -p cad-model` completo (que compile; se tocaron los literales de varias pruebas
+   viejas por los campos nuevos) y en especial `--test operations --test hole`.
+2. `cargo run -p pinocchio-app --example cad_http`, `npx vite` y
+   `node apps/web/e2e/cad.mjs operaciones` (los escenarios «operaciones:»).
+3. Si algo falla, anotar acá el escenario, el mensaje y cuál de las hipótesis de abajo cayó.
+
+Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
+
+- **`chooseOption` (e2e)**: elige en los desplegables de Kobalte con clic en el botón de la fila
+  y clic en la opción (`[role=option]`). No se probó nunca: si falla, es el arnés, no la operación.
+- **`setInputIn` (e2e)**: el punto de «Hasta un punto» se escribe en
+  `[data-point-field="…"] input[type=number]` (el `Select` de Kobalte tiene un input oculto; por
+  eso el filtro por tipo).
+- **Piel desfasada de un sólido** (`planar_and_offset_surfaces`): el área esperada supone que
+  `BRepOffset_MakeOffset` con `GeomAbs_Arc` redondea aristas (cuartos de cilindro) y esquinas
+  (octantes de esfera). Si da distinto pero la forma se ve bien, corregir la cuenta.
+- **Revolución delgada** (Pappus): supone el contorno corrido con esquinas de afuera redondeadas
+  y de adentro vivas (lo que hace `offset_face` con `GeomAbs_Arc`), como la extrusión delgada.
+- **Hélice cónica y espiral**: spline por 32 puntos por vuelta; las pruebas toleran 0,05 mm en
+  el radio. Si se ve facetada en un barrido, subir los puntos.
+- **Patrón por puntos**: el original se toma en el punto más cercano al centro de la caja de lo
+  que se repite (no se pide a mano). Con la operación lejos de todos los puntos, igual copia desde
+  el más cercano: confirmar que es lo esperado.
+- **Tablas UNC/UNF** (`standard::INCH` y `INCH_HOLES` en `lib/cad.ts`): brocas, pasante
+  (ajuste normal), caja y avellanado a 82° escritos de tablas estándar; cotejar antes de usarlas
+  en piezas reales.
+- **OCCT 7.6 de la nube**: `g++` da 3 errores que ya estaban (`WriteStream`, `std::max` con
+  lista) porque el proyecto usa un OCCT más nuevo; no son de estos cambios.
+- **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
+  el del primer lado (`second` el del otro).
 
 ## Riesgos
 
