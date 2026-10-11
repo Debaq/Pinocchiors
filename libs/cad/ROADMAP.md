@@ -697,3 +697,7 @@ cargo test -p cad-model
 - **2026-10-10 Mallas de CAD y STL sin manchas** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md)): marca de
   aristas vivas por vértice (`MeshData.creases`) y triángulos planos en el shader; retopología
   con aristas vivas por defecto; `get_scene_structure` en el puente.
+- **2026-10-10 Escaneo E1** ([PLAN_ESCANEO.md](PLAN_ESCANEO.md)): escaneo de referencia elegido
+  (sigue con una pieza activa), alinear por rasgos (cara al piso/frente, eje vertical, punto al
+  origen), referencias del árbol ligadas al escaneo (`ScanFit`, se reajustan en cada recálculo)
+  y sketch anclado al corte del escaneo («Usar el corte»).

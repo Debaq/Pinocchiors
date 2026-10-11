@@ -1264,6 +1264,12 @@ export interface Detection {
   rms: number;
 }
 
+/** Corte del escaneo por un plano: polilíneas (coordenadas del plano) y el contorno como sketch */
+export interface ScanOutline {
+  sections: { points: P2[]; closed: boolean }[];
+  sketch: Sketch;
+}
+
 export type ScanFeature =
   | { kind: "plane_outline"; triangle: number; extrude: boolean; depth?: number | null; op?: BodyOp }
   | { kind: "cylinder"; triangle: number }

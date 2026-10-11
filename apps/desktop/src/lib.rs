@@ -203,6 +203,7 @@ pub fn run() {
             cad::cad_scan_slice,
             cad::cad_scan_add,
             cad::cad_scan_use,
+            cad::cad_scan_outline,
             cad::cad_mm_per_unit,
         ])
         .run(tauri::generate_context!())

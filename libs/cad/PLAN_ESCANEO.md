@@ -26,7 +26,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Elegir qué objeto es el escaneo | ✅ (E1.1) |
 | Alinear el escaneo por rasgos | ✅ (E1.2) |
 | Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
-| Sketch anclado a la malla | ❌ `solidRefs` solo mira el sólido (E1) |
+| Sketch anclado a la malla | ✅ corte como guía, anclajes y «Usar el corte» (E1.4) |
 | Extruir hasta el escaneo | ❌ `UpToFace` solo caras del sólido (E3) |
 | Formas que siguen la piel (engrosar parche, carcasa, molde) | ❌ (E4) |
 | Curvas sobre la malla | ❌ (E5) |
@@ -98,7 +98,7 @@ de CAD y de STL.
 ### E1 — El escaneo como referencia del diseño
 
 Partes: E1.1 escaneo elegido ✅, E1.2 alinear por rasgos ✅, E1.3 referencias ligadas al
-escaneo ✅, E1.4 sketch anclado al corte.
+escaneo ✅, E1.4 sketch anclado al corte ✅. **E1 cerrada (2026-10-10).**
 
 - ✅ E1.1 (2026-10-10): el escaneo es un objeto importado elegido, no «el activo».
   `Document.scan_object` guarda la elección (si no hay: el importado activo o el primero con
@@ -125,9 +125,12 @@ escaneo ✅, E1.4 sketch anclado al corte.
   apoya en ellas (sketches, extrusiones) se rehace solo. El visor del CAD pide recálculo
   cuando cambia la malla del escaneo (`refreshScanReferences`). Prueba `references_follow_the_scan`
   y e2e «escaneo: referencias ligadas siguen al alinear». Pendiente: centro de una esfera.
-- Sketch anclado al escaneo: el corte del escaneo por el plano del sketch se ve como curva de
-  referencia, con anclajes (cerca, extremos de tramos rectos, centros de arcos reconocidos) y
-  «Usar» para copiarlo como entidades (como `Sketch.uses` con las aristas).
+- ✅ E1.4 (2026-10-10): al editar un sketch, el corte del escaneo por su plano se ve como
+  guía naranja punteada (`CadViewer.setScanSection`), sus líneas y círculos reconocidos son
+  anclajes (entran en `solidRefs`) y «Usar el corte» en el panel los copia al sketch con sus
+  horizontales/verticales/paralelas (`cad_scan_outline` → `outline_sketch`; `ui.scanOutline`).
+  e2e «escaneo: el sketch se ancla al corte del escaneo». Pendiente: tramos abiertos (escaneo
+  con huecos) solo se ven, no se copian; el corte copiado no queda ligado al escaneo.
 
 ### E2 — El escaneo como cuerpo
 

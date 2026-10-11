@@ -98,7 +98,7 @@ import {
 import type { CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
 import { regionContains } from "../../lib/CadViewer";
-import { flipSketchY, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
+import { flipSketchY, insertClip, rotateSketch, rotation, scaling, selectionCenter, translation } from "../../lib/sketchTransform";
 import { constraintSuggestions } from "../../lib/sketchSuggest";
 import { connectedChain } from "../../lib/sketchCheck";
 import { convertToBSpline, fitSplineToPoints, removeSplinePoint, simplifySpline, splineCurvature, toggleSplineHandle } from "../../lib/sketchSplines";
@@ -4778,6 +4778,15 @@ function persisted<T>(key: string, initial: T) {
 
 const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
   const ui = props.ui;
+  /** Copia al sketch el corte del escaneo por su plano (líneas y círculos reconocidos), elegido */
+  const useScanOutline = () => {
+    const o = ui.scanOutline();
+    if (!o) return;
+    let made: number[] = [];
+    const clip = { points: o.sketch.points.map((p) => ({ id: p.id, x: p.x, y: p.y })), entities: o.sketch.entities, constraints: o.sketch.constraints, texts: [] };
+    ui.change((sk) => (made = insertClip(sk, clip, (p) => p)));
+    ui.setSelection(made);
+  };
   const [cornerRadius, setCornerRadius] = persisted("cornerRadius", 5);
   /** Entidades del mismo tipo y la misma medida (±0,5 %) que `id` */
   const similarTo = (id: number): number[] => {
@@ -4994,6 +5003,14 @@ const SketchPanel: Component<{ ui: CadUi; store: CadStore }> = (props) => {
               {s().regions.length} regiones cerradas
             </p>
           )}
+        </Show>
+        <Show when={ui.scanOutline()?.sketch.entities.length}>
+          <div class="flex items-center gap-2 rounded-md border border-border p-2" aria-label="Corte del escaneo">
+            <span class="flex-1 text-[11px] text-text-dim leading-snug">El escaneo corta este plano (línea naranja): sirve de guía y de anclaje.</span>
+            <Button size="sm" onClick={useScanOutline}>
+              Usar el corte
+            </Button>
+          </div>
         </Show>
         <div class="space-y-1.5 border-b border-border pb-2" aria-label="Ayudas al dibujar">
           <div class="flex flex-wrap gap-x-3">

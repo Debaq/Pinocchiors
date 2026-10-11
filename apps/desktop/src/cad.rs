@@ -1809,6 +1809,29 @@ pub async fn cad_scan_slice(app: AppHandle, plane: Plane) -> Result<Vec<Section>
     in_background(app, move |state| with_scan(state, |scan| Ok(cad_scan::slice(&scan.mesh, &plane)))).await
 }
 
+/// Corte del escaneo por el plano de un sketch: las polilíneas (guía y
+/// anclajes) y el contorno ya pasado a sketch (líneas y círculos reconocidos,
+/// con paralelas y perpendiculares) para «Usar el corte».
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanOutline {
+    pub sections: Vec<Section>,
+    pub sketch: Sketch,
+}
+
+#[tauri::command]
+pub async fn cad_scan_outline(app: AppHandle, plane: Plane) -> Result<ScanOutline, String> {
+    in_background(app, move |state| scan_outline_impl(state, &plane)).await
+}
+
+fn scan_outline_impl(state: &AppState, plane: &Plane) -> Result<ScanOutline, String> {
+    with_scan(state, |scan| {
+        let sections = cad_scan::slice(&scan.mesh, plane);
+        let loops: Vec<Vec<[f64; 2]>> = sections.iter().filter(|s| s.closed).map(|s| s.points.clone()).collect();
+        let sketch = cad_scan::outline_sketch(&loops, &ScanPickOptions::default().outline(&scan.mesh));
+        Ok(ScanOutline { sections, sketch })
+    })
+}
+
 /// Qué agregar al diseño desde el escaneo.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
@@ -2056,6 +2079,7 @@ pub mod bridge {
                 ok(crate::commands::import_model_impl(arg(args, "path")?, vec![], &channel, state)?)
             }
             "get_mesh_data" => crate::commands::get_mesh_data_impl(state).map(|d| Reply::Bytes(d.to_bytes())),
+            "cad_scan_outline" => ok(scan_outline_impl(state, &arg(args, "plane")?)?),
             "cad_scan_use" => {
                 *state.cad_scan_object.lock().unwrap() = arg(args, "object")?;
                 ok(())

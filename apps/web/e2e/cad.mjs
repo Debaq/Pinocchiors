@@ -6751,6 +6751,29 @@ const scenarios = {
     await b.shot("escaneo-referencias");
   },
 
+  async "escaneo: el sketch se ancla al corte del escaneo"(b) {
+    // Cubo de 20 mm centrado en el origen: la planta lo corta en un cuadrado
+    const stl = twoCubesStl().split("endfacet\n").slice(0, 12).join("endfacet\n") + "endfacet\nendsolid uno\n";
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-centrado.stl`;
+    writeFileSync(path, stl.replace(/vertex (\S+) (\S+) (\S+)/g, (_, x, y, z) => `vertex ${+x - 10} ${+y - 10} ${+z - 10}`));
+    await importModel(b, path);
+    await begin(b);
+    await sketchOn(b);
+    const outline = () => b.eval(`window.__cadUi.scanOutline()?.sketch.entities.length ?? 0`);
+    for (let t = 0; t < 40 && (await outline()) < 4; t++) await sleep(250);
+    if ((await outline()) !== 4) throw new Error(`el corte no salió como un cuadrado: ${await outline()} entidades`);
+    if (!(await b.eval(`!!window.__cadViewer.scanSection`))) throw new Error("no se dibuja el corte");
+    const before = await b.eval(`__cadUi.session().sketch.entities.length`);
+    await b.clickText("Usar el corte");
+    await sleep(1500);
+    const lines = await b.eval(`__cadUi.session().sketch.entities.filter((e) => e.geometry.type === "line").length`);
+    if (lines - before < 4) throw new Error(`no se copió el corte: ${before} → ${lines}`);
+    // Las líneas copiadas están sobre el cuadrado de ±10 mm
+    const xs = await b.eval(`JSON.stringify(__cadUi.session().sketch.points.map((p) => [Math.round(p.x), Math.round(p.y)]))`);
+    if (!xs.includes("[10,10]") || !xs.includes("[-10,-10]")) throw new Error(`puntos del corte: ${xs}`);
+    await b.shot("escaneo-corte-sketch");
+  },
+
   async "mallas: caja del diseño en Fabricar"(b) {
     // La malla soldada de una pieza trae una sola normal por vértice en las
     // aristas vivas: la marca por vértice hace que las caras se dibujen planas

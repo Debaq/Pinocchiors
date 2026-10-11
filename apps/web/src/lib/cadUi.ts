@@ -47,8 +47,7 @@ import {
   type SketchConstraint,
   type SolveReport,
   editsAsSketch,
-  type PartId,
-} from "./cad";
+  type PartId, type ScanOutline } from "./cad";
 
 /** Operaciones que el panel de Diseñar ofrece al menú del visor (usan lo elegido) */
 export type CadAction = "sketch" | "fillet" | "chamfer" | "shell" | "draft";
@@ -297,6 +296,8 @@ export function createCadUi(store: CadStore) {
   const [pick, setPick] = createSignal<PickMode>({ kind: "none" });
   const [highlight, setHighlight] = createSignal<{ faces: number[]; edges: number[] }>({ faces: [], edges: [] });
   const [scanHighlight, setScanHighlight] = createSignal<number[]>([]);
+  /** Corte del escaneo por el plano del sketch en edición (guía, anclajes y «Usar el corte») */
+  const [scanOutline, setScanOutline] = createSignal<ScanOutline>();
   const [session, setSession] = createSignal<SketchSession>();
   const [tool, setTool] = createSignal<SketchTool>("line");
   const [selection, setSelection] = createSignal<number[]>([]);
@@ -454,6 +455,8 @@ export function createCadUi(store: CadStore) {
     setHighlight,
     scanHighlight,
     setScanHighlight,
+    scanOutline,
+    setScanOutline,
     message,
     // En el modo de prueba (vista previa) no se avisa ni se cambia lo elegido
     setMessage: ((m?: string) => void (dry || setMessage(m))) as typeof setMessage,

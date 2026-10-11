@@ -244,6 +244,8 @@ export class CadViewer {
   private compare?: THREE.Group;
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
+  /** Corte del escaneo por el plano del sketch en edición (guía) */
+  private scanSection?: THREE.LineSegments;
   private sketchGroup = new THREE.Group();
   /** Sketch 3D en edición */
   private sketch3dGroup = new THREE.Group();
@@ -515,6 +517,36 @@ export class CadViewer {
   }
 
   /** Resalta triángulos del escaneo (la zona que tomó un clic) */
+  /** Corte del escaneo por el plano del sketch (polilíneas en mm del CAD): guía punteada encima de todo */
+  setScanSection(lines: P3[][] | null) {
+    if (this.scanSection) {
+      this.scene.remove(this.scanSection);
+      this.scanSection.geometry.dispose();
+      (this.scanSection.material as THREE.Material).dispose();
+      this.scanSection = undefined;
+    }
+    if (lines?.length) {
+      const pts: number[] = [];
+      for (const line of lines) {
+        for (let i = 0; i + 1 < line.length; i++) {
+          const [a, b] = [this.toView(line[i]), this.toView(line[i + 1])];
+          pts.push(a.x, a.y, a.z, b.x, b.y, b.z);
+        }
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+      const m = new THREE.LineDashedMaterial({ color: themeHex("orange"), dashSize: 1, gapSize: 0.6, depthTest: false, transparent: true, opacity: 0.9 });
+      this.scanSection = new THREE.LineSegments(g, m);
+      // Rayas de ~1 mm, en las unidades del visor
+      m.dashSize = 1 / this.mmPerUnit;
+      m.gapSize = 0.6 / this.mmPerUnit;
+      this.scanSection.computeLineDistances();
+      this.scanSection.renderOrder = 6;
+      this.scene.add(this.scanSection);
+    }
+    this.requestRender();
+  }
+
   setScanHighlight(triangles: number[]) {
     if (this.scanHighlight) {
       this.scene.remove(this.scanHighlight);

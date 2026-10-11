@@ -6,7 +6,7 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -645,6 +645,34 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer?.dispose();
   });
 
+  // Corte del escaneo por el plano del sketch en edición: guía y anclajes
+  const sketchPlaneKey = createMemo(() => {
+    const p = ui.session()?.plane;
+    return p ? JSON.stringify(p) : "";
+  });
+  let outlineRequest = 0;
+  createEffect(
+    on([sketchPlaneKey, () => props.scanMesh], async ([key, scan]) => {
+      const request = ++outlineRequest;
+      const plane = ui.session()?.plane;
+      if (!key || !scan || !plane) {
+        ui.setScanOutline(undefined);
+        viewer?.setScanSection(null);
+        return;
+      }
+      try {
+        const o = await invoke<ScanOutline>("cad_scan_outline", { plane });
+        if (request !== outlineRequest) return;
+        ui.setScanOutline(o);
+        viewer?.setScanSection(o.sections.map((sec) => sec.points.map((p) => planeToWorld(plane, p))));
+      } catch {
+        if (request !== outlineRequest) return;
+        ui.setScanOutline(undefined);
+        viewer?.setScanSection(null);
+      }
+    }),
+  );
+
   createEffect(
     on(
       () => props.scanMesh,
@@ -1198,6 +1226,15 @@ export const CadView: Component<CadViewProps> = (props) => {
       }
       edges.push(poly);
       start = end;
+    }
+    // El corte del escaneo por este plano (líneas y círculos reconocidos)
+    const outline = ui.scanOutline();
+    if (outline) {
+      const at = new Map(outline.sketch.points.map((p) => [p.id, [p.x, p.y] as P2]));
+      for (const e of outline.sketch.entities) {
+        const pts = entityPolyline(e.geometry, at);
+        if (pts && pts.length >= 2) edges.push(pts.map((p) => planeToWorld(plane, p)));
+      }
     }
     // También lo dibujado en los otros sketches visibles (anclajes fijos: el otro no cambia)
     const editing = ui.session()?.feature;
