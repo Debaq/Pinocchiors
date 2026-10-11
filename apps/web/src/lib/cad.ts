@@ -224,7 +224,12 @@ export type Extent =
 export type SweepOrient = "follow" | "frenet" | "fixed";
 
 /** Cómo se reparte el giro de una revolución: todo a un lado, mitad a cada lado o `second` grados hacia atrás */
-export type RevolveExtent = { type: "one" } | { type: "symmetric" } | { type: "two_angles"; second: number };
+export type RevolveExtent =
+  | { type: "one" }
+  | { type: "symmetric" }
+  | { type: "two_angles"; second: number }
+  /** Hasta una cara (plana o curva), a menos de 350° del perfil */
+  | { type: "up_to_face"; face: FaceRef };
 
 /** Movimiento de piezas enteras (mover, girar, de un punto a otro) */
 export type Motion =

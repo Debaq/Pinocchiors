@@ -8250,6 +8250,60 @@ const scenarios = {
     await accept(b);
     await b.shot("operaciones_curvas");
   },
+
+  async "operaciones: extrusión hasta una cara curva y revolución hasta una cara"(b) {
+    await begin(b);
+    // Cilindro de radio 20 acostado sobre X y un cuadrado de 10 a z = −30
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    doc.features.push({ id: id(), name: "Rollo", suppressed: false, kind: { type: "primitive", shape: { type: "cylinder", radius: 20, height: 100 }, origin: [-50, 0, 0], z: [1, 0, 0], x: [0, 1, 0], op: "join" } });
+    const P = [[-5, -5], [5, -5], [5, 5], [-5, 5]];
+    doc.features.push({
+      id: id(), name: "Cuadrado", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: -30, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const roll = Math.PI * 400 * 100;
+    const belly = await b.eval(`window.__cadStore.faceRef(${await faceWhere((f) => f.surface === "cylinder")})`);
+    await b.clickText("Extrusión");
+    await lastIs(b, "extrude");
+    await sleep(1500);
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.extent = { type: "up_to_face", face: ${JSON.stringify(belly)} }; })`);
+    await sleep(3000);
+    const under = 5 * Math.sqrt(375) + 400 * Math.asin(0.25);
+    near((await body()).volume, roll + 10 * (300 - under), 0.5, "hasta la panza del cilindro");
+    await accept(b);
+    await b.shot("operaciones_hasta_cara_curva");
+  },
+
+  async "operaciones: revolución hasta una cara"(b) {
+    await begin(b);
+    // Caja en x < 0, y > 0 (su cara x = 0 a 90° del perfil) y el perfil x 10..15, z 0..20 en el frente
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    doc.features.push({ id: id(), name: "Tope", suppressed: false, kind: { type: "primitive", shape: { type: "box", dx: 40, dy: 40, dz: 40, centered: false }, origin: [-40, 0, -10], z: [0, 0, 1], x: [1, 0, 0], op: "join" } });
+    const P = [[10, 0], [15, 0], [15, 20], [10, 20]];
+    doc.features.push({
+      id: id(), name: "Perfil", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const wall = await b.eval(`window.__cadStore.faceRef(${await faceWhere((f) => f.surface === "plane" && f.normal[0] > 0.99)})`);
+    await b.clickText("Revolución");
+    await lastIs(b, "revolve");
+    await sleep(2000);
+    await chooseOption(b, "Hacia", "Hasta una cara");
+    if (!(await b.eval(`document.body.innerText.includes("Hasta la cara")`))) throw new Error("no apareció la caja de la cara");
+    await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.angle = 90; d.features.at(-1).kind.extent = { type: "up_to_face", face: ${JSON.stringify(wall)} }; })`);
+    await sleep(3000);
+    near((await body()).volume, 64000 + (Math.PI * (225 - 100) * 20) / 4, 0.5, "un cuarto de vuelta hasta la caja");
+    await accept(b);
+    await b.shot("operaciones_revolucion_hasta_cara");
+  },
 };
 
 const filter = process.argv[2];

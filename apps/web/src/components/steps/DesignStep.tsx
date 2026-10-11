@@ -1663,6 +1663,8 @@ export const FeatureEditor: Component<{
           </Match>
           <Match when={f().kind.type === "revolve" && (f().kind as Extract<FeatureKind, { type: "revolve" }>)}>
             {(k) => {
+              // «Hasta una cara» elegido y todavía sin cara
+              const [upToFace, setUpToFace] = createSignal(false);
               const sketch = () => props.sketches.find((s) => s.id === k().sketch);
               const lines = () => {
                 const s = sketch();
@@ -1731,17 +1733,36 @@ export const FeatureEditor: Component<{
                         { value: "one", label: "Un lado" },
                         { value: "symmetric", label: "Simétrica" },
                         { value: "two_angles", label: "Dos ángulos" },
+                        { value: "up_to_face", label: "Hasta una cara" },
                       ]}
-                      value={k().extent?.type ?? "one"}
-                      onChange={(v) =>
+                      value={upToFace() ? "up_to_face" : (k().extent?.type ?? "one")}
+                      onChange={(v) => {
+                        setUpToFace(v === "up_to_face" && k().extent?.type !== "up_to_face");
+                        if (v === "up_to_face") return;
                         update(
                           (x) =>
                             x.type === "revolve" &&
                             (x.extent = v === "two_angles" ? { type: "two_angles", second: 45 } : v === "symmetric" ? { type: "symmetric" } : undefined),
-                        )
-                      }
+                        );
+                      }}
                     />
                   </Row>
+                  <Show when={upToFace() || k().extent?.type === "up_to_face"}>
+                    <SelectionBox
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:hasta`}
+                      kind="face"
+                      label="Hasta la cara"
+                      lost={lost("extent")}
+                      refs={k().extent?.type === "up_to_face" ? [(k().extent as { face: FaceRef }).face] : []}
+                      onChange={(refs) => {
+                        if (refs[0]) update((x) => x.type === "revolve" && (x.extent = { type: "up_to_face", face: refs[0] as FaceRef }));
+                        setUpToFace(false);
+                      }}
+                    />
+                    <p class="text-[11px] text-text-dim">Gira hacia el lado del signo del ángulo hasta encontrar la cara (plana o curva).</p>
+                  </Show>
                   {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
                   <Checkbox
                     small

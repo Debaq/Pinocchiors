@@ -580,6 +580,11 @@ impl Shape {
         wrap(unsafe { ffi::cad_intersect_curves(self.ptr(), other.ptr()) })
     }
 
+    /// Esta cara extendida `distance` por todos sus lados, siguiendo su superficie.
+    pub fn extend_face(&self, distance: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_extend_face(self.ptr(), distance) })
+    }
+
     /// Extiende las superficies `distance` más allá de los bordes libres `edges`.
     pub fn extend_surface(&self, edges: &[usize], distance: f64) -> Result<Shape> {
         let e = idx(edges);

@@ -95,6 +95,8 @@ CadShape* cad_chain(const CadShape* const* shapes, int32_t n);
 CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction);
 // Curvas donde se cruzan dos formas (caras o piezas), encadenadas.
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
+// La cara extendida `distance` por todos sus lados (siguiendo su superficie).
+CadShape* cad_extend_face(const CadShape* face, double distance);
 // Extiende las superficies por los bordes libres `edges`, `distance` más allá (cada cara por sus lados).
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance);
 // Saca caras y cierra el hueco extendiendo las vecinas (BRepAlgoAPI_Defeaturing).

@@ -869,3 +869,67 @@ fn projected_and_intersection_curves() {
     assert!(pts.iter().all(|p| (p[2] - 4.0).abs() < 1e-4), "fuera de z = 4");
     assert!(pts.iter().all(|p| (p[0].hypot(p[1]) - 5.0).abs() < 1e-3), "fuera del radio 5");
 }
+
+// ─── Hasta caras curvas ───
+
+#[test]
+fn extrude_up_to_a_curved_face() {
+    if !occt() {
+        return;
+    }
+    // Cilindro de radio 20 acostado sobre X (de −50 a 50) y un cuadrado de 10 a z = −30 que sube hasta su panza
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 20.0, height: 100.0 },
+        origin: [-50.0, 0.0, 0.0],
+        z: [1.0, 0.0, 0.0],
+        x: [0.0, 1.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let belly = face_at(&doc, [0.0, 0.0, -20.0], [0.0, 0.0, -1.0]);
+    let mut s = Sketch::new();
+    s.rectangle([-5.0, -5.0], [5.0, 5.0]);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: -30.0, sketch: s });
+    doc.add(extrude(sk, Extent::UpToFace { face: belly, offset: 0.0 }, BodyOp::New));
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2);
+    // Alto en cada y: 30 − √(400 − y²); integrado en y de −5 a 5 por 10 de ancho
+    let a = 5.0f64;
+    let under = a * (400.0 - a * a).sqrt() + 400.0 * (a / 20.0).asin();
+    let expected = 10.0 * (300.0 - under);
+    assert_relative_eq!(ev.parts[1].shape.mass().unwrap().volume, expected, max_relative = 1e-4);
+}
+
+#[test]
+fn revolve_up_to_a_face() {
+    if !occt() {
+        return;
+    }
+    // Una caja que ocupa x < 0, y > 0: su cara de x = 0 queda a 90° del perfil
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 40.0, dy: 40.0, dz: 40.0, centered: false, centered_z: false },
+        origin: [-40.0, 0.0, -10.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let wall = face_at(&doc, [0.0, 20.0, 10.0], [1.0, 0.0, 0.0]);
+    let mut s = Sketch::new();
+    s.rectangle([10.0, 0.0], [15.0, 20.0]);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: s });
+    doc.add(FeatureKind::Revolve(Revolve {
+        sketch: sk,
+        regions: RegionSelection::All,
+        axis: AxisSpec::Z,
+        angle: 90.0,
+        op: BodyOp::New,
+        extent: RevolveExtent::UpToFace { face: wall },
+        thin: None,
+    }));
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2);
+    assert_relative_eq!(ev.parts[1].shape.mass().unwrap().volume, PI * (225.0 - 100.0) * 20.0 / 4.0, max_relative = 1e-6);
+}

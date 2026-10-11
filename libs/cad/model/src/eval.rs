@@ -552,6 +552,28 @@ fn occt_err(e: String) -> cad_occt::Error {
 /// Aviso de un corte que no se lleva nada.
 /// El prisma menos el escaneo, solo los sólidos que arrancan en el plano del
 /// perfil (lo que queda del otro lado del escaneo se descarta).
+/// Lo del prisma que va desde su comienzo (la tapa en `start`, normal a `cap`)
+/// hasta la lámina `sheet` (una cara curva extendida): se parte con ella y quedan
+/// los pedazos que arrancan en la tapa.
+fn until_sheet(prism: &Shape, sheet: &Shape, start: P3, cap: P3) -> R<Shape> {
+    let pieces = prism.split_by(std::slice::from_ref(sheet)).map_err(err)?.solids().map_err(err)?;
+    let size = prism.mass().map(|m| norm(sub(m.bbox_max, m.bbox_min))).unwrap_or(1.0).max(1.0);
+    let starts = |s: &Shape| {
+        (0..s.face_count()).any(|i| {
+            s.face_info(i).is_ok_and(|f| f.surface == SurfaceKind::Plane && dot(f.normal, cap).abs() > 0.999 && dot(sub(f.point, start), cap).abs() < size * 1e-6)
+        })
+    };
+    if pieces.len() < 2 {
+        return Err("la cara no corta el perfil: no tapa lo que se extruye".into());
+    }
+    let kept: Vec<Shape> = pieces.into_iter().filter(starts).collect();
+    match kept.len() {
+        0 => Err("no quedó nada entre el perfil y la cara".into()),
+        1 => Ok(kept.into_iter().next().unwrap()),
+        _ => fuse(kept),
+    }
+}
+
 fn until_scan(prism: &Shape, scan: &Shape, origin: P3, n: P3) -> R<Shape> {
     let reach = prism.mass().map_err(err)?;
     let far = (0..8)
@@ -2152,10 +2174,18 @@ impl Ctx<'_> {
                 let faces = thin_faces(faces, r.thin)?;
                 // Desde dónde (`start`, girando el perfil antes) y cuánto en total
                 let angle = r.angle.to_radians();
-                let (start, angle) = match r.extent {
+                let mut sheet = None;
+                let (start, angle) = match &r.extent {
                     RevolveExtent::One => (0.0, angle),
                     RevolveExtent::Symmetric => (-angle / 2.0, angle),
                     RevolveExtent::TwoAngles { second } => (-second.to_radians(), angle + second.to_radians()),
+                    RevolveExtent::UpToFace { face } => {
+                        // Casi una vuelta (que quede tapa al final), partida por la cara extendida
+                        let i = self.face("extent", face)?;
+                        let fs = self.body()?.face_shape(i).map_err(err)?;
+                        sheet = Some(fs.extend_face(self.diag()).map_err(err)?);
+                        (0.0, 350f64.to_radians() * if angle < 0.0 { -1.0 } else { 1.0 })
+                    }
                 };
                 if angle.abs() < 1e-9 {
                     return Err("ángulo cero".into());
@@ -2169,6 +2199,13 @@ impl Ctx<'_> {
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(err)?;
                 let shape = fuse(solids)?;
+                let shape = match &sheet {
+                    Some(s) => {
+                        let plane = self.ev.sketches.get(&r.sketch).ok_or("el sketch no está calculado")?.plane;
+                        until_sheet(&shape, s, plane.origin, plane.normal)?
+                    }
+                    None => shape,
+                };
                 let mut tags = vec![Vec::new(); shape.face_count()];
                 let rot = |p: P3, a: f64| {
                     let m = cad_occt::rotation_matrix(axis, a);
@@ -3658,6 +3695,8 @@ impl Ctx<'_> {
         }
         // Hasta el escaneo: su sólido y la distancia al primer choque
         let mut up_to_scan: Option<(Shape, f64)> = None;
+        // Hasta una cara curva: la cara extendida, que corta el prisma
+        let mut up_to_sheet: Option<Shape> = None;
         // Tramos (desde, largo) a lo largo de `n`; con desmolde, cada lado aparte
         // (las paredes se angostan a partir del plano del sketch)
         let segments: Vec<(f64, f64)> = match &e.extent {
@@ -3671,6 +3710,24 @@ impl Ctx<'_> {
                 let m = body.mass().map_err(err)?;
                 let center = scale(add(m.bbox_min, m.bbox_max), 0.5);
                 vec![(0.0, self.diag() * 2.0 + 2.0 * norm(sub(center, plane.origin)))]
+            }
+            Extent::UpToFace { face, offset } if self.body()?.face_info(self.face("extent", face)?).map_err(err)?.surface != SurfaceKind::Plane => {
+                // Curva: un prisma que la pasa entera, partido por la cara extendida
+                if offset.abs() > 1e-12 {
+                    return Err("la separación todavía solo va con caras planas".into());
+                }
+                let i = self.face("extent", face)?;
+                let body = self.body()?;
+                let info = body.face_info(i).map_err(err)?;
+                if dot(sub(info.point, plane.origin), n) < 0.0 {
+                    n = scale(n, -1.0);
+                }
+                let fm = body.face_shape(i).and_then(|s| s.mass()).map_err(err)?;
+                let corners = (0..8).map(|k| [0, 1, 2].map(|a| if k >> a & 1 == 0 { fm.bbox_min[a] } else { fm.bbox_max[a] }));
+                let reach = corners.map(|c| dot(sub(c, plane.origin), n)).fold(0.0, f64::max);
+                let ext = self.diag().max(norm(sub(fm.bbox_max, fm.bbox_min)));
+                up_to_sheet = Some(body.face_shape(i).and_then(|s| s.extend_face(ext)).map_err(err)?);
+                vec![(0.0, reach * 1.05 + self.diag() * 1e-3 + 1.0)]
             }
             Extent::UpToFace { face, offset } => {
                 let i = self.face("extent", face)?;
@@ -3775,6 +3832,10 @@ impl Ctx<'_> {
         let mut shape = fuse(solids)?;
         let lo = segments.iter().map(|(s, l)| s.min(s + l)).fold(f64::INFINITY, f64::min);
         let mut hi = segments.iter().map(|(s, l)| s.max(s + l)).fold(f64::NEG_INFINITY, f64::max);
+        if let Some(sheet) = &up_to_sheet {
+            let s0 = segments.iter().map(|(s, _)| *s).fold(f64::INFINITY, f64::min);
+            shape = until_sheet(&shape, sheet, add(plane.origin, scale(n, s0)), plane.normal)?;
+        }
         if let Some((scan, hit)) = &up_to_scan {
             shape = until_scan(&shape, scan, plane.origin, n)?;
             // Los laterales se marcan antes del escaneo

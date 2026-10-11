@@ -893,6 +893,17 @@ CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) {
     });
 }
 
+CadShape* cad_extend_face(const CadShape* face, double distance) {
+    return guard("extender la cara", (CadShape*)nullptr, [&] {
+        TopExp_Explorer ex(face->s, TopAbs_FACE);
+        if (!ex.More()) throw Standard_Failure("se esperaba una cara");
+        TopoDS_Face ext;
+        BRepLib::ExtendFace(TopoDS::Face(ex.Current()), distance, Standard_True, Standard_True, Standard_True, Standard_True, ext);
+        if (ext.IsNull()) throw Standard_Failure("no se pudo extender la cara");
+        return wrap(ext);
+    });
+}
+
 CadShape* cad_extend_surface(const CadShape* s, const int32_t* edges, int32_t n, double distance) {
     return guard("extender superficie", (CadShape*)nullptr, [&] {
         if (distance <= 0) throw Standard_Failure("la distancia tiene que ser mayor que cero");

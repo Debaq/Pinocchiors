@@ -398,7 +398,7 @@ pub struct Revolve {
 }
 
 /// Cómo se reparte el giro de una revolución alrededor del plano del sketch.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RevolveExtent {
     /// Todo `angle` hacia un lado.
@@ -408,6 +408,9 @@ pub enum RevolveExtent {
     Symmetric,
     /// `angle` hacia un lado y `second` (grados) hacia el otro.
     TwoAngles { second: f64 },
+    /// Hasta una cara (plana o curva), hacia el lado del signo de `angle`;
+    /// la cara tiene que estar a menos de 350° del perfil.
+    UpToFace { face: FaceRef },
 }
 
 impl RevolveExtent {
