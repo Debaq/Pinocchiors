@@ -91,6 +91,36 @@ pub enum PointSpec {
         #[serde(default)]
         end: bool,
     },
+    /// Tomado del escaneo; `point` es lo último ajustado (ver [`ScanFit`]).
+    Scan { fit: ScanFit, point: P3 },
+}
+
+/// Dónde se hizo clic sobre el escaneo: el triángulo y el punto dentro de él
+/// (baricéntricas), que siguen al escaneo si se mueve, y el punto en mm de ese
+/// momento, para encontrar el lugar si la malla cambió (reparada, remallada).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScanSeed {
+    pub triangle: u32,
+    pub bary: [f64; 3],
+    pub at: P3,
+    /// Huella de los triángulos del escaneo de ese momento
+    pub topology: u32,
+}
+
+/// Referencia tomada del escaneo. La app la vuelve a ajustar contra el escaneo
+/// antes de cada recálculo; la geometría guardada al lado (plano, eje, punto)
+/// es la última ajustada y se usa si no hay escaneo.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ScanFit {
+    /// La zona plana alrededor del clic (plano ajustado, normal hacia afuera).
+    Zone { seed: ScanSeed },
+    /// Tres puntos sobre el escaneo.
+    Points { seeds: [ScanSeed; 3] },
+    /// El cilindro o agujero alrededor del clic (su eje).
+    Cylinder { seed: ScanSeed },
+    /// El punto del clic sobre la superficie.
+    Point { seed: ScanSeed },
 }
 
 /// Cómo se define un plano de referencia.
@@ -105,6 +135,8 @@ pub enum PlaneDef {
     Midplane { a: PlaneSpec, b: PlaneSpec },
     /// Por tres puntos.
     ThreePoints { points: [PointSpec; 3] },
+    /// Tomado del escaneo; `plane` es lo último ajustado.
+    Scan { fit: ScanFit, plane: Plane },
 }
 
 /// Cómo se define un eje de referencia.
@@ -118,6 +150,8 @@ pub enum AxisDef {
     Face { face: FaceRef },
     /// Intersección de dos planos.
     Planes { a: PlaneSpec, b: PlaneSpec },
+    /// Tomado del escaneo; `origin` y `direction` son lo último ajustado.
+    Scan { fit: ScanFit, origin: P3, direction: P3 },
 }
 
 fn origin_point() -> PointSpec {
@@ -807,6 +841,7 @@ impl FeatureKind {
                 PlaneDef::Angle { base, axis, .. } => [plane_deps(base), axis_deps(axis)].concat(),
                 PlaneDef::Midplane { a, b } => [plane_deps(a), plane_deps(b)].concat(),
                 PlaneDef::ThreePoints { points } => points.iter().flat_map(point_deps).collect(),
+                PlaneDef::Scan { .. } => vec![],
             },
             FeatureKind::Axis { def } => match def {
                 AxisDef::TwoPoints { a, b } => [point_deps(a), point_deps(b)].concat(),

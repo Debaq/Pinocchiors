@@ -43,6 +43,19 @@ function twoCubesStl() {
   return text + "endsolid dos\n";
 }
 
+/** Importa un modelo con Ctrl+I (reintenta: recién montada la app puede no escuchar todavía) */
+async function importModel(b, path, name = path.split("/").pop()) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
+    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
+    for (let t = 0; t < 40; t++) {
+      if (await b.eval(`document.body.innerText.includes(${JSON.stringify(name)}) && document.body.innerText.includes("Modelo cargado")`)) return;
+      await sleep(250);
+    }
+  }
+  throw new Error(`no se importó ${name}`);
+}
+
 async function begin(b) {
   await b.clickText("Diseñar");
   // El diseño vacío se crea solo al entrar
@@ -6573,9 +6586,7 @@ const scenarios = {
     // El "escaneo": dos cubos de 20 mm en STL (24 triángulos)
     const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-dos-cubos.stl`;
     writeFileSync(path, twoCubesStl());
-    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
-    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
-    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Modelo cargado")`)); t++) await sleep(250);
+    await importModel(b, path);
     await begin(b);
     const scanCount = () => b.eval(`window.__cadViewer?.scan?.geometry.index.count / 3`);
     for (let t = 0; t < 20 && (await scanCount()) !== 24; t++) await sleep(250);
@@ -6637,9 +6648,7 @@ const scenarios = {
     const tilted = stl.replace(/vertex (\S+) (\S+) (\S+)/g, (_, x, y, z) => "vertex " + rot([+x, +y, +z]).join(" "));
     const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-inclinado.stl`;
     writeFileSync(path, tilted);
-    await b.eval(`window.__nextPath = ${JSON.stringify(path)}`);
-    await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
-    for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("Modelo cargado")`)); t++) await sleep(250);
+    await importModel(b, path);
     await begin(b);
     await tab(b, "Desde el escaneo");
     await sleep(800);
@@ -6681,6 +6690,65 @@ const scenarios = {
     await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
     await sleep(500);
     await b.shot("escaneo-alineado");
+  },
+
+  async "escaneo: referencias ligadas siguen al alinear"(b) {
+    const rot = (p) => {
+      const [ax, az] = [Math.PI / 6, Math.PI / 9];
+      const [x, y, z] = p;
+      const [y1, z1] = [y * Math.cos(ax) - z * Math.sin(ax), y * Math.sin(ax) + z * Math.cos(ax)];
+      const [x2, y2] = [x * Math.cos(az) - y1 * Math.sin(az), x * Math.sin(az) + y1 * Math.cos(az)];
+      return [x2 + 15, y2 - 5, z1 + 12];
+    };
+    const stl = twoCubesStl().split("endfacet\n").slice(0, 12).join("endfacet\n") + "endfacet\nendsolid uno\n";
+    const path = `${process.env.E2E_OUT ?? "/tmp/pinocchio-e2e"}/escaneo-inclinado-refs.stl`;
+    writeFileSync(path, stl.replace(/vertex (\S+) (\S+) (\S+)/g, (_, x, y, z) => "vertex " + rot([+x, +y, +z]).join(" ")));
+    await importModel(b, path);
+    await begin(b);
+    await tab(b, "Desde el escaneo");
+    await sleep(800);
+    const clickAt = async (p) => {
+      const [x, y] = await b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+      await b.click(x, y);
+    };
+    const refs = () => b.eval(`JSON.stringify(window.__cadStore.result()?.references ?? [])`).then(JSON.parse);
+    // Desde arriba se ve la cara de arriba del cubo (z = 20 sin girar)
+    await b.eval(`window.__cadViewer.lookFrom([0.2, -0.3, 1])`);
+    await sleep(1200);
+    const top = rot([10, 10, 20]);
+    await b.clickText("Plano de zona");
+    await sleep(300);
+    await clickAt(top);
+    for (let t = 0; t < 40 && (await refs()).length < 1; t++) await sleep(250);
+    await b.clickText("Punto");
+    await sleep(300);
+    await clickAt(top);
+    for (let t = 0; t < 40 && (await refs()).length < 2; t++) await sleep(250);
+    let r = await refs();
+    const plane = r.find((x) => x.kind === "plane");
+    const point = r.find((x) => x.kind === "point");
+    if (!plane || !point) throw new Error(`referencias: ${JSON.stringify(r)}`);
+    // Inclinado: la normal del plano es la de la cara de arriba girada
+    if (plane.plane.normal[2] > 0.95) throw new Error(`el plano ya estaba horizontal: ${JSON.stringify(plane.plane)}`);
+    // Alinear: la cara de abajo al piso
+    await b.eval(`window.__cadViewer.lookFrom([0.3, -0.4, -1])`);
+    await sleep(1200);
+    await b.clickText("Cara al piso");
+    await sleep(300);
+    await clickAt(rot([10, 10, 0]));
+    // Las referencias van con el escaneo: plano horizontal a 20 mm, punto a 20 mm
+    let ok = false;
+    for (let t = 0; t < 60 && !ok; t++) {
+      await sleep(250);
+      r = await refs();
+      const p = r.find((x) => x.kind === "plane")?.plane;
+      const q = r.find((x) => x.kind === "point")?.point;
+      ok = !!p && p.normal[2] > 0.999 && Math.abs(p.origin[2] - 20) < 0.05 && !!q && Math.abs(q[2] - 20) < 0.05;
+    }
+    if (!ok) throw new Error(`las referencias no siguieron al escaneo: ${JSON.stringify(r)}`);
+    await b.eval(`window.__cadViewer.lookFrom([1, -1, 0.8])`);
+    await sleep(800);
+    await b.shot("escaneo-referencias");
   },
 
   async "mallas: caja del diseño en Fabricar"(b) {

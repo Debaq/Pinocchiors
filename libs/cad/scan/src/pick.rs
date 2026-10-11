@@ -67,6 +67,8 @@ pub enum PickError {
     TooSmall,
     #[error("la zona no parece {0}")]
     NoFit(&'static str),
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Cilindro por normales: el eje es la dirección a la que todas las normales

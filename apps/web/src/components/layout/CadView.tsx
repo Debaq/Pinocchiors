@@ -634,6 +634,8 @@ export const CadView: Component<CadViewProps> = (props) => {
     viewer.setScan(props.scanMesh);
     viewer.setBody(store.mesh());
     viewer.frameAll();
+    // El escaneo pudo cambiar fuera de Diseñar
+    void store.refreshScanReferences();
     // La misma vista que en el visor principal (grilla y luces quedan del encuadre)
     if (startPose) viewer.setCameraPose(startPose);
     setPlanesReady((n) => n + 1);
@@ -657,6 +659,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         viewer.setBody(store.mesh());
         viewer.frameAll();
         setPlanesReady((n) => n + 1);
+        void store.refreshScanReferences();
       },
       { defer: true },
     ),
@@ -2294,12 +2297,12 @@ export const CadView: Component<CadViewProps> = (props) => {
         const result = await store.scanPick(mode.shape, hit.triangle);
         ui.setScanHighlight(result.faces);
         ui.setMessage(undefined);
-        mode.done(result, hit.triangle);
+        mode.done(result, hit.triangle, viewer.fromView(hit.point));
       } else if (mode.kind === "scan_point") {
         const hit = viewer.pick(e.clientX, e.clientY, { scan: true });
         if (hit?.kind !== "scan") return;
         ui.setPick({ kind: "none" });
-        mode.done(viewer.fromView(hit.point));
+        mode.done(viewer.fromView(hit.point), hit.triangle);
       } else if (mode.kind === "parts") {
         // La pieza de la cara bajo el clic (en el sólido mostrado)
         const hit = viewer.pick(e.clientX, e.clientY, { faces: true });

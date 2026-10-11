@@ -93,6 +93,7 @@ import {
   boltLengthFor,
   BOLT_LENGTHS,
   NUT_HEIGHT,
+  isScanReference,
 } from "../../lib/cad";
 import type { CadUi, Hit3d } from "../../lib/cadUi";
 import type { DesignActions } from "../../lib/designActions";
@@ -327,6 +328,38 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
     });
   };
 
+  // Referencias ligadas al escaneo: quedan en el árbol y lo siguen
+  const reference = (what: "plane" | "points" | "axis" | "point") => {
+    setScanResult(undefined);
+    if (what === "plane" || what === "axis") {
+      return ui.setPick({
+        kind: "scan",
+        shape: what === "plane" ? "plane" : "cylinder",
+        prompt: what === "plane" ? "Clic en una zona plana del escaneo" : "Clic en un cilindro o agujero del escaneo",
+        done: (_, triangle, at) => {
+          ui.setPick({ kind: "none" });
+          void addScan(what === "plane" ? { kind: "ref_plane", triangle, at } : { kind: "ref_axis", triangle, at });
+        },
+      });
+    }
+    if (what === "point") {
+      return ui.setPick({ kind: "scan_point", prompt: "Clic en el punto del escaneo", done: (at, triangle) => void addScan({ kind: "ref_point", triangle, at }) });
+    }
+    // Tres clics seguidos
+    const points: [number, P3][] = [];
+    const next = () =>
+      ui.setPick({
+        kind: "scan_point",
+        prompt: `Punto ${points.length + 1} de 3 sobre el escaneo`,
+        done: (at, triangle) => {
+          points.push([triangle, at]);
+          if (points.length < 3) next();
+          else void addScan({ kind: "ref_plane_points", points });
+        },
+      });
+    next();
+  };
+
   const detect = async () => {
     try {
       setDetections(await store.scanDetect());
@@ -403,6 +436,23 @@ export const DesignStep: Component<DesignStepProps> = (props) => {
                       </Button>
                       <Button size="sm" variant="ghost" title="Corre el escaneo para que el punto quede en el origen" onClick={() => align("origin")}>
                         Punto al origen
+                      </Button>
+                    </div>
+                  </div>
+                  <div class="space-y-1.5" aria-label="Referencias del escaneo">
+                    <span class="text-xs text-text-muted">Referencias ligadas (siguen al escaneo)</span>
+                    <div class="grid grid-cols-2 gap-1.5">
+                      <Button size="sm" variant="ghost" title="Plano ajustado a una zona plana" onClick={() => reference("plane")}>
+                        Plano de zona
+                      </Button>
+                      <Button size="sm" variant="ghost" title="Plano por tres puntos del escaneo" onClick={() => reference("points")}>
+                        Plano 3 puntos
+                      </Button>
+                      <Button size="sm" variant="ghost" title="Eje de un cilindro o agujero" onClick={() => reference("axis")}>
+                        Eje de cilindro
+                      </Button>
+                      <Button size="sm" variant="ghost" title="Un punto de la superficie" onClick={() => reference("point")}>
+                        Punto
                       </Button>
                     </div>
                   </div>
@@ -2870,6 +2920,12 @@ export const FeatureEditor: Component<{
                 <Row label="Con el sólido">{opSelect(k().op, (o) => update((x) => x.type === "loft" && (x.op = o)))}</Row>
               </>
             )}
+          </Match>
+          <Match when={isScanReference(f().kind)}>
+            <p class="text-[11px] text-text-dim leading-relaxed">
+              Tomado del escaneo: sigue al escaneo si se alinea, se mueve o se repara. Para cambiar de dónde sale, borrarlo y volver a tomarlo en la
+              pestaña «Desde el escaneo».
+            </p>
           </Match>
           <Match when={f().kind.type === "plane" && (f().kind as Extract<FeatureKind, { type: "plane" }>)}>
             {(k) => {

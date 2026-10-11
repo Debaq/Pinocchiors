@@ -1320,7 +1320,7 @@ impl Ctx<'_> {
 
     fn point(&self, field: &str, spec: &PointSpec) -> R<P3> {
         Ok(match spec {
-            PointSpec::At { point } => *point,
+            PointSpec::At { point } | PointSpec::Scan { point, .. } => *point,
             PointSpec::Center { edge } => {
                 let i = self.edge(field, edge)?;
                 let info = self.body()?.edge_info(i).map_err(err)?;
@@ -1902,6 +1902,7 @@ impl Ctx<'_> {
                 }
                 Plane { origin: a, normal: normalize(n), x_dir: normalize(sub(b, a)) }
             }
+            PlaneDef::Scan { plane, .. } => *plane,
         })
     }
 
@@ -1932,6 +1933,12 @@ impl Ctx<'_> {
                 let (d1, d2) = (dot(n1, pa.origin), dot(n2, pb.origin));
                 let p = scale(add(scale(cross(n2, dir), d1), scale(cross(dir, n1), d2)), 1.0 / l2);
                 Axis { origin: p, dir: normalize(dir) }
+            }
+            AxisDef::Scan { origin, direction, .. } => {
+                if norm(*direction) < 1e-12 {
+                    return Err("el eje del escaneo no tiene dirección".into());
+                }
+                Axis { origin: *origin, dir: normalize(*direction) }
             }
         })
     }

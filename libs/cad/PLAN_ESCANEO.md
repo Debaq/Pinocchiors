@@ -25,7 +25,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta.
 | Escaneo como cuerpo para booleanas | ❌ motor decidido en E0: OCCT + vóxeles/isótropo + sólido directo (E2) |
 | Elegir qué objeto es el escaneo | ✅ (E1.1) |
 | Alinear el escaneo por rasgos | ✅ (E1.2) |
-| Referencias (punto, plano, eje) tomadas de la malla | 🟡 solo plano de zona plana (E1) |
+| Referencias (punto, plano, eje) tomadas de la malla | ✅ ligadas al escaneo (E1.3) |
 | Sketch anclado a la malla | ❌ `solidRefs` solo mira el sólido (E1) |
 | Extruir hasta el escaneo | ❌ `UpToFace` solo caras del sólido (E3) |
 | Formas que siguen la piel (engrosar parche, carcasa, molde) | ❌ (E4) |
@@ -98,7 +98,7 @@ de CAD y de STL.
 ### E1 — El escaneo como referencia del diseño
 
 Partes: E1.1 escaneo elegido ✅, E1.2 alinear por rasgos ✅, E1.3 referencias ligadas al
-escaneo, E1.4 sketch anclado al corte.
+escaneo ✅, E1.4 sketch anclado al corte.
 
 - ✅ E1.1 (2026-10-10): el escaneo es un objeto importado elegido, no «el activo».
   `Document.scan_object` guarda la elección (si no hay: el importado activo o el primero con
@@ -115,9 +115,16 @@ escaneo, E1.4 sketch anclado al corte.
   más (historial y deshacer, mueve quads/esqueleto/rig; queda como modificación del objeto en
   el Outliner). Pruebas node `e2e/scanAlign.test.mjs` y e2e «escaneo: alinear…». Pendiente:
   alinear por 3 puntos y eje → X.
-- Referencias tomadas de la malla, como operaciones del árbol ligadas al escaneo: punto (clic
-  sobre la malla), plano por 3 puntos, plano ajustado a una zona, eje de un cilindro, centro de
-  una esfera.
+- ✅ E1.3 (2026-10-10): referencias del árbol ligadas al escaneo: plano de una zona, plano
+  por 3 puntos, eje de un cilindro, punto (`PlaneDef/AxisDef/PointSpec::Scan { fit, … }`,
+  `cad_model::ScanFit`). Guardan dónde se hizo clic (`ScanSeed`: triángulo + baricéntricas +
+  punto en mm + huella de los triángulos), no coordenadas: antes de cada recálculo la app las
+  ajusta contra el escaneo de hoy (`fit_scan_references` en `evaluate_doc`, caché por escaneo
+  y semilla; `cad_scan::fit_reference`). Siguen al escaneo si se alinea, se deshace o se mueve
+  (mismo triángulo) y si se repara o remalla (punto más cercano al último lugar). Lo que se
+  apoya en ellas (sketches, extrusiones) se rehace solo. El visor del CAD pide recálculo
+  cuando cambia la malla del escaneo (`refreshScanReferences`). Prueba `references_follow_the_scan`
+  y e2e «escaneo: referencias ligadas siguen al alinear». Pendiente: centro de una esfera.
 - Sketch anclado al escaneo: el corte del escaneo por el plano del sketch se ve como curva de
   referencia, con anclajes (cerca, extremos de tramos rectos, centros de arcos reconocidos) y
   «Usar» para copiarlo como entidades (como `Sketch.uses` con las aristas).

@@ -147,9 +147,9 @@ export type PickMode =
   /** Marcar/desmarcar caras: `toggle` con cada clic */
   | { kind: "faces"; prompt: string; owner?: string; toggle: (face: FaceRef, index: number) => void }
   /** Elegir una zona del escaneo */
-  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number) => void }
-  /** Un punto sobre el escaneo (mm) */
-  | { kind: "scan_point"; prompt: string; done: (at: P3) => void }
+  | { kind: "scan"; prompt: string; shape: "plane" | "cylinder"; done: (pick: ScanPick, triangle: number, at: P3) => void }
+  /** Un punto sobre el escaneo (mm) y su triángulo */
+  | { kind: "scan_point"; prompt: string; done: (at: P3, triangle: number) => void }
   /** Marcar/desmarcar regiones de un sketch con un clic dentro */
   | { kind: "region"; prompt: string; owner?: string; sketch: number; chosen: () => P2[]; toggle: (p: P2) => void }
   /** Un eje: una línea del sketch `sketch` o una arista del sólido */

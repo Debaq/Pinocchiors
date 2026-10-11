@@ -8,12 +8,14 @@
 //! - [`detect_all`]: todas las zonas planas/cilíndricas/esféricas de una vez;
 //! - [`PlanePick::depth`]: profundidad del material bajo una cara (para extruir
 //!   "hasta el escaneo");
-//! - `*_feature`: convertir lo detectado en operaciones de [`cad_model`].
+//! - `*_feature`: convertir lo detectado en operaciones de [`cad_model`];
+//! - [`fit_reference`]: referencias del diseño ligadas al escaneo ([`cad_model::ScanFit`]).
 
 mod deviation;
 mod mesh;
 mod outline;
 mod pick;
+mod refs;
 
 use cad_model::geom::{P2, P3, Plane, add, dot, normalize, scale, sub};
 use cad_model::{BodyOp, Extent, Extrude, FeatureId, FeatureKind, PlaneSpec, Primitive, PrimitiveShape, RegionSelection};
@@ -24,6 +26,7 @@ pub use deviation::{Deviation, DeviationStats, deviation};
 pub use mesh::ScanMesh;
 pub use outline::{OutlineOptions, Section, fit_circle, outline_sketch, simplify_closed, simplify_open, slice};
 pub use pick::{CylinderPick, PickError, PickOptions, PlanePick, boundary_loops, pick_cylinder, pick_plane};
+pub use refs::{ScanGeom, fit_reference};
 
 pub(crate) fn regions_area(p: &[P2]) -> f64 {
     cad_model::regions::signed_area(p).abs()

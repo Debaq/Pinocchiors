@@ -4,6 +4,7 @@
 use approx::assert_relative_eq;
 use cad_model::occt::{self, Frame, Shape};
 use cad_model::*;
+use cad_model::geom::{add, dot, scale, sub};
 use cad_scan::*;
 use std::f64::consts::PI;
 
@@ -242,4 +243,46 @@ fn big_planes_come_out_whole() {
     assert_eq!(area(-1.0).len(), 1);
     assert_relative_eq!(area(-1.0)[0], 6000.0 - PI * 64.0, max_relative = 0.01);
     assert_relative_eq!(area(1.0)[0], 6000.0 - PI * 64.0 - PI * 100.0, max_relative = 0.01);
+}
+
+/// Las referencias tomadas del escaneo lo siguen si se mueve (mismo
+/// triángulo) y lo encuentran si la malla se rehízo (punto más cercano).
+#[test]
+fn references_follow_the_scan() {
+    let scan = scan_of(&part(), 0.01);
+    let opts = PickOptions::default();
+    let top = face_where(&scan, |c, n| n[2] > 0.99 && c[2] > 19.0 && c[0] < 50.0);
+    let at = scan.face_centroids[top as usize];
+    let seed = scan.seed(top, at).unwrap();
+    let hole = face_where(&scan, |c, n| n[2].abs() < 0.1 && (c[0] - 30.0).hypot(c[1] - 30.0) < 8.5 && c[2] > 2.0 && c[2] < 18.0);
+    let hole_seed = scan.seed(hole, scan.face_centroids[hole as usize]).unwrap();
+
+    // Igual que el día que se tomó
+    let ScanGeom::Plane(p) = fit_reference(&scan, &ScanFit::Zone { seed: seed.clone() }, &opts).unwrap() else { panic!() };
+    assert_relative_eq!(p.origin[2], 20.0, epsilon = 0.05);
+    assert!(p.normal[2] > 0.999);
+
+    // El escaneo girado 90° en Z y subido 5 mm: la referencia va con él
+    let moved: Vec<P3> = scan.vertices.iter().map(|v| [-v[1], v[0], v[2] + 5.0]).collect();
+    let moved = ScanMesh::new(&moved, &scan.triangles);
+    assert_eq!(moved.topology(), scan.topology());
+    let ScanGeom::Plane(p) = fit_reference(&moved, &ScanFit::Zone { seed: seed.clone() }, &opts).unwrap() else { panic!() };
+    assert_relative_eq!(dot(sub(p.origin, [0.0, 0.0, 25.0]), p.normal), 0.0, epsilon = 0.05);
+    let ScanGeom::Axis { origin, direction } = fit_reference(&moved, &ScanFit::Cylinder { seed: hole_seed.clone() }, &opts).unwrap() else { panic!() };
+    // El eje del agujero (30, 30) girado queda en (−30, 30)
+    let t = dot(sub([-30.0, 30.0, 0.0], origin), direction);
+    let foot = add(origin, scale(direction, t));
+    assert!(direction[2].abs() > 0.999);
+    assert_relative_eq!(foot[0], -30.0, epsilon = 0.1);
+    assert_relative_eq!(foot[1], 30.0, epsilon = 0.1);
+    let ScanGeom::Point(q) = fit_reference(&moved, &ScanFit::Point { seed: seed.clone() }, &opts).unwrap() else { panic!() };
+    assert_relative_eq!(q[0], -at[1], epsilon = 1e-9);
+    assert_relative_eq!(q[2], at[2] + 5.0, epsilon = 1e-9);
+
+    // Otra malla (más fina): por el punto más cercano a donde estaba
+    let t = part().tessellate(0.01, 0.05).unwrap();
+    let finer = ScanMesh::new(&t.positions, &t.triangles);
+    assert_ne!(finer.topology(), scan.topology());
+    let ScanGeom::Plane(p) = fit_reference(&finer, &ScanFit::Zone { seed }, &opts).unwrap() else { panic!() };
+    assert_relative_eq!(p.origin[2], 20.0, epsilon = 0.05);
 }

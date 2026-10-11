@@ -10,12 +10,14 @@
 //! acá (también la del escaneo, para que el sólido calce encima).
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::hash::{Hash, Hasher};
 
 use cad_model::{
-    BodyOp, Document, EdgeRef, FaceRef, FeatureKind, FeatureState, FeatureStatus, ImportFormat, Plane, PlaneSpec, Region,
-    Sketch, SolveReport,
+    AxisDef, BodyOp, Document, EdgeRef, FaceRef, FeatureKind, FeatureState, FeatureStatus, ImportFormat, Plane, PlaneDef,
+    PlaneSpec, PointSpec, Region, Sketch, SolveReport,
 };
+use cad_model::geom::P3;
 use cad_scan::{CylinderPick, DetectOptions, Detection, OutlineOptions, PickOptions, PlanePick, ScanMesh, Section};
 use converter_scene::{IndexData, Mesh as SceneMesh, Node, Primitive, Scene, Transform, VertexAttribute};
 use serde::{Deserialize, Serialize};
@@ -74,6 +76,8 @@ pub struct ScanCache {
     pub mesh: ScanMesh,
     /// mm por unidad de la escena
     pub mm_per_unit: f64,
+    /// Referencias ajustadas contra este escaneo (por el JSON de su `ScanFit`)
+    pub fits: Mutex<HashMap<String, Option<cad_scan::ScanGeom>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -266,6 +270,51 @@ fn evaluate(state: &AppState) -> Result<CadResult, String> {
     evaluate_doc(state, &doc)
 }
 
+/// Las referencias tomadas del escaneo, ajustadas contra el escaneo de hoy
+/// (`None` si el diseño no tiene o no hay escaneo: se usa lo guardado). Así
+/// siguen al escaneo si se alinea, se deshace o se repara.
+fn fit_scan_references(state: &AppState, doc: &Document) -> Option<Document> {
+    let has = |f: &cad_model::Feature| {
+        matches!(
+            &f.kind,
+            FeatureKind::Plane { def: PlaneDef::Scan { .. } } | FeatureKind::Axis { def: AxisDef::Scan { .. } } | FeatureKind::Point { def: PointSpec::Scan { .. } }
+        )
+    };
+    if !doc.features.iter().any(has) {
+        return None;
+    }
+    let mut out = doc.clone();
+    let done = with_scan(state, |scan| {
+        let mut fits = scan.fits.lock().unwrap();
+        let mut geom = |fit: &cad_model::ScanFit| {
+            let key = serde_json::to_string(fit).unwrap_or_default();
+            fits.entry(key).or_insert_with(|| cad_scan::fit_reference(&scan.mesh, fit, &PickOptions::default()).ok()).clone()
+        };
+        for f in &mut out.features {
+            match &mut f.kind {
+                FeatureKind::Plane { def: PlaneDef::Scan { fit, plane } } => {
+                    if let Some(cad_scan::ScanGeom::Plane(p)) = geom(fit) {
+                        *plane = p;
+                    }
+                }
+                FeatureKind::Axis { def: AxisDef::Scan { fit, origin, direction } } => {
+                    if let Some(cad_scan::ScanGeom::Axis { origin: o, direction: d }) = geom(fit) {
+                        (*origin, *direction) = (o, d);
+                    }
+                }
+                FeatureKind::Point { def: PointSpec::Scan { fit, point } } => {
+                    if let Some(cad_scan::ScanGeom::Point(p)) = geom(fit) {
+                        *point = p;
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    });
+    done.ok().map(|_| out)
+}
+
 /// Recalcula el documento guardado, sin el borrador (exportar, pasar a modelo).
 fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
     let doc = state.cad_document.lock().unwrap().clone().ok_or("No hay un diseño abierto")?;
@@ -273,6 +322,14 @@ fn evaluate_committed(state: &AppState) -> Result<CadResult, String> {
 }
 
 fn evaluate_doc(state: &AppState, doc: &Document) -> Result<CadResult, String> {
+    let fitted;
+    let doc = match fit_scan_references(state, doc) {
+        Some(d) => {
+            fitted = d;
+            &fitted
+        }
+        None => doc,
+    };
     let hash = doc_hash(doc);
     let mut cache = state.cad_cache.lock().unwrap();
     match cache.take() {
@@ -1656,7 +1713,7 @@ fn with_scan<T>(state: &AppState, f: impl FnOnce(&ScanCache) -> Result<T, String
             vertices.extend(prim.positions.iter().map(|p| [p[0] as f64 * mm, p[1] as f64 * mm, p[2] as f64 * mm]));
             triangles.extend(prim.triangles.iter().map(|t| t.map(|i| i + base)));
         }
-        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm });
+        *cache = Some(ScanCache { scene_hash: hash, mesh: ScanMesh::new(&vertices, &triangles), mm_per_unit: mm, fits: Mutex::default() });
     }
     f(cache.as_ref().unwrap())
 }
@@ -1765,6 +1822,13 @@ pub enum ScanFeature {
     Slice { plane: Plane },
     /// Plano de referencia (sketch vacío) sobre una zona plana.
     WorkPlane { triangle: u32 },
+    /// Referencias ligadas al escaneo (lo siguen si se mueve o se repara):
+    /// plano de la zona plana, plano por tres puntos, eje del cilindro y un
+    /// punto de la superficie. `at` = el punto del clic (mm).
+    RefPlane { triangle: u32, at: P3 },
+    RefPlanePoints { points: Vec<(u32, P3)> },
+    RefAxis { triangle: u32, at: P3 },
+    RefPoint { triangle: u32, at: P3 },
 }
 
 /// Convierte lo elegido en el escaneo en operaciones del diseño.
@@ -1806,6 +1870,25 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
                         Some("Corte escaneado".to_string()),
                     )]
                 }
+                ScanFeature::RefPlane { triangle, at }
+                | ScanFeature::RefAxis { triangle, at }
+                | ScanFeature::RefPoint { triangle, at } => {
+                    let seed = mesh.seed(*triangle, *at).ok_or("Ese lugar no es del escaneo")?;
+                    let (fit, name) = match &feature {
+                        ScanFeature::RefPlane { .. } => (cad_model::ScanFit::Zone { seed }, "Plano del escaneo"),
+                        ScanFeature::RefAxis { .. } => (cad_model::ScanFit::Cylinder { seed }, "Eje del escaneo"),
+                        _ => (cad_model::ScanFit::Point { seed }, "Punto del escaneo"),
+                    };
+                    let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;
+                    vec![(scan_reference(fit, geom), Some(name.to_string()))]
+                }
+                ScanFeature::RefPlanePoints { points } => {
+                    let seeds: Vec<_> = points.iter().filter_map(|(t, at)| mesh.seed(*t, *at)).collect();
+                    let seeds: [cad_model::ScanSeed; 3] = seeds.try_into().map_err(|_| "Hacen falta tres puntos del escaneo")?;
+                    let fit = cad_model::ScanFit::Points { seeds };
+                    let geom = cad_scan::fit_reference(mesh, &fit, &options.pick()).map_err(|e| e.to_string())?;
+                    vec![(scan_reference(fit, geom), Some("Plano del escaneo".to_string()))]
+                }
                 ScanFeature::WorkPlane { triangle } => {
                     let pick = cad_scan::pick_plane(mesh, *triangle, &options.pick()).map_err(|e| e.to_string())?;
                     vec![(
@@ -1836,6 +1919,15 @@ fn scan_add_impl(state: &AppState, feature: ScanFeature, options: ScanPickOption
         }
         drop(lock);
         evaluate(state)
+    }
+}
+
+/// Operación de referencia (plano, eje o punto) ligada al escaneo
+fn scan_reference(fit: cad_model::ScanFit, geom: cad_scan::ScanGeom) -> FeatureKind {
+    match geom {
+        cad_scan::ScanGeom::Plane(plane) => FeatureKind::Plane { def: PlaneDef::Scan { fit, plane } },
+        cad_scan::ScanGeom::Axis { origin, direction } => FeatureKind::Axis { def: AxisDef::Scan { fit, origin, direction } },
+        cad_scan::ScanGeom::Point(point) => FeatureKind::Point { def: PointSpec::Scan { fit, point } },
     }
 }
 

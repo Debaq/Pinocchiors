@@ -70,19 +70,38 @@ export type PointSpec =
   | { type: "on_edge"; edge: EdgeRef; at: number }
   | { type: "reference"; feature: number }
   /** Un extremo de una arista (vértice del sólido): el final con `end` */
-  | { type: "edge_end"; edge: EdgeRef; end?: boolean };
+  | { type: "edge_end"; edge: EdgeRef; end?: boolean }
+  /** Tomado del escaneo; `point` es lo último ajustado */
+  | { type: "scan"; fit: ScanFit; point: P3 };
+
+/** Dónde se hizo clic sobre el escaneo (sigue al escaneo si se mueve o se rehace) */
+export interface ScanSeed {
+  triangle: number;
+  bary: [number, number, number];
+  at: P3;
+  topology: number;
+}
+
+/** Referencia tomada del escaneo: el backend la vuelve a ajustar en cada recálculo */
+export type ScanFit =
+  | { type: "zone"; seed: ScanSeed }
+  | { type: "points"; seeds: [ScanSeed, ScanSeed, ScanSeed] }
+  | { type: "cylinder"; seed: ScanSeed }
+  | { type: "point"; seed: ScanSeed };
 
 export type PlaneDef =
   | { type: "offset"; base: PlaneSpec; distance: number }
   | { type: "angle"; base: PlaneSpec; axis: AxisSpec; angle: number }
   | { type: "midplane"; a: PlaneSpec; b: PlaneSpec }
-  | { type: "three_points"; points: [PointSpec, PointSpec, PointSpec] };
+  | { type: "three_points"; points: [PointSpec, PointSpec, PointSpec] }
+  | { type: "scan"; fit: ScanFit; plane: Plane };
 
 export type AxisDef =
   | { type: "two_points"; a: PointSpec; b: PointSpec }
   | { type: "edge"; edge: EdgeRef }
   | { type: "face"; face: FaceRef }
-  | { type: "planes"; a: PlaneSpec; b: PlaneSpec };
+  | { type: "planes"; a: PlaneSpec; b: PlaneSpec }
+  | { type: "scan"; fit: ScanFit; origin: P3; direction: P3 };
 
 /** Geometría de referencia calculada */
 export type RefView = { id: number } & (
@@ -1249,7 +1268,12 @@ export type ScanFeature =
   | { kind: "plane_outline"; triangle: number; extrude: boolean; depth?: number | null; op?: BodyOp }
   | { kind: "cylinder"; triangle: number }
   | { kind: "slice"; plane: Plane }
-  | { kind: "work_plane"; triangle: number };
+  | { kind: "work_plane"; triangle: number }
+  /** Referencias ligadas al escaneo (`at`: el punto del clic, mm) */
+  | { kind: "ref_plane"; triangle: number; at: P3 }
+  | { kind: "ref_plane_points"; points: [number, P3][] }
+  | { kind: "ref_axis"; triangle: number; at: P3 }
+  | { kind: "ref_point"; triangle: number; at: P3 };
 
 // ─── Utilidades del documento ─────────────────────────────────────────────
 
@@ -1436,6 +1460,10 @@ function defaultName(doc: CadDocument, kind: FeatureKind): string {
   return `${label} ${n}`;
 }
 
+/** Plano, eje o punto de referencia tomado del escaneo */
+export const isScanReference = (kind: FeatureKind) =>
+  (kind.type === "plane" || kind.type === "axis" || kind.type === "point") && kind.def.type === "scan";
+
 /** Operaciones de las que depende `kind` (mismo criterio que el backend) */
 export function dependencies(kind: FeatureKind): number[] {
   const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" ? [a.feature] : []);
@@ -1457,6 +1485,7 @@ export function dependencies(kind: FeatureKind): number[] {
       if (d.type === "offset") return plane(d.base);
       if (d.type === "angle") return [...plane(d.base), ...axis(d.axis)];
       if (d.type === "midplane") return [...plane(d.a), ...plane(d.b)];
+      if (d.type === "scan") return [];
       return d.points.flatMap(point);
     }
     case "axis": {
@@ -3429,6 +3458,20 @@ export function createCadStore() {
       const s = await invoke<CadStatus>("cad_status");
       setStatus(s);
       await store.reload();
+    },
+
+    /**
+     * El escaneo cambió (se alineó, se deshizo, se reparó, se eligió otro): las
+     * referencias tomadas de él se vuelven a ajustar en el recálculo
+     */
+    async refreshScanReferences() {
+      const d = draft()?.doc ?? doc();
+      if (!d?.features.some((f) => isScanReference(f.kind))) return;
+      try {
+        await apply(await invoke<CadResult>("cad_evaluate"));
+      } catch (e) {
+        setError(String(e));
+      }
     },
 
     /** Trae el documento del backend (al abrir un proyecto o empezar uno nuevo) */
