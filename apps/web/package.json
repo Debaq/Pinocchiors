@@ -6,7 +6,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "e2e": "node --test e2e/*.test.mjs && node e2e/cad.mjs",
+    "e2e:unit": "node --test e2e/*.test.mjs",
+    "e2e:cad": "node e2e/cad.mjs"
   },
   "dependencies": {
     "@corvu/dialog": "^0.2.2",
