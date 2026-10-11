@@ -16,6 +16,7 @@
 #include <Geom2d_Line.hxx>
 #include <BRepOffset_MakeOffset.hxx>
 #include <BRepAlgoAPI_Defeaturing.hxx>
+#include <Geom_OffsetSurface.hxx>
 #include <GCE2d_MakeSegment.hxx>
 #include <BRepFeat_SplitShape.hxx>
 #include <BRepProj_Projection.hxx>
@@ -33,6 +34,7 @@
 #include <BRepOffsetAPI_MakeOffset.hxx>
 #include <BRepOffsetAPI_MakeFilling.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
+#include <ShapeFix_Shell.hxx>
 #include <ShapeFix_Solid.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <gp_Lin.hxx>
@@ -55,6 +57,7 @@
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepBuilderAPI_MakePolygon.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeSolid.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
@@ -81,6 +84,9 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepPrimAPI_MakeTorus.hxx>
 #include <BRepTools.hxx>
+#include <BRepTools_WireExplorer.hxx>
+#include <BOPAlgo_MakerVolume.hxx>
+#include <BRepGProp_Face.hxx>
 #include <BRep_Builder.hxx>
 #include <BRep_Tool.hxx>
 #include <Bnd_Box.hxx>
@@ -134,6 +140,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -666,6 +673,11 @@ CadShape* cad_pipe_ex(const CadShape* profile, const CadShape* spine, int32_t mo
             setup(mk);
             mk.Add(section, Standard_False, Standard_False);
             mk.Build();
+            if (!mk.IsDone() && mode == 0) {
+                // Frenet corregido falla en tramos rectos: el triedro discreto sigue el camino igual
+                mk.SetDiscreteMode();
+                mk.Build();
+            }
             if (!mk.IsDone()) throw Standard_Failure("no se pudo barrer el perfil por ese camino");
             if (make_solid && !mk.MakeSolid()) throw Standard_Failure("el barrido no cierra un sólido");
             return mk.Shape();
@@ -739,7 +751,7 @@ CadShape* cad_loft_pipe(const CadShape* const* wires, int32_t n, const CadShape*
         BRepOffsetAPI_MakePipeShell mk(wire_of(spine->s));
         // Con curva guía, el perfil la sigue (gira y se escala para tocarla)
         if (guide) mk.SetMode(wire_of(guide->s), Standard_True, BRepFill_ContactOnBorder);
-        else mk.SetMode(Standard_False);
+        else mk.SetDiscreteMode();
         for (int32_t i = 0; i < n; i++) mk.Add(wire_of(wires[i]->s), Standard_False, Standard_False);
         mk.Build();
         if (!mk.IsDone()) throw Standard_Failure("no se pudo pasar por las secciones a lo largo del camino");
@@ -936,6 +948,400 @@ CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b) {
         if (!sec.IsDone()) throw Standard_Failure("no se pudo calcular el cruce");
         if (!TopExp_Explorer(sec.Shape(), TopAbs_EDGE).More()) throw Standard_Failure("las caras no se cruzan");
         return wrap(chain_edges({sec.Shape()}));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Redondeo de cara: una bola de radio r que rueda tocando los dos grupos de
+// caras. Su centro corre por el cruce de las caras desfasadas r (del lado de
+// adentro en un canto convexo, de afuera en un rincón cóncavo); la superficie
+// del redondeo es el tubo de radio r alrededor de ese camino. Lo que cambia es
+// la cuña entre el centro y los puntos de contacto menos el tubo: se resta en
+// el convexo y se suma en el cóncavo.
+// ---------------------------------------------------------------------------
+namespace blend {
+
+// Caras desfasadas `off` (hacia afuera con `off` > 0), extendidas para que el cruce no se corte antes
+static TopoDS_Shape offset_faces(const std::vector<TopoDS_Face>& faces, double off, double extend) {
+    TopoDS_Compound c;
+    BRep_Builder b;
+    b.MakeCompound(c);
+    for (const TopoDS_Face& f : faces) {
+        TopoDS_Face ext;
+        if (extend > 0) BRepLib::ExtendFace(f, extend, Standard_True, Standard_True, Standard_True, Standard_True, ext);
+        if (ext.IsNull()) ext = f;
+        Handle(Geom_Surface) s = BRep_Tool::Surface(ext);
+        double u0, u1, v0, v1;
+        BRepTools::UVBounds(ext, u0, u1, v0, v1);
+        double sign = f.Orientation() == TopAbs_REVERSED ? -1.0 : 1.0;
+        Handle(Geom_OffsetSurface) os = new Geom_OffsetSurface(s, off * sign);
+        BRepBuilderAPI_MakeFace mf(os, u0, u1, v0, v1, 1e-7);
+        if (mf.IsDone()) b.Add(c, mf.Face());
+    }
+    return c;
+}
+
+static TopoDS_Shape extended(const std::vector<TopoDS_Face>& faces, double extend) {
+    return offset_faces(faces, 0.0, extend);
+}
+
+// Distancia y punto más cercano de `p` a la forma
+static bool nearest(const gp_Pnt& p, const TopoDS_Shape& s, double& d, gp_Pnt& q) {
+    BRepExtrema_DistShapeShape ds(BRepBuilderAPI_MakeVertex(p).Vertex(), s);
+    if (!ds.IsDone() || ds.NbSolution() < 1) return false;
+    d = ds.Value();
+    q = ds.PointOnShape2(1);
+    return true;
+}
+
+// ¿La bola de centro `c` toca la forma (sus caras) con el pie adentro de una cara, a distancia r?
+// En el borde de la cara el pie pasa a una arista: ahí deja de tocar (es un corte exacto).
+static bool touches(const gp_Pnt& c, const TopoDS_Shape& s, double r, double tol) {
+    BRepExtrema_DistShapeShape ds(BRepBuilderAPI_MakeVertex(c).Vertex(), s);
+    if (!ds.IsDone() || std::fabs(ds.Value() - r) >= tol) return false;
+    for (int i = 1; i <= ds.NbSolution(); i++) {
+        if (ds.SupportTypeShape2(i) == BRepExtrema_IsInFace) return true;
+        // Sobre una arista que no es borde del grupo: la costura de una cara cerrada
+        // (un cilindro) o una arista entre dos caras del grupo
+        if (ds.SupportTypeShape2(i) == BRepExtrema_IsOnEdge) {
+            TopoDS_Edge e = TopoDS::Edge(ds.SupportOnShape2(i));
+            int owners = 0;
+            for (TopExp_Explorer fx(s, TopAbs_FACE); fx.More(); fx.Next()) {
+                TopoDS_Face f = TopoDS::Face(fx.Current());
+                for (TopExp_Explorer ex(f, TopAbs_EDGE); ex.More(); ex.Next()) {
+                    if (!ex.Current().IsSame(e)) continue;
+                    if (BRep_Tool::IsClosed(e, f)) return true;
+                    owners++;
+                    break;
+                }
+            }
+            if (owners >= 2) return true;
+        }
+    }
+    return false;
+}
+
+// El tramo [ta, tb] (parámetros de la curva compuesta `cc`) del alambre `w`, con sus aristas
+static TopoDS_Wire trim(const TopoDS_Wire& w, const BRepAdaptor_CompCurve& cc, double ta, double tb) {
+    double gap = 1e-9 * (cc.LastParameter() - cc.FirstParameter());
+    if (ta <= cc.FirstParameter() + gap && tb >= cc.LastParameter() - gap) return w;
+    TopoDS_Edge ea, eb;
+    double ua, ub;
+    cc.Edge(ta, ea, ua);
+    cc.Edge(tb, eb, ub);
+    BRepBuilderAPI_MakeWire mw;
+    bool on = false;
+    for (BRepTools_WireExplorer x(w); x.More(); x.Next()) {
+        TopoDS_Edge e = x.Current();
+        bool first = e.IsSame(ea), last = e.IsSame(eb);
+        if (first) on = true;
+        if (!on) continue;
+        double f, l;
+        Handle(Geom_Curve) c = BRep_Tool::Curve(e, f, l);
+        bool fwd = e.Orientation() != TopAbs_REVERSED;
+        double lo = f, hi = l;
+        // Recorriendo el alambre la arista va de f a l (o al revés si está dada vuelta)
+        if (first) (fwd ? lo : hi) = ua;
+        if (last) (fwd ? hi : lo) = ub;
+        if (hi - lo > 1e-12) {
+            TopoDS_Edge ne = BRepBuilderAPI_MakeEdge(c, lo, hi).Edge();
+            ne.Orientation(e.Orientation());
+            mw.Add(ne);
+        }
+        if (last) break;
+    }
+    if (!mw.IsDone()) throw Standard_Failure("no se pudo recortar el camino del centro");
+    return mw.Wire();
+}
+
+}  // namespace blend
+
+CadShape* cad_face_blend(const CadShape* s, const int32_t* fa, int32_t na, const int32_t* fb, int32_t nb, double r, int32_t side) {
+    return guard("redondeo de cara", (CadShape*)nullptr, [&] {
+        if (r <= 0) throw Standard_Failure("el radio tiene que ser mayor que cero");
+        auto m = map_of(s->s, TopAbs_FACE);
+        auto take = [&](const int32_t* idx, int32_t n) {
+            std::vector<TopoDS_Face> v;
+            for (int32_t i = 0; i < n; i++) {
+                if (idx[i] < 0 || idx[i] >= m.Extent()) throw Standard_Failure("cara inexistente");
+                v.push_back(TopoDS::Face(m(idx[i] + 1)));
+            }
+            if (v.empty()) throw Standard_Failure("elegir caras de los dos lados");
+            return v;
+        };
+        std::vector<TopoDS_Face> A = take(fa, na), B = take(fb, nb);
+        TopoDS_Compound ca, cb;
+        BRep_Builder bb;
+        bb.MakeCompound(ca);
+        bb.MakeCompound(cb);
+        for (auto& f : A) bb.Add(ca, f);
+        for (auto& f : B) bb.Add(cb, f);
+        Bnd_Box box;
+        BRepBndLib::Add(s->s, box);
+        double size = std::sqrt(box.SquareExtent());
+        // Una cara sola se extiende bastante (el cruce no se corta antes de tiempo); en un
+        // grupo de varias, la extensión de una se metería delante de la vecina (un plano
+        // tangente a un cilindro) y el cruce saldría en tramos que no empalman: sin extender
+        double extend_wide = 3 * r + 0.05 * size;
+        auto extend_of = [&](const std::vector<TopoDS_Face>& g) { return g.size() > 1 ? 0.0 : extend_wide; };
+        double tol = std::max(1e-4, r * 1e-3);
+
+        // El camino del centro: el lado (adentro o afuera) cuyo cruce da una bola que toca las dos caras de verdad
+        TopoDS_Wire spine;
+        int best_valid = 0;
+        double best_sign = 0;
+        std::vector<double> signs;
+        if (side == 1) signs = {-1.0};
+        else if (side == 2) signs = {1.0};
+        else signs = {-1.0, 1.0};
+        const int N = 160;
+        std::vector<gp_Pnt> centers;
+        std::vector<bool> valid;
+        for (double sign : signs) {
+            TopoDS_Shape oa = blend::offset_faces(A, sign * r, extend_of(A)), ob = blend::offset_faces(B, sign * r, extend_of(B));
+            BRepAlgoAPI_Section sec(oa, ob, Standard_False);
+            sec.Approximation(Standard_True);
+            sec.Build();
+            if (!sec.IsDone() || !TopExp_Explorer(sec.Shape(), TopAbs_EDGE).More()) continue;
+            TopoDS_Shape chained = chain_edges({sec.Shape()});
+            for (TopExp_Explorer wx(chained, TopAbs_WIRE); wx.More(); wx.Next()) {
+                TopoDS_Wire w = TopoDS::Wire(wx.Current());
+                BRepAdaptor_CompCurve cc(w);
+                std::vector<gp_Pnt> pts;
+                std::vector<bool> ok;
+                int count = 0;
+                for (int k = 0; k <= N; k++) {
+                    gp_Pnt c = cc.Value(cc.FirstParameter() + (cc.LastParameter() - cc.FirstParameter()) * k / N);
+                    bool good = blend::touches(c, ca, r, tol) && blend::touches(c, cb, r, tol);
+                    pts.push_back(c);
+                    ok.push_back(good);
+                    count += good;
+                }
+                if (count > best_valid) {
+                    best_valid = count;
+                    best_sign = sign;
+                    spine = w;
+                    centers = pts;
+                    valid = ok;
+                }
+            }
+            if (best_valid > 0) break;
+        }
+        if (best_valid < 2) throw Standard_Failure("la bola de ese radio no toca las dos caras a la vez (radio demasiado grande o caras que no se enfrentan)");
+
+        // El tramo donde toca las dos: sus puntas exactas por bisección entre la última muestra
+        // que toca y la primera que no
+        BRepAdaptor_CompCurve cc(spine);
+        double s0 = cc.FirstParameter(), s1 = cc.LastParameter();
+        auto par = [&](int k) { return s0 + (s1 - s0) * k / N; };
+        auto ok = [&](double t) { gp_Pnt c = cc.Value(t); return blend::touches(c, ca, r, tol) && blend::touches(c, cb, r, tol); };
+        int k0 = 0, k1 = N;
+        while (k0 < N && !valid[k0]) k0++;
+        while (k1 > 0 && !valid[k1]) k1--;
+        if (k1 <= k0) throw Standard_Failure("el redondeo quedó demasiado corto");
+        auto edge = [&](double in, double out) {
+            for (int it = 0; it < 50; it++) {
+                double mid = (in + out) / 2;
+                (ok(mid) ? in : out) = mid;
+            }
+            return in;
+        };
+        double ta = k0 > 0 ? edge(par(k0), par(k0 - 1)) : s0;
+        double tb = k1 < N ? edge(par(k1), par(k1 + 1)) : s1;
+        // Camino cerrado que toca en toda la vuelta (alrededor de un cilindro): anillo
+        bool ring = k0 == 0 && k1 == N && cc.Value(s0).Distance(cc.Value(s1)) < tol;
+        if (!ring && k0 <= 1 && k1 >= N - 1 && cc.Value(s0).Distance(cc.Value(s1)) < tol) ring = true;
+        if (ring) {
+            ta = s0;
+            tb = s1;
+        } else if (best_sign < 0) {
+            // En el canto convexo un poco de más en las puntas (afuera no hay material que
+            // cortar): evita caras que coinciden justo en los extremos
+            double pad = 0.02 * (tb - ta);
+            ta = std::max(s0, ta - pad);
+            tb = std::min(s1, tb + pad);
+        }
+        TopoDS_Shape ea = blend::extended(A, extend_of(A)), eb = blend::extended(B, extend_of(B));
+
+        // Los tramos: entre las juntas del camino donde cambia la curvatura (de recta a arco en
+        // una cadena tangente); un loft suave que cruza una junta se abomba. Un anillo de una
+        // sola curva va en cuatro tramos: un loft cerrado sobre sí mismo sale retorcido
+        std::vector<double> breaks{ta};
+        {
+            int ni = cc.NbIntervals(GeomAbs_C1);
+            TColStd_Array1OfReal iv(1, ni + 1);
+            cc.Intervals(iv, GeomAbs_C1);
+            double gap = 1e-6 * (s1 - s0);
+            for (int i = 1; i <= ni + 1; i++)
+                if (iv(i) > ta + gap && iv(i) < tb - gap) breaks.push_back(iv(i));
+        }
+        breaks.push_back(tb);
+        const double total = GCPnts_AbscissaPoint::Length(cc, ta, tb);
+        if (ring && breaks.size() == 2) {
+            breaks = {ta};
+            for (int q = 1; q < 4; q++) {
+                GCPnts_AbscissaPoint ap(cc, total * q / 4, ta);
+                breaks.push_back(ap.IsDone() ? ap.Parameter() : ta + (tb - ta) * q / 4);
+            }
+            breaks.push_back(tb);
+        }
+
+        // Centro, contactos y la sección de la cuña en cada muestra, repartidas por longitud (no
+        // por parámetro: cada tramo de una cadena tiene su propia escala)
+        auto section_at = [&](double t) {
+            gp_Pnt c = cc.Value(t);
+            double da, db;
+            gp_Pnt pa, pb;
+            if (!blend::nearest(c, ea, da, pa) || !blend::nearest(c, eb, db, pb)) throw Standard_Failure("no se encontró el contacto con las caras");
+            gp_Vec ua(c, pa), ub(c, pb);
+            if (ua.Magnitude() < 1e-9 || ub.Magnitude() < 1e-9) throw Standard_Failure("contacto degenerado");
+            ua.Normalize();
+            ub.Normalize();
+            double half = ua.Angle(ub) / 2;
+            double L = 1.6 * r / std::max(std::cos(half) * std::cos(half), 0.05);
+            return std::make_pair(c, BRepBuilderAPI_MakePolygon(c, c.Translated(ua * L), c.Translated(ub * L), Standard_True).Wire());
+        };
+        const int S = ring ? 96 : 40;
+        std::vector<std::vector<TopoDS_Wire>> pieces;
+        std::vector<gp_Pnt> centers_path;
+        for (size_t j = 0; j + 1 < breaks.size(); j++) {
+            double a0 = breaks[j], a1 = breaks[j + 1];
+            double len = GCPnts_AbscissaPoint::Length(cc, a0, a1);
+            int n = std::max(6, (int)std::ceil(S * len / std::max(total, 1e-12)));
+            std::vector<TopoDS_Wire> ws;
+            for (int k = 0; k <= n; k++) {
+                // La junta con el tramo anterior es la misma sección
+                if (k == 0 && j > 0) {
+                    ws.push_back(pieces.back().back());
+                    continue;
+                }
+                double t = a0;
+                if (k == n) t = a1;
+                else if (k > 0) {
+                    GCPnts_AbscissaPoint ap(cc, len * k / n, a0);
+                    t = ap.IsDone() ? ap.Parameter() : a0 + (a1 - a0) * k / n;
+                }
+                // Anillo: la última sección es la primera
+                if (ring && j + 2 == breaks.size() && k == n) {
+                    ws.push_back(pieces.front().front());
+                    continue;
+                }
+                auto [c, w] = section_at(t);
+                ws.push_back(w);
+                centers_path.push_back(c);
+            }
+            pieces.push_back(ws);
+        }
+        Handle(TColgp_HArray1OfPnt) path = new TColgp_HArray1OfPnt(1, (int)centers_path.size());
+        for (size_t i = 0; i < centers_path.size(); i++) path->SetValue((int)i + 1, centers_path[i]);
+
+        // El camino del tubo: suavizado por los centros
+        GeomAPI_Interpolate interp(path, ring ? Standard_True : Standard_False, 1e-7);
+        interp.Perform();
+        if (!interp.IsDone()) throw Standard_Failure("no se pudo suavizar el camino del centro");
+        TopoDS_Wire spinew = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(interp.Curve()).Edge()).Wire();
+
+        // La cuña: un loft suave por tramo. Con un tramo solo y abierto es el sólido; en un
+        // anillo de una curva o un camino abierto de varios tramos, los costados de todos (sin
+        // las tapas de las juntas) se cosen en una cáscara cerrada
+        TopoDS_Shape wedge;
+        auto loft = [&](const std::vector<TopoDS_Wire>& ws) {
+            auto piece = std::make_unique<BRepOffsetAPI_ThruSections>(Standard_True, Standard_False);
+            for (auto& w : ws) piece->AddWire(w);
+            piece->Build();
+            if (!piece->IsDone()) throw Standard_Failure("no se pudo armar la cuña del redondeo");
+            return piece;
+        };
+        int spine_edges = 0;
+        for (TopExp_Explorer x(spine, TopAbs_EDGE); x.More(); x.Next()) spine_edges++;
+        // Camino de varias aristas (una cadena tangente): barrido por el camino exacto con todas
+        // las secciones; el loft por secciones alrededor de un arco no es exacto y sus tramos
+        // no cierran contra los rectos
+        const bool chain = spine_edges > 1;
+        TopoDS_Wire exact_spine = chain ? blend::trim(spine, cc, ta, tb) : spine;
+        if (!ring && pieces.size() == 1) wedge = loft(pieces[0])->Shape();
+        else if (chain) {
+            BRepOffsetAPI_MakePipeShell ws(exact_spine);
+            ws.SetDiscreteMode();
+            for (size_t j = 0; j < pieces.size(); j++)
+                for (size_t k = (j == 0 ? 0 : 1); k + (ring && j + 1 == pieces.size() ? 1 : 0) < pieces[j].size(); k++) ws.Add(pieces[j][k], Standard_False, Standard_False);
+            ws.Build();
+            if (!ws.IsDone() || !ws.MakeSolid()) throw Standard_Failure("no se pudo armar la cuña del redondeo");
+            wedge = ws.Shape();
+        } else {
+            BRepBuilderAPI_Sewing sew(1e-6 * std::max(1.0, size));
+            for (size_t j = 0; j < pieces.size(); j++) {
+                auto piece = loft(pieces[j]);
+                TopTools_IndexedMapOfShape caps;
+                if (ring || j > 0) TopExp::MapShapes(piece->FirstShape(), TopAbs_FACE, caps);
+                if (ring || j + 1 < pieces.size()) TopExp::MapShapes(piece->LastShape(), TopAbs_FACE, caps);
+                for (TopExp_Explorer x(piece->Shape(), TopAbs_FACE); x.More(); x.Next())
+                    if (!caps.Contains(x.Current())) sew.Add(x.Current());
+            }
+            sew.Perform();
+            TopExp_Explorer sx(sew.SewedShape(), TopAbs_SHELL);
+            if (!sx.More()) throw Standard_Failure("no se pudo cerrar la cuña del redondeo");
+            BRepBuilderAPI_MakeSolid ms(TopoDS::Shell(sx.Current()));
+            if (!ms.IsDone()) throw Standard_Failure("no se pudo cerrar la cuña del redondeo");
+            TopoDS_Solid solid = ms.Solid();
+            BRepLib::OrientClosedSolid(solid);
+            wedge = solid;
+        }
+
+        // El tubo: un círculo de radio r a lo largo del camino del centro
+        gp_Pnt c0;
+        gp_Vec t0;
+        interp.Curve()->D1(interp.Curve()->FirstParameter(), c0, t0);
+        gp_Circ circ(gp_Ax2(c0, gp_Dir(t0)), r);
+        TopoDS_Wire prof = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(circ).Edge()).Wire();
+        // En un camino de varias aristas (una cadena tangente: recta y arco) por el camino
+        // exacto, el cruce de las caras desfasadas: la interpolación se pasa de largo en las
+        // juntas y el tubo deja de ser tangente a las caras. Triedro discreto: el de Frenet
+        // corregido falla en caminos rectos
+        BRepOffsetAPI_MakePipeShell pipe(chain ? exact_spine : spinew);
+        pipe.SetDiscreteMode();
+        if (chain) {
+            gp_Pnt q;
+            gp_Vec tq;
+            cc.D1(ta, q, tq);
+            prof = BRepBuilderAPI_MakeWire(BRepBuilderAPI_MakeEdge(gp_Circ(gp_Ax2(q, gp_Dir(tq)), r)).Edge()).Wire();
+        }
+        pipe.Add(prof, Standard_False, Standard_False);
+        pipe.Build();
+        if (!pipe.IsDone() || !pipe.MakeSolid()) throw Standard_Failure("no se pudo armar el tubo del redondeo");
+
+        // Un poco de holgura en los booleanos: el tubo toca las caras de forma tangente
+        const double fuzzy = 1e-5 * r;
+        BRepAlgoAPI_Cut tool;
+        {
+            TopTools_ListOfShape w, t;
+            w.Append(wedge);
+            t.Append(pipe.Shape());
+            tool.SetArguments(w);
+            tool.SetTools(t);
+            tool.SetFuzzyValue(fuzzy);
+            tool.Build();
+        }
+        if (!tool.IsDone()) throw Standard_Failure("no se pudo armar la herramienta del redondeo");
+        TopTools_ListOfShape args, tools;
+        args.Append(s->s);
+        tools.Append(tool.Shape());
+        // Canto convexo: se saca lo de la cuña que queda fuera del tubo; rincón cóncavo: se agrega
+        auto run = [&](BRepAlgoAPI_BooleanOperation& op, const char* what) {
+            op.SetArguments(args);
+            op.SetTools(tools);
+            op.SetFuzzyValue(fuzzy);
+            op.Build();
+            if (!op.IsDone()) throw Standard_Failure(what);
+            record(op, {s->s}, op.Shape());
+            return wrap_checked(op.Shape(), "redondeo de cara");
+        };
+        if (best_sign < 0) {
+            BRepAlgoAPI_Cut cut;
+            return run(cut, "no se pudo recortar el canto");
+        }
+        BRepAlgoAPI_Fuse fuse;
+        return run(fuse, "no se pudo rellenar el rincón");
     });
 }
 

@@ -993,6 +993,75 @@ fn full_round_on_a_rib() {
     assert_relative_eq!(hi[2], 10.0, epsilon = 1e-6);
 }
 
+#[test]
+fn face_blend_rounds_an_edge_and_fills_a_corner() {
+    if !occt() {
+        return;
+    }
+    // Canto convexo: arriba y un costado de un cubo de 10, radio 2 a lo largo de 10
+    let lost = (1.0 - PI / 4.0) * 4.0 * 10.0;
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let top = face_at(&doc, [5.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+    let side = face_at(&doc, [10.0, 5.0, 5.0], [1.0, 0.0, 0.0]);
+    let blend = doc.add(FeatureKind::FaceBlend { a: vec![top.clone()], b: vec![side.clone()], radius: 2.0, side: BlendSide::Auto });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 1000.0 - lost, max_relative = 1e-5);
+    // Pedir rincón donde hay canto: la bola no toca las dos caras desde afuera
+    doc.get_mut(blend).unwrap().kind = FeatureKind::FaceBlend { a: vec![top.clone()], b: vec![side.clone()], radius: 2.0, side: BlendSide::Concave };
+    assert!(!doc.evaluate().errors().is_empty());
+    // La misma cara de los dos lados: error
+    doc.get_mut(blend).unwrap().kind = FeatureKind::FaceBlend { a: vec![top.clone()], b: vec![top], radius: 2.0, side: BlendSide::Auto };
+    assert!(!doc.evaluate().errors().is_empty());
+
+    // Rincón cóncavo: un cubo de 10 sobre otro, corrido 5 en x; el rincón entre el techo
+    // del de abajo y la pared del de arriba se rellena
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Box { dx: 10.0, dy: 10.0, dz: 10.0, centered: false, centered_z: false },
+        origin: [5.0, 0.0, 10.0],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let floor = face_at(&doc, [2.0, 5.0, 10.0], [0.0, 0.0, 1.0]);
+    let wall = face_at(&doc, [5.0, 5.0, 15.0], [-1.0, 0.0, 0.0]);
+    doc.add(FeatureKind::FaceBlend { a: vec![floor], b: vec![wall], radius: 2.0, side: BlendSide::Auto });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 2000.0 + lost, max_relative = 1e-5);
+}
+
+#[test]
+fn face_blend_goes_around_a_cylinder() {
+    if !occt() {
+        return;
+    }
+    // El borde de arriba de un cilindro R 8: la bola rueda toda la vuelta (Pappus)
+    let mut doc = Document::new();
+    doc.add(FeatureKind::Primitive(Primitive {
+        shape: PrimitiveShape::Cylinder { radius: 8.0, height: 10.0 },
+        origin: [0.0; 3],
+        z: [0.0, 0.0, 1.0],
+        x: [1.0, 0.0, 0.0],
+        op: BodyOp::Join,
+        link: None,
+    }));
+    let top = face_at(&doc, [0.0, 0.0, 10.0], [0.0, 0.0, 1.0]);
+    let wall = face_at(&doc, [8.0, 0.0, 5.0], [1.0, 0.0, 0.0]);
+    doc.add(FeatureKind::FaceBlend { a: vec![top], b: vec![wall], radius: 2.0, side: BlendSide::Auto });
+    let (_, hi, v) = bbox(&eval_ok(&doc));
+    // Lo que se va: la sección (1 − π/4)·r² girando con su centroide a 8 − x̄ (x̄ desde el canto)
+    let r: f64 = 2.0;
+    let area = (1.0 - PI / 4.0) * r * r;
+    let (q, cq) = (PI * r * r / 4.0, r - 4.0 * r / (3.0 * PI));
+    let xbar = (r.powi(3) / 2.0 - q * cq) / area;
+    let exact = PI * 64.0 * 10.0 - 2.0 * PI * (8.0 - xbar) * area;
+    assert_relative_eq!(v, exact, max_relative = 1e-4);
+    assert_relative_eq!(hi[2], 10.0, epsilon = 1e-6);
+}
+
 // ─── Grabado, relieve y línea de partición ───
 
 /// Cilindro de radio 10 y alto 20 con un sketch envuelto en su pared: un cuadrado de 4

@@ -70,7 +70,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Redondeo de radio constante | ✅ |
 | Redondeo de radio variable | ✅ lineal y por puntos (`Fillet.points`, 2026-10-11) |
 | Redondeo completo | ✅ caras planas (`FullRound`, 2026-10-11) |
-| Redondeo de cara | ❌ sin API en OCCT (F6) |
+| Redondeo de cara | ✅ bola que rueda entre dos grupos de caras, canto o rincón (`FaceBlend`, 2026-10-11) |
 | Chaflán por distancia, dos distancias, distancia y ángulo | ✅ |
 | Chaflán de vértice | ✅ esquinas de tres aristas rectas (`VertexChamfer`, 2026-10-11) |
 | Vaciado | ✅ |
@@ -230,8 +230,10 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
   `MakeFillet::Add` con ley.
 - Redondeo completo: radio = mitad del ancho de la cara central entre dos laterales paralelas;
   general = `ChFi3d` (riesgo).
-- Redondeo de cara: entre dos grupos de caras (`BRepFilletAPI` no lo trae: barrido de una bola
-  entre caras o fillet en las aristas de intersección; investigar).
+- Redondeo de cara: entre dos grupos de caras (`BRepFilletAPI` no lo trae). Hecho con la bola
+  que rueda (`cad_face_blend`): el camino del centro es el cruce de las caras desfasadas el
+  radio; se arma una cuña (triángulos centro–contacto–contacto) menos un tubo de radio r por
+  ese camino, y se resta (canto) o se suma (rincón). Ver «Por probar».
 - Chaflán de vértice: corte por el plano de tres puntos a distancia sobre cada arista.
 
 ### F7 — Agujero y envolver
@@ -354,7 +356,7 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
   - e2e: `faceWhere`/`edgeNear` recorren las caras y aristas por el puente (`cad_face_info`,
     `cad_edge_ref`); el punto de `EdgeRef` se supone sobre la arista (cerca del medio).
 - **Los difíciles (2026-10-11)**: `cargo test -p cad-model --test operations --test sweep` y los
-  e2e «operaciones:» (27 en total). Hipótesis:
+  e2e «operaciones:» (27 en total; 28 con el redondeo de cara). Hipótesis:
   - Referencias por clics: la deducción (qué plano, eje o punto sale de lo elegido) está en
     `picked_plane`/`picked_axis`/`picked_point` (eval.rs); el orden de los clics no importa salvo
     en plano + línea (en ángulo). La tangente a una curva sale de muestras (256) y una búsqueda
@@ -383,6 +385,27 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
     herramienta (un cuadrado grande del plano o la curva); historia por `record`.
   - Flechas nuevas: el cálculo deja la flecha (`Handle`) y el visor la muestra siempre que haya;
     arrastrar cambia el campo de `handleField`.
+- **Redondeo de cara (2026-10-11)**: `cargo test -p cad-model --test operations` (dos pruebas
+  `face_blend_*`) y el e2e «operaciones: redondeo de cara (bola que rueda)». El C++ se probó en
+  la nube contra OCCT 7.6 real (banco con 9 casos: canto convexo, rincón cóncavo, canto de 120°,
+  caras no vecinas sobre un chaflán, relleno alrededor de un cilindro, borde de un cilindro,
+  cilindro inclinado de ángulo variable, óvalo cerrado y nervio con punta redonda; todos con el
+  volumen exacto de Pappus salvo el de ángulo variable, que se acota). El banco quedó en
+  `libs/cad/occt/bench` (`build.sh t_blend`, necesita los encabezados y bibliotecas de OCCT).
+  Hipótesis:
+  - El lado (canto o rincón) se elige probando primero hacia adentro y después hacia afuera; con
+    «Según la geometría» gana el primero en que la bola toca las dos caras.
+  - La bola «toca» si el punto más cercano está adentro de la cara (o en una costura o una
+    arista entre dos caras del mismo grupo); en el borde del grupo se corta exacto (bisección).
+  - Un grupo de varias caras tiene que ser una cadena tangente (un óvalo, una pared con
+    redondeos): esas caras no se extienden; con caras que se cortan en canto vivo el camino sale
+    partido y puede fallar.
+  - Booleanos con holgura de 1e-5·r (el tubo toca las caras de forma tangente).
+  - Anillos de una curva: cuña en 4 tramos cosidos; cadenas (rectas y arcos): barrido por el
+    camino exacto con las secciones (el loft por secciones alrededor de un arco sale inexacto
+    en OCCT 7.6).
+  - Los escenarios se probaron en la nube; el ensamblado en Rust (ffi, `face_blend`) solo por
+    sintaxis.
 - **Revolución a dos ángulos**: no se migró `angle`: en la simétrica es el total; en dos ángulos,
   el del primer lado (`second` el del otro).
 
@@ -390,6 +413,8 @@ Hipótesis y puntos dudosos (si una prueba falla, mirar esto primero):
 
 - `ThruSections` no da tangencia en extremos ni cierre suave; puede requerir `GeomFill`.
 - `BRepAlgoAPI_Defeaturing` falla con caras que tocan muchas vecinas; avisar y no romper.
-- Redondeo de cara y completo general no tienen API directa en OCCT.
+- Redondeo de cara: hecho a mano (cuña menos tubo); faltan esquinas donde se juntan tres
+  redondeos y caras de un grupo que se cortan en canto vivo (no tangentes).
+- Redondeo completo general no tiene API directa en OCCT.
 - Copiar y pegar operaciones con referencias por geometría: al pegar en otro lugar pueden
   apuntar a caras distintas; mostrar como referencia perdida en vez de adivinar.

@@ -725,3 +725,7 @@ cargo test -p cad-model
   partición, barrido con curva guía y flechas en más operaciones. Faltan: torsión, tangencia en
   los extremos de la transición, redondeo de cara, partición por silueta, sistema de
   coordenadas y manipuladores de ángulo.
+- **2026-10-11 Redondeo de cara** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)): la bola que rueda
+  entre dos grupos de caras (vecinas o no, planas o curvas, cadenas tangentes), que redondea el
+  canto o rellena el rincón (`FaceBlend`, `cad_face_blend`: cruce de las caras desfasadas, cuña
+  menos tubo). Probado contra OCCT real en un banco de 9 casos con volúmenes exactos.

@@ -8406,6 +8406,32 @@ const scenarios = {
     await b.shot("operaciones_redondeo_completo");
   },
 
+  async "operaciones: redondeo de cara (bola que rueda)"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Arriba y el costado x+ de la caja de 20: canto de radio 2 a lo largo de 20
+    const top = await faceWhere((f) => f.surface === "plane" && f.normal[2] > 0.99);
+    const side = await faceWhere((f) => f.surface === "plane" && f.normal[0] > 0.99);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }, { kind: "face", face: ${side} }])`);
+    await b.clickText("Redondeo de cara");
+    await lastIs(b, "face_blend");
+    await sleep(3000);
+    const lost = (1 - Math.PI / 4) * 4 * 20;
+    near((await body()).volume, 8000 - lost, 0.05, "canto redondeado");
+    // Rincón donde hay un canto: la bola no toca las dos caras desde afuera, da error
+    await chooseOption(b, "Lado", "Rincón (agrega material)");
+    await sleep(2500);
+    const r = await evaluate();
+    if (!r.status.some((s) => s.state === "error")) throw new Error("se esperaba un error al pedir rincón en un canto");
+    await chooseOption(b, "Lado", "Según la geometría");
+    await sleep(2500);
+    near((await body()).volume, 8000 - lost, 0.05, "vuelve el canto");
+    await accept(b);
+    await b.shot("operaciones_redondeo_de_cara");
+  },
+
   async "operaciones: grabado y relieve sobre una cara curva"(b) {
     await begin(b);
     // Cilindro de radio 10 y alto 20; en su pared, un cuadrado de 4 envuelto

@@ -666,6 +666,19 @@ pub enum ImportFormat {
     Brep,
 }
 
+/// Qué hace el redondeo de cara entre los dos grupos de caras.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendSide {
+    /// Lo decide la geometría (primero prueba el canto, después el rincón).
+    #[default]
+    Auto,
+    /// Canto convexo: saca material.
+    Convex,
+    /// Rincón cóncavo: agrega material.
+    Concave,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum FeatureKind {
@@ -809,6 +822,16 @@ pub enum FeatureKind {
     /// Redondeo completo: la cara del medio, entre dos caras laterales
     /// paralelas, se vuelve medio cilindro de radio la mitad del ancho.
     FullRound { side_a: FaceRef, middle: FaceRef, side_b: FaceRef },
+    /// Redondeo de cara: la bola de radio `radius` que rueda apoyada en las
+    /// caras `a` y en las caras `b` (vecinas o no, de la misma pieza) redondea
+    /// el canto o rellena el rincón entre los dos grupos.
+    FaceBlend {
+        a: Vec<FaceRef>,
+        b: Vec<FaceRef>,
+        radius: f64,
+        #[serde(default)]
+        side: BlendSide,
+    },
     /// Escala las piezas (o las del alcance) alrededor de un punto, por eje.
     Scale {
         factor: P3,
@@ -1475,6 +1498,7 @@ impl FeatureKind {
             FeatureKind::RotateFace { .. } => "Girar cara",
             FeatureKind::VertexChamfer { .. } => "Chaflán de vértice",
             FeatureKind::FullRound { .. } => "Redondeo completo",
+            FeatureKind::FaceBlend { .. } => "Redondeo de cara",
             FeatureKind::Scale { .. } => "Escala",
             FeatureKind::Transform { copy: true, .. } => "Copiar cuerpo",
             FeatureKind::Transform { motion: Motion::Rotate { .. }, .. } => "Girar cuerpo",

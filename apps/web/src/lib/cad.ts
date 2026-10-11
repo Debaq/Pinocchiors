@@ -222,6 +222,8 @@ export type Extent =
   | { type: "up_to_vertex"; point: PointSpec };
 
 export type SweepOrient = "follow" | "frenet" | "fixed";
+/** Redondeo de cara: lo decide la geometría, canto convexo (saca) o rincón cóncavo (agrega) */
+export type BlendSide = "auto" | "convex" | "concave";
 
 /** Camino: entidades de un sketch (vacío = todas) o una curva del historial */
 export type SweepPathSpec = { type: "sketch"; sketch: number; entities: number[] } | { type: "curve"; feature: number };
@@ -686,6 +688,7 @@ export type FeatureKind =
   | { type: "vertex_chamfer"; vertex: PointSpec; distance: number }
   /** La cara del medio entre dos laterales paralelas, como medio cilindro */
   | { type: "full_round"; side_a: FaceRef; middle: FaceRef; side_b: FaceRef }
+  | { type: "face_blend"; a: FaceRef[]; b: FaceRef[]; radius: number; side?: BlendSide }
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
   | { type: "move_face"; faces: FaceRef[]; distance: number }
   /** Pared desde las líneas de un sketch hasta el sólido, centrada en su plano */
@@ -1481,6 +1484,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   rotate_face: "Girar cara",
   vertex_chamfer: "Chaflán de vértice",
   full_round: "Redondeo completo",
+  face_blend: "Redondeo de cara",
   surface_sweep: "Superficie por barrido",
   surface_loft: "Superficie por transición",
   surface_extend: "Extender superficie",

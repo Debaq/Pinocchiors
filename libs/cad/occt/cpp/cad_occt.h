@@ -95,6 +95,9 @@ CadShape* cad_chain(const CadShape* const* shapes, int32_t n);
 CadShape* cad_project_curves(const CadShape* curves, const CadShape* target, const double* direction);
 // Curvas donde se cruzan dos formas (caras o piezas), encadenadas.
 CadShape* cad_intersect_curves(const CadShape* a, const CadShape* b);
+// Redondeo de cara entre las caras `fa` y `fb` con una bola de radio `r`: `side` 0 lo deduce,
+// 1 canto convexo (saca material), 2 rincón cóncavo (agrega).
+CadShape* cad_face_blend(const CadShape* s, const int32_t* fa, int32_t na, const int32_t* fb, int32_t nb, double r, int32_t side);
 // Parche sobre la superficie de `face`: `n` lazos en (u, v) (el primero el de afuera, los demás
 // agujeros), `sizes[k]` puntos cada uno; la normal como la de la cara.
 CadShape* cad_face_patch(const CadShape* face, const double* uv, const int32_t* sizes, int32_t n);

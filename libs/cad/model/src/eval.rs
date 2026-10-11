@@ -2684,6 +2684,34 @@ impl Ctx<'_> {
                 self.scope = saved;
                 res
             }
+            FeatureKind::FaceBlend { a, b, radius, side } => {
+                if a.is_empty() || b.is_empty() {
+                    return Err("elegir caras de los dos lados".into());
+                }
+                if *radius <= 0.0 {
+                    return Err("el radio tiene que ser mayor que cero".into());
+                }
+                let (ia, ib) = (self.faces("a", a)?, self.faces("b", b)?);
+                if ia.iter().any(|i| ib.contains(i)) {
+                    return Err("una misma cara no puede estar en los dos lados".into());
+                }
+                let (ga, gb) = (self.by_part(&ia, false), self.by_part(&ib, false));
+                let (Some((pa, la)), Some((pb, lb))) = (ga.first(), gb.first()) else {
+                    return Err("las caras no son de ninguna pieza".into());
+                };
+                if ga.len() > 1 || gb.len() > 1 || pa != pb {
+                    return Err("las caras de los dos lados tienen que ser de la misma pieza".into());
+                }
+                let na = la.len();
+                let all: Vec<usize> = la.iter().chain(lb).copied().collect();
+                let side = match side {
+                    BlendSide::Auto => 0,
+                    BlendSide::Convex => 1,
+                    BlendSide::Concave => 2,
+                };
+                let r = *radius;
+                self.per_part(vec![(*pa, all)], |s, fs| s.face_blend(&fs[..na], &fs[na..], r, side), |_| Some(tag(f.id, "redondeo")))
+            }
             FeatureKind::MoveFace { faces, distance } => {
                 if faces.is_empty() {
                     return Err("elegir al menos una cara".into());

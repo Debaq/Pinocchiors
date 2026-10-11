@@ -213,6 +213,14 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "full_round", side_a: a, middle: m, side_b: b });
   };
 
+  /** Redondeo de cara: con dos caras elegidas, una de cada lado (después se suman más en el diálogo) */
+  const startFaceBlend = async () => {
+    const picked = ui.picks().flatMap((p) => (p.kind === "face" ? [p.face] : []));
+    const refs = await Promise.all(picked.slice(0, 2).map((f) => store.faceRef(f)));
+    ui.clearPicks();
+    void store.addFeature({ type: "face_blend", a: refs[0] ? [refs[0]] : [], b: refs[1] ? [refs[1]] : [], radius: 2 });
+  };
+
   /** Superficie por transición: por las curvas de los dos últimos sketches */
   const addSurfaceLoft = () => {
     const list = sketches();
@@ -731,6 +739,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     startSplitFaces,
     startVertexChamfer,
     startFullRound,
+    startFaceBlend,
     addSurfaceSweep,
     addSurfaceLoft,
     addPrimitive,

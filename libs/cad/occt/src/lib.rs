@@ -602,6 +602,15 @@ impl Shape {
         wrap(unsafe { ffi::cad_face_patch(self.ptr(), uv.as_ptr(), sizes.as_ptr(), sizes.len() as i32) })
     }
 
+    /// Redondeo de cara: la bola de radio `radius` que rueda apoyada en las caras
+    /// `a` y en las caras `b` (vecinas o no) y redondea el canto o rellena el
+    /// rincón entre ellas. `side`: 0 elige solo, 1 canto convexo (saca
+    /// material), 2 rincón cóncavo (agrega).
+    pub fn face_blend(&self, a: &[usize], b: &[usize], radius: f64, side: i32) -> Result<Shape> {
+        let (fa, fb) = (idx(a), idx(b));
+        wrap(unsafe { ffi::cad_face_blend(self.ptr(), fa.as_ptr(), fa.len() as i32, fb.as_ptr(), fb.len() as i32, radius, side) })
+    }
+
     /// Parte las caras `faces` donde las cruza `tool` (un plano grande o
     /// curvas sobre ellas), sin separar el sólido (con historia).
     pub fn split_faces(&self, faces: &[usize], tool: &Shape) -> Result<Shape> {

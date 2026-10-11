@@ -223,6 +223,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Girar cara", icon: D.MoveFace, run: () => void a.startRotateFace(), needsBody: true, tip: "Gira caras planas alrededor de un eje (una bisagra): lo que sale suma, lo que entra resta" },
     { label: "Chaflán de vértice", icon: D.Draft, run: () => void a.startVertexChamfer(), needsBody: true, tip: "Corta la esquina de un vértice de tres aristas" },
     { label: "Redondeo completo", icon: D.Draft, run: () => void a.startFullRound(), needsBody: true, tip: "Con tres caras elegidas: la del medio entre dos costados paralelos queda como medio cilindro" },
+    { label: "Redondeo de cara", icon: D.Draft, run: () => void a.startFaceBlend(), needsBody: true, tip: "Una bola que rueda apoyada en dos grupos de caras (vecinas o no): redondea el canto o rellena el rincón entre ellas" },
     { label: "Mover cara", icon: D.MoveFace, run: () => void a.startMoveFace(), needsBody: true, tip: "Lleva caras planas hacia afuera o hacia adentro" },
     { label: "Reemplazar cara", icon: D.ReplaceFace, run: () => void a.startReplaceFace(), needsBody: true, tip: "Lleva caras planas hasta un plano o hasta otra cara (elegir las caras y al final la de destino)" },
     { label: "Cara al escaneo", icon: D.ReplaceFace, run: () => void a.startFaceToScan(), needsBody: true, tip: "Lleva caras planas hasta la piel del escaneo, aunque sea curva (suma o resta según dónde esté)" },

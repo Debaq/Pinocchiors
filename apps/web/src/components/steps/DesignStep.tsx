@@ -59,6 +59,7 @@ import {
   type MissingRef,
   type Motion,
   type SweepOrient,
+  type BlendSide,
   type P2,
   type P3,
   type AxisDef,
@@ -242,6 +243,12 @@ const CORNER_OPTIONS = [
   { value: "square", label: "Cuadrada" },
 ];
 const AXIS_DIRS: Record<string, P3> = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+
+const BLEND_SIDE_OPTIONS = [
+  { value: "auto", label: "Según la geometría" },
+  { value: "convex", label: "Canto (saca material)" },
+  { value: "concave", label: "Rincón (agrega material)" },
+];
 
 const ORIENT_OPTIONS = [
   { value: "follow", label: "Sigue el camino" },
@@ -2593,6 +2600,22 @@ export const FeatureEditor: Component<{
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:m`} kind="face" label="La cara del medio" lost={lost("middle" as MissingRef["field"])} refs={k().middle ? [k().middle] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.middle = r[0] as FaceRef))} />
                 <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="face" label="El otro costado" lost={lost("side_b" as MissingRef["field"])} refs={k().side_b ? [k().side_b] : []} onChange={(r) => r[0] && update((x) => x.type === "full_round" && (x.side_b = r[0] as FaceRef))} />
                 <p class="text-[11px] text-text-dim">El radio es la mitad de la distancia entre los costados (por ahora, caras planas).</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "face_blend" && (f().kind as Extract<FeatureKind, { type: "face_blend" }>)}>
+            {(k) => (
+              <>
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:a`} kind="faces" label="Caras de un lado" lost={lost("a")} refs={k().a} onChange={(r) => update((x) => x.type === "face_blend" && (x.a = r as FaceRef[]))} />
+                <SelectionBox store={props.store} ui={props.ui} owner={`${f().id}:b`} kind="faces" label="Caras del otro lado" lost={lost("b")} refs={k().b} onChange={(r) => update((x) => x.type === "face_blend" && (x.b = r as FaceRef[]))} />
+                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "face_blend" && (x.radius = v), "mm")}
+                <Row label="Lado">
+                  <Select options={BLEND_SIDE_OPTIONS} value={k().side ?? "auto"} onChange={(v) => update((x) => x.type === "face_blend" && (x.side = v === "auto" ? undefined : (v as BlendSide)))} />
+                </Row>
+                <p class="text-[11px] text-text-dim">
+                  Una bola del radio rueda apoyada a la vez en las caras de los dos lados (pueden no ser vecinas, ni planas): si están en un canto lo redondea,
+                  si forman un rincón lo rellena. Cada lado puede ser una cadena de caras tangentes (un óvalo, una pared con redondeos).
+                </p>
               </>
             )}
           </Match>
