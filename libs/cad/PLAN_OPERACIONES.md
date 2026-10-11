@@ -97,7 +97,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 ### Transformaciones
 | Función | Estado |
 |---|---|
-| Mover, rotar, copiar (desplazamiento, giro o de punto a punto) | ✅ (`Transform`, 2026-10-11); falta el manipulador (F1) |
+| Mover, rotar, copiar (desplazamiento, giro o de punto a punto) | ✅ (`Transform`, 2026-10-11), con tres flechas al desplazar y arco al girar |
 | Alinear a cara o plano | ✅ cara plana sobre un plano (`Motion::Align`, 2026-10-11) |
 | Escalar uniforme y no uniforme | ✅ (`Scale.factor` por eje) |
 
@@ -106,7 +106,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 |---|---|
 | Plano desfasado, en ángulo, por 3 puntos, medio; eje; punto | ✅ |
 | Plano tangente, plano normal a curva | ✅ por clics (`PlaneDef::Picked`, 2026-10-11) |
-| Sistema de coordenadas | ❌ (F8) |
+| Sistema de coordenadas | ✅ (`FeatureKind::Frame`: sus tres planos, sus tres ejes y su origen, 2026-10-11) |
 
 ### Curvas 3D
 | Función | Estado |
@@ -134,7 +134,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Editar, editar croquis, suprimir, reordenar, eliminar, renombrar | ✅ |
 | Copiar y pegar | ✅ Ctrl+C / Ctrl+V en el árbol y «Duplicar» (2026-10-11) |
 | Retroceder (rollback), vista previa en vivo | ✅ |
-| Manipuladores gráficos | 🟡 flechas en extrusión, agujero, chapa, mover cara, engrosar, vaciado, redondeo, chaflán y patrón lineal (2026-10-11); faltan los de ángulo (arcos) (F10) |
+| Manipuladores gráficos | ✅ flechas en extrusión, agujero, chapa, mover cara, engrosar, vaciado, redondeo, chaflán, patrón lineal (las dos direcciones) y desplazar; arcos en revolución, patrón circular, girar cara y girar cuerpo (2026-10-11) |
 | Ámbito, fusionar o crear cuerpo nuevo | ✅ (`scope`, `BodyOp::New`) |
 
 ## Fases
@@ -148,8 +148,9 @@ abran los proyectos viejos.
 
 Hecho el 2026-10-11: `Transform` con `Translate`, `Rotate` y `Points`, `copy`, y `Mirror.op`
 («Mover cuerpo», «Girar cuerpo» y «Copiar cuerpo» en Pieza; «El reflejo como pieza aparte» en la
-simetría); después `Motion::Align` (cara plana sobre un plano). Falta: el manipulador de
-flechas y arcos.
+simetría); después `Motion::Align` (cara plana sobre un plano) y el manipulador: al desplazar,
+tres flechas (X, Y, Z) en el centro de lo movido que van con la pieza (`HandleKind::Move`:
+arrastrar suma a lo que había); al girar, un arco alrededor del eje. Completa.
 
 - `FeatureKind::Transform { parts: Vec<PartId>, motion: Motion, copy: bool }` con
   `Motion::Translate { vector }`, `Rotate { axis: AxisSpec, angle }`,
@@ -261,8 +262,12 @@ Hecho el 2026-10-11 (cónico, UNC/UNF, grabado y relieve). Completa.
 ### F8 — Referencias y curvas
 
 Hecho el 2026-10-11: planos, ejes y puntos por clics (tangente y normal a curva incluidos),
-espiral, curvas como operación y línea de partición (plano, curva, silueta). Falta: el sistema
-de coordenadas (`Frame`).
+espiral, curvas como operación y línea de partición (plano, curva, silueta); después el sistema
+de coordenadas: `FeatureKind::Frame { origin, z, x?, flip_z, flip_x }` (sin `x`, el X del mundo
+pasado a perpendicular), `RefGeom::Frame`, `PlaneSpec::Frame { feature, normal }` y
+`AxisSpec::Frame { feature, axis }` (planos orientados como planta, frente y lateral); como
+punto, su origen (`PointSpec::Reference`). Con un vértice y aristas elegidas: origen, Z y X.
+Completa.
 
 - **Primero (usuario, 2026-10-10: «los planos de referencia se construyen de una forma
   ridícula, con datos, no clics ni referencias a los objetos, líneas ni nada»).** Hoy el plano,
@@ -302,7 +307,12 @@ Hecho el 2026-10-11 (plana, desfasada, extender). Completa.
 ### F10 — Manipuladores en más operaciones
 
 Hecho el 2026-10-11: flechas de largo en mover cara, engrosar, vaciado, redondeo, chaflán y
-patrón lineal. Falta: `HandleKind::Angle` (arcos) para revolución, patrón circular y girar.
+patrón lineal; después varias por operación (`FeatureStatus.handles`, `Handle.slot`) y arcos
+(`Handle.axis` + `angle`: centro sobre el eje a la altura de lo que gira) en revolución (la
+punta según `extent`: ángulo, mitad o primer lado), patrón circular, girar cara y girar cuerpo;
+segunda flecha del patrón lineal en dos direcciones. El arrastre se mide contra la flecha de
+antes (no la que se dibuja mientras tanto) y el arco sigue el ángulo más cercano al anterior
+(pasa de 180° sin saltar). Completa (el radio del redondeo ya era una flecha).
 
 - `HandleKind` gana `Angle` (arco con punta arrastrable) y `Radius`.
 - Revolución (ángulo), redondeo (radio), chaflán (distancia), vaciado y engrosar (espesor),

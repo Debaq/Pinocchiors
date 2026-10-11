@@ -176,6 +176,15 @@ export async function faceWhere(test) {
   for (let i = 0; i < n; i++) if (test(await call("cad_face_info", { face: i }))) return i;
   throw new Error("no encontré la cara");
 }
+/**
+ * Una operación nueva con caras o aristas ya elegidas deja su caja de selección
+ * activa para sumar más (y el visor muestra el sólido de antes): Esc la suelta
+ */
+export async function releaseBox(b) {
+  await sleep(800);
+  await b.eval(`window.__cadUi.pick().kind !== "none" && window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }))`);
+  await sleep(800);
+}
 /** Índice de la arista del cuerpo cuyo punto de referencia está más cerca de `p` */
 export async function edgeNear(p) {
   const n = (await call("cad_evaluate")).body?.edges ?? 0;

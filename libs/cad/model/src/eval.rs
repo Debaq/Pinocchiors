@@ -52,9 +52,9 @@ pub struct FeatureStatus {
     /// Piezas que eligió sola (sin alcance elegido; p. ej. la más cercana a un agujero).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auto_scope: Vec<PartId>,
-    /// Flecha para el visor (extrusiones, chapas y agujeros).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handle: Option<Handle>,
+    /// Flechas y arcos para el visor (extrusiones, giros, desplazamientos...).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<Handle>,
 }
 
 /// Flecha de una operación en el visor: hacia dónde va y hasta dónde llega.
@@ -70,6 +70,28 @@ pub struct Handle {
     /// que se calculó; en el agujero, si va a favor de la normal del plano.
     pub reversed: bool,
     pub kind: HandleKind,
+    /// Arco (giros): el eje del giro, unitario. Entonces `origin` es el
+    /// centro (sobre el eje), `dir` hacia dónde arranca el arco y `length` su radio.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub axis: Option<P3>,
+    /// Arco: dónde está la punta (grados desde `dir` alrededor de `axis`, con signo).
+    #[serde(default)]
+    pub angle: f64,
+    /// Qué número cambia, si la operación tiene varias flechas (desplazar: 0, 1, 2 = X, Y, Z).
+    #[serde(default)]
+    pub slot: u8,
+}
+
+impl Handle {
+    /// Flecha desde `origin` hacia `dir` hasta `length` mm.
+    pub fn arrow(origin: P3, dir: P3, length: f64, reversed: bool, kind: HandleKind) -> Handle {
+        Handle { origin, dir, length, reversed, kind, axis: None, angle: 0.0, slot: 0 }
+    }
+
+    /// Arco de radio `radius` alrededor de `axis` (por `center`), desde `start` hasta `angle` grados.
+    pub fn arc(center: P3, axis: P3, start: P3, radius: f64, angle: f64, kind: HandleKind) -> Handle {
+        Handle { origin: center, dir: start, length: radius, reversed: false, kind, axis: Some(axis), angle, slot: 0 }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +105,9 @@ pub enum HandleKind {
     TwoSides,
     /// El largo no se cambia arrastrando (pasante, hasta una cara...).
     Fixed,
+    /// Flecha que va con la pieza (desplazar): arrastrar suma al valor que
+    /// había lo que se corrió la punta; `length` es solo el tamaño en pantalla.
+    Move,
 }
 
 /// Sketch ya resuelto y ubicado.
@@ -115,6 +140,33 @@ pub enum RefGeom {
     Curve { points: Vec<P3> },
     /// Varias curvas (un sketch 3D o envuelto), una polilínea por arista.
     Curves { lines: Vec<Vec<P3>> },
+    /// Sistema de coordenadas: origen y ejes unitarios (derecho: z = x × y).
+    Frame { origin: P3, x: P3, y: P3, z: P3 },
+}
+
+impl RefGeom {
+    /// Eje `which` de un sistema de coordenadas.
+    pub fn frame_axis(&self, which: FrameAxis) -> Option<Axis> {
+        let RefGeom::Frame { origin, x, y, z } = self else { return None };
+        let dir = match which {
+            FrameAxis::X => *x,
+            FrameAxis::Y => *y,
+            FrameAxis::Z => *z,
+        };
+        Some(Axis { origin: *origin, dir })
+    }
+
+    /// Plano de un sistema de coordenadas perpendicular a `normal`, con la
+    /// misma orientación que los planos base (planta, frente, lateral).
+    pub fn frame_plane(&self, normal: FrameAxis) -> Option<Plane> {
+        let RefGeom::Frame { origin, x, y, z } = self else { return None };
+        let origin = *origin;
+        Some(match normal {
+            FrameAxis::Z => Plane { origin, normal: *z, x_dir: *x },
+            FrameAxis::Y => Plane { origin, normal: scale(*y, -1.0), x_dir: *x },
+            FrameAxis::X => Plane { origin, normal: *x, x_dir: *y },
+        })
+    }
 }
 
 /// Sketch 3D resuelto.
@@ -245,7 +297,7 @@ struct CacheEntry {
     bends: Vec<BendInfo>,
     replaced: Vec<Replaced>,
     auto_scope: Vec<PartId>,
-    handle: Option<Handle>,
+    handles: Vec<Handle>,
     /// Para descartar las menos usadas.
     used: u64,
 }
@@ -330,6 +382,10 @@ impl Evaluation {
             AxisSpec::Reference { feature } => match self.references.get(feature) {
                 Some(RefGeom::Axis { dir, .. }) => *dir,
                 _ => return Err("el eje de referencia no está calculado".into()),
+            },
+            AxisSpec::Frame { feature, axis } => match self.references.get(feature).and_then(|g| g.frame_axis(*axis)) {
+                Some(a) => a.dir,
+                None => return Err("el sistema de coordenadas no está calculado".into()),
             },
             AxisSpec::SketchLine { sketch, line } => {
                 let s = self.sketches.get(sketch).ok_or("el sketch del eje no está calculado")?;
@@ -643,8 +699,8 @@ struct Ctx<'a> {
     /// Alcance de la operación en curso (vacío = las piezas que toca).
     scope: Vec<PartId>,    /// Piezas que la operación en curso eligió sola.
     auto_scope: Vec<PartId>,
-    /// Flecha de la operación en curso (la última herramienta calculada).
-    handle: RefCell<Option<Handle>>,
+    /// Flechas de la operación en curso (las de la última herramienta calculada).
+    handles: RefCell<Vec<Handle>>,
 }
 
 pub fn evaluate(doc: &Document) -> Evaluation {
@@ -663,7 +719,7 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
         warnings: RefCell::default(),
         scope: Vec::new(),
         auto_scope: Vec::new(),
-        handle: RefCell::default(),
+        handles: RefCell::default(),
     };
     let limit = doc.rollback.unwrap_or(usize::MAX);
     let mut key = 0u64;
@@ -694,12 +750,12 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
             ctx.ev.threads.extend(e.threads.iter().cloned());
             ctx.ev.bends.extend(e.bends.iter().cloned());
             ctx.ev.replaced.extend(e.replaced.iter().cloned());
-            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handle: e.handle.clone() });
+            ctx.ev.status.push(FeatureStatus { id: f.id, state: e.state.clone(), ms: e.ms, auto_scope: e.auto_scope.clone(), handles: e.handles.clone() });
             continue;
         }
         let start = std::time::Instant::now();
         ctx.auto_scope.clear();
-        ctx.handle.take();
+        ctx.handles.take();
         let state = if i >= limit {
             FeatureState::RolledBack
         } else if f.suppressed {
@@ -736,11 +792,11 @@ pub fn evaluate_with(doc: &Document, cache: &mut EvalCache) -> Evaluation {
                 bends: ctx.ev.bends.iter().filter(|b| b.feature == f.id).cloned().collect(),
                 replaced: ctx.ev.replaced.iter().filter(|r| r.feature == f.id).cloned().collect(),
                 auto_scope: ctx.auto_scope.clone(),
-                handle: ctx.handle.borrow().clone(),
+                handles: ctx.handles.borrow().clone(),
                 used: 0,
             },
         );
-        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handle: ctx.handle.take() });
+        ctx.ev.status.push(FeatureStatus { id: f.id, state, ms, auto_scope: std::mem::take(&mut ctx.auto_scope), handles: ctx.handles.take() });
     }
     ctx.ev
 }
@@ -1188,6 +1244,29 @@ impl Ctx<'_> {
         self.ev.diag()
     }
 
+    /// La flecha de la operación en curso (reemplaza las que hubiera).
+    fn set_handle(&self, h: Handle) {
+        *self.handles.borrow_mut() = vec![h];
+    }
+
+    /// Arco de un giro de `angle` grados alrededor de `axis`, a la altura de
+    /// `near` (lo que gira): centro sobre el eje, arranca hacia `near`.
+    fn arc_handle(&self, axis: Axis, near: P3, angle: f64, kind: HandleKind) -> Option<Handle> {
+        let a = normalize(axis.dir);
+        let rel = sub(near, axis.origin);
+        let center = add(axis.origin, scale(a, dot(rel, a)));
+        let radial = sub(near, center);
+        let min = self.diag().max(1.0) * 0.15;
+        let (start, radius) = if norm(radial) > min * 0.5 {
+            (normalize(radial), norm(radial))
+        } else {
+            // Lo que gira está sobre el eje: cualquier perpendicular
+            let t = if a[0].abs() < 0.9 { [1.0, 0.0, 0.0] } else { [0.0, 1.0, 0.0] };
+            (normalize(cross(a, t)), min)
+        };
+        (radius.is_finite() && radius > 1e-9).then(|| Handle::arc(center, a, start, radius, angle, kind))
+    }
+
     /// Anota una referencia no encontrada (una sola vez: la extrusión puede
     /// calcularse dos veces para darse vuelta).
     fn miss(&self, field: &str, index: usize) {
@@ -1261,6 +1340,13 @@ impl Ctx<'_> {
                     return Err("el plano de referencia no está calculado".into());
                 }
             },
+            PlaneSpec::Frame { feature, normal } => match self.ev.references.get(feature).and_then(|g| g.frame_plane(*normal)) {
+                Some(plane) => plane,
+                None => {
+                    self.miss(field, 0);
+                    return Err("el sistema de coordenadas no está calculado".into());
+                }
+            },
             PlaneSpec::Face { face } => {
                 let i = self.face(field, face)?;
                 let info = self.body()?.face_info(i).map_err(err)?;
@@ -1281,6 +1367,13 @@ impl Ctx<'_> {
             AxisSpec::Y => Axis { origin: [0.0; 3], dir: [0.0, 1.0, 0.0] },
             AxisSpec::Z => Axis { origin: [0.0; 3], dir: [0.0, 0.0, 1.0] },
             AxisSpec::Custom { origin, direction } => Axis { origin: *origin, dir: *direction },
+            AxisSpec::Frame { feature, axis } => match self.ev.references.get(feature).and_then(|g| g.frame_axis(*axis)) {
+                Some(a) => a,
+                None => {
+                    self.miss(field, 0);
+                    return Err("el sistema de coordenadas no está calculado".into());
+                }
+            },
             AxisSpec::Reference { feature } => match self.ev.references.get(feature) {
                 Some(RefGeom::Axis { origin, dir }) => Axis { origin: *origin, dir: *dir },
                 _ => {
@@ -1460,6 +1553,8 @@ impl Ctx<'_> {
             PointSpec::Picked { refs } => self.picked_point(refs)?.0,
             PointSpec::Reference { feature } => match self.ev.references.get(feature) {
                 Some(RefGeom::Point { point }) => *point,
+                // El origen de un sistema de coordenadas
+                Some(RefGeom::Frame { origin, .. }) => *origin,
                 _ => {
                     self.miss(field, 0);
                     return Err("el punto de referencia no está calculado".into());
@@ -1574,7 +1669,7 @@ impl Ctx<'_> {
             }
             _ => (depth, HandleKind::Fixed),
         };
-        *self.handle.borrow_mut() = Some(Handle { origin: c0, dir: down, length, reversed: dot(down, s.plane.normal) > 0.0, kind });
+        self.set_handle(Handle::arrow(c0, down, length, dot(down, s.plane.normal) > 0.0, kind));
         let mut parts = Vec::new();
         let mut probes: Vec<(P3, String)> = Vec::new();
         let mut threads = Vec::new();
@@ -2236,6 +2331,20 @@ impl Ctx<'_> {
                         slot.push(tag(f.id, format!("cara:{i}")));
                     }
                 }
+                // Arco del ángulo, a la altura del perfil
+                if !entities.is_empty() {
+                    let n = entities.len() as f64;
+                    let near = entities.iter().fold([0.0; 3], |a, (_, p)| add(a, scale(*p, 1.0 / n)));
+                    let (tip, kind) = match &r.extent {
+                        RevolveExtent::One => (r.angle, HandleKind::Blind),
+                        RevolveExtent::Symmetric => (r.angle / 2.0, HandleKind::Symmetric),
+                        RevolveExtent::TwoAngles { .. } => (r.angle, HandleKind::TwoSides),
+                        RevolveExtent::UpToFace { .. } => (angle.to_degrees(), HandleKind::Fixed),
+                    };
+                    if let Some(h) = self.arc_handle(axis, near, tip, kind) {
+                        self.set_handle(h);
+                    }
+                }
                 let tool = Tagged { shape, tags };
                 self.ev.tools.insert(f.id, (tool.clone(), r.op));
                 self.apply(f.id, tool, r.op)
@@ -2388,11 +2497,22 @@ impl Ctx<'_> {
                     None => self.body()?.mass().map_err(err)?,
                 };
                 let seed = scale(add(seed.bbox_min, seed.bbox_max), 0.5);
-                // Flecha de la separación del patrón lineal, desde lo que se repite
-                if let PatternKind::Linear { direction, spacing, .. } = pattern
-                    && norm(*direction) > 1e-12
-                {
-                    *self.handle.borrow_mut() = Some(Handle { origin: seed, dir: normalize(*direction), length: *spacing, reversed: false, kind: HandleKind::Blind });
+                // Flechas de la separación del patrón lineal (y de la segunda
+                // dirección) y arco del ángulo del circular, desde lo que se repite
+                match pattern {
+                    PatternKind::Linear { direction, spacing, second, .. } if norm(*direction) > 1e-12 => {
+                        let mut hs = vec![Handle::arrow(seed, normalize(*direction), *spacing, false, HandleKind::Blind)];
+                        if let Some(sd) = second.as_ref().filter(|sd| norm(sd.direction) > 1e-12) {
+                            hs.push(Handle { slot: 1, ..Handle::arrow(seed, normalize(sd.direction), sd.spacing, false, HandleKind::Blind) });
+                        }
+                        *self.handles.borrow_mut() = hs;
+                    }
+                    PatternKind::Circular { axis, angle, .. } => {
+                        if let Some(h) = self.axis("axis", axis).ok().and_then(|ax| self.arc_handle(ax, seed, *angle, HandleKind::Blind)) {
+                            self.set_handle(h);
+                        }
+                    }
+                    _ => {}
                 }
                 // Las omitidas no se hacen; las demás conservan su número (y sus nombres)
                 let transforms: Vec<(usize, ShapeFn)> =
@@ -2566,6 +2686,9 @@ impl Ctx<'_> {
                 let idx = self.faces("faces", faces)?;
                 let body = self.body()?.clone();
                 let far = self.diag() * 4.0;
+                if let Some(h) = body.face_info(idx[0]).ok().and_then(|info| self.arc_handle(ax, info.point, *angle, HandleKind::Blind)) {
+                    self.set_handle(h);
+                }
                 let m = cad_occt::rotation_matrix(ax, angle.to_radians());
                 let rot = |v: P3, w: f64| [0, 1, 2].map(|i| m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2] + w * m[i][3]);
                 // Cada cara: la cuña entre su plano y el girado (afuera suma, adentro resta)
@@ -2834,6 +2957,38 @@ impl Ctx<'_> {
                     (true, None) => (0..self.ev.parts.len()).collect(),
                     _ => self.find_parts("parts", parts)?,
                 };
+                // Centro de lo que se mueve (antes de moverlo)
+                let (mut lo, mut hi) = ([f64::INFINITY; 3], [f64::NEG_INFINITY; 3]);
+                for &i in &which {
+                    if let Ok(m) = self.ev.parts[i].shape.mass() {
+                        for k in 0..3 {
+                            lo[k] = lo[k].min(m.bbox_min[k]);
+                            hi[k] = hi[k].max(m.bbox_max[k]);
+                        }
+                    }
+                }
+                if lo[0].is_finite() {
+                    let center = scale(add(lo, hi), 0.5);
+                    match motion {
+                        Motion::Translate { vector } => {
+                            let at = add(center, *vector);
+                            let len = self.diag().max(1.0) * 0.2;
+                            *self.handles.borrow_mut() = (0..3u8)
+                                .map(|k| {
+                                    let mut d = [0.0; 3];
+                                    d[k as usize] = 1.0;
+                                    Handle { slot: k, ..Handle::arrow(at, d, len, false, HandleKind::Move) }
+                                })
+                                .collect();
+                        }
+                        Motion::Rotate { axis, angle } => {
+                            if let Some(h) = self.axis("axis", axis).ok().and_then(|ax| self.arc_handle(ax, center, *angle, HandleKind::Blind)) {
+                                self.set_handle(h);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 for i in which {
                     let part = self.ev.parts[i].shape.clone();
                     let (new, h) = with_history(|| part.transform(m)).map_err(err)?;
@@ -3550,6 +3705,34 @@ impl Ctx<'_> {
                 self.ev.references.insert(f.id, RefGeom::Point { point });
                 Ok(())
             }
+            FeatureKind::Frame { origin, z, x, flip_z, flip_x } => {
+                let o = self.point("origin", origin)?;
+                let raw = self.axis("z", z)?.dir;
+                if norm(raw) < 1e-12 {
+                    return Err("el eje Z no tiene dirección".into());
+                }
+                let mut zd = normalize(raw);
+                if *flip_z {
+                    zd = scale(zd, -1.0);
+                }
+                // X: la dirección pedida (o la X del mundo) sin la parte a lo largo de Z
+                let want = match x {
+                    Some(a) => normalize(self.axis("x", a)?.dir),
+                    None if zd[0].abs() < 0.9 => [1.0, 0.0, 0.0],
+                    None => [0.0, 1.0, 0.0],
+                };
+                let mut xd = sub(want, scale(zd, dot(want, zd)));
+                if norm(xd) < 1e-6 {
+                    return Err("el eje X va a lo largo del eje Z".into());
+                }
+                xd = normalize(xd);
+                if *flip_x {
+                    xd = scale(xd, -1.0);
+                }
+                let yd = cross(zd, xd);
+                self.ev.references.insert(f.id, RefGeom::Frame { origin: o, x: xd, y: yd, z: zd });
+                Ok(())
+            }
             FeatureKind::SplitParts { parts } => {
                 self.body()?;
                 let which = if parts.is_empty() { (0..self.ev.parts.len()).collect() } else { self.find_parts("parts", parts)? };
@@ -4140,7 +4323,7 @@ impl Ctx<'_> {
             Extent::TwoSides { distance, .. } => (*distance, HandleKind::TwoSides),
             _ => (segments.iter().map(|(s, l)| s + l).fold(0.0, f64::max), HandleKind::Fixed),
         };
-        *self.handle.borrow_mut() = Some(Handle { origin, dir: n, length, reversed: reverse, kind });
+        self.set_handle(Handle::arrow(origin, n, length, reverse, kind));
         let mut solids = Vec::new();
         for f in &faces {
             for &(start, length) in &segments {
@@ -4704,7 +4887,7 @@ impl Ctx<'_> {
         let Ok(info) = self.body().and_then(|b| b.face_info(face).map_err(err)) else { return };
         let n = normalize(info.normal);
         let (dir, reversed) = if inward { (scale(n, -1.0), false) } else if value < 0.0 { (scale(n, -1.0), true) } else { (n, false) };
-        *self.handle.borrow_mut() = Some(Handle { origin: info.point, dir, length: value.abs(), reversed, kind: HandleKind::Blind });
+        self.set_handle(Handle::arrow(info.point, dir, value.abs(), reversed, HandleKind::Blind));
     }
 
     /// Flecha desde el medio de una arista hacia adentro del material (entre sus dos caras).
@@ -4719,7 +4902,7 @@ impl Ctx<'_> {
         if norm(d) < 1e-9 {
             return;
         }
-        *self.handle.borrow_mut() = Some(Handle { origin: info.mid, dir: scale(normalize(d), -1.0), length: value, reversed: false, kind: HandleKind::Blind });
+        self.set_handle(Handle::arrow(info.mid, scale(normalize(d), -1.0), value, false, HandleKind::Blind));
     }
 
     fn geos(&self, refs: &[RefPick]) -> R<Vec<Geo>> {

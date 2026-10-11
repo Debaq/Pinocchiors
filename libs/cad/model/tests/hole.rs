@@ -265,7 +265,7 @@ fn hole_from_a_base_plane_goes_into_the_block_above() {
     // Flechas: el bloque sube 10 desde el medio de las regiones; el agujero
     // sube desde el centro (a favor de la normal) hasta la tapa
     let ev = doc.evaluate();
-    let handle = |id| ev.status.iter().find(|s| s.id == id).unwrap().handle.clone().unwrap();
+    let handle = |id| ev.status.iter().find(|s| s.id == id).unwrap().handles[0].clone();
     let e = handle(doc.features[1].id);
     assert_eq!((e.dir, e.length, e.reversed, e.kind), ([0.0, 0.0, 1.0], 10.0, false, HandleKind::Blind));
     assert!(e.origin.iter().all(|v| v.abs() < 1e-6), "{:?}", e.origin);
@@ -283,7 +283,7 @@ fn hole_from_a_base_plane_goes_into_the_block_above() {
         FeatureState::Warning { message, .. } => assert!(message.contains("no toca ninguna pieza"), "{message}"),
         other => panic!("{other:?}"),
     }
-    let k = ev.status.iter().find(|s| s.id == h).unwrap().handle.clone().unwrap();
+    let k = ev.status.iter().find(|s| s.id == h).unwrap().handles[0].clone();
     assert_eq!((k.dir, k.length, k.reversed, k.kind), ([0.0, 0.0, -1.0], 5.0, false, HandleKind::Blind));
 }
 

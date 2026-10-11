@@ -3,7 +3,7 @@
 //   node apps/web/e2e/cad.mjs --grupo operaciones              (lo mismo)
 
 import { sleep } from "../cdp.mjs";
-import { call, near, begin, evaluate, body, accept, clickRow, setInput, chooseOption, setInputIn, lastIs, lastKind, faceWhere, edgeNear } from "./_comun.mjs";
+import { call, near, begin, evaluate, body, accept, clickRow, setInput, chooseOption, setInputIn, lastIs, lastKind, faceWhere, edgeNear, releaseBox } from "./_comun.mjs";
 import { siEsPrincipal } from "./_ejecutor.mjs";
 
 export const escenarios = {
@@ -259,7 +259,7 @@ export const escenarios = {
     // Pulgadas: la medida más parecida a M6 es 1/4" (pasante de 0,266")
     await chooseOption(b, "Sistema", "Pulgadas (UNC/UNF)");
     let k = await lastKind(b);
-    near(k.diameter, 0.266 * 25.4, 1e-6, "pasante de 1/4\"");
+    near(k.diameter, 0.266 * 25.4, 1e-3, "pasante de 1/4\""); // la tabla guarda mm con tres decimales
     // Para roscar 1/4-20 UNC: broca #7 (0,201") y la rosca cosmética
     await chooseOption(b, "Para", "Roscar (rosca cosmética)");
     k = await lastKind(b);
@@ -977,6 +977,7 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }])`);
     await b.clickText("Girar cara");
     await lastIs(b, "rotate_face");
+    await releaseBox(b);
     await sleep(1500);
     // Bisagra en la arista de arriba de x = −10 (a lo largo de Y), 10°: baja el lado de x = 10
     await b.eval(`__cadStore.commit((d) => { d.features.at(-1).kind.axis = { type: "custom", origin: [-10, 0, 10], direction: [0, 1, 0] }; })`);
@@ -1090,6 +1091,7 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${ball} }])`);
     await b.clickText("Línea de partición");
     await lastIs(b, "split_faces");
+    await releaseBox(b);
     await sleep(2000);
     // Mirada desde arriba (eje Z, el de entrada): la silueta es el ecuador → dos hemisferios
     await chooseOption(b, "Con", "La silueta (vista desde un eje)");
@@ -1114,6 +1116,7 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks(${JSON.stringify(sides.map((face) => ({ kind: "face", face })))})`);
     await b.clickText("Línea de partición");
     await lastIs(b, "split_faces");
+    await releaseBox(b);
     await sleep(2500);
     let r = await body();
     if (r.faces !== 10) throw new Error(`caras: ${r.faces}`);
@@ -1125,10 +1128,136 @@ export const escenarios = {
     await b.eval(`window.__cadUi.setPicks([{ kind: "face", face: ${top} }])`);
     await b.clickText("Mover cara");
     await lastIs(b, "move_face");
+    await releaseBox(b);
     await sleep(2500);
-    const h = await b.eval(`(() => { const id = window.__cadStore.doc().features.at(-1).id; return JSON.parse(JSON.stringify(window.__cadStore.stateOf(id)?.handle ?? null)); })()`);
+    const h = await b.eval(`(() => { const id = window.__cadStore.doc().features.at(-1).id; return JSON.parse(JSON.stringify(window.__cadStore.stateOf(id)?.handles?.[0] ?? null)); })()`);
     if (!h || Math.abs(h.dir[2]) < 0.99) throw new Error(`flecha: ${JSON.stringify(h)}`);
     await b.shot("operaciones_flecha_mover_cara");
+    await accept(b);
+  },
+
+  async "operaciones: sistema de coordenadas (planos, ejes y origen)"(b) {
+    await begin(b);
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    // Vértice de arriba al frente a la derecha y la arista vertical del frente a la derecha: origen y Z
+    const vertical = await edgeNear([10, -10, 0]);
+    await b.eval(`window.__cadUi.setPicks([{ kind: "vertex", at: [10, -10, 10] }, { kind: "edge", edge: ${vertical} }])`);
+    await b.clickText("Sistema de coordenadas");
+    await lastIs(b, "frame");
+    await releaseBox(b);
+    await sleep(2000);
+    const id = await b.eval(`window.__cadStore.doc().features.at(-1).id`);
+    const frame = async () => (await evaluate()).references.find((r) => r.id === id);
+    let f = await frame();
+    if (f?.kind !== "frame") throw new Error(`sistema: ${JSON.stringify(f)}`);
+    for (const [k, v] of [[0, 10], [1, -10], [2, 10]]) near(f.origin[k], v, 1e-6, "origen en el vértice");
+    near(Math.abs(f.z[2]), 1, 1e-6, "Z a lo largo de la arista vertical");
+    // La arista puede ir hacia abajo: Z hacia arriba
+    if (f.z[2] < 0) {
+      await b.clickText("Invertir Z");
+      await sleep(2000);
+      f = await frame();
+      near(f.z[2], 1, 1e-6, "Z invertido");
+    }
+    // Sin X propio: el X del mundo
+    near(f.x[0], 1, 1e-6, "X del mundo");
+    // Invertir X: el Y también se da vuelta (sigue siendo derecho)
+    const y0 = f.y;
+    await b.clickText("Invertir X");
+    await sleep(2000);
+    f = await frame();
+    near(f.x[0], -1, 1e-6, "X invertido");
+    for (const k of [0, 1, 2]) near(f.y[k], -y0[k], 1e-6, "Y invertido");
+    await b.shot("operaciones_sistema_de_coordenadas");
+    await accept(b);
+    // Un sketch sobre su planta: los planos del sistema están en la lista del sketch
+    const options = await b.eval(`(() => { const r = window.__cadStore.result(); return r.references.filter((x) => x.kind === "frame").length; })()`);
+    if (options !== 1) throw new Error("el sistema no está entre las referencias");
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [5, 0], [5, 5], [0, 5]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (lid, a, c) => ({ id: lid, geometry: { type: "line", start: a, end: c } });
+    const sketch = { points, entities: [line(7, 1, 2), line(8, 2, 3), line(9, 3, 4), line(10, 4, 1)], constraints: [], next_id: 12, origin: 0 };
+    const sk = doc.next_id;
+    doc.features.push({ id: sk, name: "Tapa", suppressed: false, kind: { type: "sketch", plane: { type: "frame", feature: id, normal: "z" }, offset: 0, sketch } });
+    doc.features.push({ id: sk + 1, name: "Tapón", suppressed: false, kind: { type: "extrude", sketch: sk, regions: { type: "all" }, extent: { type: "blind", distance: 3 }, reverse: false, op: "join" } });
+    doc.next_id = sk + 2;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(2000);
+    const r = await body();
+    near(r.bbox_max[2], 13, 1e-6, "el tapón sale de la planta del sistema (z = 10) hacia su Z");
+    near(r.volume, 8000 + 25 * 3, 1e-3, "caja y tapón");
+  },
+
+  async "operaciones: arco de la revolución y flechas de desplazar"(b) {
+    await begin(b);
+    // Rectángulo x 10..15, z 0..20 en el frente, vuelta alrededor de Z
+    const doc = await call("cad_get_document");
+    const P = [[10, 0], [15, 0], [15, 20], [10, 20]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const sketch = { points, entities: [line(7, 1, 2), line(8, 2, 3), line(9, 3, 4), line(10, 4, 1)], constraints: [], next_id: 12, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Revolución");
+    await lastIs(b, "revolve");
+    await sleep(2000);
+    await setInput(b, "Ángulo", 90);
+    await sleep(2000);
+    const id = await b.eval(`window.__cadStore.draft().feature`);
+    const handles = () => b.eval(`JSON.parse(JSON.stringify(window.__cadStore.stateOf(${id})?.handles ?? []))`);
+    let [h] = await handles();
+    if (!h?.axis || Math.abs(h.angle - 90) > 1e-6) throw new Error(`arco: ${JSON.stringify(h)}`);
+    // Punto del arco a `deg` grados (el mismo giro que el visor)
+    const arcAt = (h, deg) => {
+      const [a, d, t] = [h.axis, h.dir, (deg * Math.PI) / 180];
+      const c = [a[1] * d[2] - a[2] * d[1], a[2] * d[0] - a[0] * d[2], a[0] * d[1] - a[1] * d[0]];
+      const k = (a[0] * d[0] + a[1] * d[1] + a[2] * d[2]) * (1 - Math.cos(t));
+      return [0, 1, 2].map((i) => h.origin[i] + h.length * (d[i] * Math.cos(t) + c[i] * Math.sin(t) + a[i] * k));
+    };
+    const screen = (p) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(p)})`);
+    // La punta se pincha; arrastrarla por el arco hasta 180°
+    const tip = await screen(arcAt(h, 90));
+    if ((await b.eval(`window.__cadViewer.handleHit(${tip[0]}, ${tip[1]})`)) !== 0) throw new Error("la punta del arco no se puede pinchar");
+    const path = [];
+    for (let deg = 100; deg <= 180; deg += 10) path.push(await screen(arcAt(h, deg)));
+    await b.dragPath([tip, ...path]);
+    await sleep(2500);
+    const k = await lastKind(b);
+    near(k.angle, 180, 2, "ángulo arrastrado");
+    const full = Math.PI * (15 ** 2 - 10 ** 2) * 20;
+    near((await body()).volume, (full * k.angle) / 360, 1e-3, "media vuelta");
+    // Clic en la punta: gira para el otro lado
+    [h] = await handles();
+    await b.click(...(await screen(arcAt(h, h.angle))), { wait: 2500 });
+    near((await lastKind(b)).angle, -k.angle, 1e-9, "al revés");
+    await b.shot("operaciones_arco_revolucion");
+    await accept(b);
+
+    // Mover cuerpo: tres flechas en el centro de lo movido; arrastrar la Z la sube
+    await b.clickText("Mover cuerpo");
+    await lastIs(b, "transform");
+    await sleep(2000);
+    const tid = await b.eval(`window.__cadStore.draft().feature`);
+    const hs = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.stateOf(${tid})?.handles ?? []))`);
+    if (hs.length !== 3 || hs.some((x, i) => x.kind !== "move" || (x.slot ?? 0) !== i)) throw new Error(`flechas: ${JSON.stringify(hs)}`);
+    const before = (await lastKind(b)).motion.vector;
+    const z = hs[2];
+    const from = await screen(z.origin.map((o, i) => o + z.dir[i] * z.length));
+    if ((await b.eval(`window.__cadViewer.handleHit(${from[0]}, ${from[1]})`)) !== 2) throw new Error("la flecha Z no se puede pinchar");
+    const to = await screen(z.origin.map((o, i) => o + z.dir[i] * (z.length + 12)));
+    await b.drag(from[0], from[1], to[0], to[1], 15);
+    await sleep(2500);
+    const after = (await lastKind(b)).motion.vector;
+    near(after[2] - before[2], 12, 1, "subió lo arrastrado");
+    near(after[0], before[0], 1e-9, "X igual");
+    await b.shot("operaciones_flechas_desplazar");
     await accept(b);
   },
 };

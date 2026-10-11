@@ -276,6 +276,7 @@ export const DesignToolbar: Component<{ store: CadStore; ui: CadUi; actions: Des
     { label: "Plano", icon: D.Plane, run: () => void a.addReference("plane"), tip: "Plano de referencia: desplazado, en ángulo, medio o por tres puntos" },
     { label: "Eje", icon: D.Axis, run: () => void a.addReference("axis"), tip: "Eje de referencia: por dos puntos, arista, cilindro o cruce de planos" },
     { label: "Punto", icon: D.Point, run: () => void a.addReference("point") },
+    { label: "Sistema de coordenadas", icon: D.Frame, run: () => void a.addFrame(), tip: "Origen y tres ejes: sirve como sus tres planos y sus tres ejes (elegir un vértice y aristas para Z y X)" },
     { label: "Hélice", icon: D.Helix, run: a.addHelix, tip: "Camino para resortes y roscas" },
     { label: "Espiral", icon: D.Helix, run: a.addSpiral, tip: "Espiral plana o hélice cónica (con dos radios)" },
     { label: "Curva por puntos", icon: D.Helix, run: () => void a.addCurve("points"), tip: "Spline por vértices elegidos o puntos escritos" },

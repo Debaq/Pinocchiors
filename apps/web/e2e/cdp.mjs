@@ -76,6 +76,19 @@ export async function launch(url, { width = 1400, height = 900 } = {}) {
       await api.mouse("mouseReleased", x1, y1);
       await sleep(400);
     },
+    /** Arrastrar pasando por los puntos `pts` ([x, y]), en tramos de 4 pasos */
+    async dragPath(pts) {
+      const [[x0, y0]] = pts;
+      await api.mouse("mouseMoved", x0, y0, { buttons: 0 });
+      await api.mouse("mousePressed", x0, y0);
+      for (let k = 1; k < pts.length; k++) {
+        const [[xa, ya], [xb, yb]] = [pts[k - 1], pts[k]];
+        for (let i = 1; i <= 4; i++) { await api.mouse("mouseMoved", xa + ((xb - xa) * i) / 4, ya + ((yb - ya) * i) / 4, { buttons: 1 }); await sleep(60); }
+      }
+      const [xl, yl] = pts[pts.length - 1];
+      await api.mouse("mouseReleased", xl, yl);
+      await sleep(400);
+    },
     async key(key, code = key, keyCode = 0) {
       await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode: keyCode });
       await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode: keyCode });

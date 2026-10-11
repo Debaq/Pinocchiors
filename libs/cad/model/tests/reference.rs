@@ -168,3 +168,109 @@ fn reference_axes_and_points() {
     assert_eq!(again.recomputed, 0);
     assert_eq!(again.references.len(), 3);
 }
+
+#[test]
+fn coordinate_frame_planes_axes_and_origin() {
+    let mut doc = Document::new();
+    // Z del sistema a lo largo del X del mundo: sin X pedido, X sale del Y del mundo
+    let fr = doc.add(FeatureKind::Frame {
+        origin: PointSpec::At { point: [10.0, 0.0, 0.0] },
+        z: AxisSpec::X,
+        x: None,
+        flip_z: false,
+        flip_x: false,
+    });
+    let pt = doc.add(FeatureKind::Point { def: PointSpec::Reference { feature: fr } });
+    let ax = doc.add(FeatureKind::Axis {
+        def: AxisDef::TwoPoints { a: PointSpec::Reference { feature: fr }, b: PointSpec::At { point: [10.0, 0.0, 7.0] } },
+    });
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    match ev.references.get(&fr) {
+        Some(RefGeom::Frame { origin, x, y, z }) => {
+            assert_eq!(*origin, [10.0, 0.0, 0.0]);
+            assert_parallel(*z, [1.0, 0.0, 0.0]);
+            assert_relative_eq!(x[1], 1.0, epsilon = 1e-12);
+            // Derecho: y = z × x = X × Y = Z
+            assert_relative_eq!(y[2], 1.0, epsilon = 1e-12);
+        }
+        other => panic!("sin sistema: {other:?}"),
+    }
+    match ev.references.get(&pt) {
+        Some(RefGeom::Point { point }) => assert_eq!(*point, [10.0, 0.0, 0.0]),
+        other => panic!("sin punto: {other:?}"),
+    }
+    assert_parallel(axis_of(&ev, ax).1, [0.0, 0.0, 1.0]);
+    let plane = ev.references[&fr].frame_plane(FrameAxis::Y).unwrap();
+    assert_parallel(plane.normal, [0.0, 0.0, 1.0]);
+
+    // X pedido a lo largo de Z: error claro
+    if let FeatureKind::Frame { x, .. } = &mut doc.get_mut(fr).unwrap().kind {
+        *x = Some(AxisSpec::X);
+    }
+    let ev = doc.evaluate();
+    assert!(ev.errors().iter().any(|(_, e)| e.contains("a lo largo del eje Z")), "{:?}", ev.errors());
+}
+
+#[test]
+fn sketch_on_frame_plane_and_revolve_on_frame_axis() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    let fr = doc.add(FeatureKind::Frame {
+        origin: PointSpec::At { point: [10.0, 0.0, 0.0] },
+        z: AxisSpec::X,
+        x: None,
+        flip_z: false,
+        flip_x: false,
+    });
+    // Planta del sistema: x del sketch → Y del mundo, y → Z, normal → X
+    let sk = doc.add(FeatureKind::Sketch {
+        plane: PlaneSpec::Frame { feature: fr, normal: FrameAxis::Z },
+        offset: 0.0,
+        sketch: rect_sketch(0.0, 0.0, 10.0, 5.0),
+    });
+    doc.add(FeatureKind::Extrude(Extrude {
+        sketch: sk,
+        regions: RegionSelection::All,
+        extent: Extent::Blind { distance: 3.0 },
+        reverse: false,
+        op: BodyOp::Join,
+        draft: 0.0,
+        thin: None,
+        direction: None,
+        start: 0.0,
+    }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    let m = ev.body.as_ref().unwrap().mass().unwrap();
+    for (k, (lo, hi)) in [(10.0, 13.0), (0.0, 10.0), (0.0, 5.0)].into_iter().enumerate() {
+        assert_relative_eq!(m.bbox_min[k], lo, epsilon = 1e-6);
+        assert_relative_eq!(m.bbox_max[k], hi, epsilon = 1e-6);
+    }
+
+    // Anillo alrededor del eje Y del sistema (el Z del mundo, por el origen del sistema)
+    let mut doc = Document::new();
+    let fr = doc.add(FeatureKind::Frame {
+        origin: PointSpec::At { point: [10.0, 0.0, 0.0] },
+        z: AxisSpec::X,
+        x: None,
+        flip_z: false,
+        flip_x: false,
+    });
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xz, offset: 0.0, sketch: rect_sketch(20.0, 0.0, 22.0, 5.0) });
+    doc.add(FeatureKind::Revolve(Revolve {
+        sketch: sk,
+        regions: RegionSelection::All,
+        axis: AxisSpec::Frame { feature: fr, axis: FrameAxis::Y },
+        angle: 360.0,
+        op: BodyOp::Join,
+        extent: RevolveExtent::One,
+        thin: None,
+    }));
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    // Radios 10..12 alrededor de x = 10
+    assert_relative_eq!(ev.body.unwrap().mass().unwrap().volume, PI * (144.0 - 100.0) * 5.0, max_relative = 1e-6);
+}

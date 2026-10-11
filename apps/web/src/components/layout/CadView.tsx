@@ -1,12 +1,12 @@
 import { Component, For, type JSX, Index, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import { invoke } from "@tauri-apps/api/core";
 import { clsx } from "clsx";
-import { CadViewer, arc3Polyline, entityPolyline, planeToWorld } from "../../lib/CadViewer";
+import { CadViewer, type ViewHandle, arc3Polyline, entityPolyline, planeToWorld } from "../../lib/CadViewer";
 import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -866,29 +866,34 @@ export const CadView: Component<CadViewProps> = (props) => {
     const t = store.tool();
     viewer?.setTool(t?.mesh ?? null, t?.op);
   });
-  // Flecha de la operación del diálogo (extrusión, chapa, agujero), como en
-  // Onshape: clic la da vuelta; arrastrándola cambia la distancia
+  // Flechas y arcos de la operación del diálogo, como en Onshape: clic la da
+  // vuelta; arrastrándola cambia la distancia o el ángulo
   const handleOf = createMemo(() => {
     const d = store.draft();
     if (!d || d.selecting || ui.session()) return undefined;
     const f = d.doc.features.find((x) => x.id === d.feature);
-    const h = f && store.stateOf(f.id)?.handle;
+    const hs = f && store.stateOf(f.id)?.handles;
     // Las operaciones con flecha la traen del cálculo (extrusión, agujero, chapa, mover cara, engrosar,
-    // vaciado, redondeo, chaflán, patrón lineal)
-    return f && h ? { id: f.id, h } : undefined;
+    // vaciado, redondeo, chaflán, patrones; arcos en revolución, girar y patrón circular; tres
+    // flechas al desplazar piezas)
+    return f && hs?.length ? { id: f.id, hs } : undefined;
   });
-  const [handleHot, setHandleHot] = createSignal(false);
-  // Arrastre en curso: la flecha del comienzo y dónde va la punta (mm, con signo)
-  let handleDrag: { id: number; h: FeatureHandle; x: number; y: number; moved: boolean; canDrag: boolean } | undefined;
-  const [dragAt, setDragAt] = createSignal<{ h: FeatureHandle; t: number }>();
+  const [handleHot, setHandleHot] = createSignal(-1);
+  // Arrastre en curso: la flecha del comienzo, su número, y el valor de antes y dónde
+  // se pinchó (las que van con la pieza suman la diferencia)
+  let handleDrag: { id: number; h: FeatureHandle; index: number; x: number; y: number; moved: boolean; canDrag: boolean; base: number; from?: number } | undefined;
+  const [dragAt, setDragAt] = createSignal<{ index: number; h: FeatureHandle; t: number; base: number }>();
   createEffect(() => {
     const drag = dragAt();
-    const cur = handleOf()?.h;
+    const cur = handleOf()?.hs ?? [];
     // Mientras se arrastra sigue al puntero (el recálculo llega después)
-    const h = drag
-      ? { origin: drag.h.origin, dir: drag.h.dir.map((v) => (drag.t < 0 ? -v : v)) as P3, length: Math.abs(drag.t) }
-      : cur;
-    viewer?.setHandle(h ?? null, handleHot() || !!drag);
+    const moved = (h: FeatureHandle, t: number, base: number): ViewHandle => {
+      if (h.axis) return { ...h, angle: t };
+      if (h.kind === "move") return { ...h, origin: h.origin.map((v, k) => v + h.dir[k] * (t - base)) as P3 };
+      return { origin: h.origin, dir: h.dir.map((v) => (t < 0 ? -v : v)) as P3, length: Math.abs(t) };
+    };
+    const list = cur.map((h, i) => (drag && drag.index === i ? moved(drag.h, drag.t, drag.base) : h));
+    viewer?.setHandles(list, drag ? drag.index : handleHot());
   });
   // Comparación con una versión: lo agregado en verde y lo quitado en rojo
   createEffect(() => {
@@ -2431,12 +2436,16 @@ export const CadView: Component<CadViewProps> = (props) => {
     if (viewer?.cubeDown(e.clientX, e.clientY)) return;
     if (ui.session()) return sketchClick(e);
     const handle = handleOf();
-    if (handle && viewer?.handleHit(e.clientX, e.clientY)) {
+    const index = handle && viewer ? viewer.handleHit(e.clientX, e.clientY) : -1;
+    if (handle && index >= 0) {
+      const h = handle.hs[index];
       const f = store.doc()?.features.find((x) => x.id === handle.id);
-      const field = f && handleField(f.kind, handle.h);
+      const field = f && handleField(f.kind, h);
       // Con la distancia dada por una fórmula, la flecha solo se da vuelta
       const canDrag = !!field && !store.bindingOf(`${handle.id}.${field}`);
-      handleDrag = { id: handle.id, h: handle.h, x: e.clientX, y: e.clientY, moved: false, canDrag };
+      const base = f ? handleValue(f.kind, h) : 0;
+      const from = h.kind === "move" ? (viewer?.handleParam(h, e.clientX, e.clientY) ?? undefined) : undefined;
+      handleDrag = { id: handle.id, h, index, x: e.clientX, y: e.clientY, moved: false, canDrag, base, from };
       container.setPointerCapture(e.pointerId);
       return;
     }
@@ -2502,17 +2511,22 @@ export const CadView: Component<CadViewProps> = (props) => {
       const d = handleDrag;
       if (!d.moved && Math.hypot(e.clientX - d.x, e.clientY - d.y) < 4) return;
       d.moved = true;
-      const raw = d.canDrag ? viewer?.handleParam(e.clientX, e.clientY) : null;
+      const raw = d.canDrag ? viewer?.handleParam(d.h, e.clientX, e.clientY, dragAt()?.t) : null;
       if (raw == null || !viewer) return;
-      // Redondeado a lo que se distingue en pantalla (1, 0,1, 0,01 mm...)
-      const step = 10 ** Math.ceil(Math.log10(viewer.pixelSizeMm() * 2));
-      const t = Math.round(raw / step) * step || step;
+      let t: number;
+      if (d.h.axis) t = Math.round(raw);
+      else {
+        // Redondeado a lo que se distingue en pantalla (1, 0,1, 0,01 mm...)
+        const step = 10 ** Math.ceil(Math.log10(viewer.pixelSizeMm() * 2));
+        // Las que van con la pieza: lo que había más lo que se corrió desde donde se pinchó
+        t = d.h.kind === "move" ? Math.round((d.base + raw - (d.from ?? 0)) / step) * step : Math.round(raw / step) * step || step;
+      }
       if (dragAt()?.t === t) return;
-      setDragAt({ h: d.h, t });
+      setDragAt({ index: d.index, h: d.h, t, base: d.base });
       void store.updateFeature(d.id, (f) => dragByHandle(f.kind, d.h, t));
       return;
     }
-    if (e.buttons === 0) setHandleHot(!!handleOf() && !!viewer?.handleHit(e.clientX, e.clientY));
+    if (e.buttons === 0) setHandleHot(handleOf() && viewer ? viewer.handleHit(e.clientX, e.clientY) : -1);
     // La caja aparece recién al arrastrar de verdad (un clic tiembla un par de píxeles)
     if (boxStart && (e.buttons & 1) === 1 && Math.hypot(e.clientX - boxStart.x, e.clientY - boxStart.y) >= 5) {
       const r = container.getBoundingClientRect();

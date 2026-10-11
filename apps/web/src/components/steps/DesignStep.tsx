@@ -40,6 +40,7 @@ import {
   moveRegionPoints,
   offsetPlane,
   type AxisSpec,
+  type FrameAxis,
   type BendRelief,
   type BodyOp,
   type CornerRelief,
@@ -275,6 +276,7 @@ function planeLabel(p: PlaneSpec): string {
   if (p.type === "face") return "Cara del sólido";
   if (p.type === "custom") return "Plano propio";
   if (p.type === "reference") return "Plano de referencia";
+  if (p.type === "frame") return "Plano de un sistema de coordenadas";
   return PLANE_LABELS[p.type];
 }
 
@@ -1235,7 +1237,7 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                         <Icons.CaretDown size={10} />
                       </IconButton>
                       <Show
-                        when={["sketch", "plane", "axis", "point"].includes(f().kind.type)}
+                        when={["sketch", "plane", "axis", "point", "frame"].includes(f().kind.type)}
                         fallback={
                           <IconButton
                             aria-label={f().suppressed ? "Activar" : "Suprimir"}
@@ -1354,7 +1356,7 @@ export const FeatureEditor: Component<{
   };
   const sketchOptions = () => props.sketches.map((s) => ({ value: String(s.id), label: s.name }));
   const planeSpecSelect = (value: PlaneSpec, set: (p: PlaneSpec) => void, lostFace = false) => {
-    const current = value.type === "reference" ? `ref:${value.feature}` : value.type;
+    const current = refValue(value) ?? value.type;
     return (
       <Select
         options={[
@@ -1367,7 +1369,7 @@ export const FeatureEditor: Component<{
         onChange={(v) => {
           if (v === current) return;
           if (v === "xy" || v === "xz" || v === "yz") set({ type: v });
-          else if (v.startsWith("ref:")) set({ type: "reference", feature: +v.slice(4) });
+          else if (isRefValue(v)) set(planeOfValue(v));
         }}
       />
     );
@@ -1460,12 +1462,12 @@ export const FeatureEditor: Component<{
                       value={(() => {
                         const a = k().sketch.x_axis;
                         if (!a) return "plane";
-                        if (a.type === "reference") return `ref:${a.feature}`;
+                        if (refValue(a)) return refValue(a)!;
                         return ["x", "y", "z"].includes(a.type) ? a.type : "picked";
                       })()}
                       onChange={(v) => {
                         if (v === "picked") return;
-                        void setHorizontal(v === "plane" ? null : v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" });
+                        void setHorizontal(v === "plane" ? null : isRefValue(v) ? axisOfValue(v) : { type: v as "x" | "y" | "z" });
                       }}
                     />
                   </Row>
@@ -1679,7 +1681,7 @@ export const FeatureEditor: Component<{
               };
               const axisValue = () => {
                 const a = k().axis;
-                return a.type === "sketch_line" ? `line:${a.line}` : a.type === "reference" ? `ref:${a.feature}` : a.type;
+                return a.type === "sketch_line" ? `line:${a.line}` : (refValue(a) ?? a.type);
               };
               return (
                 <>
@@ -1702,8 +1704,8 @@ export const FeatureEditor: Component<{
                           if (x.type !== "revolve") return;
                           x.axis = v.startsWith("line:")
                             ? { type: "sketch_line", sketch: x.sketch, line: +v.slice(5) }
-                            : v.startsWith("ref:")
-                              ? { type: "reference", feature: +v.slice(4) }
+                            : isRefValue(v)
+                              ? axisOfValue(v)
                               : { type: v as "x" | "y" | "z" };
                         })
                       }
@@ -2290,14 +2292,14 @@ export const FeatureEditor: Component<{
                           options={[...["x", "y", "z"].map((a) => ({ value: a, label: a.toUpperCase() })), ...refOptions(props.store, "axis")]}
                           value={(() => {
                             const a = (k().pattern as { axis: AxisSpec }).axis;
-                            return a.type === "reference" ? `ref:${a.feature}` : a.type;
+                            return (refValue(a) ?? a.type);
                           })()}
                           onChange={(v) =>
                             update(
                               (x) =>
                                 x.type === "pattern" &&
                                 x.pattern.type === "circular" &&
-                                (x.pattern.axis = v.startsWith("ref:") ? { type: "reference", feature: +v.slice(4) } : { type: v as "x" | "y" | "z" }),
+                                (x.pattern.axis = isRefValue(v) ? axisOfValue(v) : { type: v as "x" | "y" | "z" }),
                             )
                           }
                         />
@@ -2842,7 +2844,7 @@ export const FeatureEditor: Component<{
                   const n = p.plane.normal;
                   return Math.abs(n[2]) > 0.9 ? "xy" : Math.abs(n[1]) > 0.9 ? "xz" : "yz";
                 }
-                return p.type === "face" || p.type === "reference" ? "xy" : p.type;
+                return p.type === "face" || p.type === "reference" || p.type === "frame" ? "xy" : p.type;
               };
               const offset = () => {
                 const p = k().plane;
@@ -3226,7 +3228,7 @@ export const FeatureEditor: Component<{
                     <Checkbox
                       small
                       label="Hacia el otro lado"
-                      checked={k().reverse ?? state()?.handle?.reversed ?? false}
+                      checked={k().reverse ?? state()?.handles?.[0]?.reversed ?? false}
                       onChange={(c) => update((x) => x.type === "hole" && (x.reverse = c))}
                     />
                     <Show when={k().reverse != null} fallback={<span class="text-[11px] text-text-dim">Automático</span>}>
@@ -3708,15 +3710,15 @@ export const FeatureEditor: Component<{
                             ]}
                             value={(() => {
                               const a = r().axis;
-                              return a.type === "sketch_line" ? `line:${a.line}` : a.type === "reference" ? `ref:${a.feature}` : a.type;
+                              return a.type === "sketch_line" ? `line:${a.line}` : (refValue(a) ?? a.type);
                             })()}
                             onChange={(v) =>
                               update((x) => {
                                 if (x.type !== "surface_revolve") return;
                                 x.axis = v.startsWith("line:")
                                   ? { type: "sketch_line", sketch: x.sketch, line: +v.slice(5) }
-                                  : v.startsWith("ref:")
-                                    ? { type: "reference", feature: +v.slice(4) }
+                                  : isRefValue(v)
+                                    ? axisOfValue(v)
                                     : { type: v as "x" | "y" | "z" };
                               })
                             }
@@ -4339,6 +4341,56 @@ export const FeatureEditor: Component<{
               </>
             )}
           </Match>
+          <Match when={f().kind.type === "frame" && (f().kind as Extract<FeatureKind, { type: "frame" }>)}>
+            {(k) => (
+              <>
+                <PointField
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:origen`}
+                  label="Origen"
+                  value={k().origin}
+                  except={f().id}
+                  onChange={(p) => update((x) => x.type === "frame" && (x.origin = p))}
+                />
+                <AxisField
+                  store={props.store}
+                  ui={props.ui}
+                  owner={`${f().id}:z`}
+                  label="Eje Z"
+                  value={k().z}
+                  except={f().id}
+                  onChange={(a) => update((x) => x.type === "frame" && (x.z = a))}
+                />
+                <Checkbox
+                  small
+                  label="Hacia dónde va X"
+                  checked={!!k().x}
+                  onChange={(c) => update((x) => x.type === "frame" && (x.x = c ? { type: "x" } : undefined))}
+                />
+                <Show when={k().x}>
+                  {(ax) => (
+                    <AxisField
+                      store={props.store}
+                      ui={props.ui}
+                      owner={`${f().id}:x`}
+                      label="Eje X"
+                      value={ax()}
+                      except={f().id}
+                      onChange={(a) => update((x) => x.type === "frame" && (x.x = a))}
+                    />
+                  )}
+                </Show>
+                <div class="flex gap-3">
+                  <Checkbox small label="Invertir Z" checked={!!k().flip_z} onChange={(c) => update((x) => x.type === "frame" && (x.flip_z = c || undefined))} />
+                  <Checkbox small label="Invertir X" checked={!!k().flip_x} onChange={(c) => update((x) => x.type === "frame" && (x.flip_x = c || undefined))} />
+                </div>
+                <p class="text-[11px] text-text-dim">
+                  Sin X propio, X sale del X del mundo (o del Y si Z va a lo largo de X). Se usa como sus tres planos, sus tres ejes y su origen.
+                </p>
+              </>
+            )}
+          </Match>
         </Switch>
         {/* Unir, restar o intersecar: con qué piezas (sin elegir, las que toca; el agujero, la más cercana) */}
         <Show when={f().kind.type === "hole" || ("op" in f().kind && f().kind.type !== "boolean" && (f().kind as { op: BodyOp }).op !== "new")}>
@@ -4369,15 +4421,50 @@ function planeLabelFor(f: Feature): string {
 /** Referencias calculadas de un tipo, con el nombre de su operación (sin `except`) */
 function refOptions(store: CadStore, kind: "plane" | "axis" | "point" | "curve", except?: number): { value: string; label: string }[] {
   const names = new Map((store.doc()?.features ?? []).map((f) => [f.id, f.name]));
-  return (store.result()?.references ?? [])
-    .filter((r) => (r.kind === kind || (kind === "curve" && r.kind === "curves")) && r.id !== except)
-    .map((r) => ({ value: `ref:${r.id}`, label: names.get(r.id) ?? `Referencia ${r.id}` }));
+  return (store.result()?.references ?? []).flatMap((r) => {
+    if (r.id === except) return [];
+    const name = names.get(r.id) ?? `Referencia ${r.id}`;
+    // Un sistema de coordenadas da sus tres planos, sus tres ejes y su origen
+    if (r.kind === "frame") {
+      if (kind === "plane") return FRAME_PLANES.map(([n, label]) => ({ value: `frame:${r.id}:${n}`, label: `${name} · ${label}` }));
+      if (kind === "axis") return (["x", "y", "z"] as const).map((a) => ({ value: `frame:${r.id}:${a}`, label: `${name} · ${a.toUpperCase()}` }));
+      if (kind === "point") return [{ value: `ref:${r.id}`, label: `${name} · origen` }];
+      return [];
+    }
+    return r.kind === kind || (kind === "curve" && r.kind === "curves") ? [{ value: `ref:${r.id}`, label: name }] : [];
+  });
+}
+
+/** Planos de un sistema de coordenadas: el eje perpendicular y su nombre */
+const FRAME_PLANES: [FrameAxis, string][] = [
+  ["z", "planta XY"],
+  ["y", "frente XZ"],
+  ["x", "lateral YZ"],
+];
+
+/** Valor de un `Select` para un plano o eje de referencia o de un sistema de coordenadas */
+function refValue(s: PlaneSpec | AxisSpec): string | undefined {
+  if (s.type === "reference") return `ref:${s.feature}`;
+  if (s.type === "frame") return `frame:${s.feature}:${"normal" in s ? s.normal : s.axis}`;
+  return undefined;
+}
+
+const isRefValue = (v: string) => v.startsWith("ref:") || v.startsWith("frame:");
+
+function planeOfValue(v: string): PlaneSpec {
+  const [kind, id, which] = v.split(":");
+  return kind === "frame" ? { type: "frame", feature: +id, normal: which as FrameAxis } : { type: "reference", feature: +id };
+}
+
+function axisOfValue(v: string): AxisSpec {
+  const [kind, id, which] = v.split(":");
+  return kind === "frame" ? { type: "frame", feature: +id, axis: which as FrameAxis } : { type: "reference", feature: +id };
 }
 
 /** Plano: base, de referencia o una cara plana elegida en el visor */
 const PlaneField: Component<{ store: CadStore; ui: CadUi; owner: string; label: string; value: PlaneSpec; except?: number; lost?: boolean; onChange: (p: PlaneSpec) => void }> = (props) => {
   const [wantFace, setWantFace] = createSignal(false);
-  const current = () => (wantFace() ? "face" : props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
+  const current = () => (wantFace() ? "face" : (refValue(props.value) ?? props.value.type));
   return (
     <>
       <Row label={props.label}>
@@ -4393,7 +4480,7 @@ const PlaneField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
             if (v === current()) return;
             setWantFace(v === "face");
             if (v === "xy" || v === "xz" || v === "yz") props.onChange({ type: v });
-            else if (v.startsWith("ref:")) props.onChange({ type: "reference", feature: +v.slice(4) });
+            else if (isRefValue(v)) props.onChange(planeOfValue(v));
           }}
         />
       </Row>
@@ -4419,7 +4506,7 @@ const PlaneField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
 /** Eje: X/Y/Z, de referencia o una arista elegida */
 const AxisField: Component<{ store: CadStore; ui: CadUi; owner: string; label: string; value: AxisSpec; except?: number; onChange: (a: AxisSpec) => void }> = (props) => {
   const [wantEdge, setWantEdge] = createSignal(false);
-  const current = () => (wantEdge() ? "edge" : props.value.type === "reference" ? `ref:${props.value.feature}` : props.value.type);
+  const current = () => (wantEdge() ? "edge" : (refValue(props.value) ?? props.value.type));
   return (
     <>
       <Row label={props.label}>
@@ -4436,7 +4523,7 @@ const AxisField: Component<{ store: CadStore; ui: CadUi; owner: string; label: s
             if (v === current()) return;
             setWantEdge(v === "edge");
             if (v === "x" || v === "y" || v === "z") props.onChange({ type: v });
-            else if (v.startsWith("ref:")) props.onChange({ type: "reference", feature: +v.slice(4) });
+            else if (isRefValue(v)) props.onChange(axisOfValue(v));
           }}
         />
       </Row>
@@ -4472,6 +4559,10 @@ const PointField: Component<{ store: CadStore; ui: CadUi; owner: string; label: 
             { value: "center", label: "Centro de una arista" },
             { value: "on_edge", label: "Sobre una arista recta" },
             ...refOptions(props.store, "point", props.except),
+            // Elegidos en el visor (no se arman desde la lista)
+            ...(props.value.type === "edge_end" ? [{ value: "edge_end", label: "Vértice del sólido" }] : []),
+            ...(props.value.type === "picked" ? [{ value: "picked", label: "Por clics" }] : []),
+            ...(props.value.type === "scan" ? [{ value: "scan", label: "Del escaneo" }] : []),
           ]}
           value={current()}
           onChange={(v) => {
@@ -4699,11 +4790,11 @@ const RefPicksBox: Component<{
     if (r.type === "edge") return "Arista";
     if (r.type === "plane") {
       const p = r.plane;
-      return p.type === "reference" ? (names().get(p.feature) ?? "Plano") : p.type === "face" ? "Cara plana" : p.type === "custom" ? "Plano propio" : PLANE_LABELS[p.type];
+      return p.type === "reference" ? (names().get(p.feature) ?? "Plano") : p.type === "frame" ? `${names().get(p.feature) ?? "Sistema"} · ${FRAME_PLANES.find(([n]) => n === p.normal)![1]}` : p.type === "face" ? "Cara plana" : p.type === "custom" ? "Plano propio" : PLANE_LABELS[p.type];
     }
     if (r.type === "axis") {
       const a = r.axis;
-      return a.type === "reference" ? (names().get(a.feature) ?? "Eje") : a.type === "sketch_line" ? `Línea ${a.line}` : a.type === "x" || a.type === "y" || a.type === "z" ? `Eje ${a.type.toUpperCase()}` : "Eje";
+      return a.type === "reference" ? (names().get(a.feature) ?? "Eje") : a.type === "frame" ? `${names().get(a.feature) ?? "Sistema"} · ${a.axis.toUpperCase()}` : a.type === "sketch_line" ? `Línea ${a.line}` : a.type === "x" || a.type === "y" || a.type === "z" ? `Eje ${a.type.toUpperCase()}` : "Eje";
     }
     const p = r.point;
     if (p.type === "edge_end") return "Vértice";

@@ -221,6 +221,9 @@ function preselectKey(p: CadPick): string {
   }
 }
 
+/** Flecha o arco de una operación para el visor (ver `setHandles`) */
+export type ViewHandle = { origin: P3; dir: P3; length: number; axis?: P3; angle?: number; kind?: string; slot?: number };
+
 export class CadViewer {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -239,8 +242,8 @@ export class CadViewer {
   private bodyEdges?: THREE.LineSegments;
   private bodyData: CadMesh | null = null;
   private tool?: THREE.Group;
-  /** Flecha de la operación en edición: el grupo y la punta (se escala con la distancia) */
-  private handle?: { group: THREE.Group; tip: THREE.Object3D; origin: THREE.Vector3; dir: THREE.Vector3 };
+  /** Flechas y arcos de la operación en edición: el grupo y la punta (se escala con la distancia) */
+  private handles: { group: THREE.Group; tip: THREE.Object3D; origin: THREE.Vector3; dir: THREE.Vector3; axis?: THREE.Vector3; angle: number }[] = [];
   private compare?: THREE.Group;
   private scan?: THREE.Mesh;
   private scanHighlight?: THREE.Mesh;
@@ -388,6 +391,7 @@ export class CadViewer {
       // Lo reemplazado se libera recién ahora: los materiales nuevos ya tomaron los
       // programas de WebGL (liberarlo antes los dejaba sin uso y se recompilaban: ~200 ms)
       for (const o of this.retired.splice(0)) {
+        if (o instanceof THREE.ArrowHelper) o.dispose();
         o.geometry?.dispose();
         (o.material as THREE.Material | undefined)?.dispose();
       }
@@ -718,69 +722,116 @@ export class CadViewer {
   }
 
   /**
-   * Flecha de la operación (mm, Z arriba): desde `origin` hacia `dir` hasta
-   * `length`, con la punta del mismo tamaño en pantalla; `hot` la resalta
-   * (bajo el puntero o arrastrándola). `null` la quita.
+   * Flechas y arcos de la operación (mm, Z arriba). Flecha: desde `origin`
+   * hacia `dir` hasta `length`. Arco (con `axis`): centro `origin`, arranca
+   * hacia `dir` a `length` del centro y llega a `angle` grados alrededor de
+   * `axis`. La punta tiene el mismo tamaño en pantalla; `hot` resalta la de
+   * ese número (bajo el puntero o arrastrándola). Las de desplazar (`slot`
+   * con `kind: "move"`) van del color de su eje.
    */
-  setHandle(h: { origin: P3; dir: P3; length: number } | null, hot = false) {
-    if (this.handle) this.dropGroup(this.handle.group);
-    this.handle = undefined;
-    if (h) {
+  setHandles(list: ViewHandle[], hot = -1) {
+    for (const h of this.handles) this.dropGroup(h.group);
+    this.handles = [];
+    list.forEach((h, i) => {
       const origin = this.toView(h.origin);
       const dir = this.dirToView(h.dir);
-      const tipAt = origin.clone().addScaledVector(dir, h.length / this.mmPerUnit);
-      const color = themeHex(hot ? "warning" : "accent");
+      const axis = h.axis && this.dirToView(h.axis);
+      const angle = h.angle ?? 0;
+      const color = themeHex(i === hot ? "warning" : h.kind === "move" ? (["axis-x", "axis-y", "axis-z"] as const)[h.slot ?? 0] : "accent");
+      const r = h.length / this.mmPerUnit;
+      let pts: THREE.Vector3[];
+      let tipAt: THREE.Vector3;
+      let tipDir: THREE.Vector3;
+      if (axis) {
+        // Arco: de `dir` girando `angle` grados alrededor del eje; la punta va tangente
+        const n = Math.max(8, Math.ceil(Math.abs(angle) / 3));
+        const at = (deg: number) => dir.clone().applyAxisAngle(axis, (deg * Math.PI) / 180);
+        pts = Array.from({ length: n + 1 }, (_, k) => origin.clone().addScaledVector(at((angle * k) / n), r));
+        tipAt = pts[n];
+        tipDir = new THREE.Vector3().crossVectors(axis, at(angle)).multiplyScalar(angle < 0 ? -1 : 1).normalize();
+      } else {
+        tipAt = origin.clone().addScaledVector(dir, r);
+        pts = [origin, tipAt];
+        tipDir = dir;
+      }
       const group = new THREE.Group();
-      const shaft = new THREE.Line(
-        new THREE.BufferGeometry().setFromPoints([origin, tipAt]),
-        new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }),
-      );
+      const shaft = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color, depthTest: false, transparent: true }));
       shaft.renderOrder = 10;
+      group.add(shaft);
+      if (axis) {
+        // Radio hasta el arranque del arco: se ve desde dónde se mide el ángulo
+        const spoke = new THREE.Line(
+          new THREE.BufferGeometry().setFromPoints([origin, pts[0]]),
+          new THREE.LineDashedMaterial({ color, depthTest: false, transparent: true, dashSize: r / 12, gapSize: r / 16 }),
+        );
+        spoke.computeLineDistances();
+        spoke.renderOrder = 10;
+        group.add(spoke);
+      }
       // Punta de alto 1 apuntando a +Y, con su base en el origen; la escala la pone del tamaño en pantalla
       const cone = new THREE.ConeGeometry(0.32, 1, 20);
       cone.translate(0, 0.5, 0);
       const tip = new THREE.Mesh(cone, new THREE.MeshBasicMaterial({ color, depthTest: false, transparent: true }));
       tip.position.copy(tipAt);
-      tip.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      tip.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tipDir);
       tip.renderOrder = 11;
       // Para pinchar: una esfera invisible más grande que la punta
       const hit = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 8), new THREE.MeshBasicMaterial({ visible: false }));
       hit.position.y = 0.5;
       tip.add(hit);
-      group.add(shaft, tip);
+      group.add(tip);
       this.scene.add(group);
-      this.handle = { group, tip, origin, dir };
-    }
+      this.handles.push({ group, tip, origin, dir, axis, angle });
+    });
     this.requestRender();
   }
 
-  /** La punta de la flecha mide unos 30 px de alto en pantalla */
+  /** La punta de cada flecha mide unos 30 px de alto en pantalla */
   private scaleHandle() {
-    if (!this.handle) return;
     const h = this.renderer.domElement.clientHeight || 1;
-    const dist = this.camera.position.distanceTo(this.handle.tip.position);
-    const px = (2 * dist * Math.tan((this.camera.fov * Math.PI) / 360)) / h;
-    this.handle.tip.scale.setScalar(30 * px);
+    for (const { tip } of this.handles) {
+      const dist = this.camera.position.distanceTo(tip.position);
+      const px = (2 * dist * Math.tan((this.camera.fov * Math.PI) / 360)) / h;
+      tip.scale.setScalar(30 * px);
+    }
   }
 
-  /** ¿El puntero está sobre la punta de la flecha? */
-  handleHit(clientX: number, clientY: number): boolean {
-    if (!this.handle) return false;
+  /** La flecha bajo el puntero (su número), o -1 */
+  handleHit(clientX: number, clientY: number): number {
+    if (!this.handles.length) return -1;
     this.scaleHandle();
-    this.handle.tip.updateMatrixWorld(true);
     this.setRay(clientX, clientY);
-    return this.raycaster.intersectObject(this.handle.tip, true).length > 0;
+    let best = -1;
+    let near = Infinity;
+    this.handles.forEach(({ tip }, i) => {
+      tip.updateMatrixWorld(true);
+      const hit = this.raycaster.intersectObject(tip, true)[0];
+      if (hit && hit.distance < near) [best, near] = [i, hit.distance];
+    });
+    return best;
   }
 
   /**
-   * Dónde queda el puntero a lo largo de la línea de la flecha: mm desde su
-   * origen (negativo, del otro lado); `null` si la línea apunta a la cámara.
+   * Dónde queda el puntero para la flecha `h` (la de antes de arrastrar, no la
+   * que se dibuja mientras tanto). Flecha: mm desde su origen a lo largo de la
+   * línea (negativo, del otro lado). Arco: grados desde su arranque alrededor
+   * del eje, el más cercano a `near` (así pasa de 180° y de una vuelta sin
+   * saltar). `null` si la línea o el plano del arco miran a la cámara.
    */
-  handleParam(clientX: number, clientY: number): number | null {
-    if (!this.handle) return null;
+  handleParam(h: ViewHandle, clientX: number, clientY: number, near?: number): number | null {
     this.setRay(clientX, clientY);
-    const { origin: o, dir: d } = this.handle;
+    const o = this.toView(h.origin);
+    const d = this.dirToView(h.dir);
     const { origin: r, direction: v } = this.raycaster.ray;
+    if (h.axis) {
+      const a = this.dirToView(h.axis);
+      const den = a.dot(v);
+      if (Math.abs(den) < 0.05) return null;
+      const p = r.clone().addScaledVector(v, a.dot(o.clone().sub(r)) / den).sub(o);
+      const deg = (Math.atan2(a.dot(new THREE.Vector3().crossVectors(d, p)), d.dot(p)) * 180) / Math.PI;
+      const want = near ?? h.angle ?? 0;
+      return deg + 360 * Math.round((want - deg) / 360);
+    }
     // Punto de la línea más cercano al rayo
     const w = o.clone().sub(r);
     const b = d.dot(v);
@@ -1405,6 +1456,20 @@ export class CadViewer {
           line.renderOrder = 5;
           this.refsGroup.add(line);
         }
+      } else if (r.kind === "frame") {
+        // Tres flechas (X rojo, Y verde, Z azul) desde el origen, y el origen
+        const o = this.toView(r.origin);
+        const len = size * 0.35;
+        for (const [d, c] of [[r.x, "axis-x"], [r.y, "axis-y"], [r.z, "axis-z"]] as const) {
+          const arrow = new THREE.ArrowHelper(this.dirToView(d), o, len, themeHex(c), len * 0.18, len * 0.09);
+          for (const m of [arrow.line.material, arrow.cone.material] as THREE.Material[]) m.depthTest = false;
+          arrow.renderOrder = 6;
+          this.refsGroup.add(arrow);
+        }
+        const g = new THREE.BufferGeometry().setFromPoints([o]);
+        const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: 8, sizeAttenuation: false, depthTest: false }));
+        pts.renderOrder = 6;
+        this.refsGroup.add(pts);
       } else {
         const g = new THREE.BufferGeometry().setFromPoints([this.toView(r.point)]);
         const pts = new THREE.Points(g, new THREE.PointsMaterial({ color, size: 8, sizeAttenuation: false, depthTest: false }));
@@ -2062,7 +2127,7 @@ export class CadViewer {
     this.controls.dispose();
     this.setBody(null);
     this.setTool(null);
-    this.setHandle(null);
+    this.setHandles([]);
     this.setComparison(null, null);
     this.setScan(null);
     this.setSketch(null);

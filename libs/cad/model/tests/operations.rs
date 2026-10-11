@@ -1188,3 +1188,93 @@ fn sweep_with_a_guide_curve() {
     assert!(v > 16.0 * 20.0 * 1.2, "volumen {v}");
     assert!(hi[0] > 3.5, "se abre: {}", hi[0]);
 }
+
+fn handles_of(ev: &Evaluation, id: FeatureId) -> Vec<Handle> {
+    ev.status.iter().find(|s| s.id == id).unwrap().handles.clone()
+}
+
+/// Punta de un arco: `dir` girado `angle` grados alrededor de `axis`, a `length` del centro
+fn arc_tip(h: &Handle) -> P3 {
+    let a = normalize(h.axis.unwrap());
+    let (d, t) = (h.dir, h.angle.to_radians());
+    let c = cross(a, d);
+    let k = dot(a, d) * (1.0 - t.cos());
+    std::array::from_fn(|i| h.origin[i] + h.length * (d[i] * t.cos() + c[i] * t.sin() + a[i] * k))
+}
+
+#[test]
+fn revolve_and_rotate_have_angle_arcs() {
+    if !occt() {
+        return;
+    }
+    // Revolución de 90°: el arco sale del perfil y su punta queda donde termina el sólido
+    let doc = ring(RevolveExtent::One, 90.0);
+    let ev = eval_ok(&doc);
+    let hs = handles_of(&ev, doc.features[1].id);
+    assert_eq!(hs.len(), 1);
+    let h = &hs[0];
+    assert_eq!(h.kind, HandleKind::Blind);
+    assert_relative_eq!(h.angle, 90.0);
+    assert_relative_eq!(dot(normalize(h.axis.unwrap()), [0.0, 0.0, 1.0]).abs(), 1.0, epsilon = 1e-9);
+    let (lo, hi, _) = bbox(&ev);
+    let tip = arc_tip(h);
+    assert!(tip[1] > lo[1] - 1e-6 && tip[1] < hi[1] + 1e-6 && tip[0].abs() < 1e-6, "punta {tip:?} fuera de {lo:?}..{hi:?}");
+    // Simétrica: la punta en la mitad
+    let doc = ring(RevolveExtent::Symmetric, 90.0);
+    let h = handles_of(&eval_ok(&doc), doc.features[1].id).remove(0);
+    assert_eq!(h.kind, HandleKind::Symmetric);
+    assert_relative_eq!(h.angle, 45.0);
+
+    // Girar un cubo alrededor de Z: arco por el centro del cubo
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let t = doc.add(FeatureKind::Transform { parts: vec![], motion: Motion::Rotate { axis: AxisSpec::Z, angle: 90.0 }, copy: false });
+    let h = handles_of(&eval_ok(&doc), t).remove(0);
+    assert_relative_eq!(h.origin[2], 5.0, epsilon = 1e-6);
+    assert_relative_eq!(h.length, 50f64.sqrt(), epsilon = 1e-6);
+    assert_relative_eq!(h.angle, 90.0);
+}
+
+#[test]
+fn translate_has_three_arrows_and_patterns_more_handles() {
+    if !occt() {
+        return;
+    }
+    let mut doc = Document::new();
+    doc.add(cube(0.0, 10.0, BodyOp::Join));
+    let t = doc.add(FeatureKind::Transform { parts: vec![], motion: Motion::Translate { vector: [5.0, 0.0, 0.0] }, copy: false });
+    let hs = handles_of(&eval_ok(&doc), t);
+    assert_eq!(hs.len(), 3);
+    for (k, h) in hs.iter().enumerate() {
+        assert_eq!(h.kind, HandleKind::Move);
+        assert_eq!(h.slot as usize, k);
+        // En el centro del cubo ya movido, a lo largo de X, Y y Z
+        assert_eq!(h.origin, [10.0, 5.0, 5.0]);
+        assert_relative_eq!(h.dir[k], 1.0);
+    }
+
+    // Patrón lineal en dos direcciones: una flecha por dirección
+    let (mut doc, hole) = plate_with_hole();
+    let p = doc.add(FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Linear {
+            direction: [1.0, 0.0, 0.0],
+            count: 3,
+            spacing: 20.0,
+            second: Some(LinearSecond { direction: [0.0, 1.0, 0.0], count: 2, spacing: 30.0 }),
+        },
+        skip: vec![],
+    });
+    let hs = handles_of(&eval_ok(&doc), p);
+    assert_eq!(hs.iter().map(|h| (h.slot, h.length)).collect::<Vec<_>>(), vec![(0, 20.0), (1, 30.0)]);
+    // Circular: arco del ángulo total alrededor del eje
+    doc.get_mut(p).unwrap().kind = FeatureKind::Pattern {
+        features: vec![hole],
+        pattern: PatternKind::Circular { axis: AxisSpec::Custom { origin: [50.0, 30.0, 0.0], direction: [0.0, 0.0, 1.0] }, count: 4, angle: 180.0 },
+        skip: vec![],
+    };
+    let h = handles_of(&eval_ok(&doc), p).remove(0);
+    assert!(h.axis.is_some());
+    assert_relative_eq!(h.angle, 180.0);
+    assert_relative_eq!(h.origin[0], 50.0, epsilon = 1e-6);
+}

@@ -683,7 +683,7 @@ export const escenarios = {
     await b.eval(`window.__cadStore.reload()`);
     await sleep(2000);
     near((await body()).volume, 16000, 1e-6, "bloque");
-    const handle = (id) => b.eval(`window.__cadStore.stateOf(${id})?.handle ?? null`);
+    const handle = (id) => b.eval(`window.__cadStore.stateOf(${id})?.handles?.[0] ?? null`);
     const tip = (h) => b.eval(`window.__cadViewer.screenOf(${JSON.stringify(h.origin.map((o, i) => o + h.dir[i] * h.length))})`);
     const kind = (id) => b.eval(`window.__cadStore.doc().features.find((f) => f.id === ${id}).kind`);
     // Abrir el bloque: su flecha sube 10 desde el centro
@@ -693,7 +693,7 @@ export const escenarios = {
     if (!h || h.dir[2] !== 1 || h.length !== 10 || h.reversed) throw new Error(`flecha del bloque: ${JSON.stringify(h)}`);
     // Clic en la punta: hacia abajo
     const [x, y] = await tip(h);
-    if (!(await b.eval(`window.__cadViewer.handleHit(${x}, ${y})`))) throw new Error("la punta no se puede pinchar");
+    if ((await b.eval(`window.__cadViewer.handleHit(${x}, ${y})`)) < 0) throw new Error("la punta no se puede pinchar");
     await b.click(x, y, { wait: 2000 });
     if (!(await kind(2)).reverse) throw new Error("no se dio vuelta");
     let r = await body();

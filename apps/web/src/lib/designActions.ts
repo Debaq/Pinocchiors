@@ -23,6 +23,7 @@ import {
   type PartId,
   type PlaneSpec,
   type PointSpec,
+  type EdgeRef,
   type RefPick,
   type Sketch,
   type PrimitiveShape,
@@ -655,6 +656,28 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     void store.addFeature({ type: "point", def: { type: "picked", refs: [] } });
   };
 
+  /**
+   * Sistema de coordenadas: el origen en el vértice elegido (o en el centro de
+   * la primera arista), Z a lo largo de la primera arista y X de la segunda.
+   * Sin nada elegido, en el origen con Z arriba.
+   */
+  const addFrame = async () => {
+    let origin: PointSpec | undefined;
+    const edges: EdgeRef[] = [];
+    for (const p of ui.picks()) {
+      if (p.kind === "vertex" && !origin) origin = await invoke<PointSpec>("cad_vertex_spec", { point: p.at }).catch((): PointSpec => ({ type: "at", point: p.at }));
+      else if (p.kind === "edge" && edges.length < 2) edges.push(await store.edgeRef(p.edge));
+    }
+    ui.clearPicks();
+    const [z, x] = edges;
+    void store.addFeature({
+      type: "frame",
+      origin: origin ?? (z ? { type: "center", edge: z } : { type: "at", point: [0, 0, 0] }),
+      z: z ? { type: "edge", edge: z } : { type: "z" },
+      ...(x ? { x: { type: "edge", edge: x } } : {}),
+    });
+  };
+
   /** Booleana: con piezas elegidas, la primera es la que queda y las demás, las que restan */
   const addBoolean = () => {
     const [first, ...rest] = pickedParts();
@@ -758,6 +781,7 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addBoolean,
     pickedParts,
     addReference,
+    addFrame,
     startThicken,
     startMoveFace,
     startRib,

@@ -209,6 +209,14 @@ export const Point = (p: IconProps) => (
   </DesignIcon>
 );
 
+export const Frame = (p: IconProps) => (
+  <DesignIcon {...p}>
+    <path d="M7 17 V4 M7 17 H20 M7 17 L2.5 21.5" />
+    <path d="M5 6 L7 4 L9 6 M18 15 L20 17 L18 19" />
+    <circle cx="7" cy="17" r="1.5" fill="currentColor" stroke="none" />
+  </DesignIcon>
+);
+
 export const Helix = (p: IconProps) => (
   <DesignIcon {...p}>
     <path d="M6 20 C18 20 18 16 6 16 C18 16 18 12 6 12 C18 12 18 8 6 8 C18 8 18 4 6 4" />

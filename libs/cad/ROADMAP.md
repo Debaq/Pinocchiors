@@ -734,3 +734,10 @@ cargo test -p cad-model
   llega perpendicular a las secciones de las puntas (superficie Hermite armada a mano: OCCT no
   tiene loft con condiciones de borde) y línea de partición por silueta (marching squares sobre
   n·d en el parámetro de la cara). Cada una probada contra OCCT real en `libs/cad/occt/bench`.
+- **2026-10-11 Sistema de coordenadas y manipuladores** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md),
+  F1, F8 y F10): `FeatureKind::Frame` (origen, Z, X opcional, invertir) usable como sus tres
+  planos (`PlaneSpec::Frame`), sus tres ejes (`AxisSpec::Frame`) y su origen; varias flechas por
+  operación (`FeatureStatus.handles`) y arcos (`Handle.axis`/`angle`) en revolución, patrón
+  circular, girar cara y girar cuerpo; tres flechas que van con la pieza al desplazar
+  (`HandleKind::Move`) y segunda flecha del patrón lineal. Pruebas en `model/tests/reference.rs`
+  y `operations.rs`; e2e «operaciones: sistema de coordenadas…» y «…arco de la revolución…».

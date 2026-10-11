@@ -55,6 +55,18 @@ pub enum PlaneSpec {
     Custom { plane: Plane },
     /// Un plano de referencia del historial.
     Reference { feature: FeatureId },
+    /// Uno de los tres planos de un sistema de coordenadas: el perpendicular
+    /// a `normal` (con `Z`, su planta).
+    Frame { feature: FeatureId, normal: FrameAxis },
+}
+
+/// Eje de un sistema de coordenadas ([`FeatureKind::Frame`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FrameAxis {
+    X,
+    Y,
+    Z,
 }
 
 
@@ -71,6 +83,8 @@ pub enum AxisSpec {
     Custom { origin: P3, direction: P3 },
     /// Un eje de referencia del historial.
     Reference { feature: FeatureId },
+    /// Uno de los tres ejes de un sistema de coordenadas.
+    Frame { feature: FeatureId, axis: FrameAxis },
 }
 
 /// Un punto: fijo, en una arista o de referencia.
@@ -241,7 +255,7 @@ fn origin_point() -> PointSpec {
 
 fn plane_deps(p: &PlaneSpec) -> Vec<FeatureId> {
     match p {
-        PlaneSpec::Reference { feature } => vec![*feature],
+        PlaneSpec::Reference { feature } | PlaneSpec::Frame { feature, .. } => vec![*feature],
         _ => vec![],
     }
 }
@@ -249,7 +263,7 @@ fn plane_deps(p: &PlaneSpec) -> Vec<FeatureId> {
 fn axis_deps(a: &AxisSpec) -> Vec<FeatureId> {
     match a {
         AxisSpec::SketchLine { sketch, .. } => vec![*sketch],
-        AxisSpec::Reference { feature } => vec![*feature],
+        AxisSpec::Reference { feature } | AxisSpec::Frame { feature, .. } => vec![*feature],
         _ => vec![],
     }
 }
@@ -794,6 +808,19 @@ pub enum FeatureKind {
     Plane { def: PlaneDef },
     Axis { def: AxisDef },
     Point { def: PointSpec },
+    /// Sistema de coordenadas: origen, eje Z y (opcional) hacia dónde va X;
+    /// sirve como sus tres planos, sus tres ejes y su origen. Sin `x`, X es
+    /// el X del mundo pasado a perpendicular (o el Y si Z va a lo largo de X).
+    Frame {
+        origin: PointSpec,
+        z: AxisSpec,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        x: Option<AxisSpec>,
+        #[serde(default)]
+        flip_z: bool,
+        #[serde(default)]
+        flip_x: bool,
+    },
     /// Perfil llevado a lo largo de un camino.
     Sweep(Sweep),
     /// Sólido que pasa por varias secciones (una región por sketch).
@@ -1337,6 +1364,7 @@ impl FeatureKind {
                 _ => vec![],
             },
             FeatureKind::Point { def } => point_deps(def),
+            FeatureKind::Frame { origin, z, x, .. } => [point_deps(origin), axis_deps(z), x.as_ref().map(axis_deps).unwrap_or_default()].concat(),
             FeatureKind::Sweep(s) => {
                 let dep = |p: &SweepPath| match p {
                     SweepPath::Sketch { sketch, .. } => *sketch,
@@ -1480,6 +1508,7 @@ impl FeatureKind {
             FeatureKind::Plane { .. } => "Plano",
             FeatureKind::Axis { .. } => "Eje",
             FeatureKind::Point { .. } => "Punto",
+            FeatureKind::Frame { .. } => "Sistema de coordenadas",
             FeatureKind::Sweep(_) => "Barrido",
             FeatureKind::Loft(_) => "Transición",
             FeatureKind::Hole(_) => "Agujero",

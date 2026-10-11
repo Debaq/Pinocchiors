@@ -51,7 +51,12 @@ export type PlaneSpec =
   | { type: "face"; face: FaceRef }
   | { type: "custom"; plane: Plane }
   /** Un plano de referencia del historial */
-  | { type: "reference"; feature: number };
+  | { type: "reference"; feature: number }
+  /** Un plano de un sistema de coordenadas: el perpendicular a `normal` */
+  | { type: "frame"; feature: number; normal: FrameAxis };
+
+/** Eje de un sistema de coordenadas */
+export type FrameAxis = "x" | "y" | "z";
 
 export type AxisSpec =
   | { type: "x" }
@@ -61,7 +66,9 @@ export type AxisSpec =
   | { type: "edge"; edge: EdgeRef }
   | { type: "custom"; origin: P3; direction: P3 }
   /** Un eje de referencia del historial */
-  | { type: "reference"; feature: number };
+  | { type: "reference"; feature: number }
+  /** Un eje de un sistema de coordenadas */
+  | { type: "frame"; feature: number; axis: FrameAxis };
 
 /** Punto: coordenadas, centro de una arista, sobre una arista recta o de referencia */
 export type PointSpec =
@@ -135,6 +142,8 @@ export type RefView = { id: number; how?: string } & (
   | { kind: "curve"; points: P3[] }
   /** Varias curvas (sketch 3D o envuelto): una polilínea por arista */
   | { kind: "curves"; lines: P3[][] }
+  /** Sistema de coordenadas: origen y ejes unitarios */
+  | { kind: "frame"; origin: P3; x: P3; y: P3; z: P3 }
 );
 
 // ─── Sketch 3D ─────────────────────────────────────────────────────────────
@@ -779,7 +788,9 @@ export type FeatureKind =
   | { type: "split_by"; parts: PartId[]; tool: SplitTool }
   | { type: "plane"; def: PlaneDef }
   | { type: "axis"; def: AxisDef }
-  | { type: "point"; def: PointSpec };
+  | { type: "point"; def: PointSpec }
+  /** Sistema de coordenadas: origen, eje Z y hacia dónde va X (sin `x`, el X del mundo) */
+  | { type: "frame"; origin: PointSpec; z: AxisSpec; x?: AxisSpec; flip_z?: boolean; flip_x?: boolean };
 
 export type ChamferSecond = { type: "distance"; distance: number; flip: boolean } | { type: "angle"; degrees: number; flip: boolean };
 
@@ -1155,19 +1166,25 @@ export type FeatureState =
 
 /** `ms`: lo que tardó la última vez que se calculó */
 /** `auto_scope`: piezas que eligió sola, sin alcance elegido (la más cercana a un agujero) */
-export type FeatureStatus = { id: number; ms?: number; auto_scope?: PartId[]; handle?: FeatureHandle } & FeatureState;
+export type FeatureStatus = { id: number; ms?: number; auto_scope?: PartId[]; handles?: FeatureHandle[] } & FeatureState;
 
 /**
- * Flecha de una operación en el visor (extrusión, chapa, agujero): desde
+ * Flecha de una operación en el visor (extrusión, chapa, agujero...): desde
  * `origin` hacia `dir` hasta `length` mm. `reversed`: el sentido con que se
- * calculó (el `reverse`/`flip` de la operación).
+ * calculó (el `reverse`/`flip` de la operación). Con `axis` es un arco (giros):
+ * centro `origin`, arranca hacia `dir` a `length` del centro y la punta está a
+ * `angle` grados. `slot`: qué número cambia si hay varias (desplazar: X, Y, Z).
+ * `move`: flecha que va con la pieza; arrastrar suma a lo que había.
  */
 export interface FeatureHandle {
   origin: P3;
   dir: P3;
   length: number;
   reversed: boolean;
-  kind: "blind" | "symmetric" | "two_sides" | "fixed";
+  kind: "blind" | "symmetric" | "two_sides" | "fixed" | "move";
+  axis?: P3;
+  angle?: number;
+  slot?: number;
 }
 
 /** Campo que cambia al arrastrar la flecha (ruta para los vínculos), o nada */
@@ -1178,27 +1195,54 @@ export function handleField(k: FeatureKind, h: FeatureHandle): string | undefine
   if (k.type === "sheet_metal" || k.type === "thicken" || k.type === "shell") return "kind.thickness";
   if (k.type === "move_face" || k.type === "chamfer") return "kind.distance";
   if (k.type === "fillet") return "kind.radius";
-  if (k.type === "pattern" && k.pattern.type === "linear") return "kind.pattern.spacing";
+  if (k.type === "pattern" && k.pattern.type === "linear") return h.slot === 1 ? "kind.pattern.second.spacing" : "kind.pattern.spacing";
+  if (k.type === "pattern" && k.pattern.type === "circular") return "kind.pattern.angle";
+  if (k.type === "revolve" || k.type === "rotate_face") return "kind.angle";
+  if (k.type === "transform" && k.motion.type === "rotate") return "kind.motion.angle";
+  if (k.type === "transform" && k.motion.type === "translate") return `kind.motion.vector.${h.slot ?? 0}`;
   return undefined;
 }
 
-/** Clic en la flecha: hacia el otro lado */
+/** Valor del campo de la flecha antes de arrastrarla (las que van con la pieza suman a esto) */
+export function handleValue(k: FeatureKind, h: FeatureHandle): number {
+  if (k.type === "transform" && k.motion.type === "translate") return k.motion.vector[h.slot ?? 0];
+  return h.axis ? (h.angle ?? 0) : h.reversed ? -h.length : h.length;
+}
+
+/** Clic en la flecha: hacia el otro lado (en los arcos, girar al revés) */
 export function flipByHandle(k: FeatureKind, h: FeatureHandle) {
+  if (h.kind === "move") return;
   if (k.type === "extrude" || k.type === "hole") k.reverse = !h.reversed;
   else if (k.type === "sheet_metal") k.flip = !h.reversed;
   else if (k.type === "move_face") k.distance = -k.distance;
   else if (k.type === "thicken") k.thickness = -k.thickness;
+  else if (k.type === "pattern" && k.pattern.type === "linear" && h.slot === 1 && k.pattern.second)
+    k.pattern.second.direction = k.pattern.second.direction.map((c) => -c || 0) as P3;
   else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.direction = k.pattern.direction.map((c) => -c || 0) as P3;
+  else if (k.type === "pattern" && k.pattern.type === "circular") k.pattern.angle = -k.pattern.angle;
+  else if ((k.type === "revolve" && h.kind === "blind") || k.type === "rotate_face") k.angle = -k.angle;
+  else if (k.type === "transform" && k.motion.type === "rotate") k.motion.angle = -k.motion.angle;
 }
 
 /**
- * Arrastrar la flecha `h` (la del comienzo) hasta `t` mm a lo largo de ella:
- * el largo nuevo; pasando del origen, se da vuelta (salvo simétrica y dos direcciones).
+ * Arrastrar la flecha `h` (la del comienzo) hasta `t` a lo largo de ella: mm
+ * (el largo nuevo; pasando del origen, se da vuelta salvo simétrica y dos
+ * direcciones), grados en los arcos, o el valor nuevo en las que van con la pieza.
  */
 export function dragByHandle(k: FeatureKind, h: FeatureHandle, t: number) {
   const len = Math.max(Math.abs(t), 0.01);
   const reversed = h.reversed !== t < 0;
-  if (k.type === "extrude" && "distance" in k.extent) {
+  if (h.axis) {
+    // Grados: con signo salvo la simétrica; nunca más de una vuelta
+    const deg = Math.max(-360, Math.min(360, t)) || 1;
+    if (k.type === "revolve") k.angle = h.kind === "symmetric" ? Math.min(2 * Math.abs(deg), 360) : h.kind === "two_sides" ? Math.abs(deg) : deg;
+    else if (k.type === "pattern" && k.pattern.type === "circular") k.pattern.angle = deg;
+    else if (k.type === "rotate_face") k.angle = deg;
+    else if (k.type === "transform" && k.motion.type === "rotate") k.motion.angle = deg;
+    return;
+  }
+  if (k.type === "transform" && k.motion.type === "translate") k.motion.vector[h.slot ?? 0] = t;
+  else if (k.type === "extrude" && "distance" in k.extent) {
     if (h.kind === "symmetric") k.extent.distance = 2 * len;
     else if (h.kind === "two_sides") k.extent.distance = len;
     else {
@@ -1216,6 +1260,7 @@ export function dragByHandle(k: FeatureKind, h: FeatureHandle, t: number) {
   else if (k.type === "shell") k.thickness = len;
   else if (k.type === "fillet") k.radius = len;
   else if (k.type === "chamfer") k.distance = len;
+  else if (k.type === "pattern" && k.pattern.type === "linear" && h.slot === 1 && k.pattern.second) k.pattern.second.spacing = len;
   else if (k.type === "pattern" && k.pattern.type === "linear") k.pattern.spacing = len;
 }
 
@@ -1464,6 +1509,7 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   plane: "Plano",
   axis: "Eje",
   point: "Punto",
+  frame: "Sistema de coordenadas",
   sweep: "Barrido",
   loft: "Transición",
   hole: "Agujero",
@@ -1719,8 +1765,8 @@ export const usesScan = (kind: FeatureKind) =>
 
 /** Operaciones de las que depende `kind` (mismo criterio que el backend) */
 export function dependencies(kind: FeatureKind): number[] {
-  const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" ? [a.feature] : []);
-  const plane = (p: PlaneSpec) => (p.type === "reference" ? [p.feature] : []);
+  const axis = (a: AxisSpec) => (a.type === "sketch_line" ? [a.sketch] : a.type === "reference" || a.type === "frame" ? [a.feature] : []);
+  const plane = (p: PlaneSpec) => (p.type === "reference" || p.type === "frame" ? [p.feature] : []);
   const pick = (r: RefPick): number[] =>
     r.type === "plane" ? plane(r.plane) : r.type === "point" ? point(r.point) : r.type === "axis" ? axis(r.axis) : [];
   const point = (p: PointSpec): number[] => (p.type === "reference" ? [p.feature] : p.type === "picked" ? p.refs.flatMap(pick) : []);
@@ -1753,6 +1799,8 @@ export function dependencies(kind: FeatureKind): number[] {
     }
     case "point":
       return point(kind.def);
+    case "frame":
+      return [...point(kind.origin), ...axis(kind.z), ...(kind.x ? axis(kind.x) : [])];
     case "sweep":
       return [kind.sketch, kind.path.type === "sketch" ? kind.path.sketch : kind.path.feature, ...(kind.guide ? [kind.guide.type === "sketch" ? kind.guide.sketch : kind.guide.feature] : [])];
     case "surface_sweep":
