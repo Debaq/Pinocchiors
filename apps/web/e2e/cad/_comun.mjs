@@ -98,6 +98,16 @@ export async function sketchOn(b) {
   throw new Error("no encontré un punto libre de la planta");
 }
 export const body = async () => (await evaluate()).body;
+/** Para los mensajes de error: si hay sketch abierto, qué está elegido, la
+ * herramienta, las operaciones y, con `[x, y]`, qué hay bajo ese punto */
+export const uiState = (b, xy) =>
+  b.eval(`JSON.stringify({
+    sketch: !!window.__cadUi.session(),
+    picks: window.__cadUi.picks?.().map((p) => p.kind),
+    tool: window.__cadUi.tool?.(),
+    features: window.__cadStore.doc()?.features.map((f) => f.kind.type),
+    ${xy ? `under: (() => { const h = window.__cadViewer.pick(${xy[0]}, ${xy[1]}, { faces: true, planes: true }); return h && (h.kind === "plane" ? "plano " + h.plane : h.kind); })(),` : ""}
+  })`);
 /** Acepta el diálogo de la operación recién creada (✓) */
 export async function accept(b, wait = 1500) {
   await b.eval(`document.querySelector('[aria-label="Aceptar"]')?.click()`);

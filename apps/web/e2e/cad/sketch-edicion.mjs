@@ -4,7 +4,7 @@
 
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { sleep } from "../cdp.mjs";
-import { call, near, begin, evaluate, sketchOn, body, accept, sketchText, setInput } from "./_comun.mjs";
+import { call, near, begin, evaluate, sketchOn, body, accept, sketchText, setInput, uiState } from "./_comun.mjs";
 import { siEsPrincipal } from "./_ejecutor.mjs";
 
 export const escenarios = {
@@ -1017,7 +1017,8 @@ export const escenarios = {
     // Sketch en la planta (z = 0, a media altura de la caja)
     await sketchOn(b);
     for (let t = 0; t < 20 && !(await b.eval(`!!window.__cadUi.session()`)); t++) await sleep(250);
-    if (!(await byTitle("Las curvas donde el plano del sketch corta el sólido"))) throw new Error("no está Intersección");
+    if (!(await b.eval(`!!window.__cadUi.session()`))) throw new Error(`no se abrió el sketch en la planta: ${await uiState(b)}`);
+    if (!(await byTitle("Las curvas donde el plano del sketch corta el sólido"))) throw new Error(`no está Intersección: ${await uiState(b)}`);
     await waitUses(4);
     if (!(await byTitle("El contorno del sólido visto desde la normal del plano, con los agujeros pasantes"))) throw new Error("no está Silueta");
     await waitUses(8);

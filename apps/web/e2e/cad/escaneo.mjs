@@ -70,9 +70,11 @@ export const escenarios = {
     await b.eval(`window.__nextPath = ${JSON.stringify(one)}`);
     await b.eval(`window.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }))`);
     for (let t = 0; t < 60 && !(await b.eval(`document.body.innerText.includes("escaneo-un-cubo")`)); t++) await sleep(250);
-    await sleep(1000);
+    // Al terminar de importar la app pasa sola a Preparar: esperar ese cambio
+    // (el panel de Remallar) antes de volver a Diseñar, para que no lo deshaga
+    for (let t = 0; t < 60 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Remallar"]')`)); t++) await sleep(250);
     await b.clickText("Diseñar");
-    await sleep(1000);
+    for (let t = 0; t < 40 && !(await b.eval(`!!document.querySelector('nav button[aria-label="Desde el escaneo"]')`)); t++) await sleep(250);
     await tab(b, "Desde el escaneo");
     for (let t = 0; t < 40 && (await scanCount()) !== 12; t++) await sleep(250);
     if ((await scanCount()) !== 12) throw new Error(`el escaneo nuevo no es la referencia: ${await scanCount()}`);

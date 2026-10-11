@@ -4988,6 +4988,14 @@ const SelectionBox: Component<{
     if (best >= 0) props.onChange(refs.filter((_, i) => i !== best));
   };
   const same = (a: EdgeRef, b: EdgeRef) => Math.hypot(a.point[0] - b.point[0], a.point[1] - b.point[1], a.point[2] - b.point[2]) < 1e-6;
+  /** En vivo: `fresh` ocupa primero los lugares de las referencias perdidas y lo que sobra va al final */
+  const addLive = (refs: EdgeRef[], fresh: EdgeRef[]) => {
+    const lost = (props.lost ?? []).filter((i) => i < refs.length).sort((a, c) => a - c);
+    const next = [...refs];
+    const rest = [...fresh];
+    for (const i of lost) if (rest.length) next[i] = rest.shift()!;
+    return [...next, ...rest];
+  };
   const activate = () => {
     const base = { prompt: PROMPTS[props.kind], owner: props.owner };
     const live = props.live;
@@ -4998,7 +5006,8 @@ const SelectionBox: Component<{
         kind: "edges",
         toggle: (r) => {
           const refs = props.refs as EdgeRef[];
-          if (!refs.some((x) => same(x, r))) props.onChange([...refs, r]);
+          // Lo nuevo reemplaza a la primera referencia perdida
+          if (!refs.some((x) => same(x, r))) props.onChange(addLive(refs, [r]));
         },
         live: {
           feature: live,
@@ -5007,7 +5016,7 @@ const SelectionBox: Component<{
           face: (edges) => {
             const refs = props.refs as EdgeRef[];
             const fresh = edges.filter((e) => !refs.some((x) => same(x, e)));
-            props.onChange(fresh.length ? [...refs, ...fresh] : refs.filter((x) => !edges.some((e) => same(x, e))));
+            props.onChange(fresh.length ? addLive(refs, fresh) : refs.filter((x) => !edges.some((e) => same(x, e))));
           },
         },
       });

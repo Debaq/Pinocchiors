@@ -3,7 +3,7 @@
 //   node apps/web/e2e/cad.mjs --grupo interfaz              (lo mismo)
 
 import { sleep } from "../cdp.mjs";
-import { call, near, begin, evaluate, sketchOn, body, accept, tab, tone, clickRow, setInput } from "./_comun.mjs";
+import { call, near, begin, evaluate, sketchOn, body, accept, tab, tone, clickRow, setInput, uiState } from "./_comun.mjs";
 import { siEsPrincipal } from "./_ejecutor.mjs";
 
 export const escenarios = {
@@ -875,7 +875,8 @@ export const escenarios = {
     await sleep(1500);
     if ((await dz()) !== 40) throw new Error("aceptar no guardó");
     near((await body()).volume, 16000, 1e-6, "aceptado");
-    await b.clickText("Deshacer");
+    // El botón es solo un ícono: se busca por su etiqueta
+    await b.eval(`document.querySelector('[aria-label="Deshacer"]').click()`);
     await sleep(1500);
     if ((await dz()) !== 20) throw new Error("deshacer no volvió en un paso");
     // Operación nueva cancelada: no queda en el árbol
@@ -958,13 +959,16 @@ export const escenarios = {
     await b.clickText("Terminar sketch");
     await sleep(1500);
     // Elegir solo la región del primer círculo y extruir
-    await b.click(...(await at([-15, -15, 0])), { wait: 500 });
+    if (await b.eval(`!!window.__cadUi.session()`)) throw new Error(`el sketch siguió abierto: ${await uiState(b)}`);
+    const region = await at([-15, -15, 0]);
+    const ante = await uiState(b, region);
+    await b.click(...region, { wait: 500 });
     // Sin el texto del botón Limpiar
     const summary = await b.eval(`(() => {
       const e = [...document.querySelectorAll("span")].find((x) => x.textContent?.startsWith("Elegido"));
       return [...(e?.childNodes ?? [])].filter((n) => n.nodeType === 3).map((n) => n.textContent).join("").trim();
     })()`);
-    if (summary !== "Elegido: 1 región") throw new Error(`selección: ${summary}`);
+    if (summary !== "Elegido: 1 región") throw new Error(`selección: «${summary}» · antes del clic ${ante} · después ${await uiState(b)}`);
     await b.clickText("Extrusión");
     await sleep(2000);
     await accept(b);
@@ -1003,7 +1007,7 @@ export const escenarios = {
     // Filas del Outliner: sangría y texto
     const rows = () => b.eval(`[...document.querySelectorAll("[data-outliner-row]")].map((d) => d.innerText.split("\\n")[0])`);
     const row = (label) => `[...document.querySelector("[data-outliner]").querySelectorAll("span")].find((x) => x.textContent === ${JSON.stringify(label)})`;
-    const expect = ["PLANOS", "Grid", "Planta (XY)", "Frente (XZ)", "Lateral (YZ)", "Plano 1", "OPERACIONES", "OBJETOS", "Pieza 1", "Pieza 2"];
+    const expect = ["PLANOS", "Grid", "Planta (XY)", "Frente (XZ)", "Lateral (YZ)", "Plano 1", "OPERACIONES", "OBJETOS", "Pieza 1", "Pieza 2", "PLANOS 2D"];
     const got = await rows();
     if (JSON.stringify(got) !== JSON.stringify(expect)) throw new Error(`árbol: ${JSON.stringify(got)}`);
     // Las operaciones son el árbol de Diseñar, dentro del grupo Operaciones
