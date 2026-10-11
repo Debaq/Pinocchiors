@@ -1556,6 +1556,27 @@ export function offsetPlane(base: "xy" | "xz" | "yz", offset: number): Plane {
   return { ...p, origin: [p.normal[0] * offset, p.normal[1] * offset, p.normal[2] * offset] };
 }
 
+/** Claves con el id de otra operación (un número) en lo que guarda una operación */
+const FEATURE_ID_KEYS = new Set(["sketch", "feature", "curve"]);
+
+/**
+ * Cambia, en el lugar, los ids de operaciones según `map` en todo lo que
+ * cuelga de `v` (sketch, feature, curve y las listas `features`): al pegar
+ * operaciones, lo que se referían entre sí apunta a las copias; lo demás queda.
+ */
+export function remapFeatureIds(v: unknown, map: Map<number, number>): void {
+  if (!v || typeof v !== "object") return;
+  if (Array.isArray(v)) return v.forEach((x) => remapFeatureIds(x, map));
+  const o = v as Record<string, unknown>;
+  for (const [k, x] of Object.entries(o)) {
+    if (typeof x === "number" && FEATURE_ID_KEYS.has(k)) {
+      if (map.has(x)) o[k] = map.get(x)!;
+    } else if (k === "features" && Array.isArray(x)) {
+      o[k] = x.map((i) => (typeof i === "number" && map.has(i) ? map.get(i)! : i));
+    } else remapFeatureIds(x, map);
+  }
+}
+
 function nextFeatureId(doc: CadDocument): number {
   const max = doc.features.reduce((m, f) => Math.max(m, f.id + 1), 0);
   return Math.max(max, doc.next_id ?? 0);
@@ -3400,6 +3421,8 @@ export interface ResolvedRefs {
 export function createCadStore() {
   const [status, setStatus] = createSignal<CadStatus>();
   const [committed, setDoc] = createSignal<CadDocument | null>(null);
+  // Operaciones copiadas del árbol (Ctrl+C), para pegarlas (Ctrl+V)
+  const [featureClip, setFeatureClip] = createSignal<Feature[]>();
   const [draft, setDraft] = createSignal<Draft>();
   // Herramienta de la operación en el diálogo (vista previa verde/roja)
   const [tool, setTool] = createSignal<{ mesh: CadMesh; op: BodyOp } | null>(null);
@@ -3697,6 +3720,43 @@ export function createCadStore() {
       insert(next);
       await openDraft({ feature: id, isNew: true, base: current, doc: next });
       return id;
+    },
+
+    featureClip,
+    /** Copia las operaciones (en el orden del árbol); cuántas */
+    copyFeatures(ids: number[]): number {
+      const list = (committed()?.features ?? []).filter((f) => ids.includes(f.id));
+      if (list.length) setFeatureClip(clone(list));
+      return list.length;
+    },
+    /**
+     * Pega operaciones (las copiadas, o `list`) al final o en la barra de
+     * retroceso: ids nuevos, lo que se referían entre sí apunta a las copias y
+     * lo de afuera queda igual (si ya no está, se ve como referencia perdida).
+     */
+    async pasteFeatures(list: Feature[] | undefined = featureClip()): Promise<number[]> {
+      if (!list?.length) return [];
+      if (draft()) await acceptDraft();
+      const ids: number[] = [];
+      await commit((d) => {
+        let next = nextFeatureId(d);
+        const map = new Map<number, number>();
+        for (const f of list) map.set(f.id, next++);
+        const copies = list.map((f) => {
+          const c = clone(f);
+          c.id = map.get(f.id)!;
+          c.name = `${f.name} (copia)`;
+          remapFeatureIds(c.kind, map);
+          if (c.scope) remapFeatureIds(c.scope, map);
+          return c;
+        });
+        const at = Math.min(d.rollback ?? d.features.length, d.features.length);
+        d.features.splice(at, 0, ...copies);
+        d.next_id = next;
+        if (d.rollback != null) d.rollback += copies.length;
+        ids.push(...copies.map((c) => c.id));
+      });
+      return ids;
     },
 
     updateFeature(id: number, mutate: (f: Feature) => void) {

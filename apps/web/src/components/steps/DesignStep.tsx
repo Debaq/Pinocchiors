@@ -1017,6 +1017,34 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
     const r = selRange();
     return rangeTo() !== undefined && r !== null && r[0] <= i && i <= r[1];
   };
+  // Copiar y pegar operaciones: Ctrl+C con la elegida (o el tramo con Mayús) y Ctrl+V
+  const selectedIds = () => {
+    const r = selRange();
+    return r ? doc()!.features.slice(r[0], r[1] + 1).map((f) => f.id) : [];
+  };
+  const copyOps = () => {
+    const n = store.copyFeatures(selectedIds());
+    props.ui.setMessage(n ? `${n === 1 ? "Operación copiada" : `${n} operaciones copiadas`}: Ctrl+V para pegar` : "Elegir en el árbol lo que se copia");
+  };
+  const pasteOps = async (list?: Feature[]) => {
+    const ids = await store.pasteFeatures(list);
+    if (ids.length) props.ui.setMessage(`${ids.length === 1 ? "Pegada una operación" : `Pegadas ${ids.length} operaciones`} (lo que usaban de afuera queda igual)`);
+  };
+  const onTreeKey = (e: KeyboardEvent) => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || props.ui.session()) return;
+    const t = e.target as HTMLElement | null;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    const key = e.key.toLowerCase();
+    if (key === "c" && store.selected() !== undefined) {
+      e.preventDefault();
+      copyOps();
+    } else if (key === "v" && store.featureClip()) {
+      e.preventDefault();
+      void pasteOps();
+    }
+  };
+  window.addEventListener("keydown", onTreeKey);
+  onCleanup(() => window.removeEventListener("keydown", onTreeKey));
   const [renaming, setRenaming] = createSignal<number>();
   /** Dónde se dibuja la línea del hueco mientras se arrastra */
   const dropGap = () => {
@@ -1180,6 +1208,17 @@ export const FeatureTree: Component<{ store: CadStore; ui: CadUi }> = (props) =>
                       </span>
                     </Show>
                     <span class="hidden group-hover:flex items-center gap-0.5" onClick={(e) => e.stopPropagation()}>
+                      <IconButton
+                        aria-label="Duplicar"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          const ids = inRange(i()) ? selectedIds() : [f().id];
+                          void pasteOps(doc()!.features.filter((x) => ids.includes(x.id)));
+                        }}
+                      >
+                        <Icons.Copy size={11} />
+                      </IconButton>
                       <IconButton aria-label="Subir" size="sm" variant="ghost" onClick={() => !store.moveFeature(f().id, -1) && props.ui.setMessage("No se puede: quedaría antes de lo que necesita")}>
                         <Icons.CaretDown size={10} class="rotate-180" />
                       </IconButton>
