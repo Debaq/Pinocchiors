@@ -960,7 +960,16 @@ export const escenarios = {
     await sleep(1500);
     // Elegir solo la región del primer círculo y extruir
     if (await b.eval(`!!window.__cadUi.session()`)) throw new Error(`el sketch siguió abierto: ${await uiState(b)}`);
-    const region = await at([-15, -15, 0]);
+    // Un punto del círculo que no tape el panel del sketch recién terminado
+    let region;
+    for (const [x, y] of [[-15, -15], [-13, -16], [-12, -17], [-17, -17], [-13, -13]]) {
+      const p = await at([x, y, 0]);
+      if (await b.eval(`document.elementFromPoint(${p[0]}, ${p[1]})?.tagName === "CANVAS"`)) {
+        region = p;
+        break;
+      }
+    }
+    if (!region) throw new Error("el panel tapa todo el círculo");
     const ante = await uiState(b, region);
     await b.click(...region, { wait: 500 });
     // Sin el texto del botón Limpiar
@@ -1018,7 +1027,7 @@ export const escenarios = {
     await sleep(500);
     if ((await b.eval(`window.__cadUi.openPart()`)) !== "51:0") throw new Error("no se abrió la pieza");
     // Ojo: el último botón de la fila
-    const eye = (label) => b.eval(`(() => { const bs = ${row(label)}.parentElement.querySelectorAll("button"); bs[bs.length - 1].click(); })()`);
+    const eye = async (label) => { const ok = await b.eval(`(() => { const r = ${row(label)}; if (!r) return false; const bs = r.parentElement.querySelectorAll("button"); bs[bs.length - 1].click(); return true; })()`); if (!ok) throw new Error(`no está la fila ${label}: ${JSON.stringify(await rows())}`); };
     await eye("Pieza 2");
     await sleep(1500);
     if (!(await b.eval(`window.__cadStore.doc().parts?.[0]?.hidden`))) throw new Error("no se ocultó la pieza");

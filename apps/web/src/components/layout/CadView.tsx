@@ -6,7 +6,7 @@ import type { LightSettings } from "../../lib/lightRig";
 import type { CameraPose } from "../../lib/cameraRig";
 import { parse as parseFont, type Font } from "opentype.js";
 import { layoutText, type Contour } from "../../lib/sketchText";
-import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
+import { CONSTRAINT_LABELS, editsAsSketch, geometryPoints, type Report3d, type Sketch3d, type Plane, addPoint, addText, removeText, textOf, constraintIds, ellipsePolyline, splineOf, splinePolyline, curvePolyline, constraintValue, isReference, isSolidPoint, leavingDirection, placeSnap, tangentArc, type CadStore, designMass, dragByHandle, flipByHandle, handleField, handleValue, partColor, partHidden, samePart, type FeatureHandle, type FeatureKind, type MeasureItem, type Measurement, type P2, type P3, type ScanOutline, type Sketch, type SketchConstraint } from "../../lib/cad";
 import { infer, solidRefs, SNAP_GLYPHS, type Snap, type SnapKind } from "../../lib/sketchSnap";
 import { applyFrame, clipCenter, invertFrame, measureConstraint, rotation, scaling, selectedEntities, splitEntityAt, transformSelection, translation, type Frame, type Xform } from "../../lib/sketchTransform";
 import { trimByStroke, trimRemoved } from "../../lib/sketchEdit";
@@ -2240,7 +2240,7 @@ export const CadView: Component<CadViewProps> = (props) => {
     const at = prePointer;
     const want = preselectWant();
     if (!viewer) return;
-    if (!at || !want || overCube() || handleHot()) return viewer.setPreselect(null);
+    if (!at || !want || overCube() || handleHot() >= 0) return viewer.setPreselect(null);
     const hit = viewer.pick(at.x, at.y, want);
     if (!hit || hit.kind === "scan") return viewer.setPreselect(null);
     // Un sketch solo va en caras planas: las curvas no se preseleccionan
@@ -2776,7 +2776,17 @@ export const CadView: Component<CadViewProps> = (props) => {
       const d = handleDrag;
       handleDrag = undefined;
       setDragAt(undefined);
-      if (!d.moved) void store.updateFeature(d.id, (f) => flipByHandle(f.kind, d.h));
+      if (d.moved) return;
+      // Clic sin arrastrar: da vuelta la flecha; si no tiene vuelta (el radio de un
+      // redondeo) y hay una caja eligiendo, el clic es para elegir lo que hay debajo
+      const kind = store.doc()?.features.find((x) => x.id === d.id)?.kind;
+      const flipped = kind && (JSON.parse(JSON.stringify(kind)) as FeatureKind);
+      if (flipped) flipByHandle(flipped, d.h);
+      if (kind && JSON.stringify(flipped) === JSON.stringify(kind)) {
+        if (ui.pick().kind !== "none") void pickClick(e);
+        return;
+      }
+      void store.updateFeature(d.id, (f) => flipByHandle(f.kind, d.h));
       return;
     }
     if (e.button === 0 && boxStart) finishBox(e.clientX, e.clientY);
@@ -3423,7 +3433,7 @@ export const CadView: Component<CadViewProps> = (props) => {
         ref={container}
         class={clsx(
           "absolute inset-0",
-          overCube() || handleHot() ? "cursor-pointer" : ui.session() ? TOOL_CURSOR[ui.tool()] ?? "cursor-crosshair" : ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
+          overCube() || handleHot() >= 0 ? "cursor-pointer" : ui.session() ? TOOL_CURSOR[ui.tool()] ?? "cursor-crosshair" : ui.pick().kind !== "none" ? "cursor-crosshair" : "cursor-default",
         )}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

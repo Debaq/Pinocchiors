@@ -494,12 +494,15 @@ Los 7 escenarios hechos en la nube que fallaban en la PC ya pasan:
 - **Agujero cónico en pulgadas**: la tabla guarda la broca en mm con tres decimales (5,105, no
   5,1054); la prueba usaba el valor sin redondear.
 
-Fallan también en la base (70b8a89), en el grupo «interfaz»; quedan para más adelante:
+También se repararon las cuatro del grupo «interfaz» que fallaban en la base:
 
-| Escenario | Mensaje | Probable |
-|---|---|---|
-| cajas de selección: sumar, quitar y volver a elegir | tras quitar con clic: Arista 1,Arista 2 | la flecha del radio (manipuladores, 18341fb) queda sobre la primera arista: el clic la arrastra en vez de quitar el redondeo |
-| preselección: lo que está bajo el mouse se resalta | el plano bajo el mouse no se preselecciona: null | sin revisar |
+- **Preselección y cursor**: `handleHot` pasó de booleano a índice (−1 sin flecha) en 18341fb y
+  `|| handleHot()` daba verdadero siempre: nada se preseleccionaba y el cursor quedaba en manito.
+- **Clic sobre una flecha sin vuelta** (el radio de un redondeo) con una caja eligiendo: el clic
+  pasa a elegir lo de abajo (antes no hacía nada; quitar el redondeo de una arista no andaba).
+- **Selección como Onshape** (prueba): el panel del sketch recién terminado tapaba el centro del
+  círculo; se hace clic en un punto de la región que no esté tapado.
+- **Outliner**: pasa; si una fila no aparece, el error ahora la nombra.
 
 ## Riesgos
 
