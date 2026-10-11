@@ -80,6 +80,55 @@ pub fn size(name: &str) -> Option<&'static MetricSize> {
     SIZES.iter().find(|s| s.name.eq_ignore_ascii_case(name.trim()))
 }
 
+/// Rosca unificada en pulgadas (UNC gruesa, UNF fina): perfil de 60° como
+/// la métrica, así que sirve el mismo filete. Medidas en mm.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct InchThread {
+    pub name: &'static str,
+    pub d: f64,
+    pub pitch: f64,
+}
+
+macro_rules! inch {
+    ($n:literal, $d:literal, $tpi:literal) => {
+        InchThread { name: $n, d: $d * 25.4, pitch: 25.4 / $tpi as f64 }
+    };
+}
+
+/// De #2 a 1/2": diámetro mayor (pulgadas) e hilos por pulgada.
+pub const INCH: &[InchThread] = &[
+    inch!("#2-56 UNC", 0.086, 56),
+    inch!("#2-64 UNF", 0.086, 64),
+    inch!("#4-40 UNC", 0.112, 40),
+    inch!("#4-48 UNF", 0.112, 48),
+    inch!("#6-32 UNC", 0.138, 32),
+    inch!("#6-40 UNF", 0.138, 40),
+    inch!("#8-32 UNC", 0.164, 32),
+    inch!("#8-36 UNF", 0.164, 36),
+    inch!("#10-24 UNC", 0.19, 24),
+    inch!("#10-32 UNF", 0.19, 32),
+    inch!("1/4-20 UNC", 0.25, 20),
+    inch!("1/4-28 UNF", 0.25, 28),
+    inch!("5/16-18 UNC", 0.3125, 18),
+    inch!("5/16-24 UNF", 0.3125, 24),
+    inch!("3/8-16 UNC", 0.375, 16),
+    inch!("3/8-24 UNF", 0.375, 24),
+    inch!("7/16-14 UNC", 0.4375, 14),
+    inch!("7/16-20 UNF", 0.4375, 20),
+    inch!("1/2-13 UNC", 0.5, 13),
+    inch!("1/2-20 UNF", 0.5, 20),
+];
+
+/// Rosca en pulgadas por su nombre ("1/4-20 UNC").
+pub fn inch(name: &str) -> Option<&'static InchThread> {
+    INCH.iter().find(|s| s.name.eq_ignore_ascii_case(name.trim()))
+}
+
+/// Rosca en pulgadas de este diámetro y paso (mm).
+pub fn inch_by_spec(d: f64, pitch: f64) -> Option<&'static InchThread> {
+    INCH.iter().find(|s| (s.d - d).abs() < 1e-6 && (s.pitch - pitch).abs() < 1e-6)
+}
+
 /// La medida de diámetro nominal `d` (las cabezas y tuercas salen de ella).
 pub fn size_by_nominal(d: f64) -> Option<&'static MetricSize> {
     SIZES.iter().find(|s| (s.d - d).abs() < 1e-6)

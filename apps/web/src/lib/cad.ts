@@ -533,7 +533,9 @@ export type PatternKind =
   /** Copias trasladadas según una tabla de desplazamientos (mm) */
   | { type: "table"; offsets: P3[] }
   /** Copias en grilla (cuadrada o hexagonal) que llenan regiones de un sketch */
-  | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number };
+  | { type: "fill"; sketch: number; regions: RegionSelection; spacing: number; hex: boolean; margin: number }
+  /** Una copia en cada punto suelto de un sketch (o en `points`), desde el punto más cercano al original */
+  | { type: "points"; sketch: number; points: number[] };
 
 /** Con qué se parte: un plano u otra pieza (una superficie curva, por ejemplo) */
 export type SplitTool = { type: "plane"; plane: PlaneSpec } | { type: "part"; part: PartId };
@@ -556,7 +558,8 @@ export type FeatureKind =
       /** Extrusión delgada: espesor de la pared */
       thin?: number | null;
     }
-  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent }
+  /** `thin`: revolución delgada, una pared de ese espesor siguiendo el contorno */
+  | { type: "revolve"; sketch: number; regions: RegionSelection; axis: AxisSpec; angle: number; op: BodyOp; extent?: RevolveExtent; thin?: number | null }
   /** `link`: tornillo o tuerca puesto en otra rosca (el marco de arriba no se usa) */
   | { type: "primitive"; shape: PrimitiveShape; origin: P3; z: P3; x: P3; op: BodyOp; link?: ThreadLink | null }
   /** Con `radius2`, variable de `radius` al comienzo de cada arista a `radius2` al final */
@@ -600,7 +603,12 @@ export type FeatureKind =
       op: BodyOp;
     }
   /** Hélice de referencia (camino de resortes y roscas) */
-  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean }
+  /** `radius2`: cónica (el radio pasa de `radius` a `radius2`); `flat`: espiral plana (sin avance) */
+  | { type: "helix"; axis: AxisSpec; radius: number; pitch: number; turns: number; left: boolean; radius2?: number | null; flat?: boolean }
+  /** Las regiones cerradas de un sketch como superficie plana */
+  | { type: "surface_planar"; sketch: number; regions: RegionSelection }
+  /** Copia desfasada de superficies (o de la piel de sólidos), como pieza nueva */
+  | { type: "surface_offset"; parts: PartId[]; distance: number }
   /** Espesor a caras del sólido */
   | { type: "thicken"; faces: FaceRef[]; thickness: number; op: BodyOp }
   /** Caras planas movidas a lo largo de su normal (afuera suma, adentro resta) */
@@ -623,7 +631,12 @@ export type FeatureKind =
       points: number[];
       diameter: number;
       depth: { type: "blind"; depth: number } | { type: "through_all" };
-      style: { type: "simple" } | { type: "counterbore"; diameter: number; depth: number } | { type: "countersink"; diameter: number; angle: number };
+      /** `tapered`: el agujero se angosta hacia el fondo; `angle` es el de la pared con el eje (NPT 1°47' = 1,7833) */
+      style:
+        | { type: "simple" }
+        | { type: "counterbore"; diameter: number; depth: number }
+        | { type: "countersink"; diameter: number; angle: number }
+        | { type: "tapered"; angle: number };
       tip_angle: number;
       thread?: string | null;
       /** Rosca modelada (el filete de verdad, para imprimir) */
@@ -1360,6 +1373,8 @@ export const FEATURE_LABELS: Record<FeatureKind["type"], string> = {
   face_to_scan: "Cara al escaneo",
   scale: "Escala",
   transform: "Mover cuerpo",
+  surface_planar: "Superficie plana",
+  surface_offset: "Superficie desfasada",
 };
 
 /**
@@ -1380,6 +1395,45 @@ export const METRIC_HOLES: { size: string; nominal: number; pitch: number; tap: 
   { size: "M16", nominal: 16, pitch: 2, tap: 14, clearance: 17.5, cbore: 26, cboreDepth: 16, csink: 32.4 },
 ];
 
+export type HoleSize = (typeof METRIC_HOLES)[number] & { csinkAngle?: number };
+
+/**
+ * Roscas unificadas en pulgadas (UNC gruesa y UNF fina, de #2 a 1/2"), en mm:
+ * broca para roscar, pasante (ajuste normal), caja para cabeza cilíndrica y
+ * avellanado a 82°. Los nombres son los del backend ("1/4-20 UNC").
+ */
+export const INCH_HOLES: HoleSize[] = (
+  [
+  ["#2", 0.086, 56, 64, 0.07, 0.07, 0.096, 0.188, 0.086, 0.172],
+  ["#4", 0.112, 40, 48, 0.089, 0.0935, 0.12, 0.219, 0.112, 0.225],
+  ["#6", 0.138, 32, 40, 0.1065, 0.113, 0.144, 0.281, 0.138, 0.279],
+  ["#8", 0.164, 32, 36, 0.136, 0.136, 0.17, 0.312, 0.164, 0.332],
+  ["#10", 0.19, 24, 32, 0.1495, 0.159, 0.196, 0.375, 0.19, 0.385],
+  ["1/4", 0.25, 20, 28, 0.201, 0.213, 0.266, 0.438, 0.25, 0.507],
+  ["5/16", 0.3125, 18, 24, 0.257, 0.272, 0.328, 0.531, 0.312, 0.635],
+  ["3/8", 0.375, 16, 24, 0.3125, 0.332, 0.397, 0.625, 0.375, 0.762],
+  ["7/16", 0.4375, 14, 20, 0.368, 0.3906, 0.469, 0.719, 0.438, 0.812],
+  ["1/2", 0.5, 13, 20, 0.4219, 0.4531, 0.531, 0.812, 0.5, 0.875],
+  ] as [string, number, number, number, number, number, number, number, number, number][]
+).flatMap(([name, d, unc, unf, tapC, tapF, clear, cbore, cboreDepth, csink]) =>
+  (
+    [
+      [unc, "UNC", tapC],
+      [unf, "UNF", tapF],
+    ] as [number, string, number][]
+  ).map(([tpi, series, tap]) => ({
+    size: `${name}-${tpi} ${series}`,
+    nominal: d * 25.4,
+    pitch: 25.4 / tpi,
+    tap: +(tap * 25.4).toFixed(3),
+    clearance: +(clear * 25.4).toFixed(3),
+    cbore: +(cbore * 25.4).toFixed(3),
+    cboreDepth: +(cboreDepth * 25.4).toFixed(3),
+    csink: +(csink * 25.4).toFixed(3),
+    csinkAngle: 82,
+  })),
+);
+
 /** Alto de la tuerca hexagonal ISO 4032 por medida */
 export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4, M4: 3.2, M5: 4.7, M6: 5.2, M8: 6.8, M10: 8.4, M12: 10.8, M16: 14.8 };
 
@@ -1387,8 +1441,10 @@ export const NUT_HEIGHT: Record<string, number> = { M2: 1.6, "M2.5": 2, M3: 2.4,
  * Largo de tornillo para atravesar `depth` mm: con tuerca (pasante) suma la
  * tuerca y dos pasos; si no, el largo normal más cercano por arriba.
  */
-/** "M6", "M8×1", "M6 izq." */
+/** "M6", "M8×1", "M6 izq.", "1/4-20 UNC" */
 export function threadName(s: ThreadSpec): string {
+  const inch = INCH_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-6);
+  if (inch) return `${inch.size}${s.left ? " izq." : ""}`;
   const coarse = METRIC_HOLES.find((m) => Math.abs(m.nominal - s.nominal) < 1e-6 && Math.abs(m.pitch - s.pitch) < 1e-9);
   const d = String(+s.nominal.toFixed(3)).replace(".", ",");
   return `${coarse ? coarse.size : `M${d}×${String(s.pitch).replace(".", ",")}`}${s.left ? " izq." : ""}`;
@@ -1559,13 +1615,24 @@ export function dependencies(kind: FeatureKind): number[] {
       return [kind.sketch];
     case "extrude":
       return [kind.sketch, ...(kind.extent.type === "up_to_vertex" ? point(kind.extent.point) : [])];
+    case "surface_planar":
+      return [kind.sketch];
+    case "surface_offset":
+      return kind.parts.map((p) => p.feature);
     case "sheet_metal":
       return [kind.sketch];
     case "revolve":
       return [kind.sketch, ...axis(kind.axis)];
     case "pattern": {
       const p = kind.pattern;
-      const extra = p.type === "circular" ? axis(p.axis) : p.type === "curve" ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature] : [];
+      const extra =
+        p.type === "circular"
+          ? axis(p.axis)
+          : p.type === "curve"
+            ? [p.path.type === "sketch" ? p.path.sketch : p.path.feature]
+            : p.type === "fill" || p.type === "points"
+              ? [p.sketch]
+              : [];
       return [...kind.features, ...extra];
     }
     case "scale":

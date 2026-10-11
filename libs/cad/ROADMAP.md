@@ -706,3 +706,8 @@ cargo test -p cad-model
   (`Mirror.op`), patrón lineal en dos direcciones y copias omitidas (`Linear.second`,
   `Pattern.skip`), revolución simétrica o a dos ángulos (`Revolve.extent`) y extrusión hasta un
   punto (`Extent::UpToVertex`). Pruebas en `model/tests/operations.rs` y e2e «operaciones:».
+- **2026-10-11 Operaciones fáciles, segunda tanda** ([PLAN_OPERACIONES.md](PLAN_OPERACIONES.md)):
+  agujero cónico (`HoleStyle::Tapered`), roscas UNC/UNF de #2 a 1/2" (tabla en
+  `standard::INCH` y en el diálogo, «Sistema»), espiral plana y hélice cónica (`Helix.radius2`,
+  `flat`), superficie plana y desfasada (`cad_offset_shape`), patrón por puntos de un sketch y
+  revolución delgada. Pruebas en `model/tests/operations.rs` y `hole.rs`; e2e «operaciones:».

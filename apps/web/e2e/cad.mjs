@@ -7647,6 +7647,210 @@ const scenarios = {
     if (k.extent.type !== "up_to_vertex" || k.extent.point.point[2] !== -6) throw new Error(`guardado: ${JSON.stringify(k.extent)}`);
     await b.shot("operaciones_extrusion_hasta_punto");
   },
+
+  async "operaciones: agujero cónico y rosca en pulgadas"(b) {
+    await begin(b);
+    // Caja de 20 (z de −10 a 10) y un sketch arriba con un punto en el centro
+    await b.clickText("Caja");
+    await sleep(1500);
+    await accept(b);
+    await b.eval(`__cadStore.commit((d) => {
+      d.features.push({ id: d.next_id, name: "Centros", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 10, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 0, y: 0 }], entities: [{ id: 2, geometry: { type: "point", point: 1 }, construction: false }], constraints: [], next_id: 3, origin: 0 } } });
+      d.next_id += 1;
+    })`);
+    await sleep(1500);
+    await b.clickText("Agujero");
+    await lastIs(b, "hole");
+    await sleep(2000);
+    const frustum = (h, r1, r2) => ((Math.PI * h) / 3) * (r1 * r1 + r1 * r2 + r2 * r2);
+    const tan = (deg) => Math.tan((deg * Math.PI) / 180);
+    // M6 pasante (Ø 6,6) cónico a 1,7833° (NPT): se angosta los 20 de alto
+    await chooseOption(b, "Tipo", "Cónico");
+    near((await body()).volume, 8000 - frustum(20, 3.3, 3.3 - 20 * tan(1.7833)), 0.05, "cónico NPT");
+    await setInput(b, "Cono: ángulo", 3);
+    await sleep(2000);
+    near((await body()).volume, 8000 - frustum(20, 3.3, 3.3 - 20 * tan(3)), 0.05, "cónico a 3°");
+    // Tanto ángulo que se cierra: error
+    await setInput(b, "Cono: ángulo", 20);
+    await sleep(2000);
+    if ((await evaluate()).status.at(-1).state !== "error") throw new Error("el cono cerrado no dio error");
+    await setInput(b, "Cono: ángulo", 3);
+    await sleep(2000);
+    // Pulgadas: la medida más parecida a M6 es 1/4" (pasante de 0,266")
+    await chooseOption(b, "Sistema", "Pulgadas (UNC/UNF)");
+    let k = await lastKind(b);
+    near(k.diameter, 0.266 * 25.4, 1e-6, "pasante de 1/4\"");
+    // Para roscar 1/4-20 UNC: broca #7 (0,201") y la rosca cosmética
+    await chooseOption(b, "Para", "Roscar (rosca cosmética)");
+    k = await lastKind(b);
+    if (k.thread !== "1/4-20 UNC") throw new Error(`rosca: ${k.thread}`);
+    const r = (0.201 * 25.4) / 2;
+    near((await body()).volume, 8000 - frustum(20, r, r - 20 * tan(3)), 0.05, "broca de 1/4-20 cónica");
+    if (!(await b.eval(`document.body.innerText.includes("Rosca 1/4-20 UNC")`))) throw new Error("no se muestra la rosca");
+    await accept(b);
+    const threads = (await evaluate()).threads;
+    if (threads.length !== 1) throw new Error(`roscas: ${threads.length}`);
+    near(threads[0].spec.nominal, 6.35, 1e-6, "rosca de 1/4\"");
+    near(threads[0].spec.pitch, 1.27, 1e-6, "20 hilos por pulgada");
+    await b.shot("operaciones_agujero_conico_pulgadas");
+  },
+
+  async "operaciones: patrón por puntos de un sketch"(b) {
+    await begin(b);
+    // Placa de 100 × 60 × 2, agujero de Ø4 en (10, 10) y un sketch con cuatro puntos (el primero sobre el agujero)
+    const doc = await call("cad_get_document");
+    const id = () => doc.next_id++;
+    const P = [[0, 0], [100, 0], [100, 60], [0, 60]];
+    const plate = id();
+    doc.features.push({
+      id: plate, name: "Placa", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    doc.features.push({ id: id(), name: "Extrusión", suppressed: false, kind: { type: "extrude", sketch: plate, regions: { type: "all" }, extent: { type: "blind", distance: 2 }, reverse: false, op: "join", draft: 0, thin: null } });
+    const hs = id();
+    doc.features.push({ id: hs, name: "Círculo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, { id: 1, x: 10, y: 10 }], entities: [{ id: 2, geometry: { type: "circle", center: 1, radius: 2 } }], constraints: [], next_id: 3, origin: 0 } } });
+    const hole = id();
+    doc.features.push({ id: hole, name: "Agujero", suppressed: false, kind: { type: "extrude", sketch: hs, regions: { type: "all" }, extent: { type: "through_all" }, reverse: false, op: "cut", draft: 0, thin: null } });
+    const Q = [[10, 10], [40, 10], [70, 30], [90, 50]];
+    doc.features.push({
+      id: id(), name: "Puntos", suppressed: false,
+      kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch: { points: [{ id: 0, x: 0, y: 0 }, ...Q.map(([x, y], i) => ({ id: i + 1, x, y }))], entities: Q.map((_, i) => ({ id: 11 + i, geometry: { type: "point", point: i + 1 }, construction: false })), constraints: [], next_id: 20, origin: 0 } },
+    });
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    const holeV = Math.PI * 4 * 2;
+    await b.eval(`window.__cadStore.select(${hole})`);
+    await b.clickText("Patrón por puntos");
+    await lastIs(b, "pattern");
+    await sleep(2500);
+    const k = await lastKind(b);
+    if (k.pattern.type !== "points" || JSON.stringify(k.features) !== `[${hole}]`) throw new Error(`patrón: ${JSON.stringify(k)}`);
+    // En el punto del original no se copia: 4 agujeros
+    near((await body()).volume, 12000 - 4 * holeV, 1e-3, "un agujero por punto");
+    if (!(await b.eval(`document.body.innerText.includes("4 puntos sueltos")`))) throw new Error("no dice cuántos puntos");
+    // Omitir la segunda copia (el punto de (70, 30))
+    await setInput(b, "Omitir copias", "2");
+    await sleep(2000);
+    near((await body()).volume, 12000 - 3 * holeV, 1e-3, "sin la copia 2");
+    await accept(b);
+    await b.shot("operaciones_patron_por_puntos");
+  },
+
+  async "operaciones: revolución delgada"(b) {
+    await begin(b);
+    // En el frente: rectángulo x 10..15, z 0..20; gira alrededor de Z
+    const doc = await call("cad_get_document");
+    const P = [[10, 0], [15, 0], [15, 20], [10, 20]];
+    const points = [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))];
+    const line = (id, a, c) => ({ id, geometry: { type: "line", start: a, end: c } });
+    const sketch = { points, entities: [line(7, 1, 2), line(8, 2, 3), line(9, 3, 4), line(10, 4, 1)], constraints: [], next_id: 12, origin: 0 };
+    doc.features.push({ id: doc.next_id, name: "Perfil", suppressed: false, kind: { type: "sketch", plane: { type: "xz" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Revolución");
+    await lastIs(b, "revolve");
+    await sleep(2000);
+    await b.clickText("Delgada (solo una pared)");
+    await sleep(2000);
+    // Banda de 1 alrededor del rectángulo de 5 × 20 (esquinas de afuera redondeadas), centrada en x = 12,5: Pappus
+    const band = (t) => 100 + (t / 2) * 50 + Math.PI * (t / 2) ** 2 - (5 - t) * (20 - t);
+    let v = 2 * Math.PI * 12.5 * band(1);
+    near((await body()).volume, v, v * 1e-3, "delgada de 1");
+    await setInput(b, "Espesor", 2);
+    await sleep(2000);
+    v = 2 * Math.PI * 12.5 * band(2);
+    near((await body()).volume, v, v * 1e-3, "delgada de 2");
+    // Con 90° simétrica sigue siendo delgada: un cuarto
+    await setInput(b, "Ángulo", 90);
+    await sleep(1500);
+    await chooseOption(b, "Hacia", "Simétrica");
+    near((await body()).volume, v / 4, v * 1e-3, "un cuarto, delgada");
+    await accept(b);
+    if ((await lastKind(b)).thin !== 2) throw new Error("no quedó delgada");
+    await b.shot("operaciones_revolucion_delgada");
+  },
+
+  async "operaciones: espiral plana y hélice cónica"(b) {
+    await begin(b);
+    await b.clickText("Espiral");
+    await lastIs(b, "helix");
+    await sleep(1500);
+    const curve = async () => {
+      const refs = (await evaluate()).references;
+      const c = refs.find((r) => r.kind === "curve");
+      if (!c) throw new Error(`sin curva: ${JSON.stringify(refs.map((r) => r.kind))}`);
+      return c.points;
+    };
+    const radial = (p) => Math.hypot(p[0], p[1]);
+    // Espiral plana de radio 2 a 20 en 4 vueltas: todo en z = 0
+    let pts = await curve();
+    if (pts.some((p) => Math.abs(p[2]) > 1e-6)) throw new Error("la espiral no es plana");
+    near(Math.max(...pts.map(radial)), 20, 0.05, "radio final");
+    near(Math.min(...pts.map(radial)), 2, 0.05, "radio inicial");
+    // Cónica: sin «Espiral plana», sube 4 vueltas de 5
+    await b.clickText("Espiral plana");
+    await sleep(1500);
+    pts = await curve();
+    const top = pts.reduce((a, p) => (p[2] > a[2] ? p : a));
+    near(top[2], 20, 1e-3, "alto de la cónica");
+    near(radial(top), 20, 0.05, "arriba, el radio final");
+    await setInput(b, "Radio final", 8);
+    await sleep(1500);
+    pts = await curve();
+    near(radial(pts.reduce((a, p) => (p[2] > a[2] ? p : a))), 8, 0.05, "radio final 8");
+    // Sin «Cónica»: la hélice de siempre, de radio 2
+    await b.clickText("Cónica (dos radios)");
+    await sleep(1500);
+    pts = await curve();
+    if (pts.some((p) => Math.abs(radial(p) - 2) > 0.05)) throw new Error("la hélice no quedó de radio 2");
+    await accept(b);
+    const k = await lastKind(b);
+    if (k.radius2 != null || k.flat) throw new Error(`guardado: ${JSON.stringify(k)}`);
+  },
+
+  async "operaciones: superficie plana y desfasada"(b) {
+    await begin(b);
+    // Rectángulo de 10 × 20 en la planta
+    const doc = await call("cad_get_document");
+    const P = [[0, 0], [10, 0], [10, 20], [0, 20]];
+    const sketch = {
+      points: [{ id: 0, x: 0, y: 0 }, ...P.map(([x, y], i) => ({ id: i + 1, x, y }))],
+      entities: P.map((_, i) => ({ id: 11 + i, geometry: { type: "line", start: i + 1, end: ((i + 1) % 4) + 1 } })),
+      constraints: [], next_id: 20, origin: 0,
+    };
+    doc.features.push({ id: doc.next_id, name: "Rectángulo", suppressed: false, kind: { type: "sketch", plane: { type: "xy" }, offset: 0, sketch } });
+    doc.next_id += 1;
+    await call("cad_set_document", { document: doc });
+    await b.eval(`window.__cadStore.reload()`);
+    await sleep(1500);
+    await b.clickText("Superficie plana");
+    await lastIs(b, "surface_planar");
+    await sleep(2000);
+    await accept(b);
+    let ps = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts))`);
+    if (ps.length !== 1 || !ps[0].surface) throw new Error(`plana: ${JSON.stringify(ps.map((p) => p.surface))}`);
+    near(ps[0].area, 200, 1e-6, "área de la plana");
+    // Desfasada 5 (por defecto): otra igual a 5 del plano
+    await b.clickText("Superficie desfasada");
+    await lastIs(b, "surface_offset");
+    await sleep(2000);
+    ps = await b.eval(`JSON.parse(JSON.stringify(window.__cadStore.result().parts))`);
+    if (ps.length !== 2 || !ps[1].surface) throw new Error(`desfasada: ${ps.length} piezas`);
+    near(ps[1].area, 200, 1e-3, "área de la desfasada");
+    const reach = async () => {
+      const r = await body();
+      return Math.max(Math.abs(r.bbox_min[2]), Math.abs(r.bbox_max[2]));
+    };
+    near(await reach(), 5, 1e-6, "a 5 del plano");
+    await setInput(b, "Distancia", 3);
+    await sleep(2000);
+    near(await reach(), 3, 1e-6, "a 3 del plano");
+    await accept(b);
+    await b.shot("operaciones_superficie_plana_desfasada");
+  },
 };
 
 const filter = process.argv[2];

@@ -98,7 +98,7 @@ fn spring_along_a_helix_and_thicken() {
     // Hélice de radio 10, paso 5, 2 vueltas sobre Z; perfil: círculo de radio 1 en
     // el plano XZ donde arranca la hélice
     let mut doc = Document::new();
-    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false });
+    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false, radius2: None, flat: false });
     let ev = doc.evaluate();
     let Some(RefGeom::Curve { points }) = ev.references.get(&hx) else { panic!("sin curva") };
     let start = points[0];

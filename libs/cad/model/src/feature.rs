@@ -287,6 +287,9 @@ pub struct Revolve {
     /// Hacia dónde gira `angle` desde el plano del sketch.
     #[serde(default, skip_serializing_if = "RevolveExtent::is_one")]
     pub extent: RevolveExtent,
+    /// Revolución delgada: una pared de este espesor siguiendo el contorno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thin: Option<f64>,
 }
 
 /// Cómo se reparte el giro de una revolución alrededor del plano del sketch.
@@ -428,6 +431,14 @@ pub enum PatternKind {
     Curve { path: SweepPath, count: u32 },
     /// Copias trasladadas según una tabla de desplazamientos (mm).
     Table { offsets: Vec<P3> },
+    /// Una copia en cada punto suelto de un sketch (o en los de `points`),
+    /// trasladada desde el punto más cercano a la operación original (ahí no
+    /// se copia).
+    Points {
+        sketch: FeatureId,
+        #[serde(default)]
+        points: Vec<u32>,
+    },
     /// Copias en grilla (cuadrada o hexagonal) que llenan regiones de un
     /// sketch, a `spacing` entre centros y a `margin` como mínimo del borde.
     /// La grilla pasa por la operación original (su centro, en el plano).
@@ -644,7 +655,9 @@ pub enum FeatureKind {
     Loft(Loft),
     /// Agujeros en los puntos de un sketch.
     Hole(Hole),
-    /// Curva helicoidal de referencia (camino de resortes y roscas).
+    /// Curva helicoidal de referencia (camino de resortes y roscas). Con
+    /// `radius2`, cónica (el radio pasa de `radius` a `radius2`); con `flat`,
+    /// espiral plana de Arquímedes (sin avance: `pitch` no cuenta).
     Helix {
         axis: AxisSpec,
         radius: f64,
@@ -652,6 +665,10 @@ pub enum FeatureKind {
         turns: f64,
         #[serde(default)]
         left: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        radius2: Option<f64>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        flat: bool,
     },
     /// Mueve caras planas a lo largo de su normal (afuera suma, adentro resta).
     MoveFace { faces: Vec<FaceRef>, distance: f64 },
@@ -777,6 +794,15 @@ pub enum FeatureKind {
         #[serde(default)]
         reverse: bool,
     },
+    /// Superficie plana: las regiones cerradas de un sketch como caras.
+    SurfacePlanar {
+        sketch: FeatureId,
+        #[serde(default)]
+        regions: RegionSelection,
+    },
+    /// Copia desfasada de superficies (o de la piel de sólidos) a `distance`
+    /// sobre su normal (negativo, hacia el otro lado); queda como pieza nueva.
+    SurfaceOffset { parts: Vec<PartId>, distance: f64 },
     /// Superficie que deja una curva de un sketch girada alrededor de un eje.
     SurfaceRevolve {
         sketch: FeatureId,
@@ -941,6 +967,9 @@ pub enum HoleStyle {
     Counterbore { diameter: f64, depth: f64 },
     /// Avellanado: diámetro en la superficie y ángulo total (grados).
     Countersink { diameter: f64, angle: f64 },
+    /// Cónico: el agujero se angosta hacia el fondo; `angle` es el de la
+    /// pared con el eje (grados; NPT 1°47' = 1,7833).
+    Tapered { angle: f64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1058,7 +1087,8 @@ impl FeatureKind {
                 d.extend(axis_dep(&r.axis));
                 d
             }
-            FeatureKind::SurfaceExtrude { sketch, .. } => vec![*sketch],
+            FeatureKind::SurfaceExtrude { sketch, .. } | FeatureKind::SurfacePlanar { sketch, .. } => vec![*sketch],
+            FeatureKind::SurfaceOffset { parts, .. } => parts.iter().map(|p| p.feature).collect(),
             FeatureKind::SurfaceRevolve { sketch, axis, .. } => {
                 let mut d = vec![*sketch];
                 d.extend(axis_dep(axis));
@@ -1079,7 +1109,7 @@ impl FeatureKind {
                     PatternKind::Circular { axis, .. } => d.extend(axis_dep(axis)),
                     PatternKind::Curve { path: SweepPath::Sketch { sketch, .. }, .. } => d.push(*sketch),
                     PatternKind::Curve { path: SweepPath::Curve { feature }, .. } => d.push(*feature),
-                    PatternKind::Fill { sketch, .. } => d.push(*sketch),
+                    PatternKind::Fill { sketch, .. } | PatternKind::Points { sketch, .. } => d.push(*sketch),
                     _ => {}
                 }
                 d
@@ -1139,6 +1169,7 @@ impl FeatureKind {
             FeatureKind::Sweep(_) => "Barrido",
             FeatureKind::Loft(_) => "Transición",
             FeatureKind::Hole(_) => "Agujero",
+            FeatureKind::Helix { flat: true, .. } => "Espiral",
             FeatureKind::Helix { .. } => "Hélice",
             FeatureKind::Thicken { .. } => "Engrosar",
             FeatureKind::Rib { .. } => "Nervio",
@@ -1148,6 +1179,8 @@ impl FeatureKind {
             FeatureKind::SheetMetal { .. } => "Chapa",
             FeatureKind::Flange { .. } => "Pestaña",
             FeatureKind::SurfaceExtrude { .. } => "Superficie extruida",
+            FeatureKind::SurfacePlanar { .. } => "Superficie plana",
+            FeatureKind::SurfaceOffset { .. } => "Superficie desfasada",
             FeatureKind::SurfaceRevolve { .. } => "Superficie de revolución",
             FeatureKind::Fill { .. } => "Relleno",
             FeatureKind::Sew { .. } => "Coser",

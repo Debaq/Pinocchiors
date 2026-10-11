@@ -1397,6 +1397,26 @@ CadShape* cad_thicken(const CadShape* faces, double thickness) {
     });
 }
 
+CadShape* cad_offset_shape(const CadShape* s, double distance) {
+    return guard("desfasar superficie", (CadShape*)nullptr, [&] {
+        if (std::fabs(distance) < 1e-9) throw Standard_Failure("distancia cero");
+        BRepOffset_MakeOffset mk;
+        mk.Initialize(s->s, distance, 1e-6, BRepOffset_Skin, Standard_False, Standard_False, GeomAbs_Arc, Standard_False);
+        mk.MakeOffsetShape();
+        if (!mk.IsDone()) throw Standard_Failure("no se pudo desfasar");
+        // De un sólido queda su piel desfasada: las cáscaras, sin volumen
+        TopoDS_Shape r = mk.Shape();
+        if (TopExp_Explorer(r, TopAbs_SOLID).More()) {
+            TopoDS_Compound c;
+            BRep_Builder b;
+            b.MakeCompound(c);
+            for (TopExp_Explorer ex(r, TopAbs_SHELL); ex.More(); ex.Next()) b.Add(c, ex.Current());
+            r = c;
+        }
+        return wrap_checked(r, "superficie desfasada");
+    });
+}
+
 CadShape* cad_fill(const CadShape* const* edges, const CadShape* const* faces, int32_t n, const double* points,
                    int32_t n_points) {
     return guard("relleno", (CadShape*)nullptr, [&] {

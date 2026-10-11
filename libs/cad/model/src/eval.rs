@@ -482,6 +482,26 @@ impl Evaluation {
 type R<T> = Result<T, String>;
 type ShapeFn = Box<dyn Fn(&Shape) -> R<Shape>>;
 
+/// Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
+/// (extrusión y revolución delgadas); sin espesor, las caras como están.
+fn thin_faces(faces: Vec<Shape>, thin: Option<f64>) -> R<Vec<Shape>> {
+    match thin {
+        Some(t) if t > 0.0 => faces
+            .iter()
+            .map(|f| {
+                let outer = f.offset_face(t / 2.0).map_err(err)?;
+                match f.offset_face(-t / 2.0) {
+                    Ok(inner) => outer.cut(&inner).map_err(err),
+                    // Más angosto que la pared: queda lleno
+                    Err(_) => Ok(outer),
+                }
+            })
+            .collect(),
+        Some(_) => Err("el espesor tiene que ser mayor que cero".into()),
+        None => Ok(faces),
+    }
+}
+
 fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
@@ -1462,6 +1482,12 @@ impl Ctx<'_> {
         {
             return Err("la rosca necesita un paso positivo y menor que el diámetro".into());
         }
+        let taper = match h.style {
+            HoleStyle::Tapered { angle } if h.modeled.is_some() => return Err(format!("un agujero cónico ({angle}°) no lleva rosca modelada")),
+            HoleStyle::Tapered { angle } if !(angle > 0.0 && angle < 45.0) => return Err("el ángulo del cono va entre 0 y 45°".into()),
+            HoleStyle::Tapered { angle } => Some(angle.to_radians().tan()),
+            _ => None,
+        };
         // Con rosca modelada el taladro es el diámetro menor (más la holgura)
         let r = h.modeled.map_or(r, |t| (t.minor() + t.clearance) / 2.0);
         let centers = ids.iter().map(|pid| s.sketch.point(*pid).map(|p| s.plane.to_world(p))).collect::<Result<Vec<P3>, _>>().map_err(err)?;
@@ -1516,7 +1542,13 @@ impl Ctx<'_> {
         // Rosca cosmética: la medida sale de la tabla
         let cosmetic = match src {
             Some(t) => Some(ThreadSpec { clearance: 0.0, ..t.spec }),
-            None => h.thread.as_deref().and_then(crate::standard::size).map(|m| ThreadSpec { nominal: m.d, pitch: m.pitch, clearance: 0.0, left: false }),
+            None => h.thread.as_deref().and_then(|name| {
+                let (d, pitch) = match crate::standard::size(name) {
+                    Some(m) => (m.d, m.pitch),
+                    None => crate::standard::inch(name).map(|t| (t.d, t.pitch))?,
+                };
+                Some(ThreadSpec { nominal: d, pitch, clearance: 0.0, left: false })
+            }),
         };
         let mut aligned = false;
         for (k, &c) in centers.iter().enumerate() {
@@ -1566,16 +1598,29 @@ impl Ctx<'_> {
                     let helix = Frame { origin: top, z: down, x: hx };
                     parts.push(Shape::thread(helix, r, (t.nominal + t.clearance) / 2.0, t.pitch, len + lift, t.left).map_err(err)?);
                 }
-                None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
+                None => match taper {
+                    // Cónico: hasta el fondo (o hasta donde termina el sólido), angostándose
+                    Some(t) => {
+                        let len = through_len(0.0);
+                        if r - len * t <= 1e-6 {
+                            return Err("el cono se cierra antes del fondo: menos ángulo o menos profundidad".into());
+                        }
+                        parts.push(Shape::cone(frame(top), r + lift * t, r - len * t, len + lift).map_err(err)?);
+                    }
+                    None => parts.push(Shape::cylinder(frame(top), r, depth + lift).map_err(err)?),
+                },
             }
-            probes.push((add(add(c, scale(down, depth / 2.0)), scale(x, r)), format!("agujero:{k}:pared")));
+            // El radio a una profundidad (el cónico se angosta) y la pared a la mitad
+            let len = if taper.is_some() { through_len(0.0) } else { depth };
+            let r_at = |d: f64| r - d * taper.unwrap_or(0.0);
+            probes.push((add(add(c, scale(down, len / 2.0)), scale(x, r_at(len / 2.0))), format!("agujero:{k}:pared")));
             // Punta de broca en los ciegos
             if matches!(h.depth, HoleDepth::Blind { .. }) && h.tip_angle > 0.0 && h.tip_angle < 180.0 {
-                let tip = r / (h.tip_angle.to_radians() / 2.0).tan();
-                parts.push(Shape::cone(frame(add(c, scale(down, depth))), r, 0.0, tip).map_err(err)?);
+                let tip = r_at(depth) / (h.tip_angle.to_radians() / 2.0).tan();
+                parts.push(Shape::cone(frame(add(c, scale(down, depth))), r_at(depth), 0.0, tip).map_err(err)?);
             }
             match h.style {
-                HoleStyle::Simple => {}
+                HoleStyle::Simple | HoleStyle::Tapered { .. } => {}
                 HoleStyle::Counterbore { diameter, depth: d } => {
                     if diameter <= h.diameter || d <= 0.0 {
                         return Err("la caja tiene que ser más ancha que el agujero y tener profundidad".into());
@@ -2094,6 +2139,7 @@ impl Ctx<'_> {
                 let axis = self.axis("axis", &r.axis)?;
                 self.check_revolve_profile(r.sketch, &r.regions, axis)?;
                 let (faces, entities, samples) = self.profile(r.sketch, &r.regions)?;
+                let faces = thin_faces(faces, r.thin)?;
                 // Desde dónde (`start`, girando el perfil antes) y cuánto en total
                 let angle = r.angle.to_radians();
                 let (start, angle) = match r.extent {
@@ -2126,6 +2172,12 @@ impl Ctx<'_> {
                     for p in &samples {
                         mark(&shape, &mut tags, rot(*p, start), tag(f.id, "inicio"));
                         mark(&shape, &mut tags, rot(*p, start + angle), tag(f.id, "fin"));
+                    }
+                }
+                // Delgada: las paredes corridas no siempre caen en los puntos de arriba
+                for (i, slot) in tags.iter_mut().enumerate() {
+                    if slot.is_empty() {
+                        slot.push(tag(f.id, format!("cara:{i}")));
                     }
                 }
                 let tool = Tagged { shape, tags };
@@ -2318,10 +2370,38 @@ impl Ctx<'_> {
                 self.ev.tools.insert(f.id, (tool.clone(), sw.op));
                 self.apply(f.id, tool, sw.op)
             }
-            FeatureKind::Helix { axis, radius, pitch, turns, left } => {
+            FeatureKind::Helix { axis, radius, pitch, turns, left, radius2, flat } => {
                 let ax = self.axis("axis", axis)?;
                 let ax = Axis { origin: ax.origin, dir: normalize(ax.dir) };
-                let wire = Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?;
+                let r2 = radius2.unwrap_or(*radius);
+                let wire = if *flat || (r2 - radius).abs() > 1e-9 {
+                    // Cónica o espiral plana: spline por puntos de la curva (32 por vuelta)
+                    if *turns <= 0.0 {
+                        return Err("las vueltas tienen que ser más que cero".into());
+                    }
+                    if *radius < 0.0 || r2 < 0.0 || radius.max(r2) <= 0.0 {
+                        return Err("los radios no pueden ser negativos (y uno tiene que ser mayor que cero)".into());
+                    }
+                    if *flat && (r2 - radius).abs() < 1e-9 {
+                        return Err("la espiral plana necesita dos radios distintos".into());
+                    }
+                    let x = default_x(ax.dir);
+                    let y = cross(ax.dir, x);
+                    let n = ((turns * 32.0).ceil() as usize).max(16);
+                    let hand = if *left { -1.0 } else { 1.0 };
+                    let points: Vec<P3> = (0..=n)
+                        .map(|k| {
+                            let t = k as f64 / n as f64;
+                            let a = hand * 2.0 * std::f64::consts::PI * turns * t;
+                            let r = radius + (r2 - radius) * t;
+                            let h = if *flat { 0.0 } else { pitch * turns * t };
+                            add(add(ax.origin, scale(ax.dir, h)), add(scale(x, r * a.cos()), scale(y, r * a.sin())))
+                        })
+                        .collect();
+                    Shape::wire(&[Curve::Spline(points)]).map_err(err)?
+                } else {
+                    Shape::helix(ax, *radius, *pitch, *turns, *left).map_err(err)?
+                };
                 // Polilínea para el visor: la del teselado del alambre mismo
                 let points: Vec<P3> = wire.tessellate(0.05, 0.1).map_err(err)?.edges.concat();
                 self.ev.references.insert(f.id, RefGeom::Curve { points });
@@ -2740,6 +2820,23 @@ impl Ctx<'_> {
                 let tool = self.surface_tool(f.id, shapes)?;
                 self.apply(f.id, tool, BodyOp::New)
             }
+            FeatureKind::SurfacePlanar { sketch, regions } => {
+                let (faces, _, _) = self.profile(*sketch, regions)?;
+                let tool = self.surface_tool(f.id, faces)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
+            FeatureKind::SurfaceOffset { parts, distance } => {
+                if parts.is_empty() {
+                    return Err("elegir al menos una pieza".into());
+                }
+                if distance.abs() < 1e-9 {
+                    return Err("distancia cero".into());
+                }
+                let idx = self.find_parts("parts", parts)?;
+                let shapes = idx.iter().map(|&i| self.ev.parts[i].shape.offset_shape(*distance)).collect::<Result<Vec<_>, _>>().map_err(err)?;
+                let tool = self.surface_tool(f.id, shapes)?;
+                self.apply(f.id, tool, BodyOp::New)
+            }
             FeatureKind::SurfaceRevolve { sketch, entities, axis, angle } => {
                 let axis = self.axis("axis", axis)?;
                 let a = angle.to_radians();
@@ -3021,6 +3118,33 @@ impl Ctx<'_> {
                             continue;
                         }
                         let v = add(scale(d, spacing * i as f64), scale(d2, spacing2 * j as f64));
+                        out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
+                    }
+                }
+            }
+            PatternKind::Points { sketch, points } => {
+                let s = self.ev.sketches.get(sketch).ok_or("el sketch de los puntos no está calculado")?;
+                let ids: Vec<u32> = if points.is_empty() {
+                    s.sketch
+                        .entities
+                        .iter()
+                        .filter_map(|e| match e.geometry {
+                            Geometry::Point { point } if !e.construction => Some(point),
+                            _ => None,
+                        })
+                        .collect()
+                } else {
+                    points.clone()
+                };
+                let pts = ids.iter().map(|id| s.sketch.point(*id).map(|p| s.plane.to_world(p))).collect::<Result<Vec<P3>, _>>().map_err(err)?;
+                if pts.len() < 2 {
+                    return Err("el sketch necesita al menos 2 puntos sueltos".into());
+                }
+                // Desde el punto más cercano a lo que se copia: ahí está el original
+                let from = pts.iter().copied().min_by(|a, b| norm(sub(*a, seed)).total_cmp(&norm(sub(*b, seed)))).unwrap();
+                for p in pts {
+                    let v = sub(p, from);
+                    if norm(v) > 1e-9 {
                         out.push(Box::new(move |s: &Shape| s.translate(v).map_err(err)));
                     }
                 }
@@ -3357,22 +3481,7 @@ impl Ctx<'_> {
     fn extrude_dir(&self, id: FeatureId, e: &Extrude, reverse: bool) -> R<Tagged> {
         let plane = self.ev.sketches.get(&e.sketch).ok_or("el sketch no está calculado")?.plane;
         let (faces, entities, samples) = self.profile(e.sketch, &e.regions)?;
-        // Delgada: el anillo entre el contorno desplazado hacia afuera y hacia adentro
-        let faces = match e.thin {
-            Some(t) if t > 0.0 => faces
-                .iter()
-                .map(|f| {
-                    let outer = f.offset_face(t / 2.0).map_err(err)?;
-                    match f.offset_face(-t / 2.0) {
-                        Ok(inner) => outer.cut(&inner).map_err(err),
-                        // Más angosto que la pared: queda lleno
-                        Err(_) => Ok(outer),
-                    }
-                })
-                .collect::<R<Vec<_>>>()?,
-            Some(_) => return Err("el espesor tiene que ser mayor que cero".into()),
-            None => faces,
-        };
+        let faces = thin_faces(faces, e.thin)?;
         let mut n = if reverse { scale(plane.normal, -1.0) } else { plane.normal };
         let drafted = e.draft.abs() > 1e-9;
         // Hasta el escaneo: su sólido y la distancia al primer choque

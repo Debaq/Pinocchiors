@@ -10,6 +10,7 @@ import {
   MATERIALS,
   MATE_LABELS,
   METRIC_HOLES,
+  INCH_HOLES,
   BOLT_HEADS,
   type BoltHead,
   designMass,
@@ -1665,6 +1666,15 @@ export const FeatureEditor: Component<{
                     />
                   </Row>
                   {field("Ángulo", "kind.angle", k().angle, (x, v) => x.type === "revolve" && (x.angle = v), "°")}
+                  <Checkbox
+                    small
+                    label="Delgada (solo una pared)"
+                    checked={k().thin != null}
+                    onChange={(c) => update((x) => x.type === "revolve" && (x.thin = c ? 1 : null))}
+                  />
+                  <Show when={k().thin != null}>
+                    {field("Espesor", "kind.thin", k().thin ?? 1, (x, v) => x.type === "revolve" && (x.thin = v), "mm")}
+                  </Show>
                   <Show when={k().extent?.type === "two_angles"}>
                     {field(
                       "Hacia atrás",
@@ -2050,7 +2060,30 @@ export const FeatureEditor: Component<{
                     </>
                   )}
                 </Show>
-                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill"}>
+                <Show when={k().pattern.type === "points" && (k().pattern as Extract<PatternKind, { type: "points" }>)}>
+                  {(pt) => {
+                    const loose = () => {
+                      const s = props.sketches.find((x) => x.id === pt().sketch);
+                      return s?.kind.type === "sketch" ? s.kind.sketch.entities.filter((e) => e.geometry.type === "point" && !e.construction).length : 0;
+                    };
+                    return (
+                      <>
+                        <Row label="Puntos de">
+                          <Select
+                            options={sketchOptions()}
+                            value={String(pt().sketch)}
+                            onChange={(v) => update((x) => x.type === "pattern" && x.pattern.type === "points" && ((x.pattern.sketch = +v), (x.pattern.points = [])))}
+                          />
+                        </Row>
+                        <p class="text-[11px] text-text-dim">
+                          {pt().points.length ? `${pt().points.length} puntos elegidos` : `${loose()} puntos sueltos`}: una copia en cada uno, desde el más cercano a lo que se
+                          repite (ahí queda el original).
+                        </p>
+                      </>
+                    );
+                  }}
+                </Show>
+                <Show when={k().pattern.type !== "table" && k().pattern.type !== "fill" && k().pattern.type !== "points"}>
                 <Show
                   when={k().pattern.type !== "curve"}
                   fallback={
@@ -2172,6 +2205,45 @@ export const FeatureEditor: Component<{
                   checked={k().op === "new"}
                   onChange={(c) => update((x) => x.type === "mirror" && (x.op = c ? "new" : undefined))}
                 />
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "surface_planar" && (f().kind as Extract<FeatureKind, { type: "surface_planar" }>)}>
+            {(k) => (
+              <>
+                <Row label="Sketch">
+                  <Select options={sketchOptions()} value={String(k().sketch)} onChange={(v) => update((x) => x.type === "surface_planar" && ((x.sketch = +v), (x.regions = { type: "all" })))} />
+                </Row>
+                <RegionBox
+                  ui={props.ui}
+                  store={props.store}
+                  owner={`${f().id}:regiones`}
+                  lost={lost("regions")}
+                  sketch={k().sketch}
+                  value={k().regions}
+                  onChange={(r) => update((x) => x.type === "surface_planar" && (x.regions = r))}
+                />
+                <p class="text-[11px] text-text-dim">Las regiones quedan como una superficie sin espesor, aparte de las piezas.</p>
+              </>
+            )}
+          </Match>
+          <Match when={f().kind.type === "surface_offset" && (f().kind as Extract<FeatureKind, { type: "surface_offset" }>)}>
+            {(k) => (
+              <>
+                <PartChecklist
+                  store={props.store}
+                  ui={props.ui}
+                  featureId={f().id}
+                  label="Desfasar"
+                  empty="Elegir superficies o piezas"
+                  value={k().parts}
+                  missing={lost("parts")}
+                  onChange={(v) => update((x) => x.type === "surface_offset" && (x.parts = v))}
+                />
+                {field("Distancia", "kind.distance", k().distance, (x, v) => x.type === "surface_offset" && (x.distance = v), "mm")}
+                <p class="text-[11px] text-text-dim">
+                  Una copia a esa distancia sobre la normal (negativa, hacia el otro lado). De una pieza sólida se copia su piel. Queda como superficie nueva.
+                </p>
               </>
             )}
           </Match>
@@ -2480,17 +2552,30 @@ export const FeatureEditor: Component<{
           <Match when={f().kind.type === "hole" && (f().kind as Extract<FeatureKind, { type: "hole" }>)}>
             {(k) => {
               // Tamaño estándar que corresponde a los diámetros actuales (si alguno)
+              const ALL_HOLES = [...METRIC_HOLES, ...INCH_HOLES];
               const fit = (): { size: string; mode: "clearance" | "tap" | "modeled" } | null => {
                 const mod = k().modeled;
-                if (mod) return { size: METRIC_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6)?.size ?? "", mode: "modeled" };
-                for (const m of METRIC_HOLES) {
+                if (mod)
+                  return {
+                    size: ALL_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6 && Math.abs(m.pitch - mod.pitch) < 1e-6)?.size ??
+                      METRIC_HOLES.find((m) => Math.abs(m.nominal - mod.nominal) < 1e-6)?.size ??
+                      "",
+                    mode: "modeled",
+                  };
+                // La rosca cosmética dice la medida (el pasante y la broca de UNC y UNF a veces coinciden)
+                const named = ALL_HOLES.find((m) => m.size === k().thread);
+                if (named) return { size: named.size, mode: "tap" };
+                for (const m of ALL_HOLES) {
                   if (Math.abs(m.clearance - k().diameter) < 1e-6) return { size: m.size, mode: "clearance" };
                   if (Math.abs(m.tap - k().diameter) < 1e-6) return { size: m.size, mode: "tap" };
                 }
                 return null;
               };
+              // Sistema de medidas: el de la medida actual, o el elegido
+              const [inch, setInch] = createSignal(INCH_HOLES.some((m) => m.size === fit()?.size));
+              const table = () => (inch() ? INCH_HOLES : METRIC_HOLES);
               const applySize = (size: string, mode: "clearance" | "tap" | "modeled") => {
-                const m = METRIC_HOLES.find((x) => x.size === size);
+                const m = ALL_HOLES.find((x) => x.size === size);
                 if (!m) return;
                 update((x) => {
                   if (x.type !== "hole") return;
@@ -2499,7 +2584,7 @@ export const FeatureEditor: Component<{
                   // Al cambiar de medida la rosca modelada toma el paso grueso y conserva la holgura
                   x.modeled = mode === "modeled" ? { nominal: m.nominal, pitch: m.pitch, clearance: x.modeled?.clearance ?? 0, left: x.modeled?.left ?? false } : null;
                   if (x.style.type === "counterbore") x.style = { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth };
-                  if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: 90 };
+                  if (x.style.type === "countersink") x.style = { type: "countersink", diameter: m.csink, angle: (m as { csinkAngle?: number }).csinkAngle ?? 90 };
                 });
               };
               const view = () => props.store.sketchView(k().sketch);
@@ -2521,19 +2606,27 @@ export const FeatureEditor: Component<{
                         { value: "simple", label: "Simple" },
                         { value: "counterbore", label: "Con caja" },
                         { value: "countersink", label: "Avellanado" },
+                        { value: "tapered", label: "Cónico" },
                       ]}
                       value={k().style.type}
                       onChange={(v) => {
                         if (v === k().style.type) return;
-                        const m = METRIC_HOLES.find((x) => x.size === fit()?.size) ?? METRIC_HOLES.find((x) => x.size === "M6")!;
+                        const m = ALL_HOLES.find((x) => x.size === fit()?.size) ?? METRIC_HOLES.find((x) => x.size === "M6")!;
                         update((x) => {
                           if (x.type !== "hole") return;
                           x.style =
                             v === "counterbore"
                               ? { type: "counterbore", diameter: m.cbore, depth: m.cboreDepth }
                               : v === "countersink"
-                                ? { type: "countersink", diameter: m.csink, angle: 90 }
-                                : { type: "simple" };
+                                ? { type: "countersink", diameter: m.csink, angle: (m as { csinkAngle?: number }).csinkAngle ?? 90 }
+                                : v === "tapered"
+                                  ? { type: "tapered", angle: 1.7833 }
+                                  : { type: "simple" };
+                          // Un cónico no lleva rosca modelada: queda cosmética
+                          if (v === "tapered" && x.modeled) {
+                            x.thread = threadName(x.modeled);
+                            x.modeled = null;
+                          }
                         });
                       }}
                     />
@@ -2561,10 +2654,27 @@ export const FeatureEditor: Component<{
                     />
                   </Show>
                   <Show when={!k().link}>
+                  <Row label="Sistema">
+                    <Select
+                      options={[
+                        { value: "metric", label: "Métrico (ISO)" },
+                        { value: "inch", label: "Pulgadas (UNC/UNF)" },
+                      ]}
+                      value={inch() ? "inch" : "metric"}
+                      onChange={(v) => {
+                        if ((v === "inch") === inch()) return;
+                        setInch(v === "inch");
+                        // La medida más parecida del otro sistema, con el mismo uso
+                        const now = ALL_HOLES.find((m) => m.size === fit()?.size);
+                        const near = (now ? [...table()].sort((a, b) => Math.abs(a.nominal - now.nominal) - Math.abs(b.nominal - now.nominal))[0] : undefined) ?? table()[0];
+                        applySize(near.size, fit()?.mode ?? "clearance");
+                      }}
+                    />
+                  </Row>
                   <Row label="Tamaño">
                     <Select
-                      options={[{ value: "", label: "A medida" }, ...METRIC_HOLES.map((m) => ({ value: m.size, label: m.size }))]}
-                      value={fit()?.size ?? ""}
+                      options={[{ value: "", label: "A medida" }, ...table().map((m) => ({ value: m.size, label: m.size }))]}
+                      value={table().some((m) => m.size === fit()?.size) ? (fit()?.size ?? "") : ""}
                       onChange={(v) => v && applySize(v, fit()?.mode ?? "clearance")}
                     />
                   </Row>
@@ -2598,7 +2708,7 @@ export const FeatureEditor: Component<{
                           <Checkbox small label="A izquierdas" checked={t().left} onChange={(c) => update((x) => x.type === "hole" && !!x.modeled && (x.modeled.left = c))} />
                         </Show>
                         <p class="text-[11px] text-text-dim">
-                          M{t().nominal} × {t().pitch}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
+                          {threadName(t())}: el agujero sale con el filete (diámetro menor {fmt(t().nominal - 1.082532 * t().pitch + t().clearance)} mm). Para imprimir en FDM conviene
                           una holgura de 0,2–0,4 mm. Cada vuelta del filete tarda en calcularse.
                         </p>
                       </>
@@ -2652,6 +2762,16 @@ export const FeatureEditor: Component<{
                       </>
                     )}
                   </Show>
+                  <Show when={k().style.type === "tapered" && (k().style as { angle: number })}>
+                    {(st) => (
+                      <>
+                        {field("Cono: ángulo", "kind.style.angle", st().angle, (x, v) => x.type === "hole" && x.style.type === "tapered" && (x.style.angle = v), "°")}
+                        <p class="text-[11px] text-text-dim">
+                          Ángulo de la pared con el eje (NPT: 1°47' = 1,7833°). El diámetro es el de la boca; se angosta hasta el fondo.
+                        </p>
+                      </>
+                    )}
+                  </Show>
                   <Show when={k().thread && !k().modeled}>
                     <p class="text-[11px] text-text-dim">Rosca {k().thread} (cosmética: no se modela)</p>
                   </Show>
@@ -2686,8 +2806,37 @@ export const FeatureEditor: Component<{
             {(k) => (
               <>
                 <AxisField store={props.store} ui={props.ui} owner={`${f().id}:eje`} label="Eje" value={k().axis} except={f().id} onChange={(a) => update((x) => x.type === "helix" && (x.axis = a))} />
-                {field("Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
-                {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                {field(k().radius2 != null ? "Radio inicial" : "Radio", "kind.radius", k().radius, (x, v) => x.type === "helix" && (x.radius = v), "mm")}
+                <Checkbox
+                  small
+                  label="Espiral plana"
+                  checked={!!k().flat}
+                  onChange={(c) =>
+                    update((x) => {
+                      if (x.type !== "helix") return;
+                      x.flat = c || undefined;
+                      if (c && x.radius2 == null) x.radius2 = x.radius * 2;
+                    })
+                  }
+                />
+                <Checkbox
+                  small
+                  label="Cónica (dos radios)"
+                  checked={k().radius2 != null}
+                  onChange={(c) =>
+                    update((x) => {
+                      if (x.type !== "helix") return;
+                      x.radius2 = c ? x.radius / 2 : null;
+                      if (!c) x.flat = undefined;
+                    })
+                  }
+                />
+                <Show when={k().radius2 != null}>
+                  {field("Radio final", "kind.radius2", k().radius2 ?? k().radius, (x, v) => x.type === "helix" && (x.radius2 = v), "mm")}
+                </Show>
+                <Show when={!k().flat}>
+                  {field("Paso", "kind.pitch", k().pitch, (x, v) => x.type === "helix" && (x.pitch = v), "mm")}
+                </Show>
                 {field("Vueltas", "kind.turns", k().turns, (x, v) => x.type === "helix" && (x.turns = v))}
                 <Checkbox small label="A izquierdas" checked={k().left} onChange={(c) => update((x) => x.type === "helix" && (x.left = c))} />
                 <p class="text-[11px] text-text-dim">Para un resorte: un círculo en un plano que pase por el eje, en el arranque de la hélice, y un Barrido con la hélice como camino.</p>

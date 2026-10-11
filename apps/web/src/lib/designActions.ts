@@ -460,9 +460,19 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     draft: () => void startFaces("draft"),
   });
 
-  const addPattern = (kind: "linear" | "circular" | "table" | "fill") => {
+  const addPattern = (kind: "linear" | "circular" | "table" | "fill" | "points") => {
     const sel = selectedFeature();
     const features = sel && toolFeatures().includes(sel) ? [sel.id] : [];
+    if (kind === "points") {
+      // Los puntos: el último sketch con puntos sueltos que no sea el de lo que se repite
+      const own = sel && "sketch" in sel.kind ? (sel.kind as { sketch: number }).sketch : undefined;
+      const withPoints = sketches()
+        .filter((s) => s.id !== own && s.kind.type === "sketch" && s.kind.sketch.entities.some((e) => e.geometry.type === "point" && !e.construction))
+        .pop();
+      if (!withPoints) return say("Primero un sketch con puntos sueltos (y la operación que se repite)");
+      void store.addFeature({ type: "pattern", features, pattern: { type: "points", sketch: withPoints.id, points: [] } });
+      return;
+    }
     if (kind === "fill") {
       // La región a llenar: el último sketch con una región cerrada que no sea el de lo que se repite
       const own = sel && "sketch" in sel.kind ? (sel.kind as { sketch: number }).sketch : undefined;
@@ -666,6 +676,23 @@ export function createDesignActions(store: CadStore, ui: CadUi) {
     addSplitParts: () => void store.addFeature({ type: "split_parts", parts: pickedParts() }),
     addDeleteParts: () => void store.addFeature({ type: "delete_parts", parts: pickedParts() }),
     addHelix: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 10, pitch: 5, turns: 3, left: false }),
+    /** Espiral plana de Arquímedes (resortes de reloj, bobinas) */
+    addSpiral: () => void store.addFeature({ type: "helix", axis: { type: "z" }, radius: 2, pitch: 5, turns: 4, left: false, radius2: 20, flat: true }),
+    /** Las regiones del sketch elegido (o del último) como superficie plana */
+    addSurfacePlanar: () => {
+      const s = targetSketch();
+      if (!s) return say("Primero hace falta un sketch con una región cerrada");
+      ui.clearPicks();
+      void store.addFeature({ type: "surface_planar", sketch: s.id, regions: { type: "all" } });
+    },
+    /** Copia desfasada de las superficies elegidas (o de todas; con una pieza sólida elegida, su piel) */
+    addSurfaceOffset: () => {
+      const picked = pickedParts();
+      const parts = picked.length > 0 ? picked : surfaceParts();
+      if (parts.length === 0) return say("Elegir una superficie (o una pieza) para desfasar");
+      ui.clearPicks();
+      void store.addFeature({ type: "surface_offset", parts, distance: 5 });
+    },
     addSketch3d: () => void store.addFeature({ type: "sketch3d", sketch: { points: [], entities: [], constraints: [], next_id: 1 } }),
     startSurfaceSketch,
     addScale: () => void store.addFeature({ type: "scale", factor: [2, 2, 2], center: { type: "at", point: [0, 0, 0] } }),

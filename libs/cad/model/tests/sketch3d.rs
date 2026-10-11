@@ -222,7 +222,7 @@ fn pierce_finds_the_helix_crossing() {
         return;
     }
     let mut doc = Document::new();
-    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false });
+    let hx = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 5.0, turns: 2.0, left: false, radius2: None, flat: false });
     // El plano XZ corta la hélice en x = ±10; el punto arranca cerca de (10, 0)
     let mut s = Sketch::default();
     let p = s.add_point(9.0, 1.0);

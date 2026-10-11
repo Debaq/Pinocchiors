@@ -246,6 +246,7 @@ fn revolve_around_sketch_line() {
         angle: 360.0,
         op: BodyOp::Join,
         extent: RevolveExtent::One,
+        thin: None,
     }));
     let ev = doc.evaluate();
     assert_all_ok(&ev);

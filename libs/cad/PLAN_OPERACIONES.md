@@ -39,7 +39,8 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 |---|---|
 | Completa, por ángulo, selección de eje | ✅ |
 | Simétrica, dos ángulos | ✅ (`Revolve.extent`, 2026-10-11) |
-| Hasta superficie, pared delgada | ❌ (F3) |
+| Pared delgada | ✅ (`Revolve.thin`, 2026-10-11) |
+| Hasta superficie | ❌ (F3) |
 
 ### Opciones de barrido
 | Función | Estado |
@@ -57,8 +58,8 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 | Función | Estado |
 |---|---|
 | Simple, avellanado, abocardado, roscado, ciego o pasante | ✅ |
-| Cónico | ❌ (F7) |
-| Tabla de estándares | 🟡 métrico ISO; faltan pulgadas UNC/UNF (F7) |
+| Cónico | ✅ (`HoleStyle::Tapered`, 2026-10-11) |
+| Tabla de estándares | ✅ métrico ISO y pulgadas UNC/UNF de #2 a 1/2" (2026-10-11) |
 
 ### Operaciones sobre aristas y caras
 | Función | Estado |
@@ -80,7 +81,7 @@ Leyenda: ✅ hecho · 🟡 a medias · ❌ falta · (F*n*) fase de este plan que
 |---|---|
 | Lineal, circular, a lo largo de curva, relleno de región | ✅ (además por tabla) |
 | Lineal en dos direcciones | ✅ (`Linear.second`, 2026-10-11) |
-| Guiado por puntos de croquis | ❌ (F2) |
+| Guiado por puntos de croquis | ✅ (`PatternKind::Points`, 2026-10-11) |
 | Omitir instancias | 🟡 escritas en el diálogo (`Pattern.skip`); falta prender y apagar con clic en el visor (F2) |
 | Simetría de operaciones | ✅ |
 | Simetría de cuerpos | ✅ unido o como pieza aparte (`Mirror.op`, 2026-10-11) |
@@ -105,7 +106,7 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Función | Estado |
 |---|---|
 | Hélice | ✅ |
-| Espiral | ❌ (F8) |
+| Espiral | ✅ plana y hélice cónica (`Helix.radius2`, `flat`; spline por puntos, 2026-10-11) |
 | Curva por puntos | 🟡 splines del sketch 3D (F8) |
 | Curva proyectada, curva de intersección | 🟡 solo hacia el plano de un sketch (F8) |
 | Línea de partición | ❌ (F8) |
@@ -117,8 +118,9 @@ Unión, resta, intersección, dividir, separar no conectados, eliminar: ✅ toda
 | Por extrusión, por revolución, relleno, recortar, coser, cortar sólido con superficie | ✅ |
 | Por barrido | ❌ (F4) |
 | Por recubrimiento | ❌ (F5) |
-| Plana | 🟡 solo como relleno de un borde plano (F9) |
-| Desfasada, extender | ❌ (F9) |
+| Plana | ✅ (`SurfacePlanar`, 2026-10-11) |
+| Desfasada | ✅ (`SurfaceOffset`; de un sólido, su piel, 2026-10-11) |
+| Extender | ❌ (F9) |
 
 ### Gestión de operaciones
 | Función | Estado |
@@ -288,6 +290,9 @@ personalizada, desde plano desfasado, revolución hasta una cara y delgada.
 - Chapa: más allá de pestañas, alivios y esquinas cerradas (dobladillos, pestañas en arista
   curva, desdoblar/doblar).
 - Suite e2e completa, push y release CAD Windows/macOS cuando el usuario lo pida.
+- Segunda tanda del 2026-10-11 (agujero cónico, UNC/UNF, espiral, superficies plana y
+  desfasada, patrón por puntos, revolución delgada): también sin correr; mismos comandos (10
+  escenarios «operaciones:») y `cargo test -p cad-model --test operations --test hole`.
 - e2e de lo hecho el 2026-10-11 sin correr todavía (en la nube no se bajan los crates):
   `node apps/web/e2e/cad.mjs operaciones` (5 escenarios) y `cargo test -p cad-model --test operations`.
 

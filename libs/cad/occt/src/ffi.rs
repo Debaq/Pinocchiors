@@ -148,6 +148,7 @@ unsafe extern "C" {
     pub fn cad_make_helix(origin: *const f64, dir: *const f64, radius: f64, pitch: f64, turns: f64, left: i32) -> *mut CadShape;
     pub fn cad_make_thread(origin: *const f64, dir: *const f64, xdir: *const f64, r_minor: f64, r_major: f64, pitch: f64, length: f64, left: i32, chamfer: i32) -> *mut CadShape;
     pub fn cad_thicken(faces: *const CadShape, thickness: f64) -> *mut CadShape;
+    pub fn cad_offset_shape(s: *const CadShape, distance: f64) -> *mut CadShape;
     pub fn cad_fill(edges: *const *const CadShape, faces: *const *const CadShape, n: i32, points: *const f64, n_points: i32) -> *mut CadShape;
     pub fn cad_sew(shapes: *const *const CadShape, n: i32, tolerance: f64, solid: i32) -> *mut CadShape;
     pub fn cad_split_by(s: *const CadShape, tools: *const *const CadShape, n: i32) -> *mut CadShape;

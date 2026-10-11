@@ -197,6 +197,7 @@ fn ring(extent: RevolveExtent, angle: f64) -> Document {
         angle,
         op: BodyOp::Join,
         extent,
+        thin: None,
     }));
     doc
 }
@@ -246,4 +247,145 @@ fn extrude_up_to_vertex() {
     assert_relative_eq!(v, 400.0, max_relative = 1e-9);
     assert_relative_eq!(lo[2], -4.0, epsilon = 1e-6);
     assert_relative_eq!(hi[2], 0.0, epsilon = 1e-6);
+}
+
+// ─── Segunda tanda: patrón por puntos, revolución delgada, espiral y superficies ───
+
+/// Sketch en la planta con puntos sueltos en `at`
+fn points_sketch(at: &[[f64; 2]]) -> (Sketch, Vec<u32>) {
+    let mut s = Sketch::default();
+    let mut ids = Vec::new();
+    for q in at {
+        let p = s.add_point(q[0], q[1]);
+        s.entities.push(SketchEntity { id: s.next_id, geometry: Geometry::Point { point: p }, construction: false, infinite: false, axis: false, layer: None });
+        s.next_id += 1;
+        ids.push(p);
+    }
+    (s, ids)
+}
+
+#[test]
+fn pattern_on_sketch_points() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, hole) = plate_with_hole();
+    // El primer punto está sobre el agujero original: ahí no se copia
+    let (s, ids) = points_sketch(&[[10.0, 10.0], [40.0, 10.0], [70.0, 30.0], [90.0, 50.0]]);
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    let p = doc.add(FeatureKind::Pattern { features: vec![hole], pattern: PatternKind::Points { sketch: sk, points: vec![] }, skip: vec![] });
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 12000.0 - 4.0 * HOLE, max_relative = 1e-6);
+    // Solo dos de los puntos (el del original y otro)
+    if let FeatureKind::Pattern { pattern: PatternKind::Points { points, .. }, .. } = &mut doc.get_mut(p).unwrap().kind {
+        *points = vec![ids[0], ids[2]];
+    }
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 12000.0 - 2.0 * HOLE, max_relative = 1e-6);
+}
+
+#[test]
+fn revolve_thin() {
+    if !occt() {
+        return;
+    }
+    let mut doc = ring(RevolveExtent::One, 360.0);
+    let last = doc.features.last().unwrap().id;
+    if let FeatureKind::Revolve(r) = &mut doc.get_mut(last).unwrap().kind {
+        r.thin = Some(1.0);
+    }
+    // Banda de 1 mm alrededor del rectángulo de 3 × 20 (esquinas de afuera
+    // redondeadas), centrada en x = 6,5: Pappus
+    let outer = 60.0 + 0.5 * 46.0 + PI * 0.25;
+    let inner = 2.0 * 19.0;
+    let (_, _, v) = bbox(&eval_ok(&doc));
+    assert_relative_eq!(v, 2.0 * PI * 6.5 * (outer - inner), max_relative = 1e-4);
+}
+
+fn curve_points(doc: &Document, id: FeatureId) -> Vec<P3> {
+    let ev = eval_ok(doc);
+    match ev.references.get(&id) {
+        Some(RefGeom::Curve { points }) => points.clone(),
+        other => panic!("sin curva: {other:?}"),
+    }
+}
+
+#[test]
+fn conical_helix_and_flat_spiral() {
+    if !occt() {
+        return;
+    }
+    let radial = |p: &P3| (p[0] * p[0] + p[1] * p[1]).sqrt();
+    // Cónica: de radio 10 a 5 en 2 vueltas de paso 4 (sube 8)
+    let mut doc = Document::new();
+    let h = doc.add(FeatureKind::Helix { axis: AxisSpec::Z, radius: 10.0, pitch: 4.0, turns: 2.0, left: false, radius2: Some(5.0), flat: false });
+    let pts = curve_points(&doc, h);
+    let top = pts.iter().copied().max_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
+    let bottom = pts.iter().copied().min_by(|a, b| a[2].total_cmp(&b[2])).unwrap();
+    assert_relative_eq!(top[2], 8.0, epsilon = 1e-3);
+    assert_relative_eq!(radial(&top), 5.0, epsilon = 0.05);
+    assert_relative_eq!(radial(&bottom), 10.0, epsilon = 0.05);
+    assert!(doc.get(h).unwrap().kind.label() == "Hélice");
+
+    // Espiral plana: de radio 2 a 10 en 3 vueltas, toda en z = 0
+    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: Some(10.0), flat: true };
+    let pts = curve_points(&doc, h);
+    assert!(pts.iter().all(|p| p[2].abs() < 1e-6));
+    let rmax = pts.iter().map(radial).fold(0.0, f64::max);
+    let rmin = pts.iter().map(radial).fold(f64::INFINITY, f64::min);
+    assert_relative_eq!(rmax, 10.0, epsilon = 0.05);
+    assert_relative_eq!(rmin, 2.0, epsilon = 0.05);
+    assert_eq!(doc.get(h).unwrap().kind.label(), "Espiral");
+    // Plana con un solo radio: error
+    doc.get_mut(h).unwrap().kind = FeatureKind::Helix { axis: AxisSpec::Z, radius: 2.0, pitch: 4.0, turns: 3.0, left: false, radius2: None, flat: true };
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn planar_and_offset_surfaces() {
+    if !occt() {
+        return;
+    }
+    let mut s = Sketch::new();
+    s.rectangle([0.0, 0.0], [10.0, 20.0]);
+    let mut doc = Document::new();
+    let sk = doc.add(FeatureKind::Sketch { plane: PlaneSpec::Xy, offset: 0.0, sketch: s });
+    let plane = doc.add(FeatureKind::SurfacePlanar { sketch: sk, regions: RegionSelection::All });
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 1);
+    assert!(ev.parts[0].is_surface());
+    assert_relative_eq!(ev.parts[0].shape.mass().unwrap().area, 200.0, max_relative = 1e-9);
+
+    // Desfasada 5: otra superficie igual, a 5 del plano
+    doc.add(FeatureKind::SurfaceOffset { parts: vec![PartId { feature: plane, index: 0 }], distance: 5.0 });
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2);
+    let m = ev.parts[1].shape.mass().unwrap();
+    assert!(ev.parts[1].is_surface());
+    assert_relative_eq!(m.area, 200.0, max_relative = 1e-6);
+    assert_relative_eq!(m.bbox_min[2].abs(), 5.0, epsilon = 1e-6);
+    assert_relative_eq!(m.bbox_max[2], m.bbox_min[2], epsilon = 1e-6);
+
+    // De un sólido queda su piel desfasada (aristas y esquinas redondeadas), sin volumen
+    let mut doc = Document::new();
+    let c = doc.add(cube(0.0, 10.0, BodyOp::Join));
+    doc.add(FeatureKind::SurfaceOffset { parts: vec![PartId { feature: c, index: 0 }], distance: 2.0 });
+    let ev = eval_ok(&doc);
+    assert_eq!(ev.parts.len(), 2);
+    assert!(ev.parts[1].is_surface());
+    let skin = 600.0 + 12.0 * (10.0 * PI * 2.0 * 2.0 / 4.0) + 4.0 * PI * 4.0;
+    assert_relative_eq!(ev.parts[1].shape.mass().unwrap().area, skin, max_relative = 1e-4);
+}
+
+#[test]
+fn inch_thread_names() {
+    let t = standard::inch("1/4-20 UNC").unwrap();
+    assert_relative_eq!(t.d, 6.35, epsilon = 1e-9);
+    assert_relative_eq!(t.pitch, 1.27, epsilon = 1e-9);
+    let spec = ThreadSpec { nominal: t.d, pitch: t.pitch, clearance: 0.0, left: false };
+    assert_eq!(threads::spec_name(&spec), "1/4-20 UNC");
+    assert_eq!(threads::spec_name(&ThreadSpec { left: true, ..spec }), "1/4-20 UNC izq.");
+    assert_eq!(standard::INCH.len(), 20);
+    // La métrica sigue igual
+    assert_eq!(threads::spec_name(&ThreadSpec { nominal: 6.0, pitch: 1.0, clearance: 0.0, left: false }), "M6");
 }

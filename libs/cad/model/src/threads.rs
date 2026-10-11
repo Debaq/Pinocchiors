@@ -85,8 +85,11 @@ pub fn default_x(dir: P3) -> P3 {
     normalize(sub(a, scale(d, dot(a, d))))
 }
 
-/// Medida métrica de una rosca ("M6", "M8×1", "M6 izq.").
+/// Medida de una rosca ("M6", "M8×1", "M6 izq.", "1/4-20 UNC").
 pub fn spec_name(s: &ThreadSpec) -> String {
+    if let Some(t) = crate::standard::inch_by_spec(s.nominal, s.pitch) {
+        return if s.left { format!("{} izq.", t.name) } else { t.name.to_string() };
+    }
     let d = if (s.nominal - s.nominal.round()).abs() < 1e-9 { format!("{}", s.nominal.round()) } else { format!("{}", s.nominal) };
     let coarse = crate::standard::size_by_nominal(s.nominal).is_some_and(|m| (m.pitch - s.pitch).abs() < 1e-9);
     let mut name = if coarse { format!("M{d}") } else { format!("M{d}×{}", s.pitch) };

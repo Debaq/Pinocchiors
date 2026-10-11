@@ -761,6 +761,12 @@ impl Shape {
         wrap(unsafe { ffi::cad_thicken(self.ptr(), thickness) })
     }
 
+    /// Copia desfasada `distance` sobre la normal de las caras (de un sólido,
+    /// su piel como superficie).
+    pub fn offset_shape(&self, distance: f64) -> Result<Shape> {
+        wrap(unsafe { ffi::cad_offset_shape(self.ptr(), distance) })
+    }
+
     /// Superficie que llena un borde cerrado: cada arista con su cara vecina
     /// (tangente a ella) o sola (solo pasa por el borde); y por los puntos.
     pub fn fill(boundary: &[(Shape, Option<Shape>)], points: &[P3]) -> Result<Shape> {

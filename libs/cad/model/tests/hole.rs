@@ -286,3 +286,46 @@ fn hole_from_a_base_plane_goes_into_the_block_above() {
     let k = ev.status.iter().find(|s| s.id == h).unwrap().handle.clone().unwrap();
     assert_eq!((k.dir, k.length, k.reversed, k.kind), ([0.0, 0.0, -1.0], 5.0, false, HandleKind::Blind));
 }
+
+#[test]
+fn tapered_blind_and_through() {
+    if !occt() {
+        return;
+    }
+    let frustum = |h: f64, r1: f64, r2: f64| PI * h / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2);
+    // Ciego de 8 con 2° de pared: de radio 3 a 3 − 8·tan 2°
+    let (mut doc, sk) = plate();
+    let t = 2f64.to_radians().tan();
+    let h = doc.add(hole(sk, 6.0, HoleDepth::Blind { depth: 8.0 }, HoleStyle::Tapered { angle: 2.0 }));
+    assert_relative_eq!(vol(&doc), 16000.0 - 2.0 * frustum(8.0, 3.0, 3.0 - 8.0 * t), max_relative = 1e-6);
+    // Pasante con 1°: hasta la cara de abajo (10 de alto)
+    let t = 1f64.to_radians().tan();
+    if let FeatureKind::Hole(x) = &mut doc.get_mut(h).unwrap().kind {
+        x.depth = HoleDepth::ThroughAll;
+        x.style = HoleStyle::Tapered { angle: 1.0 };
+    }
+    assert_relative_eq!(vol(&doc), 16000.0 - 2.0 * frustum(10.0, 3.0, 3.0 - 10.0 * t), max_relative = 1e-6);
+    // Tanto ángulo que se cierra antes del fondo: error
+    if let FeatureKind::Hole(x) = &mut doc.get_mut(h).unwrap().kind {
+        x.style = HoleStyle::Tapered { angle: 30.0 };
+    }
+    assert!(!doc.evaluate().errors().is_empty());
+}
+
+#[test]
+fn inch_cosmetic_thread() {
+    if !occt() {
+        return;
+    }
+    let (mut doc, sk) = plate();
+    let mut k = hole(sk, 5.1, HoleDepth::Blind { depth: 8.0 }, HoleStyle::Simple);
+    if let FeatureKind::Hole(x) = &mut k {
+        x.thread = Some("1/4-20 UNC".into());
+    }
+    doc.add(k);
+    let ev = doc.evaluate();
+    assert!(ev.errors().is_empty(), "{:?}", ev.errors());
+    assert_eq!(ev.threads.len(), 2);
+    assert_relative_eq!(ev.threads[0].spec.nominal, 6.35, epsilon = 1e-9);
+    assert_eq!(cad_model::threads::spec_name(&ev.threads[0].spec), "1/4-20 UNC");
+}
