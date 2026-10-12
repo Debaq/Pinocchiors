@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Pinocchio</title>
+    <!-- Ventana chica sin bordes mientras carga la principal. La cierra el
+         comando app_ready (apps/desktop/src/lib.rs) -->
+    <style>
+      html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0b0d; }
+      body {
+        box-sizing: border-box; border: 1px solid #26231f;
+        display: flex; align-items: center; gap: 28px; padding: 0 40px 0 28px;
+        color: #f6f1e8; font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        user-select: none; cursor: default;
+      }
+      body > svg { width: auto; height: 236px; flex: none; }
+      main { flex: 1; display: flex; flex-direction: column; }
+      .name { font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1; }
+      .tagline { margin-top: 8px; font-size: 12px; line-height: 1.4; color: #a8998a; }
+      .loading { margin-top: 36px; font-size: 11px; color: #a8998a; }
+      .bar { margin-top: 8px; height: 2px; border-radius: 1px; background: #24211e; overflow: hidden; }
+      .bar::after {
+        content: ""; display: block; width: 35%; height: 100%; background: #e9a93c;
+        animation: bar 1.2s ease-in-out infinite;
+      }
+      @keyframes bar { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+      .version { position: fixed; right: 14px; bottom: 10px; font: 10px ui-monospace, monospace; color: #5f574f; }
+    </style>
+  </head>
+  <body>
+    <!-- logo -->
+    <main>
+      <div class="name">Pinocchio</div>
+      <div class="tagline">Escanear, reparar, animar<br />y fabricar modelos 3D</div>
+      <div class="loading">Cargando…</div>
+      <div class="bar"></div>
+    </main>
+    <div class="version">%VITE_APP_VERSION%</div>
+  </body>
+</html>

@@ -1,6 +1,7 @@
 /* @refresh reload */
 import { ErrorBoundary } from "solid-js";
 import { render } from "solid-js/web";
+import { invoke } from "@tauri-apps/api/core";
 import { App } from "./App";
 import "./styles/app.css";
 import { applyTheme, storedTheme } from "./lib/theme";
@@ -48,3 +49,8 @@ render(
   ),
   root
 );
+
+// La interfaz ya está armada: se cierra el splash (otra ventana) y aparece
+// esta. Con setTimeout y no requestAnimationFrame, que no corre mientras la
+// ventana está oculta. Sin Tauri (vista previa) no hay nada que avisar
+setTimeout(() => void invoke("app_ready").catch(() => {}));

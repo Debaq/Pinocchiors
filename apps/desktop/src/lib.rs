@@ -40,9 +40,16 @@ pub fn run() {
             app.manage(scan_cloud::CloudEditor::default());
             #[cfg(target_os = "linux")]
             enable_camera(app);
+            // Si la interfaz nunca avisa (error al cargar), igual se muestra
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(20));
+                show_main_window(&handle);
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            app_ready,
             // Import/Export multi-formato
             commands::get_supported_formats,
             commands::import_model,
@@ -215,6 +222,24 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+/// La interfaz ya se dibujó: se cierra el splash y aparece la ventana principal
+#[tauri::command]
+fn app_ready(app: tauri::AppHandle) {
+    show_main_window(&app);
+}
+
+/// Una sola vez: las siguientes llamadas no encuentran el splash y no hacen nada
+fn show_main_window(app: &tauri::AppHandle) {
+    let Some(splash) = app.get_webview_window("splash") else {
+        return;
+    };
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    let _ = splash.close();
 }
 
 /// WebKitGTK trae la cámara apagada y niega los permisos que nadie atiende:

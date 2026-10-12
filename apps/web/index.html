@@ -7,7 +7,12 @@
     <title>Pinocchio - Auto Rigging 3D</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <!-- Sin bloquear el primer cuadro: sin red, la interfaz no espera a la fuente -->
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'" />
+    <!-- Fondo negro desde el primer cuadro (el splash es otra ventana: splash.html) -->
+    <style>
+      html, body { margin: 0; background: #0b0b0d; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
