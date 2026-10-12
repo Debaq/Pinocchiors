@@ -189,6 +189,43 @@ Pendiente:
 - ⬜ API WASM propia (la feature `wasm` no tiene código), GPU (`wgpu`), FBX.
 - ⬜ Tests de volumen, área y centro de masa en `print3d`; `prepare_for_printing`.
 
+### Render (`libs/geppettoray`, plan en `libs/PLAN_RENDER.md`)
+Hechas las fases 3a–3g (motor, BSDF glTF, luces y HDRI con MIS, vidrio, cámara
+real, denoise, progreso en la app). Falta o es aproximado:
+- 🧪 **GeppettoRay en Tauri real**: la conexión con la app (selector de motor,
+  progreso, vista previa, cancelar, guardar) solo se probó con tests de Rust y
+  un `invoke` falso; falta correrla en la app de escritorio. Lo mismo para el
+  atajo Ctrl+Shift+R y el guardado completo del render del visor.
+- ⬜ **3h, animación**: un fotograma por pose evaluada en CPU (esqueleto +
+  pesos), secuencia PNG y video si hay ffmpeg, reanudar un render interrumpido.
+  Hoy no hay pose de esqueleto en el motor (usa `AppState.scene` tal cual) ni
+  desenfoque de movimiento de objetos (solo de cámara).
+- ⬜ **Suelo con sombra** como receptor invisible en GeppettoRay (en el visor ya
+  existe); con GeppettoRay se desactivan sombras suaves, suelo y oclusión
+  ambiental.
+- ⬜ **HDRI elegible desde la interfaz** (el motor lo soporta: `EnvMap`).
+- 🟨 **Luces del visor → motor**: pasan como sol principal + relleno + luz de
+  cámara y un cielo uniforme que resume ambiente y entorno; no coinciden exacto
+  con el visor (usa una imagen de estudio para los reflejos). Sin el tono ACES
+  del visor (sale lineal → sRGB).
+- ⬜ **Vidrio**: sin rugosidad en la transmisión (vidrio esmerilado), sin medios
+  anidados (líquido dentro de un vaso), sin cáusticas (la sombra del vidrio es
+  una aproximación que deja pasar la luz sin desviarla); la escena de converter
+  no trae `attenuationColor/Distance` (se usa color base + grosor).
+- ⬜ **Luces**: las de área con emisión texturizada se ven pero no iluminan por
+  muestreo; sol y foco no tienen tamaño (sombras duras).
+- ⬜ **Materiales**: sin mipmaps; solo el set UV 0 y la escala UV; las tangentes
+  del mapa de normales salen por triángulo (no MikkTSpace); el mapa de oclusión
+  se ignora a propósito (el path tracing calcula la oclusión real).
+- ⬜ **Denoise**: solo espacial (sin acumulación temporal: puede parpadear en
+  animación); reflejos nítidos y vidrio no se separan del fondo (las capas usan
+  el primer cruce); con profundidad de campo el desenfoque queda como ruido que
+  el filtro no distingue. Open Image Denoise descartado por la dependencia C++.
+- ⬜ **Escena**: BVH propia sin instanciado ni actualización por pose; el motor
+  no corre en WASM ni como CLI (`apps/geppettoray` quedó como idea).
+
+---
+
 ---
 
 ## Rust sin compilar
