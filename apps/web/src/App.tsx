@@ -116,7 +116,9 @@ type SceneEdit =
 import { bvhMotion, parseBvh } from "./lib/bvh";
 import { autoMap, retargetClip, type RetargetMap, type SourceMotion } from "./lib/retarget";
 import { ConfirmDialog, type ConfirmChoice, type ConfirmRequest } from "./components/layout/ConfirmDialog";
-import { defaultRenderSettings, renderPixels, type RenderSettings } from "./components/steps/RenderStep";
+import { cameraFileSuffix, renderCameraById } from "./lib/renderCameras";
+import { composeSheet, type SheetCell, type StillImage } from "./lib/renderStill";
+import { cameraZoom, defaultRenderSettings, renderLayout, type RenderSettings } from "./components/steps/RenderStep";
 import { RenderEditor } from "./components/layout/RenderEditor";
 
 interface ProjectSaved {
@@ -5475,15 +5477,25 @@ export const App: Component = () => {
   createEffect(() => {
     const v = viewer();
     if (!v || !inRender()) return;
-    const { width, height } = renderPixels(renderSettings(), renderViewSize());
-    v.setRenderFrame(width / height);
+    const { cell } = renderLayout(renderSettings(), renderViewSize());
+    v.setRenderFrame(cell.width / cell.height);
     onCleanup(() => v.setRenderFrame(null));
   });
+  /** Lleva el visor a una cámara del render, encuadrada para la imagen que saldrá */
+  const previewRenderCamera = (id: string, zoom?: number) => {
+    const v = viewer();
+    const camera = renderCameraById(id);
+    if (!v || !camera?.direction) return;
+    const { cell } = renderLayout(renderSettings(), v.getViewSize());
+    v.setRenderCamera(camera.direction, cell.width / cell.height, zoom ?? cameraZoom(renderSettings(), id));
+  };
 
   const handleRender = async () => {
     const v = viewer();
     if (!v || renderProgress() !== undefined) return;
     const s = renderSettings();
+    const layout = renderLayout(s, v.getViewSize());
+    if (layout.cameras.length === 0) return;
     const ext = s.format === "jpeg" ? "jpg" : s.format;
     const base = (fileName() ?? "render").replace(/\.[^.]+$/, "");
     const dir = renderDir();
@@ -5495,37 +5507,78 @@ export const App: Component = () => {
     if (!selected) return;
     const path = /\.[^./]+$/.test(selected) ? selected : `${selected}.${ext}`;
     setRenderDir(path.slice(0, Math.max(0, path.lastIndexOf("/"))));
+    const stem = path.replace(/\.[^./]+$/, "");
     const controller = new AbortController();
     renderAbort = controller;
     setRenderProgress(0);
+    const pose = v.getCameraPose();
+    const saved: string[] = [];
+    // El archivo viaja como cuerpo crudo (sin JSON): las imágenes grandes pesan megas
+    const write = (image: StillImage, to: string) => invoke<number>("write_render_image", image.bytes, { headers: { path: encodeURIComponent(to) } });
     try {
-      const { width, height } = renderPixels(s, v.getViewSize());
-      const image = await v.renderStill(
-        {
-          width,
-          height,
+      const cells: SheetCell[] = [];
+      let size = 0;
+      const count = layout.cameras.length;
+      for (let i = 0; i < count; i++) {
+        const camera = layout.cameras[i];
+        if (camera.direction) v.setRenderCamera(camera.direction, layout.cell.width / layout.cell.height, cameraZoom(s, camera.id));
+        else v.restoreCameraPose(pose);
+        const image = await v.renderStill(
+          {
+            width: layout.cell.width,
+            height: layout.cell.height,
+            background: s.background,
+            color: s.color,
+            samples: s.samples,
+            // En la hoja las celdas van sin pérdida y el formato es el de la hoja
+            format: layout.sheet ? "png" : s.format,
+            quality: s.quality / 100,
+            hideGrid: s.hideGrid,
+            hideSkeleton: s.hideSkeleton,
+            hideGizmos: s.hideGizmos,
+            hideSelection: s.hideSelection,
+            shadows: s.shadows,
+            ambientOcclusion: s.ambientOcclusion,
+          },
+          (fraction) => setRenderProgress((i + fraction) / count),
+          controller.signal,
+        );
+        if (layout.sheet) {
+          cells.push({ image, label: camera.label() });
+        } else {
+          const to = count === 1 ? path : `${stem}_${cameraFileSuffix(camera)}.${ext}`;
+          size = await write(image, to);
+          saved.push(to);
+        }
+      }
+      let last = saved[saved.length - 1] ?? path;
+      let info = { w: layout.cell.width, h: layout.cell.height };
+      if (layout.sheet) {
+        const sheet = await composeSheet(cells, {
+          cols: layout.cols,
+          rows: layout.rows,
+          cellWidth: layout.cell.width,
+          cellHeight: layout.cell.height,
           background: s.background,
           color: s.color,
-          samples: s.samples,
           format: s.format,
           quality: s.quality / 100,
-          hideGrid: s.hideGrid,
-          hideSkeleton: s.hideSkeleton,
-          hideGizmos: s.hideGizmos,
-          hideSelection: s.hideSelection,
-          shadows: s.shadows,
-          ambientOcclusion: s.ambientOcclusion,
-        },
-        setRenderProgress,
-        controller.signal,
+          labels: s.sheetLabels,
+        });
+        size = await write(sheet, path);
+        last = path;
+        info = { w: sheet.width, h: sheet.height };
+      }
+      setStatusMessage(
+        saved.length > 1
+          ? t("{n} renders guardados en {dir}", { n: saved.length, dir: last.slice(0, Math.max(0, last.lastIndexOf("/"))) })
+          : t("Render guardado: {name} ({w} × {h}, {size})", { name: last.split("/").pop() ?? "", w: info.w, h: info.h, size: formatBytes(size) }),
       );
-      // El archivo viaja como cuerpo crudo (sin JSON): las imágenes grandes pesan megas
-      const bytes = await invoke<number>("write_render_image", image.bytes, { headers: { path: encodeURIComponent(path) } });
-      setStatusMessage(t("Render guardado: {name} ({w} × {h}, {size})", { name: path.split("/").pop() ?? "", w: image.width, h: image.height, size: formatBytes(bytes) }));
     } catch (e) {
       const cancelled = e instanceof DOMException && e.name === "AbortError";
       setStatusMessage(cancelled ? t("Render cancelado") : t("Error: {e}", { e: tBackend(String(e instanceof Error ? e.message : e)) }));
     } finally {
+      v.restoreCameraPose(pose);
       renderAbort = undefined;
       setRenderProgress(undefined);
     }
@@ -7775,6 +7828,7 @@ export const App: Component = () => {
               <RenderEditor
                 settings={renderSettings()}
                 onSettingsChange={setRenderSettings}
+                onPreviewCamera={previewRenderCamera}
                 viewSize={renderViewSize()}
                 busy={renderProgress() !== undefined}
                 onClose={() => setRenderEditorOpen(false)}

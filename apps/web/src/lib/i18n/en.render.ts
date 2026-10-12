@@ -10,8 +10,21 @@ export const en_render: Catalog = {
   "Guardar render": "Save render",
   "Imagen": "Image",
   "Render guardado: {name} ({w} × {h}, {size})": "Render saved: {name} ({w} × {h}, {size})",
-  "Sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.":
-    "It comes from what you see now: same position, rotation and zoom. The frame in the viewport shows the exact area; move the view to compose the shot.",
+  "Con «Vista actual» sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.":
+    "«Current view» comes from what you see now: same position, rotation and zoom. The frame in the viewport shows the exact area; move the view to compose the shot.",
+  "Cámaras": "Cameras",
+  "Mismo zoom en todas": "Same zoom on all",
+  "Encuadran el modelo entero desde cada lado. El ojo lleva el visor a esa cámara para ver el encuadre.":
+    "They frame the whole model from each side. The eye takes the viewport to that camera to see the framing.",
+  "Ver desde esta cámara": "View from this camera",
+  "Vista actual": "Current view",
+  "3/4": "3/4",
+  "Salida": "Output",
+  "Una imagen por cámara": "One image per camera",
+  "Hoja con todas las vistas": "Sheet with all views",
+  "{n} columnas": "{n} columns",
+  "Nombre en cada vista": "Name on each view",
+  "{n} renders guardados en {dir}": "{n} renders saved in {dir}",
   "Pantalla": "Screen",
   "Luz": "Light",
   "Sombras suaves": "Soft shadows",

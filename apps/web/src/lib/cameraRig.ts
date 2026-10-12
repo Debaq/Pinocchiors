@@ -71,6 +71,31 @@ export class CameraRig {
     this.onChange();
   }
 
+  /**
+   * Pone la cámara de golpe mirando desde `direction` a la esfera, con ella
+   * entera en una imagen de relación `aspect` (o la de la vista, si es menor).
+   */
+  frameFrom(direction: THREE.Vector3, sphere: THREE.Sphere, aspect: number, zoom = 1, margin = 1.1) {
+    this.stop();
+    const dir = direction.clone().normalize();
+    if (Math.abs(dir.x) < 1e-9 && Math.abs(dir.z) < 1e-9) dir.z = 1e-3 * Math.sign(dir.y || 1);
+    dir.normalize();
+    const radius = Math.max(sphere.radius, 1e-6);
+    const vfov = (this.camera.fov * Math.PI) / 180;
+    const fitAspect = Math.min(aspect, this.camera.aspect);
+    const hfov = 2 * Math.atan(Math.tan(vfov / 2) * fitAspect);
+    const dist = ((radius / Math.sin(Math.min(vfov, hfov) / 2)) * margin) / Math.max(zoom, 1e-3);
+    this.camera.up.set(0, 1, 0);
+    this.controls.target.copy(sphere.center);
+    this.camera.position.copy(sphere.center).addScaledVector(dir, dist);
+    this.camera.near = dist / 1000;
+    this.camera.far = dist * 100;
+    this.camera.updateProjectionMatrix();
+    this.camera.lookAt(sphere.center);
+    this.controls.update();
+    this.onChange();
+  }
+
   /** Corta el giro en curso (encuadrar, cargar otro modelo…) */
   stop() {
     this.transition = null;

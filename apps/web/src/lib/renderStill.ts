@@ -346,3 +346,71 @@ export async function renderStillImage(
   }
   return { bytes: new Uint8Array(await blob.arrayBuffer()), width: W, height: H };
 }
+
+/** Una vista ya renderizada (en PNG) para la hoja, con su rótulo */
+export interface SheetCell {
+  image: StillImage;
+  label: string;
+}
+
+export interface SheetOptions {
+  cols: number;
+  rows: number;
+  /** Medidas de cada celda; la hoja mide `cols × cellWidth` por `rows × cellHeight` */
+  cellWidth: number;
+  cellHeight: number;
+  background: StillBackground;
+  color: string;
+  format: StillFormat;
+  quality: number;
+  /** Escribe el nombre de cada vista en su celda */
+  labels: boolean;
+}
+
+/** Junta las vistas en una sola imagen, de izquierda a derecha y de arriba abajo */
+export async function composeSheet(cells: SheetCell[], opts: SheetOptions): Promise<StillImage> {
+  const W = opts.cols * opts.cellWidth;
+  const H = opts.rows * opts.cellHeight;
+  const canvas = document.createElement("canvas");
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error(t("No se pudo crear la imagen"));
+  const bitmaps = await Promise.all(cells.map((c) => createImageBitmap(new Blob([c.image.bytes as BlobPart], { type: MIME.png }))));
+  try {
+    // Las celdas vacías llevan el fondo de la imagen
+    if (opts.background === "color") ctx.fillStyle = opts.color;
+    else if (opts.background === "transparent") ctx.fillStyle = opts.format === "jpeg" ? "#ffffff" : "rgba(0,0,0,0)";
+    else {
+      ctx.drawImage(bitmaps[0], 0, 0);
+      const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = `rgba(${r},${g},${b},${a / 255})`;
+    }
+    ctx.fillRect(0, 0, W, H);
+    const fontSize = Math.max(12, Math.round(opts.cellHeight * 0.045));
+    ctx.font = `600 ${fontSize}px sans-serif`;
+    ctx.textBaseline = "bottom";
+    ctx.lineJoin = "round";
+    bitmaps.forEach((bitmap, i) => {
+      const x = (i % opts.cols) * opts.cellWidth;
+      const y = Math.floor(i / opts.cols) * opts.cellHeight;
+      ctx.drawImage(bitmap, x, y, opts.cellWidth, opts.cellHeight);
+      if (!opts.labels) return;
+      const pad = fontSize * 0.6;
+      ctx.lineWidth = fontSize * 0.3;
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.fillStyle = "#ffffff";
+      ctx.strokeText(cells[i].label, x + pad, y + opts.cellHeight - pad);
+      ctx.fillText(cells[i].label, x + pad, y + opts.cellHeight - pad);
+    });
+  } finally {
+    bitmaps.forEach((b) => b.close());
+  }
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, MIME[opts.format], opts.quality));
+  canvas.width = canvas.height = 0;
+  if (!blob || blob.type !== MIME[opts.format]) {
+    throw new Error(t("Esta ventana no puede guardar {f}; prueba con PNG", { f: opts.format.toUpperCase() }));
+  }
+  return { bytes: new Uint8Array(await blob.arrayBuffer()), width: W, height: H };
+}

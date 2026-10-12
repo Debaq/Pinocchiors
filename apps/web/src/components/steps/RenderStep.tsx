@@ -1,10 +1,13 @@
-import { Component, Show, createEffect, onCleanup, onMount } from "solid-js";
-import { Button, Checkbox, NumberInput, ProgressBar, Select, Slider, Tooltip, Hint } from "../ui";
+import { Component, For, Show, createEffect, onCleanup, onMount } from "solid-js";
+import { Button, Checkbox, IconButton, NumberInput, ProgressBar, Select, Slider, Tooltip, Hint } from "../ui";
 import * as Icons from "../icons";
 import { t } from "../../lib/i18n";
 import { MAX_STILL_SIDE, type StillBackground, type StillFormat } from "../../lib/renderStill";
+import { RENDER_CAMERAS, sheetGrid } from "../../lib/renderCameras";
 
 export type RenderSize = "screen" | "hd" | "uhd" | "custom";
+/** Una imagen por cámara, o todas juntas en una hoja */
+export type RenderOutput = "files" | "sheet";
 
 /** Lo que recuerda el diálogo de Render entre sesiones */
 export interface RenderSettings {
@@ -27,7 +30,22 @@ export interface RenderSettings {
   hideSelection: boolean;
   shadows: boolean;
   ambientOcclusion: boolean;
+  /** Ids de las cámaras activas (ver `RENDER_CAMERAS`) */
+  cameras: string[];
+  output: RenderOutput;
+  /** Columnas de la hoja: 2, 3 o 4 */
+  sheetColumns: number;
+  /** Nombre de la vista escrito en cada celda de la hoja */
+  sheetLabels: boolean;
+  /** Un mismo zoom para todas las cámaras, o uno por cámara */
+  zoomShared: boolean;
+  zoom: number;
+  /** Zoom de cada cámara cuando no se comparte (por id; falta = 1) */
+  zooms: Record<string, number>;
 }
+
+/** Zoom con que sale una cámara (1 = el modelo entero con un margen) */
+export const cameraZoom = (s: RenderSettings, id: string): number => (s.zoomShared ? s.zoom : (s.zooms[id] ?? 1));
 
 export const defaultRenderSettings: RenderSettings = {
   size: "hd",
@@ -45,6 +63,13 @@ export const defaultRenderSettings: RenderSettings = {
   hideSelection: true,
   shadows: true,
   ambientOcclusion: true,
+  cameras: ["current"],
+  output: "files",
+  sheetColumns: 2,
+  sheetLabels: true,
+  zoomShared: true,
+  zoom: 1,
+  zooms: {},
 };
 
 /** Medidas en píxeles que salen de las opciones; "Pantalla" toma las de la vista */
@@ -55,11 +80,24 @@ export function renderPixels(s: RenderSettings, view: { width: number; height: n
   return { width: s.width, height: s.height };
 }
 
+/** Cómo sale el render: cámaras activas (en orden de la lista) y medidas de cada imagen y de la hoja */
+export function renderLayout(s: RenderSettings, view: { width: number; height: number }) {
+  const cameras = RENDER_CAMERAS.filter((c) => s.cameras.includes(c.id));
+  const total = renderPixels(s, view);
+  const sheet = s.output === "sheet" && cameras.length > 1;
+  if (!sheet) return { cameras, sheet, cols: 1, rows: 1, cell: total, total };
+  const { cols, rows } = sheetGrid(cameras.length, s.sheetColumns);
+  const cell = { width: Math.max(16, Math.floor(total.width / cols)), height: Math.max(16, Math.floor(total.height / rows)) };
+  return { cameras, sheet, cols, rows, cell, total: { width: cell.width * cols, height: cell.height * rows } };
+}
+
 const clampSide = (v: number) => Math.max(16, Math.min(MAX_STILL_SIDE, Math.round(v) || 16));
 
 export interface RenderOptionsProps {
   settings: RenderSettings;
   onSettingsChange: (settings: RenderSettings) => void;
+  /** Lleva el visor a esa cámara, con el encuadre que tendrá la imagen */
+  onPreviewCamera: (id: string, zoom?: number) => void;
   /** Tamaño de la vista en píxeles (lo que sale con "Pantalla") */
   viewSize: { width: number; height: number };
   /** Hay un render en curso: las opciones no se tocan */
@@ -91,6 +129,22 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
     set(s().lockRatio ? { height, width: clampSide((height * s().width) / s().height) } : { height });
   };
 
+  const toggleCamera = (id: string, on: boolean) => {
+    const cameras = on ? [...s().cameras, id] : s().cameras.filter((c) => c !== id);
+    set({ cameras: RENDER_CAMERAS.map((c) => c.id).filter((c) => cameras.includes(c)) });
+  };
+  /** Cámaras activas con zoom propio ("Vista actual" queda como se ve) */
+  const zoomable = () => RENDER_CAMERAS.filter((c) => c.direction && s().cameras.includes(c.id));
+  const setZoom = (id: string, v: number) => {
+    props.onSettingsChange(s().zoomShared ? { ...s(), zoom: v } : { ...s(), zooms: { ...s().zooms, [id]: v } });
+    // El visor sigue el cambio para ver el encuadre; con zoom compartido, desde la primera cámara
+    props.onPreviewCamera(id, v);
+  };
+  const outputOptions = [
+    { value: "files", get label() { return t("Una imagen por cámara"); } },
+    { value: "sheet", get label() { return t("Hoja con todas las vistas"); } },
+  ];
+  const columnOptions = [2, 3, 4].map((n) => ({ value: String(n), get label() { return t("{n} columnas", { n }); } }));
   const sizeOptions = [
     { value: "screen", get label() { return t("Pantalla"); } },
     { value: "hd", label: "1080p (1920 × 1080)" },
@@ -115,6 +169,54 @@ export const RenderOptions: Component<RenderOptionsProps> = (props) => {
 
   return (
     <div class="[column-width:260px] [column-gap:1rem]">
+      {/* Cámaras */}
+      <div class="flex flex-col items-start gap-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
+        <span class="flex items-center gap-1.5 text-xs font-medium text-text-muted">
+          {t("Cámaras")}
+          <Hint text={t("Encuadran el modelo entero desde cada lado. El ojo lleva el visor a esa cámara para ver el encuadre.")} />
+        </span>
+        <For each={RENDER_CAMERAS}>
+          {(camera) => (
+            <div class="flex items-center gap-2 w-full">
+              <div class="flex-1 min-w-0">
+                <Checkbox label={camera.label()} checked={s().cameras.includes(camera.id)} disabled={busy()} onChange={(v) => toggleCamera(camera.id, v)} />
+              </div>
+              <IconButton size="sm" variant="ghost" aria-label={t("Ver desde esta cámara")} title={t("Ver desde esta cámara")} disabled={busy()} onClick={() => props.onPreviewCamera(camera.id)}>
+                <Icons.Eye size={14} />
+              </IconButton>
+            </div>
+          )}
+        </For>
+        <Show when={zoomable().length > 0}>
+          <Show when={zoomable().length > 1}>
+            <Checkbox label={t("Mismo zoom en todas")} checked={s().zoomShared} disabled={busy()} onChange={(v) => set({ zoomShared: v })} />
+          </Show>
+          <Show
+            when={s().zoomShared || zoomable().length === 1}
+            fallback={
+              <For each={zoomable()}>
+                {(camera) => (
+                  <div class="w-full">
+                    <Slider label={`${t("Zoom")} · ${camera.label()}`} min={0.5} max={2.5} step={0.05} value={s().zooms[camera.id] ?? 1} onChange={(v) => setZoom(camera.id, v)} showValue />
+                  </div>
+                )}
+              </For>
+            }
+          >
+            <div class="w-full">
+              <Slider label={t("Zoom")} min={0.5} max={2.5} step={0.05} value={s().zoomShared ? s().zoom : (s().zooms[zoomable()[0].id] ?? 1)} onChange={(v) => setZoom(zoomable()[0].id, v)} showValue />
+            </div>
+          </Show>
+        </Show>
+        <Show when={s().cameras.length > 1}>
+          <Select label={t("Salida")} options={outputOptions} value={s().output} disabled={busy()} onChange={(v) => set({ output: v as RenderOutput })} />
+          <Show when={s().output === "sheet"}>
+            <Select label={t("Columnas")} options={columnOptions} value={String(s().sheetColumns)} disabled={busy()} onChange={(v) => set({ sheetColumns: Number(v) })} />
+            <Checkbox label={t("Nombre en cada vista")} checked={s().sheetLabels} disabled={busy()} onChange={(v) => set({ sheetLabels: v })} />
+          </Show>
+        </Show>
+      </div>
+
       {/* Tamaño */}
       <div class="space-y-2 p-3 rounded-md bg-surface/30 border border-border break-inside-avoid mb-3">
         <Select label={t("Tamaño")} options={sizeOptions} value={s().size} disabled={busy()} onChange={(v) => set({ size: v as RenderSize })} />
@@ -200,7 +302,8 @@ export interface RenderStepProps {
  */
 export const RenderStep: Component<RenderStepProps> = (props) => {
   const busy = () => props.progress !== undefined;
-  const px = () => renderPixels(props.settings, props.viewSize);
+  const layout = () => renderLayout(props.settings, props.viewSize);
+  const px = () => layout().total;
 
   // Esc detiene el render en curso (sin llegar a los atajos del visor)
   onMount(() => {
@@ -219,7 +322,7 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
       <div class="flex items-center justify-between">
         <h3 class="flex items-center gap-1.5 text-sm font-semibold text-text">
           {t("Render")}
-          <Hint text={t("Sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.")} />
+          <Hint text={t("Con «Vista actual» sale de lo que se ve ahora: misma posición, giro y zoom. El marco del visor muestra el área exacta; mueve la vista para encuadrar.")} />
         </h3>
         <span class="text-[10px] text-text-dim">
           {px().width} × {px().height} · {((px().width * px().height) / 1e6).toFixed(1)} MP
@@ -228,7 +331,7 @@ export const RenderStep: Component<RenderStepProps> = (props) => {
       <Show
         when={busy()}
         fallback={
-          <Button variant="primary" fullWidth disabled={!props.canRender} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
+          <Button variant="primary" fullWidth disabled={!props.canRender || layout().cameras.length === 0} icon={<Icons.FrameCorners size={16} />} onClick={props.onRender}>
             {t("Renderizar")}
           </Button>
         }

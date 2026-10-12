@@ -4940,6 +4940,20 @@ export class Viewer3D {
     this.boneShapes = [];
   }
 
+  /** Cámara de render: de golpe, mirando desde `direction` al modelo entero en una imagen de relación `aspect` */
+  setRenderCamera(direction: Vec3, aspect: number, zoom = 1): void {
+    const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
+    if (!box) return;
+    this.cameraRig.frameFrom(new THREE.Vector3(...direction), box.getBoundingSphere(new THREE.Sphere()), aspect, zoom);
+    this.placeLights();
+  }
+
+  /** Devuelve la cámara guardada con `getCameraPose` (tras renderizar desde otras) */
+  restoreCameraPose(pose: CameraPose): void {
+    this.cameraRig.setPose(pose, this.gridUnits.metersPerUnit);
+    this.placeLights();
+  }
+
   private fitCamera(): void {
     const box = this.cloudBox() ?? (this.currentMesh ? new THREE.Box3().setFromObject(this.currentMesh) : this.skeletonBox());
     if (!box) return;
